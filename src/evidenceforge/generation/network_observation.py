@@ -584,8 +584,26 @@ class NetworkObservationPlanner:
             or rng.random() >= timing.capture_loss_probability
         ):
             return canonical
-        orig, missed_orig = cls._lose_direction(canonical.orig, timing, rng)
-        resp, missed_resp = cls._lose_direction(canonical.resp, timing, rng)
+        orig = canonical.orig
+        resp = canonical.resp
+        missed_orig = 0
+        missed_resp = 0
+        has_orig = canonical.orig.payload_bytes > 0
+        has_resp = canonical.resp.payload_bytes > 0
+        if has_orig and has_resp:
+            # Capture gaps usually affect one observed direction (asymmetric
+            # routing, SPAN pressure, receive-buffer loss). Reserve paired gaps
+            # for the smaller class of sensor-wide loss episodes.
+            shape_roll = rng.random()
+            lose_orig = shape_roll < 0.44 or shape_roll >= 0.88
+            lose_resp = 0.44 <= shape_roll < 0.88 or shape_roll >= 0.88
+        else:
+            lose_orig = has_orig
+            lose_resp = has_resp
+        if lose_orig:
+            orig, missed_orig = cls._lose_direction(canonical.orig, timing, rng)
+        if lose_resp:
+            resp, missed_resp = cls._lose_direction(canonical.resp, timing, rng)
         if missed_orig + missed_resp <= 0:
             return canonical
         return NetworkTrafficLedger(

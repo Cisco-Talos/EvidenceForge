@@ -26,6 +26,9 @@ from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.source_timing import SourceTimingPlanner
+
+_SOURCE_TIMING = SourceTimingPlanner()
 
 
 class ZeekDhcpEmitter(SensorMultiplexEmitter):
@@ -48,7 +51,13 @@ class ZeekDhcpEmitter(SensorMultiplexEmitter):
             return
         dhcp = event.dhcp
         event_data = {
-            "ts": event.timestamp,
+            "ts": _SOURCE_TIMING.packet_child_time(
+                event,
+                "source.zeek_dhcp_transaction",
+                seed_parts=(dhcp.uids, dhcp.client_addr, dhcp.assigned_addr, event.timestamp),
+                preferred_time=event.timestamp,
+                not_before=event.timestamp,
+            ),
             "uids": dhcp.uids,
             "client_addr": dhcp.client_addr,
             "server_addr": dhcp.server_addr,

@@ -496,7 +496,8 @@ class TestRenderEvent3:
             seed_parts=("WKS-01", 4567, "10.0.1.10", 49152, "10.0.2.20", 4444, event_time),
         )
         expected_time = event_time + expected_delta
-        assert emitter._event_dicts[0]["TimeCreated"] == expected_time
+        assert emitter._event_dicts[0]["TimeCreated"] > expected_time
+        assert emitter._event_dicts[0]["_SysmonNativeTime"] == expected_time
         assert (
             emitter._event_dicts[0]["UtcTime"]
             == expected_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -1200,7 +1201,9 @@ class TestRenderEvent22:
             "source.sysmon_dns_query",
             seed_parts=("WKS-01", "example.com", "A", event_time),
         )
-        assert emitter._event_dicts[0]["TimeCreated"] == event_time + expected_delta
+        native_time = event_time + expected_delta
+        assert emitter._event_dicts[0]["TimeCreated"] > native_time
+        assert emitter._event_dicts[0]["_SysmonNativeTime"] == native_time
 
     def test_nxdomain_query_status(self, emitter):
         event = OccurrenceBuilder(

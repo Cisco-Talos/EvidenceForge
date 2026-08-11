@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from types import ModuleType
@@ -37,6 +38,34 @@ if TYPE_CHECKING:
     from evidenceforge.events.base import OccurrenceBuilder
     from evidenceforge.generation.actions.network_connection import NetworkConnectionRequest
     from evidenceforge.generation.activity.generator import ActivityGenerator
+
+
+def _network_with_smb_file_accounting(network: Any, file_transfer: Any) -> Any:
+    """Return canonical transport accounting large enough for its SMB object."""
+
+    file_bytes = max(
+        int(getattr(file_transfer, "seen_bytes", 0)),
+        int(getattr(file_transfer, "total_bytes", 0) or 0),
+    )
+    if file_bytes <= 0:
+        return network
+    required_payload = file_bytes + max(1024, int(file_bytes * 0.018))
+    prefix = "orig" if file_transfer.is_orig else "resp"
+    payload_name = f"{prefix}_bytes"
+    packets_name = f"{prefix}_pkts"
+    ip_bytes_name = f"{prefix}_ip_bytes"
+    current_payload = int(getattr(network, payload_name, 0) or 0)
+    if current_payload >= required_payload:
+        return network
+    packets = max(int(getattr(network, packets_name, 0) or 0), math.ceil(required_payload / 1460))
+    ip_bytes = max(
+        int(getattr(network, ip_bytes_name, 0) or 0),
+        required_payload + (packets * 40),
+    )
+    setattr(network, payload_name, required_payload)
+    setattr(network, packets_name, packets)
+    setattr(network, ip_bytes_name, ip_bytes)
+    return network
 
 
 @dataclass(slots=True)
@@ -498,6 +527,43 @@ class NetworkTransactionPlanner:
         proxyable_external_destination = (
             hostname_is_external or not generator_module._is_private_ip(dst_ip)
         )
+        # Role-level server traffic often knows that a request occurred without
+        # knowing which local process owned it. Preserve that uncertainty rather
+        # than turning a sampled HTTP User-Agent into a fabricated PID-1 child.
+        # Explicit caller PIDs remain authoritative, and interactive workstation
+        # traffic can still materialize a source-native browser/client process.
+        source_roles = {str(role).lower() for role in (getattr(source_system, "roles", None) or [])}
+        source_type = (
+            str(getattr(source_system, "type", "") or "").lower()
+            if source_system is not None
+            else ""
+        )
+        linux_server_without_owner = (
+            pid <= 0
+            and source_system is not None
+            and generator_module._get_os_category(source_system.os) == "linux"
+            and (
+                source_type in {"server", "domain_controller"}
+                or bool(
+                    source_roles
+                    & {
+                        "app_server",
+                        "database",
+                        "dns_server",
+                        "file_server",
+                        "forward_proxy",
+                        "log_server",
+                        "mail_server",
+                        "monitoring",
+                        "web_server",
+                    }
+                )
+            )
+            and proto == "tcp"
+            and dst_port in {80, 443}
+        )
+        if linux_server_without_owner:
+            suppress_source_pid_inference = True
         dns_server_ips = set(getattr(executor, "_dns_server_ips", []))
         if (
             proto == "tcp"
@@ -610,6 +676,7 @@ class NetworkTransactionPlanner:
                 caller_provided_conn_state=caller_provided_conn_state,
                 ad_domain=ad_domain,
                 parent_action_group_id=parent_action_group_id,
+                suppress_source_pid_inference=suppress_source_pid_inference,
             )
             return ProxyTransactionActionBundle(
                 request=proxy_request,
@@ -2263,6 +2330,11 @@ class NetworkTransactionPlanner:
                 ),
                 rng,
             ).execute()
+            if event.file_transfer is not None:
+                event.network = _network_with_smb_file_accounting(
+                    event.network,
+                    event.file_transfer,
+                )
 
         # NTP context for Zeek ntp.log fan-out. Zeek ntp.log records server response
         # fields, so only attach the context when the matching conn.log row has a
@@ -2486,16 +2558,17 @@ class NetworkTransactionPlanner:
 
         self._reconcile_application_payload(event, generator_module)
 
-        executor._repair_explicit_proxy_listener_process_attribution(
-            event,
-            source_system=resolved_source_system,
-            time=time,
-        )
-        executor._repair_browser_http_process_attribution(
-            event,
-            source_system=resolved_source_system,
-            time=time,
-        )
+        if not suppress_source_pid_inference:
+            executor._repair_explicit_proxy_listener_process_attribution(
+                event,
+                source_system=resolved_source_system,
+                time=time,
+            )
+            executor._repair_browser_http_process_attribution(
+                event,
+                source_system=resolved_source_system,
+                time=time,
+            )
         pid = event.network.initiating_pid
         process_ctx = event.process
         if pid > 0 and resolved_source_system is not None and process_ctx is not None:
@@ -2552,17 +2625,60 @@ class NetworkTransactionPlanner:
             event.network.service = ""
         canonical_start = event.network.source_visible_start_time
         canonical_close = event.network.source_visible_close_time
-        phase_times: list[tuple[str, datetime]] = [("transport_start", canonical_start)]
+        application_request_time: datetime | None = None
         if any((event.dns, event.http, event.ssl, event.smtp, event.proxy)):
-            phase_times.append(("application_request", canonical_start))
+            if event.http is not None and event.http.canonical_request_time is not None:
+                application_request_time = event.http.canonical_request_time
+            elif event.http is not None:
+                if event.network.application_layer_only:
+                    application_request_time = max(
+                        event.timestamp,
+                        canonical_start + timedelta(milliseconds=1),
+                    )
+                else:
+                    delay_ms = 12 + (
+                        _stable_seed(
+                            "http_request_after_transport:"
+                            f"{event.network.src_ip}:{event.network.src_port}:"
+                            f"{event.network.dst_ip}:{event.network.dst_port}:"
+                            f"{canonical_start.isoformat()}"
+                        )
+                        % 74
+                    )
+                    application_request_time = canonical_start + timedelta(milliseconds=delay_ms)
+                if canonical_close is not None:
+                    available = canonical_close - canonical_start
+                    application_request_time = min(
+                        application_request_time,
+                        canonical_start + available * 0.45,
+                    )
+                application_request_time = max(
+                    application_request_time,
+                    canonical_start + timedelta(milliseconds=1),
+                )
+                event.http = replace(
+                    event.http,
+                    canonical_request_time=application_request_time,
+                )
+            else:
+                application_request_time = canonical_start
+
+        phase_times: list[tuple[str, datetime]] = [("transport_start", canonical_start)]
+        if any((event.dns, event.http, event.ssl, event.smtp, event.proxy)) and not (
+            event.network.application_layer_only
+        ):
+            phase_times.append(("application_request", application_request_time or canonical_start))
         if (
             canonical_close is not None
             and (event.network.resp_bytes or 0) > 0
             and canonical_close > canonical_start
+            and not event.network.application_layer_only
         ):
             response_time = canonical_start + timedelta(
                 seconds=(canonical_close - canonical_start).total_seconds() * 0.75
             )
+            if application_request_time is not None:
+                response_time = max(response_time, application_request_time)
             phase_times.append(("application_response", response_time))
         if canonical_close is not None:
             phase_times.append(("transport_close", canonical_close))
@@ -2578,8 +2694,6 @@ class NetworkTransactionPlanner:
             outcome=transaction_outcome,
             phase_times=tuple(phase_times),
         )
-        if event.http is not None and event.http.canonical_request_time is None:
-            event.http = replace(event.http, canonical_request_time=event.timestamp)
         from evidenceforge.generation.actions.ids_alert import (
             ids_alert_matches_transaction,
             normalize_ids_alerts,

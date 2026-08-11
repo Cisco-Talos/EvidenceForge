@@ -2268,6 +2268,75 @@ class TestExplicitProxyVisibility:
         assert client_event.process.username == "root"
         assert client_event.network.initiating_pid != bash_pid
 
+    def test_ownerless_linux_server_proxy_request_does_not_fabricate_cli_process(self):
+        """Role traffic without a caller must stay unattributed through explicit proxying."""
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        linux_system = System(
+            hostname="DB-PROD-01",
+            ip="10.0.1.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["database"],
+        )
+        generator._ip_to_system[linux_system.ip] = linux_system
+        generator._proxy_routes[linux_system.ip] = [generator._ip_to_system["10.0.3.10"]]
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip=linux_system.ip,
+                method="CONNECT",
+                url="packages.microsoft.com:443",
+                host="packages.microsoft.com",
+                status_code=200,
+                sc_bytes=220,
+                cs_bytes=340,
+                time_taken=900,
+                user_agent="Wget/1.21.4",
+                content_type="",
+                cache_result="MISS",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip=linux_system.ip,
+            dst_ip="13.107.246.52",
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=linux_system,
+            hostname="packages.microsoft.com",
+            conn_state="SF",
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == linux_system.ip
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        )
+        assert client_event.process is None
+        assert client_event.network.initiating_pid == -1
+        assert all(
+            proc.image not in {"/usr/bin/wget", "/usr/bin/curl"}
+            for proc in generator.state_manager.get_processes_on_system(linux_system.hostname)
+        )
+
     def test_direct_proxy_listener_flow_replaces_mismatched_linux_browser(self):
         generator, emitters = _generator(
             [

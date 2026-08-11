@@ -122,6 +122,12 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
             overlay["external_scanner_port_profiles"],
             "name",
         )
+    if "linux_smb_connection_owners" in overlay:
+        result["linux_smb_connection_owners"] = merge_keyed_list(
+            default.get("linux_smb_connection_owners", []),
+            overlay["linux_smb_connection_owners"],
+            "role",
+        )
     if isinstance(overlay.get("dns_tunnel_rcode_weights"), dict):
         result["dns_tunnel_rcode_weights"] = dict(overlay["dns_tunnel_rcode_weights"])
     if isinstance(overlay.get("proxy_connect_status_messages"), dict):
@@ -178,6 +184,35 @@ def external_client_excluded_cidrs() -> list[str]:
     if not isinstance(values, list):
         return []
     return [str(value) for value in values if isinstance(value, str) and value]
+
+
+def linux_smb_connection_owner(
+    roles: set[str],
+    target: str,
+) -> tuple[str, str, str, str] | None:
+    """Return configured role-owned Linux SMB process metadata."""
+
+    profiles = load_network_params().get("linux_smb_connection_owners", [])
+    if not isinstance(profiles, list):
+        return None
+    normalized_roles = {role.lower() for role in roles}
+    for profile in profiles:
+        if (
+            not isinstance(profile, dict)
+            or str(profile.get("role", "")).lower() not in normalized_roles
+        ):
+            continue
+        values = tuple(
+            str(profile.get(field, "")) for field in ("key", "image", "command_line", "username")
+        )
+        if not all(values):
+            return None
+        key, image, command_line, username = values
+        # These workers expose their repository peer in the process command line.
+        # Scope the durable process identity to that peer so a process created for
+        # one repository can never be reused to attribute a flow to another.
+        return f"{key}:{target}", image, command_line.format(target=target), username
+    return None
 
 
 def public_dns_resolver_ips(scope_key: str | None = None) -> list[str]:

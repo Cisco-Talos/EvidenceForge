@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import unquote
 
@@ -20,6 +21,7 @@ from evidenceforge.generation.actions.ocsp_transaction import (
 )
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
+from evidenceforge.models.scenario import System
 from tests.network_factories import network_plan
 
 _EVENT_TIME = datetime(2024, 10, 14, 12, 0, tzinfo=UTC)
@@ -171,7 +173,14 @@ def test_ocsp_action_bundle_builds_all_contexts_from_one_plan() -> None:
     issuer = tls_planner.authority_material(presentation.leaf.issuer_name)
 
     class Executor:
-        _ip_to_system: dict[str, object] = {}
+        _ip_to_system: dict[str, object] = {
+            "10.0.10.25": System(
+                hostname="WS-TEST-01",
+                ip="10.0.10.25",
+                os="Windows 11",
+                type="workstation",
+            )
+        }
 
         def __init__(self) -> None:
             self.kwargs = None
@@ -197,6 +206,42 @@ def test_ocsp_action_bundle_builds_all_contexts_from_one_plan() -> None:
     assert executor.kwargs["ocsp"].serial_number == plan.certificate.serial_number
     assert executor.kwargs["ocsp_transaction"] is plan
     assert executor.kwargs.get("proxy_bypass") is None
+
+
+def test_ocsp_action_bundle_does_not_import_external_client_validation() -> None:
+    """An unmodeled TLS peer's OCSP traffic stays outside the enterprise boundary."""
+
+    registry = CryptographicMaterialRegistry()
+    tls_planner, presentation = _presentation(registry)
+    planner = OcspTransactionPlanner(registry, tls_planner)
+    issuer = tls_planner.authority_material(presentation.leaf.issuer_name)
+    external_event = _tls_event(presentation)
+    external_event.network = replace(external_event.network, src_ip="173.194.182.221")
+
+    class Executor:
+        _ip_to_system: dict[str, object] = {}
+
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def generate_connection(self, **kwargs):
+            self.kwargs = kwargs
+            return "COcsp"
+
+    executor = Executor()
+    plan = OcspTransactionActionBundle(
+        executor,
+        planner,
+        OcspTransactionRequest(
+            external_event,
+            presentation.leaf,
+            issuer,
+            "www.example.com",
+        ),
+    ).execute()
+
+    assert plan is None
+    assert executor.kwargs is None
 
 
 def test_ocsp_response_file_duration_varies_with_planned_transaction() -> None:

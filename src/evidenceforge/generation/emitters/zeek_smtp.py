@@ -61,7 +61,7 @@ class ZeekSmtpEmitter(SensorMultiplexEmitter):
         elif net.duration is not None and net.duration > 0:
             latest = conn_ts + timedelta(seconds=max(0.0, net.duration)) - timedelta(microseconds=1)
             within = (conn_ts, max(conn_ts, latest))
-        smtp_ts = _SOURCE_TIMING.source_time(
+        smtp_ts = _SOURCE_TIMING.packet_child_time(
             event,
             "source.zeek_smtp_transaction",
             seed_parts=(

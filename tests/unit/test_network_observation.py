@@ -433,16 +433,63 @@ def test_explicit_loss_profile_is_deterministic_bounded_and_auditable(monkeypatc
     assert first == second
     assert first.capture_profile == "lossy_span"
     assert first.traffic.missed_bytes > 0
-    assert first.traffic.orig.payload_bytes < canonical.orig.payload_bytes
-    assert first.traffic.resp.payload_bytes < canonical.resp.payload_bytes
-    assert canonical.orig.payload_bytes - first.traffic.orig.payload_bytes == pytest.approx(
-        canonical.orig.payload_bytes * 0.1,
-        abs=1,
+    assert (
+        first.traffic.orig.payload_bytes < canonical.orig.payload_bytes
+        or first.traffic.resp.payload_bytes < canonical.resp.payload_bytes
     )
-    assert canonical.resp.payload_bytes - first.traffic.resp.payload_bytes == pytest.approx(
-        canonical.resp.payload_bytes * 0.1,
-        abs=1,
+    assert (
+        canonical.orig.payload_bytes - first.traffic.orig.payload_bytes
+        == first.traffic.missed_orig_bytes
     )
+    assert (
+        canonical.resp.payload_bytes - first.traffic.resp.payload_bytes
+        == first.traffic.missed_resp_bytes
+    )
+
+
+def test_capture_loss_directionality_has_asymmetric_and_paired_shapes(monkeypatch) -> None:
+    """Loss profiles should not stamp bidirectional gaps onto nearly every flow."""
+    forced_loss = NetworkSensorObservationTiming(
+        profile_name="lossy_span",
+        clock_offset_min_us=0,
+        clock_offset_max_us=0,
+        clock_drift_min_ppm=0,
+        clock_drift_max_ppm=0,
+        route_delay_min_us=0,
+        route_delay_max_us=0,
+        event_jitter_min_us=0,
+        event_jitter_max_us=0,
+        capture_loss_probability=1.0,
+        capture_loss_min_fraction=0.1,
+        capture_loss_max_fraction=0.1,
+        capture_loss_max_missed_bytes=10_000,
+    )
+    monkeypatch.setattr(
+        "evidenceforge.generation.network_observation.network_sensor_observation_timing",
+        lambda _profile_name: forced_loss,
+    )
+    planner = NetworkObservationPlanner(_visibility_engine(destination_profile="lossy_span"))
+    shapes: dict[str, int] = {"orig": 0, "resp": 0, "both": 0}
+
+    for index in range(300):
+        event = _network_event(
+            protocol="tcp",
+            stable_id=f"network:directional-loss:{index}",
+            start=T0 + timedelta(seconds=index),
+        )
+        event._sensor_hostnames_by_format = {"zeek_conn": ["destination-tap"]}
+        traffic = planner.plan(event, {"zeek_conn"})[0].traffic
+        if traffic.missed_orig_bytes and traffic.missed_resp_bytes:
+            shapes["both"] += 1
+        elif traffic.missed_orig_bytes:
+            shapes["orig"] += 1
+        elif traffic.missed_resp_bytes:
+            shapes["resp"] += 1
+
+    assert all(count > 0 for count in shapes.values())
+    assert shapes["both"] < 75
+    assert shapes["orig"] > shapes["both"]
+    assert shapes["resp"] > shapes["both"]
 
 
 @pytest.mark.parametrize("protocol", ["udp", "icmp"])

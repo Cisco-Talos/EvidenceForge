@@ -143,6 +143,8 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._segment_config: list[dict[str, str]] = []
         # Per-sensor interface mappings (set by emitter_setup)
         self._sensor_interfaces: dict[str, dict[str, str]] = {}
+        # Optional ASA nameif security levels (set by emitter_setup).
+        self._sensor_security_levels: dict[str, dict[str, int]] = {}
         # VIP→real_ip for interface resolution (set by emitter_setup)
         self._vip_to_real_ip: dict[str, str] = {}
         # Threat detection: per-(sensor, src_ip) deny rate tracking
@@ -601,8 +603,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         nat: NatSensorObservation | None,
     ) -> None:
         """Emit a Built connection record (302013/302015/302020)."""
-        # Determine direction: if src is "outside", it's inbound
-        direction = "inbound" if src_iface == "outside" else "outbound"
+        direction = self._connection_direction(src_iface, dst_iface, sensor_hostname)
 
         if protocol == "icmp":
             msg_id = 302020
@@ -685,7 +686,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         if protocol == "icmp":
             msg_id = 302021
             icmp_type = net.dst_port if net.dst_port else 8
-            direction = "inbound" if src_iface == "outside" else "outbound"
+            direction = self._connection_direction(src_iface, dst_iface, sensor_hostname)
             if direction == "inbound":
                 foreign_ip = net.src_ip
                 global_ip = nat.global_ip if nat is not None else net.dst_ip
@@ -727,6 +728,24 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         }
         self._dispatch(event_data)
         return True
+
+    def _connection_direction(
+        self,
+        src_iface: str,
+        dst_iface: str,
+        sensor_hostname: str,
+    ) -> str:
+        """Return ASA direction from the initiating interface security relationship."""
+
+        configured = self._sensor_security_levels.get(sensor_hostname, {})
+        conventional = {"outside": 0, "dmz": 50, "inside": 100}
+        src_level = configured.get(src_iface, conventional.get(src_iface.lower()))
+        dst_level = configured.get(dst_iface, conventional.get(dst_iface.lower()))
+        if src_level is not None and dst_level is not None and src_level != dst_level:
+            return "inbound" if src_level < dst_level else "outbound"
+        # Preserve compatibility for custom and same-security interfaces whose
+        # relationship was not declared.
+        return "inbound" if src_iface.lower() == "outside" else "outbound"
 
     def _emit_deny(
         self,

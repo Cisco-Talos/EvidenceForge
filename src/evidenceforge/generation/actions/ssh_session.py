@@ -127,6 +127,14 @@ class SshSessionRequest:
     source: str = "activity_generator"
 
     @property
+    def bundle_owns_close(self) -> bool:
+        """Return whether this action, rather than explicit intent, owns closure."""
+
+        return self.emit_session_close and not (
+            self.session_end_plan is not None and self.session_end_plan.is_authoritative
+        )
+
+    @property
     def stable_id(self) -> str:
         """Return a deterministic intent identifier for durable references."""
 
@@ -295,6 +303,20 @@ class SshSessionExecutor(Protocol):
         """Return or materialize the source-side SSH client process."""
         ...
 
+    def ensure_ssh_client_process(
+        self,
+        *,
+        user: User,
+        source_system: System,
+        target_system: System,
+        time: datetime,
+        process_image: str,
+        source_port: int,
+        required_until: datetime | None = None,
+    ) -> tuple[int, str] | None:
+        """Return the modeled source-side SSH client for any supported endpoint OS."""
+        ...
+
     def _clamp_after_visible_linux_process_create(
         self,
         system: System,
@@ -403,7 +425,7 @@ class SshSessionActionBundle:
             self._terminate_source_ssh_client_process(state)
         if auth_state is not None:
             self._dispatch_linux_auth_messages(state, event, auth_state)
-            if self.request.emit_session_close:
+            if self.request.bundle_owns_close:
                 if self.request.defer_session_close:
                     self.executor._defer_ssh_session_close(self, state, event, auth_state)
                 else:
@@ -506,7 +528,10 @@ class SshSessionActionBundle:
                     "Explicit SSH session end must follow transport open: "
                     f"{request.target_system.hostname} at {end_plan.canonical_end.isoformat()}"
                 )
-            duration = (planned_close - ensure_utc(transport_open_time)).total_seconds()
+            # The bundle preserves the authored TCP-open anchor at request.time.
+            # The predicted packet timestamp is used for receiver process timing,
+            # not as a second canonical start for duration arithmetic.
+            duration = (planned_close - ensure_utc(request.time)).total_seconds()
         orig_bytes = (
             request.orig_bytes if request.orig_bytes is not None else rng.randint(2000, 50000)
         )
@@ -585,22 +610,48 @@ class SshSessionActionBundle:
         source_system = self._source_system()
         source_pid = request.source_pid
         source_process_image = request.source_process_image
-        if (
-            source_pid <= 0
-            and source_system is not None
-            and _get_os_category(source_system.os) == "linux"
-        ):
-            client = executor.ensure_linux_ssh_client_process(
+        if source_pid <= 0 and source_system is not None:
+            client = executor.ensure_ssh_client_process(
                 user=request.user,
                 source_system=source_system,
                 target_system=request.target_system,
                 time=request.time,
                 process_image=source_process_image or "/usr/bin/ssh",
                 source_port=state.source_port,
-                required_until=state.close_time,
+                required_until=(
+                    state.close_time if _get_os_category(source_system.os) == "linux" else None
+                ),
             )
             if client is not None:
                 source_pid, source_process_image = client
+
+        if source_system is not None and source_pid > 0:
+            source_process = executor.state_manager.get_process(source_system.hostname, source_pid)
+            source_session_end = None
+            if source_process is not None and source_process.logon_id:
+                source_end_plan = executor.state_manager.get_session_end_plan(
+                    source_process.logon_id
+                )
+                if source_end_plan is not None and source_end_plan.is_authoritative:
+                    source_session_end = ensure_utc(source_end_plan.canonical_end)
+                else:
+                    source_session_end = executor.state_manager.get_session_end_time(
+                        source_process.logon_id
+                    )
+            if source_session_end is not None and state.close_time >= source_session_end:
+                close_margin_ms = 250 + (
+                    _stable_seed(
+                        "ssh-before-source-session-end:"
+                        f"{source_system.hostname}:{source_pid}:{state.source_port}:"
+                        f"{source_session_end.isoformat()}"
+                    )
+                    % 751
+                )
+                state.close_time = source_session_end - timedelta(milliseconds=close_margin_ms)
+                state.duration = max(
+                    1.0,
+                    (state.close_time - ensure_utc(request.time)).total_seconds(),
+                )
 
         state.source_process = self._resolve_source_process(source_pid, source_process_image)
         network_uid = executor.generate_connection(
@@ -624,6 +675,11 @@ class SshSessionActionBundle:
             responding_pid=responding_pid or -1,
             ssh_attempted_username=request.user.username,
             ids_alerts=list(request.ids_alerts),
+            # The SSH bundle already owns the transport/auth lifecycle anchor.
+            # If a source-side client process becomes visible too late, the
+            # network contract must omit that attribution instead of moving TCP
+            # open behind the receiver sshd child and authentication evidence.
+            preserve_start_time=True,
         )
         state.uid = network_uid
         state.network_visible = bool(network_uid)
@@ -636,6 +692,7 @@ class SshSessionActionBundle:
                 source_port=state.source_port,
                 session_kind="ssh",
                 transport_pid=responding_pid,
+                closure_owned_by_bundle=request.bundle_owns_close,
                 network_close_time=state.close_time,
             )
             if not state.session_obj_id:
@@ -1417,8 +1474,13 @@ class SshSessionActionBundle:
             f"{request.target_system.hostname}:{request.source_ip}:{state.source_port}:"
             f"{auth_state.sshd_pid}:{close_time.isoformat()}"
         )
+        # PAM close has its own source-native delay (up to 2.5 seconds) before
+        # collection delay is applied.  Leave a real teardown tail so an eCAR
+        # process-termination observation cannot render before the same PID's
+        # syslog PAM-close record merely because the two sources sampled
+        # different latency values.
         terminate_time = close_time + timedelta(
-            milliseconds=80 + (seed % 920),
+            milliseconds=3200 + (seed % 2000),
             microseconds=307 + (seed % 491),
         )
         self.executor.generate_process_termination(

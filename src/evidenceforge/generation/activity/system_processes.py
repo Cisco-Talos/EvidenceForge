@@ -214,8 +214,34 @@ def scheduled_task_key(entry: dict[str, Any]) -> str:
 def get_scheduled_task_entries(host: Any | None = None) -> list[dict[str, Any]]:
     """Return scheduled-task config entries allowed for a host."""
     data = load_system_processes()
-    return [
+    entries = [
         entry for entry in data.get("scheduled_tasks", []) if _scheduled_task_allowed(entry, host)
+    ]
+    grouped_options: dict[str, set[str]] = {}
+    host_scoped_groups: set[str] = set()
+    for entry in entries:
+        group = str(entry.get("compatibility_group") or "")
+        option = str(entry.get("compatibility_option") or "")
+        if group and option:
+            grouped_options.setdefault(group, set()).add(option)
+            if entry.get("compatibility_scope") == "host":
+                host_scoped_groups.add(group)
+    hostname = str(getattr(host, "hostname", "default") or "default")
+    selected_options = {
+        group: random.Random(
+            _stable_seed(
+                f"software_deployment:{hostname if group in host_scoped_groups else 'default'}:"
+                f"{group}"
+            )
+        ).choice(sorted(options))
+        for group, options in grouped_options.items()
+    }
+    return [
+        entry
+        for entry in entries
+        if not entry.get("compatibility_group")
+        or selected_options.get(str(entry["compatibility_group"]))
+        == str(entry.get("compatibility_option") or "")
     ]
 
 
@@ -288,10 +314,19 @@ def pick_system_service_process(
         option = str(entry.get("compatibility_option") or "")
         if group and option:
             grouped_options.setdefault(group, set()).add(option)
+    host_scoped_groups = {
+        str(entry["compatibility_group"])
+        for entry in pool
+        if entry.get("compatibility_group") and entry.get("compatibility_scope") == "host"
+    }
+    hostname = str(getattr(host, "hostname", "default") or "default")
     selected_options = {
-        group: random.Random(_stable_seed(f"software_deployment:{deployment_key}:{group}")).choice(
-            sorted(options)
-        )
+        group: random.Random(
+            _stable_seed(
+                f"software_deployment:"
+                f"{hostname if group in host_scoped_groups else deployment_key}:{group}"
+            )
+        ).choice(sorted(options))
         for group, options in grouped_options.items()
     }
     pool = [

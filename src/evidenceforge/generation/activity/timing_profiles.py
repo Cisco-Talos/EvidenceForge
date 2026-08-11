@@ -109,6 +109,19 @@ class FirewallObservationTiming:
     tcp_idle_timeout_seconds: int
 
 
+@dataclass(frozen=True, slots=True)
+class SysmonEnvelopeTiming:
+    """Provider-envelope latency parameters for one Sysmon event family."""
+
+    median_us: int
+    sigma: float
+    min_us: int
+    max_us: int
+    tail_probability: float
+    tail_min_us: int
+    tail_max_us: int
+
+
 def load_timing_profiles() -> dict[str, Any]:
     """Load timing profiles, merged with project-local overlay."""
     global _CACHED_DATA
@@ -228,6 +241,43 @@ def sample_packet_timing_delta(key: str, *, seed_parts: tuple[Any, ...] = ()) ->
     seed = "packet_timing_delta:" + key + ":" + ":".join(str(part) for part in seed_parts)
     rng = random.Random(_stable_seed(seed))
     return base_delta + timedelta(microseconds=rng.randint(37, 997))
+
+
+def sysmon_envelope_timing(event_id: int) -> SysmonEnvelopeTiming:
+    """Return data-driven Sysmon provider-envelope timing for an event ID."""
+
+    data = load_timing_profiles().get("sysmon_event_envelope", {})
+    if not isinstance(data, dict):
+        data = {}
+    default = data.get("default", {})
+    if not isinstance(default, dict):
+        default = {}
+    event_profiles = data.get("event_ids", {})
+    if not isinstance(event_profiles, dict):
+        event_profiles = {}
+    override = event_profiles.get(str(event_id), {})
+    if not isinstance(override, dict):
+        override = {}
+    profile = {**default, **override}
+    minimum_us = _safe_int(profile.get("min_us"), 80, minimum=1, maximum=1_000_000)
+    maximum_us = _safe_int(profile.get("max_us"), 18_000, minimum=minimum_us, maximum=1_000_000)
+    tail_min_us = _safe_int(
+        profile.get("tail_min_us"), 12_000, minimum=minimum_us, maximum=1_000_000
+    )
+    tail_max_us = _safe_int(
+        profile.get("tail_max_us"), 85_000, minimum=tail_min_us, maximum=1_000_000
+    )
+    return SysmonEnvelopeTiming(
+        median_us=_safe_int(profile.get("median_us"), 850, minimum=minimum_us, maximum=maximum_us),
+        sigma=_safe_float(profile.get("sigma"), 0.8, minimum=0.05, maximum=3.0),
+        min_us=minimum_us,
+        max_us=maximum_us,
+        tail_probability=_safe_float(
+            profile.get("tail_probability"), 0.012, minimum=0.0, maximum=0.25
+        ),
+        tail_min_us=tail_min_us,
+        tail_max_us=tail_max_us,
+    )
 
 
 def startup_module_observation_timing() -> StartupModuleObservationTiming:

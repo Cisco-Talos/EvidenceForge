@@ -348,7 +348,12 @@ def registry_entries_for_process(
     return [
         entry
         for entry in entries
-        if _artifact_allowed_for_process(entry[0], process_name, rules, "key_contains")
+        if _artifact_allowed_for_process(
+            f"{entry[0]}\\{entry[1]}",
+            process_name,
+            rules,
+            "key_contains",
+        )
     ]
 
 
@@ -489,9 +494,31 @@ def _userassist_value_name(rng: random.Random, user: str) -> str:
 
 
 def _userassist_binary_details(rng: random.Random) -> str:
-    """Return plausible REG_BINARY-looking UserAssist details, not a tiny placeholder."""
-    byte_count = rng.choice([32, 40, 48])
-    return " ".join(f"{rng.getrandbits(8):02X}" for _ in range(byte_count))
+    """Return a structured 72-byte Windows 7+ UserAssist value payload."""
+    data = bytearray(72)
+    run_count = rng.randint(1, 80)
+    focus_count = rng.randint(0, run_count)
+    focus_milliseconds = focus_count * rng.randint(1_000, 180_000)
+    # Use a plausible collection-era FILETIME while keeping this pool deterministic.
+    unix_seconds = 1_709_251_200 + rng.randint(0, 31 * 24 * 60 * 60)
+    filetime = 116_444_736_000_000_000 + unix_seconds * 10_000_000
+    data[4:8] = run_count.to_bytes(4, "little")
+    data[8:12] = focus_count.to_bytes(4, "little")
+    data[12:16] = focus_milliseconds.to_bytes(4, "little")
+    data[60:68] = filetime.to_bytes(8, "little")
+    return " ".join(f"{byte:02X}" for byte in data)
+
+
+def _stable_registry_guid(host_key: str, identity: str) -> str:
+    """Return a persistent GUID for one host-owned registry object."""
+    scope = f"registry_guid:{host_key or 'default'}:{identity.lower()}"
+    return (
+        f"{_stable_seed(scope) & 0xFFFFFFFF:08X}-"
+        f"{_stable_seed(f'{scope}:a') & 0xFFFF:04X}-"
+        f"{_stable_seed(f'{scope}:b') & 0xFFFF:04X}-"
+        f"{_stable_seed(f'{scope}:c') & 0xFFFF:04X}-"
+        f"{_stable_seed(f'{scope}:d') & 0xFFFFFFFFFFFF:012X}"
+    )
 
 
 def _process_prefetch_name(process_name: str) -> str:
@@ -574,6 +601,8 @@ def materialize_edr_template(
         "guid": (
             _interface_guid(rng, host_key, host_ip)
             if "services\\tcpip\\parameters\\interfaces" in template_lower
+            else _stable_registry_guid(host_key, template)
+            if "updateorchestrator\\schedule scan" in template_lower
             else f"{rng.getrandbits(32):08X}-"
             f"{rng.getrandbits(16):04X}-"
             f"{rng.getrandbits(16):04X}-"
@@ -652,6 +681,8 @@ def materialize_edr_template_group(
         "guid": (
             _interface_guid(rng, host_key, host_ip)
             if "services\\tcpip\\parameters\\interfaces" in combined_lower
+            else _stable_registry_guid(host_key, combined_lower)
+            if "updateorchestrator\\schedule scan" in combined_lower
             else f"{rng.getrandbits(32):08X}-"
             f"{rng.getrandbits(16):04X}-"
             f"{rng.getrandbits(16):04X}-"

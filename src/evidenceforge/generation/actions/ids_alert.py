@@ -224,6 +224,7 @@ def _predicate_from_signature(
         http_methods=tuple(spec.http_methods),
         http_statuses=tuple(spec.http_statuses),
         requires_http_body=spec.requires_http_body,
+        file_mime_types=tuple(spec.file_mime_types),
         semantic_claim=spec.semantic_claim,
     )
 
@@ -304,8 +305,19 @@ def ids_alert_matches_transaction(
         return False
     if predicate.semantic_claim == "dns_response" and (dns is None or not has_response):
         return False
-    if predicate.semantic_claim == "file_content" and not file_transfers:
-        return False
+    if predicate.semantic_claim == "file_content":
+        eligible_files = tuple(
+            candidate
+            for candidate in file_transfers
+            if predicate.payload_direction != "resp" or not bool(candidate.is_orig)
+        )
+        if not eligible_files:
+            return False
+        if predicate.file_mime_types and not any(
+            str(candidate.mime_type).lower() in predicate.file_mime_types
+            for candidate in eligible_files
+        ):
+            return False
     return True
 
 

@@ -4577,11 +4577,31 @@ class StorylineMixin:
                 if existing_lease
                 else float(rng.choice([3600, 7200, 14400, 86400]))
             )
-            renewal_interval = (
-                float(existing_lease["renewal_interval"])
-                if existing_lease
-                else dhcp_renewal_interval_seconds(lease_time, rng)
-            )
+            if existing_lease:
+                legacy_timer_state = "renewal_rng" not in existing_lease
+                renewal_rng = existing_lease.get("renewal_rng")
+                if renewal_rng is None:
+                    renewal_rng = random.Random(
+                        _stable_seed(f"dhcp_renewal_timer:{system.hostname}:{mac}")
+                    )
+                if "timer_granularity" in existing_lease:
+                    timer_granularity = float(existing_lease["timer_granularity"])
+                else:
+                    timer_granularity = renewal_rng.choice([0.25, 1.0, 1.0, 5.0])
+            else:
+                legacy_timer_state = False
+                renewal_rng = random.Random(
+                    _stable_seed(f"dhcp_renewal_timer:{system.hostname}:{mac}")
+                )
+                timer_granularity = renewal_rng.choice([0.25, 1.0, 1.0, 5.0])
+            if legacy_timer_state:
+                renewal_interval = float(existing_lease["renewal_interval"])
+            else:
+                renewal_interval = dhcp_renewal_interval_seconds(
+                    lease_time,
+                    renewal_rng,
+                    timer_granularity=timer_granularity,
+                )
             msg_types = ["REQUEST", "ACK"] if existing_lease else None
             authored_ids_alerts = _build_ids_alert_contexts(
                 getattr(spec, "ids_alerts", []),
@@ -4611,6 +4631,8 @@ class StorylineMixin:
                     "last_renewal": time.timestamp(),
                     "next_renewal": time.timestamp() + renewal_interval,
                     "renewal_interval": renewal_interval,
+                    "renewal_rng": renewal_rng,
+                    "timer_granularity": timer_granularity,
                     "server_addr": dhcp_server,
                     "system": system,
                 }

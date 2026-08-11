@@ -504,6 +504,38 @@ class TestRegistryKeys:
             "Microsoft\\Office" in key
             for key, _name, _value in registry_entries_for_process(entries, "WINWORD.EXE")
         )
+        assert not any(
+            "\\Excel\\" in key or "\\PowerPoint\\" in key
+            for key, _name, _value in registry_entries_for_process(entries, "OUTLOOK.EXE")
+        )
+        assert not any(
+            "\\Word\\" in key
+            for key, _name, _value in registry_entries_for_process(entries, "EXCEL.EXE")
+        )
+        assert not any(
+            "Internet Settings" in key
+            for key, _name, _value in registry_entries_for_process(entries, "WINWORD.EXE")
+        )
+        assert not any(
+            name in {"EnableLUA", "SecurityHealthSystray"}
+            for _key, name, _value in registry_entries_for_process(entries, "dllhost.exe")
+        )
+        assert any(
+            name == "NoAutoUpdate"
+            for _key, name, _value in registry_entries_for_process(entries, "usoclient.exe")
+        )
+        assert not any(
+            "SearchboxTaskbarMode" == name
+            for _key, name, _value in registry_entries_for_process(entries, "powershell.exe")
+        )
+        assert any(
+            "SearchboxTaskbarMode" == name
+            for _key, name, _value in registry_entries_for_process(entries, "explorer.exe")
+        )
+        assert not any(
+            "Windows Defender\\Exclusions" in key
+            for key, _name, _value in registry_entries_for_process(entries, "MsMpEng.exe")
+        )
 
 
 def test_windows_ambient_file_artifacts_require_source_native_process_owners():
@@ -584,8 +616,39 @@ class TestTemplateMaterialization:
         assert not value_name.removeprefix("HRZR_EHACNGU").isdigit()
         assert "\\" in value_name
         detail_bytes = details.split()
-        assert len(detail_bytes) >= 32
+        assert len(detail_bytes) == 72
         assert all(len(byte) == 2 for byte in detail_bytes)
+
+        payload = bytes(int(byte, 16) for byte in detail_bytes)
+        assert int.from_bytes(payload[4:8], "little") >= 1
+        assert int.from_bytes(payload[60:68], "little") >= 116_444_736_000_000_000
+
+    def test_update_orchestrator_task_identity_is_host_stable(self):
+        template = (
+            "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tree\\"
+            "Microsoft\\Windows\\UpdateOrchestrator\\Schedule Scan",
+            "Id",
+            "{{{guid}}}",
+        )
+
+        first = materialize_edr_template_group(
+            template,
+            random.Random(1),
+            host_key="WS-01",
+        )
+        second = materialize_edr_template_group(
+            template,
+            random.Random(99),
+            host_key="WS-01",
+        )
+        other_host = materialize_edr_template_group(
+            template,
+            random.Random(1),
+            host_key="WS-02",
+        )
+
+        assert first[2] == second[2]
+        assert first[2] != other_host[2]
 
     def test_materializes_runmru_values_with_user_texture(self):
         import random

@@ -52,6 +52,7 @@ class ProcessExecutionRequest:
     allow_browser_launch_spacing: bool = True
     concurrency_group_id: str = ""
     lifecycle_group_id: str = ""
+    source_visible_by: datetime | None = None
     source: str = "activity_generator"
 
     @property
@@ -67,6 +68,7 @@ class ProcessExecutionRequest:
             f"{self.parent_pid}:{self.ensure_file_event}:{self.from_storyline}:"
             f"{self.suppress_command_file_effect}:{self.allow_existing_browser_reuse}:"
             f"{self.allow_browser_launch_spacing}{concurrency_suffix}{lifecycle_suffix}:"
+            f"{self.source_visible_by.isoformat() if self.source_visible_by else ''}:"
             f"{self.source}"
         )
         return f"process-execution-{seed:016x}"

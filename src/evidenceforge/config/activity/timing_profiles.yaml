@@ -344,14 +344,14 @@ network_sensor_observation:
   profiles:
     distributed_taps:
       clock_offset_us:
-        min: -35000
-        max: 35000
+        min: -250000
+        max: 250000
       clock_drift_ppm:
         min: -1
         max: 1
       route_delay_us:
-        min: 500
-        max: 25000
+        min: 200
+        max: 3500
       event_jitter_us:
         min: -1500
         max: 1500
@@ -413,13 +413,13 @@ windows_startup_modules:
   # dependency work and collector batching produce a heavy tail rather than
   # one fixed per-process cadence.
   initial_delay_us:
-    min: 250
-    max: 6500
+    min: 1500
+    max: 85000
   inter_load_gap_us:
-    median: 1900
-    sigma: 0.95
-    min: 120
-    max: 65000
+    median: 11000
+    sigma: 1.15
+    min: 800
+    max: 900000
 
 windows_event_time:
   collision_spacing:
@@ -431,3 +431,29 @@ windows_event_time:
     # unfold across seconds/minutes, not microseconds.
     large_gap_min_ms: 1000
     large_gap_max_ms: 4000
+
+sysmon_event_envelope:
+  # Sysmon EventData UtcTime is the semantic event time. The Windows event
+  # envelope is written later by the provider/ETW path and therefore has its
+  # own small, right-skewed latency distribution.
+  default:
+    median_us: 850
+    sigma: 0.8
+    min_us: 80
+    max_us: 18000
+    tail_probability: 0.012
+    tail_min_us: 12000
+    tail_max_us: 85000
+  event_ids:
+    "3":
+      median_us: 2100
+      sigma: 0.9
+      max_us: 35000
+    "5":
+      median_us: 1400
+      sigma: 0.85
+      max_us: 28000
+    "22":
+      median_us: 1750
+      sigma: 0.9
+      max_us: 32000

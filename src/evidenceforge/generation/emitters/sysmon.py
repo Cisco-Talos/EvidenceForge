@@ -1434,20 +1434,26 @@ class SysmonEventEmitter(LogEmitter):
         host = event.src_host
         net = event.network
         proc = event.process
+        seed_parts = (
+            host.hostname,
+            net.initiating_pid if net else -1,
+            net.src_ip if net else "",
+            net.src_port if net else 0,
+            net.dst_ip if net else "",
+            net.dst_port if net else 0,
+            event.timestamp,
+        )
 
         render_time = _SOURCE_TIMING.source_time(
             event,
             "source.sysmon_network_connection",
-            seed_parts=(
-                host.hostname,
-                net.initiating_pid if net else -1,
-                net.src_ip if net else "",
-                net.src_port if net else 0,
-                net.dst_ip if net else "",
-                net.dst_port if net else 0,
+            seed_parts=seed_parts,
+            not_before=_SOURCE_TIMING.canonical_time_in_source_clock(
+                event,
+                "source.sysmon_network_connection",
                 event.timestamp,
+                seed_parts,
             ),
-            not_before=event.timestamp,
         )
         utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
@@ -1871,6 +1877,27 @@ class SysmonEventEmitter(LogEmitter):
             event_data[field] = normalize_windows_id_value(value)
         if "EventID" in event_data:
             event_data["EventID"] = normalize_windows_event_id_value(event_data["EventID"])
+        native_time = event_data.get("TimeCreated")
+        if isinstance(native_time, datetime) and "UtcTime" in event_data:
+            computer = str(event_data.get("Computer") or "")
+            hostname = computer.split(".", 1)[0] if computer else ""
+            event_id = coerce_windows_event_id(event_data.get("EventID"))
+            identity_parts = (
+                event_data.get("ProcessGuid"),
+                event_data.get("ProcessId"),
+                event_data.get("SourceIp"),
+                event_data.get("SourcePort"),
+                native_time,
+            )
+            envelope_time = _SOURCE_TIMING.sysmon_envelope_time(
+                native_time,
+                hostname=hostname,
+                event_id=event_id,
+                identity_parts=identity_parts,
+            )
+            event_data["_SysmonNativeTime"] = native_time
+            event_data["_SysmonInitialEnvelopeTime"] = envelope_time
+            event_data["TimeCreated"] = envelope_time
         host_type = getattr(self._emission_context, "host_type", "")
         if host_type:
             event_data["_host_type"] = host_type
@@ -1888,8 +1915,6 @@ class SysmonEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
-                if "UtcTime" in event_data:
-                    event_data["UtcTime"] = _format_sysmon_utc_time(ts)
                 event_data["TimeCreated"] = format_windows_system_time(ts, event_data)
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":
@@ -2102,11 +2127,19 @@ class SysmonEventEmitter(LogEmitter):
                     event["CreationUtcTime"] = _format_sysmon_utc_time(shifted_time)
 
     def _sync_utc_time_fields(self) -> None:
-        """Keep Sysmon EventData UtcTime aligned with final TimeCreated values."""
+        """Preserve provider-envelope latency through final causal time repairs."""
         for event in self._event_dicts:
-            ts = event.get("TimeCreated")
-            if "UtcTime" in event and isinstance(ts, datetime):
-                event["UtcTime"] = _format_sysmon_utc_time(ts)
+            envelope_time = event.get("TimeCreated")
+            native_time = event.pop("_SysmonNativeTime", None)
+            initial_envelope = event.pop("_SysmonInitialEnvelopeTime", None)
+            if (
+                "UtcTime" in event
+                and isinstance(envelope_time, datetime)
+                and isinstance(native_time, datetime)
+                and isinstance(initial_envelope, datetime)
+            ):
+                repair_delta = envelope_time - initial_envelope
+                event["UtcTime"] = _format_sysmon_utc_time(native_time + repair_delta)
 
     def _shift_terminations_after_followons(self) -> None:
         """Prevent Event 5 from preceding visible same-process follow-on telemetry."""

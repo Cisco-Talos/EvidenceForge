@@ -485,6 +485,10 @@ Validation warns when a network topology has no firewall entry. Requesting `cisc
         workstations: inside
         servers: inside
         dmz: dmz
+      interface_security_levels: # Optional; conventional outside/dmz/inside use 0/50/100
+        outside: 0
+        dmz: 50
+        inside: 100
       default_action: deny      # deny (default) | permit
       deny_ratio: 5.0           # Deny events per allow event in baseline (default: 5.0)
       threat_detection_rate: 10 # Deny rate (drops/sec) triggering 733100 alerts (0=disabled)

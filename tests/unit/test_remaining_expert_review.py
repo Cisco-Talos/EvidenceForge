@@ -338,6 +338,67 @@ class TestStorylineAccountLifecycle:
         assert resolved_pid == pid
         engine.activity_generator.generate_system_process.assert_not_called()
 
+    def test_service_account_delegation_does_not_reuse_one_shot_check(self):
+        """A check-once caller is a fresh bounded process, not a resident agent."""
+        engine = object.__new__(BaselineMixin)
+        engine.state_manager = StateManager()
+        engine.activity_generator = Mock()
+        engine.activity_generator.generate_system_process.return_value = 8124
+        timestamp = datetime(2024, 3, 18, 13, 0, tzinfo=UTC)
+        engine.state_manager.set_current_time(timestamp - timedelta(minutes=5))
+        services_pid = engine.state_manager.create_process(
+            system="WS-01",
+            parent_pid=0,
+            image=r"C:\Windows\System32\services.exe",
+            command_line="services.exe",
+            username="SYSTEM",
+            integrity_level="System",
+        )
+        engine.state_manager.create_process(
+            system="WS-01",
+            parent_pid=services_pid,
+            image=r"C:\Program Files\Meridian\OpsAgent\ops-agent.exe",
+            command_line=r'"C:\Program Files\Meridian\OpsAgent\ops-agent.exe" check --once',
+            username="SYSTEM",
+            integrity_level="System",
+        )
+        system = SimpleNamespace(hostname="WS-01", os="Windows 10", type="workstation")
+        config = {
+            "caller_profiles": [
+                {
+                    "name": "ops_agent",
+                    "account_terms": ["svc"],
+                    "weight": 1,
+                    "processes": [
+                        {
+                            "image": r"C:\Program Files\Meridian\OpsAgent\ops-agent.exe",
+                            "command_line": (
+                                r'"C:\Program Files\Meridian\OpsAgent\ops-agent.exe" check --once'
+                            ),
+                            "parent_key": "services",
+                            "weight": 1,
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with patch(
+            "evidenceforge.generation.engine.baseline.service_account_delegation_config",
+            return_value=config,
+        ):
+            _, resolved_pid = engine._ensure_service_account_delegation_process(
+                system=system,
+                svc_name="svc_ops",
+                time=timestamp,
+                sys_pids={"services": services_pid},
+                rng=random.Random(11),
+            )
+
+        assert resolved_pid == 8124
+        engine.activity_generator.generate_system_process.assert_called_once()
+        engine.activity_generator.generate_system_process_termination.assert_called_once()
+
     def test_backup_server_binary_is_not_selected_on_workstation(self):
         """Server-side backup controllers must not be assigned to workstations."""
         engine = object.__new__(BaselineMixin)
@@ -377,6 +438,37 @@ class TestStorylineAccountLifecycle:
             )
 
         assert choice["image"].endswith("powershell.exe")
+
+    def test_default_service_maintenance_varies_by_host_role(self):
+        """Generic service delegation should not collapse to one fleet-wide script."""
+        engine = object.__new__(BaselineMixin)
+        engine.scenario = SimpleNamespace(name="deployment-a")
+        workstation = SimpleNamespace(type="workstation")
+        server = SimpleNamespace(type="server")
+
+        workstation_commands = {
+            engine._pick_service_account_delegation_process(
+                "svc_generic",
+                random.Random(seed),
+                workstation,
+            )["command_line"]
+            for seed in range(100)
+        }
+        server_commands = {
+            engine._pick_service_account_delegation_process(
+                "svc_generic",
+                random.Random(seed),
+                server,
+            )["command_line"]
+            for seed in range(100)
+        }
+
+        assert len(workstation_commands) >= 4
+        assert len(server_commands) >= 4
+        assert any("endpoint-inventory.ps1" in command for command in workstation_commands)
+        assert not any("endpoint-inventory.ps1" in command for command in server_commands)
+        assert any("certificate-health.ps1" in command for command in server_commands)
+        assert not any("certificate-health.ps1" in command for command in workstation_commands)
 
 
 class TestIdsFalsePositiveSignatures:

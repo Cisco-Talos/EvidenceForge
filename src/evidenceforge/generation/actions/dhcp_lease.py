@@ -35,11 +35,30 @@ from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
 
 
-def dhcp_renewal_interval_seconds(lease_time: float, rng: Random) -> float:
-    """Return a jittered DHCP T1-style renewal interval."""
+def dhcp_renewal_interval_seconds(
+    lease_time: float,
+    rng: Random,
+    *,
+    timer_granularity: float = 1.0,
+) -> float:
+    """Return one client-timer realization around the lease's T1 boundary.
+
+    DHCP clients normally target T1, but wakeups, scheduler latency, timer
+    granularity, and occasional retry/backoff alter the observed interval after
+    each ACK.  The caller owns a client-scoped RNG so successive lease cycles
+    retain one implementation character without repeating one fixed interval.
+    """
 
     base_renewal = max(60.0, lease_time / 2)
-    return base_renewal * (1.0 + rng.uniform(-0.10, 0.10))
+    scheduling_drift = lease_time * rng.triangular(-0.015, 0.025, 0.002)
+    if rng.random() < 0.08:
+        scheduling_drift += lease_time * rng.uniform(0.02, 0.08)
+    if rng.random() < 0.05:
+        scheduling_drift += rng.uniform(1.0, 8.0)
+    interval = max(60.0, base_renewal + scheduling_drift)
+    granularity = max(0.05, timer_granularity)
+    quantized = round(interval / granularity) * granularity
+    return max(60.0, quantized + rng.uniform(0.0, min(1.0, granularity)))
 
 
 @dataclass(frozen=True, slots=True)

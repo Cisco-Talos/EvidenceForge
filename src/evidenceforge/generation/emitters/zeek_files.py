@@ -416,21 +416,21 @@ def _bounded_file_transfer_observation(
     if conn_duration is None or conn_duration <= 0:
         return file_ts, file_duration
 
-    epsilon = 0.001
+    close_margin = _SOURCE_TIMING.file_transfer_close_margin_seconds(event, ft, conn_duration)
     conn_end = conn_ts + timedelta(seconds=conn_duration)
-    max_duration = max(0.0, conn_duration - epsilon)
+    max_duration = max(0.0, conn_duration - close_margin)
     bounded_duration = min(max(0.0, file_duration), max_duration)
-    latest_start = conn_end - timedelta(seconds=bounded_duration + epsilon)
+    latest_start = conn_end - timedelta(seconds=bounded_duration + close_margin)
     if lower_bound > latest_start:
         lower_bound = min(max(hard_lower_bound, latest_start), conn_end)
-        bounded_duration = max(0.0, (conn_end - lower_bound).total_seconds() - epsilon)
+        bounded_duration = max(0.0, (conn_end - lower_bound).total_seconds() - close_margin)
         latest_start = lower_bound
     if file_ts > latest_start and lower_bound <= latest_start:
         file_ts = latest_start
     if file_ts < lower_bound:
         file_ts = lower_bound
     if file_ts + timedelta(seconds=bounded_duration) > conn_end:
-        bounded_duration = max(0.0, (conn_end - file_ts).total_seconds() - epsilon)
+        bounded_duration = max(0.0, (conn_end - file_ts).total_seconds() - close_margin)
     return file_ts, bounded_duration
 
 

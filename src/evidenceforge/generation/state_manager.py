@@ -771,6 +771,7 @@ class StateManager:
         source_port: int | None = None,
         session_kind: str | None = None,
         transport_pid: int | None = None,
+        closure_owned_by_bundle: bool | None = None,
         network_close_time: datetime | None = None,
         source_ready_time: datetime | None = None,
         logon_guid: str | None = None,
@@ -798,6 +799,8 @@ class StateManager:
                 session.session_kind = session_kind
             if transport_pid is not None:
                 session.transport_pid = transport_pid
+            if closure_owned_by_bundle is not None:
+                session.closure_owned_by_bundle = closure_owned_by_bundle
             if network_close_time is not None:
                 session.network_close_time = ensure_utc(network_close_time)
             if source_ready_time is not None:
@@ -1118,28 +1121,27 @@ class StateManager:
         rng = random.Random(_stable_seed(f"linux_pid_hidden_churn:{system}"))
         prefix = [0]
         hourly_factor = 1.0
+        hourly_regimes = [0.20, 0.40, 0.70, 1.00, 1.50, 2.80]
         for minute_of_week in range(_MINUTES_PER_WEEK):
             day = minute_of_week // (24 * 60)
             minute_of_day = minute_of_week % (24 * 60)
             hour = minute_of_day // 60
             if minute_of_day % 60 == 0:
-                hourly_factor = rng.choices(
-                    (0.70, 0.85, 1.00, 1.20, 1.50),
-                    weights=(10, 20, 40, 20, 10),
-                    k=1,
-                )[0]
+                if hour % len(hourly_regimes) == 0:
+                    rng.shuffle(hourly_regimes)
+                hourly_factor = hourly_regimes[hour % len(hourly_regimes)]
             if day >= 5:
-                base_churn = 95
+                base_churn = 76
             elif 8 <= hour < 18:
-                base_churn = 145
+                base_churn = 116
             else:
-                base_churn = 115
+                base_churn = 92
             hourly_target = round(base_churn * hourly_factor)
-            lower = max(76, hourly_target - 18)
-            upper = min(220, hourly_target + 18)
+            lower = max(48, round(hourly_target * 0.45))
+            upper = min(720, max(lower, round(hourly_target * 1.55)))
             churn = rng.randint(lower, upper)
-            if rng.random() < 0.015:
-                churn += rng.randint(18, 72)
+            if rng.random() < 0.04:
+                churn += rng.randint(90, 480)
             prefix.append(prefix[-1] + churn)
 
         frozen = tuple(prefix)

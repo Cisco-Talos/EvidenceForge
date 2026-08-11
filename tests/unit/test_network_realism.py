@@ -271,8 +271,9 @@ class TestSslRealism:
 
         assert tls12_resumed == {"CSIFIFD"}
         assert all("X" in history for history in tls12_full)
-        assert tls13_resumed == {"CSOFFD"}
-        assert all("X" in history and "Y" in history for history in tls13_full)
+        assert tls13_resumed == {"CSD"}
+        assert tls13_full == {"CSD", "CSDD", "CSDDD"}
+        assert all(not set(history) & {"O", "X", "Y", "F", "T"} for history in tls13_full)
 
     def test_tls12_cipher_aes128_dominates(self):
         rng = random.Random(42)

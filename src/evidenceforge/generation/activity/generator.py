@@ -83,6 +83,7 @@ from evidenceforge.events.cryptography import (
     TlsCertificatePresentationPlan,
 )
 from evidenceforge.events.dispatcher import EventDispatcher, expand_formats
+from evidenceforge.events.identity import EventIdentityPlan, SessionIdentity
 from evidenceforge.events.lifecycle import ActionLifecycleContext, SessionEndPlan
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -192,7 +193,10 @@ from evidenceforge.generation.activity.mail_public_identities import (
     public_mail_ptr_name,
     public_safe_mail_hostname,
 )
-from evidenceforge.generation.activity.network_params import public_dns_resolver_ips
+from evidenceforge.generation.activity.network_params import (
+    linux_smb_connection_owner,
+    public_dns_resolver_ips,
+)
 from evidenceforge.generation.activity.proxy_uri import (
     get_proxy_domain_class,
     is_browser_like_proxy_domain,
@@ -1813,6 +1817,10 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
         "/usr/lib/apt/methods/"
     ):
         return (5.0, 60.0)
+    if exe_name in {"python", "python3", "node", "npm", "git"} and any(
+        marker in f" {command} " for marker in (" --version ", " -v ", " version ")
+    ):
+        return (0.05, 2.0)
     if exe_name in {"apt", "apt-get", "dnf", "yum"} and any(
         token in command for token in ("update", "upgradable", "makecache", "check-update")
     ):
@@ -1847,6 +1855,14 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
         return (0.35, 5.0)
     if exe_name in {"curl", "wget"}:
         return (0.8, 12.0)
+    if exe_name == "smbclient":
+        return (1.0, 20.0) if " -c " in f" {command} " else None
+    if exe_name == "git":
+        if any(token in f" {command} " for token in (" pull ", " fetch ", " clone ")):
+            return (3.0, 90.0)
+        return (0.3, 12.0)
+    if exe_name == "npm" and " run build" in command:
+        return (8.0, 180.0)
     if exe_name == "ssh":
         return (30.0, 3600.0)
     if exe_name in {"gzip", "tar", "zip", "scp", "kubectl", "docker"}:
@@ -1865,7 +1881,10 @@ _LINUX_ONE_SHOT_NETWORK_EXES: set[str] = {
     "apt-get",
     "curl",
     "dnf",
+    "git",
+    "npm",
     "python3",
+    "smbclient",
     "wget",
     "scp",
     "kubectl",
@@ -1900,6 +1919,12 @@ def _windows_foreground_lifetime(
         if "--service" in command:
             return None
         return (2.0, 45.0)
+    if " check --once" in f" {command} ":
+        return (2.0, 45.0)
+    if any(marker in command for marker in ("--silent", " /quiet", " /norestart")) and any(
+        marker in exe_name for marker in ("setup", "installer", "update", "updater", "msi")
+    ):
+        return (8.0, 360.0)
     if exe_name in {
         "whoami.exe",
         "hostname.exe",
@@ -2797,12 +2822,11 @@ _SSL_HISTORY_TLS12_FULL_HANDSHAKE = (
 )
 _SSL_HISTORY_TLS12_RESUMED = (("CSIFIFD", 20),)  # abbreviated session, no cert/key exchange
 _SSL_HISTORY_TLS13_FULL_HANDSHAKE = (
-    ("CSOXYFFD", 36),  # full TLS 1.3 handshake plus encrypted app data
-    ("CSOXYFFTD", 18),  # full handshake with ticket
-    ("CSJOXYFFD", 8),  # HelloRetryRequest path
-    ("CSOXYFFL", 12),  # established then alert/close
+    ("CSD", 36),  # ClientHello, ServerHello, then encrypted records
+    ("CSDD", 26),  # multiple encrypted application-data records
+    ("CSDDD", 12),  # longer post-handshake encrypted exchange
 )
-_SSL_HISTORY_TLS13_RESUMED = (("CSOFFD", 26),)  # PSK-style handshake, no cert messages
+_SSL_HISTORY_TLS13_RESUMED = (("CSD", 26),)  # PSK identity is visible; later messages are encrypted
 _SSL_HISTORY_TLS12_SUCCESS = _SSL_HISTORY_TLS12_FULL_HANDSHAKE + _SSL_HISTORY_TLS12_RESUMED
 _SSL_HISTORY_TLS13_SUCCESS = _SSL_HISTORY_TLS13_FULL_HANDSHAKE + _SSL_HISTORY_TLS13_RESUMED
 _SSL_HISTORY_SUCCESS = _SSL_HISTORY_TLS12_SUCCESS + _SSL_HISTORY_TLS13_SUCCESS
@@ -4232,9 +4256,9 @@ class ActivityGenerator:
         self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
         self._ntp_server_response_profiles: dict[str, dict[str, float]] = {}
         self._ntp_last_parser_times: dict[tuple[str, str], datetime] = {}
-        self._bash_history_next_time: dict[tuple[str, str], datetime] = {}
-        self._bash_history_command_counts: dict[tuple[str, str], int] = {}
-        self._bash_history_quick_streaks: dict[tuple[str, str], int] = {}
+        self._bash_history_next_time: dict[tuple[str, str, str], datetime] = {}
+        self._bash_history_command_counts: dict[tuple[str, str, str], int] = {}
+        self._bash_history_quick_streaks: dict[tuple[str, str, str], int] = {}
         self._bash_history_user_seconds: dict[tuple[str, int], int] = {}
         self._linux_shell_last_session_close: dict[tuple[str, str], datetime] = {}
         self._linux_local_logon_syslog_sessions: set[str] = set()
@@ -4426,13 +4450,15 @@ class ActivityGenerator:
 
         window_end = ensure_utc(end_time)
         pending = sorted(self._pending_ssh_session_closures, key=lambda item: item[0])
-        self._pending_ssh_session_closures = []
+        remaining = []
         for close_time, bundle, state, event, auth_state in pending:
             if close_time >= window_end:
+                remaining.append((close_time, bundle, state, event, auth_state))
                 continue
             if not state.logon_id or self.state_manager.get_session(state.logon_id) is None:
                 continue
             bundle._dispatch_linux_session_close_lifecycle(state, event, auth_state)
+        self._pending_ssh_session_closures = remaining
 
     def _generate_bounded_foreground_process_termination(
         self,
@@ -4448,6 +4474,31 @@ class ActivityGenerator:
     ) -> datetime:
         """Emit and track termination for a bounded foreground command process."""
         termination_time = start_time + timedelta(seconds=rng.uniform(*lifetime))
+        session_end_plan = self.state_manager.get_session_end_plan(logon_id)
+        session = self.state_manager.get_session(logon_id)
+        lifecycle_deadlines = [
+            ensure_utc(deadline)
+            for deadline in (
+                session_end_plan.canonical_end
+                if session_end_plan is not None and session_end_plan.is_authoritative
+                else None,
+                session.network_close_time if session is not None else None,
+            )
+            if deadline is not None
+        ]
+        if lifecycle_deadlines:
+            deadline = min(lifecycle_deadlines)
+            # A foreground command belongs to its interactive session.  Its
+            # sampled lifetime cannot outlive the transport/session deadline;
+            # leave a small canonical margin for source-native termination
+            # latency before the session's close observation.
+            latest_termination = deadline - timedelta(seconds=2)
+            if latest_termination <= ensure_utc(start_time):
+                latest_termination = min(
+                    deadline - timedelta(milliseconds=25),
+                    ensure_utc(start_time) + timedelta(milliseconds=100),
+                )
+            termination_time = min(termination_time, latest_termination)
         self._remember_foreground_process_finalizer(
             system=system,
             user=user,
@@ -4464,6 +4515,7 @@ class ActivityGenerator:
                 pid=pid,
                 process_name=process_name,
                 logon_id=logon_id,
+                session_end_plan=session_end_plan,
             )
             source_termination_time = self.process_source_terminate_time(system.hostname, pid)
             if source_termination_time is not None:
@@ -4555,9 +4607,14 @@ class ActivityGenerator:
             )
         )
         release_time = termination_time + timedelta(milliseconds=rng.randint(180, 1400))
-        bash_key = (system.hostname, username)
+        bash_key = (system.hostname, username, logon_id)
         self._bash_history_next_time[bash_key] = max(
             self._bash_history_next_time.get(bash_key, release_time),
+            release_time,
+        )
+        generic_bash_key = (system.hostname, username, "")
+        self._bash_history_next_time[generic_bash_key] = max(
+            self._bash_history_next_time.get(generic_bash_key, release_time),
             release_time,
         )
         key = self._foreground_shell_key(
@@ -4591,7 +4648,10 @@ class ActivityGenerator:
             return requested_time
         reserved_time = max(
             requested_time,
-            self._bash_history_next_time.get((system.hostname, username), requested_time),
+            self._bash_history_next_time.get(
+                (system.hostname, username, logon_id),
+                requested_time,
+            ),
         )
         return self._reserve_foreground_shell_time(
             system=system,
@@ -6147,12 +6207,7 @@ class ActivityGenerator:
             )
 
         if service_name == "smb" or dst_port == 445:
-            return (
-                f"smbclient:{target}",
-                "/usr/bin/smbclient",
-                f"smbclient //{target}/Shared --use-kerberos=required -c 'ls'",
-                "root",
-            )
+            return linux_smb_connection_owner(roles, target)
 
         if dst_port in {80, 443, 8080, 8443} or service_name in {"http", "ssl", "https"}:
             user_agent = (http.user_agent if http is not None else "") or ""
@@ -6453,6 +6508,7 @@ class ActivityGenerator:
             image,
             command_line,
         )
+        require_unique_process = self._connection_owner_requires_unique_transport_process(image)
         for proc in self.state_manager.get_processes_on_system(source_system.hostname):
             if proc.image.lower() == image_lower and proc.username == username:
                 if require_exact_command and proc.command_line != command_line:
@@ -6460,6 +6516,8 @@ class ActivityGenerator:
                 candidate_pids.append(proc.pid)
 
         for candidate_pid in candidate_pids:
+            if require_unique_process:
+                continue
             proc = self.state_manager.get_process(source_system.hostname, candidate_pid)
             if proc is None:
                 continue
@@ -6486,6 +6544,11 @@ class ActivityGenerator:
         """Return whether a process command line carries per-target network semantics."""
         image_lower = image.lower()
         command_lower = command_line.lower()
+        # A literal SMB URI binds any executable—not only generic clients—to
+        # one repository peer. Reusing that process for another destination
+        # would make its endpoint FLOW contradict its own command line.
+        if "smb://" in command_lower:
+            return True
         target_bearing_images = {
             "curl",
             "curl.exe",
@@ -6528,7 +6591,6 @@ class ActivityGenerator:
                     "sftp ",
                     "sftp.exe ",
                     "smbclient ",
-                    "smb://",
                 )
             )
         return False
@@ -6550,7 +6612,15 @@ class ActivityGenerator:
         """Return whether each transport needs a distinct short-lived client process."""
 
         executable = image.lower().replace("\\", "/").rsplit("/", 1)[-1]
-        return executable in {"ssh", "ssh.exe", "scp", "scp.exe", "sftp", "sftp.exe"}
+        return executable in {
+            "ssh",
+            "ssh.exe",
+            "scp",
+            "scp.exe",
+            "sftp",
+            "sftp.exe",
+            "smbclient",
+        }
 
     def _ensure_user_connection_owner_process(
         self,
@@ -6562,6 +6632,7 @@ class ActivityGenerator:
         os_category: str,
         hostname: str | None,
         ssh_attempted_username: str | None,
+        source_visible_by: datetime | None = None,
     ) -> tuple[int, str | None]:
         """Create or reuse a user process for high-confidence workstation flows."""
         spec = self._user_connection_owner_spec(
@@ -6692,6 +6763,7 @@ class ActivityGenerator:
             suppress_command_file_effect=True,
             allow_existing_browser_reuse=False,
             allow_browser_launch_spacing=False,
+            source_visible_by=source_visible_by,
         )
         self._record_user_process(source_system, user, pid, image)
         self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
@@ -6713,14 +6785,28 @@ class ActivityGenerator:
     ) -> int:
         """Return a visible interactive shell for a user-owned Windows CLI process."""
 
+        command_exe = child_command_line.strip().split(maxsplit=1)[0].strip('"').lower()
+        requires_dedicated_shell = command_exe in {
+            "ssh",
+            "ssh.exe",
+            "scp",
+            "scp.exe",
+            "sftp",
+            "sftp.exe",
+        }
         candidate = self.state_manager.get_process(system.hostname, candidate_pid)
-        if candidate is not None:
+        if candidate is not None and not requires_dedicated_shell:
             candidate_exe = ntpath.basename(candidate.image).lower()
             if (
                 candidate_exe in self._WINDOWS_SHELL_NAMES
                 and candidate.logon_id == session.logon_id
                 and self._is_pid_active_at(system, candidate.pid, child_time)
                 and not self._is_one_shot_shell_parent(system, candidate.pid)
+                and not self._shell_has_active_foreground_child(
+                    system,
+                    candidate.pid,
+                    child_time,
+                )
             ):
                 return candidate.pid
 
@@ -6732,8 +6818,9 @@ class ActivityGenerator:
             and proc.logon_id == session.logon_id
             and self._is_pid_active_at(system, proc.pid, child_time)
             and not self._is_one_shot_shell_parent(system, proc.pid)
+            and not self._shell_has_active_foreground_child(system, proc.pid, child_time)
         ]
-        if shell_candidates:
+        if shell_candidates and not requires_dedicated_shell:
             return max(shell_candidates, key=lambda proc: proc.start_time).pid
 
         shell_seed = _stable_seed(
@@ -6777,6 +6864,26 @@ class ActivityGenerator:
         )
         self._record_user_process(system, user, shell_pid, shell_image)
         return shell_pid
+
+    def _shell_has_active_foreground_child(
+        self,
+        system: System,
+        shell_pid: int,
+        activity_time: datetime,
+    ) -> bool:
+        """Return whether a shell is blocked by an ordinary foreground child."""
+        os_category = _get_os_category(system.os)
+        for process in self.state_manager.get_processes_on_system(system.hostname):
+            if process.parent_pid != shell_pid or process.start_time > activity_time:
+                continue
+            lifetime = (
+                _windows_foreground_lifetime(process.image, process.command_line)
+                if os_category == "windows"
+                else _linux_foreground_lifetime(process.image, process.command_line)
+            )
+            if lifetime is not None:
+                return True
+        return False
 
     @staticmethod
     def _user_connection_owner_spec(
@@ -9785,6 +9892,25 @@ class ActivityGenerator:
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch_builder(event)
 
+        # Interactive child processes cannot be visible to eCAR before the
+        # source-native session login that owns their LogonID.  The session
+        # renderer finalizes that timestamp during dispatch, so publish it as
+        # the readiness floor before materializing the shell lifecycle.
+        if os_cat == "windows" and logon_type in (2, 10, 11) and event.lifecycle is not None:
+            ecar_login_time = self.dispatcher.source_timing_planner.session_start_source_time(
+                "ecar",
+                event.lifecycle.group_id,
+            )
+            session = self.state_manager.get_session(logon_id)
+            existing_ready_time = _session_source_ready_time(session) if session else None
+            if ecar_login_time is not None and (
+                existing_ready_time is None or existing_ready_time < ecar_login_time
+            ):
+                self.state_manager.update_session_metadata(
+                    logon_id,
+                    source_ready_time=ecar_login_time,
+                )
+
         # Phase 4: Create per-session explorer.exe for interactive logons
         if logon_type in (2, 10, 11):
             session = self.state_manager.get_session(logon_id)
@@ -9859,6 +9985,37 @@ class ActivityGenerator:
         )
         self._linux_local_logind_session_ids[logon_id] = session_id
         self.state_manager.update_session_metadata(logon_id, session_id=session_id)
+        system_type = (system.type or "workstation").lower()
+        pam_service = (
+            "login"
+            if system_type in {"server", "domain_controller"} or user.username == "root"
+            else "gdm-password"
+        )
+        pam_actor = "LOGIN(uid=0)" if pam_service == "login" else "gdm(uid=0)"
+        pam_time = logind_time - timedelta(milliseconds=rng.randint(3000, 8000))
+        self.generate_syslog_event(
+            system=system,
+            time=pam_time,
+            app_name=pam_service,
+            message=(
+                f"pam_unix({pam_service}:session): session opened for user "
+                f"{user.username}(uid={_linux_uid_for_user(user.username)}) by {pam_actor}"
+            ),
+            pid=self.state_manager.allocate_transient_linux_pid(
+                system.hostname,
+                pam_time,
+                os_category="linux",
+            ),
+            facility=10,
+            auth=AuthContext(
+                username=user.username,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+                session_id=session_id,
+                logon_type=session.logon_type,
+                source_ip="-",
+            ),
+        )
         self.generate_syslog_event(
             system=system,
             time=logind_time,
@@ -10750,10 +10907,12 @@ class ActivityGenerator:
 
         # Terminate session-specific processes before ending session
         session = self.state_manager.get_session(logon_id)
+        session_transport_pid = session.transport_pid if session is not None else None
         is_ssh_session = session and (
             session.session_kind == "ssh"
             or (_get_os_category(system.os) == "linux" and logon_type == 10)
         )
+        deferred_ssh_transport_process = None
         if session:
             logon_type = session.logon_type
             ssh_transport_close_time = (
@@ -10817,6 +10976,24 @@ class ActivityGenerator:
                 logon_id,
                 session.system,
             )
+            deferred_ssh_transport_process = (
+                next(
+                    (
+                        process
+                        for process in session_processes
+                        if process.pid == session_transport_pid
+                    ),
+                    None,
+                )
+                if is_ssh_session and session_transport_pid is not None
+                else None
+            )
+            if deferred_ssh_transport_process is not None:
+                session_processes = [
+                    process
+                    for process in session_processes
+                    if process.pid != deferred_ssh_transport_process.pid
+                ]
             session_process_by_pid = {proc.pid: proc for proc in session_processes}
 
             def _session_process_depth(pid: int) -> int:
@@ -10853,7 +11030,10 @@ class ActivityGenerator:
                     )
                     for proc in session_processes
                 ]
-                termination_span = timedelta(milliseconds=max(500, sum(termination_gaps_ms) + 150))
+                final_margin_ms = 1000 if ssh_transport_close_time is not None else 150
+                termination_span = timedelta(
+                    milliseconds=max(500, sum(termination_gaps_ms) + final_margin_ms)
+                )
             termination_start = time - termination_span
             prior_visible_termination = self._session_process_source_terminate_times.get(
                 (session.system, logon_id)
@@ -10880,6 +11060,41 @@ class ActivityGenerator:
                         milliseconds=cumulative_gap_ms
                     )
                     cumulative_gap_ms += termination_gaps_ms[ordinal]
+                process_lifetime = (
+                    _windows_foreground_lifetime(
+                        session_process.image,
+                        session_process.command_line,
+                    )
+                    if _get_os_category(system.os) == "windows"
+                    else _linux_foreground_lifetime(
+                        session_process.image,
+                        session_process.command_line,
+                    )
+                )
+                if process_lifetime is not None:
+                    lifetime_rng = random.Random(
+                        _stable_seed(
+                            "orphan_foreground_process_lifetime:"
+                            f"{session.system}:{session_process.pid}:"
+                            f"{session_process.start_time.isoformat()}:"
+                            f"{session_process.command_line}"
+                        )
+                    )
+                    bounded_termination_time = ensure_utc(session_process.start_time) + timedelta(
+                        seconds=lifetime_rng.uniform(*process_lifetime)
+                    )
+                    connection_hold = self._process_connection_hold_until.get(
+                        (session.system, session_process.pid)
+                    )
+                    if connection_hold is not None:
+                        bounded_termination_time = max(
+                            bounded_termination_time,
+                            ensure_utc(connection_hold) + timedelta(milliseconds=25),
+                        )
+                    requested_termination_time = min(
+                        requested_termination_time,
+                        bounded_termination_time,
+                    )
                 self.generate_process_termination(
                     user=user,
                     system=system,
@@ -10917,6 +11132,12 @@ class ActivityGenerator:
                     logon_id,
                     session.system,
                 )
+                if deferred_ssh_transport_process is not None:
+                    remaining_processes = [
+                        process
+                        for process in remaining_processes
+                        if process.pid != deferred_ssh_transport_process.pid
+                    ]
                 if remaining_processes:
                     raise StateError(
                         "Authoritative session closure left running processes: "
@@ -10977,8 +11198,8 @@ class ActivityGenerator:
                     seconds=90
                 )
             sshd_pid = (
-                session.transport_pid
-                if session and session.transport_pid is not None
+                session_transport_pid
+                if session_transport_pid is not None
                 else self.state_manager.allocate_transient_linux_pid(
                     system.hostname, time, os_category=_get_os_category(system.os)
                 )
@@ -11000,6 +11221,7 @@ class ActivityGenerator:
                     message=f"pam_unix(sshd:session): session closed for user {user.username}",
                 )
 
+        pam_close_time: datetime | None = None
         if authoritative_end_plan is not None:
             ecar_close_time = time + sample_timing_delta(
                 "source.ecar_session_logout",
@@ -11036,6 +11258,32 @@ class ActivityGenerator:
                     "syslog",
                     pam_close_time,
                 )
+
+        if session is not None and deferred_ssh_transport_process is not None:
+            if event.syslog is not None:
+                pam_close_time = self._source_timing_planner.session_closure_source_time(
+                    event,
+                    "syslog",
+                )
+            responder_close_anchor = pam_close_time or ensure_utc(time)
+            responder_close_seed = _stable_seed(
+                "generic_ssh_responder_terminate_after_pam:"
+                f"{system.hostname}:{logon_id}:{deferred_ssh_transport_process.pid}:"
+                f"{responder_close_anchor.isoformat()}"
+            )
+            self.generate_process_termination(
+                user=user,
+                system=system,
+                time=responder_close_anchor
+                + timedelta(
+                    milliseconds=3200 + (responder_close_seed % 2000),
+                    microseconds=307 + (responder_close_seed % 491),
+                ),
+                pid=deferred_ssh_transport_process.pid,
+                process_name=deferred_ssh_transport_process.image,
+                logon_id=deferred_ssh_transport_process.logon_id,
+                from_storyline=from_storyline,
+            )
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch_builder(event)
@@ -11535,6 +11783,7 @@ class ActivityGenerator:
         allow_browser_launch_spacing: bool = True,
         concurrency_group_id: str = "",
         lifecycle_group_id: str = "",
+        source_visible_by: datetime | None = None,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -11582,6 +11831,7 @@ class ActivityGenerator:
             allow_browser_launch_spacing=allow_browser_launch_spacing,
             concurrency_group_id=concurrency_group_id,
             lifecycle_group_id=lifecycle_group_id,
+            source_visible_by=source_visible_by,
         )
         return ProcessExecutionActionBundle(self, request).execute()
 
@@ -11602,6 +11852,7 @@ class ActivityGenerator:
         allow_existing_browser_reuse = request.allow_existing_browser_reuse
         allow_browser_launch_spacing = request.allow_browser_launch_spacing
         concurrency_group_id = request.concurrency_group_id
+        source_visible_by = request.source_visible_by
 
         self.state_manager.set_current_time(time)
         session_end_plan = self.state_manager.get_session_end_plan(logon_id)
@@ -11968,11 +12219,21 @@ class ActivityGenerator:
             storyline_origin=from_storyline,
         )
 
-        self._record_process_source_create_time(system.hostname, pid, event)
+        self._record_process_source_create_time(
+            system.hostname,
+            pid,
+            event,
+            not_after=source_visible_by,
+        )
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch_builder(event)
-        self._record_process_source_create_time(system.hostname, pid, event)
+        self._record_process_source_create_time(
+            system.hostname,
+            pid,
+            event,
+            not_after=source_visible_by,
+        )
         if _get_os_category(system.os) == "windows":
             self._emit_windows_process_startup_modules(
                 user=user,
@@ -12266,9 +12527,11 @@ class ActivityGenerator:
         hostname: str,
         pid: int,
         event: OccurrenceBuilder,
+        *,
+        not_after: datetime | None = None,
     ) -> None:
         """Remember the latest rendered source timestamp for a process create."""
-        self._plan_process_source_create_times(event)
+        self._plan_process_source_create_times(event, not_after=not_after)
         source_timing = event.source_timing
         if source_timing is None:
             return
@@ -12340,7 +12603,12 @@ class ActivityGenerator:
             seed_parts=(system.hostname, pid, visible_create_time, time),
         )
 
-    def _plan_process_source_create_times(self, event: OccurrenceBuilder) -> None:
+    def _plan_process_source_create_times(
+        self,
+        event: OccurrenceBuilder,
+        *,
+        not_after: datetime | None = None,
+    ) -> None:
         """Precompute source-create timestamps before threaded emitters render."""
         host = event.src_host
         proc = event.process
@@ -12370,18 +12638,21 @@ class ActivityGenerator:
                 "source.sysmon_process_create",
                 seed_parts=(host.hostname, proc.pid, process_start_time),
                 not_before=sysmon_not_before,
+                not_after=not_after,
             )
             self._source_timing_planner.source_time(
                 event,
                 "source.windows_security_process_create",
                 seed_parts=(host.hostname, proc.pid, process_start_time),
                 not_before=sysmon_not_before,
+                not_after=not_after,
             )
             self._source_timing_planner.source_time(
                 event,
                 "source.ecar_process_create",
                 seed_parts=(host.hostname, proc.pid, process_start_time),
                 not_before=ecar_not_before,
+                not_after=not_after,
             )
             return
         else:
@@ -12392,6 +12663,7 @@ class ActivityGenerator:
             "source.ecar_process_create",
             seed_parts=(host.hostname, proc.pid, process_start_time),
             not_before=ecar_not_before,
+            not_after=not_after,
         )
 
     def _process_session_source_ready_floor(
@@ -12942,6 +13214,7 @@ class ActivityGenerator:
                 process_time,
                 command_line,
             ),
+            source_visible_by=requested_time,
         )
         self._record_user_process(source_system, user, pid, image)
         self._emit_bash_command_event(user, source_system, process_time, command_line)
@@ -12953,6 +13226,52 @@ class ActivityGenerator:
         )
         self.state_manager.update_process_activity_time(source_system.hostname, pid, requested_time)
         self.state_manager.set_current_time(requested_time)
+        return pid, image
+
+    def ensure_ssh_client_process(
+        self,
+        *,
+        user: User,
+        source_system: System,
+        target_system: System,
+        time: datetime,
+        process_image: str,
+        source_port: int,
+        required_until: datetime | None = None,
+    ) -> tuple[int, str] | None:
+        """Materialize the source-side SSH client before opening its transport."""
+
+        if _get_os_category(source_system.os) == "linux":
+            return self.ensure_linux_ssh_client_process(
+                user=user,
+                source_system=source_system,
+                target_system=target_system,
+                time=time,
+                process_image=process_image,
+                source_port=source_port,
+                required_until=required_until,
+            )
+        if _get_os_category(source_system.os) != "windows":
+            return None
+        target_host = self._build_host_context(target_system).fqdn or target_system.hostname
+        pid, image = self._ensure_user_connection_owner_process(
+            source_system=source_system,
+            time=time,
+            service="ssh",
+            dst_port=22,
+            os_category="windows",
+            hostname=target_host,
+            ssh_attempted_username=user.username,
+            source_visible_by=ensure_utc(time),
+        )
+        if pid <= 0 or not image:
+            return None
+        if required_until is not None:
+            self._remember_process_connection_hold(
+                system=source_system,
+                pid=pid,
+                close_time=required_until,
+            )
         return pid, image
 
     def _active_source_linux_session(
@@ -13236,9 +13555,70 @@ class ActivityGenerator:
         self.dispatcher.dispatch_builder(event)
         termination_start_time = event.process.start_time if event.process is not None else None
         self._terminated_process_keys.add((system.hostname, pid, termination_start_time))
+        self._terminate_completed_one_shot_shell_parent(
+            user=user,
+            system=system,
+            child=running_proc,
+            child_termination_time=event.timestamp,
+            from_storyline=from_storyline,
+            session_end_plan=authoritative_end_plan,
+        )
 
         logger.debug(
             f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}"
+        )
+
+    def _terminate_completed_one_shot_shell_parent(
+        self,
+        *,
+        user: User,
+        system: System,
+        child: RunningProcess | None,
+        child_termination_time: datetime,
+        from_storyline: bool,
+        session_end_plan: SessionEndPlan | None,
+    ) -> None:
+        """Close a one-shot Windows wrapper just after its final foreground child."""
+
+        if child is None or _get_os_category(system.os) != "windows" or child.parent_pid <= 0:
+            return
+        parent = self.state_manager.get_process(system.hostname, child.parent_pid)
+        if parent is None or not self._is_one_shot_shell_command(parent.image, parent.command_line):
+            return
+        if not self._windows_shell_parent_invokes_child(
+            system=system,
+            parent_pid=parent.pid,
+            process_name=child.image,
+            command_line=child.command_line,
+        ):
+            return
+        if any(
+            process.pid != child.pid and process.parent_pid == parent.pid
+            for process in self.state_manager.get_processes_on_system(system.hostname)
+        ):
+            return
+        seed = _stable_seed(
+            "one_shot_shell_after_final_child:"
+            f"{system.hostname}:{parent.pid}:{child.pid}:{child_termination_time.isoformat()}"
+        )
+        parent_termination_time = child_termination_time + timedelta(
+            milliseconds=80 + (seed % 920),
+            microseconds=137 + (seed % 719),
+        )
+        parent_user = (
+            user
+            if parent.username == user.username
+            else self._user_model_for_username(parent.username)
+        )
+        self.generate_process_termination(
+            user=parent_user,
+            system=system,
+            time=parent_termination_time,
+            pid=parent.pid,
+            process_name=parent.image,
+            logon_id=parent.logon_id,
+            from_storyline=from_storyline,
+            session_end_plan=session_end_plan,
         )
 
     def _remember_kerberos_audit(
@@ -18852,8 +19232,28 @@ class ActivityGenerator:
             requested_time,
             command,
         )
-        key = (system.hostname, user.username)
-        scheduled_time = max(requested_time, self._bash_history_next_time.get(key, requested_time))
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if session.system == system.hostname
+            and session.session_kind not in {"network", "service"}
+            and session.logon_type not in {3, 5}
+            and _session_active_for_activity(session, requested_time)
+        ]
+        logon_id = (
+            max(sessions, key=lambda session: ensure_utc(session.start_time)).logon_id
+            if sessions
+            else ""
+        )
+        key = (system.hostname, user.username, logon_id)
+        scheduled_time = max(
+            requested_time,
+            self._bash_history_next_time.get(key, requested_time),
+            self._bash_history_next_time.get(
+                (system.hostname, user.username, ""),
+                requested_time,
+            ),
+        )
         scheduled_time = self._fit_bash_history_time_to_linux_session(
             user,
             system,
@@ -22483,7 +22883,8 @@ class ActivityGenerator:
 
         Unlike generate_logon(), does not require a User object.
         Emits 4624 (type 5) + 4672 (special privileges) via normal pipeline.
-        Each call gets a unique LogonID (real Windows allocates new sessions for service restarts).
+        Built-in service principals retain their Windows well-known authentication IDs;
+        named service accounts receive ordinary allocated session IDs.
         """
         request = ServiceLogonRequest(
             system=system,
@@ -22499,19 +22900,51 @@ class ActivityGenerator:
         service_account = request.service_account
 
         sid = _SYSTEM_ACCOUNT_SIDS.get(service_account, self._get_sid(service_account))
-        logon_id = self.state_manager.create_session(
-            username=service_account,
-            system=system.hostname,
-            logon_type=5,
-            source_ip="-",
-            start_time=time,
-            session_kind="service",
-            logon_guid_required=False,
-            lifecycle_group_id=request.stable_id,
-        )
+        normalized_account = service_account.upper()
+        logon_id = _SYSTEM_ACCOUNT_LOGON_IDS.get(normalized_account, "")
+        if not logon_id:
+            logon_id = self.state_manager.create_session(
+                username=service_account,
+                system=system.hostname,
+                logon_type=5,
+                source_ip="-",
+                start_time=time,
+                session_kind="service",
+                logon_guid_required=False,
+                lifecycle_group_id=request.stable_id,
+            )
         host = self._build_host_context(system)
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject = self._account_subject_fields("SYSTEM", system, logon_id="0x3e7")
+        # The Windows built-in token LUID is durable, but each emitted Type 5
+        # authentication is a distinct occurrence. Preserve the native LUID in
+        # AuthContext while giving normalized session consumers an occurrence
+        # identity that cannot LOGIN repeatedly as one lifecycle object.
+        builtin_lifecycle_group_id = stable_uuid(
+            "windows-built-in-service-authentication-occurrence",
+            system.hostname,
+            logon_id,
+            request.stable_id,
+        )
+        builtin_session_identity = (
+            SessionIdentity(
+                hostname=system.hostname,
+                object_id=stable_uuid(
+                    "windows-built-in-service-authentication-object",
+                    system.hostname,
+                    logon_id,
+                    request.stable_id,
+                ),
+                logon_id=logon_id,
+                session_id=0,
+                principal=service_account,
+                session_kind="service",
+                started_at=time,
+                lifecycle_group_id=builtin_lifecycle_group_id,
+            )
+            if normalized_account in _SYSTEM_ACCOUNT_LOGON_IDS
+            else None
+        )
 
         event = OccurrenceBuilder(
             timestamp=time,
@@ -22533,6 +22966,23 @@ class ActivityGenerator:
                 subject_domain=subject["domain"],
                 subject_logon_id=subject["logon_id"],
                 reporting_pid=reporting_pid,
+            ),
+            lifecycle=ActionLifecycleContext(
+                group_id=(
+                    builtin_lifecycle_group_id
+                    if builtin_session_identity is not None
+                    else request.stable_id
+                ),
+                canonical_start=time,
+                phase="start",
+            ),
+            identity_plan=(
+                EventIdentityPlan(
+                    subject=builtin_session_identity,
+                    session=builtin_session_identity,
+                )
+                if builtin_session_identity is not None
+                else None
             ),
         )
         self.dispatcher.dispatch_builder(event)

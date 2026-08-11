@@ -397,6 +397,18 @@ class TestStateManagerInit:
         assert offset > 0
         assert sm._linux_pid_block_offsets == {}
 
+    def test_linux_hidden_pid_churn_has_bursty_hourly_regimes(self):
+        """Hidden forks should not expose one nearly constant PID-per-second slope."""
+        sm = StateManager()
+        hourly = [
+            sm._linux_pid_hidden_churn_offset("linux01", hour * 3600)
+            - sm._linux_pid_hidden_churn_offset("linux01", (hour - 1) * 3600)
+            for hour in range(1, 25)
+        ]
+
+        assert max(hourly) > min(hourly) * 2
+        assert len(set(hourly)) >= 12
+
     def test_linux_visible_pids_stay_below_pid_max_after_days(self):
         """Ordinary multi-day uptime should retain plausible pre-wrap PID values."""
         sm = StateManager()
