@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -37,6 +38,88 @@ def _directory_bytes(path: Path) -> int:
         if candidate.is_file() and not candidate.is_symlink():
             total += candidate.stat().st_size
     return total
+
+
+def _directory_digest(path: Path) -> str:
+    """Return a stable digest of every generated artifact path and byte sequence."""
+    digest = hashlib.sha256()
+    for candidate in sorted(item for item in path.rglob("*") if item.is_file()):
+        digest.update(candidate.relative_to(path).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        with candidate.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _ecar_pid_lifecycle_summary(path: Path) -> dict[str, int]:
+    """Validate that rendered host PID lifetimes never overlap or cross instances."""
+    creates = 0
+    terminations = 0
+    reused_pids = 0
+    overlaps = 0
+    stale_terminations = 0
+    linux_wraps = 0
+    unexplained_linux_reversals = 0
+    seen_pids: set[tuple[str, int]] = set()
+    for ecar_path in sorted(path.rglob("ecar.json")):
+        records: list[dict[str, Any]] = []
+        with ecar_path.open(encoding="utf-8") as stream:
+            for line in stream:
+                record = json.loads(line)
+                if record.get("object") == "PROCESS" and record.get("action") in {
+                    "CREATE",
+                    "TERMINATE",
+                }:
+                    records.append(record)
+        records.sort(key=lambda record: (int(record.get("timestamp_ms", 0)), str(record["id"])))
+        active: dict[tuple[str, int], str] = {}
+        previous_linux_create: tuple[int, int] | None = None
+        for record in records:
+            key = (str(record.get("hostname") or "-"), int(record["pid"]))
+            object_id = str(record.get("objectID") or "")
+            if record["action"] == "CREATE":
+                creates += 1
+                image_path = str((record.get("properties") or {}).get("image_path") or "")
+                if image_path.startswith("/"):
+                    current_linux_create = (int(record["timestamp_ms"]), int(record["pid"]))
+                    if previous_linux_create is not None:
+                        prior_time, prior_pid = previous_linux_create
+                        current_time, current_pid = current_linux_create
+                        if current_pid <= prior_pid:
+                            if prior_pid >= 4_000_000 and 500 <= current_pid <= 200_000:
+                                linux_wraps += 1
+                            elif current_time - prior_time > 30_000:
+                                unexplained_linux_reversals += 1
+                    previous_linux_create = current_linux_create
+                if key in active:
+                    overlaps += 1
+                if key in seen_pids:
+                    reused_pids += 1
+                seen_pids.add(key)
+                active[key] = object_id
+                continue
+            terminations += 1
+            active_object_id = active.get(key)
+            if active_object_id is None:
+                continue
+            if active_object_id != object_id:
+                stale_terminations += 1
+                continue
+            del active[key]
+    summary = {
+        "creates": creates,
+        "terminations": terminations,
+        "reused_pids": reused_pids,
+        "overlaps": overlaps,
+        "stale_terminations": stale_terminations,
+        "linux_wraps": linux_wraps,
+        "unexplained_linux_reversals": unexplained_linux_reversals,
+    }
+    if overlaps or stale_terminations or unexplained_linux_reversals:
+        raise RuntimeError(f"Rendered eCAR PID lifecycle validation failed: {summary}")
+    return summary
 
 
 def _parse_profiles(values: list[str] | None) -> list[tuple[str, str | None]]:
@@ -172,6 +255,7 @@ def _measure(
             )
         worker_data = json.loads(worker_result.read_text(encoding="utf-8"))
         forecast = worker_data["resource_forecast"]
+        pid_lifecycles = _ecar_pid_lifecycle_summary(output)
         return {
             "scenario": worker_data["scenario_name"],
             "profile": profile_name,
@@ -182,6 +266,8 @@ def _measure(
             "elapsed_seconds": round(elapsed, 3),
             "peak_rss_bytes": peak_rss,
             "output_bytes": _directory_bytes(output),
+            "output_sha256": _directory_digest(output),
+            "pid_lifecycles": pid_lifecycles,
             "workload_estimate": worker_data["workload_estimate"],
             "forecast_memory": forecast["memory"],
             "forecast_disk": forecast["disk"],

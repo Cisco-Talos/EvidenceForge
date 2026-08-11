@@ -62,12 +62,13 @@ Observed 1×/2×/4× peak RSS in MiB:
 | Zeek | 136.0 | 155.3 | 189.4 |
 | Sysmon | 130.7 | 154.5 | 210.6 |
 | Windows Security | 154.0 | 191.1 | 226.3 |
-| Full | 205.9 | 253.8 | not used |
+| Full | 205.9 | 253.8 | 315.6–337.3 |
 
-The full 4×/24-hour run was stopped by the generator's existing bounded Linux PID-allocation
-contention guard, not by memory or disk pressure. The failure demonstrates a nonlinear scenario
-duration boundary and is intentionally not treated as a resource-forecast calibration point.
-The highest successful peak remained 253.8 MiB, far below system pressure thresholds.
+The original full 4×/24-hour attempt was stopped by the former bounded Linux PID-allocation
+contention guard. After duration-stable PID wrap/reuse was implemented, repeated full runs
+completed in 81.6–86.8 seconds at 315.6–337.3 MiB peak RSS and produced byte-identical 148.61 MB
+artifacts. The forecast expected 330.9 MiB with a 248.2–446.8 MiB interval, so the completed
+calibration remains inside the fitted interval and does not require a coefficient refit.
 
 Model v2 uses a measured fixed interpreter/generator cost, emitter-format fixed costs,
 baseline-occurrence slopes, explicit-occurrence slopes, and source-specific output rates scoped to

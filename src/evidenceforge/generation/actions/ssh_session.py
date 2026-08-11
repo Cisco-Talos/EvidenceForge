@@ -1352,6 +1352,7 @@ class SshSessionActionBundle:
 
         request = self.request
         close_time = self._source_native_session_close_time(state, auth_state)
+        self._terminate_receiver_session_children(state, auth_state, close_time)
         self._terminate_receiver_session_shell(state, close_time)
         # A real dispatcher applies the logoff to StateManager immediately. That
         # retires the session's transport process, so capture and schedule the
@@ -1381,6 +1382,7 @@ class SshSessionActionBundle:
                 ),
             )
         )
+
         self.executor.dispatcher.dispatch_builder(
             OccurrenceBuilder(
                 timestamp=self._source_native_logind_removed_time(state, auth_state, close_time),
@@ -1407,6 +1409,46 @@ class SshSessionActionBundle:
                 ),
             )
         )
+
+    def _terminate_receiver_session_children(
+        self,
+        state: _SshTransportState,
+        auth_state: _SshLinuxAuthState,
+        close_time: datetime,
+    ) -> None:
+        """End residual commands before their owning SSH session closes."""
+        if not state.logon_id:
+            return
+        request = self.request
+        session = self.executor.state_manager.get_session(state.logon_id)
+        shell_pid = session.session_shell_pid if session is not None else None
+        children = [
+            process
+            for process in self.executor.state_manager.get_processes_for_session(
+                state.logon_id,
+                request.target_system.hostname,
+            )
+            if process.pid not in {shell_pid, auth_state.sshd_pid}
+        ]
+        children.sort(key=lambda process: process.start_time, reverse=True)
+        for ordinal, process in enumerate(children):
+            terminate_time = close_time - timedelta(milliseconds=50 + (ordinal * 25))
+            terminate_time = max(
+                process.start_time + timedelta(milliseconds=100),
+                terminate_time,
+            )
+            if terminate_time >= close_time:
+                terminate_time = close_time - timedelta(milliseconds=1)
+            self.executor.generate_process_termination(
+                user=request.user,
+                system=request.target_system,
+                time=terminate_time,
+                pid=process.pid,
+                process_name=process.image,
+                logon_id=process.logon_id,
+                from_storyline=request.source.startswith("storyline"),
+                session_end_plan=session.end_plan if session is not None else None,
+            )
 
     def _terminate_receiver_session_shell(
         self,

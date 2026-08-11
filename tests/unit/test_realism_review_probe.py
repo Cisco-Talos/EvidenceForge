@@ -9,6 +9,7 @@ from scripts.realism_review_probe import (
     Finding,
     _check_cisco_asa_contracts,
     _check_cross_source_contracts,
+    _check_ecar_lifecycles,
     _check_zeek_sensor,
 )
 
@@ -19,6 +20,60 @@ def _asa_findings(tmp_path: Path, lines: list[str]) -> list[Finding]:
     findings: list[Finding] = []
     _check_cisco_asa_contracts(path, findings)
     return findings
+
+
+def _linux_process_create(hostname: str, pid: int, timestamp_ms: int) -> dict[str, object]:
+    """Build the minimum eCAR Linux process-create record used by PID checks."""
+    return {
+        "id": f"{hostname}-{pid}-{timestamp_ms}",
+        "hostname": hostname,
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": f"object-{hostname}-{pid}-{timestamp_ms}",
+        "timestamp_ms": timestamp_ms,
+        "pid": pid,
+        "properties": {"image_path": "/usr/bin/test"},
+    }
+
+
+def test_probe_accepts_linux_pid_wrap_and_host_local_chronology(tmp_path: Path) -> None:
+    records = [
+        _linux_process_create("LINUX-01", 4_194_300, 1_000),
+        _linux_process_create("LINUX-02", 800_000, 1_050),
+        _linux_process_create("LINUX-01", 503, 1_100),
+        _linux_process_create("LINUX-02", 800_100, 1_150),
+    ]
+    findings: list[Finding] = []
+
+    _check_ecar_lifecycles(tmp_path / "ecar.json", records, findings)
+
+    assert not [finding for finding in findings if finding.check == "ecar_linux_pid_chronology"]
+
+
+def test_probe_rejects_linux_pid_reversal_away_from_wrap(tmp_path: Path) -> None:
+    records = [
+        _linux_process_create("LINUX-01", 80_000, 1_000),
+        _linux_process_create("LINUX-01", 70_000, 32_000),
+    ]
+    findings: list[Finding] = []
+
+    _check_ecar_lifecycles(tmp_path / "ecar.json", records, findings)
+
+    assert [finding.check for finding in findings].count("ecar_linux_pid_chronology") == 1
+
+
+def test_probe_accepts_near_simultaneous_linux_pid_observation_reordering(
+    tmp_path: Path,
+) -> None:
+    records = [
+        _linux_process_create("LINUX-01", 80_000, 1_000),
+        _linux_process_create("LINUX-01", 79_999, 1_250),
+    ]
+    findings: list[Finding] = []
+
+    _check_ecar_lifecycles(tmp_path / "ecar.json", records, findings)
+
+    assert not [finding for finding in findings if finding.check == "ecar_linux_pid_chronology"]
 
 
 def test_probe_detects_pat_teardown_before_connection(tmp_path: Path) -> None:

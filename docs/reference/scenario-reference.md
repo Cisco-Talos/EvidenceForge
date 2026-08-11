@@ -964,7 +964,13 @@ hostnames, and email addresses still win over fallback pools.
 
 **Endpoint ProcessAccess realism:** Sysmon Event 10 and eCAR PROCESS OPEN rows use canonical `ProcessAccessContext` owned by the generation bundle. Source images such as Defender, CSRSS, services, svchost, WMI, and suspicious tools select source-aware CallTrace palettes from package config; scenario authors do not need to set call traces in YAML.
 
-**PID allocation:** Windows PIDs use a lognormal distribution for gap sizes (mu=1.2, sigma=0.8), producing mostly small gaps with an occasional heavy tail — simulating background process churn consuming PIDs between emitted events. Linux PIDs use a similar but tighter distribution (mu=0.5, sigma=0.6). No fixed choice-set fingerprint.
+**PID allocation:** Windows PIDs preserve a multiples-of-four, heavy-tailed progression through
+the modeled `4,000..65,532` ring. Linux uses an unbounded logical progression rendered into the
+exclusive `pid_max` range `500..4,194,303`, so long scenarios can wrap naturally. Both systems
+reuse a rendered PID only after natural wrap and only when no active process, fixed boot process,
+or unexpired transient source-native companion still owns it. PID reuse is therefore validated as
+non-overlapping lifetimes on one host rather than forbidden across the entire dataset. Allocation
+history is watermarked and duration-stable; no scenario or output-schema setting is required.
 
 **Per-user bash history:** Baseline SSH sessions to Linux servers generate organic admin commands (ls, df -h, ps aux, systemctl status, etc.) for realistic admin users, creating per-user `<username>.bash_history` files on all Linux hosts. Storyline process events on Linux inject 0-3 organic noise commands around each attack command for realistic interleaving. The generator coordinates bash-history timing with foreground process telemetry through an internal Linux shell-command bundle; scenario authors still use normal `process` events and do not need to model the bundle directly.
 
