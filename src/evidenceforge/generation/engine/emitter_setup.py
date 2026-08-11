@@ -263,6 +263,9 @@ class EmitterSetupMixin:
                     if sensor.interfaces:
                         hostname = sensor.hostname or sensor.name
                         asa_emitter._sensor_interfaces[hostname] = sensor.interfaces
+                        asa_emitter._sensor_security_levels[hostname] = (
+                            sensor.interface_security_levels
+                        )
                     if sensor.type == "firewall":
                         asa_emitter._td_burst_threshold = sensor.threat_detection_rate
                         asa_emitter._td_avg_threshold = max(1, sensor.threat_detection_rate // 2)
@@ -407,7 +410,13 @@ class EmitterSetupMixin:
             dhcp_server = dhcp_servers[
                 _stable_seed(f"dhcp_server:{system.hostname}") % len(dhcp_servers)
             ].ip
-            renewal_interval = dhcp_renewal_interval_seconds(lease_time, rng)
+            renewal_rng = random.Random(_stable_seed(f"dhcp_renewal_timer:{system.hostname}:{mac}"))
+            timer_granularity = renewal_rng.choice([0.25, 1.0, 1.0, 5.0])
+            renewal_interval = dhcp_renewal_interval_seconds(
+                lease_time,
+                renewal_rng,
+                timer_granularity=timer_granularity,
+            )
             self.state_manager.set_current_time(ts)
             self.activity_generator.generate_dhcp_lease(
                 system=system,
@@ -425,6 +434,8 @@ class EmitterSetupMixin:
                 "last_renewal": ts.timestamp(),
                 "next_renewal": ts.timestamp() + renewal_interval,
                 "renewal_interval": renewal_interval,
+                "renewal_rng": renewal_rng,
+                "timer_granularity": timer_granularity,
                 "server_addr": dhcp_server,
                 "system": system,
             }

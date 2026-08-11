@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -16,7 +16,10 @@ from evidenceforge.events.contexts import HttpContext, ProxyContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.generation.actions.proxy_phase_planner import ProxyPhasePlanner
-from evidenceforge.generation.actions.proxy_transaction import ProxyTransactionRequest
+from evidenceforge.generation.actions.proxy_transaction import (
+    ProxyTransactionActionBundle,
+    ProxyTransactionRequest,
+)
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.activity.proxy_phase_profiles import proxy_resolver_profiles
 from evidenceforge.generation.state_manager import StateManager
@@ -118,6 +121,20 @@ def test_proxy_phase_plan_is_deterministic_ordered_and_immutable() -> None:
     )
     with pytest.raises(FrozenInstanceError):
         first.request_at = request.time  # type: ignore[misc]
+
+
+def test_proxy_transaction_can_preserve_unknown_client_process_ownership() -> None:
+    """Explicit proxy routing must honor a caller's no-fabricated-owner contract."""
+    request = replace(_request(), suppress_source_pid_inference=True)
+    executor = MagicMock()
+    executor._caller_explicit_proxy_process_image.return_value = None
+    bundle = ProxyTransactionActionBundle(request=request, executor=executor)
+
+    pid, process_image = bundle._resolve_client_process(_proxy_context(), _systems()[1])
+
+    assert pid == -1
+    assert process_image is None
+    executor._ensure_explicit_proxy_client_process.assert_not_called()
 
 
 @pytest.mark.parametrize(

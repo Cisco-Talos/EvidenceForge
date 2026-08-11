@@ -80,6 +80,7 @@ class ActiveSession:
     source_port: int = 0
     session_kind: str = "logon"
     transport_pid: int | None = None
+    closure_owned_by_bundle: bool = False
     ecar_object_id: str = ""
     storyline_protected: bool = False
     logon_guid: str = ""  # Final once first published; null/non-null policy is immutable

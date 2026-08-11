@@ -120,6 +120,7 @@ from evidenceforge.generation.activity.generator import (
     _network_effect_context_for_process,
     _normalize_http_context_for_source_native_response,
     _source_native_http_referrer,
+    _windows_foreground_lifetime,
     _zeek_conn_observation_time,
 )
 from evidenceforge.generation.activity.http_content import response_size_for_status
@@ -150,6 +151,28 @@ def test_linux_gui_editor_process_is_not_modeled_as_short_foreground_exit():
     )
 
     assert lifetime is None
+
+
+@pytest.mark.parametrize(
+    ("image", "command_line"),
+    [
+        (r"C:\Users\alice\AppData\Local\Temp\ChromeSetup.exe", "ChromeSetup.exe --silent"),
+        (r"C:\Windows\Temp\KB5034441_update.exe", "KB5034441_update.exe /quiet"),
+        (
+            r"C:\Program Files\Meridian\OpsAgent\ops-agent.exe",
+            r'"C:\Program Files\Meridian\OpsAgent\ops-agent.exe" check --once',
+        ),
+    ],
+)
+def test_windows_one_shot_install_and_check_commands_have_bounded_lifetimes(
+    image: str,
+    command_line: str,
+) -> None:
+    """One-shot installers and checks must not inherit workstation-session lifetimes."""
+    lifetime = _windows_foreground_lifetime(image, command_line)
+
+    assert lifetime is not None
+    assert lifetime[1] <= 360.0
 
 
 def test_linux_server_ssh_client_requires_ssh_source_session():
@@ -2475,6 +2498,8 @@ class TestActivityGenerator:
     ):
         """Direct Type 10 calls should delegate transport and auth to the RDP bundle."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        mock_emitters["ecar"] = Mock()
+        activity_gen.dispatcher.emitters = mock_emitters
         state_manager.set_current_time(timestamp)
 
         logon_id = activity_gen.generate_logon(
@@ -2505,6 +2530,14 @@ class TestActivityGenerator:
         assert event.auth.logon_process == "User32"
         assert event.auth.auth_package in {"Negotiate", "Kerberos", "NTLM"}
         assert event.auth.auth_package != "CredSSP"
+        assert event.lifecycle is not None
+        ecar_login_time = activity_gen.dispatcher.source_timing_planner.session_start_source_time(
+            "ecar",
+            event.lifecycle.group_id,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.source_ready_time == ecar_login_time
 
     def test_generate_logon_rdp_preserves_explicit_modeled_source(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -4175,7 +4208,7 @@ class TestActivityGenerator:
             source_ready_time=start_time + timedelta(seconds=3),
             network_close_time=close_time,
         )
-        activity_gen._bash_history_next_time[(linux.hostname, user.username)] = (
+        activity_gen._bash_history_next_time[(linux.hostname, user.username, session.logon_id)] = (
             close_time + timedelta(seconds=10)
         )
         bash_emitter = Mock()
@@ -4235,7 +4268,7 @@ class TestActivityGenerator:
             source_ready_time=second_ready,
             network_close_time=second_close,
         )
-        activity_gen._bash_history_next_time[(linux.hostname, user.username)] = (
+        activity_gen._bash_history_next_time[(linux.hostname, user.username, first.logon_id)] = (
             first_close + timedelta(seconds=10)
         )
         bash_emitter = Mock()
@@ -4399,7 +4432,7 @@ class TestActivityGenerator:
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         scheduled_time = timestamp + timedelta(seconds=75)
         state_manager.set_current_time(timestamp)
-        activity_gen._bash_history_next_time[(linux.hostname, user.username)] = scheduled_time
+        activity_gen._bash_history_next_time[(linux.hostname, user.username, "")] = scheduled_time
         mock_emitters["bash_history"] = Mock()
         for emitter in mock_emitters.values():
             emitter.can_handle.return_value = True
@@ -4447,7 +4480,7 @@ class TestActivityGenerator:
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         activity_gen._scenario_end_time = timestamp + timedelta(minutes=5)
-        activity_gen._bash_history_next_time[(linux.hostname, user.username)] = (
+        activity_gen._bash_history_next_time[(linux.hostname, user.username, "")] = (
             timestamp + timedelta(days=1)
         )
         mock_emitters["bash_history"] = Mock()
@@ -5178,9 +5211,100 @@ class TestActivityGenerator:
 
         smb_proc = activity_gen.state_manager.get_process(db_server.hostname, smb_pid)
         assert smb_proc is not None
-        assert smb_proc.image == "/usr/bin/smbclient"
-        assert "//FILE-SRV-01.meridianhcs.local/Shared" in smb_proc.command_line
+        assert smb_proc.image == "/usr/local/sbin/database-backup-agent"
+        assert "smb://FILE-SRV-01.meridianhcs.local/DatabaseBackups" in smb_proc.command_line
         assert "rsyncd" not in smb_proc.command_line
+
+    def test_linux_smb_connection_owner_is_role_specific_or_unattributed(self, activity_gen):
+        """Linux SMB ownership should reflect a deployed role-specific service."""
+        expected = {
+            "app_server": ("/opt/meridian/bin/document-sync", "meridian-app"),
+            "database": ("/usr/local/sbin/database-backup-agent", "backup"),
+            "mail_server": ("/usr/libexec/meridian/attachment-archive", "dovecot"),
+            "web_server": ("/opt/meridian/bin/content-publisher", "www-data"),
+        }
+        for index, (role, (image, username)) in enumerate(expected.items(), start=1):
+            system = System(
+                hostname=f"LNX-{index}",
+                ip=f"10.0.20.{index}",
+                os="Ubuntu 22.04",
+                type="server",
+                roles=[role],
+            )
+            spec = activity_gen._service_connection_owner_spec(
+                source_system=system,
+                service="smb",
+                dst_port=445,
+                os_category="linux",
+                hostname="FILE-SRV-01.example.local",
+                http=None,
+            )
+            assert spec is not None
+            assert spec[1] == image
+            assert spec[3] == username
+            assert "FILE-SRV-01.example.local" in spec[2]
+
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        assert (
+            activity_gen._service_connection_owner_spec(
+                source_system=proxy,
+                service="smb",
+                dst_port=445,
+                os_category="linux",
+                hostname="FILE-SRV-01.example.local",
+                http=None,
+            )
+            is None
+        )
+
+    def test_linux_smb_connection_owner_is_scoped_to_declared_peer(
+        self, activity_gen, state_manager
+    ):
+        """A target-bearing SMB worker must not own flows to a different peer."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        server = System(
+            hostname="DB-PROD-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["database"],
+        )
+        state_manager.set_current_time(timestamp)
+
+        first_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=server,
+            time=timestamp,
+            service="smb",
+            dst_port=445,
+            proto="tcp",
+            hostname="FILE-SRV-01.example.local",
+            http=None,
+        )
+        second_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=server,
+            time=timestamp + timedelta(minutes=1),
+            service="smb",
+            dst_port=445,
+            proto="tcp",
+            hostname="DC-01.example.local",
+            http=None,
+        )
+
+        first = state_manager.get_process(server.hostname, first_pid)
+        second = state_manager.get_process(server.hostname, second_pid)
+        assert first is not None
+        assert second is not None
+        assert first_pid != second_pid
+        assert "FILE-SRV-01.example.local" in first.command_line
+        assert "DC-01.example.local" not in first.command_line
+        assert "DC-01.example.local" in second.command_line
+        assert "FILE-SRV-01.example.local" not in second.command_line
 
     def test_one_shot_connection_owner_starts_near_first_network_action(
         self, activity_gen, state_manager
@@ -5219,6 +5343,7 @@ class TestActivityGenerator:
         "image,command_line",
         [
             ("/usr/bin/wget", "wget -q -O - https://example.test/"),
+            ("/usr/bin/smbclient", "smbclient //FILE-SRV/Shared -c 'ls'"),
             ("/usr/lib/apt/methods/https", "/usr/lib/apt/methods/https"),
             (
                 "/usr/local/bin/service-healthcheck",
@@ -5260,6 +5385,40 @@ class TestActivityGenerator:
             pid,
             process.start_time,
         )
+
+    def test_smbclient_connection_owner_is_not_reused_for_later_transport(
+        self, activity_gen, state_manager
+    ):
+        """Each noninteractive smbclient invocation owns one bounded process."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        server = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["app_server"],
+        )
+        command_line = "smbclient //FILE-SRV-01/Shared --use-kerberos=required -c 'ls'"
+        state_manager.set_current_time(timestamp)
+
+        first_pid, _ = activity_gen._ensure_system_connection_owner_process(
+            source_system=server,
+            time=timestamp,
+            key="smbclient:FILE-SRV-01",
+            image="/usr/bin/smbclient",
+            command_line=command_line,
+            username="root",
+        )
+        second_pid, _ = activity_gen._ensure_system_connection_owner_process(
+            source_system=server,
+            time=timestamp + timedelta(minutes=5),
+            key="smbclient:FILE-SRV-01",
+            image="/usr/bin/smbclient",
+            command_line=command_line,
+            username="root",
+        )
+
+        assert first_pid != second_pid
 
     def test_windows_healthcheck_service_agent_is_durable_and_target_agnostic(
         self, activity_gen, state_manager, test_system
@@ -5586,6 +5745,7 @@ class TestActivityGenerator:
         assert app_reuse_pid not in {app_pid, proxy_pid}
         assert app_proc.command_line == "ssh.exe APP-INT-01"
         assert proxy_proc.command_line == "ssh.exe PROXY-01"
+        assert app_proc.parent_pid != proxy_proc.parent_pid
 
     def test_connection_owner_process_is_not_reused_across_logon_sessions(
         self, activity_gen, test_user, state_manager
@@ -5731,6 +5891,12 @@ class TestActivityGenerator:
         assert connection_event.process is not None
         assert connection_event.process.username == source_user.username
         assert connection_event.process.command_line == ssh_proc.command_line
+        source_create_time = activity_gen.process_source_create_time(
+            workstation.hostname,
+            ssh_proc.pid,
+        )
+        assert source_create_time is not None
+        assert source_create_time <= connection_event.network.started_at
 
     def test_linux_smb_browse_owner_is_scoped_to_command_target(
         self, activity_gen, test_user, state_manager
@@ -6701,7 +6867,48 @@ class TestActivityGenerator:
         assert event.auth.subject_username == "SYSTEM"
         assert event.auth.subject_domain == "NT AUTHORITY"
         assert event.auth.subject_logon_id == "0x3e7"
-        assert service_logon_id != event.auth.subject_logon_id
+        assert service_logon_id == event.auth.subject_logon_id == "0x3e7"
+
+    @pytest.mark.parametrize(
+        ("service_account", "expected_logon_id"),
+        [
+            ("SYSTEM", "0x3e7"),
+            ("LOCAL SERVICE", "0x3e5"),
+            ("NETWORK SERVICE", "0x3e4"),
+        ],
+    )
+    def test_builtin_service_logon_uses_well_known_authentication_id(
+        self,
+        activity_gen,
+        test_system,
+        state_manager,
+        mock_emitters,
+        service_account,
+        expected_logon_id,
+    ):
+        """Built-in Type 5 logons reuse the token's Windows well-known LUID."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        first = activity_gen.generate_service_logon(test_system, timestamp, service_account)
+        second = activity_gen.generate_service_logon(
+            test_system,
+            timestamp + timedelta(minutes=5),
+            service_account,
+        )
+
+        events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 5
+        ]
+        assert first == second == expected_logon_id
+        assert {event.auth.logon_id for event in events} == {expected_logon_id}
+        assert len({event.identity_plan.session.object_id for event in events}) == 2
+        assert len({event.lifecycle.group_id for event in events}) == 2
+        assert all(event.identity_plan.session.logon_id == expected_logon_id for event in events)
+        assert state_manager.get_session(expected_logon_id) is None
 
     def test_log_cleared_can_inherit_causative_process_logon_id(
         self, activity_gen, test_system, mock_emitters
@@ -9757,6 +9964,11 @@ class TestActivityGenerator:
         ]
         assert request_times == sorted(request_times)
         assert request_times[2] > request_times[1]
+        assert all(
+            request_time > event.timestamp
+            for request_time, event in zip(request_times, http_emitter.events, strict=True)
+            if not event.network.application_layer_only
+        )
 
     def test_generate_connection_derives_plain_http_bytes_from_http_context(
         self, activity_gen, state_manager, mock_emitters
@@ -11202,6 +11414,96 @@ class TestActivityGenerator:
 
         assert release_time == source_visible_done
         assert reserved > source_visible_done
+
+    def test_foreground_termination_respects_authoritative_session_deadline(
+        self, activity_gen, test_user, state_manager, monkeypatch
+    ):
+        """A bounded command cannot be scheduled beyond an explicit session close."""
+        start_time = datetime(2024, 3, 18, 15, 0, 32, tzinfo=UTC)
+        deadline = start_time + timedelta(seconds=30)
+        linux = System(
+            hostname="APP-INT-01",
+            ip="10.0.2.20",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        state_manager.set_current_time(start_time)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.2.10",
+            session_kind="ssh",
+            start_time=start_time - timedelta(minutes=20),
+        )
+        plan = SessionEndPlan(deadline, "explicit_storyline", "evt-ssh-close")
+        state_manager.plan_session_end(logon_id, plan)
+        generated: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            activity_gen,
+            "generate_process_termination",
+            lambda **kwargs: generated.append(kwargs),
+        )
+        monkeypatch.setattr(activity_gen, "process_source_terminate_time", lambda *_args: None)
+
+        release_time = activity_gen._generate_bounded_foreground_process_termination(
+            user=test_user,
+            system=linux,
+            start_time=start_time,
+            pid=1099641,
+            process_name="/usr/bin/git",
+            logon_id=logon_id,
+            lifetime=(90.0, 90.0),
+            rng=random.Random(7),
+        )
+
+        assert release_time == deadline - timedelta(seconds=2)
+        assert generated[0]["time"] == release_time
+        assert generated[0]["session_end_plan"] == plan
+
+    def test_foreground_termination_respects_ssh_transport_close(
+        self, activity_gen, test_user, state_manager, monkeypatch
+    ):
+        """A sampled command lifetime is bounded even without an explicit end plan."""
+        start_time = datetime(2024, 3, 18, 15, 0, 32, tzinfo=UTC)
+        transport_close = start_time + timedelta(seconds=30)
+        linux = System(
+            hostname="APP-INT-01",
+            ip="10.0.2.20",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        state_manager.set_current_time(start_time)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.2.10",
+            session_kind="ssh",
+            start_time=start_time - timedelta(minutes=20),
+        )
+        state_manager.update_session_metadata(logon_id, network_close_time=transport_close)
+        generated: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            activity_gen,
+            "generate_process_termination",
+            lambda **kwargs: generated.append(kwargs),
+        )
+        monkeypatch.setattr(activity_gen, "process_source_terminate_time", lambda *_args: None)
+
+        release_time = activity_gen._generate_bounded_foreground_process_termination(
+            user=test_user,
+            system=linux,
+            start_time=start_time,
+            pid=1099641,
+            process_name="/usr/bin/git",
+            logon_id=logon_id,
+            lifetime=(90.0, 90.0),
+            rng=random.Random(7),
+        )
+
+        assert release_time == transport_close - timedelta(seconds=2)
+        assert generated[0]["session_end_plan"] is None
 
     def test_linux_session_shell_reuses_user_manager_when_rebuilt(
         self, activity_gen, test_user, state_manager

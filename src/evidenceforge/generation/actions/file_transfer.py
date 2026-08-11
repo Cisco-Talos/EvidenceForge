@@ -447,17 +447,22 @@ class SmbFileTransferMetadataActionBundle:
         mime_type = self._pick_mime_type(smb_config)
         analyzers = self._pick_analyzers(smb_config)
         fuid = generate_zeek_uid("F")
-        file_hashes = file_transfer_hashes(
-            f"smb:{self._request.src_ip}:{self._request.dst_ip}:"
-            f"{self._request.transfer_bytes}:{fuid}",
-            analyzers,
-        )
         filename = pick_smb_filename(
             self._rng,
             smb_config,
             mime_type=mime_type,
             server=self._request.server,
             user=self._request.user,
+        )
+        file_size = self._stable_file_size(
+            filename,
+            mime_type,
+            smb_config,
+            fallback_size=self._request.transfer_bytes,
+        )
+        file_hashes = file_transfer_hashes(
+            f"smb-file:{filename.casefold()}:{mime_type}:{file_size}",
+            analyzers,
         )
         return FileTransferContext(
             fuid=fuid,
@@ -469,13 +474,46 @@ class SmbFileTransferMetadataActionBundle:
             duration=max(0.0, self._request.duration * self._rng.uniform(0.6, 0.98)),
             local_orig=_is_private_ip(self._request.src_ip),
             is_orig=self._request.is_orig,
-            seen_bytes=self._request.transfer_bytes,
-            total_bytes=self._request.transfer_bytes,
+            seen_bytes=file_size,
+            total_bytes=file_size,
             missing_bytes=0,
             overflow_bytes=0,
             timedout=False,
             **file_hashes,
         )
+
+    @staticmethod
+    def _stable_file_size(
+        filename: str,
+        mime_type: str,
+        smb_config: Mapping[str, Any],
+        *,
+        fallback_size: int,
+    ) -> int:
+        """Return durable size metadata for one concrete SMB file identity."""
+        entries = [
+            entry
+            for entry in smb_config.get("mime_types", [])
+            if str(entry.get("mime_type", "")) == mime_type
+        ]
+        if not entries:
+            return 4096
+        entry = entries[0]
+        bands = [band for band in entry.get("size_bands", []) if isinstance(band, Mapping)]
+        seed = _stable_seed(f"smb-file-size:{filename.casefold()}:{mime_type}")
+        if bands:
+            profile_rng = random.Random(seed)
+            band = profile_rng.choices(
+                bands,
+                weights=[max(1, int(candidate.get("weight", 1))) for candidate in bands],
+                k=1,
+            )[0]
+            minimum = max(1, int(band.get("size_min", 1)))
+            maximum = max(minimum, int(band.get("size_max", minimum)))
+            return profile_rng.randint(minimum, maximum)
+        minimum = max(1, int(entry.get("size_min", fallback_size)))
+        maximum = max(minimum, int(entry.get("size_max", minimum)))
+        return minimum + (seed % (maximum - minimum + 1))
 
     def _pick_mime_type(self, smb_config: Mapping[str, Any]) -> str:
         """Return a configured SMB file MIME type."""

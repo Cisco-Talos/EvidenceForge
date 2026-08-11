@@ -631,6 +631,30 @@ class TestPermitRecords:
         output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         assert "Built inbound TCP connection" in output
 
+    @pytest.mark.parametrize(
+        ("protocol", "src_ip", "dst_ip", "expected"),
+        [
+            ("tcp", "172.16.0.5", "10.0.20.10", "inbound"),
+            ("udp", "10.0.20.10", "172.16.0.5", "outbound"),
+            ("icmp", "172.16.0.5", "10.0.20.10", "inbound"),
+        ],
+    )
+    def test_direction_uses_interface_security_relationship(
+        self, asa_emitter, tmp_path, protocol, src_ip, dst_ip, expected
+    ):
+        """DMZ/inside direction follows security levels for every protocol family."""
+        event = _make_connection_event(
+            protocol=protocol,
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            dst_port=8 if protocol == "icmp" else 443,
+        )
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
+        assert f"Built {expected} {protocol.upper()} connection" in output
+
     def test_permit_uses_firewall_context_connection_id_and_interfaces(self, asa_emitter, tmp_path):
         """Context-owned ASA fields override emitter-derived fallback fields."""
         event = _make_connection_event(

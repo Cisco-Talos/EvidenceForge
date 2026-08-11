@@ -560,7 +560,7 @@ class TestSysmonEventEmitter:
     def test_process_terminate_payload_time_updates_after_followon_shift(
         self, format_def, temp_output
     ):
-        """Event 5 UtcTime should follow final source-native TimeCreated normalization."""
+        """Event 5 keeps native/envelope separation through ordering repair."""
         emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=100)
         guid = "{12345678-abcd-ef01-2345-678901234567}"
         base = {
@@ -602,6 +602,11 @@ class TestSysmonEventEmitter:
         event5 = content.split("<EventID>5</EventID>", 1)[1]
         assert "2024-01-15 15:44:49.138" not in event5
         assert '<Data Name="UtcTime">2024-01-15 16:32:44.' in event5
+        system_time = event5.split('SystemTime="', 1)[1].split('"', 1)[0]
+        utc_time = event5.split('<Data Name="UtcTime">', 1)[1].split("<", 1)[0]
+        envelope = datetime.fromisoformat(system_time.replace("Z", "+00:00"))
+        native = datetime.strptime(utc_time, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=UTC)
+        assert envelope > native
 
     def test_interactive_process_without_canonical_session_uses_zero(self, format_def, tmp_path):
         """Sysmon must not invent a terminal session when canonical state is unavailable."""

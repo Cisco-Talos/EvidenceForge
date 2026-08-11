@@ -79,6 +79,9 @@ class SnortEmitter(SensorMultiplexEmitter):
         """Render IdsAlertPlan to Snort fast alert format."""
         net = event.network
         for ids in event.ids_alerts:
+            response_packet = (
+                ids.predicate is not None and ids.predicate.payload_direction == "resp"
+            )
             event_data = {
                 "timestamp": event.timestamp,
                 "gid": ids.gid,
@@ -88,10 +91,10 @@ class SnortEmitter(SensorMultiplexEmitter):
                 "classification": ids.classification,
                 "priority": ids.priority,
                 "protocol": (net.protocol or "TCP").upper() if net else "TCP",
-                "src_ip": net.src_ip if net else "",
-                "src_port": net.src_port if net else 0,
-                "dst_ip": net.dst_ip if net else "",
-                "dst_port": net.dst_port if net else 0,
+                "src_ip": net.dst_ip if net and response_packet else net.src_ip if net else "",
+                "src_port": net.dst_port if net and response_packet else net.src_port if net else 0,
+                "dst_ip": net.src_ip if net and response_packet else net.dst_ip if net else "",
+                "dst_port": net.src_port if net and response_packet else net.dst_port if net else 0,
                 "_ids_candidate": True,
                 "_ids_policy": asdict(ids.policy) if ids.policy is not None else None,
                 "_cluster_id": event.storyline_cluster_id or event.occurrence_id,

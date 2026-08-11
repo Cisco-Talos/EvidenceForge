@@ -254,6 +254,29 @@ class TestProcessPoolSize:
             assert entry["max_per_host_window"] == 1
             assert entry["cooldown_hours"] >= 24
 
+    def test_third_party_updater_inventory_varies_by_host_and_stays_coherent(self):
+        """A workstation should schedule only the updater installed in its service inventory."""
+        updater_names = {"googleupdate.exe", "adobearm.exe", "dropboxupdate.exe"}
+        selected_by_host: dict[str, str] = {}
+
+        for index in range(24):
+            hostname = f"WS-{index:02d}"
+            host = SimpleNamespace(
+                hostname=hostname,
+                os="Windows 11 Enterprise",
+                type="workstation",
+            )
+            entries = get_scheduled_task_entries(host)
+            selected = {
+                entry["image"].rsplit("\\", 1)[-1].lower()
+                for entry in entries
+                if entry["image"].rsplit("\\", 1)[-1].lower() in updater_names
+            }
+            assert len(selected) == 1
+            selected_by_host[hostname] = next(iter(selected))
+
+        assert len(set(selected_by_host.values())) >= 2
+
 
 class TestBaselinePatterns:
     """Verify baseline patterns include new activity types."""

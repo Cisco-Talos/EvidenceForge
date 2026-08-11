@@ -60,6 +60,7 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
     http_methods: list[str] = Field(default_factory=list)
     http_statuses: list[int] = Field(default_factory=list)
     requires_http_body: bool = False
+    file_mime_types: list[str] = Field(default_factory=list)
     semantic_claim: Literal[
         "flow_metadata",
         "scan",
@@ -95,6 +96,18 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
             raise ValueError("http_statuses must not contain duplicates")
         return values
 
+    @field_validator("file_mime_types")
+    @classmethod
+    def normalize_file_mime_types(cls, values: list[str]) -> list[str]:
+        """Normalize and deduplicate MIME requirements for file-content rules."""
+
+        normalized = [value.strip().lower() for value in values]
+        if any(not value or "/" not in value for value in normalized):
+            raise ValueError("file_mime_types must contain non-empty MIME types")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("file_mime_types must not contain duplicates")
+        return normalized
+
     @model_validator(mode="after")
     def validate_semantic_combination(self) -> Self:
         """Reject predicates that cannot be evaluated coherently."""
@@ -107,6 +120,8 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
             raise ValueError("HTTP-specific fields require application_protocol='http'")
         if self.requires_http_body and self.payload_direction not in {"orig", "either"}:
             raise ValueError("requires_http_body needs orig/either payload_direction")
+        if self.file_mime_types and self.semantic_claim != "file_content":
+            raise ValueError("file_mime_types requires semantic_claim='file_content'")
         if self.phase == "response" and not self.requires_response:
             raise ValueError("response-phase predicates must set requires_response=true")
         return self
@@ -1334,11 +1349,28 @@ class KerberosRealismConfig(BaseModel, extra="forbid"):
 # --- SMB File Transfers ---
 
 
+class SmbFileSizeBand(BaseModel, extra="forbid"):
+    """One weighted file-size band for an SMB MIME family."""
+
+    size_min: int = Field(ge=1)
+    size_max: int = Field(ge=1)
+    weight: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def size_range_ordered(self) -> Self:
+        if self.size_max < self.size_min:
+            raise ValueError("size_max must be greater than or equal to size_min")
+        return self
+
+
 class SmbMimeTypeEntry(BaseModel, extra="forbid"):
     """A weighted MIME type in smb_file_transfers.yaml."""
 
     mime_type: str
     weight: int
+    size_min: int = Field(ge=1)
+    size_max: int = Field(ge=1)
+    size_bands: list[SmbFileSizeBand] = Field(default_factory=list)
 
     @field_validator("weight")
     @classmethod
@@ -1346,6 +1378,12 @@ class SmbMimeTypeEntry(BaseModel, extra="forbid"):
         if v <= 0:
             raise ValueError("weight must be positive")
         return v
+
+    @model_validator(mode="after")
+    def size_range_ordered(self) -> Self:
+        if self.size_max < self.size_min:
+            raise ValueError("size_max must be greater than or equal to size_min")
+        return self
 
 
 class SmbAnalyzerSetEntry(BaseModel, extra="forbid"):
@@ -1388,6 +1426,17 @@ class SmbFileTransferConfig(BaseModel, extra="forbid"):
     """Root schema for smb_file_transfers.yaml."""
 
     min_transfer_bytes: int
+    working_set_probability: float = Field(ge=0.0, le=1.0)
+    working_set_size: int = Field(ge=1, le=100)
+    lexical_composition_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+    shares: list[str] = Field(min_length=1)
+    departments: list[str] = Field(min_length=1)
+    projects: list[str] = Field(min_length=1)
+    basenames: list[str] = Field(min_length=1)
+    lexical_subjects: list[str] = Field(default_factory=list)
+    lexical_document_kinds: list[str] = Field(default_factory=list)
+    lexical_qualifiers: list[str] = Field(default_factory=list)
+    binary_extensions: list[str] = Field(min_length=1)
     mime_types: list[SmbMimeTypeEntry]
     analyzer_sets: list[SmbAnalyzerSetEntry]
     filename_templates: list[SmbFilenameTemplateEntry] = Field(default_factory=list)
@@ -2395,6 +2444,9 @@ class ScheduledTaskEntry(BaseModel, extra="forbid"):
     max_per_host_window: int | None = Field(default=None, gt=0)
     cooldown_seconds: float | None = Field(default=None, gt=0)
     cooldown_hours: float | None = Field(default=None, gt=0)
+    compatibility_group: str | None = None
+    compatibility_option: str | None = None
+    compatibility_scope: Literal["host"] | None = None
 
 
 class SystemServiceEntry(BaseModel, extra="forbid"):
@@ -2408,6 +2460,7 @@ class SystemServiceEntry(BaseModel, extra="forbid"):
     singleton: bool = False
     compatibility_group: str | None = None
     compatibility_option: str | None = None
+    compatibility_scope: Literal["host"] | None = None
 
 
 class SystemBinaryEntry(BaseModel, extra="forbid"):

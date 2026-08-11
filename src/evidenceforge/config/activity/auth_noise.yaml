@@ -131,3 +131,17 @@ service_account_delegation:
           command_line: "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\service-health.ps1"
           parent_key: "taskeng"
           weight: 2
+        - image: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+          command_line: "powershell.exe -NoProfile -File C:\\Scripts\\endpoint-inventory.ps1 -Mode Delta"
+          parent_key: "taskeng"
+          system_types: [workstation]
+          weight: 2
+        - image: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+          command_line: "powershell.exe -NoProfile -File C:\\Scripts\\certificate-health.ps1"
+          parent_key: "taskeng"
+          system_types: [server, domain_controller]
+          weight: 2
+        - image: "C:\\Program Files\\Meridian\\OpsAgent\\ops-agent.exe"
+          command_line: '"C:\\Program Files\\Meridian\\OpsAgent\\ops-agent.exe" check --once'
+          parent_key: "services"
+          weight: 2

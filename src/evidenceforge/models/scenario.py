@@ -1989,6 +1989,7 @@ class NetworkSensor(BaseModel):
         log_formats: Which log formats this sensor generates
         interfaces: Mapping of segment names to ASA interface names (e.g., {"dmz": "dmz",
                     "workstations": "inside"}). IPs not in any mapped segment resolve to "outside".
+        interface_security_levels: Optional ASA security levels keyed by interface name.
         policy: Ordered list of firewall rules (first match wins). Only used for firewall-type
                 sensors. Default action applies if no rule matches.
         default_action: Default firewall action when no rule matches ("deny" or "permit").
@@ -2011,6 +2012,7 @@ class NetworkSensor(BaseModel):
     )
     log_formats: list[str] = Field(default_factory=lambda: ["zeek"])
     interfaces: dict[str, str] = Field(default_factory=dict)
+    interface_security_levels: dict[str, int] = Field(default_factory=dict)
     policy: list[FirewallRule] = Field(default_factory=list)
     default_action: str = Field(default="deny", pattern="^(deny|permit)$")
     deny_ratio: float = Field(
@@ -2055,6 +2057,15 @@ class NetworkSensor(BaseModel):
                 f"Available profiles: {available}"
             )
         return profile_name
+
+    @field_validator("interface_security_levels")
+    @classmethod
+    def validate_interface_security_levels(cls, value: dict[str, int]) -> dict[str, int]:
+        """Require ASA interface security levels to use the native 0-100 range."""
+        invalid = {name: level for name, level in value.items() if not 0 <= level <= 100}
+        if invalid:
+            raise ValueError(f"interface security levels must be between 0 and 100: {invalid}")
+        return value
 
 
 class NetworkConfig(BaseModel):

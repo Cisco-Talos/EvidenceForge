@@ -25,6 +25,7 @@ from evidenceforge.generation.activity.timing_profiles import (
     network_sensor_observation_timing,
     sample_timing_delta,
     startup_module_observation_timing,
+    sysmon_envelope_timing,
 )
 from evidenceforge.generation.timing import TemporalConstraintGraph
 from evidenceforge.models.exceptions import StateError
@@ -93,6 +94,7 @@ class SourceTimingPlanner:
         self._kerberos_service_times: dict[tuple[str, str, str, str], list[datetime]] = {}
         self._latest_session_start_times: dict[tuple[str, str], datetime] = {}
         self._latest_session_dependent_times: dict[tuple[str, str], datetime] = {}
+        self._latest_session_dependent_descriptions: dict[tuple[str, str], str] = {}
         self._admitted_ecar_remote_transports: dict[_REMOTE_TRANSPORT_KEY, datetime] = {}
         self._admitted_windows_remote_transports: dict[_REMOTE_TRANSPORT_KEY, datetime] = {}
         self._admitted_ecar_transport_transactions: dict[_TRANSACTION_TRANSPORT_KEY, datetime] = {}
@@ -100,6 +102,63 @@ class SourceTimingPlanner:
             _TRANSACTION_TRANSPORT_KEY, datetime
         ] = {}
         self._admitted_ecar_ssh_transports: dict[_SSH_TRANSPORT_KEY, datetime] = {}
+
+    @staticmethod
+    def sysmon_envelope_time(
+        native_time: datetime,
+        *,
+        hostname: str,
+        event_id: int,
+        identity_parts: tuple[Any, ...] = (),
+    ) -> datetime:
+        """Project Sysmon semantic time through its provider event-envelope path."""
+
+        timing = sysmon_envelope_timing(event_id)
+        seed = _stable_seed(
+            "sysmon-envelope:"
+            f"{hostname}:{event_id}:" + ":".join(str(part) for part in identity_parts)
+        )
+        rng = random.Random(seed)
+        delay_us = round(rng.lognormvariate(math.log(timing.median_us), timing.sigma))
+        delay_us = max(timing.min_us, min(delay_us, timing.max_us))
+        if rng.random() < timing.tail_probability:
+            tail_span = timing.tail_max_us - timing.tail_min_us
+            tail_unit = rng.betavariate(1.4, 4.5)
+            delay_us = timing.tail_min_us + round(tail_span * tail_unit)
+        return ensure_utc(native_time) + timedelta(microseconds=delay_us)
+
+    @staticmethod
+    def file_transfer_close_margin_seconds(
+        event: TimingOccurrence,
+        file_transfer: Any,
+        connection_duration: float,
+    ) -> float:
+        """Return a source-native analyzer-to-transport teardown margin."""
+
+        duration = max(0.0, connection_duration)
+        if duration <= 0:
+            return 0.0
+        network = event.network
+        seed = _stable_seed(
+            "file_transfer_close_margin:"
+            f"{getattr(network, 'zeek_uid', '')}:"
+            f"{getattr(file_transfer, 'fuid', '')}:"
+            f"{getattr(file_transfer, 'source', '')}:"
+            f"{getattr(file_transfer, 'seen_bytes', 0)}"
+        )
+        unit = (seed % 10_000) / 9_999
+        source = str(getattr(file_transfer, "source", "")).upper()
+        if source == "SMB":
+            minimum, maximum, cap = 0.004, 0.16, 0.75
+        elif source == "HTTP":
+            minimum, maximum, cap = 0.003, 0.12, 0.50
+        elif source == "SMTP":
+            minimum, maximum, cap = 0.012, 0.28, 1.50
+        else:
+            minimum, maximum, cap = 0.002, 0.10, 0.40
+        fraction = minimum + ((maximum - minimum) * unit)
+        desired = min(cap, max(minimum, duration * fraction))
+        return min(desired, max(0.00025, duration * 0.35))
 
     def plan_event(
         self,
@@ -690,6 +749,19 @@ class SourceTimingPlanner:
         """Return a finalized FLOW time bounded by its canonical interval."""
 
         interval_start, not_after = self._ecar_flow_interval(event, seed_parts)
+        interval_start = self.canonical_time_in_source_clock(
+            event,
+            "source.ecar_flow",
+            interval_start,
+            seed_parts,
+        )
+        if not_after is not None:
+            not_after = self.canonical_time_in_source_clock(
+                event,
+                "source.ecar_flow",
+                not_after,
+                seed_parts,
+            )
         lifecycle = event.lifecycle
         if (
             lifecycle is not None
@@ -705,6 +777,15 @@ class SourceTimingPlanner:
                 within=(interval_start, not_after) if not_after is not None else None,
             )
             if flow_time is not None:
+                flow_time = self._paired_ecar_flow_observation_time(
+                    event,
+                    flow_time,
+                    seed_parts=seed_parts,
+                    interval_start=interval_start,
+                    not_before=not_before,
+                    not_after=not_after,
+                    enabled=paired_endpoint,
+                )
                 return flow_time, not_before is None or not_before <= flow_time
 
         if drop_late_process_identity and not_before is not None:
@@ -768,11 +849,7 @@ class SourceTimingPlanner:
                 not_before=not_before,
             )
         short_interval = not_after <= interval_start + timedelta(milliseconds=5)
-        lower_bound = not_before
-        if not short_interval and not_after > interval_start:
-            lower_bound = (
-                interval_start if lower_bound is None else max(lower_bound, interval_start)
-            )
+        lower_bound = interval_start if not_before is None else max(not_before, interval_start)
         min_offset_ms = SourceTimingPlanner._ecar_flow_min_endpoint_offset_ms(
             event,
             seed_parts,
@@ -783,6 +860,23 @@ class SourceTimingPlanner:
                 lower_bound = (
                     minimum_time if lower_bound is None else max(lower_bound, minimum_time)
                 )
+
+        if short_interval and lower_bound is not None and not_after > lower_bound:
+            available_us = int((not_after - lower_bound).total_seconds() * 1_000_000)
+            if available_us >= 2_000:
+                direction = str(seed_parts[0]) if seed_parts else ""
+                seed = _stable_seed(
+                    "ecar_short_paired_flow_observation:"
+                    + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
+                )
+                if direction == "outbound":
+                    lower_fraction, fraction_span = 100, 250
+                elif direction == "inbound":
+                    lower_fraction, fraction_span = 650, 250
+                else:
+                    lower_fraction, fraction_span = 300, 400
+                fraction = lower_fraction + (seed % (fraction_span + 1))
+                return lower_bound + timedelta(microseconds=(available_us * fraction) // 1000)
 
         seed = _stable_seed(
             "ecar_paired_flow_observation:"
@@ -946,6 +1040,27 @@ class SourceTimingPlanner:
             previous = self._latest_session_dependent_times.get(key)
             if previous is None or source_time > previous:
                 self._latest_session_dependent_times[key] = source_time
+                process = event.process
+                identity = (
+                    event.identity_plan.subject
+                    if event.identity_plan is not None
+                    and isinstance(event.identity_plan.subject, ProcessIdentity)
+                    else None
+                )
+                create_time = (
+                    self._ecar_process_create_times.get(identity.object_id)
+                    if identity is not None
+                    else None
+                )
+                self._latest_session_dependent_descriptions[key] = (
+                    f"event={event.event_type} host={event.src_host.hostname if event.src_host else ''} "
+                    f"pid={process.pid if process is not None else ''} "
+                    f"image={process.image if process is not None else ''} "
+                    f"process_start={process.start_time.isoformat() if process is not None and process.start_time is not None else ''} "
+                    f"source_create={create_time.isoformat() if create_time is not None else ''} "
+                    f"canonical_terminate={event.timestamp.isoformat()} "
+                    f"source_terminate={source_time.isoformat()}"
+                )
             return event
         if event.event_type != "logoff" or format_name not in _SESSION_CLOSURE_SOURCE_KEYS:
             return event
@@ -1026,7 +1141,9 @@ class SourceTimingPlanner:
         earliest = canonical_end
         visible_start = self._latest_session_start_times.get((format_name, lifecycle.group_id))
         if visible_start is not None:
-            earliest = max(earliest, visible_start + _SOURCE_EPSILON)
+            canonical_start = ensure_utc(lifecycle.canonical_start)
+            canonical_duration = max(_SOURCE_EPSILON, canonical_end - canonical_start)
+            earliest = max(earliest, visible_start + canonical_duration)
         if latest is not None:
             earliest = max(
                 earliest,
@@ -1039,14 +1156,29 @@ class SourceTimingPlanner:
         tail_seconds = 4 if format_name == "syslog" else 15
         latest_allowed = canonical_end + timedelta(seconds=tail_seconds)
         if earliest > latest_allowed:
+            description = self._latest_session_dependent_descriptions.get(
+                (format_name, lifecycle.group_id),
+                "",
+            )
             raise StateError(
                 "Source-visible session dependents exceed the closure tail bound: "
                 f"format={format_name} group={lifecycle.group_id} "
-                f"dependent={earliest.isoformat()} end={canonical_end.isoformat()}"
+                f"start={visible_start.isoformat() if visible_start is not None else ''} "
+                f"dependent={earliest.isoformat()} end={canonical_end.isoformat()} "
+                f"{description}"
             )
         closure_time = min(max(preferred, earliest), latest_allowed)
         plan.source_times[cache_key] = closure_time
         return closure_time
+
+    def session_start_source_time(
+        self,
+        format_name: str,
+        lifecycle_group_id: str,
+    ) -> datetime | None:
+        """Return the admitted source-native start time for a session group."""
+
+        return self._latest_session_start_times.get((format_name, lifecycle_group_id))
 
     def record_session_closure_source_time(
         self,
@@ -1107,6 +1239,18 @@ class SourceTimingPlanner:
         parent_time = self._ecar_process_create_times.get(parent.object_id) if parent else None
         if parent is not None and parent_time is None:
             parent_time = self._prime_ecar_process_create_time(event, parent)
+        lifecycle = event.lifecycle
+        auth = event.auth
+        session_ready_time = None
+        if (
+            lifecycle is not None
+            and lifecycle.parent_group_id
+            and auth is not None
+            and auth.logon_id not in {"", "-", "0x3e4", "0x3e5", "0x3e7"}
+        ):
+            session_ready_time = self._latest_session_start_times.get(
+                ("ecar", lifecycle.parent_group_id)
+            )
 
         for identity in identities:
             anchor_timestamp = (
@@ -1124,6 +1268,9 @@ class SourceTimingPlanner:
                         identity.object_id,
                     ),
                 )
+            if identity is subject and session_ready_time is not None:
+                session_floor = session_ready_time + _SOURCE_EPSILON
+                not_before = session_floor if not_before is None else max(not_before, session_floor)
             create_time = self._prime_ecar_process_create_time(
                 event,
                 identity,
@@ -1254,6 +1401,43 @@ class SourceTimingPlanner:
         )
         plan.source_times[cache_key] = constrained_time
         return constrained_time
+
+    def packet_child_time(
+        self,
+        event: TimingOccurrence,
+        source_key: str,
+        *,
+        seed_parts: tuple[Any, ...] = (),
+        preferred_time: datetime | None = None,
+        not_before: datetime | None = None,
+        not_after: datetime | None = None,
+        within: tuple[datetime, datetime] | None = None,
+    ) -> datetime:
+        """Return a packet-derived child timestamp with sub-millisecond texture."""
+        effective_seed = seed_parts or self._event_seed_parts(event)
+        base_time = preferred_time or self.source_time(
+            event,
+            source_key,
+            seed_parts=effective_seed,
+            not_before=not_before,
+            not_after=not_after,
+            within=within,
+        )
+        noise_us = 37 + (
+            _stable_seed(
+                "packet-child-texture:"
+                + source_key
+                + ":"
+                + ":".join(str(part) for part in effective_seed)
+            )
+            % 961
+        )
+        return self._apply_constraints(
+            base_time + timedelta(microseconds=noise_us),
+            not_before=not_before,
+            not_after=not_after,
+            within=within,
+        )
 
     def process_module_source_time(
         self,
@@ -1481,11 +1665,31 @@ class SourceTimingPlanner:
             timing.clock_skew_max_us,
             (sensor,),
         )
+        drift_ppm = self._bounded_int(
+            "sensor-clock-drift",
+            timing.clock_drift_min_ppm,
+            timing.clock_drift_max_ppm,
+            (sensor,),
+        )
+        observed_at = ensure_utc(event.timestamp)
+        seconds_since_midnight = (
+            observed_at.hour * 3600
+            + observed_at.minute * 60
+            + observed_at.second
+            + observed_at.microsecond / 1_000_000
+        )
+        drift_us = round(seconds_since_midnight * drift_ppm)
         path_delay = self._bounded_us(
             "sensor-path-delay",
             timing.path_delay_min_us,
             timing.path_delay_max_us,
             (sensor, route_key),
+        )
+        wander_us = self._coherent_sensor_wander_us(
+            sensor,
+            observed_at,
+            timing.event_jitter_min_us,
+            timing.event_jitter_max_us,
         )
         noise = self._bounded_us(
             "sensor-capture-noise",
@@ -1493,7 +1697,47 @@ class SourceTimingPlanner:
             _OBSERVATION_NOISE_US,
             (sensor, route_key, *self._event_seed_parts(event)),
         )
-        return source_time + timedelta(microseconds=skew + path_delay + noise)
+        return source_time + timedelta(
+            microseconds=skew + drift_us + path_delay + wander_us + noise
+        )
+
+    @staticmethod
+    def _coherent_sensor_wander_us(
+        sensor: str,
+        timestamp: datetime,
+        minimum_us: int,
+        maximum_us: int,
+    ) -> int:
+        """Return slowly varying sensor-clock wander inside the configured envelope."""
+
+        if maximum_us <= minimum_us:
+            return minimum_us
+        seed = _stable_seed(f"sensor-clock-wander:{sensor}")
+        period_seconds = 1_200 + (seed % 2_401)
+        period_us = period_seconds * 1_000_000
+        half_period_us = period_us // 2
+        phase_us = (seed >> 16) % period_us
+        timestamp_us = round(ensure_utc(timestamp).timestamp() * 1_000_000)
+        position_us = (timestamp_us + phase_us) % period_us
+        distance_us = min(position_us, period_us - position_us)
+        span_us = maximum_us - minimum_us
+        return minimum_us + (span_us * distance_us) // half_period_us
+
+    def canonical_time_in_source_clock(
+        self,
+        event: TimingOccurrence,
+        source_key: str,
+        canonical_time: datetime,
+        seed_parts: tuple[Any, ...] = (),
+    ) -> datetime:
+        """Translate a canonical causal bound into one endpoint source's clock frame."""
+
+        effective_seed = seed_parts or self._event_seed_parts(event)
+        return canonical_time + self._endpoint_clock_adjustment(
+            event,
+            source_key,
+            effective_seed,
+        )
 
     def _ensure_plan(self, event: TimingOccurrence) -> SourceTimingPlan:
         """Attach and return a mutable source timing plan for ``event``."""

@@ -875,11 +875,7 @@ class WorldModel:
             # so coerce for auto-selected sessions only.
             if kind == "rdp":
                 kind = "ssh" if host.supports_ssh else "network"
-            fallback_kind = (
-                kind
-                if kind in ("ssh", "network")
-                else ("network" if host.is_server else "interactive")
-            )
+            fallback_kind = "network" if kind in ("ssh", "rdp", "network") else "interactive"
             return self.plan_session(
                 user=user,
                 target_system=target_system,
