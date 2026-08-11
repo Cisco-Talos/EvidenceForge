@@ -1,0 +1,110 @@
+{
+  "schema_version": 2,
+  "python": "3.12.12 (main, Oct 28 2025, 11:52:25) [Clang 20.1.4 ]",
+  "platform": "darwin",
+  "measurements": [
+    {
+      "scenario": "iteration-test-expanded-ids",
+      "profile": "zeek",
+      "formats": "zeek",
+      "duration_scale": 3.0,
+      "effective_duration_seconds": 64800,
+      "baseline_only": true,
+      "elapsed_seconds": 36.883,
+      "peak_rss_bytes": 186433536,
+      "output_bytes": 18407074,
+      "workload_estimate": {
+        "primary_duration_seconds": 64800,
+        "warmup_seconds": 7200,
+        "baseline_occurrences": 90000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 90000,
+        "rendered_records": 1260000,
+        "attachment_payload_bytes": 15696,
+        "email_artifact_bytes": 20928,
+        "enabled_formats": 14,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 129054624,
+        "expected_bytes": 172072832,
+        "upper_bytes": 232298323
+      },
+      "forecast_disk": {
+        "lower_bytes": 3458510,
+        "expected_bytes": 23056736,
+        "upper_bytes": 34585104
+      }
+    },
+    {
+      "scenario": "iteration-test-expanded-ids",
+      "profile": "sysmon",
+      "formats": "windows_event_sysmon",
+      "duration_scale": 3.0,
+      "effective_duration_seconds": 64800,
+      "baseline_only": true,
+      "elapsed_seconds": 32.691,
+      "peak_rss_bytes": 201916416,
+      "output_bytes": 15850178,
+      "workload_estimate": {
+        "primary_duration_seconds": 64800,
+        "warmup_seconds": 7200,
+        "baseline_occurrences": 90000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 90000,
+        "rendered_records": 90000,
+        "attachment_payload_bytes": 15696,
+        "email_artifact_bytes": 20928,
+        "enabled_formats": 1,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 139081008,
+        "expected_bytes": 185441344,
+        "upper_bytes": 250345814
+      },
+      "forecast_disk": {
+        "lower_bytes": 2793662,
+        "expected_bytes": 18624416,
+        "upper_bytes": 27936624
+      }
+    },
+    {
+      "scenario": "iteration-test-expanded-ids",
+      "profile": "security",
+      "formats": "windows_event_security",
+      "duration_scale": 3.0,
+      "effective_duration_seconds": 64800,
+      "baseline_only": true,
+      "elapsed_seconds": 40.272,
+      "peak_rss_bytes": 236666880,
+      "output_bytes": 47845552,
+      "workload_estimate": {
+        "primary_duration_seconds": 64800,
+        "warmup_seconds": 7200,
+        "baseline_occurrences": 90000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 90000,
+        "rendered_records": 90000,
+        "attachment_payload_bytes": 15696,
+        "email_artifact_bytes": 20928,
+        "enabled_formats": 1,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 158184648,
+        "expected_bytes": 210912864,
+        "upper_bytes": 284732366
+      },
+      "forecast_disk": {
+        "lower_bytes": 8304902,
+        "expected_bytes": 55366016,
+        "upper_bytes": 83049024
+      }
+    }
+  ],
+  "failures": []
+}

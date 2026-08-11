@@ -164,6 +164,19 @@ class TestValidateCommand:
 
         assert result.exit_code == EXIT_SUCCESS
         assert "Schema valid: include-cli-test" in result.stdout
+        assert "Resource forecast" in result.stdout
+        assert "Projected peak memory" in result.stdout
+        assert "Available memory + swap" in result.stdout
+        assert "Projected output size" in result.stdout
+        assert "Available disk" in result.stdout
+
+    def test_large_workload_option_is_hidden_from_public_help(self):
+        """The obsolete workload override is not part of the visible CLI contract."""
+        for command in ("generate", "validate"):
+            result = runner.invoke(app, [command, "--help"])
+
+            assert result.exit_code == EXIT_SUCCESS
+            assert "--allow-large-workload" not in result.stdout
 
     def test_validate_reports_include_conflict_as_schema_validation(self, tmp_path):
         """eforge validate should treat include conflicts as validation errors."""
@@ -314,8 +327,11 @@ name: test
 
         assert result.exit_code == EXIT_SUCCESS
         assert "✓" in result.stdout or "complete" in result.stdout.lower()
+        assert "Resource forecast" in result.stdout
+        assert "Projected output size" in result.stdout
         assert mock_engine.generate.called
         assert mock_engine_class.call_args.kwargs["output_target"] == OutputTarget.DEFAULT
+        assert mock_engine_class.call_args.kwargs["resource_forecast"].disk.expected_bytes > 0
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_accepts_sof_elk_target(self, mock_engine_class, scenarios_dir, tmp_path):

@@ -86,8 +86,8 @@ For scripted or non-interactive use:
 
 | Command | Description |
 |---------|-------------|
-| `eforge generate <scenario.yaml> -o <dir> [--seed N] [--allow-large-workload]` | Generate logs; `--seed` overrides the scenario seed and the trusted workload override bypasses resource limits, not path safety |
-| `eforge validate <scenario.yaml> [--allow-large-workload]` | Validate schema, cross-references, and the default workload envelope |
+| `eforge generate <scenario.yaml> -o <dir> [--seed N]` | Forecast machine resources, then generate logs; `--seed` overrides the scenario seed |
+| `eforge validate <scenario.yaml>` | Validate schema and cross-references, and always print a machine-aware memory and disk forecast |
 | `eforge eval <output_dir> -s <scenario.yaml> [--allow-large-evaluation]` | Evaluate quality (4 pillars, 22 sub-scores); the trusted override bypasses evaluator corpus limits |
 | `eforge info [field]` | Show installation info, config paths, and data inventories. Pass a dot-path field for a specific value (e.g., `eforge info personas`). Use `--fields` to list available fields, `--json` for machine output. |
 | `eforge validate-config` | Validate config files for cross-reference integrity. Use `--json` for machine output. |

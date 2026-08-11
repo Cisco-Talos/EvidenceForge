@@ -89,8 +89,8 @@ The singular `include` key is accepted as a convenience for one file, but
 `includes` is the preferred form for new scenarios.
 
 Scenario composition is bounded to 32 levels, 256 files, 16 MiB of source YAML, and 1,000,000
-expanded nodes. These parsing limits are always enforced; the trusted large-workload override
-does not disable them.
+expanded nodes. These parsing and path-safety limits are always enforced independently of the
+generation resource forecast.
 
 For larger exercise families, keep reusable organization context separate from
 scenario-specific narrative files:
@@ -136,15 +136,21 @@ of changing the scenario name or unrelated content to obtain independent determi
 
 Before validation or generation allocates the workload, EvidenceForge estimates the primary
 duration, warm-up, periodic and explicit occurrences, canonical fan-out, rendered records, and
-attachment/email expansion. The default supported envelope is 31 days of primary activity, 7 days
-of warm-up, 1,000,000 periodic occurrences, 5,000,000 explicit occurrences, 20,000,000 canonical
-occurrences, and 200,000,000 rendered records. Per-attachment and aggregate email payload limits
-are also enforced.
+attachment/email expansion. It combines that scenario estimate with currently available RAM,
+free swap, container memory constraints, and free space on the destination filesystem.
 
-`eforge validate` and `eforge generate` reject an estimated overrun. For a reviewed, trusted run
-with adequate resources, pass `--allow-large-workload`; this bypasses the workload estimate only.
-It does not relax YAML ambiguity, include budgets, path containment, regular-file, symlink, or
-archive safety checks.
+Both `eforge validate` and `eforge generate` always print the resulting projected peak-memory and
+output-size ranges. When expected use reaches a material fraction of usable capacity, the forecast
+is followed immediately by a low, medium, or high resource warning. Resource warnings are
+advisory: generation continues without an override flag. YAML ambiguity, include budgets, path
+containment, regular-file, symlink, and archive safety checks remain hard errors because they are
+input-integrity boundaries rather than capacity forecasts.
+
+The forecast identifies its versioned calibration model in the output. Coefficients are measured
+and source-aware—for example, retained Sysmon event state is modeled differently from bounded
+streaming emitters, while output-byte rates account for source eligibility by operating system or
+host role. The calibration can be refined with additional measured runs without changing the CLI
+contract.
 
 ## Environment
 

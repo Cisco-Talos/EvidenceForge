@@ -1,0 +1,53 @@
+version: 2
+calibration_label: "assessment-scaled empirical model"
+
+memory:
+  base_mib: 90
+  emitter_queue_mib_per_format: 1
+  baseline_bytes_per_occurrence: 700
+  explicit_bytes_per_occurrence: 3800
+  fixed_mib_by_format:
+    windows_event_security: 20
+  baseline_bytes_per_occurrence_by_format:
+    windows_event_sysmon: 300
+    windows_event_security: 350
+  lower_multiplier: 0.75
+  upper_multiplier: 1.35
+
+disk:
+  base_mib: 0.5
+  unknown_format_bytes_per_host_second: 10.0
+  lower_multiplier: 0.15
+  upper_multiplier: 1.50
+  formats:
+    zeek_conn: {bytes_per_host_second: 8.0, system_scope: all}
+    zeek_dns: {bytes_per_host_second: 3.5, system_scope: all}
+    zeek_http: {bytes_per_host_second: 1.0, system_scope: all}
+    zeek_ssl: {bytes_per_host_second: 1.5, system_scope: all}
+    zeek_smtp: {bytes_per_host_second: 0.6, system_scope: all}
+    zeek_files: {bytes_per_host_second: 1.0, system_scope: all}
+    zeek_x509: {bytes_per_host_second: 1.0, system_scope: all}
+    zeek_ocsp: {bytes_per_host_second: 0.2, system_scope: all}
+    zeek_dhcp: {bytes_per_host_second: 0.7, system_scope: all}
+    zeek_ntp: {bytes_per_host_second: 0.7, system_scope: all}
+    zeek_packet_filter: {bytes_per_host_second: 0.2, system_scope: all}
+    zeek_weird: {bytes_per_host_second: 0.3, system_scope: all}
+    zeek_reporter: {bytes_per_host_second: 0.2, system_scope: all}
+    zeek_pe: {bytes_per_host_second: 0.4, system_scope: all}
+    windows_event_sysmon: {bytes_per_host_second: 31.0, system_scope: windows}
+    windows_event_security: {bytes_per_host_second: 94.0, system_scope: windows}
+    ecar: {bytes_per_host_second: 30.0, system_scope: all}
+    syslog: {bytes_per_host_second: 10.0, system_scope: linux}
+    bash_history: {bytes_per_host_second: 2.0, system_scope: linux}
+    snort_alert: {bytes_per_host_second: 0.5, system_scope: all}
+    cisco_asa: {bytes_per_host_second: 1.0, system_scope: all}
+    web_access: {bytes_per_host_second: 10.0, system_scope: "role:web_server"}
+    proxy_access: {bytes_per_host_second: 18.0, system_scope: "role:forward_proxy"}
+
+capacity:
+  memory_headroom_fraction: 0.85
+  disk_headroom_fraction: 0.90
+  warning_ratios:
+    low: 0.70
+    medium: 0.85
+    high: 0.95
