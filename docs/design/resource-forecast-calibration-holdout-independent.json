@@ -1,0 +1,42 @@
+{
+  "schema_version": 2,
+  "python": "3.12.12 (main, Oct 28 2025, 11:52:25) [Clang 20.1.4 ]",
+  "platform": "darwin",
+  "measurements": [
+    {
+      "scenario": "full-coverage-apt",
+      "profile": "full",
+      "formats": null,
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 21600,
+      "baseline_only": false,
+      "elapsed_seconds": 22.731,
+      "peak_rss_bytes": 207536128,
+      "output_bytes": 46083926,
+      "workload_estimate": {
+        "primary_duration_seconds": 21600,
+        "warmup_seconds": 28800,
+        "baseline_occurrences": 38500,
+        "explicit_occurrences": 27,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 38716,
+        "rendered_records": 813036,
+        "attachment_payload_bytes": 0,
+        "email_artifact_bytes": 0,
+        "enabled_formats": 21,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 142080792,
+        "expected_bytes": 189441056,
+        "upper_bytes": 255745425
+      },
+      "forecast_disk": {
+        "lower_bytes": 5576275,
+        "expected_bytes": 37175168,
+        "upper_bytes": 55762752
+      }
+    }
+  ],
+  "failures": []
+}

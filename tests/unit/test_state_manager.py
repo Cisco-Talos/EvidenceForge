@@ -395,7 +395,7 @@ class TestStateManagerInit:
         offset = sm._linux_pid_block_offset("linux01", 1_000_000_000)
 
         assert offset > 0
-        assert sm._linux_pid_block_offsets == {}
+        assert not hasattr(sm, "_linux_pid_block_offsets")
 
     def test_linux_hidden_pid_churn_has_bursty_hourly_regimes(self):
         """Hidden forks should not expose one nearly constant PID-per-second slope."""
@@ -626,6 +626,133 @@ class TestStateManagerInit:
             ]
 
         assert allocate_sequence() == allocate_sequence()
+
+    def test_linux_pid_wrap_uses_exclusive_pid_max_boundary(self):
+        """Logical Linux progression wraps from pid_max - 1 to the low ring."""
+        sm = StateManager()
+        event_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", event_time)
+        sm._initialize_pid_allocator("linux01", "linux")
+        sm._pid_counters["linux01"] = 4_194_300
+
+        pids = [
+            sm.allocate_transient_linux_pid(
+                "linux01",
+                event_time + timedelta(milliseconds=ordinal),
+            )
+            for ordinal in range(12)
+        ]
+
+        assert any(pid > 4_194_250 for pid in pids)
+        assert any(500 <= pid < 600 for pid in pids)
+        assert 4_194_304 not in pids
+
+    def test_linux_pid_reuses_only_after_exit_and_natural_wrap(self):
+        """A wrapped PID is reusable after exit but never while still active."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        sm._pid_counters["linux01"] = 500
+        sm.set_current_time(start)
+        first_pid = sm.create_process("linux01", 0, "/bin/first", "/bin/first", "root", "System")
+        assert first_pid == 500
+
+        second_time = start + timedelta(seconds=1)
+        sm._pid_counters["linux01"] = 4_194_304 - sm._linux_pid_hidden_churn_offset("linux01", 1)
+        sm.set_current_time(second_time)
+        live_collision_pid = sm.create_process(
+            "linux01", 0, "/bin/second", "/bin/second", "root", "System"
+        )
+        assert live_collision_pid != first_pid
+        assert live_collision_pid < 1_000
+
+        assert sm.end_process("linux01", first_pid, start + timedelta(seconds=2))
+        sm._pid_counters["linux01"] = 8_388_108 - sm._linux_pid_hidden_churn_offset("linux01", 3)
+        sm.set_current_time(start + timedelta(seconds=3))
+        reused_pid = sm.create_process("linux01", 0, "/bin/third", "/bin/third", "root", "System")
+        assert reused_pid == first_pid
+
+    def test_linux_parent_child_can_cross_rendered_pid_wrap(self):
+        """Logical parentage remains chronological across a high-to-low render wrap."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        sm._pid_counters["linux01"] = 4_194_303
+        sm.set_current_time(start)
+        parent_pid = sm.create_process("linux01", 0, "/bin/sh", "/bin/sh", "root", "System")
+        sm.set_current_time(start + timedelta(milliseconds=1))
+        child_pid = sm.create_process(
+            "linux01", parent_pid, "/bin/child", "/bin/child", "root", "System"
+        )
+
+        parent = sm.get_process("linux01", parent_pid)
+        child = sm.get_process("linux01", child_pid)
+        assert parent is not None and child is not None
+        assert parent_pid == 4_194_303
+        assert child_pid < 1_000
+        assert child.pid_logical_position > parent.pid_logical_position
+
+    def test_transient_pid_reservation_expires_before_natural_reuse(self):
+        """A transient companion protects its PID only through its final row."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        sm._initialize_pid_allocator("linux01", "linux")
+        sm._pid_counters["linux01"] = 500
+        first_pid = sm.allocate_transient_linux_pid(
+            "linux01", start, release_time=start + timedelta(seconds=1)
+        )
+        sm._pid_counters["linux01"] = 4_194_304 - sm._linux_pid_hidden_churn_offset("linux01", 2)
+        reused_pid = sm.allocate_transient_linux_pid(
+            "linux01",
+            start + timedelta(seconds=2),
+            release_time=start + timedelta(seconds=3),
+        )
+        assert first_pid == reused_pid == 500
+
+    def test_pid_watermark_rejects_late_allocation_and_bounds_history(self):
+        """Sealed allocation detail cannot grow with simulated duration."""
+        sm = StateManager()
+        start = datetime(2024, 1, 1, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        retained_sizes: list[tuple[int, int, int]] = []
+
+        for hour in range(24 * 30):
+            event_time = start + timedelta(hours=hour, minutes=5)
+            for ordinal in range(8):
+                sm.allocate_transient_linux_pid(
+                    "linux01",
+                    event_time + timedelta(seconds=ordinal),
+                )
+            sm.advance_pid_allocation_watermark(start + timedelta(hours=hour + 1))
+            if hour + 1 in {24, 24 * 7, 24 * 30}:
+                census = sm.pid_allocator_census()
+                retained_sizes.append(
+                    (
+                        census["open_allocations"],
+                        census["open_ordinals"],
+                        census["transient_reservations"],
+                    )
+                )
+
+        assert retained_sizes == [(0, 0, 0), (0, 0, 0), (0, 0, 0)]
+        with pytest.raises(StateError, match="sealed allocation watermark"):
+            sm.allocate_transient_linux_pid("linux01", start + timedelta(days=10))
+
+    def test_windows_allocator_never_overwrites_live_pid_after_wrap(self):
+        """Every Windows candidate checks the live reservation map, not just reset."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.set_current_time(start)
+        first_pid = sm.create_process("win01", 0, r"C:\first.exe", "first.exe", "SYSTEM", "System")
+        sm._pid_counters["win01"] = first_pid
+        second_pid = sm.create_process(
+            "win01", 0, r"C:\second.exe", "second.exe", "SYSTEM", "System"
+        )
+
+        assert second_pid != first_pid
+        assert sm.get_process("win01", first_pid).image == r"C:\first.exe"
+        assert sm.get_process("win01", second_pid).image == r"C:\second.exe"
 
     def test_linux_pid_order_survives_dense_out_of_order_transient_allocation(self):
         """Host PID chronology must not depend on generator traversal order."""

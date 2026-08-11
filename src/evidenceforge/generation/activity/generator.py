@@ -4233,6 +4233,7 @@ class ActivityGenerator:
         self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
+        self._terminated_process_times: dict[tuple[str, int, datetime | None], datetime] = {}
         self._dns_cache: ExpiringIndex[tuple[str, str, str, str], tuple[float, float]] = (
             ExpiringIndex(deadline=lambda window: _dns_cache_window(window)[1])
         )
@@ -4269,7 +4270,7 @@ class ActivityGenerator:
         ] = []
         self._foreground_shell_next_time: dict[tuple[str, str, str, int], datetime] = {}
         self._foreground_process_finalizers: ExpiringIndex[
-            tuple[str, int], tuple[System, str, str, str, datetime]
+            tuple[str, int, datetime | None], tuple[System, str, str, str, datetime]
         ] = ExpiringIndex(deadline=lambda finalizer: finalizer[4].timestamp())
         self._linux_apt_frontends: dict[str, tuple[int, datetime]] = {}
         self._loaded_modules_by_process: set[tuple[str, int, str, str]] = set()
@@ -4279,10 +4280,16 @@ class ActivityGenerator:
         ] = {}
         self._preferred_browser_by_session: dict[tuple[str, str, str], str] = {}
         self._last_browser_launch_by_session: dict[tuple[str, str, str], datetime] = {}
-        self._process_source_create_times: dict[tuple[str, int], datetime] = {}
-        self._process_source_terminate_times: dict[tuple[str, int], datetime] = {}
+        self._process_source_create_times: dict[tuple[str, int, datetime | None], datetime] = {}
+        self._process_source_terminate_times: dict[tuple[str, int, datetime | None], datetime] = {}
+        self._process_source_create_latest: dict[
+            tuple[str, int], tuple[datetime | None, datetime]
+        ] = {}
+        self._process_source_terminate_latest: dict[
+            tuple[str, int], tuple[datetime | None, datetime]
+        ] = {}
         self._session_process_source_terminate_times: dict[tuple[str, str], datetime] = {}
-        self._process_connection_hold_until: dict[tuple[str, int], datetime] = {}
+        self._process_connection_hold_until: dict[tuple[str, int, datetime | None], datetime] = {}
         self._source_timing_planner = SourceTimingPlanner(clock_profile_name=source_timing_profile)
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
@@ -4306,6 +4313,122 @@ class ActivityGenerator:
                 for terminated_host, terminated_pid, _ in self._terminated_process_keys
             )
         return (hostname, pid, start_time) in self._terminated_process_keys
+
+    def _process_instance_key(
+        self,
+        hostname: str,
+        pid: int,
+        start_time: datetime | None = None,
+    ) -> tuple[str, int, datetime | None]:
+        """Return a PID-reuse-safe key for the current process instance."""
+        if start_time is None:
+            state_manager = getattr(self, "state_manager", None)
+            process = (
+                state_manager.get_process(hostname, pid) if state_manager is not None else None
+            )
+            if process is not None:
+                start_time = process.start_time
+        return hostname, pid, start_time
+
+    def _process_cached_time(
+        self,
+        cache: dict[Any, datetime],
+        latest: dict[tuple[str, int], tuple[datetime | None, datetime]],
+        hostname: str,
+        pid: int,
+    ) -> datetime | None:
+        """Read an instance timestamp with compatibility for direct unit fixtures."""
+        instance_key = self._process_instance_key(hostname, pid)
+        value = cache.get(instance_key)
+        if value is not None:
+            return value
+        value = cache.get((hostname, pid))
+        if value is not None:
+            return value
+        if instance_key[2] is not None:
+            return None
+        latest_value = latest.get((hostname, pid))
+        return latest_value[1] if latest_value is not None else None
+
+    def advance_process_state_watermark(self, cutoff: datetime) -> None:
+        """Discard process-instance helper state sealed by the engine watermark."""
+        normalized_cutoff = ensure_utc(cutoff)
+        active = {
+            (process.system, process.pid, process.start_time)
+            for process in self.state_manager.state.running_processes.values()
+        }
+        active_pids = {(hostname, pid) for hostname, pid, _start_time in active}
+        self._terminated_process_times = {
+            key: ended_at
+            for key, ended_at in self._terminated_process_times.items()
+            if ended_at >= normalized_cutoff
+        }
+        self._terminated_process_keys = set(self._terminated_process_times)
+        self._process_source_create_times = {
+            key: source_time
+            for key, source_time in self._process_source_create_times.items()
+            if key in active or source_time >= normalized_cutoff
+        }
+        self._process_source_terminate_times = {
+            key: source_time
+            for key, source_time in self._process_source_terminate_times.items()
+            if source_time >= normalized_cutoff
+        }
+        self._process_source_create_latest = {
+            key: value
+            for key, value in self._process_source_create_latest.items()
+            if (key[0], key[1], value[0]) in active or value[1] >= normalized_cutoff
+        }
+        self._process_source_terminate_latest = {
+            key: value
+            for key, value in self._process_source_terminate_latest.items()
+            if value[1] >= normalized_cutoff
+        }
+        self._process_connection_hold_until = {
+            key: hold_until
+            for key, hold_until in self._process_connection_hold_until.items()
+            if key in active or hold_until >= normalized_cutoff
+        }
+        self._session_process_source_terminate_times = {
+            key: source_time
+            for key, source_time in self._session_process_source_terminate_times.items()
+            if source_time >= normalized_cutoff
+        }
+        active_module_prefixes = {
+            (hostname, pid, start_time.isoformat()) for hostname, pid, start_time in active
+        }
+        self._loaded_modules_by_process = {
+            module
+            for module in self._loaded_modules_by_process
+            if module[:3] in active_module_prefixes
+        }
+        self._foreground_process_finalizers.expire_before(
+            normalized_cutoff.timestamp(),
+            inclusive=True,
+        )
+        self._foreground_shell_next_time = {
+            key: next_time
+            for key, next_time in self._foreground_shell_next_time.items()
+            if self.state_manager.get_process(key[0], key[3]) is not None
+            or next_time >= normalized_cutoff
+        }
+        responder_pids = getattr(self, "_ssh_responder_pids", None)
+        if responder_pids is not None:
+            retained_responders: dict[str, int] = {}
+            systems_by_ip = getattr(self, "_ip_to_system", {})
+            for key, pid in responder_pids.items():
+                target_ip = key.partition("->")[2].partition(":")[0]
+                target_system = systems_by_ip.get(target_ip)
+                if target_system is not None and (target_system.hostname, pid) in active_pids:
+                    retained_responders[key] = pid
+            self._ssh_responder_pids = retained_responders
+        pid_aliases = getattr(self, "_ssh_pid_aliases", None)
+        if pid_aliases is not None:
+            self._ssh_pid_aliases = {
+                key: mapped_pid
+                for key, mapped_pid in pid_aliases.items()
+                if (key[0], mapped_pid) in self.state_manager.state.running_processes
+            }
 
     def _remember_process_connection_hold(
         self,
@@ -4337,7 +4460,7 @@ class ActivityGenerator:
             ):
                 latest_hold = deadline - timedelta(milliseconds=1)
             close_time = min(close_time, latest_hold)
-        key = (system.hostname, pid)
+        key = self._process_instance_key(system.hostname, pid)
         previous = self._process_connection_hold_until.get(key)
         if previous is None or close_time > previous:
             self._process_connection_hold_until[key] = close_time
@@ -4354,7 +4477,9 @@ class ActivityGenerator:
         requested_time: datetime,
     ) -> datetime:
         """Move process termination after any active process-owned transport hold."""
-        hold_until = self._process_connection_hold_until.get((system.hostname, pid))
+        hold_until = self._process_connection_hold_until.get(
+            self._process_instance_key(system.hostname, pid)
+        )
         if hold_until is None:
             return requested_time
         hold_until = ensure_utc(hold_until)
@@ -4380,7 +4505,8 @@ class ActivityGenerator:
         termination_time: datetime,
     ) -> None:
         """Track a bounded foreground process until its terminate event is observed."""
-        self._foreground_process_finalizers[(system.hostname, pid)] = (
+        key = self._process_instance_key(system.hostname, pid)
+        self._foreground_process_finalizers[key] = (
             system,
             user.username,
             process_name,
@@ -4390,7 +4516,9 @@ class ActivityGenerator:
 
     def foreground_process_termination_time(self, hostname: str, pid: int) -> datetime | None:
         """Return the canonical bounded-process deadline, when one is registered."""
-        finalizer = self._foreground_process_finalizers.get((hostname, pid))
+        finalizer = self._foreground_process_finalizers.get(
+            self._process_instance_key(hostname, pid)
+        )
         return finalizer[4] if finalizer is not None else None
 
     def finalize_foreground_process_lifetimes(self, end_time: datetime) -> None:
@@ -4415,6 +4543,8 @@ class ActivityGenerator:
         ):
             running = self.state_manager.get_process(system.hostname, key[1])
             if running is None:
+                continue
+            if running.start_time != key[2]:
                 continue
             if self._process_termination_recorded(system.hostname, key[1], running.start_time):
                 continue
@@ -9823,11 +9953,23 @@ class ActivityGenerator:
 
             session = self.state_manager.get_session(logon_id)
             effective_source_port = source_port or (session.source_port if session else 0)
+            sshd_release_time = (
+                ensure_utc(session.end_plan.canonical_end)
+                if session is not None and session.end_plan is not None
+                else (
+                    ensure_utc(session.network_close_time)
+                    if session is not None and session.network_close_time is not None
+                    else min(self._scenario_end_time, ensure_utc(time) + timedelta(hours=12))
+                )
+            )
             sshd_pid = (
                 session.transport_pid
                 if session and session.transport_pid is not None
                 else self.state_manager.allocate_transient_linux_pid(
-                    system.hostname, time, os_category=_get_os_category(system.os)
+                    system.hostname,
+                    time,
+                    os_category=_get_os_category(system.os),
+                    release_time=sshd_release_time,
                 )
             )
             self.state_manager.update_session_metadata(
@@ -11084,7 +11226,11 @@ class ActivityGenerator:
                         seconds=lifetime_rng.uniform(*process_lifetime)
                     )
                     connection_hold = self._process_connection_hold_until.get(
-                        (session.system, session_process.pid)
+                        self._process_instance_key(
+                            session.system,
+                            session_process.pid,
+                            session_process.start_time,
+                        )
                     )
                     if connection_hold is not None:
                         bounded_termination_time = max(
@@ -12547,15 +12693,35 @@ class ActivityGenerator:
             )
         ]
         if source_create_times:
-            self._process_source_create_times[(hostname, pid)] = max(source_create_times)
+            start_time = event.process.start_time if event.process is not None else None
+            visible_create_time = max(source_create_times)
+            self._process_source_create_times[(hostname, pid, start_time)] = visible_create_time
+            latest = getattr(self, "_process_source_create_latest", None)
+            if latest is None:
+                latest = {}
+                self._process_source_create_latest = latest
+            latest[(hostname, pid)] = (
+                start_time,
+                visible_create_time,
+            )
 
     def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
         """Return the latest rendered source-create timestamp for a process."""
-        return self._process_source_create_times.get((hostname, pid))
+        return self._process_cached_time(
+            self._process_source_create_times,
+            getattr(self, "_process_source_create_latest", {}),
+            hostname,
+            pid,
+        )
 
     def process_source_terminate_time(self, hostname: str, pid: int) -> datetime | None:
         """Return the rendered source-terminate timestamp for a process."""
-        return self._process_source_terminate_times.get((hostname, pid))
+        return self._process_cached_time(
+            self._process_source_terminate_times,
+            getattr(self, "_process_source_terminate_latest", {}),
+            hostname,
+            pid,
+        )
 
     def _clamp_after_visible_process_create(
         self,
@@ -12701,7 +12867,18 @@ class ActivityGenerator:
         ]
         if source_terminate_times:
             visible_terminate_time = max(source_terminate_times)
-            self._process_source_terminate_times[(hostname, pid)] = visible_terminate_time
+            start_time = event.process.start_time if event.process is not None else None
+            self._process_source_terminate_times[(hostname, pid, start_time)] = (
+                visible_terminate_time
+            )
+            latest = getattr(self, "_process_source_terminate_latest", None)
+            if latest is None:
+                latest = {}
+                self._process_source_terminate_latest = latest
+            latest[(hostname, pid)] = (
+                start_time,
+                visible_terminate_time,
+            )
             logon_id = str(getattr(event.process, "logon_id", "") or "")
             if logon_id:
                 key = (hostname, logon_id)
@@ -13472,6 +13649,19 @@ class ActivityGenerator:
         process_logon_id = running_proc.logon_id if running_proc is not None else logon_id
         session_logon_type = self.state_manager.get_session_logon_type(process_logon_id)
         session_end_time = self.state_manager.get_session_end_time(process_logon_id)
+        owning_session = self.state_manager.get_session(process_logon_id)
+        if (
+            owning_session is not None
+            and owning_session.session_kind == "ssh"
+            and owning_session.network_close_time is not None
+            and owning_session.transport_pid != pid
+        ):
+            ssh_transport_end = ensure_utc(owning_session.network_close_time)
+            session_end_time = (
+                ssh_transport_end
+                if session_end_time is None
+                else min(ensure_utc(session_end_time), ssh_transport_end)
+            )
         if session_end_time is not None and time >= session_end_time:
             end_margin_ms = 150 + (
                 _stable_seed(
@@ -13486,7 +13676,9 @@ class ActivityGenerator:
                 time = min(time, latest_allowed)
         if authoritative_end_plan is not None and authoritative_end_plan.is_authoritative:
             deadline = ensure_utc(authoritative_end_plan.canonical_end)
-            hold_until = self._process_connection_hold_until.get((system.hostname, pid))
+            hold_until = self._process_connection_hold_until.get(
+                self._process_instance_key(system.hostname, pid)
+            )
             if hold_until is not None and ensure_utc(hold_until) >= deadline:
                 raise StateError(
                     "Process connection hold extends beyond authoritative session end: "
@@ -13554,7 +13746,9 @@ class ActivityGenerator:
         self._record_process_source_terminate_time(system.hostname, pid, event)
         self.dispatcher.dispatch_builder(event)
         termination_start_time = event.process.start_time if event.process is not None else None
-        self._terminated_process_keys.add((system.hostname, pid, termination_start_time))
+        termination_key = (system.hostname, pid, termination_start_time)
+        self._terminated_process_keys.add(termination_key)
+        self._terminated_process_times[termination_key] = ensure_utc(event.timestamp)
         self._terminate_completed_one_shot_shell_parent(
             user=user,
             system=system,
@@ -14115,6 +14309,7 @@ class ActivityGenerator:
         worker_pid = self.state_manager.allocate_transient_linux_pid(
             server.hostname,
             time + timedelta(milliseconds=rng.randint(35, 140)),
+            release_time=time + timedelta(seconds=duration + 1.0),
         )
         session_token = self._dovecot_session_token(seed)
         message_count = max(1, len(message_ids) or rng.randint(1, 6))
@@ -16209,12 +16404,20 @@ class ActivityGenerator:
             event_time = time + timedelta(
                 milliseconds=_stable_seed(f"postfix_qmgr_pid:{system.hostname}") % 40
             )
-            pid = self.state_manager.allocate_transient_linux_pid(system.hostname, event_time)
+            pid = self.state_manager.allocate_transient_linux_pid(
+                system.hostname,
+                event_time,
+                release_time=self._scenario_end_time,
+            )
             cache[system.hostname] = pid
             return pid
         seed = _stable_seed(f"postfix_component_pid:{system.hostname}:{component}:{time.date()}")
         event_time = time + timedelta(milliseconds=seed % 40)
-        return self.state_manager.allocate_transient_linux_pid(system.hostname, event_time)
+        return self.state_manager.allocate_transient_linux_pid(
+            system.hostname,
+            event_time,
+            release_time=event_time + timedelta(minutes=10),
+        )
 
     def _postfix_queue_id(self, message_id: str, system: "System") -> str:
         """Return a stable Postfix-like queue identifier for a message on one server."""

@@ -541,6 +541,51 @@ def test_finalize_foreground_process_lifetimes_preserves_commands_beyond_window(
     )
 
 
+def test_process_watermark_drops_pid_scoped_state_before_reuse() -> None:
+    """A reused PID must not inherit timing, holds, or modules from its old instance."""
+    start = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start)
+    generator = ActivityGenerator(state, {})
+    pid = state.create_process(
+        "WS-01",
+        0,
+        r"C:\old.exe",
+        "old.exe",
+        "analyst",
+        "Medium",
+    )
+    old_key = generator._process_instance_key("WS-01", pid)
+    generator._process_source_create_times[old_key] = start
+    generator._process_source_terminate_times[old_key] = start + timedelta(seconds=1)
+    generator._process_connection_hold_until[old_key] = start + timedelta(seconds=2)
+    generator._loaded_modules_by_process.add(("WS-01", pid, start.isoformat(), r"c:\old.dll"))
+    generator._terminated_process_keys.add(old_key)
+    generator._terminated_process_times[old_key] = start + timedelta(seconds=3)
+    assert state.end_process("WS-01", pid, start + timedelta(seconds=3))
+
+    cutoff = start + timedelta(hours=1)
+    state.advance_pid_allocation_watermark(cutoff)
+    generator.advance_process_state_watermark(cutoff)
+    state._pid_counters["WS-01"] = pid
+    state.set_current_time(cutoff)
+    reused_pid = state.create_process(
+        "WS-01",
+        0,
+        r"C:\new.exe",
+        "new.exe",
+        "analyst",
+        "Medium",
+    )
+
+    assert reused_pid == pid
+    assert generator._process_instance_key("WS-01", pid) != old_key
+    assert generator.process_source_create_time("WS-01", pid) is None
+    assert generator.process_source_terminate_time("WS-01", pid) is None
+    assert not generator._loaded_modules_by_process
+    assert not generator._terminated_process_keys
+
+
 def test_expired_linux_curl_is_not_valid_for_later_network_attribution() -> None:
     start = datetime(2024, 3, 18, 13, 28, 11, tzinfo=UTC)
     proc = _process("/usr/bin/curl", "curl -sS https://grafana.example/api/health", start)

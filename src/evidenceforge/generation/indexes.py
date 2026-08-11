@@ -376,13 +376,46 @@ class TemporalAllocationIndex:
         self._block_last_times: list[datetime] = []
         self._block_max_values: list[int] = []
         self._block_min_values: list[int] = []
-        self._prefix_max_values: list[int] = []
+        self._summary_tree_capacity = 1
+        self._max_summary_tree: list[float] = [float("-inf")] * 2
+        self._min_summary_tree: list[float] = [float("inf")] * 2
         self._minus_invariants: dict[int, list[tuple[float, datetime, int]]] = {}
         self._plus_invariants: dict[int, list[tuple[float, datetime, int]]] = {}
         self._sequence = 0
 
     def __len__(self) -> int:
         return sum(len(block) for block in self._blocks)
+
+    def discard_before(self, cutoff: datetime) -> int | None:
+        """Discard allocations before ``cutoff`` and return their greatest value.
+
+        Allocation indexes are used only for the engine's open scheduling window.
+        Rebuilding at an hourly watermark keeps every hot query independent of total
+        scenario duration while preserving any allocations authored ahead of the
+        sealed period.
+        """
+        discarded_max: int | None = None
+        retained: list[tuple[datetime, int]] = []
+        for block in self._blocks:
+            for event_time, _sequence, value in block:
+                if event_time < cutoff:
+                    discarded_max = value if discarded_max is None else max(discarded_max, value)
+                else:
+                    retained.append((event_time, value))
+
+        self._blocks = []
+        self._block_last_times = []
+        self._block_max_values = []
+        self._block_min_values = []
+        self._summary_tree_capacity = 1
+        self._max_summary_tree = [float("-inf")] * 2
+        self._min_summary_tree = [float("inf")] * 2
+        self._minus_invariants = {}
+        self._plus_invariants = {}
+        self._sequence = 0
+        for event_time, value in retained:
+            self.add(event_time, value)
+        return discarded_max
 
     def add(self, event_time: datetime, value: int) -> None:
         """Record an allocation."""
@@ -394,8 +427,7 @@ class TemporalAllocationIndex:
             self._block_last_times.append(event_time)
             self._block_max_values.append(value)
             self._block_min_values.append(value)
-            prior_max = self._prefix_max_values[-1] if self._prefix_max_values else value
-            self._prefix_max_values.append(max(prior_max, value))
+            self._rebuild_summary_tree()
         else:
             block = self._blocks[block_index]
             position = bisect_right(block, (event_time, math.inf, math.inf))
@@ -404,7 +436,7 @@ class TemporalAllocationIndex:
             if len(block) > self._BLOCK_SIZE * 2:
                 self._split_block(block_index)
             else:
-                self._refresh_prefix_max_values(block_index)
+                self._update_summary_tree(block_index)
 
         epoch = event_time.timestamp()
         minus = value - epoch
@@ -415,7 +447,7 @@ class TemporalAllocationIndex:
     def max_value_at_or_before(self, event_time: datetime) -> int | None:
         """Return the greatest allocated value at or before an event time."""
         completed_block = bisect_right(self._block_last_times, event_time) - 1
-        best = self._prefix_max_values[completed_block] if completed_block >= 0 else None
+        best = self._range_max(0, completed_block + 1) if completed_block >= 0 else None
         partial_block = completed_block + 1
         if partial_block >= len(self._blocks):
             return best
@@ -427,21 +459,27 @@ class TemporalAllocationIndex:
 
     def min_value_after(self, event_time: datetime) -> int | None:
         """Return the least allocated value strictly after an event time."""
+        partial_block = bisect_right(self._block_last_times, event_time)
+        if partial_block >= len(self._blocks):
+            return None
         best: int | None = None
-        for block_index in range(len(self._blocks) - 1, -1, -1):
-            block = self._blocks[block_index]
-            if block[0][0] > event_time:
-                block_min = self._block_min_values[block_index]
-                best = block_min if best is None else min(best, block_min)
-                continue
-            if block[-1][0] <= event_time:
-                break
-            for allocated_time, _sequence, value in reversed(block):
-                if allocated_time <= event_time:
-                    break
+        for allocated_time, _sequence, value in self._blocks[partial_block]:
+            if allocated_time > event_time:
                 best = value if best is None else min(best, value)
-            break
+        suffix_min = self._range_min(partial_block + 1, len(self._blocks))
+        if suffix_min is not None:
+            best = suffix_min if best is None else min(best, suffix_min)
         return best
+
+    def first_record_after(self, event_time: datetime) -> tuple[datetime, int] | None:
+        """Return the first allocation record strictly after an event time."""
+        first_block = bisect_right(self._block_last_times, event_time)
+        for block in self._blocks[first_block : first_block + 1]:
+            position = bisect_right(block, (event_time, math.inf, math.inf))
+            if position < len(block):
+                allocated_time, _sequence, value = block[position]
+                return allocated_time, value
+        return None
 
     def matches_elapsed_delta(
         self,
@@ -491,18 +529,82 @@ class TemporalAllocationIndex:
         self._block_max_values[block_index] = max(values)
         self._block_min_values[block_index] = min(values)
 
-    def _refresh_prefix_max_values(self, start: int) -> None:
-        """Refresh prefix maxima after a block summary changes."""
-        for block_index in range(start, len(self._blocks)):
-            prior_max = (
-                self._prefix_max_values[block_index - 1]
-                if block_index > 0
-                else self._block_max_values[block_index]
+    def _rebuild_summary_tree(self) -> None:
+        """Rebuild block summaries after the infrequent block split/append."""
+        capacity = 1
+        while capacity < len(self._blocks):
+            capacity *= 2
+        self._summary_tree_capacity = capacity
+        self._max_summary_tree = [float("-inf")] * (capacity * 2)
+        self._min_summary_tree = [float("inf")] * (capacity * 2)
+        for index, (maximum, minimum) in enumerate(
+            zip(self._block_max_values, self._block_min_values, strict=True)
+        ):
+            position = capacity + index
+            self._max_summary_tree[position] = maximum
+            self._min_summary_tree[position] = minimum
+        for position in range(capacity - 1, 0, -1):
+            self._max_summary_tree[position] = max(
+                self._max_summary_tree[position * 2],
+                self._max_summary_tree[(position * 2) + 1],
             )
-            self._prefix_max_values[block_index] = max(
-                prior_max,
-                self._block_max_values[block_index],
+            self._min_summary_tree[position] = min(
+                self._min_summary_tree[position * 2],
+                self._min_summary_tree[(position * 2) + 1],
             )
+
+    def _update_summary_tree(self, block_index: int) -> None:
+        """Update one block summary in logarithmic time."""
+        position = self._summary_tree_capacity + block_index
+        self._max_summary_tree[position] = self._block_max_values[block_index]
+        self._min_summary_tree[position] = self._block_min_values[block_index]
+        position //= 2
+        while position:
+            self._max_summary_tree[position] = max(
+                self._max_summary_tree[position * 2],
+                self._max_summary_tree[(position * 2) + 1],
+            )
+            self._min_summary_tree[position] = min(
+                self._min_summary_tree[position * 2],
+                self._min_summary_tree[(position * 2) + 1],
+            )
+            position //= 2
+
+    def _range_max(self, start: int, stop: int) -> int | None:
+        """Return a block maximum over ``[start, stop)`` in logarithmic time."""
+        if start >= stop:
+            return None
+        left = start + self._summary_tree_capacity
+        right = stop + self._summary_tree_capacity
+        result = float("-inf")
+        while left < right:
+            if left % 2:
+                result = max(result, self._max_summary_tree[left])
+                left += 1
+            if right % 2:
+                right -= 1
+                result = max(result, self._max_summary_tree[right])
+            left //= 2
+            right //= 2
+        return None if result == float("-inf") else int(result)
+
+    def _range_min(self, start: int, stop: int) -> int | None:
+        """Return a block minimum over ``[start, stop)`` in logarithmic time."""
+        if start >= stop:
+            return None
+        left = start + self._summary_tree_capacity
+        right = stop + self._summary_tree_capacity
+        result = float("inf")
+        while left < right:
+            if left % 2:
+                result = min(result, self._min_summary_tree[left])
+                left += 1
+            if right % 2:
+                right -= 1
+                result = min(result, self._min_summary_tree[right])
+            left //= 2
+            right //= 2
+        return None if result == float("inf") else int(result)
 
     def _split_block(self, block_index: int) -> None:
         block = self._blocks[block_index]
@@ -522,12 +624,4 @@ class TemporalAllocationIndex:
             min(record[2] for record in left),
             min(record[2] for record in right),
         ]
-        prior_prefix = self._prefix_max_values[block_index - 1] if block_index > 0 else None
-        left_prefix = self._block_max_values[block_index]
-        if prior_prefix is not None:
-            left_prefix = max(prior_prefix, left_prefix)
-        self._prefix_max_values[block_index : block_index + 1] = [
-            left_prefix,
-            max(left_prefix, self._block_max_values[block_index + 1]),
-        ]
-        self._refresh_prefix_max_values(block_index + 2)
+        self._rebuild_summary_tree()

@@ -44,8 +44,9 @@ from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
 from evidenceforge.generation.network_identities import ScenarioNetworkResolver
+from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.generation.workload import WorkloadLimits, enforce_workload_limits
+from evidenceforge.generation.workload import WorkloadLimits, estimate_workload
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
 from evidenceforge.models.scenario import Scenario, System, User
 from evidenceforge.output_targets import (
@@ -95,6 +96,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         generation_seed: int | None = None,
         allow_large_workload: bool = False,
         workload_limits: WorkloadLimits | None = None,
+        resource_forecast: ResourceForecast | None = None,
     ):
         """Initialize generation engine.
 
@@ -119,11 +121,15 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.output_dir = Path(output_dir)
         self.scenario_root = Path(scenario_root) if scenario_root is not None else Path.cwd()
         self.allow_large_workload = allow_large_workload
-        self.workload_estimate = enforce_workload_limits(
+        self.workload_estimate = estimate_workload(
             self.scenario,
             scenario_root=self.scenario_root,
             limits=workload_limits,
-            allow_large_workload=allow_large_workload,
+        )
+        self.resource_forecast = resource_forecast or build_resource_forecast(
+            self.scenario,
+            self.workload_estimate,
+            self.output_dir,
         )
         self.ground_truth_dir = (
             Path(ground_truth_dir) if ground_truth_dir is not None else self.output_dir
@@ -559,7 +565,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self.scenario,
             self.output_target,
             workload_estimate=self.workload_estimate,
-            workload_limits_overridden=self.allow_large_workload,
         )
 
         logger.info("All emitters closed")

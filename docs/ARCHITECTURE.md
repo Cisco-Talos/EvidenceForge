@@ -947,7 +947,27 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 **Windows maintenance cadence:** Baseline Windows scheduled/background utility launches are data-driven through `system_processes.yaml`. Scheduled-task entries can declare optional selection weights, host-type eligibility, per-host window caps, and cooldowns, while the generator applies executable-specific lifetime profiles for common maintenance tools such as `CompatTelRunner.exe`, `usoclient.exe`, `MpCmdRun.exe`, and `cleanmgr.exe`. Remote/admin command parents are resolved by execution family above generic process-tree selection, preferring concrete owners such as live `PSEXESVC.exe`, `WmiPrvSE.exe`, Task Scheduler, service/SCM context, or PowerShell/WinRM when the command shape indicates them.
 
-**PID allocation diversity:** PIDs use a lognormal distribution for gap sizes (Windows: `lognormvariate(1.2, 0.8)` in multiples of 4; Linux: `lognormvariate(0.5, 0.6)`), producing a heavy-tailed gap distribution with no fixed-set fingerprint. Wraparound at 65536 skips PIDs still held by running processes.
+**Duration-stable PID allocation:** `StateManager` advances Linux through an unbounded logical
+position and renders that position into the exclusive `pid_max` ring `500..4,194,303`. A
+high-to-low rendered transition is therefore an explicit wrap, not a chronology failure. Windows
+keeps its multiples-of-four distribution and renders through the modeled `4,000..65,532` ring.
+Both policies probe live reservations on every candidate, so neither can overwrite a running
+process. A rendered PID is reusable only after natural wrap and after the prior canonical or
+transient lifetime has ended; fixed boot processes remain reserved for the host lifetime.
+
+The engine advances a PID-allocation watermark after each generated hour. Because baseline and
+session planners can visit canonical process starts out of traversal order, a fixed 24-hour
+scheduling horizon remains open. Detailed temporal allocations, same-timestamp ordinals, and
+transient reservation intervals exist only in that horizon. Sealed history collapses to one
+greatest logical position per host, and allocation behind the watermark is an internal ordering
+error. The fixed weekly hidden-churn table, per-host policy state, active-process map, and open
+window are the only allocator-retained structures; none grows with elapsed scenario duration.
+
+Process helper state follows the same instance boundary. Source create/terminate timestamps,
+connection holds, foreground finalizers, module deduplication, and termination deduplication use
+`(host, PID, process start)` or object identity and are pruned at the allocation watermark. The
+separate 48-hour ended-identity snapshot remains bounded and exists only for legitimate late
+source references.
 
 **Per-user bash history:** Baseline SSH sessions to Linux servers generate organic admin commands for realistic admin users, creating per-user `<username>.bash_history` files on all Linux hosts. Storyline process events inject 0-3 organic noise commands (pwd, ls, id, w, df -h, etc.) around each attack command via `generate_bash_command_with_noise()`.
 

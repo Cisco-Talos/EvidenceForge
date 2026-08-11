@@ -124,6 +124,11 @@ from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
 
+# Some lifecycle planners author a process owner in a later traversal pass with
+# a canonical start earlier in the same workday. Keep that fixed scheduling
+# horizon open; elapsed scenario history behind it is still sealed every hour.
+_PID_ALLOCATION_OPEN_WINDOW = timedelta(hours=24)
+
 _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY = 0.28
 _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY = 0.18
 _BASELINE_GUARDED_SUCCESS_PORTS = {445, 3389}
@@ -3294,6 +3299,7 @@ class BaselineMixin:
         if len(recipients) < 2:
             return
         hourly_rate = email_config.background_messages_per_user_per_day / 24.0
+        planned_messages: list[tuple[datetime, EmailMessageEventSpec, User, System]] = []
         for user in recipients:
             rng = random.Random(
                 _stable_seed(f"baseline_email:{self.scenario.name}:{user.username}:{current_hour}")
@@ -3351,6 +3357,12 @@ class BaselineMixin:
                 mail_action="deliver",
                 outcome="delivered",
             )
+            planned_messages.append((event_time, spec, actor, actor_system))
+
+        for event_time, spec, actor, actor_system in sorted(
+            planned_messages,
+            key=lambda planned: planned[0],
+        ):
             self.activity_generator.generate_email_message(
                 spec=spec,
                 actor=actor,
@@ -3906,7 +3918,11 @@ class BaselineMixin:
                 self._generate_hour(
                     current_hour, enabled_users, emit_storylines=False, flush_emitters=False
                 )
-                self.state_manager.sweep_closed_connections(current_hour + timedelta(hours=1))
+                next_hour = current_hour + timedelta(hours=1)
+                self.state_manager.sweep_closed_connections(next_hour)
+                allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
+                self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
+                self.activity_generator.advance_process_state_watermark(allocation_cutoff)
                 current_hour += timedelta(hours=1)
 
             logger.info(f"Warm-up complete: processed {warmup_count} hours")
@@ -3938,7 +3954,11 @@ class BaselineMixin:
 
             self._generate_hour(current_hour, enabled_users)
             # Evict completed/failed connections to bound memory during long runs
-            self.state_manager.sweep_closed_connections(current_hour + timedelta(hours=1))
+            next_hour = current_hour + timedelta(hours=1)
+            self.state_manager.sweep_closed_connections(next_hour)
+            allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
+            self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
+            self.activity_generator.advance_process_state_watermark(allocation_cutoff)
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")

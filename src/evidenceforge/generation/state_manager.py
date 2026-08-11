@@ -63,6 +63,12 @@ _HOST_LOGON_BUCKET_SPACE = 0x01000000
 _HOST_LOGON_BUCKET_STEP = 131071
 _NULL_LOGON_GUID = "{00000000-0000-0000-0000-000000000000}"
 _LINUX_PID_BLOCK_SECONDS = 300
+_LINUX_PID_MIN = 500
+_LINUX_PID_MAX_EXCLUSIVE = 4_194_304
+_WINDOWS_PID_MIN = 4_000
+_WINDOWS_PID_MAX = 65_532
+_WINDOWS_PID_STEP = 4
+_PID_ALLOCATION_REORDER_WINDOW = timedelta(hours=24)
 _MINUTES_PER_WEEK = 7 * 24 * 60
 _ENDED_IDENTITY_RETENTION = timedelta(hours=48)
 _MAX_RETAINED_PROCESS_IDENTITIES = 500_000
@@ -167,11 +173,17 @@ class StateManager:
         self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
         self._pid_rngs: dict[str, random.Random] = {}  # Per-system PID RNGs
         self._pid_time_epochs: dict[str, datetime] = {}
-        self._pid_bucket_offsets: dict[tuple[str, int, int], int] = {}
-        self._linux_pid_block_offsets: dict[str, dict[int, int]] = {}
+        self._pid_bucket_offsets: dict[tuple[str, datetime], int] = {}
         self._linux_pid_weekly_churn_prefixes: dict[str, tuple[int, ...]] = {}
-        self._linux_pid_used_ids: dict[str, set[int]] = {}
         self._linux_pid_allocations: dict[str, TemporalAllocationIndex] = {}
+        self._pid_allocation_watermark: datetime | None = None
+        self._pid_sealed_logical_positions: dict[str, int] = {}
+        self._fixed_pid_reservations: dict[str, set[int]] = {}
+        self._active_pid_reservation_counts: dict[str, int] = {}
+        self._transient_pid_reservations: dict[str, dict[int, list[tuple[datetime, datetime]]]] = {}
+        self._transient_pid_reservation_counts: dict[str, int] = {}
+        self._pid_candidate_probe_count = 0
+        self._pid_allocation_count = 0
         self._connection_id_counter = 0
         self._thread_id_counters: dict[str, int] = {}
         self._thread_id_rngs: dict[str, random.Random] = {}
@@ -1162,21 +1174,58 @@ class StateManager:
         return (full_weeks * weekly_churn) + prefix[minute_of_week] + partial_churn
 
     def _linux_pid_block_offset(self, system: str, block: int) -> int:
-        """Return deterministic per-host Linux PID churn before a coarse time block."""
+        """Return hidden churn at a coarse block without materializing block history."""
         if block <= 0:
             return 0
-        elapsed_seconds = block * _LINUX_PID_BLOCK_SECONDS
-        return self._linux_pid_hidden_churn_offset(system, elapsed_seconds)
+        return self._linux_pid_hidden_churn_offset(
+            system,
+            block * _LINUX_PID_BLOCK_SECONDS,
+        )
 
     @staticmethod
     def _normalize_linux_pid(pid: int) -> int:
-        """Keep a PID inside the ordinary Linux pid_max range."""
-        linux_pid_max = 4_194_304
-        if pid > linux_pid_max:
-            return 500 + (pid % (linux_pid_max - 500))
-        if pid <= 0:
-            return 500
-        return pid
+        """Render an unbounded logical position in Linux's PID ring.
+
+        Linux treats ``pid_max`` as an exclusive wrap boundary, so the largest
+        rendered PID is 4,194,303.
+        """
+        return _LINUX_PID_MIN + (
+            (pid - _LINUX_PID_MIN) % (_LINUX_PID_MAX_EXCLUSIVE - _LINUX_PID_MIN)
+        )
+
+    @staticmethod
+    def _normalize_windows_pid(pid: int) -> int:
+        """Render an unbounded logical position in the modeled Windows PID ring."""
+        slots = ((_WINDOWS_PID_MAX - _WINDOWS_PID_MIN) // _WINDOWS_PID_STEP) + 1
+        slot = ((pid - _WINDOWS_PID_MIN) // _WINDOWS_PID_STEP) % slots
+        return _WINDOWS_PID_MIN + (slot * _WINDOWS_PID_STEP)
+
+    def _allocate_windows_pid(
+        self,
+        system: str,
+        pid_rng: random.Random,
+        current_time: datetime,
+    ) -> tuple[int, int]:
+        """Allocate a Windows PID without overwriting a live process instance."""
+        logical_position = self._pid_counters[system]
+        gap = max(1, int(pid_rng.lognormvariate(1.2, 0.8)))
+        next_logical_position = logical_position + (_WINDOWS_PID_STEP * gap)
+        occupied = self._reserved_pid_count(system)
+        for _probe in range(occupied + 1):
+            self._pid_candidate_probe_count += 1
+            if logical_position <= _WINDOWS_PID_MAX:
+                pid = logical_position
+            else:
+                pid = self._normalize_windows_pid(logical_position)
+            if not self._pid_is_reserved(system, pid, current_time, None):
+                self._pid_counters[system] = max(
+                    next_logical_position,
+                    logical_position + _WINDOWS_PID_STEP,
+                )
+                self._pid_allocation_count += 1
+                return pid, logical_position
+            logical_position += _WINDOWS_PID_STEP
+        raise StateError("Windows PID namespace is fully occupied by active reservations")
 
     def _initialize_pid_allocator(self, system: str, os_category: str) -> None:
         """Initialize a per-system PID allocator without creating a process."""
@@ -1193,120 +1242,192 @@ class StateManager:
             self._pid_counters[system] = pid_rng.randint(8000, 42000)
             self._pid_os[system] = "linux"
 
+    def _pid_is_reserved(
+        self,
+        system: str,
+        pid: int,
+        start_time: datetime,
+        release_time: datetime | None,
+    ) -> bool:
+        """Return whether a rendered PID overlaps any live reservation."""
+        if (system, pid) in self.state.running_processes:
+            return True
+        if pid in self._fixed_pid_reservations.get(system, set()):
+            return True
+        candidate_end = release_time or datetime.max.replace(tzinfo=start_time.tzinfo)
+        for reserved_start, reserved_end in self._transient_pid_reservations.get(system, {}).get(
+            pid, ()
+        ):
+            if start_time <= reserved_end and reserved_start <= candidate_end:
+                return True
+        return False
+
+    def _reserved_pid_count(self, system: str) -> int:
+        """Return an upper bound on occupied rendered PIDs for bounded probing."""
+        return (
+            self._active_pid_reservation_counts.get(system, 0)
+            + len(self._fixed_pid_reservations.get(system, ()))
+            + self._transient_pid_reservation_counts.get(system, 0)
+        )
+
+    def advance_pid_allocation_watermark(self, cutoff: datetime) -> None:
+        """Seal PID allocation history before an authoritative engine boundary.
+
+        Detailed temporal records exist only for the still-open scheduling window.
+        Sealed history is represented by one greatest logical position per host.
+        """
+        normalized_cutoff = ensure_utc(cutoff)
+        with self._lock:
+            if (
+                self._pid_allocation_watermark is not None
+                and normalized_cutoff < self._pid_allocation_watermark
+            ):
+                raise StateError("PID allocation watermark cannot move backward")
+            for system, allocations in self._linux_pid_allocations.items():
+                discarded = allocations.discard_before(normalized_cutoff)
+                if discarded is not None:
+                    self._pid_sealed_logical_positions[system] = max(
+                        discarded,
+                        self._pid_sealed_logical_positions.get(system, discarded),
+                    )
+            self._pid_bucket_offsets = {
+                key: value
+                for key, value in self._pid_bucket_offsets.items()
+                if key[1] >= normalized_cutoff
+            }
+            for system, reservations in tuple(self._transient_pid_reservations.items()):
+                retained: dict[int, list[tuple[datetime, datetime]]] = {}
+                for pid, intervals in reservations.items():
+                    live = [interval for interval in intervals if interval[1] >= normalized_cutoff]
+                    if live:
+                        retained[pid] = live
+                if retained:
+                    self._transient_pid_reservations[system] = retained
+                    self._transient_pid_reservation_counts[system] = sum(
+                        len(intervals) for intervals in retained.values()
+                    )
+                else:
+                    del self._transient_pid_reservations[system]
+                    self._transient_pid_reservation_counts.pop(system, None)
+            self._pid_allocation_watermark = normalized_cutoff
+
+    def pid_allocator_census(self) -> dict[str, int]:
+        """Return stable allocator-state and operation counters for probes."""
+        with self._lock:
+            return {
+                "open_allocations": sum(
+                    len(index) for index in self._linux_pid_allocations.values()
+                ),
+                "open_ordinals": len(self._pid_bucket_offsets),
+                "sealed_hosts": len(self._pid_sealed_logical_positions),
+                "active_reservations": sum(self._active_pid_reservation_counts.values()),
+                "fixed_reservations": sum(
+                    len(reservations) for reservations in self._fixed_pid_reservations.values()
+                ),
+                "transient_reservations": sum(
+                    len(intervals)
+                    for reservations in self._transient_pid_reservations.values()
+                    for intervals in reservations.values()
+                ),
+                "allocations": self._pid_allocation_count,
+                "candidate_probes": self._pid_candidate_probe_count,
+            }
+
     def _allocate_linux_pid(
         self,
         system: str,
         pid_rng: random.Random,
         current_time: datetime | None = None,
-        minimum_pid_exclusive: int | None = None,
-    ) -> int:
-        """Allocate a Linux PID without exposing wall-clock elapsed seconds."""
+        minimum_logical_exclusive: int | None = None,
+        reservation_end: datetime | None = None,
+    ) -> tuple[int, int]:
+        """Allocate a Linux PID from an unbounded logical sequence."""
         current_time = ensure_utc(current_time or self.state.current_time)
+        if (
+            self._pid_allocation_watermark is not None
+            and current_time < self._pid_allocation_watermark
+        ):
+            raise StateError(
+                "Cannot allocate PID before the sealed allocation watermark: "
+                f"{current_time.isoformat()} < {self._pid_allocation_watermark.isoformat()}"
+            )
         epoch = self._linux_pid_epoch(system, current_time)
         elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
         time_offset = self._linux_pid_hidden_churn_offset(system, elapsed_seconds)
-        ordinal_key = (system, time_offset, 0)
+        ordinal_key = (system, current_time)
         ordinal = self._pid_bucket_offsets.get(ordinal_key, 0)
         gap = max(1, min(5, int(pid_rng.lognormvariate(0.3, 0.8))))
         self._pid_bucket_offsets[ordinal_key] = ordinal + gap
 
-        pid = self._pid_counters[system] + time_offset + ordinal
-        pid = self._normalize_linux_pid(pid)
-
-        running = {process.pid for process in self._running_processes.find("system", system)}
-        used = self._linux_pid_used_ids.setdefault(system, set())
+        logical_position = self._pid_counters[system] + time_offset + ordinal
+        natural_logical_position = logical_position
         allocations = self._linux_pid_allocations.setdefault(
             system,
             TemporalAllocationIndex(),
         )
-        prior_visible_pid = allocations.max_value_at_or_before(current_time)
-        if prior_visible_pid is not None and (
-            minimum_pid_exclusive is None or prior_visible_pid > minimum_pid_exclusive
-        ):
-            minimum_pid_exclusive = prior_visible_pid
-        future_pid_exclusive = allocations.min_value_after(current_time)
-
-        def is_available(candidate: int) -> bool:
-            return (
-                candidate not in running
-                and candidate not in used
-                and (
-                    minimum_pid_exclusive is None
-                    or minimum_pid_exclusive >= 4_194_304
-                    or candidate > minimum_pid_exclusive
-                )
-                and (future_pid_exclusive is None or candidate < future_pid_exclusive)
-            )
-
-        def bounded_candidate() -> int | None:
-            if future_pid_exclusive is None:
-                return None
-            lower_bound = max(499, minimum_pid_exclusive or 499)
-            if future_pid_exclusive <= lower_bound + 1:
-                return None
-            span = future_pid_exclusive - lower_bound - 1
-            # The time-derived PID is already the best estimate of where this
-            # process belongs. Search outward from that point instead of choosing
-            # a random midpoint: midpoint insertion repeatedly halves the room
-            # below a preplanned future PID and exhausts otherwise adequate
-            # capacity during dense deferred baseline generation.
-            center = min(max(pid, lower_bound + 1), future_pid_exclusive - 1)
-            for distance in range(min(span, 4096)):
-                offsets = (0,) if distance == 0 else (distance, -distance)
-                for offset in offsets:
-                    candidate = center + offset
-                    if lower_bound < candidate < future_pid_exclusive and is_available(candidate):
-                        return candidate
-            return None
-
-        if not is_available(pid):
-            bounded = bounded_candidate()
-            if bounded is not None:
-                pid = bounded
-            elif minimum_pid_exclusive is not None and minimum_pid_exclusive < 4_194_304:
-                jump = 23 + (
-                    _stable_seed(
-                        f"linux_pid_lower_bound:{system}:{current_time.isoformat()}:"
-                        f"{minimum_pid_exclusive}"
+        prior_logical = allocations.max_value_at_or_before(current_time)
+        sealed_logical = self._pid_sealed_logical_positions.get(system)
+        lower_bound = max(
+            value
+            for value in (minimum_logical_exclusive, prior_logical, sealed_logical, 0)
+            if value is not None
+        )
+        future_logical = allocations.min_value_after(current_time)
+        future_record = allocations.first_record_after(current_time)
+        logical_position = max(logical_position, lower_bound + 1)
+        if future_logical is not None and logical_position >= future_logical:
+            logical_position = lower_bound + 1
+        if future_logical is not None and logical_position >= future_logical:
+            future_time = future_record[0] if future_record is not None else None
+            if (
+                future_time is not None
+                and future_time - current_time <= _PID_ALLOCATION_REORDER_WINDOW
+            ):
+                # Source planners can visit open-window companions in a different
+                # order than their canonical timestamps. Once the last integer
+                # between them is consumed, retain kernel allocation order. The
+                # rendered-output probe still permits only narrow source-time
+                # reordering and reports wider reversals for scheduler correction.
+                logical_position = (
+                    max(
+                        natural_logical_position,
+                        lower_bound,
+                        future_logical,
                     )
-                    % 47
+                    + 1
                 )
-                pid = self._normalize_linux_pid(minimum_pid_exclusive + jump)
-
-        collision_salt = 0
-        max_retries = 64
-        while not is_available(pid):
-            if collision_salt >= max_retries:
+                future_logical = None
+            else:
                 raise StateError(
-                    "Unable to allocate Linux PID after bounded retries; "
-                    "adjust scenario timing or reduce process contention."
+                    "Cannot allocate Linux PID between already scheduled process allocations; "
+                    "this indicates an exhausted open scheduling interval "
+                    f"(host={system}, time={current_time.isoformat()}, lower={lower_bound}, "
+                    f"candidate={logical_position}, future={future_logical}, "
+                    f"future_time={future_time})."
                 )
-            bounded = bounded_candidate()
-            if bounded is not None:
-                pid = bounded
-                if is_available(pid):
-                    break
-            elif future_pid_exclusive is not None:
-                future_pid_exclusive = None
-            lower_bound = max(pid, minimum_pid_exclusive or 499)
-            bump = 23 + (
-                _stable_seed(
-                    f"linux_pid_collision:{system}:{current_time.isoformat()}:"
-                    f"{lower_bound}:{collision_salt}"
+
+        occupied = self._reserved_pid_count(system)
+        for _probe in range(occupied + 1):
+            self._pid_candidate_probe_count += 1
+            pid = self._normalize_linux_pid(logical_position)
+            if not self._pid_is_reserved(system, pid, current_time, reservation_end):
+                allocations.add(current_time, logical_position)
+                self._pid_allocation_count += 1
+                return pid, logical_position
+            logical_position += 1
+            if future_logical is not None and logical_position >= future_logical:
+                raise StateError(
+                    "Cannot allocate Linux PID before a future allocation in the open window; "
+                    "the interval contains only reserved PID candidates."
                 )
-                % 47
-            )
-            pid = self._normalize_linux_pid(lower_bound + bump)
-            collision_salt += 1
-        used.add(pid)
-        allocations.add(current_time, pid)
-        return pid
+        raise StateError("Linux PID namespace is fully occupied by active reservations")
 
     def allocate_transient_linux_pid(
         self,
         system: str,
         event_time: datetime,
         os_category: str = "linux",
+        release_time: datetime | None = None,
     ) -> int:
         """Allocate a Linux PID for syslog-only transient process observations.
 
@@ -1326,7 +1447,25 @@ class StateManager:
                 )
             self._initialize_pid_allocator(system, "linux")
             pid_rng = self._pid_rngs[system]
-            return self._allocate_linux_pid(system, pid_rng, event_time)
+            normalized_event_time = ensure_utc(event_time)
+            normalized_release_time = ensure_utc(
+                release_time or (normalized_event_time + timedelta(seconds=1))
+            )
+            if normalized_release_time < normalized_event_time:
+                raise StateError("Transient PID release time cannot precede its allocation")
+            pid, _logical_position = self._allocate_linux_pid(
+                system,
+                pid_rng,
+                normalized_event_time,
+                reservation_end=normalized_release_time,
+            )
+            self._transient_pid_reservations.setdefault(system, {}).setdefault(pid, []).append(
+                (normalized_event_time, normalized_release_time)
+            )
+            self._transient_pid_reservation_counts[system] = (
+                self._transient_pid_reservation_counts.get(system, 0) + 1
+            )
+            return pid
 
     def register_process(
         self,
@@ -1368,8 +1507,8 @@ class StateManager:
 
             normalized_start = ensure_utc(effective_start)
             self._initialize_pid_allocator(system, os_category)
+            self._fixed_pid_reservations.setdefault(system, set()).add(pid)
             if os_category == "linux":
-                self._linux_pid_used_ids.setdefault(system, set()).add(pid)
                 self._linux_pid_allocations.setdefault(
                     system,
                     TemporalAllocationIndex(),
@@ -1407,8 +1546,12 @@ class StateManager:
                 ecar_object_id=object_id,
                 lifecycle_group_id=process_lifecycle_group_id,
                 parent_lifecycle_group_id=process_parent_group_id,
+                pid_logical_position=pid,
             )
             self.state.running_processes[(system, pid)] = process
+            self._active_pid_reservation_counts[system] = (
+                self._active_pid_reservation_counts.get(system, 0) + 1
+            )
             self._process_object_ids[(system, pid)] = object_id
             self._processes_by_object_id[object_id] = process
             self._ended_processes_by_key.pop((system, pid), None)
@@ -1483,36 +1626,24 @@ class StateManager:
                 self._pid_rngs[system] = random.Random(_stable_seed(f"pid_alloc_{system}"))
             pid_rng = self._pid_rngs[system]
             if self._pid_os.get(system) == "windows":
-                pid = self._pid_counters[system]
-                # Windows: multiples of 4 with lognormal gap distribution.
-                # Lognormal produces mostly small gaps (4-20) with a heavy tail
-                # (occasionally 100-800+) simulating background process churn
-                # that consumes PIDs between our emitted events.
-                gap = max(1, int(pid_rng.lognormvariate(1.2, 0.8)))
-                self._pid_counters[system] += 4 * gap
-
-                # Check for PID exhaustion — wrap around to a safe range,
-                # skipping any PIDs still in use by running processes.
-                if self._pid_counters[system] > 65536:
-                    self._pid_counters[system] = 4000
-                    running = {
-                        process.pid for process in self._running_processes.find("system", system)
-                    }
-                    while self._pid_counters[system] in running:
-                        self._pid_counters[system] += 4
+                pid, pid_logical_position = self._allocate_windows_pid(
+                    system,
+                    pid_rng,
+                    self.state.current_time,
+                )
             else:
-                minimum_pid_exclusive = None
+                minimum_logical_exclusive = None
                 parent = self.state.running_processes.get((system, parent_pid))
                 if (
                     parent is not None
                     and parent.start_time <= self.state.current_time
                     and parent.pid > 1
                 ):
-                    minimum_pid_exclusive = parent.pid
-                pid = self._allocate_linux_pid(
+                    minimum_logical_exclusive = parent.pid_logical_position
+                pid, pid_logical_position = self._allocate_linux_pid(
                     system,
                     pid_rng,
-                    minimum_pid_exclusive=minimum_pid_exclusive,
+                    minimum_logical_exclusive=minimum_logical_exclusive,
                 )
 
             # Create process
@@ -1549,10 +1680,16 @@ class StateManager:
                 ecar_object_id=ecar_object_id,
                 lifecycle_group_id=process_lifecycle_group_id,
                 parent_lifecycle_group_id=process_parent_group_id,
+                pid_logical_position=pid_logical_position,
             )
 
             key = (system, pid)
+            if key in self.state.running_processes:
+                raise StateError(f"Cannot create process: PID {pid} already exists on {system}")
             self.state.running_processes[key] = process
+            self._active_pid_reservation_counts[system] = (
+                self._active_pid_reservation_counts.get(system, 0) + 1
+            )
             self._process_object_ids[key] = ecar_object_id
             self._processes_by_object_id[ecar_object_id] = process
             self._ended_processes_by_key.pop(key, None)
@@ -1993,6 +2130,11 @@ class StateManager:
                 for thread_key in thread_keys:
                     self.end_thread(*thread_key, end_time=effective_end)
                 del self.state.running_processes[key]
+                remaining = self._active_pid_reservation_counts.get(system, 1) - 1
+                if remaining > 0:
+                    self._active_pid_reservation_counts[system] = remaining
+                else:
+                    self._active_pid_reservation_counts.pop(system, None)
                 process.end_time = effective_end
                 self._process_object_ids.pop(key, None)
                 self._processes_by_object_id.pop(process.ecar_object_id, None)

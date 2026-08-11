@@ -54,10 +54,11 @@ def build_collection_profile(
     workload_limits_overridden: bool = False,
 ) -> CollectionProfile:
     """Build blind-safe source collection metadata for generated evidence."""
+    _ = workload_limits_overridden  # Compatibility-only; workload overrides no longer apply.
     collection_window = _collection_window(scenario)
     return CollectionProfile(
         generation_seed=scenario.generation_seed,
-        workload_limits_overridden=workload_limits_overridden,
+        workload_limits_overridden=False,
         workload_estimate=(
             {
                 key: int(value)

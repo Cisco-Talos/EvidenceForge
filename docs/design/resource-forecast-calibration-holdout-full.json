@@ -1,0 +1,42 @@
+{
+  "schema_version": 2,
+  "python": "3.12.12 (main, Oct 28 2025, 11:52:25) [Clang 20.1.4 ]",
+  "platform": "darwin",
+  "measurements": [
+    {
+      "scenario": "iteration-test-expanded-ids",
+      "profile": "full",
+      "formats": null,
+      "duration_scale": 1.5,
+      "effective_duration_seconds": 32400,
+      "baseline_only": false,
+      "elapsed_seconds": 38.653,
+      "peak_rss_bytes": 248627200,
+      "output_bytes": 70308693,
+      "workload_estimate": {
+        "primary_duration_seconds": 32400,
+        "warmup_seconds": 7200,
+        "baseline_occurrences": 49500,
+        "explicit_occurrences": 12952,
+        "periodic_event_max": 12000,
+        "canonical_occurrences": 153708,
+        "rendered_records": 3535284,
+        "attachment_payload_bytes": 283367,
+        "email_artifact_bytes": 377823,
+        "enabled_formats": 23,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 191910773,
+        "expected_bytes": 255881031,
+        "upper_bytes": 345439391
+      },
+      "forecast_disk": {
+        "lower_bytes": 10707760,
+        "expected_bytes": 71385071,
+        "upper_bytes": 107077606
+      }
+    }
+  ],
+  "failures": []
+}

@@ -42,6 +42,7 @@ dependencies = [
     "json-logic-qubit>=0.9.1",
     "python-dotenv>=1.2.2",
     "cryptography>=50.0.0",
+    "psutil>=7.0.0",
 ]
 
 [project.scripts]

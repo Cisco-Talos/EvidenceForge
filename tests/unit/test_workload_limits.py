@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Tests for generation workload estimation and explicit trusted overrides."""
+"""Tests for generation workload estimation without hard capacity rejection."""
 
 from pathlib import Path
 
@@ -10,7 +10,6 @@ from pydantic import ValidationError
 
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.workload import WorkloadLimits, estimate_workload
-from evidenceforge.models.exceptions import WorkloadLimitError
 from evidenceforge.models.scenario import BeaconEventSpec, Scenario
 from evidenceforge.utils.files import load_yaml
 from evidenceforge.validation import ScenarioValidator
@@ -28,17 +27,18 @@ def _long_scenario() -> Scenario:
     )
 
 
-def test_engine_rejects_unsupported_duration_before_generation(tmp_path: Path) -> None:
-    """An authored long run fails before generator state or artifacts are allocated."""
+def test_engine_forecasts_unsupported_duration_without_rejecting(tmp_path: Path) -> None:
+    """An authored long run is estimated and admitted without allocating output."""
 
-    with pytest.raises(WorkloadLimitError, match="primary duration"):
-        GenerationEngine(_long_scenario(), tmp_path / "output")
+    engine = GenerationEngine(_long_scenario(), tmp_path / "output")
 
     assert not (tmp_path / "output").exists()
+    assert engine.workload_estimate.limit_violations
+    assert engine.resource_forecast.memory.expected_bytes > 0
 
 
-def test_engine_accepts_explicit_trusted_large_workload_override(tmp_path: Path) -> None:
-    """The same reviewed workload can be admitted only through the explicit override."""
+def test_engine_keeps_large_workload_keyword_as_compatibility_noop(tmp_path: Path) -> None:
+    """Existing library callers may pass the old keyword without changing admission."""
 
     engine = GenerationEngine(
         _long_scenario(),
@@ -50,15 +50,15 @@ def test_engine_accepts_explicit_trusted_large_workload_override(tmp_path: Path)
     assert engine.workload_estimate.limit_violations
 
 
-def test_validator_reports_error_or_override_info_for_same_workload() -> None:
-    """CLI validation and runtime construction enforce one shared workload contract."""
+def test_validator_does_not_report_static_workload_envelope_as_validation_issue() -> None:
+    """Machine resource forecasts replace static workload validation errors."""
     scenario = _long_scenario()
 
-    rejected = ScenarioValidator(scenario).validate()
-    accepted = ScenarioValidator(scenario, allow_large_workload=True).validate()
+    issues = ScenarioValidator(scenario).validate()
+    compatibility_issues = ScenarioValidator(scenario, allow_large_workload=True).validate()
 
-    assert any(issue.field_path == "workload" and issue.severity == "error" for issue in rejected)
-    assert any(issue.field_path == "workload" and issue.severity == "info" for issue in accepted)
+    assert not any(issue.field_path == "workload" for issue in issues)
+    assert not any(issue.field_path == "workload" for issue in compatibility_issues)
 
 
 def test_rendered_record_limit_uses_preallocation_estimate() -> None:

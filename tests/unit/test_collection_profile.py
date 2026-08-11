@@ -64,8 +64,8 @@ def test_collection_profile_describes_rendered_log_tree_only() -> None:
     assert "eml" not in formats
 
 
-def test_collection_profile_records_seed_and_workload_capacity_decision() -> None:
-    """A generated package explains its public seed and capacity-override state."""
+def test_collection_profile_records_seed_and_keeps_legacy_override_false() -> None:
+    """The legacy metadata field remains schema-compatible but cannot claim an override."""
     scenario = Scenario(
         version="1.0",
         generation_seed=8675309,
@@ -109,6 +109,6 @@ def test_collection_profile_records_seed_and_workload_capacity_decision() -> Non
     )
 
     assert profile.generation_seed == 8675309
-    assert profile.workload_limits_overridden is True
+    assert profile.workload_limits_overridden is False
     assert profile.workload_estimate is not None
     assert profile.workload_estimate["canonical_occurrences"] == estimate.canonical_occurrences

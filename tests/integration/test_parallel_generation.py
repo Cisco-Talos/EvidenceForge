@@ -250,7 +250,7 @@ class TestParallelGeneration:
             # assert len(zeek_timestamps) >= 0  # Always true, just checking it parses
 
     def test_parallel_generation_cross_log_consistency(self):
-        """Test LogonIDs, PIDs, UIDs are unique across parallel emitters."""
+        """Test LogonIDs, PID lifetimes, and UIDs across parallel emitters."""
         scenario = create_test_scenario(users=5, hours=2)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -279,17 +279,27 @@ class TestParallelGeneration:
                 "Duplicate LogonIDs found in logon events!"
             )
 
-            # Verify PID uniqueness per system
-            pids_per_system = {}
-            for e in windows_events:
-                if e.get("EventID") == "4688":  # Process creation
-                    system = e.get("Computer")
-                    pid = e.get("NewProcessId")
-                    if system and pid:
-                        pids_per_system.setdefault(system, []).append(pid)
-
-            for system, pids in pids_per_system.items():
-                assert len(pids) == len(set(pids)), f"Duplicate PIDs found on {system}!"
+            # PID values may be reused after exit. They must never identify two
+            # overlapping process lifetimes on the same host.
+            active_pids: dict[str, set[str]] = {}
+            for event in sorted(
+                windows_events,
+                key=lambda item: item.get("TimeCreated", datetime.min.replace(tzinfo=UTC)),
+            ):
+                system = event.get("Computer")
+                if not system:
+                    continue
+                if event.get("EventID") == "4688":
+                    pid = event.get("NewProcessId")
+                    if not pid:
+                        continue
+                    active = active_pids.setdefault(system, set())
+                    assert pid not in active, f"Overlapping PID {pid} found on {system}!"
+                    active.add(pid)
+                elif event.get("EventID") == "4689":
+                    pid = event.get("ProcessId")
+                    if pid:
+                        active_pids.setdefault(system, set()).discard(pid)
 
             # Verify Zeek UID uniqueness
             zeek_events = parse_zeek_log(first_zeek_conn_file(Path(tmpdir)))
