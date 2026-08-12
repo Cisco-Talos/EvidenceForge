@@ -63,6 +63,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Add proxy URI templates | `proxy_uri_templates.yaml` | `dns_registry.yaml` (validate domain exists); use `domain_class` and `referrer_policy` for certificate/update infrastructure |
 | Modify proxy User-Agent pools | `proxy_user_agents.yaml` | `dns_registry.yaml` for package/update hostnames |
 | Add/modify beacon behavior profiles | `beacon_profiles.yaml` | Scenario `beacon.profile` values reference these synthetic HTTP sequence profiles; keep profiles behavior-shaped, not live IOC replicas |
+| Modify HTTP request/file profiles | `http_file_profiles.yaml` | Shared request-content classes and file-extension MIME mappings used by background and authored HTTP file analysis |
 | Add site map entries | `site_maps.yaml` | `dns_registry.yaml` (validate domain exists) |
 | Modify inbound web visitor mix | `web_session_profiles.yaml` | `site_maps.yaml`, `traffic_rates.yaml`, `timing_profiles.yaml` |
 | Modify bash commands | `bash_commands.yaml` | Validate role names match persona names; keep `typo_model` rates/counts realistic |
@@ -72,6 +73,11 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Modify EDR diversity pools | `edr_pools.yaml` | (standalone — file paths, registry keys, DLL pool for background events) |
 | Modify CallTrace patterns | `calltrace_patterns.yaml` | (standalone — Event 10 ProcessAccess call chain templates) |
 | Modify ProcessAccess masks | `process_access_patterns.yaml` | (standalone — Event 10 baseline source/target pairs and GrantedAccess masks) |
+
+The `multipart` section of `http_file_profiles.yaml` controls deterministic
+browser/curl/generic boundary morphology, part-header order, safety limits, and
+the 15-entry HTTP vector caps. Keep these settings data-driven and synchronized
+with the scenario and evidence references.
 | Modify CreateRemoteThread pairs | `create_remote_thread_patterns.yaml` | (standalone — Event 8 baseline source/target pairs) |
 | Modify TLS chain/OCSP/SNI realism | `tls_realism.yaml` | `dns_registry.yaml` for OCSP responder hosts and domains selected by `dns_tags` |
 | Modify Windows auth realism | `windows_auth_realism.yaml` | (standalone — Security log auth timing and failed-logon profile knobs) |

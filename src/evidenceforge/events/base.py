@@ -138,6 +138,7 @@ class OccurrenceBuilder:
     ocsp: OcspContext | None = None
     ocsp_transaction: OcspTransactionPlan | None = None
     pe: PeContext | None = None
+    pe_analyses: list[PeContext] = field(default_factory=list)
     proxy: ProxyContext | None = None
 
     # Firewall decision context (Cisco ASA)
@@ -204,6 +205,7 @@ class OccurrenceBuilder:
             ocsp=self.ocsp,
             ocsp_transaction=self.ocsp_transaction,
             pe=self.pe,
+            pe_analyses=self.pe_analyses,
             proxy=self.proxy,
         )
 

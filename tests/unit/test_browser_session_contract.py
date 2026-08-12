@@ -222,3 +222,67 @@ def test_caller_http_large_download_attaches_zeek_file_transfer():
     assert event.protocol.primary_file_transfer.seen_bytes == response_body_len
     assert event.protocol.http.resp_fuids == (event.protocol.primary_file_transfer.fuid,)
     assert event.protocol.http.resp_mime_types == (event.protocol.primary_file_transfer.mime_type,)
+
+
+def test_background_browser_post_attaches_anonymous_originator_file(monkeypatch):
+    """Generated browser form bodies receive files.log analysis without local-file metadata."""
+
+    def fake_browsing_session(**_kwargs) -> list[BrowsingRequest]:
+        return [
+            BrowsingRequest(
+                time_offset_ms=0,
+                hostname="portal.example.com",
+                path="/session/preferences",
+                method="POST",
+                content_type="application/json",
+                referrer="http://portal.example.com/",
+                trans_depth=1,
+                is_page_load=True,
+                response_body_len=512,
+                request_body_len=287,
+                status_code=204,
+            )
+        ]
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.browser_session."
+        "browsing_session.generate_browsing_session",
+        fake_browsing_session,
+    )
+    generator, state_manager, _conn_emitter, http_emitter, files_emitter = (
+        _activity_generator_with_collectors()
+    )
+    timestamp = datetime(2026, 2, 22, 12, 32, 37, tzinfo=UTC)
+    source = System(
+        hostname="WS-01",
+        ip="10.0.0.5",
+        os="Windows 11",
+        type="workstation",
+    )
+    state_manager.set_current_time(timestamp)
+
+    BrowserSessionActionBundle(
+        request=BrowserSessionRequest(
+            src_ip=source.ip,
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            hostname="portal.example.com",
+            dst_port=80,
+            service="http",
+            source_system=source,
+            user_agent="Mozilla/5.0",
+            emit_dns_on_page_load=False,
+        ),
+        executor=generator,
+        rng=random.Random(9),
+    ).execute()
+
+    http = http_emitter.events[0].protocol.http
+    request_file = next(
+        ft for event in files_emitter.events for ft in event.protocol.file_transfers if ft.is_orig
+    )
+    assert http.request_body_len == 287
+    assert http.orig_fuids == (request_file.fuid,)
+    assert request_file.total_bytes == 287
+    assert request_file.mime_type == "application/x-www-form-urlencoded"
+    assert request_file.filename == ""

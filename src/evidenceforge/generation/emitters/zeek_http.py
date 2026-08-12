@@ -38,17 +38,21 @@ _MIN_HTTP_FILE_TIMESTAMP_GAP = timedelta(milliseconds=2)
 _SOURCE_TIMING = SourceTimingPlanner()
 
 
-def _response_file_vectors(http: Any) -> tuple[list[str] | None, list[str] | None]:
-    """Return Zeek HTTP response file vectors only when file IDs are visible."""
-    resp_fuids = list(getattr(http, "resp_fuids", []) or [])
-    if not resp_fuids:
-        return None, None
-    resp_mime_types = list(getattr(http, "resp_mime_types", []) or [])
-    if len(resp_mime_types) == len(resp_fuids):
-        return resp_fuids, resp_mime_types
-    if len(resp_mime_types) == 1:
-        return resp_fuids, resp_mime_types * len(resp_fuids)
-    return resp_fuids, None
+def _file_vectors(
+    http: Any, side: str
+) -> tuple[list[str] | None, list[str] | None, list[str] | None]:
+    """Return one side's Zeek HTTP file vectors when file IDs are visible."""
+
+    fuids = list(getattr(http, f"{side}_fuids", []) or [])
+    if not fuids:
+        return None, None, None
+    filenames = list(getattr(http, f"{side}_filenames", []) or [])
+    mime_types = list(getattr(http, f"{side}_mime_types", []) or [])
+    return (
+        fuids,
+        filenames or None,
+        mime_types or None,
+    )
 
 
 class ZeekHttpEmitter(SensorMultiplexEmitter):
@@ -109,13 +113,15 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             )
         within = None
         latest_ts = None
-        resp_fuids, resp_mime_types = _response_file_vectors(http)
+        orig_fuids, orig_filenames, orig_mime_types = _file_vectors(http, "orig")
+        resp_fuids, resp_filenames, resp_mime_types = _file_vectors(http, "resp")
+        any_fuids = bool(orig_fuids or resp_fuids)
         if planned_close is not None:
-            tail_gap = _MIN_HTTP_FILE_TIMESTAMP_GAP if resp_fuids else timedelta(microseconds=1)
+            tail_gap = _MIN_HTTP_FILE_TIMESTAMP_GAP if any_fuids else timedelta(microseconds=1)
             latest_ts = max(conn_ts, planned_close - tail_gap)
             within = (conn_ts, latest_ts)
         elif net.duration is not None and net.duration > 0:
-            tail_gap = _MIN_HTTP_FILE_TIMESTAMP_GAP if resp_fuids else timedelta(microseconds=1)
+            tail_gap = _MIN_HTTP_FILE_TIMESTAMP_GAP if any_fuids else timedelta(microseconds=1)
             latest_ts = conn_ts + timedelta(seconds=max(0.0, net.duration)) - tail_gap
             if latest_ts < conn_ts:
                 latest_ts = conn_ts
@@ -123,7 +129,7 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
         cached_bounds = self._conn_bounds_by_uid.get(uid_key)
         if cached_bounds is not None:
             conn_ts, latest_ts = cached_bounds
-            if resp_fuids and latest_ts is not None:
+            if any_fuids and latest_ts is not None:
                 reserve = _MIN_HTTP_FILE_TIMESTAMP_GAP - timedelta(microseconds=1)
                 latest_ts = max(conn_ts, latest_ts - reserve)
             within = (conn_ts, latest_ts) if latest_ts is not None else None
@@ -172,8 +178,12 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             event_ts,
             seed_parts=http_seed_parts,
         )
-        if resp_fuids and not zeek_format_observed(event, "zeek_files"):
+        if any_fuids and not zeek_format_observed(event, "zeek_files"):
+            orig_fuids = None
+            orig_filenames = None
+            orig_mime_types = None
             resp_fuids = None
+            resp_filenames = None
             resp_mime_types = None
         event_data: dict[str, Any] = {
             "ts": event_ts,
@@ -194,7 +204,11 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             "status_msg": http.status_msg,
             "tags": http.tags if http.tags else None,
             "referrer": http.referrer or None,
+            "orig_fuids": orig_fuids,
+            "orig_filenames": orig_filenames,
+            "orig_mime_types": orig_mime_types,
             "resp_fuids": resp_fuids,
+            "resp_filenames": resp_filenames,
             "resp_mime_types": resp_mime_types,
             **self._sensor_metadata(event, self.format_def.name),
         }
@@ -206,7 +220,11 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             "user_agent",
             "tags",
             "referrer",
+            "orig_fuids",
+            "orig_filenames",
+            "orig_mime_types",
             "resp_fuids",
+            "resp_filenames",
             "resp_mime_types",
         ]
         for f in optional_fields:

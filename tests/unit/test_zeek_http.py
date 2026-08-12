@@ -276,6 +276,53 @@ class TestHttpFormatAccuracy:
         assert "resp_fuids" not in data
         assert "resp_mime_types" not in data
 
+    def test_originator_file_vectors_include_mime_and_optional_filename(self):
+        """Request file vectors render with their request-side Zeek field names."""
+
+        fmt = load_format("zeek_http")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "http.json"
+            emitter = ZeekHttpEmitter(fmt, output)
+            event = OccurrenceBuilder(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=network_plan(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="93.184.216.34",
+                    dst_port=80,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="CRequestFile12345",
+                    duration=1.0,
+                ),
+                http=HttpContext(
+                    method="POST",
+                    host="some.site",
+                    uri="/upload",
+                    request_body_len=42,
+                    orig_fuids=("FRequestFile12345",),
+                    orig_filenames=("payload.bin",),
+                    orig_mime_types=("application/octet-stream",),
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="FRequestFile12345",
+                    source="HTTP",
+                    filename="payload.bin",
+                    mime_type="application/octet-stream",
+                    is_orig=True,
+                    seen_bytes=42,
+                    total_bytes=42,
+                ),
+            )
+            emitter.emit(event)
+            emitter.close()
+            data = json.loads(output.read_text().splitlines()[0])
+
+        assert data["orig_fuids"] == ["FRequestFile12345"]
+        assert data["orig_filenames"] == ["payload.bin"]
+        assert data["orig_mime_types"] == ["application/octet-stream"]
+
 
 class TestHttpCanHandle:
     """Verify can_handle() filtering."""

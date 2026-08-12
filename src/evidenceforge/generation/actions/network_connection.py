@@ -108,6 +108,7 @@ class NetworkConnectionRequest:
     file_transfer: FileTransferContext | None = None
     file_transfers: tuple[FileTransferContext, ...] = ()
     pe: PeContext | None = None
+    pe_analyses: tuple[PeContext, ...] = ()
     ocsp: OcspContext | None = None
     ocsp_transaction: OcspTransactionPlan | None = None
     proxy: ProxyContext | None = None
@@ -144,6 +145,7 @@ class NetworkConnectionRequest:
             f"{_context_fingerprint(self.http)}:{_context_fingerprint(self.file_transfer)}:"
             f"{_context_fingerprint(self.file_transfers)}:"
             f"{_context_fingerprint(self.pe)}:{_context_fingerprint(self.ocsp)}:"
+            f"{_context_fingerprint(self.pe_analyses)}:"
             f"{_context_fingerprint(self.proxy)}:"
             f"{_context_fingerprint(self.firewall)}:{self.hostname or ''}:"
             f"{self.proxy_bypass}:{self.process_image or ''}:{self.preserve_dst_ip}:"

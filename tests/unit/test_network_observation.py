@@ -243,6 +243,46 @@ def test_capture_loss_projects_file_and_http_completeness_with_gap_history() -> 
     assert event.file_transfer.seen_bytes == 8_000
 
 
+def test_capture_loss_projects_originator_http_file_from_originator_traffic() -> None:
+    """Request entities use originator capture ratios and retain canonical totals."""
+
+    event = _network_event(protocol="tcp")
+    event.http = HttpContext(
+        method="PUT",
+        host="ingest.example.com",
+        uri="/telemetry",
+        request_body_len=8_000,
+        orig_fuids=("FUploadObservation1",),
+        orig_mime_types=("application/octet-stream",),
+    )
+    event.file_transfer = FileTransferContext(
+        fuid="FUploadObservation1",
+        source="HTTP",
+        analyzers=("SHA1",),
+        is_orig=True,
+        seen_bytes=8_000,
+        total_bytes=8_000,
+        sha1="a" * 40,
+    )
+    observed = NetworkTrafficLedger(
+        orig=DirectionalTrafficLedger(payload_bytes=600, packets=6, ip_bytes=768),
+        resp=event.network.traffic.resp,
+        missed_orig_bytes=600,
+    )
+
+    history, files, request_body, response_body = NetworkObservationPlanner._observed_protocol(
+        event, observed
+    )
+
+    assert history.endswith("G")
+    assert request_body == 4_000
+    assert response_body == 0
+    assert files[0].seen_bytes == 4_000
+    assert files[0].missing_bytes == 4_000
+    assert not files[0].analyzers_visible
+    assert event.file_transfer.total_bytes == 8_000
+
+
 def test_inbound_static_nat_sensor_views_come_from_topology_and_nat_context() -> None:
     """Inside and outside tuple views need no mutable event-side swap map."""
 
