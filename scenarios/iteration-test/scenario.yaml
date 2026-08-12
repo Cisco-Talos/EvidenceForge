@@ -14,7 +14,8 @@ description: |
   explicit on-prem email topology, SMTP routing, corpus-backed message bodies,
   MIME artifacts, distribution groups, Bcc handling, STARTTLS visibility, ISP relay
   egress, inbound/outbound/internal mail, explicit mailbox reads, rejected mail,
-  and deterministic background email traffic.
+  and deterministic background email traffic. This benchmark epoch also adds one
+  representative benign cleartext multipart support upload through the explicit proxy.
 
 environment:
   description: "Meridian Healthcare Solutions corporate HQ and on-prem data center"
@@ -142,6 +143,11 @@ environment:
       hosts: ["archive.ubuntu.com"]
       ips: ["91.189.91.82"]
       tags: ["software", "package_repository", "external"]
+      dns: true
+    - id: valeworks_support
+      hosts: ["support.valeworks-health.net"]
+      ips: ["52.44.186.73"]
+      tags: ["web", "vendor", "support", "external"]
       dns: true
 
   systems:
@@ -509,6 +515,60 @@ red_herrings:
             policy: every
         technique: "Benign - Package Maintenance"
         description: "Expected APT metadata retrieval that produces a policy false positive"
+
+  - id: rh-004
+    time: "+3h32m"
+    actor: lina.nguyen
+    system: WS-LNGUYEN-01
+    activity: "Developer uploads EHR connector diagnostics to a vendor support case"
+    explanation: "Lina attached a routine diagnostics bundle to an existing vendor support case while troubleshooting an integration issue."
+    event_spacing:
+      mode: automated
+      min_delay: "2s"
+      max_delay: "5s"
+    events:
+      - type: process
+        process_name: "/usr/bin/tar"
+        command_line: >-
+          /usr/bin/tar -czf /tmp/mhs-support-48217.tar.gz
+          /var/log/ehr-connector/connector.log /var/log/ehr-connector/queue.log
+        technique: "Benign - Vendor Support"
+        description: "Create a compressed diagnostics bundle for the support case"
+      - type: process
+        process_name: "/usr/bin/curl"
+        command_line: >-
+          /usr/bin/curl --fail --silent --show-error
+          --proxy http://proxy.meridianhcs.com:8080
+          --form 'metadata={"ticket":"MHS-48217","component":"ehr-connector"};type=application/json'
+          --form 'diagnostics=@/tmp/mhs-support-48217.tar.gz;type=application/gzip'
+          http://support.valeworks-health.net/api/v1/cases/MHS-48217/attachments
+        technique: "Benign - Vendor Support"
+        description: "Upload ticket metadata and the diagnostics archive to vendor support"
+      - type: connection
+        dst_ip: "52.44.186.73"
+        dst_port: 80
+        hostname: "support.valeworks-health.net"
+        service: http
+        method: POST
+        uri: "/api/v1/cases/MHS-48217/attachments"
+        status_code: 200
+        user_agent: "curl/7.81.0"
+        request_multipart:
+          media_type: multipart/form-data
+          parts:
+            - name: metadata
+              value: '{"ticket":"MHS-48217","component":"ehr-connector"}'
+              content_type: application/json
+              detected_mime_type: application/json
+            - name: diagnostics
+              body_len: 1572864
+              local_source_path: /tmp/mhs-support-48217.tar.gz
+              filename: mhs-support-48217.tar.gz
+              content_type: application/gzip
+              detected_mime_type: application/gzip
+        response_body_len: 96
+        technique: "Benign - Vendor Support"
+        description: "Vendor support accepts the multipart diagnostics upload"
 
   - id: rh-002
     time: "+5h10m"
