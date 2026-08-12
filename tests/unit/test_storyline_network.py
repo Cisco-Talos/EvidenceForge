@@ -108,6 +108,19 @@ class TestConnectionEventSpecHostname:
                 response_body_len=100_000_000_000_000_000_000,
             )
 
+    def test_request_body_len_accepts_exact_42_mib_upload(self):
+        """Authored HTTP uploads can pin the exact request entity size."""
+
+        spec = ConnectionEventSpec(
+            dst_ip="203.0.113.10",
+            dst_port=80,
+            service="http",
+            method="POST",
+            uri="/uploads/accept-upload",
+            request_body_len=42 * 1024 * 1024,
+        )
+        assert spec.request_body_len == 44_040_192
+
     def test_hostname_in_storyline_event(self):
         """hostname field works when embedded in a storyline event dict."""
         scenario = Scenario(

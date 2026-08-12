@@ -454,6 +454,8 @@ class NetworkObservationPlanner:
             for value in event.protocol.ssl.cert_chain_fuids:
                 add(value)
         if event.protocol.http is not None:
+            for value in event.protocol.http.orig_fuids:
+                add(value)
             for value in event.protocol.http.resp_fuids:
                 add(value)
         if event.smtp is not None:

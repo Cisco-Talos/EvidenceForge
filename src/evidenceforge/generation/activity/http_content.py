@@ -6,34 +6,8 @@
 import random
 from pathlib import PurePosixPath
 
+from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
 from evidenceforge.utils.rng import _stable_seed
-
-_EXTENSION_MIME_TYPES: dict[str, str] = {
-    ".cab": "application/vnd.ms-cab-compressed",
-    ".css": "text/css",
-    ".deb": "application/vnd.debian.binary-package",
-    ".exe": "application/x-msdownload",
-    ".gif": "image/gif",
-    ".gz": "application/x-gzip",
-    ".ico": "image/x-icon",
-    ".jpeg": "image/jpeg",
-    ".jpg": "image/jpeg",
-    ".js": "application/javascript",
-    ".json": "application/json",
-    ".map": "application/json",
-    ".msi": "application/x-msi",
-    ".msp": "application/x-ms-patch",
-    ".pdf": "application/pdf",
-    ".png": "image/png",
-    ".rpm": "application/vnd.debian.binary-package",
-    ".svg": "image/svg+xml",
-    ".txt": "text/plain",
-    ".webp": "image/webp",
-    ".woff": "font/woff",
-    ".woff2": "font/woff2",
-    ".xml": "application/xml",
-    ".zip": "application/zip",
-}
 
 _RESPONSE_SIZE_RANGES: dict[str, tuple[int, int]] = {
     "application/javascript": (10_000, 200_000),
@@ -112,7 +86,8 @@ def infer_mime_type_from_path(path: str, default: str = "text/html") -> str:
     """
     clean_path = path.split("?", 1)[0].split("#", 1)[0]
     suffix = PurePosixPath(clean_path).suffix.lower()
-    return _EXTENSION_MIME_TYPES.get(suffix, default)
+    extension_types = load_http_file_profiles().get("extension_mime_types", {})
+    return str(extension_types.get(suffix, default))
 
 
 def normalize_mime_type_for_path(path: str, content_type: str | None = None) -> str:
@@ -221,13 +196,37 @@ def response_mime_types_for_status(
     method: str = "GET",
 ) -> list[str]:
     """Return Zeek-style response MIME metadata only when a body is observable."""
-    if not mime_type or response_body_len <= 0:
+    if not http_response_has_entity_body(method, status_code, response_body_len):
         return []
-    if method.upper() == "HEAD" or status_code in {204, 304}:
-        return []
-    if status_code in {301, 302} or status_code >= 400:
+    if mime_type:
+        return [mime_type]
+    if 300 <= status_code < 400 or status_code >= 400:
         return ["text/html"]
-    return [mime_type]
+    return ["application/octet-stream"]
+
+
+def http_response_has_entity_body(
+    method: str,
+    status_code: int,
+    response_body_len: int,
+) -> bool:
+    """Return whether an HTTP response can expose a nonempty entity to Zeek."""
+
+    if response_body_len <= 0:
+        return False
+    return not http_response_body_is_prohibited(method, status_code)
+
+
+def http_response_body_is_prohibited(method: str, status_code: int) -> bool:
+    """Return whether HTTP semantics prohibit a response entity body."""
+
+    normalized_method = (method or "GET").upper()
+    return (
+        normalized_method == "HEAD"
+        or 100 <= status_code < 200
+        or status_code in {204, 205, 304}
+        or (normalized_method == "CONNECT" and 200 <= status_code < 300)
+    )
 
 
 def is_health_endpoint_path(uri: str) -> bool:
@@ -307,7 +306,7 @@ def _uses_shared_static_response_seed(uri: str) -> bool:
 
 def response_size_for_status(status_code: int, host: str, uri: str) -> int:
     """Return a stable source-native web response body size for an HTTP status."""
-    if status_code in {204, 304}:
+    if 100 <= status_code < 200 or status_code in {204, 205, 304}:
         return 0
     if status_code in {301, 302}:
         rng = random.Random(_stable_seed(f"web_redirect:{status_code}:{host}:{uri}"))

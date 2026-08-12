@@ -30,7 +30,12 @@ from unittest.mock import Mock, patch
 import pytest
 
 from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder
-from evidenceforge.events.contexts import FirewallContext, HttpContext, ProxyContext
+from evidenceforge.events.contexts import (
+    FirewallContext,
+    HttpContext,
+    HttpRequestEntityContext,
+    ProxyContext,
+)
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions import (
@@ -348,8 +353,8 @@ class TestStateObjectIds:
 
 
 class TestProcessHttpCommandCorrelation:
-    def test_http_normalization_rewrites_error_asset_mime_to_error_body(self):
-        """Caller-provided HTTP errors should not keep MIME from requested asset extension."""
+    def test_http_normalization_preserves_explicit_error_response_mime(self):
+        """Caller-provided response content types remain authoritative for errors."""
         http = HttpContext(
             method="GET",
             host="portal.example.com",
@@ -362,7 +367,7 @@ class TestProcessHttpCommandCorrelation:
 
         normalized = _normalize_http_context_for_source_native_response(http)
 
-        assert normalized.resp_mime_types == ("text/html",)
+        assert normalized.resp_mime_types == ("image/svg+xml",)
 
     def test_http_normalization_removes_head_response_body(self):
         """HEAD response metadata must not claim entity-body bytes."""
@@ -9808,6 +9813,262 @@ class TestActivityGenerator:
         assert event.protocol.http.trans_depth == 1
         assert http.trans_depth == 4
 
+    def test_http_request_body_always_creates_originator_file_transfer(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Anonymous background POST bodies receive canonical originator file analysis."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            service="http",
+            duration=0.5,
+            http=HttpContext(
+                method="POST",
+                host="forms.example.test",
+                uri="/submit",
+                user_agent="Mozilla/5.0",
+                request_body_len=321,
+                response_body_len=0,
+                status_code=500,
+                status_msg="Internal Server Error",
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        request_transfer = next(ft for ft in event.protocol.file_transfers if ft.is_orig)
+        assert request_transfer.total_bytes == 321
+        assert request_transfer.mime_type == "application/x-www-form-urlencoded"
+        assert request_transfer.filename == ""
+        assert event.protocol.http.orig_fuids == (request_transfer.fuid,)
+        assert event.network.orig_bytes > 321
+
+    def test_opaque_https_request_body_has_no_zeek_file_transfer(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """An undecrypted direct HTTPS request remains opaque to Zeek file analysis."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=443,
+            service="ssl",
+            duration=0.5,
+            http=HttpContext(
+                method="PUT",
+                host="api.example.test",
+                uri="/api/v1/telemetry",
+                request_body_len=8192,
+                response_body_len=0,
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert not any(ft.is_orig for ft in event.protocol.file_transfers)
+        assert event.protocol.http.orig_fuids == ()
+
+    def test_http_request_and_response_files_coexist(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """One HTTP transaction can carry independently analyzed files both ways."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        request_body_len = 42 * 1024 * 1024
+        entity = HttpRequestEntityContext(
+            size=request_body_len,
+            mime_type="application/vnd.rar",
+            content_identity=f"upload:exfildata.rar:{request_body_len}",
+            local_source_path="/tmp/exfildata.rar",
+            local_source_filename="exfildata.rar",
+        )
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            service="http",
+            duration=1.0,
+            http=HttpContext(
+                method="POST",
+                host="some.site",
+                uri="/uploads/accept-upload",
+                request_body_len=request_body_len,
+                request_content_type=entity.mime_type,
+                request_entity=entity,
+                response_body_len=2_000_000,
+                resp_mime_types=("application/zip",),
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert {ft.is_orig for ft in event.protocol.file_transfers} == {True, False}
+        assert len(event.protocol.http.orig_fuids) == 1
+        assert len(event.protocol.http.resp_fuids) == 1
+        request_transfer = next(ft for ft in event.protocol.file_transfers if ft.is_orig)
+        assert request_transfer.total_bytes == 44_040_192
+        assert request_transfer.mime_type == "application/vnd.rar"
+        assert request_transfer.filename == ""
+        assert event.network.orig_bytes > request_body_len
+        assert request_transfer.duration <= event.network.duration
+
+    @pytest.mark.parametrize("response_body_len", [1, 100, 101, 4096, 2_000_000])
+    def test_every_nonempty_plaintext_http_response_creates_responder_file(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        response_body_len,
+    ):
+        """Response file analysis has no size threshold or sampling gate."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            service="http",
+            duration=0.5,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="api.example.test",
+                uri="/api/v1/result",
+                response_body_len=response_body_len,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=("application/json",),
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        responses = [ft for ft in event.protocol.file_transfers if not ft.is_orig]
+        assert len(responses) == 1
+        assert responses[0].total_bytes == response_body_len
+        assert responses[0].mime_type == "application/json"
+        assert responses[0].filename == ""
+        assert event.protocol.http.resp_fuids == (responses[0].fuid,)
+
+    @pytest.mark.parametrize("status_code", [200, 301, 302, 401, 403, 404, 500, 502, 503])
+    def test_body_bearing_http_statuses_create_responder_files(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        status_code,
+    ):
+        """Redirect and error provenance does not suppress a transmitted entity."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            service="http",
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="portal.example.test",
+                uri="/result",
+                response_body_len=321,
+                status_code=status_code,
+                status_msg="",
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        response = next(ft for ft in event.protocol.file_transfers if not ft.is_orig)
+        assert response.total_bytes == 321
+        assert response.mime_type == (
+            "application/octet-stream" if status_code == 200 else "text/html"
+        )
+        assert event.protocol.http.resp_filenames == ()
+
+    @pytest.mark.parametrize(
+        ("method", "status_code"),
+        [
+            ("HEAD", 200),
+            ("GET", 100),
+            ("GET", 199),
+            ("GET", 204),
+            ("GET", 205),
+            ("GET", 304),
+            ("CONNECT", 200),
+        ],
+    )
+    def test_body_prohibited_http_responses_are_normalized_fileless(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        method,
+        status_code,
+    ):
+        """HTTP semantics override authored bytes for responses prohibited from carrying bodies."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            service="http",
+            conn_state="SF",
+            http=HttpContext(
+                method=method,
+                host="portal.example.test",
+                uri="/result",
+                response_body_len=321,
+                status_code=status_code,
+                status_msg="",
+                resp_mime_types=("text/html",),
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.protocol.http.response_body_len == 0
+        assert event.protocol.http.resp_mime_types == ()
+        assert not any(not ft.is_orig for ft in event.protocol.file_transfers)
+
+    def test_failed_http_transport_does_not_create_response_file(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """An uncompleted transport cannot expose an authored response body."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            service="http",
+            conn_state="S0",
+            http=HttpContext(
+                method="GET",
+                host="portal.example.test",
+                uri="/result",
+                response_body_len=321,
+                status_code=200,
+                resp_mime_types=("text/html",),
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert not any(not ft.is_orig for ft in event.protocol.file_transfers)
+
     def test_generate_connection_reuses_http_uid_for_persistent_transactions(self, state_manager):
         """Later HTTP transactions on a warm connection should reuse one Zeek UID."""
 
@@ -9908,6 +10169,11 @@ class TestActivityGenerator:
         assert second_event.network.src_port == first_event.network.src_port
         assert second_event.network.application_layer_only is True
         assert second_event.protocol.http.trans_depth == 2
+        first_response = next(ft for ft in first_event.protocol.file_transfers if not ft.is_orig)
+        second_response = next(ft for ft in second_event.protocol.file_transfers if not ft.is_orig)
+        assert first_response.fuid != second_response.fuid
+        assert first_event.protocol.http.resp_fuids == (first_response.fuid,)
+        assert second_event.protocol.http.resp_fuids == (second_response.fuid,)
 
     def test_generate_connection_orders_reused_http_transactions_by_depth(self, state_manager):
         """Persistent request timestamps should advance with assigned transaction depth."""

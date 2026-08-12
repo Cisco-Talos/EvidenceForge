@@ -371,6 +371,12 @@ class PlausibilityScorer(DimensionScorer):
         if len(failures) < 10:
             failures.extend(email_failures[: 10 - len(failures)])
 
+        http_matched, http_agreeing, http_failures = _score_http_file_consistency(records)
+        total_matched += http_matched
+        total_agreeing += http_agreeing
+        if len(failures) < 10:
+            failures.extend(http_failures[: 10 - len(failures)])
+
         crypto_matched, crypto_agreeing, crypto_failures = (
             _score_cryptographic_protocol_consistency(records)
         )
@@ -908,6 +914,68 @@ def _score_email_evidence_consistency(
             elif len(failures) < 10:
                 failures.append(f"email artifact subject disagrees for msg_id {msg_id}")
 
+    return matched, agreeing, failures
+
+
+def _score_http_file_consistency(
+    records: dict[str, list[ParsedRecord]],
+) -> tuple[int, int, list[str]]:
+    """Return HTTP-to-files FUID, direction, MIME, size, and UID agreement."""
+
+    file_index = {
+        (record.source_instance, str(record.fields.get("fuid"))): record
+        for record in records.get("zeek_files", [])
+        if record.fields.get("fuid")
+    }
+    matched = 0
+    agreeing = 0
+    failures: list[str] = []
+
+    def check(condition: bool, message: str) -> None:
+        nonlocal matched, agreeing
+        matched += 1
+        if condition:
+            agreeing += 1
+        elif len(failures) < 10:
+            failures.append(message)
+
+    for http in records.get("zeek_http", []):
+        for side, is_orig, body_field in (
+            ("orig", True, "request_body_len"),
+            ("resp", False, "response_body_len"),
+        ):
+            fuids = http.fields.get(f"{side}_fuids") or []
+            if not isinstance(fuids, list):
+                fuids = [fuids]
+            mime_types = http.fields.get(f"{side}_mime_types") or []
+            filenames = http.fields.get(f"{side}_filenames") or []
+            for index, fuid in enumerate(fuids):
+                file_record = file_index.get((http.source_instance, str(fuid)))
+                check(file_record is not None, f"HTTP {side} fuid {fuid} has no files.log row")
+                if file_record is None:
+                    continue
+                fields = file_record.fields
+                check(
+                    fields.get("is_orig") is is_orig, f"HTTP {side} fuid {fuid} direction differs"
+                )
+                conn_uids = fields.get("conn_uids") or []
+                check(http.fields.get("uid") in conn_uids, f"HTTP {side} fuid {fuid} UID differs")
+                body_len = http.fields.get(body_field)
+                if isinstance(body_len, int):
+                    check(
+                        fields.get("total_bytes") == body_len,
+                        f"HTTP {side} fuid {fuid} size differs",
+                    )
+                if index < len(mime_types):
+                    check(
+                        fields.get("mime_type") == mime_types[index],
+                        f"HTTP {side} fuid {fuid} MIME differs",
+                    )
+                if index < len(filenames):
+                    check(
+                        fields.get("filename") == filenames[index],
+                        f"HTTP {side} fuid {fuid} filename differs",
+                    )
     return matched, agreeing, failures
 
 

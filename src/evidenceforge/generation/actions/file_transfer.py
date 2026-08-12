@@ -75,6 +75,7 @@ def _file_identity_plan(
 
 _HTTP_HASH_ANALYZER_MIME_TYPES = {
     "application/octet-stream",
+    "application/vnd.rar",
     "application/vnd.debian.binary-package",
     "application/vnd.ms-cab-compressed",
     "application/x-dosexec",
@@ -253,26 +254,35 @@ def _http_pe_compile_ts(content_seed_material: str, observed_at: datetime) -> in
     return min(compile_ts, latest_allowed)
 
 
-def _http_pe_analysis_enabled(mime_type: str, content_seed_material: str) -> bool:
+def _http_pe_analysis_enabled(
+    mime_type: str,
+    content_seed_material: str,
+    body_len: int,
+) -> bool:
     """Return whether this content object should produce PE analyzer records."""
 
     if mime_type not in _HTTP_PE_ANALYZER_MIME_TYPES:
         return False
     if mime_type in _HTTP_PE_DEFINITE_MIME_TYPES:
         return True
+    if mime_type == "application/octet-stream" and body_len < _HTTP_ANALYZER_SHORT_BODY_BYTES:
+        return False
     return _stable_seed(f"http_pe_enabled:{content_seed_material}") % 100 < 25
 
 
 @dataclass(frozen=True, slots=True)
-class HttpResponseFileTransferRequest:
-    """Intent for one HTTP response body visible to Zeek file analysis."""
+class HttpFileTransferRequest:
+    """Intent for one request or response entity visible to Zeek file analysis."""
 
     host: str
     uri: str
     dst_ip: str
-    response_body_len: int
-    response_mime_types: list[str]
+    body_len: int
+    mime_types: tuple[str, ...]
     timestamp: datetime
+    is_orig: bool
+    filename: str = ""
+    content_identity: str = ""
     parent_duration: float | None = None
     source: str = "activity_generator"
 
@@ -282,27 +292,28 @@ class HttpResponseFileTransferRequest:
 
         seed = _stable_seed(
             "action_bundle:http_file_transfer:"
-            f"{self.host}:{self.uri}:{self.dst_ip}:{self.response_body_len}:"
-            f"{','.join(self.response_mime_types)}:{self.timestamp.isoformat()}:"
+            f"{self.host}:{self.uri}:{self.dst_ip}:{self.body_len}:"
+            f"{','.join(self.mime_types)}:{self.is_orig}:{self.filename}:"
+            f"{self.content_identity}:{self.timestamp.isoformat()}:"
             f"{self.parent_duration or ''}:{self.source}"
         )
         return f"http-file-transfer-{seed:016x}"
 
 
 @dataclass(slots=True)
-class HttpResponseFileTransferResult:
+class HttpFileTransferResult:
     """Expanded HTTP file-analysis metadata."""
 
     file_transfer: FileTransferContext
     pe: PeContext | None = None
 
 
-class HttpResponseFileTransferActionBundle:
-    """Build coordinated Zeek files.log metadata for an HTTP response body."""
+class HttpFileTransferActionBundle:
+    """Build coordinated Zeek files.log metadata for an HTTP entity."""
 
     def __init__(
         self,
-        request: HttpResponseFileTransferRequest,
+        request: HttpFileTransferRequest,
         rng: random.Random,
     ) -> None:
         self._request = request
@@ -318,40 +329,38 @@ class HttpResponseFileTransferActionBundle:
             source=self._request.source,
         )
 
-    def execute(self) -> HttpResponseFileTransferResult:
+    def execute(self) -> HttpFileTransferResult:
         """Return file-transfer metadata and optional PE analysis."""
 
         fuid = generate_zeek_uid("F")
-        file_mime_type = self._request.response_mime_types[0]
+        file_mime_type = self._request.mime_types[0]
         analyzers = ["SHA1"] if file_mime_type in _HTTP_HASH_ANALYZER_MIME_TYPES else []
-        content_seed_material = _http_content_seed_material(
-            self._request.host,
-            self._request.uri,
-            self._request.response_body_len,
-            file_mime_type,
+        content_seed_material = self._request.content_identity or _http_content_seed_material(
+            self._request.host, self._request.uri, self._request.body_len, file_mime_type
         )
         file_hashes = file_transfer_hashes(content_seed_material, analyzers)
         file_transfer = FileTransferContext(
             fuid=fuid,
             source="HTTP",
             depth=0,
+            filename=self._request.filename,
             analyzers=analyzers,
             mime_type=file_mime_type,
             duration=_http_response_file_duration(
-                self._request.response_body_len,
+                self._request.body_len,
                 self._request.parent_duration,
                 self._rng,
             ),
             local_orig=_is_private_ip(self._request.dst_ip),
-            is_orig=False,
-            seen_bytes=self._request.response_body_len,
-            total_bytes=self._request.response_body_len,
+            is_orig=self._request.is_orig,
+            seen_bytes=self._request.body_len,
+            total_bytes=self._request.body_len,
             missing_bytes=0,
             overflow_bytes=0,
             timedout=False,
             **file_hashes,
         )
-        return HttpResponseFileTransferResult(
+        return HttpFileTransferResult(
             file_transfer=file_transfer,
             pe=self._maybe_build_pe_context(fuid, file_mime_type, content_seed_material),
         )
@@ -364,7 +373,11 @@ class HttpResponseFileTransferActionBundle:
     ) -> PeContext | None:
         """Return content-scoped PE analysis for executable file transfers."""
 
-        if not _http_pe_analysis_enabled(mime_type, content_seed_material):
+        if not _http_pe_analysis_enabled(
+            mime_type,
+            content_seed_material,
+            self._request.body_len,
+        ):
             return None
         profile_rng = random.Random(_stable_seed(f"http_pe_profile:{content_seed_material}"))
         is_64 = _http_pe_is_64bit(self._request.uri, content_seed_material)
@@ -386,6 +399,56 @@ class HttpResponseFileTransferActionBundle:
                 % len(_PE_SECTION_PROFILES)
             ],
         )
+
+
+@dataclass(frozen=True, slots=True)
+class HttpResponseFileTransferRequest:
+    """Backward-compatible response-side HTTP file-analysis intent."""
+
+    host: str
+    uri: str
+    dst_ip: str
+    response_body_len: int
+    response_mime_types: list[str]
+    timestamp: datetime
+    content_identity: str = ""
+    parent_duration: float | None = None
+    source: str = "activity_generator"
+
+
+HttpResponseFileTransferResult = HttpFileTransferResult
+
+
+class HttpResponseFileTransferActionBundle:
+    """Compatibility wrapper for callers constructing response transfers."""
+
+    def __init__(self, request: HttpResponseFileTransferRequest, rng: random.Random) -> None:
+        self._bundle = HttpFileTransferActionBundle(
+            HttpFileTransferRequest(
+                host=request.host,
+                uri=request.uri,
+                dst_ip=request.dst_ip,
+                body_len=request.response_body_len,
+                mime_types=tuple(request.response_mime_types),
+                timestamp=request.timestamp,
+                is_orig=False,
+                content_identity=request.content_identity,
+                parent_duration=request.parent_duration,
+                source=request.source,
+            ),
+            rng,
+        )
+
+    @property
+    def anchor(self) -> ActionAnchor:
+        """Return the stable action anchor."""
+
+        return self._bundle.anchor
+
+    def execute(self) -> HttpFileTransferResult:
+        """Return response-side file-transfer metadata."""
+
+        return self._bundle.execute()
 
 
 @dataclass(frozen=True, slots=True)

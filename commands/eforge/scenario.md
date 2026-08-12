@@ -177,7 +177,14 @@ Inbound traffic respects network topology: DMZ-placed `web_server` hosts attract
 
 **Red herrings** — Should the dataset include explicit suspicious-but-benign events beyond automatic ambient noise? These are events with innocent explanations that create false leads for analysts: after-hours admin sessions, failed logon bursts from fat-fingered passwords, large outbound transfers that are actually backup sync, service accounts authenticating from unusual hosts. Define these in the `red_herrings:` section — they use the same event types as the storyline but include an `explanation` field for the instructor ground truth. Note: ambient suspicious noise (controlled by `baseline_activity.suspicious_noise`, default "high") is separate and always active.
 
-**Browsing patterns** — How much web browsing does each user role generate? Personas have a default `browsing_intensity` (light/normal/heavy) that controls browser/proxy session depth — how many pages and subresources each browsing session produces. Plaintext HTTP sessions may render multiple `http.log` rows on one Zeek UID with increasing `trans_depth`, and large download-scale responses produce matching `files.log` metadata. Ask whether any user roles are heavier or lighter web users than their persona default suggests, and set per-user `browsing_intensity` overrides where appropriate.
+**Browsing patterns** — How much web browsing does each user role generate? Personas have a default `browsing_intensity` (light/normal/heavy) that controls browser/proxy session depth — how many pages and subresources each browsing session produces. Plaintext HTTP sessions may render multiple `http.log` rows on one Zeek UID with increasing `trans_depth`; every transmitted nonempty response entity, including small and error responses, produces matching responder-direction `files.log` metadata. Ask whether any user roles are heavier or lighter web users than their persona default suggests, and set per-user `browsing_intensity` overrides where appropriate.
+
+Every transmitted plaintext HTTP request body also produces originator-direction `files.log` evidence. This applies to background browser forms, application/API traffic, telemetry, beacons, and red herrings as well as authored uploads; filename absence is normal for anonymous bodies.
+
+HTTP responses prohibited from carrying a body (HEAD, 1xx, 204, 205, 304, and
+successful CONNECT), zero-byte responses, failed transports, and opaque HTTPS
+remain fileless. A plaintext proxy MISS analyzes the same response on both legs;
+a HIT or proxy-generated error has only a client-leg response file.
 
 **Scenario network identities and traffic affinities** — When a scenario needs a
 specific benign partner, vendor, SaaS, C2, public service, or authored hostname,
@@ -580,6 +587,7 @@ The `raw` type targets a specific output format with arbitrary fields — use it
 
 - **Process + connection pairing:** When a command line references a domain (Invoke-WebRequest, curl, wget), always add a paired `connection` event with `hostname` set. Without it, the domain appears in Sysmon but is absent from DNS, SSL, HTTP, and proxy logs. For raw-IP commands, the connection alone (no `hostname`) is sufficient.
 - **HTTP visibility:** For `service: http` connections, specify `method`, `uri`, and `user_agent`. Without them the engine auto-generates generic metadata that won't reflect actual attack activity. For `service: ssl`, these fields aren't needed.
+- **HTTP upload sizing:** Set `request_body_len` for an exact request entity size. Pair a file-backed upload with its real process command; supported curl file arguments resolve endpoint FILE/READ and MIME metadata. Raw `--data-binary @file` normally has no wire filename, while multipart `-F name=@file` exposes one. HTTPS remains opaque without modeled decryption.
 - **`hostname` on connections:** Use the client-facing DNS name actually resolved by the endpoint — not a reverse-DNS/PTR artifact. This keeps DNS, TLS SNI, x509 subject, and proxy logs consistent. Omit `hostname` for raw-IP C2.
 - **No documentation domains in generated data:** Don't use `example.com`, `example.net`, or `example.org` as live public infrastructure — they're an obvious synthetic tell. Use a realistic non-reserved domain.
 - **Prefer full image paths:** Bare executable names are accepted but full paths produce more accurate logs. Don't invent one-off paths — add a config overlay entry instead.

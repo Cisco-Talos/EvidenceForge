@@ -123,8 +123,22 @@ class LogoffAttributes(GroundTruthAttributesBase):
     """Logoff event attributes."""
 
 
+class HttpUploadAttributes(BaseModel):
+    """Resolved local and wire metadata for an authored HTTP upload."""
+
+    request_body_len: int = Field(ge=0)
+    mime_type: str
+    local_source_path: str
+    local_source_filename: str
+    wire_filename: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class ConnectionAttributes(GroundTruthAttributesBase):
     """Connection event attributes."""
+
+    http_upload: HttpUploadAttributes | None = None
 
 
 class SshSessionAttributes(GroundTruthAttributesBase):

@@ -450,6 +450,8 @@ class WeightedHttpMethodProfile(BaseModel):
 
     statuses: dict[str, float] = Field(default_factory=lambda: {"200": 1.0})
     request_body_bytes: list[int] | None = None
+    request_content_type: str | None = None
+    request_wire_filename: str | None = None
     response_body_bytes: list[int] | None = None
     content_type: str = "text/html"
 
@@ -827,6 +829,9 @@ class ConnectionEventSpec(_IdsAttachableEventSpec):
     status_code: int | None = None  # HTTP response status
     user_agent: str | None = None  # Client User-Agent string
     referrer: str | None = None  # Referer header value (None = auto-generated)
+    request_body_len: int | None = Field(
+        default=None, ge=0, le=MAX_HTTP_RESPONSE_BODY_LEN
+    )  # Exact transmitted HTTP request entity size
     response_body_len: int | None = Field(
         default=None, ge=0, le=MAX_HTTP_RESPONSE_BODY_LEN
     )  # Override auto-sized response bytes
@@ -995,6 +1000,7 @@ class BeaconHttpSequenceEntry(BaseModel):
     status_code: int | None = Field(default=None, ge=100, le=599)
     user_agent: str | None = None
     referrer: str | None = None
+    request_body_len: int | list[int] | None = None
     response_body_len: int | list[int] | None = None
     orig_bytes: int | list[int] | None = None
     resp_bytes: int | list[int] | None = None
@@ -1020,7 +1026,7 @@ class BeaconHttpSequenceEntry(BaseModel):
             )
         return v
 
-    @field_validator("response_body_len", "orig_bytes", "resp_bytes")
+    @field_validator("request_body_len", "response_body_len", "orig_bytes", "resp_bytes")
     @classmethod
     def validate_byte_value_or_range(
         cls, v: int | list[int] | None, info: ValidationInfo
@@ -1136,6 +1142,7 @@ class BeaconEventSpec(_IdsAttachablePeriodicEventSpec):
     status_code: int | None = None
     user_agent: str | None = None
     referrer: str | None = None  # Referer header value (None = auto-generated)
+    request_body_len: int | None = Field(default=None, ge=0, le=MAX_HTTP_RESPONSE_BODY_LEN)
     response_body_len: int | None = Field(default=None, ge=0, le=MAX_HTTP_RESPONSE_BODY_LEN)
     profile: str | None = Field(
         default=None,

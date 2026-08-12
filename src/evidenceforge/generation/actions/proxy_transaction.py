@@ -52,22 +52,6 @@ from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
 
-_PROXY_HTTP_FILE_TRANSFER_MIME_TYPES = frozenset(
-    {
-        "application/octet-stream",
-        "application/pdf",
-        "application/vnd.debian.binary-package",
-        "application/vnd.ms-cab-compressed",
-        "application/x-gzip",
-        "application/x-ms-patch",
-        "application/x-msi",
-        "application/x-msdownload",
-        "application/zip",
-    }
-)
-_PROXY_HTTP_FILE_TRANSFER_BODY_THRESHOLD = 64 * 1024
-_PROXY_HTTP_FILE_TRANSFER_LARGE_BODY_THRESHOLD = 1_000_000
-
 
 @dataclass(frozen=True, slots=True)
 class ProxyTransactionRequest:
@@ -644,6 +628,9 @@ class ProxyTransactionActionBundle:
                     request.time,
                 ),
                 tags=[],
+                resp_mime_types=["text/html"]
+                if tunnel_status_code >= 400 and proxy_context.response_body_bytes > 0
+                else [],
             )
 
         if request.http is not None:
@@ -672,6 +659,8 @@ class ProxyTransactionActionBundle:
                 user_agent=request.http.user_agent,
                 user_agent_known_absent=request.http.user_agent_known_absent,
                 request_body_len=proxy_context.request_body_bytes,
+                request_content_type=request.http.request_content_type,
+                request_entity=request.http.request_entity,
                 response_body_len=response_body_len,
                 canonical_request_time=request_time,
                 flow_request_body_len=request.http.flow_request_body_len,
@@ -742,7 +731,11 @@ class ProxyTransactionActionBundle:
             elif request.orig_bytes is not None:
                 request_body = max(0, request.orig_bytes)
 
-        if method == "HEAD" or proxy_context.status_code in {204, 304}:
+        if (
+            method == "HEAD"
+            or 100 <= proxy_context.status_code < 200
+            or proxy_context.status_code in {204, 205, 304}
+        ):
             response_body = 0
         elif method == "CONNECT" and proxy_context.status_code < 400:
             response_body = 0
@@ -846,7 +839,21 @@ class ProxyTransactionActionBundle:
     ]:
         """Build paired file metadata for a proxied HTTP MISS response body."""
 
-        if not self._http_file_transfer_required(client_http, egress_http):
+        from evidenceforge.generation.activity.http_content import http_response_has_entity_body
+
+        if (
+            not http_response_has_entity_body(
+                egress_http.method,
+                egress_http.status_code,
+                egress_http.response_body_len,
+            )
+            or not http_response_has_entity_body(
+                client_http.method,
+                client_http.status_code,
+                client_http.response_body_len,
+            )
+            or client_http.response_body_len != egress_http.response_body_len
+        ):
             return (
                 client_http,
                 egress_http,
@@ -860,6 +867,11 @@ class ProxyTransactionActionBundle:
 
         request = self.request
         proxy_sys = request.proxy_chain[0]
+        mime_type = egress_http.resp_mime_types[0]
+        content_identity = (
+            f"proxy-http-response:{egress_http.host}:{egress_http.uri}:"
+            f"{egress_http.status_code}:{egress_http.response_body_len}:{mime_type}"
+        )
         egress_result = HttpResponseFileTransferActionBundle(
             HttpResponseFileTransferRequest(
                 host=egress_http.host,
@@ -868,6 +880,7 @@ class ProxyTransactionActionBundle:
                 response_body_len=egress_http.response_body_len,
                 response_mime_types=list(egress_http.resp_mime_types),
                 timestamp=egress_time,
+                content_identity=content_identity,
                 parent_duration=egress_duration,
                 source="proxy_transaction",
             ),
@@ -887,6 +900,7 @@ class ProxyTransactionActionBundle:
                 response_body_len=client_http.response_body_len,
                 response_mime_types=list(client_http.resp_mime_types),
                 timestamp=client_time,
+                content_identity=content_identity,
                 parent_duration=client_duration,
                 source="proxy_transaction",
             ),
@@ -954,25 +968,6 @@ class ProxyTransactionActionBundle:
             egress_duration,
         )
 
-    @staticmethod
-    def _http_file_transfer_required(client_http: HttpContext, egress_http: HttpContext) -> bool:
-        """Return whether this proxied HTTP body should produce files.log rows."""
-
-        method = (egress_http.method or "GET").upper()
-        if (
-            method in {"CONNECT", "HEAD"}
-            or not (200 <= egress_http.status_code < 300)
-            or egress_http.response_body_len <= 100
-            or not egress_http.resp_mime_types
-            or client_http.response_body_len != egress_http.response_body_len
-        ):
-            return False
-        mime_type = egress_http.resp_mime_types[0]
-        return egress_http.response_body_len >= _PROXY_HTTP_FILE_TRANSFER_LARGE_BODY_THRESHOLD or (
-            egress_http.response_body_len >= _PROXY_HTTP_FILE_TRANSFER_BODY_THRESHOLD
-            and mime_type in _PROXY_HTTP_FILE_TRANSFER_MIME_TYPES
-        )
-
     def _build_egress_http(
         self,
         proxy_context: ProxyContext,
@@ -1015,6 +1010,10 @@ class ProxyTransactionActionBundle:
             503: "Service Unavailable",
             504: "Gateway Timeout",
         }
+        from evidenceforge.generation.activity.http_content import (
+            response_mime_types_for_status,
+        )
+
         response_body_len = proxy_context.response_body_bytes
         return HttpContext(
             method=proxy_context.method,
@@ -1029,10 +1028,10 @@ class ProxyTransactionActionBundle:
             referrer=proxy_context.referrer,
             trans_depth=client_http.trans_depth,
             tags=[],
-            resp_mime_types=[proxy_context.content_type]
-            if proxy_context.content_type
-            and response_body_len > 0
-            and proxy_context.status_code not in {204, 304}
-            and proxy_context.status_code < 400
-            else [],
+            resp_mime_types=response_mime_types_for_status(
+                proxy_context.status_code,
+                proxy_context.content_type,
+                response_body_len,
+                method=proxy_context.method,
+            ),
         )

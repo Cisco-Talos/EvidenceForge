@@ -116,6 +116,8 @@ from evidenceforge.generation.actions import (
     FailedLogonRequest,
     GroupMembershipChangeActionBundle,
     GroupMembershipChangeRequest,
+    HttpFileTransferActionBundle,
+    HttpFileTransferRequest,
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
     KerberosConnectionAuditActionBundle,
@@ -752,6 +754,7 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
     """Keep caller-provided HTTP metadata source-native before cross-source fan-out."""
     from evidenceforge.generation.activity.http_content import (
         coerce_response_size_for_mime,
+        http_response_body_is_prohibited,
         http_status_message,
         is_download_scale_mime,
         is_stable_resource_path,
@@ -763,7 +766,7 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
     status_code = http.status_code
     response_body_len = max(0, http.response_body_len)
     status_msg = http.status_msg
-    bodyless_status = status_code in {204, 304} or method == "HEAD"
+    bodyless_status = http_response_body_is_prohibited(method, status_code)
 
     if bodyless_status:
         response_body_len = 0
@@ -779,7 +782,7 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
         status_msg = http_status_message(status_code)
 
     resp_mime_types = list(http.resp_mime_types)
-    if 200 <= status_code < 300 and method not in {"CONNECT", "HEAD"}:
+    if 200 <= status_code < 300 and not bodyless_status:
         mime_type = (
             resp_mime_types[0]
             if resp_mime_types
@@ -799,15 +802,13 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
                 mime_type,
                 response_body_len,
             )
-    if (
-        not resp_mime_types
-        or response_body_len <= 0
-        or method == "HEAD"
-        or bodyless_status
-        or status_code in {301, 302}
-        or status_code >= 400
-    ):
+    if not resp_mime_types or response_body_len <= 0 or bodyless_status:
         mime_type = resp_mime_types[0] if resp_mime_types else ""
+        if not mime_type and response_body_len > 0 and status_code < 300:
+            mime_type = normalize_mime_type_for_path(
+                http.uri,
+                "application/octet-stream",
+            )
         resp_mime_types = response_mime_types_for_status(
             status_code,
             mime_type,
@@ -881,17 +882,6 @@ def _apply_plaintext_http_policy(
     )
 
 
-_HTTP_FILE_TRANSFER_MIME_TYPES = {
-    "application/octet-stream",
-    "application/pdf",
-    "application/vnd.debian.binary-package",
-    "application/vnd.ms-cab-compressed",
-    "application/x-gzip",
-    "application/x-msdownload",
-    "application/zip",
-}
-_HTTP_FILE_TRANSFER_BODY_THRESHOLD = 64 * 1024
-_HTTP_FILE_TRANSFER_LARGE_BODY_THRESHOLD = 1_000_000
 _SSH_CLIENT_IDENTITY_FILES = (
     "~/.ssh/id_ed25519",
     "~/.ssh/id_rsa",
@@ -968,48 +958,115 @@ def _ssh_command_target(target_host: str, attempted_username: str | None) -> str
     return target_host
 
 
-def _http_response_requires_file_transfer(http: HttpContext) -> bool:
-    """Return whether Zeek should always analyze this HTTP response body as a file."""
-
-    if http.response_body_len >= _HTTP_FILE_TRANSFER_LARGE_BODY_THRESHOLD:
-        return True
-    mime_type = http.resp_mime_types[0] if http.resp_mime_types else ""
-    return (
-        http.response_body_len >= _HTTP_FILE_TRANSFER_BODY_THRESHOLD
-        and mime_type in _HTTP_FILE_TRANSFER_MIME_TYPES
-    )
-
-
-def _attach_http_response_file_transfer(
+def _attach_http_file_transfers(
     event: OccurrenceBuilder,
     *,
     dst_ip: str,
     rng: random.Random,
-    probabilistic_file_analysis: bool,
 ) -> None:
-    """Attach source-native Zeek files.log metadata for eligible HTTP responses."""
+    """Attach source-native Zeek files.log metadata for visible HTTP entities."""
 
-    if event.network is None or event.http is None or event.file_transfer is not None:
+    if event.network is None or event.http is None:
         return
     if event.network.service != "http" or event.network.conn_state != "SF":
         return
     http = event.http
     method = (http.method or "GET").upper()
-    if (
-        method in {"CONNECT", "HEAD"}
-        or not (200 <= http.status_code < 300)
-        or http.response_body_len <= 100
-        or not http.resp_mime_types
-    ):
-        return
 
-    required = _http_response_requires_file_transfer(http)
-    if probabilistic_file_analysis:
-        sampled = rng.random() < 0.3
-        should_attach = required or sampled
-    else:
-        should_attach = required
-    if not should_attach:
+    existing = [
+        transfer
+        for transfer in (event.file_transfer, *event.file_transfers)
+        if transfer is not None
+    ]
+    has_request_transfer = any(transfer.is_orig for transfer in existing)
+    has_response_transfer = any(not transfer.is_orig for transfer in existing)
+
+    if http.request_body_len > 0 and not has_request_transfer:
+        from evidenceforge.generation.activity.http_file_profiles import (
+            request_content_type_for_activity,
+        )
+
+        request_entity = http.request_entity
+        request_mime = http.request_content_type or (
+            request_entity.mime_type if request_entity is not None else ""
+        )
+        if not request_mime:
+            request_mime = request_content_type_for_activity(
+                method,
+                http.uri,
+                http.user_agent,
+                local_source_path=(request_entity.local_source_path if request_entity else ""),
+            )
+        request_duration_floor = http_response_parent_duration_floor(http.request_body_len)
+        if request_duration_floor > 0:
+            request_floor_rng = random.Random(
+                _stable_seed(
+                    "http_request_file_transfer_parent_duration:"
+                    f"{event.network.src_ip}:{event.network.src_port}:"
+                    f"{event.network.dst_ip}:{event.network.dst_port}:"
+                    f"{http.host}:{http.uri}:{http.request_body_len}:"
+                    f"{event.timestamp.isoformat()}"
+                )
+            )
+            event.network.duration = max(
+                event.network.duration or 0.0,
+                request_duration_floor + request_floor_rng.uniform(0.05, 0.55),
+            )
+            if event.proxy is not None:
+                event.proxy = replace(
+                    event.proxy,
+                    time_taken=_proxy_time_taken_ms(
+                        event.network.duration,
+                        rng,
+                        method=event.proxy.method,
+                        status_code=event.proxy.status_code,
+                        cache_result=event.proxy.cache_result,
+                    ),
+                )
+        content_identity = (
+            request_entity.content_identity
+            if request_entity is not None
+            else (
+                f"http-request:{http.host}:{http.uri}:{method}:"
+                f"{http.request_body_len}:{request_mime}"
+            )
+        )
+        request_result = HttpFileTransferActionBundle(
+            HttpFileTransferRequest(
+                host=http.host,
+                uri=http.uri,
+                dst_ip=dst_ip,
+                body_len=http.request_body_len,
+                mime_types=(request_mime,),
+                timestamp=event.timestamp,
+                is_orig=True,
+                filename=request_entity.wire_filename if request_entity else "",
+                content_identity=content_identity,
+                parent_duration=event.network.duration,
+            ),
+            rng,
+        ).execute()
+        event.file_transfers.append(request_result.file_transfer)
+        event.http = replace(
+            event.http,
+            request_content_type=request_mime,
+            orig_fuids=(request_result.file_transfer.fuid,),
+            orig_filenames=(request_result.file_transfer.filename,)
+            if request_result.file_transfer.filename
+            else (),
+            orig_mime_types=(request_result.file_transfer.mime_type,),
+        )
+        if event.pe is None:
+            event.pe = request_result.pe
+
+    http = event.http
+    from evidenceforge.generation.activity.http_content import http_response_has_entity_body
+
+    if has_response_transfer or not http_response_has_entity_body(
+        method,
+        http.status_code,
+        http.response_body_len,
+    ):
         return
 
     duration_floor = http_response_parent_duration_floor(http.response_body_len)
@@ -1049,13 +1106,20 @@ def _attach_http_response_file_transfer(
         ),
         rng,
     ).execute()
-    event.file_transfer = file_result.file_transfer
+    if event.file_transfer is None:
+        event.file_transfer = file_result.file_transfer
+    else:
+        event.file_transfers.append(file_result.file_transfer)
     event.http = replace(
         event.http,
-        resp_fuids=(event.file_transfer.fuid,),
-        resp_mime_types=(event.file_transfer.mime_type,),
+        resp_fuids=(file_result.file_transfer.fuid,),
+        resp_filenames=(file_result.file_transfer.filename,)
+        if file_result.file_transfer.filename
+        else (),
+        resp_mime_types=(file_result.file_transfer.mime_type,),
     )
-    event.pe = file_result.pe
+    if event.pe is None:
+        event.pe = file_result.pe
 
 
 def _http_context_flow_body_len(http: HttpContext, side: str) -> int:
@@ -1103,7 +1167,9 @@ def _http_request_header_len(http: HttpContext, transaction_count: int) -> int:
         header_lines.append(f'If-None-Match: W/"{seed & 0xFFFFFFFF:x}"')
     if body_len > 0:
         header_lines.append(f"Content-Length: {body_len}")
-        header_lines.append("Content-Type: application/x-www-form-urlencoded")
+        header_lines.append(
+            f"Content-Type: {http.request_content_type or 'application/octet-stream'}"
+        )
     base_len = sum(len(line.encode("utf-8")) + 2 for line in header_lines) + 2
     per_transaction_extra = 24 + (seed % 97)
     return (base_len + per_transaction_extra) * transaction_count

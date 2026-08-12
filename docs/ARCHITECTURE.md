@@ -503,20 +503,30 @@ proxy legs never advance policy state. Raw Snort events remain an explicit
 source-local escape hatch.
 
 File-transfer callers supply transfer intent layered on top of a transport path.
-`HttpResponseFileTransferActionBundle` and `SmbFileTransferMetadataActionBundle`
+`HttpFileTransferActionBundle` and `SmbFileTransferMetadataActionBundle`
 build Zeek files.log metadata, FUIDs, analyzers, hashes, MIME types, filenames,
 byte counts, transfer direction, and optional PE analysis from one transfer
 description. `StagedArchiveSmbReadActionBundle` emits the SMB read that moves a
 staged archive before exfiltration, and `ScpReceiverFileActionBundle` emits only
 the receiver-side endpoint file evidence after the SSH bundle owns transport,
-auth, and session timing. Large or download-scale HTTP responses attach the HTTP
-file-transfer bundle deterministically after canonical HTTP metadata is known,
-including caller-provided HTTP contexts from browser-session, proxy,
-and storyline paths. Email delivery uses the same canonical file-transfer
+auth, and session timing. Every successfully transmitted, sensor-visible,
+nonempty plaintext/decrypted HTTP request or response entity attaches a
+directional file transfer. This includes tiny bodies, redirects, authentication
+failures, and other error pages; HEAD, 1xx, 204, 205, 304, successful CONNECT,
+zero-byte, failed-transport, and opaque TLS responses remain fileless. The same
+canonical path owns authored, baseline, beacon, API, red-herring, browser-session,
+and direct or explicit-proxy HTTP activity. Local
+source identity is separate from a wire-visible filename: a local curl path does
+not become an HTTP filename unless the message exposes one, such as multipart
+Content-Disposition. Response URLs do not invent filenames. A plaintext proxy
+MISS uses distinct leg-local FUIDs but one content identity across origin→proxy
+and proxy→client files; a HIT or proxy-generated error has only the client-leg
+file. Failure before an origin response creates no egress response file, and
+TLS-protected entities remain opaque. Email delivery uses
+the same canonical file-transfer
 context list for plaintext SMTP MIME parts, so `smtp.log.fuids` and `files.log`
 rows share the owning SMTP connection UID. STARTTLS-protected SMTP hops keep the
-message content opaque and do not attach MIME file contexts.
-process-command, or storyline paths. This keeps transport/session ownership
+message content opaque and do not attach MIME file contexts. This keeps transport/session ownership
 separate from file evidence while preventing each caller from inventing transfer
 metadata independently.
 

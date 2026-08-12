@@ -583,6 +583,31 @@ class SslContext:
 
 
 @dataclass(frozen=True, slots=True)
+class HttpRequestEntityContext:
+    """Canonical metadata for one HTTP request entity.
+
+    Local source information describes endpoint activity and is deliberately
+    separate from the filename, if any, exposed by the HTTP message on the wire.
+    """
+
+    size: int
+    mime_type: str
+    content_identity: str
+    encoding: str = "raw"
+    local_source_path: str = ""
+    local_source_filename: str = ""
+    wire_filename: str = ""
+
+    def __post_init__(self) -> None:
+        if self.size < 0:
+            raise ValueError("HTTP request entity size must be non-negative")
+        if not self.mime_type:
+            raise ValueError("HTTP request entity MIME type must not be empty")
+        if not self.content_identity:
+            raise ValueError("HTTP request entity content identity must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class HttpContext:
     """HTTP request/response details for Zeek http.log."""
 
@@ -593,6 +618,8 @@ class HttpContext:
     user_agent: str = ""
     user_agent_known_absent: bool = False
     request_body_len: int = 0
+    request_content_type: str = ""
+    request_entity: HttpRequestEntityContext | None = None
     response_body_len: int = 0
     canonical_request_time: datetime | None = None
     flow_request_body_len: int | None = None
@@ -603,12 +630,22 @@ class HttpContext:
     referrer: str = ""
     trans_depth: int = 1
     tags: tuple[str, ...] = ()
+    orig_fuids: tuple[str, ...] = ()
+    orig_filenames: tuple[str, ...] = ()
+    orig_mime_types: tuple[str, ...] = ()
     resp_fuids: tuple[str, ...] = ()
+    resp_filenames: tuple[str, ...] = ()
     resp_mime_types: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.request_entity is not None and self.request_entity.size != self.request_body_len:
+            raise ValueError("HTTP request entity size must match request_body_len")
         object.__setattr__(self, "tags", tuple(self.tags))
+        object.__setattr__(self, "orig_fuids", tuple(self.orig_fuids))
+        object.__setattr__(self, "orig_filenames", tuple(self.orig_filenames))
+        object.__setattr__(self, "orig_mime_types", tuple(self.orig_mime_types))
         object.__setattr__(self, "resp_fuids", tuple(self.resp_fuids))
+        object.__setattr__(self, "resp_filenames", tuple(self.resp_filenames))
         object.__setattr__(self, "resp_mime_types", tuple(self.resp_mime_types))
 
 

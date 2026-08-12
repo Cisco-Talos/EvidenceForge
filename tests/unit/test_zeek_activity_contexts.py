@@ -3939,10 +3939,10 @@ class TestHttpContextPopulation:
 class TestFileTransferContext:
     """Verify FileTransferContext populated probabilistically for HTTP."""
 
-    def test_redirect_asset_response_does_not_attach_asset_file_transfer(
+    def test_redirect_asset_response_preserves_explicit_mime_and_attaches_file_transfer(
         self, activity_gen, monkeypatch
     ):
-        """Redirect bodies keep text/html MIME instead of asset extension MIME."""
+        """A transmitted redirect entity preserves explicit route MIME and gets a file."""
         gen, events = activity_gen
 
         class LowRandom(random.Random):
@@ -3986,8 +3986,12 @@ class TestFileTransferContext:
         event = events[-1]
         assert event.protocol.http is not None
         assert event.protocol.http.status_code == 301
-        assert event.protocol.http.resp_mime_types == ("text/html",)
-        assert event.protocol.primary_file_transfer is None
+        assert event.protocol.http.resp_mime_types == ("application/javascript",)
+        assert event.protocol.primary_file_transfer is not None
+        assert event.protocol.primary_file_transfer.is_orig is False
+        assert event.protocol.primary_file_transfer.total_bytes == (
+            event.protocol.http.response_body_len
+        )
 
     def test_large_http_file_transfer_extends_parent_connection_duration(self, activity_gen):
         """Large HTTP files.log rows should have plausible duration inside the parent flow."""

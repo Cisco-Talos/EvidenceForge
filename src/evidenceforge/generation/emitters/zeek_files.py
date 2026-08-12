@@ -64,11 +64,13 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
 
     def emit(self, event: CanonicalOccurrence) -> None:
         net = event.network
-        file_transfers = list(event.protocol.file_transfers)
+        file_transfers = sorted(
+            event.protocol.file_transfers, key=lambda transfer: not transfer.is_orig
+        )
         sensor_metadata = self._sensor_metadata(event, self.format_def.name)
         previous_file_ts: datetime | None = None
         for ft in file_transfers:
-            min_start = _related_http_analyzer_timestamp(event)
+            min_start = _related_http_analyzer_timestamp(event, ft)
             if previous_file_ts is not None:
                 next_min_start = previous_file_ts + timedelta(microseconds=100)
                 min_start = (
@@ -453,12 +455,17 @@ def _bounded_in_connection_timestamp(
     return preferred_ts
 
 
-def _related_http_analyzer_timestamp(event: CanonicalOccurrence) -> datetime | None:
+def _related_http_analyzer_timestamp(
+    event: CanonicalOccurrence, ft: Any | None = None
+) -> datetime | None:
     """Return the owning HTTP analyzer timestamp when this file belongs to http.log."""
     net = event.network
-    ft = event.protocol.primary_file_transfer
+    if ft is None:
+        ft = event.protocol.primary_file_transfer
     http = event.protocol.http
-    if net is None or ft is None or http is None or ft.fuid not in http.resp_fuids:
+    if net is None or ft is None or http is None:
+        return None
+    if ft.fuid not in (*http.orig_fuids, *http.resp_fuids):
         return None
     planned_interval = planned_zeek_connection_interval(event)
     if planned_interval is not None:

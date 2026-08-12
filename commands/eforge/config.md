@@ -63,6 +63,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Add proxy URI templates | `proxy_uri_templates.yaml` | `dns_registry.yaml` (validate domain exists); use `domain_class` and `referrer_policy` for certificate/update infrastructure |
 | Modify proxy User-Agent pools | `proxy_user_agents.yaml` | `dns_registry.yaml` for package/update hostnames |
 | Add/modify beacon behavior profiles | `beacon_profiles.yaml` | Scenario `beacon.profile` values reference these synthetic HTTP sequence profiles; keep profiles behavior-shaped, not live IOC replicas |
+| Modify HTTP request/file profiles | `http_file_profiles.yaml` | Shared request-content classes and file-extension MIME mappings used by background and authored HTTP file analysis |
 | Add site map entries | `site_maps.yaml` | `dns_registry.yaml` (validate domain exists) |
 | Modify inbound web visitor mix | `web_session_profiles.yaml` | `site_maps.yaml`, `traffic_rates.yaml`, `timing_profiles.yaml` |
 | Modify bash commands | `bash_commands.yaml` | Validate role names match persona names; keep `typo_model` rates/counts realistic |

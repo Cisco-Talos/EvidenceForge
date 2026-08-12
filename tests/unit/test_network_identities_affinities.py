@@ -170,6 +170,8 @@ def test_route_profile_keeps_method_and_status_owned_by_route() -> None:
                     "POST": WeightedHttpMethodProfile(
                         statuses={"201": 1.0},
                         request_body_bytes=[100, 100],
+                        request_content_type="application/json",
+                        request_wire_filename="item.json",
                         response_body_bytes=[200, 200],
                         content_type="application/json",
                     )
@@ -207,6 +209,10 @@ def test_route_profile_keeps_method_and_status_owned_by_route() -> None:
     assert http.method == "POST"
     assert http.status_code == 201
     assert http.request_body_len == 100
+    assert http.request_content_type == "application/json"
+    assert http.request_entity is not None
+    assert http.request_entity.local_source_path == ""
+    assert http.request_entity.wire_filename == "item.json"
     assert http.response_body_len == 200
     assert http.resp_mime_types == ("application/json",)
 

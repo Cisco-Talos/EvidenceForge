@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
-from evidenceforge.events.contexts import HttpContext
+from evidenceforge.events.contexts import HttpContext, HttpRequestEntityContext
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.activity import browsing_session
 from evidenceforge.generation.activity.http_content import (
@@ -271,6 +271,12 @@ class BrowserSessionActionBundle:
             content_type = (
                 str(getattr(profile, "content_type", "text/html")) if profile else "text/html"
             )
+            request_content_type = (
+                str(getattr(profile, "request_content_type", "") or "") if profile else ""
+            )
+            request_wire_filename = (
+                str(getattr(profile, "request_wire_filename", "") or "") if profile else ""
+            )
             req_range = getattr(profile, "request_body_bytes", None) if profile else None
             resp_range = getattr(profile, "response_body_bytes", None) if profile else None
             request_body_len = (
@@ -304,6 +310,8 @@ class BrowserSessionActionBundle:
                     response_body_len=response_body_len,
                     request_body_len=request_body_len,
                     status_code=status,
+                    request_content_type=request_content_type,
+                    request_wire_filename=request_wire_filename,
                 )
             )
             referrer = browsing_session._make_referrer(  # noqa: SLF001
@@ -536,6 +544,19 @@ class BrowserSessionActionBundle:
                     referrer = ""
             except ValueError:
                 referrer = ""
+        request_entity = None
+        if req.request_body_len > 0 and (req.request_content_type or req.request_wire_filename):
+            request_mime = req.request_content_type or "application/octet-stream"
+            request_entity = HttpRequestEntityContext(
+                size=req.request_body_len,
+                mime_type=request_mime,
+                content_identity=(
+                    f"application-request:{req_hostname}:{req.path}:{req.method}:"
+                    f"{req.request_body_len}:{request_mime}:{req.request_wire_filename}"
+                ),
+                encoding="multipart" if req.request_wire_filename else "raw",
+                wire_filename=req.request_wire_filename,
+            )
         return HttpContext(
             method=req.method,
             host=req_hostname,
@@ -543,6 +564,8 @@ class BrowserSessionActionBundle:
             version="1.1",
             user_agent=request.user_agent or "",
             request_body_len=req.request_body_len,
+            request_content_type=req.request_content_type,
+            request_entity=request_entity,
             response_body_len=req.response_body_len,
             flow_request_body_len=(
                 group["request_body_len"]

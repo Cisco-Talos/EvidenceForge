@@ -1363,6 +1363,48 @@ class SmbFileSizeBand(BaseModel, extra="forbid"):
         return self
 
 
+class HttpRequestProfilesConfig(BaseModel, extra="forbid"):
+    """Request-entity classification values in http_file_profiles.yaml."""
+
+    browser_form: str
+    json_api: str
+    binary: str
+    json_uri_tokens: list[str] = Field(min_length=1)
+
+    @field_validator("browser_form", "json_api", "binary")
+    @classmethod
+    def mime_type_is_valid(cls, value: str) -> str:
+        if not re.fullmatch(r"[^/\s]+/[^/\s]+", value):
+            raise ValueError("must be a MIME type such as application/json")
+        return value
+
+    @field_validator("json_uri_tokens")
+    @classmethod
+    def uri_tokens_are_non_empty(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("json_uri_tokens must contain non-empty strings")
+        return values
+
+
+class HttpFileProfilesConfig(BaseModel, extra="forbid"):
+    """Root schema for bidirectional HTTP file-analysis profiles."""
+
+    extension_mime_types: dict[str, str]
+    request_profiles: HttpRequestProfilesConfig
+
+    @field_validator("extension_mime_types")
+    @classmethod
+    def extensions_and_mime_types_are_valid(cls, values: dict[str, str]) -> dict[str, str]:
+        if not values:
+            raise ValueError("extension_mime_types must not be empty")
+        for extension, mime_type in values.items():
+            if not re.fullmatch(r"\.[a-z0-9]+", extension):
+                raise ValueError(f"invalid lowercase file extension {extension!r}")
+            if not re.fullmatch(r"[^/\s]+/[^/\s]+", mime_type):
+                raise ValueError(f"invalid MIME type {mime_type!r} for {extension}")
+        return values
+
+
 class SmbMimeTypeEntry(BaseModel, extra="forbid"):
     """A weighted MIME type in smb_file_transfers.yaml."""
 
@@ -1829,6 +1871,7 @@ class BeaconProfileHttpEntry(BaseModel, extra="forbid"):
     status_code: int | None = Field(default=None, ge=100, le=599)
     user_agent: str | None = None
     referrer: str | None = None
+    request_body_len: list[int] | int | None = None
     response_body_len: list[int] | int | None = None
     orig_bytes: list[int] | int | None = None
     resp_bytes: list[int] | int | None = None
@@ -1849,7 +1892,7 @@ class BeaconProfileHttpEntry(BaseModel, extra="forbid"):
             raise ValueError("uri must start with '/' and contain no whitespace")
         return v
 
-    @field_validator("response_body_len", "orig_bytes", "resp_bytes")
+    @field_validator("request_body_len", "response_body_len", "orig_bytes", "resp_bytes")
     @classmethod
     def byte_value_or_range(cls, v: list[int] | int | None, info: ValidationInfo):
         if v is None:

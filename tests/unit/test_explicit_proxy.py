@@ -14,6 +14,7 @@ from evidenceforge.events.contexts import (
     FirewallContext,
     HostContext,
     HttpContext,
+    HttpRequestEntityContext,
     IdsAlertPlan,
     ProxyContext,
 )
@@ -2943,6 +2944,129 @@ class TestExplicitProxyVisibility:
         assert http_event.protocol.http.request_body_len == 0
         assert http_event.network.orig_bytes > 0
 
+    def test_plaintext_proxy_upload_has_correlated_files_on_both_legs(self):
+        """A visible upload is analyzed independently on client and proxy egress sensors."""
+
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        entity = HttpRequestEntityContext(
+            size=4096,
+            mime_type="application/vnd.rar",
+            content_identity="proxy-upload:/tmp/exfildata.rar:4096",
+            local_source_path="/tmp/exfildata.rar",
+            local_source_filename="exfildata.rar",
+        )
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            service="http",
+            duration=1.0,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="some.site",
+            conn_state="SF",
+            http=HttpContext(
+                method="POST",
+                host="some.site",
+                uri="/uploads/accept-upload",
+                request_body_len=4096,
+                request_content_type=entity.mime_type,
+                request_entity=entity,
+                response_body_len=512,
+                resp_mime_types=("application/octet-stream",),
+            ),
+        )
+
+        http_events = [call.args[0] for call in emitters["zeek_http"].emit.call_args_list]
+        upload_transfers = [
+            next(ft for ft in event.protocol.file_transfers if ft.is_orig) for event in http_events
+        ]
+        assert len(http_events) == 2
+        assert {event.network.src_ip for event in http_events} == {"10.0.1.10", "10.0.3.10"}
+        assert len({transfer.fuid for transfer in upload_transfers}) == 2
+        assert {transfer.total_bytes for transfer in upload_transfers} == {4096}
+        assert {transfer.sha1 for transfer in upload_transfers} == {upload_transfers[0].sha1}
+
+        response_transfers = [
+            next(ft for ft in event.protocol.file_transfers if not ft.is_orig)
+            for event in http_events
+        ]
+        assert len({transfer.fuid for transfer in response_transfers}) == 2
+        assert {transfer.total_bytes for transfer in response_transfers} == {512}
+        assert {transfer.mime_type for transfer in response_transfers} == {
+            "application/octet-stream"
+        }
+        assert {transfer.sha1 for transfer in response_transfers} == {response_transfers[0].sha1}
+        assert response_transfers[0].sha1
+
+    def test_plaintext_proxy_hit_creates_client_leg_response_file_only(self):
+        """A cached body is visible on the proxy-to-client leg without origin evidence."""
+
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="GET",
+                url="http://example.com/cache/object.bin",
+                host="example.com",
+                status_code=200,
+                sc_bytes=178,
+                cs_bytes=320,
+                response_body_bytes=77,
+                user_agent="agent/1.0",
+                content_type="application/octet-stream",
+                cache_result="HIT",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            service="http",
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/cache/object.bin",
+                response_body_len=77,
+                status_code=200,
+                resp_mime_types=("application/octet-stream",),
+            ),
+        )
+
+        http_events = [call.args[0] for call in emitters["zeek_http"].emit.call_args_list]
+        assert len(http_events) == 1
+        client_event = http_events[0]
+        assert client_event.network.src_ip == "10.0.1.10"
+        response = next(ft for ft in client_event.protocol.file_transfers if not ft.is_orig)
+        assert response.total_bytes == 77
+        assert response.mime_type == "application/octet-stream"
+
     def test_https_service_alias_uses_explicit_proxy(self):
         generator, emitters = _generator(
             [
@@ -3872,6 +3996,7 @@ class TestExplicitProxyVisibility:
         assert http_event.protocol.http.method == "CONNECT"
         assert http_event.protocol.http.status_code == 200
         assert http_event.protocol.http.status_msg == "Connection Established"
+        assert not any(not ft.is_orig for ft in http_event.protocol.file_transfers)
         assert ("10.0.3.10", "93.184.216.34", 443) not in _conn_pairs(emitters)
 
     def test_denied_connect_uses_proxy_error_accounting(self):
@@ -3934,6 +4059,10 @@ class TestExplicitProxyVisibility:
             == proxy_event.protocol.proxy.response_body_bytes
         )
         assert http_event.protocol.http.response_body_len < proxy_event.protocol.proxy.sc_bytes
+        error_response = next(ft for ft in http_event.protocol.file_transfers if not ft.is_orig)
+        assert error_response.total_bytes == http_event.protocol.http.response_body_len
+        assert error_response.mime_type == "text/html"
+        assert http_event.protocol.http.resp_fuids == (error_response.fuid,)
         assert ("10.0.3.10", "93.184.216.34", 443) not in _conn_pairs(emitters)
 
     def test_cache_hit_request_stops_before_origin_side_sources(self):
@@ -4504,6 +4633,85 @@ class TestExplicitProxyVisibility:
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
         assert proxy_event.protocol.proxy.transaction.terminal_outcome == "gateway_failure"
         assert proxy_event.protocol.proxy.transaction.origin_response_at is None
+
+    def test_plaintext_gateway_failure_keeps_client_upload_file_only(self):
+        """A sent plaintext body is analyzed on the client leg, not an S0 origin attempt."""
+
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="POST",
+                url="http://example.com/upload",
+                host="example.com",
+                status_code=504,
+                sc_bytes=700,
+                cs_bytes=4416,
+                request_body_bytes=4096,
+                response_body_bytes=380,
+                user_agent="agent/1.0",
+                content_type="text/html",
+                cache_result="GATEWAY_ERROR",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=4416,
+            resp_bytes=700,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+            http=HttpContext(
+                method="POST",
+                host="example.com",
+                uri="/upload",
+                user_agent="agent/1.0",
+                request_body_len=4096,
+                response_body_len=380,
+                status_code=504,
+                status_msg="Gateway Timeout",
+            ),
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.1.10"
+            and call.args[0].network.dst_ip == "10.0.3.10"
+        )
+        upload = next(ft for ft in client_event.protocol.file_transfers if ft.is_orig)
+        assert upload.total_bytes == 4096
+        assert client_event.protocol.http.orig_fuids == (upload.fuid,)
+        error_response = next(ft for ft in client_event.protocol.file_transfers if not ft.is_orig)
+        assert error_response.total_bytes == 380
+        assert error_response.mime_type == "text/html"
+        assert client_event.protocol.http.resp_fuids == (error_response.fuid,)
+
+        origin_events = [
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.3.10"
+            and call.args[0].network.dst_ip == "93.184.216.34"
+        ]
+        assert origin_events == []
 
     def test_proxy_network_children_share_the_proxy_action_parent(self):
         generator, emitters = _generator(

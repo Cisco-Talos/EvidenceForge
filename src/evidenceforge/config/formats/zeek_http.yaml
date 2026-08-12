@@ -109,6 +109,26 @@ fields:
     required: false
     description: "Response file UIDs (JSON array)"
 
+  - name: orig_fuids
+    type: list
+    required: false
+    description: "Request file UIDs (JSON array)"
+
+  - name: orig_filenames
+    type: list
+    required: false
+    description: "Request filenames exposed on the wire (JSON array)"
+
+  - name: orig_mime_types
+    type: list
+    required: false
+    description: "Request MIME types (JSON array)"
+
+  - name: resp_filenames
+    type: list
+    required: false
+    description: "Response filenames exposed on the wire (JSON array)"
+
   - name: resp_mime_types
     type: list
     required: false
@@ -146,8 +166,20 @@ output:
       {%- if referrer is not none %},
       "referrer": {{ referrer | tojson }}
       {%- endif %}
+      {%- if orig_fuids is not none %},
+      "orig_fuids": {{ orig_fuids | tojson }}
+      {%- endif %}
+      {%- if orig_filenames is not none %},
+      "orig_filenames": {{ orig_filenames | tojson }}
+      {%- endif %}
+      {%- if orig_mime_types is not none %},
+      "orig_mime_types": {{ orig_mime_types | tojson }}
+      {%- endif %}
       {%- if resp_fuids is not none %},
       "resp_fuids": {{ resp_fuids | tojson }}
+      {%- endif %}
+      {%- if resp_filenames is not none %},
+      "resp_filenames": {{ resp_filenames | tojson }}
       {%- endif %}
       {%- if resp_mime_types is not none %},
       "resp_mime_types": {{ resp_mime_types | tojson }}

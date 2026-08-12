@@ -89,10 +89,15 @@ def _pe_analyzer_timestamp(event: CanonicalOccurrence) -> datetime:
     pe = event.protocol.pe
     if pe is None:
         return event.timestamp
-    if event.network is not None and event.protocol.primary_file_transfer is not None:
+    owning_transfer = next(
+        (transfer for transfer in event.protocol.file_transfers if transfer.fuid == pe.id),
+        None,
+    )
+    if event.network is not None and owning_transfer is not None:
         file_ts, file_duration = _bounded_file_transfer_observation(
             event,
-            min_start=_related_http_analyzer_timestamp(event),
+            min_start=_related_http_analyzer_timestamp(event, owning_transfer),
+            file_transfer=owning_transfer,
         )
         duration_us = max(0, int(file_duration * 1_000_000))
         if duration_us <= 1:

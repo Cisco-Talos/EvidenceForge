@@ -112,6 +112,58 @@ class TestInstallSkills:
         assert "dns_tunnel" in ids_ref
         assert "does not decrypt" in ids_ref
 
+    def test_installed_skills_include_bidirectional_http_file_guidance(self, tmp_path):
+        """Claude command install retains request and response file-analysis guidance."""
+
+        install_skills(tmp_path)
+        root = tmp_path / "eforge"
+
+        scenario = (root / "scenario.md").read_text()
+        generate = (root / "generate.md").read_text()
+        evaluate_skill = (root / "evaluate.md").read_text()
+        assert "request_body_len" in scenario
+        assert "every transmitted nonempty response entity" in scenario
+        assert "orig_fuids" in generate
+        assert "resp_fuids" in generate
+        assert "sensor-local files.log" in evaluate_skill
+        assert "HTTP Response Coverage" in evaluate_skill
+        assert "http_file_profiles.yaml" in (root / "config.md").read_text()
+        reference = (root / "references" / "scenario-reference.md").read_text()
+        assert "--data-binary @/tmp/exfildata.rar" in reference
+        assert "application/vnd.rar" in reference
+        evidence_reference = (root / "references" / "evidence-formats.md").read_text()
+        assert "tiny, redirect, authentication-failure" in evidence_reference
+        assert "plaintext proxy MISS" in evidence_reference
+        assert "smaller eligible responses remain sampled" not in evidence_reference
+
+    def test_http_response_guidance_matches_canonical_and_bundled_references(self):
+        """Canonical and distributable references retain the same response contract."""
+
+        repository = Path(__file__).parents[2]
+        references = [
+            (
+                repository / "docs" / "reference" / "EVIDENCE_FORMATS.md",
+                "Every successfully transmitted visible nonempty",
+            ),
+            (
+                repository / "commands" / "eforge" / "references" / "evidence-formats.md",
+                "Every successfully transmitted visible nonempty",
+            ),
+            (
+                repository / "docs" / "reference" / "scenario-reference.md",
+                "Every transmitted nonempty plaintext response entity",
+            ),
+            (
+                repository / "commands" / "eforge" / "references" / "scenario-reference.md",
+                "Every transmitted nonempty plaintext response entity",
+            ),
+        ]
+        for reference_path, required_phrase in references:
+            content = reference_path.read_text(encoding="utf-8")
+            assert required_phrase in content
+            assert "successful CONNECT" in content
+            assert "smaller eligible responses remain sampled" not in content
+
     def test_no_persona_files_installed(self, tmp_path):
         """Persona YAMLs are NOT installed (skills use eforge info instead)."""
         install_skills(tmp_path)
@@ -308,6 +360,23 @@ class TestInstallChatGPTSkills:
         assert ids_ref.is_file()
         assert "event_filter" in ids_ref.read_text()
         assert "mail-event" in ids_ref.read_text()
+
+    def test_chatgpt_installs_bundle_complete_http_response_guidance(self, tmp_path):
+        """Generated skills and references include the complete response contract."""
+
+        install_chatgpt_skills(tmp_path)
+
+        scenario = (tmp_path / "eforge-scenario" / "SKILL.md").read_text()
+        generate = (tmp_path / "eforge-generate" / "SKILL.md").read_text()
+        evaluate_skill = (tmp_path / "eforge-evaluate" / "SKILL.md").read_text()
+        evidence_reference = (
+            tmp_path / "eforge-generate" / "references" / "evidence-formats.md"
+        ).read_text()
+        assert "every transmitted nonempty response entity" in scenario
+        assert "resp_fuids" in generate
+        assert "HTTP Response Coverage" in evaluate_skill
+        assert "plaintext proxy MISS" in evidence_reference
+        assert "smaller eligible responses remain sampled" not in evidence_reference
 
     def test_chatgpt_references_are_limited_per_skill(self, tmp_path):
         """ChatGPT skills only receive the references they need."""

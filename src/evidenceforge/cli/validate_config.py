@@ -548,6 +548,9 @@ def validate_config() -> ValidationResult:
                 "firewall_deny",
             },
         },
+        "activity/http_file_profiles.yaml": {
+            "dict_fields": {"extension_mime_types", "request_profiles"},
+        },
         "activity/ids_signatures.yaml": {
             "list_fields": {"signatures": None},
         },
@@ -2620,6 +2623,7 @@ def validate_config() -> ValidationResult:
         ExternalActorProfilesConfig,
         ExternalScannerPortProfile,
         HostActivityProfilesConfig,
+        HttpFileProfilesConfig,
         KerberosRealismConfig,
         LoadedModuleEntry,
         MailPublicIdentitiesConfig,
@@ -2923,6 +2927,15 @@ def validate_config() -> ValidationResult:
     if smb_file_transfer_data:
         _SCHEMA_CHECKS.append(
             ([smb_file_transfer_data], SmbFileTransferConfig, "smb_file_transfers.yaml")
+        )
+
+    # http_file_profiles.yaml
+    from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
+
+    http_file_profile_data = load_http_file_profiles()
+    if http_file_profile_data:
+        _SCHEMA_CHECKS.append(
+            ([http_file_profile_data], HttpFileProfilesConfig, "http_file_profiles.yaml")
         )
 
     # extra_syslog_messages.yaml

@@ -319,7 +319,6 @@ class NetworkTransactionPlanner:
         x509_chain = request.x509_chain
         ids_alerts = list(request.ids_alerts)
         http = request.http
-        caller_supplied_http = http is not None
         file_transfer = request.file_transfer
         file_transfers = request.file_transfers
         pe = request.pe
@@ -2294,11 +2293,10 @@ class NetworkTransactionPlanner:
             )
 
         if not suppress_application_side_effects:
-            generator_module._attach_http_response_file_transfer(
+            generator_module._attach_http_file_transfers(
                 event,
                 dst_ip=dst_ip,
                 rng=rng,
-                probabilistic_file_analysis=not caller_supplied_http,
             )
 
         if (

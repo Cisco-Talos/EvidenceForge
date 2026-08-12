@@ -80,6 +80,9 @@ class ProtocolTransactionPlan:
                     )
 
         if self.http is not None:
+            unknown_request_ids = set(self.http.orig_fuids) - set(transfer_ids)
+            if unknown_request_ids:
+                raise ValueError("HTTP request file IDs must reference canonical transfers")
             unknown_response_ids = set(self.http.resp_fuids) - set(transfer_ids)
             if unknown_response_ids:
                 raise ValueError("HTTP response file IDs must reference canonical transfers")

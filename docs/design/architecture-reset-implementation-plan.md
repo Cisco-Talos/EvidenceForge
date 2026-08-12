@@ -149,9 +149,10 @@ creation now routes through `ScpReceiverFileActionBundle` after the SSH bundle
 has owned transport/auth/session timing. Public scenario YAML, CLI behavior,
 output layout, and authoring skills remain unchanged for this slice.
 The HTTP/browser contract follow-up also attaches the HTTP response file-transfer
-bundle deterministically for large/download-scale responses after canonical HTTP
-metadata is known, including caller-provided HTTP contexts from browser-session,
-proxy, process-command, or storyline paths.
+bundle deterministically for every transmitted, nonempty, sensor-visible
+plaintext/decrypted response entity after canonical HTTP metadata is known,
+including caller-provided HTTP contexts from browser-session, proxy,
+process-command, or storyline paths.
 
 The Linux shell-command action-bundle extraction moves bash-history command
 execution orchestration into `LinuxShellCommandActionBundle`. The bundle resolves
