@@ -21,9 +21,11 @@ from evidenceforge.events.contexts import (
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+from evidenceforge.generation.activity.http_multipart import build_http_multipart_context
 from evidenceforge.generation.network_identities import ScenarioNetworkResolver
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.http import HttpMultipartEntitySpec
 from evidenceforge.models.scenario import (
     NetworkConfig,
     NetworkIdentity,
@@ -3008,6 +3010,93 @@ class TestExplicitProxyVisibility:
         }
         assert {transfer.sha1 for transfer in response_transfers} == {response_transfers[0].sha1}
         assert response_transfers[0].sha1
+
+    def test_plaintext_proxy_miss_correlates_every_multipart_leaf_on_both_legs(self):
+        """MISS forwarding preserves part identity while allocating leg-local FUIDs."""
+
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        request_multipart = build_http_multipart_context(
+            HttpMultipartEntitySpec.model_validate(
+                {
+                    "media_type": "multipart/form-data",
+                    "boundary": "request-parts",
+                    "parts": [
+                        {"name": "metadata", "value": "case-123"},
+                        {
+                            "name": "archive",
+                            "body_len": 4096,
+                            "filename": "evidence.rar",
+                            "detected_mime_type": "application/vnd.rar",
+                        },
+                    ],
+                }
+            ),
+            stable_key="proxy-request",
+        )
+        response_multipart = build_http_multipart_context(
+            HttpMultipartEntitySpec.model_validate(
+                {
+                    "media_type": "multipart/mixed",
+                    "boundary": "response-parts",
+                    "parts": [
+                        {"body_len": 7, "detected_mime_type": "text/plain"},
+                        {"body_len": 11, "detected_mime_type": "application/json"},
+                    ],
+                }
+            ),
+            stable_key="proxy-response",
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            service="http",
+            duration=1.0,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="some.site",
+            conn_state="SF",
+            http=HttpContext(
+                method="POST",
+                host="some.site",
+                uri="/multipart",
+                request_body_len=request_multipart.body_len,
+                request_multipart=request_multipart,
+                response_body_len=response_multipart.body_len,
+                response_multipart=response_multipart,
+            ),
+        )
+
+        http_events = [call.args[0] for call in emitters["zeek_http"].emit.call_args_list]
+        assert len(http_events) == 2
+        for is_orig in (True, False):
+            per_leg = [
+                [
+                    transfer
+                    for transfer in event.protocol.file_transfers
+                    if transfer.is_orig is is_orig
+                ]
+                for event in http_events
+            ]
+            assert [len(transfers) for transfers in per_leg] == [2, 2]
+            assert {
+                tuple(transfer.seen_bytes for transfer in transfers) for transfers in per_leg
+            } == ({(8, 4096)} if is_orig else {(7, 11)})
+            assert (
+                len({tuple(transfer.sha1 for transfer in transfers) for transfers in per_leg}) == 1
+            )
+            assert len({transfer.fuid for transfers in per_leg for transfer in transfers}) == 4
 
     def test_plaintext_proxy_hit_creates_client_leg_response_file_only(self):
         """A cached body is visible on the proxy-to-client leg without origin evidence."""

@@ -159,10 +159,16 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P1** Improve public PTR, TLS, and provider realism so public reverse DNS
   is sparse/provider-style rather than forward-hostname-derived, and
   SNI/certificate issuer/provider relationships remain plausible.
-- [ ] **P2** Add true HTTP multipart transactions with ordered parts, per-part
-  size/MIME/filename/FUID metadata, envelope overhead, and multiple correlated
-  local file reads. Keep the current one-request/one-response entity model until
-  multipart owns those semantics end to end.
+- [x] **P2** Add true HTTP multipart transactions with ordered/nested parts,
+  per-part size/MIME/filename/FUID metadata, envelope overhead, curl form parsing,
+  multiple correlated local file reads, proxy legs, and span-aware loss. See the
+  [research/implementation record](docs/worklog/2026-08-12-http-multipart-zeek-research.md).
+- [ ] **P2** Add HTTP range identity and reassembly for 206 and
+  `multipart/byteranges`, including cross-transaction and cross-connection FUID
+  reuse, sparse offsets, instance size, overlap, and missing-range semantics.
+- [ ] **P3** Add explicit HTTP chunked/content-coded multipart framing. Model
+  chunk layout and Zeek weird behavior separately from semantic parts, and model
+  top-level gzip/deflate before enabling these authored combinations.
 - [ ] **P2** Redesign SMB around canonical sessions and operations: correlate
   share mapping, realistic paths/names and file metadata, reads and writes,
   endpoint evidence, `smb_files.log`, and bidirectional `files.log`; widen

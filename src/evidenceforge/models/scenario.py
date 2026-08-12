@@ -49,6 +49,7 @@ from pydantic import (
     model_validator,
 )
 
+from evidenceforge.models.http import HttpMultipartEntitySpec
 from evidenceforge.models.ids import IdsAlertAttachmentSpec
 
 MAX_HTTP_RESPONSE_BODY_LEN = 10_000_000_000
@@ -452,7 +453,9 @@ class WeightedHttpMethodProfile(BaseModel):
     request_body_bytes: list[int] | None = None
     request_content_type: str | None = None
     request_wire_filename: str | None = None
+    request_multipart: HttpMultipartEntitySpec | None = None
     response_body_bytes: list[int] | None = None
+    response_multipart: HttpMultipartEntitySpec | None = None
     content_type: str = "text/html"
 
     @field_validator("statuses")
@@ -487,6 +490,16 @@ class WeightedHttpMethodProfile(BaseModel):
         if v[0] < 0 or v[1] < 0 or v[0] > v[1]:
             raise ValueError(f"{info.field_name} must be a non-negative [lo, hi] range")
         return v
+
+    @model_validator(mode="after")
+    def multipart_owns_body_size(self) -> "WeightedHttpMethodProfile":
+        """Keep profiled multipart serialization authoritative for outer body length."""
+
+        if self.request_multipart is not None and self.request_body_bytes is not None:
+            raise ValueError("request_multipart is mutually exclusive with request_body_bytes")
+        if self.response_multipart is not None and self.response_body_bytes is not None:
+            raise ValueError("response_multipart is mutually exclusive with response_body_bytes")
+        return self
 
     model_config = ConfigDict(extra="forbid")
 
@@ -832,9 +845,11 @@ class ConnectionEventSpec(_IdsAttachableEventSpec):
     request_body_len: int | None = Field(
         default=None, ge=0, le=MAX_HTTP_RESPONSE_BODY_LEN
     )  # Exact transmitted HTTP request entity size
+    request_multipart: HttpMultipartEntitySpec | None = None
     response_body_len: int | None = Field(
         default=None, ge=0, le=MAX_HTTP_RESPONSE_BODY_LEN
     )  # Override auto-sized response bytes
+    response_multipart: HttpMultipartEntitySpec | None = None
     # Override auto-sized byte counts and connection outcome
     orig_bytes: int | None = None  # Originator payload bytes (large for exfil)
     resp_bytes: int | None = None  # Responder payload bytes (large for downloads)
@@ -1001,7 +1016,9 @@ class BeaconHttpSequenceEntry(BaseModel):
     user_agent: str | None = None
     referrer: str | None = None
     request_body_len: int | list[int] | None = None
+    request_multipart: HttpMultipartEntitySpec | None = None
     response_body_len: int | list[int] | None = None
+    response_multipart: HttpMultipartEntitySpec | None = None
     orig_bytes: int | list[int] | None = None
     resp_bytes: int | list[int] | None = None
 
@@ -1045,6 +1062,16 @@ class BeaconHttpSequenceEntry(BaseModel):
         if v[0] < 0 or v[1] < v[0]:
             raise ValueError(f"{info.field_name} range must be non-negative [lo, hi]")
         return v
+
+    @model_validator(mode="after")
+    def multipart_body_length_is_exact(self) -> "BeaconHttpSequenceEntry":
+        """Reject ranged outer sizes for deterministically serialized multipart entities."""
+
+        if self.request_multipart is not None and isinstance(self.request_body_len, list):
+            raise ValueError("request_multipart requires an exact request_body_len assertion")
+        if self.response_multipart is not None and isinstance(self.response_body_len, list):
+            raise ValueError("response_multipart requires an exact response_body_len assertion")
+        return self
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1143,7 +1170,9 @@ class BeaconEventSpec(_IdsAttachablePeriodicEventSpec):
     user_agent: str | None = None
     referrer: str | None = None  # Referer header value (None = auto-generated)
     request_body_len: int | None = Field(default=None, ge=0, le=MAX_HTTP_RESPONSE_BODY_LEN)
+    request_multipart: HttpMultipartEntitySpec | None = None
     response_body_len: int | None = Field(default=None, ge=0, le=MAX_HTTP_RESPONSE_BODY_LEN)
+    response_multipart: HttpMultipartEntitySpec | None = None
     profile: str | None = Field(
         default=None,
         pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$",
@@ -1188,7 +1217,10 @@ class BeaconEventSpec(_IdsAttachablePeriodicEventSpec):
                     entry.status_code,
                     entry.user_agent,
                     entry.referrer,
+                    entry.request_body_len,
+                    entry.request_multipart,
                     entry.response_body_len,
+                    entry.response_multipart,
                     entry.orig_bytes,
                     entry.resp_bytes,
                 )

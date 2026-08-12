@@ -523,6 +523,19 @@ or proxy-generated denial/error body creates only the proxy-to-client file. A
 failure before the origin responds creates no egress response file. Failed CONNECT
 error bodies can be analyzed; successful CONNECT and opaque tunneled HTTPS cannot.
 
+**Multipart HTTP files:** `multipart/form-data` and `multipart/mixed` bodies use
+the outer serialized size in `request_body_len` or `response_body_len`, including
+boundaries, MIME headers, separators, and transfer encoding. Each nonempty decoded
+leaf produces its own directional `files.log` row; multipart containers and
+envelope bytes do not. Leaf `seen_bytes`, hashes, detected MIME, and PE analysis
+describe decoded content. `total_bytes` is absent unless that leaf has its own
+Content-Length. `orig_fuids`/`resp_fuids` preserve discovery order and are capped
+at 15, while all leaf rows remain in `files.log`. Filename and MIME vectors are
+sparse present-value lists and must not be indexed positionally against FUIDs.
+Missing-boundary analyzer input remains one ordinary whole-body file. Ordinary
+byteranges, chunked multipart, and top-level content-coded multipart are outside
+this model.
+
 **Source-native HTTP semantics:** Domain/path planning is resolved before proxy
 and Zeek HTTP rows are rendered. Public browser-like domains default to
 HTTPS-first behavior, so plaintext port-80 requests redirect instead of serving

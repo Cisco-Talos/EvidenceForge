@@ -518,7 +518,15 @@ canonical path owns authored, baseline, beacon, API, red-herring, browser-sessio
 and direct or explicit-proxy HTTP activity. Local
 source identity is separate from a wire-visible filename: a local curl path does
 not become an HTTP filename unless the message exposes one, such as multipart
-Content-Disposition. Response URLs do not invent filenames. A plaintext proxy
+Content-Disposition. Multipart form-data and mixed entities are serialized as
+ordered entity trees without allocating their payloads: the HTTP/TCP ledger owns
+boundaries, headers, separators, and encoded bytes, while each nonempty decoded
+leaf owns one file transfer and optional PE analysis. Containers never become
+files. Detected MIME and wire filenames project as sparse vectors, capped at 15
+entries per direction even though every leaf remains in files.log. Span-aware
+observation loss can truncate one leaf without truncating every sibling. Local
+file-backed parts emit transmitting-process reads; literal parts do not invent
+endpoint activity. Response URLs do not invent filenames. A plaintext proxy
 MISS uses distinct leg-local FUIDs but one content identity across origin→proxy
 and proxy→client files; a HIT or proxy-generated error has only the client-leg
 file. Failure before an origin response creates no egress response file, and

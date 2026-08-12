@@ -77,19 +77,28 @@ local path/name ground truth, and connection-bounded file timing.
   timing, evaluator, docs, skills, and the upload integration: `948 passed`.
 - First post-response full default run: `5447 passed, 42 skipped, 3 failed`.
   Two response-related expectations were corrected and rerun successfully. The
-  remaining DNS SRV failure passed in isolation and is unrelated order/state
-  leakage outside this change.
+  remaining DNS SRV failure passed in isolation and exposed cross-scenario
+  reverse-DNS state leakage that the multipart follow-up subsequently fixed.
 - Clean-twin integration with complete responder files: passed after teaching
   the differential harness that correlated `files.log` size/hash differences are
   injection-owned evidence.
-- Final repository-wide default suite: `5450 passed, 42 skipped, 1 failed` in
-  340.28 seconds. The sole failure is the same unrelated order-dependent DNS SRV
-  assertion (`dc-01.example.com` versus `hostA.corp.local`); it passes in
-  isolation. No HTTP response, proxy, files, observation, documentation, skill,
-  or upload regression failed.
+- The multipart follow-up removed scenario writes to the packaged reverse-DNS
+  registry and made scenario-owned hostname resolution local to each generator.
+  Its final repository-wide suite passed with `5476 passed, 42 skipped`.
 - Final quality gates: `uv run ruff check .`,
   `uv run ruff format --check .`, and `git diff --check` all passed.
 - Final installed-skill/reference regression rerun: `45 passed`; a repository-wide
   stale-language scan found no remaining response sampling or download-scale-only
   guidance.
 - Version artifacts are unchanged, as required for the feature branch.
+
+## Source-Native Multipart Follow-up
+
+The follow-up implementation adds deterministic `multipart/form-data` and
+`multipart/mixed` trees in both directions. Outer HTTP/TCP accounting includes
+the serialized envelope and encoded leaves; every nonempty decoded leaf becomes
+an independent file object. Ordered nested/repeated parts, curl form arguments,
+local endpoint reads, sparse 15-entry vectors, multiple PE rows, span-aware loss,
+application/browser/beacon provenance, and proxy leg correlation share the same
+canonical path. See the
+[multipart research and implementation record](2026-08-12-http-multipart-zeek-research.md).

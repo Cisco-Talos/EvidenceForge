@@ -38,7 +38,7 @@ class ProtocolTransactionPlan:
     tls_presentation: TlsCertificatePresentationPlan | None = None
     ocsp: OcspContext | None = None
     ocsp_transaction: OcspTransactionPlan | None = None
-    pe: PeContext | None = None
+    pe_analyses: tuple[PeContext, ...] = ()
     proxy: ProxyContext | None = None
 
     def __post_init__(self) -> None:
@@ -99,8 +99,11 @@ class ProtocolTransactionPlan:
             if self.ocsp_transaction.certificate_status != self.ocsp.cert_status:
                 raise ValueError("OCSP transaction and response status must match")
 
-        if self.pe is not None and self.pe.id not in transfer_ids:
-            raise ValueError("PE analysis must reference a canonical file transfer")
+        pe_ids = tuple(pe.id for pe in self.pe_analyses)
+        if len(pe_ids) != len(set(pe_ids)):
+            raise ValueError("PE analysis IDs must be unique")
+        if any(pe_id not in transfer_ids for pe_id in pe_ids):
+            raise ValueError("PE analyses must reference canonical file transfers")
 
     @classmethod
     def compose(
@@ -116,6 +119,7 @@ class ProtocolTransactionPlan:
         ocsp: OcspContext | None = None,
         ocsp_transaction: OcspTransactionPlan | None = None,
         pe: PeContext | None = None,
+        pe_analyses: tuple[PeContext, ...] | list[PeContext] = (),
         proxy: ProxyContext | None = None,
     ) -> ProtocolTransactionPlan:
         """Collapse construction-only singular/list views into canonical tuples."""
@@ -132,6 +136,10 @@ class ProtocolTransactionPlan:
             if not certificates:
                 certificates.append(x509)
 
+        analyses = list(pe_analyses)
+        if pe is not None and pe not in analyses:
+            analyses.insert(0, pe)
+
         return cls(
             ssl=ssl,
             http=http,
@@ -140,7 +148,7 @@ class ProtocolTransactionPlan:
             tls_presentation=tls_presentation,
             ocsp=ocsp,
             ocsp_transaction=ocsp_transaction,
-            pe=pe,
+            pe_analyses=tuple(analyses),
             proxy=proxy,
         )
 
@@ -149,6 +157,12 @@ class ProtocolTransactionPlan:
         """Return the occurrence's primary transferred object, when one exists."""
 
         return self.file_transfers[0] if self.file_transfers else None
+
+    @property
+    def pe(self) -> PeContext | None:
+        """Return the first PE analysis for compatibility with single-file callers."""
+
+        return self.pe_analyses[0] if self.pe_analyses else None
 
     @property
     def leaf_certificate(self) -> X509Context | None:

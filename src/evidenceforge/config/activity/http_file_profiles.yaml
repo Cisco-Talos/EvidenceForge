@@ -35,3 +35,25 @@ request_profiles:
     - /v1/
     - /v2/
     - telemetry
+
+multipart:
+  boundaries:
+    browser:
+      prefix: "----WebKitFormBoundary"
+      suffix_length: 16
+    curl:
+      prefix: "------------------------"
+      suffix_length: 16
+    generic:
+      prefix: "eforge-boundary-"
+      suffix_length: 20
+  header_order:
+    - content_disposition
+    - content_type
+    - content_length
+    - transfer_encoding
+  max_parts: 256
+  max_depth: 100
+  max_files_orig: 15
+  max_files_resp: 15
+  quoted_printable_escape_percent: 12

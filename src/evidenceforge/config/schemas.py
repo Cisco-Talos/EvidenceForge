@@ -27,6 +27,7 @@ from pydantic import (
 )
 
 from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
+from evidenceforge.models.http import HttpMultipartEntitySpec
 
 TLS_SERIAL_LENGTH_MAX_WEIGHT = 1_000_000
 KERBEROS_TRANSPORT_MAX_WEIGHT = 1_000_000
@@ -1391,6 +1392,7 @@ class HttpFileProfilesConfig(BaseModel, extra="forbid"):
 
     extension_mime_types: dict[str, str]
     request_profiles: HttpRequestProfilesConfig
+    multipart: HttpMultipartProfilesConfig
 
     @field_validator("extension_mime_types")
     @classmethod
@@ -1402,6 +1404,51 @@ class HttpFileProfilesConfig(BaseModel, extra="forbid"):
                 raise ValueError(f"invalid lowercase file extension {extension!r}")
             if not re.fullmatch(r"[^/\s]+/[^/\s]+", mime_type):
                 raise ValueError(f"invalid MIME type {mime_type!r} for {extension}")
+        return values
+
+
+class HttpMultipartBoundaryProfile(BaseModel, extra="forbid"):
+    """Deterministic multipart boundary morphology for one client family."""
+
+    prefix: str = Field(min_length=1, max_length=50)
+    suffix_length: int = Field(ge=4, le=40)
+
+
+class HttpMultipartProfilesConfig(BaseModel, extra="forbid"):
+    """Multipart serializer and Zeek projection limits."""
+
+    boundaries: dict[str, HttpMultipartBoundaryProfile]
+    header_order: list[
+        Literal["content_disposition", "content_type", "content_length", "transfer_encoding"]
+    ]
+    max_parts: int = Field(ge=1, le=1000)
+    max_depth: int = Field(ge=1, le=100)
+    max_files_orig: int = Field(ge=1, le=1000)
+    max_files_resp: int = Field(ge=1, le=1000)
+    quoted_printable_escape_percent: int = Field(ge=0, le=100)
+
+    @field_validator("boundaries")
+    @classmethod
+    def required_boundary_families_exist(
+        cls, values: dict[str, HttpMultipartBoundaryProfile]
+    ) -> dict[str, HttpMultipartBoundaryProfile]:
+        required = {"browser", "curl", "generic"}
+        missing = required - set(values)
+        if missing:
+            raise ValueError(f"multipart boundaries missing families: {sorted(missing)}")
+        return values
+
+    @field_validator("header_order")
+    @classmethod
+    def header_order_is_complete(cls, values: list[str]) -> list[str]:
+        required = {
+            "content_disposition",
+            "content_type",
+            "content_length",
+            "transfer_encoding",
+        }
+        if set(values) != required or len(values) != len(required):
+            raise ValueError("multipart header_order must list every supported header exactly once")
         return values
 
 
@@ -1872,7 +1919,9 @@ class BeaconProfileHttpEntry(BaseModel, extra="forbid"):
     user_agent: str | None = None
     referrer: str | None = None
     request_body_len: list[int] | int | None = None
+    request_multipart: HttpMultipartEntitySpec | None = None
     response_body_len: list[int] | int | None = None
+    response_multipart: HttpMultipartEntitySpec | None = None
     orig_bytes: list[int] | int | None = None
     resp_bytes: list[int] | int | None = None
     weight: float = Field(default=1.0, gt=0.0)
@@ -1908,6 +1957,16 @@ class BeaconProfileHttpEntry(BaseModel, extra="forbid"):
         if v[0] < 0 or v[1] < v[0]:
             raise ValueError(f"{info.field_name} range must be non-negative [lo, hi]")
         return v
+
+    @model_validator(mode="after")
+    def multipart_body_length_is_exact(self) -> BeaconProfileHttpEntry:
+        """Reject ranged outer sizes for deterministically serialized multipart entities."""
+
+        if self.request_multipart is not None and isinstance(self.request_body_len, list):
+            raise ValueError("request_multipart requires an exact request_body_len assertion")
+        if self.response_multipart is not None and isinstance(self.response_body_len, list):
+            raise ValueError("response_multipart requires an exact response_body_len assertion")
+        return self
 
 
 class BeaconProfileEntry(BaseModel, extra="forbid"):

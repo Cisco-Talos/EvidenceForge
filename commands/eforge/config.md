@@ -73,6 +73,11 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Modify EDR diversity pools | `edr_pools.yaml` | (standalone — file paths, registry keys, DLL pool for background events) |
 | Modify CallTrace patterns | `calltrace_patterns.yaml` | (standalone — Event 10 ProcessAccess call chain templates) |
 | Modify ProcessAccess masks | `process_access_patterns.yaml` | (standalone — Event 10 baseline source/target pairs and GrantedAccess masks) |
+
+The `multipart` section of `http_file_profiles.yaml` controls deterministic
+browser/curl/generic boundary morphology, part-header order, safety limits, and
+the 15-entry HTTP vector caps. Keep these settings data-driven and synchronized
+with the scenario and evidence references.
 | Modify CreateRemoteThread pairs | `create_remote_thread_patterns.yaml` | (standalone — Event 8 baseline source/target pairs) |
 | Modify TLS chain/OCSP/SNI realism | `tls_realism.yaml` | `dns_registry.yaml` for OCSP responder hosts and domains selected by `dns_tags` |
 | Modify Windows auth realism | `windows_auth_realism.yaml` | (standalone — Security log auth timing and failed-logon profile knobs) |

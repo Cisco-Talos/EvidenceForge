@@ -608,6 +608,114 @@ class HttpRequestEntityContext:
 
 
 @dataclass(frozen=True, slots=True)
+class HttpWireSpanContext:
+    """One serialized multipart envelope or encoded leaf byte span."""
+
+    kind: str
+    offset: int
+    length: int
+    part_path: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"envelope", "leaf"}:
+            raise ValueError("HTTP multipart wire span kind must be envelope or leaf")
+        if self.offset < 0 or self.length < 0:
+            raise ValueError("HTTP multipart wire spans require non-negative offsets and lengths")
+        object.__setattr__(self, "part_path", tuple(self.part_path))
+
+
+@dataclass(frozen=True, slots=True)
+class HttpEntityPartContext:
+    """Canonical decoded and wire metadata for one multipart part."""
+
+    path: tuple[int, ...]
+    name: str = ""
+    decoded_size: int = 0
+    encoded_size: int = 0
+    declared_content_type: str = ""
+    detected_mime_type: str = ""
+    transfer_encoding: str = "binary"
+    local_source_path: str = ""
+    local_source_filename: str = ""
+    wire_filename: str = ""
+    content_identity: str = ""
+    declared_content_length: int | None = None
+    parts: tuple[HttpEntityPartContext, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.decoded_size < 0 or self.encoded_size < 0:
+            raise ValueError("HTTP multipart part sizes must be non-negative")
+        if self.declared_content_length is not None and self.declared_content_length < 0:
+            raise ValueError("HTTP multipart declared content length must be non-negative")
+        if self.transfer_encoding not in {
+            "binary",
+            "7bit",
+            "8bit",
+            "base64",
+            "quoted-printable",
+        }:
+            raise ValueError("unsupported HTTP multipart transfer encoding")
+        object.__setattr__(self, "path", tuple(self.path))
+        object.__setattr__(self, "parts", tuple(self.parts))
+        if self.parts and any(
+            (
+                self.decoded_size,
+                self.encoded_size,
+                self.local_source_path,
+                self.wire_filename,
+                self.detected_mime_type,
+            )
+        ):
+            raise ValueError("HTTP multipart containers cannot also own leaf content")
+
+    @property
+    def is_leaf(self) -> bool:
+        """Return whether this part carries file-analyzable content."""
+
+        return not self.parts
+
+
+@dataclass(frozen=True, slots=True)
+class HttpMultipartEntityContext:
+    """Canonical serialized multipart entity and its ordered MIME part tree."""
+
+    media_type: str
+    boundary: str
+    body_len: int
+    parts: tuple[HttpEntityPartContext, ...]
+    wire_spans: tuple[HttpWireSpanContext, ...]
+    complete: bool = True
+    local_reads_emitted: bool = False
+
+    def __post_init__(self) -> None:
+        if self.media_type not in {"multipart/form-data", "multipart/mixed"}:
+            raise ValueError("unsupported HTTP multipart media type")
+        if not self.boundary:
+            raise ValueError("canonical HTTP multipart entities require a boundary")
+        if self.body_len < 0:
+            raise ValueError("HTTP multipart body length must be non-negative")
+        object.__setattr__(self, "parts", tuple(self.parts))
+        object.__setattr__(self, "wire_spans", tuple(self.wire_spans))
+        if sum(span.length for span in self.wire_spans) != self.body_len:
+            raise ValueError("HTTP multipart wire spans must exactly cover the entity body")
+
+    def leaf_parts(self) -> tuple[HttpEntityPartContext, ...]:
+        """Return non-container parts in wire discovery order."""
+
+        leaves: list[HttpEntityPartContext] = []
+
+        def visit(parts: tuple[HttpEntityPartContext, ...]) -> None:
+            for part in parts:
+                if part.is_leaf:
+                    leaves.append(part)
+                else:
+                    visit(part.parts)
+
+        visit(self.parts)
+        return tuple(leaves)
+
+
+@dataclass(frozen=True, slots=True)
 class HttpContext:
     """HTTP request/response details for Zeek http.log."""
 
@@ -620,7 +728,9 @@ class HttpContext:
     request_body_len: int = 0
     request_content_type: str = ""
     request_entity: HttpRequestEntityContext | None = None
+    request_multipart: HttpMultipartEntityContext | None = None
     response_body_len: int = 0
+    response_multipart: HttpMultipartEntityContext | None = None
     canonical_request_time: datetime | None = None
     flow_request_body_len: int | None = None
     flow_response_body_len: int | None = None
@@ -640,6 +750,16 @@ class HttpContext:
     def __post_init__(self) -> None:
         if self.request_entity is not None and self.request_entity.size != self.request_body_len:
             raise ValueError("HTTP request entity size must match request_body_len")
+        if (
+            self.request_multipart is not None
+            and self.request_multipart.body_len != self.request_body_len
+        ):
+            raise ValueError("HTTP request multipart size must match request_body_len")
+        if (
+            self.response_multipart is not None
+            and self.response_multipart.body_len != self.response_body_len
+        ):
+            raise ValueError("HTTP response multipart size must match response_body_len")
         object.__setattr__(self, "tags", tuple(self.tags))
         object.__setattr__(self, "orig_fuids", tuple(self.orig_fuids))
         object.__setattr__(self, "orig_filenames", tuple(self.orig_filenames))
@@ -675,9 +795,14 @@ class FileTransferContext:
     md5: str = ""
     sha1: str = ""
     sha256: str = ""
+    multipart_part_path: tuple[int, ...] = ()
+    wire_offset: int | None = None
+    wire_length: int | None = None
+    entity_body_len: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "analyzers", tuple(self.analyzers))
+        object.__setattr__(self, "multipart_part_path", tuple(self.multipart_part_path))
 
 
 @dataclass(frozen=True, slots=True)

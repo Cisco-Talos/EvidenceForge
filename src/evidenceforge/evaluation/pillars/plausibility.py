@@ -949,33 +949,65 @@ def _score_http_file_consistency(
                 fuids = [fuids]
             mime_types = http.fields.get(f"{side}_mime_types") or []
             filenames = http.fields.get(f"{side}_filenames") or []
-            for index, fuid in enumerate(fuids):
+            referenced_files: list[ParsedRecord] = []
+            for fuid in fuids:
                 file_record = file_index.get((http.source_instance, str(fuid)))
                 check(file_record is not None, f"HTTP {side} fuid {fuid} has no files.log row")
                 if file_record is None:
                     continue
+                referenced_files.append(file_record)
                 fields = file_record.fields
                 check(
                     fields.get("is_orig") is is_orig, f"HTTP {side} fuid {fuid} direction differs"
                 )
                 conn_uids = fields.get("conn_uids") or []
                 check(http.fields.get("uid") in conn_uids, f"HTTP {side} fuid {fuid} UID differs")
-                body_len = http.fields.get(body_field)
-                if isinstance(body_len, int):
+            body_len = http.fields.get(body_field)
+            if isinstance(body_len, int) and referenced_files:
+                ordinary = (
+                    len(referenced_files) == 1
+                    and referenced_files[0].fields.get("total_bytes") == body_len
+                )
+                if ordinary:
                     check(
-                        fields.get("total_bytes") == body_len,
-                        f"HTTP {side} fuid {fuid} size differs",
+                        referenced_files[0].fields.get("total_bytes") == body_len,
+                        f"HTTP {side} fuid {fuids[0]} size differs",
                     )
-                if index < len(mime_types):
+                else:
+                    observed_leaf_bytes = sum(
+                        int(record.fields.get("seen_bytes") or 0) for record in referenced_files
+                    )
                     check(
-                        fields.get("mime_type") == mime_types[index],
-                        f"HTTP {side} fuid {fuid} MIME differs",
+                        observed_leaf_bytes <= body_len,
+                        f"HTTP {side} multipart leaf bytes exceed the entity body",
                     )
-                if index < len(filenames):
-                    check(
-                        fields.get("filename") == filenames[index],
-                        f"HTTP {side} fuid {fuid} filename differs",
-                    )
+
+            candidate_mimes = [
+                record.fields.get("mime_type")
+                for record in referenced_files
+                if record.fields.get("mime_type")
+            ]
+            candidate_filenames = [
+                record.fields.get("filename")
+                for record in referenced_files
+                if record.fields.get("filename")
+            ]
+            if mime_types:
+                check(
+                    all(
+                        candidate_mimes.count(value) >= mime_types.count(value)
+                        for value in mime_types
+                    ),
+                    f"HTTP {side} sparse MIME projection differs from files.log",
+                )
+            if filenames:
+                check(
+                    all(
+                        candidate_filenames.count(value) >= filenames.count(value)
+                        for value in filenames
+                    ),
+                    f"HTTP {side} sparse filename projection differs from files.log",
+                )
     return matched, agreeing, failures
 
 

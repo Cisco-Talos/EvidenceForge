@@ -3416,15 +3416,15 @@ class TestStorylineCommandSideEffects:
     def test_multipart_curl_upload_exposes_wire_filename(self):
         """Multipart form-data carries the basename in Content-Disposition."""
 
-        entity = StorylineMixin._http_request_entity_from_command(
+        entity = StorylineMixin._http_request_multipart_from_command(
             "curl -F file=@/tmp/report.zip http://some.site/upload",
             8192,
         )
 
         assert entity is not None
-        assert entity.encoding == "multipart"
-        assert entity.local_source_filename == "report.zip"
-        assert entity.wire_filename == "report.zip"
+        part = entity.leaf_parts()[0]
+        assert part.local_source_filename == "report.zip"
+        assert part.wire_filename == "report.zip"
 
     def test_literal_or_stdin_curl_body_does_not_invent_local_file(self):
         """Inline data and stdin are request entities but are not endpoint file reads."""

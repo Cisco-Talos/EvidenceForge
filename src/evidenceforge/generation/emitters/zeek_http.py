@@ -48,14 +48,10 @@ def _file_vectors(
         return None, None, None
     filenames = list(getattr(http, f"{side}_filenames", []) or [])
     mime_types = list(getattr(http, f"{side}_mime_types", []) or [])
-    if len(filenames) == 1 and len(fuids) > 1:
-        filenames *= len(fuids)
-    if len(mime_types) == 1 and len(fuids) > 1:
-        mime_types *= len(fuids)
     return (
         fuids,
-        filenames if len(filenames) == len(fuids) else None,
-        mime_types if len(mime_types) == len(fuids) else None,
+        filenames or None,
+        mime_types or None,
     )
 
 

@@ -2198,6 +2198,7 @@ class TestDnsSupportQueryTypes:
         self, activity_gen, timestamp, mock_emitters, monkeypatch
     ):
         import evidenceforge.generation.activity.generator as generator_module
+        from evidenceforge.generation.activity.network import REVERSE_DNS
 
         self._force_dns_random(monkeypatch, [0.5, 0.95, 0.5])
         monkeypatch.setattr(
@@ -2224,6 +2225,9 @@ class TestDnsSupportQueryTypes:
         activity_gen._dc_systems = [dc]
         activity_gen._ad_domain = "example.com"
         activity_gen._dns_server_ips = [dc.ip]
+        # Another generation in the same process may have registered this IP
+        # under a different scenario. SRV ownership must remain scenario-local.
+        monkeypatch.setitem(REVERSE_DNS, dc.ip, "hostA.corp.local")
 
         activity_gen._emit_dns_lookup(
             src_ip=proxy.ip,

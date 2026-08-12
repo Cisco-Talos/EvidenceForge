@@ -186,6 +186,13 @@ bodies receive the same network file analysis without invented endpoint reads.
 HTTPS bodies remain opaque, and explicit plaintext proxies can produce one sensor-local
 FUID per successfully traversed leg.
 
+For multipart, verify the outer request/response body length includes boundaries,
+part headers, separators, and encoded leaf bytes, while each `files.json` row
+uses the decoded leaf size. FUIDs follow discovery order and stop at 15 in
+`http.json`, but all leaf files remain present. Filename and MIME vectors are
+sparse and are not positionally aligned with FUIDs. Each resolved local part
+should have one transmitting-process FILE/READ; literals should have none.
+
 For responses, complete observation should give every transmitted nonempty
 plaintext/decrypted HTTP entity a `resp_fuids` join to an `is_orig: false`
 `files.json` row, even for tiny redirects or error pages. HEAD, 1xx, 204, 205,

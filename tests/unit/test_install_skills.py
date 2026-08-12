@@ -127,13 +127,19 @@ class TestInstallSkills:
         assert "resp_fuids" in generate
         assert "sensor-local files.log" in evaluate_skill
         assert "HTTP Response Coverage" in evaluate_skill
+        assert "HTTP multipart" in scenario
+        assert "decoded leaf size" in generate
+        assert "sparse present-value projections" in evaluate_skill
         assert "http_file_profiles.yaml" in (root / "config.md").read_text()
         reference = (root / "references" / "scenario-reference.md").read_text()
         assert "--data-binary @/tmp/exfildata.rar" in reference
         assert "application/vnd.rar" in reference
+        assert "request_multipart" in reference
+        assert "multipart/byteranges" in reference
         evidence_reference = (root / "references" / "evidence-formats.md").read_text()
         assert "tiny, redirect, authentication-failure" in evidence_reference
         assert "plaintext proxy MISS" in evidence_reference
+        assert "Filename and MIME vectors are" in evidence_reference
         assert "smaller eligible responses remain sampled" not in evidence_reference
 
     def test_http_response_guidance_matches_canonical_and_bundled_references(self):
@@ -163,6 +169,26 @@ class TestInstallSkills:
             assert required_phrase in content
             assert "successful CONNECT" in content
             assert "smaller eligible responses remain sampled" not in content
+
+    def test_http_multipart_guidance_matches_canonical_and_bundled_references(self):
+        """Installed references retain source-native multipart byte/vector semantics."""
+
+        repository = Path(__file__).parents[2]
+        for relative_path in (
+            Path("docs/reference/scenario-reference.md"),
+            Path("commands/eforge/references/scenario-reference.md"),
+        ):
+            content = (repository / relative_path).read_text(encoding="utf-8")
+            assert "request_multipart" in content
+            assert "outer request is larger than 44,040,192 bytes" in content
+            assert "multipart/byteranges" in content
+        for relative_path in (
+            Path("docs/reference/EVIDENCE_FORMATS.md"),
+            Path("commands/eforge/references/evidence-formats.md"),
+        ):
+            content = (repository / relative_path).read_text(encoding="utf-8")
+            assert "Each nonempty decoded" in content
+            assert "sparse present-value lists" in content
 
     def test_no_persona_files_installed(self, tmp_path):
         """Persona YAMLs are NOT installed (skills use eforge info instead)."""

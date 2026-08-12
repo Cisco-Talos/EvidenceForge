@@ -1040,24 +1040,31 @@ def _attach_http_file_transfers(
                 mime_types=(request_mime,),
                 timestamp=event.timestamp,
                 is_orig=True,
+                multipart=http.request_multipart,
                 filename=request_entity.wire_filename if request_entity else "",
                 content_identity=content_identity,
                 parent_duration=event.network.duration,
             ),
             rng,
         ).execute()
-        event.file_transfers.append(request_result.file_transfer)
+        event.file_transfers.extend(request_result.file_transfers)
+        request_transfers = request_result.file_transfers
+        from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
+
+        max_files_orig = int(load_http_file_profiles()["multipart"]["max_files_orig"])
+        request_referenced = request_transfers[:max_files_orig]
         event.http = replace(
             event.http,
             request_content_type=request_mime,
-            orig_fuids=(request_result.file_transfer.fuid,),
-            orig_filenames=(request_result.file_transfer.filename,)
-            if request_result.file_transfer.filename
-            else (),
-            orig_mime_types=(request_result.file_transfer.mime_type,),
+            orig_fuids=tuple(transfer.fuid for transfer in request_referenced),
+            orig_filenames=tuple(
+                transfer.filename for transfer in request_referenced if transfer.filename
+            ),
+            orig_mime_types=tuple(
+                transfer.mime_type for transfer in request_transfers if transfer.mime_type
+            )[:max_files_orig],
         )
-        if event.pe is None:
-            event.pe = request_result.pe
+        event.pe_analyses.extend(request_result.pe_analyses)
 
     http = event.http
     from evidenceforge.generation.activity.http_content import http_response_has_entity_body
@@ -1102,24 +1109,31 @@ def _attach_http_file_transfers(
             response_body_len=http.response_body_len,
             response_mime_types=list(http.resp_mime_types),
             timestamp=event.timestamp,
+            multipart=http.response_multipart,
             parent_duration=event.network.duration,
         ),
         rng,
     ).execute()
-    if event.file_transfer is None:
-        event.file_transfer = file_result.file_transfer
+    if file_result.file_transfers and event.file_transfer is None:
+        event.file_transfer = file_result.file_transfers[0]
+        event.file_transfers.extend(file_result.file_transfers[1:])
     else:
-        event.file_transfers.append(file_result.file_transfer)
+        event.file_transfers.extend(file_result.file_transfers)
+    from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
+
+    max_files_resp = int(load_http_file_profiles()["multipart"]["max_files_resp"])
+    response_referenced = file_result.file_transfers[:max_files_resp]
     event.http = replace(
         event.http,
-        resp_fuids=(file_result.file_transfer.fuid,),
-        resp_filenames=(file_result.file_transfer.filename,)
-        if file_result.file_transfer.filename
-        else (),
-        resp_mime_types=(file_result.file_transfer.mime_type,),
+        resp_fuids=tuple(transfer.fuid for transfer in response_referenced),
+        resp_filenames=tuple(
+            transfer.filename for transfer in response_referenced if transfer.filename
+        ),
+        resp_mime_types=tuple(
+            transfer.mime_type for transfer in file_result.file_transfers if transfer.mime_type
+        )[:max_files_resp],
     )
-    if event.pe is None:
-        event.pe = file_result.pe
+    event.pe_analyses.extend(file_result.pe_analyses)
 
 
 def _http_context_flow_body_len(http: HttpContext, side: str) -> int:
@@ -4984,6 +4998,13 @@ class ActivityGenerator:
             return system_host
         return f"{system_host}.{ad_domain}"
 
+    def _scenario_fqdn_for_ip(self, ip: str) -> str | None:
+        """Return the current scenario's canonical hostname for an owned IP."""
+        system = getattr(self, "_ip_to_system", {}).get(ip)
+        if system is None:
+            return None
+        return self._dns_canonical_internal_hostname(str(getattr(system, "hostname", "") or ""))
+
     def _unique_environment_systems(self) -> list[Any]:
         """Return scenario systems once, preserving environment order where possible."""
         systems: list[Any] = []
@@ -7387,7 +7408,7 @@ class ActivityGenerator:
         rng = _get_rng()
         proxy_hostname = hostname
         if proxy_hostname is None:
-            proxy_hostname = REVERSE_DNS.get(dst_ip)
+            proxy_hostname = self._scenario_fqdn_for_ip(dst_ip) or REVERSE_DNS.get(dst_ip)
         if proxy_hostname is None:
             proxy_hostname = _generate_random_hostname(rng, dst_ip)
         if proxy_hostname == "":
@@ -10897,12 +10918,11 @@ class ActivityGenerator:
             "emit_4771": auth_package in ("Kerberos", "Negotiate"),
         }
 
-    @staticmethod
-    def _workstation_name_for_source(source_ip: str) -> str:
+    def _workstation_name_for_source(self, source_ip: str) -> str:
         """Return a plausible WorkstationName for a failed network logon source."""
         if not source_ip or source_ip == "-":
             return "-"
-        rdns = REVERSE_DNS.get(source_ip, "")
+        rdns = self._scenario_fqdn_for_ip(source_ip) or REVERSE_DNS.get(source_ip, "")
         if rdns:
             return rdns.split(".", 1)[0].upper()
         return source_ip
@@ -14092,6 +14112,7 @@ class ActivityGenerator:
         file_transfer: FileTransferContext | None = None,
         file_transfers: list[FileTransferContext] | None = None,
         pe: PeContext | None = None,
+        pe_analyses: list[PeContext] | None = None,
         ocsp: OcspContext | None = None,
         ocsp_transaction: OcspTransactionPlan | None = None,
         proxy: Optional["ProxyContext"] = None,
@@ -14171,6 +14192,7 @@ class ActivityGenerator:
             file_transfer=file_transfer,
             file_transfers=tuple(file_transfers or ()),
             pe=pe,
+            pe_analyses=tuple(pe_analyses or ()),
             ocsp=ocsp,
             ocsp_transaction=ocsp_transaction,
             proxy=proxy,
@@ -20334,10 +20356,10 @@ class ActivityGenerator:
 
         rng = _get_rng()
 
-        # Use explicit hostname if provided (domain-first selection),
-        # otherwise fall back to REVERSE_DNS lookup
+        # Use explicit hostname if provided (domain-first selection), then the
+        # current scenario's owned systems, and only then packaged DNS data.
         if not hostname:
-            hostname = REVERSE_DNS.get(dst_ip)
+            hostname = self._scenario_fqdn_for_ip(dst_ip) or REVERSE_DNS.get(dst_ip)
         if not hostname:
             if _is_private_ip(dst_ip):
                 hostname = _generate_internal_hostname(
@@ -20502,8 +20524,7 @@ class ActivityGenerator:
                 domain = ad_domain
                 query = rng.choice(_AD_SRV_QUERIES).format(domain=domain)
                 dc_sys = _get_rng().choice(dc_systems)
-                dc_ip = dc_sys.ip
-                dc_hostname = REVERSE_DNS.get(dc_ip, f"{dc_sys.hostname}.{domain}")
+                dc_hostname = self._scenario_fqdn_for_ip(dc_sys.ip) or dc_sys.hostname
                 svc_prefix = query.split(".")[0]
                 port = _SRV_PORT_MAP.get(svc_prefix, 389)
                 answers = [f"0 100 {port} {dc_hostname}"]

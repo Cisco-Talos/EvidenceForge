@@ -223,11 +223,22 @@ class NetworkObservationPlanner:
         for transfer in event.protocol.file_transfers:
             ratio = orig_ratio if transfer.is_orig else resp_ratio
             total = transfer.total_bytes
-            accounted_total = (
-                total if total is not None else transfer.seen_bytes + transfer.missing_bytes
-            )
-            seen = min(transfer.seen_bytes, int(transfer.seen_bytes * ratio))
-            missing = max(transfer.missing_bytes, accounted_total - seen)
+            if (
+                transfer.entity_body_len is not None
+                and transfer.wire_offset is not None
+                and transfer.wire_length is not None
+            ):
+                seen, missing = cls._observed_multipart_leaf(
+                    event,
+                    transfer,
+                    ratio,
+                )
+            else:
+                accounted_total = (
+                    total if total is not None else transfer.seen_bytes + transfer.missing_bytes
+                )
+                seen = min(transfer.seen_bytes, int(transfer.seen_bytes * ratio))
+                missing = max(transfer.missing_bytes, accounted_total - seen)
             files.append(
                 FileSensorObservation(
                     canonical_id=transfer.fuid,
@@ -271,6 +282,47 @@ class NetworkObservationPlanner:
             response_body_len = min(http.response_body_len, int(canonical_response * resp_ratio))
 
         return history, tuple(files), request_body_len, response_body_len
+
+    @staticmethod
+    def _observed_multipart_leaf(
+        event: CanonicalOccurrence,
+        transfer: object,
+        ratio: float,
+    ) -> tuple[int, int]:
+        """Allocate one stable directional capture gap across multipart wire spans."""
+
+        entity_len = max(0, int(getattr(transfer, "entity_body_len", 0) or 0))
+        wire_offset = max(0, int(getattr(transfer, "wire_offset", 0) or 0))
+        wire_length = max(0, int(getattr(transfer, "wire_length", 0) or 0))
+        decoded_size = max(0, int(getattr(transfer, "seen_bytes", 0) or 0))
+        canonical_missing = max(0, int(getattr(transfer, "missing_bytes", 0) or 0))
+        if entity_len <= 0 or wire_length <= 0 or ratio >= 1.0:
+            return decoded_size, canonical_missing
+
+        missing_wire = min(entity_len, entity_len - int(entity_len * ratio))
+        if missing_wire <= 0:
+            return decoded_size, canonical_missing
+        available_starts = entity_len - missing_wire + 1
+        network = event.network
+        gap_start = (
+            _stable_seed(
+                "http-multipart-observation-gap:"
+                f"{getattr(network, 'zeek_uid', '')}:"
+                f"{getattr(transfer, 'is_orig', False)}:{entity_len}"
+            )
+            % available_starts
+        )
+        gap_end = gap_start + missing_wire
+        leaf_end = wire_offset + wire_length
+        overlap = max(0, min(gap_end, leaf_end) - max(gap_start, wire_offset))
+        if overlap <= 0:
+            return decoded_size, canonical_missing
+        decoded_missing = min(
+            decoded_size,
+            (decoded_size * overlap + wire_length - 1) // wire_length,
+        )
+        missing = max(canonical_missing, decoded_missing)
+        return max(0, decoded_size - missing), missing
 
     @staticmethod
     def _payload_observation_ratio(canonical_bytes: int, observed_bytes: int) -> float:
@@ -467,8 +519,8 @@ class NetworkObservationPlanner:
             add(certificate.fuid)
         if event.protocol.ocsp is not None:
             add(event.protocol.ocsp.id)
-        if event.protocol.pe is not None:
-            add(event.protocol.pe.id)
+        for pe in event.protocol.pe_analyses:
+            add(pe.id)
         return tuple(values)
 
     @staticmethod

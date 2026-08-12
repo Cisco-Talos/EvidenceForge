@@ -802,7 +802,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `logon` | 4624, target-host 4672 for elevated sessions, eCAR LOGIN | | `logon_type` (default 3), `source_ip` |
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
 | `logoff` | 4634, eCAR LOGOUT | | |
-| `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname` (domain for DNS/SSL SNI), `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent`, `ids_alerts` |
+| `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http/files when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname`, `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent`, `request_body_len`, `request_multipart`, `response_body_len`, `response_multipart`, `ids_alerts` |
 | `ssh_session` | canonical SSH connection (Zeek conn) + syslog sshd + EDR/eCAR | | `source_ip`, `ids_alerts` |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip`, `ids_alerts` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
@@ -1027,7 +1027,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
       technique: "T1071.001 - Web Protocols"
 ```
 
-Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). `profile` selects a behavior-shaped synthetic profile from `config/activity/beacon_profiles.yaml`; bundled profiles model broad check-in/tasking shapes, not live malware IoCs. `http_sequence` cycles explicit per-tick request shapes and can use deterministic URI tokens: `{host_id}`, `{campaign_id}`, `{tick}`, `{hex8}`, `{guid}`, and `{base64url:N}`. Sequence entries may override `method`, `uri`, `user_agent`, `referrer`, `status_code`, `request_body_len`, `response_body_len`, `orig_bytes`, and `resp_bytes`; byte fields accept either an integer or `[min, max]`. For `hostname`, use the client-facing DNS name used by the beacon, not a reverse-DNS/PTR artifact, unless that is intentionally part of the scenario. `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download). In explicit proxy mode, HTTP/S beacons from hosts routed through a `forward_proxy` traverse the proxy; denied proxyable beacons stop at the proxy and emit proxy-denied CONNECT/GET evidence rather than direct client-to-origin network evidence.
+Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). `profile` selects a behavior-shaped synthetic profile from `config/activity/beacon_profiles.yaml`; bundled profiles model broad check-in/tasking shapes, not live malware IoCs. `http_sequence` cycles explicit per-tick request shapes and can use deterministic URI tokens: `{host_id}`, `{campaign_id}`, `{tick}`, `{hex8}`, `{guid}`, and `{base64url:N}`. Sequence entries may override `method`, `uri`, `user_agent`, `referrer`, `status_code`, `request_body_len`, `request_multipart`, `response_body_len`, `response_multipart`, `orig_bytes`, and `resp_bytes`; byte fields accept either an integer or `[min, max]`, but multipart outer-size assertions must be exact integers. For `hostname`, use the client-facing DNS name used by the beacon, not a reverse-DNS/PTR artifact, unless that is intentionally part of the scenario. `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download). In explicit proxy mode, HTTP/S beacons from hosts routed through a `forward_proxy` traverse the proxy; denied proxyable beacons stop at the proxy and emit proxy-denied CONNECT/GET evidence rather than direct client-to-origin network evidence.
 
 ### Correlated IDS attachments
 
@@ -1252,6 +1252,50 @@ For web-based attack steps (SQL injection, web shell access, etc.), use `connect
 HTTP optional fields on `connection` events: `method` (GET/POST/etc.), `uri`, `status_code`, `user_agent`, `referrer`, `request_body_len`, `response_body_len`. With `service: http`, the engine generates correlated web_access, zeek_http, zeek_conn, and visible files.log records. `request_body_len` pins the exact transmitted request entity size; originator TCP bytes still include HTTP framing. Every successfully transmitted plaintext request body receives originator-direction Zeek file analysis, including background forms, APIs, telemetry, beacons, and red herrings. Every transmitted nonempty plaintext response entity receives responder-direction analysis, including tiny redirects, authentication failures, and other error bodies. HEAD, 1xx, 204, 205, 304, successful CONNECT, zero-byte, failed-transport, and opaque HTTPS responses remain fileless. Anonymous bodies do not invent endpoint file reads. Both body-length fields are available on `beacon` and `beacon.http_sequence`; sequence values may be exact integers or `[min, max]` ranges.
 
 Request MIME type is derived from the owning activity unless a resolved upload supplies stronger metadata. Curl `--data-binary @path`, `--upload-file path`, `-T path`, and multipart `-F name=@path` resolve a local source file and curl-owned endpoint read. Local source names stay in ground truth and do not become Zeek filenames unless the HTTP message exposes one: raw `--data-binary` has no wire filename, while multipart normally does. Response MIME preserves explicit/application metadata, otherwise follows URI inference, redirect/error `text/html`, then `application/octet-stream`; response URLs never invent filenames. `http_file_profiles.yaml` maps extensions such as `.rar` to `application/vnd.rar`. A plaintext proxy MISS creates leg-local FUIDs for matching origin→proxy and proxy→client content; a HIT or proxy error creates only the client-leg response file. HTTPS stays opaque without modeled decryption.
+
+`request_multipart` and `response_multipart` are available on `connection`,
+`beacon`, `beacon.http_sequence`, and application/web-route method profiles. They
+accept ordered `multipart/form-data` or `multipart/mixed` parts; repeated names and
+nested multipart containers are preserved. A leaf defines exactly one of `value`,
+`body_len`, or `local_source_path`, plus optional `filename`, `filename_star`,
+`content_type`, `content_type_name`, `detected_mime_type`, `content_length`, and
+`transfer_encoding` (`binary`, `7bit`, `8bit`, `base64`, or `quoted-printable`).
+Direct form-data parts require `name`. Literal UTF-8 values derive their decoded
+size. The engine deterministically generates a client-shaped boundary when it is
+omitted and derives the outer body size from the complete serialization. An
+authored `request_body_len`/`response_body_len` alongside multipart is an exact
+assertion and a mismatch is rejected; profile body-size ranges are mutually
+exclusive with multipart.
+
+```yaml
+- type: connection
+  dst_ip: 45.33.32.30
+  dst_port: 80
+  hostname: some.site
+  service: http
+  method: POST
+  uri: /uploads/accept-upload
+  request_multipart:
+    media_type: multipart/form-data
+    parts:
+      - name: metadata
+        value: '{"case":"1234"}'
+        content_type: application/json
+      - name: archive
+        body_len: 44040192
+        local_source_path: /tmp/exfildata.rar
+        filename: exfildata.rar
+        content_type: application/vnd.rar
+        detected_mime_type: application/vnd.rar
+```
+
+The outer request is larger than 44,040,192 bytes because it includes the
+multipart envelope; the matching file row remains exactly 44,040,192 decoded
+bytes. Curl `-F`/`--form` and `--form-string` are parsed in order. `@path` emits a
+file-backed part and wire filename, `<path` emits a file-backed field without a
+filename, and literals emit no endpoint read. `filename=`, `type=`, and `encoder=`
+modifiers are honored. More than one unresolved local file size is rejected.
+Chunked/content-coded multipart and `multipart/byteranges` are not supported.
 
 ```yaml
 events:

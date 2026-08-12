@@ -140,6 +140,43 @@ class TestGenerationEngine:
             personas=[],
         )
 
+    def test_system_seeding_does_not_mutate_packaged_reverse_dns(self, minimal_scenario, tmp_path):
+        """Scenario identities must remain local to their generation engine."""
+        from evidenceforge.generation.activity.network import REVERSE_DNS
+
+        scenario_ip = "10.255.254.253"
+        scenario_system = System(
+            hostname="SCENARIO-ONLY",
+            ip=scenario_ip,
+            os="Windows 11",
+            type="workstation",
+        )
+        scenario = minimal_scenario.model_copy(
+            update={
+                "environment": minimal_scenario.environment.model_copy(
+                    update={"systems": [scenario_system]}
+                )
+            }
+        )
+        engine = GenerationEngine(scenario, tmp_path)
+        engine.start_time = None
+        engine._kernel_boot_uptimes = {}
+        engine._system_pids = {}
+        engine._infra_ips = {"db_servers": [], "dns": [], "dc_hostnames": [], "dc": []}
+        engine.activity_generator = Mock()
+
+        prior = REVERSE_DNS.pop(scenario_ip, None)
+        try:
+            with (
+                patch.object(engine, "_seed_windows_process_tree"),
+                patch.object(engine, "_generate_external_client_ip", return_value="198.51.100.10"),
+            ):
+                engine._seed_system_process_trees()
+            assert scenario_ip not in REVERSE_DNS
+        finally:
+            if prior is not None:
+                REVERSE_DNS[scenario_ip] = prior
+
     @pytest.fixture
     def scenario_with_storyline(self):
         """Create scenario with storyline events."""

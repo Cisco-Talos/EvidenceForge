@@ -277,6 +277,12 @@ class BrowserSessionActionBundle:
             request_wire_filename = (
                 str(getattr(profile, "request_wire_filename", "") or "") if profile else ""
             )
+            request_multipart_spec = (
+                getattr(profile, "request_multipart", None) if profile else None
+            )
+            response_multipart_spec = (
+                getattr(profile, "response_multipart", None) if profile else None
+            )
             req_range = getattr(profile, "request_body_bytes", None) if profile else None
             resp_range = getattr(profile, "response_body_bytes", None) if profile else None
             request_body_len = (
@@ -296,6 +302,69 @@ class BrowserSessionActionBundle:
                     transfer_variant_key=self.request.transfer_variant_key,
                 )
             )
+            request_multipart = None
+            response_multipart = None
+            legacy_wire_filename = bool(request_wire_filename and request_multipart_spec is None)
+            if legacy_wire_filename:
+                from evidenceforge.models.http import HttpMultipartEntitySpec
+
+                request_multipart_spec = HttpMultipartEntitySpec.model_validate(
+                    {
+                        "media_type": "multipart/form-data",
+                        "parts": [
+                            {
+                                "name": "file",
+                                "body_len": 0,
+                                "filename": request_wire_filename,
+                                "content_type": request_content_type or "application/octet-stream",
+                            }
+                        ],
+                    }
+                )
+            if request_multipart_spec is not None or response_multipart_spec is not None:
+                from evidenceforge.generation.activity.http_multipart import (
+                    build_http_multipart_context,
+                )
+
+                stable_key = f"{self.request.stable_id}:route:{index}:{method}:{path}"
+                if request_multipart_spec is not None:
+                    if legacy_wire_filename:
+                        envelope = build_http_multipart_context(
+                            request_multipart_spec,
+                            stable_key=f"{stable_key}:request",
+                            user_agent=self.request.user_agent or "Mozilla/5.0",
+                        )
+                        if request_body_len > envelope.body_len:
+                            request_multipart_spec = request_multipart_spec.model_copy(
+                                update={
+                                    "parts": [
+                                        request_multipart_spec.parts[0].model_copy(
+                                            update={
+                                                "body_len": request_body_len - envelope.body_len
+                                            }
+                                        )
+                                    ]
+                                }
+                            )
+                        else:
+                            request_multipart_spec = None
+                    if request_multipart_spec is not None:
+                        request_multipart = build_http_multipart_context(
+                            request_multipart_spec,
+                            stable_key=f"{stable_key}:request",
+                            user_agent=self.request.user_agent or "Mozilla/5.0",
+                        )
+                        request_body_len = request_multipart.body_len
+                        request_content_type = (
+                            f"{request_multipart.media_type}; boundary={request_multipart.boundary}"
+                        )
+                if response_multipart_spec is not None:
+                    response_multipart = build_http_multipart_context(
+                        response_multipart_spec,
+                        stable_key=f"{stable_key}:response",
+                        client_family="generic",
+                    )
+                    response_body_len = response_multipart.body_len
             elapsed_ms += self.rng.randint(250, 2400) if index else 0
             requests.append(
                 browsing_session.BrowsingRequest(
@@ -312,6 +381,8 @@ class BrowserSessionActionBundle:
                     status_code=status,
                     request_content_type=request_content_type,
                     request_wire_filename=request_wire_filename,
+                    request_multipart=request_multipart,
+                    response_multipart=response_multipart,
                 )
             )
             referrer = browsing_session._make_referrer(  # noqa: SLF001
@@ -418,6 +489,13 @@ class BrowserSessionActionBundle:
         emit_dns = (request.emit_dns_on_page_load and req.is_page_load) or (
             req_hostname != request.hostname
         )
+        http_context = self._http_context(
+            req=req,
+            req_hostname=req_hostname,
+            group=group,
+            trans_depth=trans_depth,
+            first_in_group=first_in_group,
+        )
 
         generate_kwargs: dict[str, Any] = {
             "src_ip": request.src_ip,
@@ -433,13 +511,7 @@ class BrowserSessionActionBundle:
             "suppress_prereq_dns": not emit_dns,
             "source_system": request.source_system,
             "hostname": req_hostname,
-            "http": self._http_context(
-                req=req,
-                req_hostname=req_hostname,
-                group=group,
-                trans_depth=trans_depth,
-                first_in_group=first_in_group,
-            ),
+            "http": http_context,
         }
         if request.pid != -1:
             generate_kwargs["pid"] = request.pid
@@ -545,7 +617,11 @@ class BrowserSessionActionBundle:
             except ValueError:
                 referrer = ""
         request_entity = None
-        if req.request_body_len > 0 and (req.request_content_type or req.request_wire_filename):
+        if (
+            req.request_multipart is None
+            and req.request_body_len > 0
+            and (req.request_content_type or req.request_wire_filename)
+        ):
             request_mime = req.request_content_type or "application/octet-stream"
             request_entity = HttpRequestEntityContext(
                 size=req.request_body_len,
@@ -566,7 +642,9 @@ class BrowserSessionActionBundle:
             request_body_len=req.request_body_len,
             request_content_type=req.request_content_type,
             request_entity=request_entity,
+            request_multipart=req.request_multipart,
             response_body_len=req.response_body_len,
+            response_multipart=req.response_multipart,
             flow_request_body_len=(
                 group["request_body_len"]
                 if request.include_flow_context and first_in_group
