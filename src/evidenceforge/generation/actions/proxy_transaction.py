@@ -146,6 +146,7 @@ class ProxyTransactionExecutor(Protocol):
         proxy_context: ProxyContext,
         proxy_sys: System,
         dst_port: int,
+        http: HttpContext | None = None,
     ) -> str | None:
         """Return a caller process image when valid proxy client telemetry owns it."""
         ...
@@ -816,6 +817,7 @@ class ProxyTransactionActionBundle:
             proxy_context=proxy_context,
             proxy_sys=proxy_sys,
             dst_port=request.dst_port,
+            http=request.http,
         )
         if caller_process_image is not None:
             client_process_image = caller_process_image

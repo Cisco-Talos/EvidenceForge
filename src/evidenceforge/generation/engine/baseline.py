@@ -835,6 +835,8 @@ def _windows_background_process_lifetime_seconds(
         )
     if exe_name == "wsqmcons.exe":
         return _bounded_lognormal_seconds(rng, minimum=2.0, median=12.0, p95=75.0, maximum=180.0)
+    if exe_name == "taskhostw.exe":
+        return _bounded_lognormal_seconds(rng, minimum=2.0, median=35.0, p95=300.0, maximum=900.0)
     if exe_name == "conhost.exe":
         return _bounded_lognormal_seconds(rng, minimum=1.0, median=18.0, p95=240.0, maximum=900.0)
     if exe_name == "dllhost.exe":
@@ -1681,6 +1683,51 @@ class BaselineMixin:
     # Make PERSONA_CLUSTER_CONFIG accessible as class attribute
     PERSONA_CLUSTER_CONFIG = PERSONA_CLUSTER_CONFIG
 
+    def _linux_snapd_message(self, hostname: str, rng: random.Random) -> str:
+        """Return one stateful snapd baseline message for a Linux host.
+
+        Change and task identifiers are durable snapd object identities. A
+        terminal task may therefore be emitted only once, for the snap that
+        owned the task when its change started.
+        """
+        if not hasattr(self, "_snapd_next_change_id"):
+            self._snapd_next_change_id: dict[str, int] = {}
+        if not hasattr(self, "_snapd_active_tasks"):
+            self._snapd_active_tasks: dict[str, list[tuple[int, int, str]]] = {}
+
+        active_tasks = self._snapd_active_tasks.setdefault(hostname, [])
+        snap_names = (
+            "core20",
+            "core22",
+            "lxd",
+            "microk8s",
+            "snapd-desktop-integration",
+        )
+        roll = rng.random()
+
+        if active_tasks and roll < 0.32:
+            change_id, task_id, snap_name = active_tasks.pop(0)
+            return f"taskrunner.go:271: change {change_id} task {task_id} done for {snap_name}"
+
+        if roll < 0.58:
+            next_change_id = self._snapd_next_change_id.get(hostname)
+            if next_change_id is None:
+                next_change_id = 1000 + (_stable_seed(f"snapd_change:{hostname}") % 8000)
+            self._snapd_next_change_id[hostname] = next_change_id + 1
+            task_id = 1 + (_stable_seed(f"snapd_task:{hostname}:{next_change_id}") % 9)
+            snap_name = rng.choice(snap_names)
+            active_tasks.append((next_change_id, task_id, snap_name))
+            return f"stateengine.go:150: state ensure starting change {next_change_id}"
+
+        snap_name = rng.choice(snap_names)
+        return rng.choice(
+            (
+                f"autorefresh.go:540: auto-refresh for {snap_name}: no updates found",
+                f"daemon.go:460: gracefully waiting for hook {snap_name}.configure",
+                f"snapmgr.go:523: refresh candidates checked for {snap_name}",
+            )
+        )
+
     def _storyline_account_lifecycle(self) -> dict[str, tuple[datetime | None, datetime | None]]:
         """Return storyline-created/deleted account lifecycle bounds by username."""
         cached = getattr(self, "_storyline_account_lifecycle_cache", None)
@@ -1945,6 +1992,41 @@ class BaselineMixin:
                 "pending": state["pending"],
                 "worker_count": state["workers"],
             },
+        )
+
+    def _render_systemd_resolved_message(
+        self,
+        entry: dict[str, Any],
+        hostname: str,
+        dns_server_ips: list[str],
+        rng: random.Random,
+    ) -> str:
+        """Render one bounded native resolver feature-state transition."""
+
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        states = getattr(self, "_linux_resolved_feature_states", None)
+        if states is None:
+            states = {}
+            self._linux_resolved_feature_states = states
+        state = states.get(hostname)
+        degraded = state is not None and state[0] == "degraded"
+        if degraded:
+            message_index = 1
+            dns_server = state[1]
+            states[hostname] = ("full", dns_server)
+        else:
+            message_index = 0
+            dns_server = rng.choice(dns_server_ips)
+            states[hostname] = ("degraded", dns_server)
+        messages = entry.get("messages") or []
+        selected_entry = {**entry, "messages": [messages[message_index]]}
+        return render_extra_syslog_message(
+            selected_entry,
+            rng,
+            positional_value=0,
+            system_services=[],
+            values={"dns_server": dns_server},
         )
 
     def _next_dbus_bus_id(self, hostname: str, rng: random.Random) -> int:
@@ -4881,7 +4963,6 @@ class BaselineMixin:
             "dwm.exe",
             "userinit.exe",
             "runtimebroker",
-            "taskhostw",
             "searchindexer",
             "msmpeng",
             "sqlservr",
@@ -9156,30 +9237,11 @@ class BaselineMixin:
                 elif source_roll < 0.35:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
-                    snap_name = rng.choice(
-                        [
-                            "core20",
-                            "core22",
-                            "lxd",
-                            "microk8s",
-                            "snapd-desktop-integration",
-                        ]
-                    )
-                    change_id = 1000 + (_stable_seed(f"snapd_change:{system.hostname}") % 8000)
-                    task_id = rng.randint(1, 9)
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
                         app_name="snapd",
-                        message=rng.choice(
-                            [
-                                f"autorefresh.go:540: auto-refresh for {snap_name}: no updates found",
-                                f"daemon.go:460: gracefully waiting for hook {snap_name}.configure",
-                                f"stateengine.go:150: state ensure starting change {change_id + task_id}",
-                                f"taskrunner.go:271: change {change_id} task {task_id} done for {snap_name}",
-                                f"snapmgr.go:523: refresh candidates checked for {snap_name}",
-                            ]
-                        ),
+                        message=self._linux_snapd_message(system.hostname, rng),
                         pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
                 elif source_roll < 0.45:
@@ -9320,18 +9382,11 @@ class BaselineMixin:
                             values={"interface": primary_interface},
                         )
                     elif app == "systemd-resolved":
-                        dns_server = rng.choice(system_dns_ips)
-                        scope = "global" if rng.random() < 0.35 else primary_interface
-                        msg = render_extra_syslog_message(
+                        msg = self._render_systemd_resolved_message(
                             entry,
+                            system.hostname,
+                            system_dns_ips,
                             rng,
-                            positional_value=rng.randint(100000, 999999),
-                            system_services=system.services,
-                            values={
-                                "dns_server": dns_server,
-                                "interface": primary_interface,
-                                "scope": scope,
-                            },
                         )
                     elif app == "anacron":
                         self._emit_anacron_lifecycle(system, ts, rng, sys_pids)
@@ -9388,10 +9443,16 @@ class BaselineMixin:
                         "cron": "cron",
                         "snapd": "snapd",
                     }
+                    sudo_has_session = (
+                        app == "sudo" and "COMMAND=" in msg and "command not allowed" not in msg
+                    )
                     # Transient processes (forked per invocation) get random PIDs;
                     # persistent daemons get stable PIDs.
                     _TRANSIENT_APPS = {"sudo", "cron"}
-                    if app in _TRANSIENT_APPS:
+                    if sudo_has_session:
+                        # The sudo bundle creates and owns its canonical PID lifecycle.
+                        pid = 0
+                    elif app in _TRANSIENT_APPS:
                         pid = self.state_manager.allocate_transient_linux_pid(
                             system.hostname,
                             ts,
@@ -9415,9 +9476,6 @@ class BaselineMixin:
                             pid = 500 + (_h % 59500)  # range 500-59999
                     facility = 10 if app == "sudo" else 3
                     severity = 5 if app == "sudo" else 6
-                    sudo_has_session = (
-                        app == "sudo" and "COMMAND=" in msg and "command not allowed" not in msg
-                    )
                     if sudo_has_session:
                         sudo_user = (msg.split(" : ", 1)[0] or "admin").strip()
                         uid = _linux_uid_for_user(sudo_user)
@@ -9429,7 +9487,6 @@ class BaselineMixin:
                             command_message=msg,
                             sudo_user=sudo_user,
                             uid=uid,
-                            pid=pid,
                             runtime=sudo_runtime,
                         )
                     else:

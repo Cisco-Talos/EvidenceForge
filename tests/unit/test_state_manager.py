@@ -710,6 +710,34 @@ class TestStateManagerInit:
         )
         assert first_pid == reused_pid == 500
 
+    def test_linux_pid_cannot_reuse_ended_identity_at_overlapping_earlier_time(self):
+        """Out-of-order planning must not reuse a PID inside a retained ended lifetime."""
+        manager = StateManager()
+        later_start = datetime(2024, 3, 18, 14, 19, 16, tzinfo=UTC)
+        manager.set_current_time(later_start)
+        first_pid = manager.create_process(
+            "linux-01",
+            0,
+            "/usr/lib/apt/methods/https",
+            "/usr/lib/apt/methods/https",
+            "root",
+            "root",
+        )
+        manager.end_process("linux-01", first_pid, later_start + timedelta(seconds=45))
+
+        manager._pid_counters["linux-01"] = first_pid - 1
+        manager.set_current_time(later_start + timedelta(milliseconds=75))
+        second_pid = manager.create_process(
+            "linux-01",
+            0,
+            "/usr/lib/apt/methods/http",
+            "/usr/lib/apt/methods/http",
+            "root",
+            "root",
+        )
+
+        assert second_pid != first_pid
+
     def test_pid_watermark_rejects_late_allocation_and_bounds_history(self):
         """Sealed allocation detail cannot grow with simulated duration."""
         sm = StateManager()

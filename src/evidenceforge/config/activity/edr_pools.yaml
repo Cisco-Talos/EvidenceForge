@@ -11,6 +11,13 @@
 # {hex} = 8-character hexadecimal token, {process_prefetch_name} = owning
 # process basename uppercased for Windows Prefetch artifacts.
 
+# Additional application/service principals that must never receive generic interactive-user
+# file churn. Core operating-system accounts remain protected in code for compatibility.
+linux_service_users:
+  - "dovecot"
+  - "meridian-app"
+  - "postfix"
+
 group_policy_extension_guids:
   - "35378EAC-683F-11D2-A89A-00C04FBBCFA2"
   - "42B5FAAE-6536-11D2-AE5A-0000F87571E3"
@@ -133,7 +140,7 @@ file_side_effect_profiles:
 
   - name: linux_dbus_state
     executables: ["dbus-daemon"]
-    actions: ["modify"]
+    actions: ["read"]
     paths_linux:
       - "/var/lib/dbus/machine-id"
       - "/run/dbus/system_bus_socket"

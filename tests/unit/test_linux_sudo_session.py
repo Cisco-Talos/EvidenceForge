@@ -24,7 +24,6 @@ def _request() -> LinuxSudoSessionRequest:
         ),
         sudo_user="deploy",
         uid=1002,
-        pid=701258,
         runtime=timedelta(seconds=2),
     )
 
@@ -33,6 +32,12 @@ def test_linux_sudo_action_orders_authorization_before_pam_lifecycle() -> None:
     """The action bundle should own command, open, and close causal order."""
 
     executor = Mock()
+    executor.generate_linux_sudo_processes.return_value = (
+        701258,
+        701259,
+        timedelta(0),
+        "pts/1",
+    )
     request = _request()
 
     LinuxSudoSessionActionBundle(executor=executor, request=request).execute()
@@ -48,6 +53,13 @@ def test_linux_sudo_action_orders_authorization_before_pam_lifecycle() -> None:
     assert auth_contexts[0] is auth_contexts[1] is auth_contexts[2]
     assert auth_contexts[0].username == "deploy"
     assert auth_contexts[0].logon_id.startswith("linux-sudo-session-")
+    create = executor.generate_linux_sudo_processes.call_args.kwargs
+    assert create["command"] == "/usr/bin/systemctl status nginx"
+    assert create["sudo_user"] == "deploy"
+    assert create["tty"] == "pts/1"
+    terminations = executor.terminate_linux_sudo_process.call_args_list
+    assert [call.kwargs["pid"] for call in terminations] == [701259, 701258]
+    assert terminations[-1].kwargs["time"] > calls[2].kwargs["time"]
 
 
 def test_linux_sudo_action_anchor_and_timing_are_deterministic() -> None:
@@ -55,6 +67,18 @@ def test_linux_sudo_action_anchor_and_timing_are_deterministic() -> None:
 
     first_executor = Mock()
     second_executor = Mock()
+    first_executor.generate_linux_sudo_processes.return_value = (
+        701258,
+        701259,
+        timedelta(0),
+        "pts/1",
+    )
+    second_executor.generate_linux_sudo_processes.return_value = (
+        701258,
+        701259,
+        timedelta(0),
+        "pts/1",
+    )
     request = _request()
     first = LinuxSudoSessionActionBundle(first_executor, request)
     second = LinuxSudoSessionActionBundle(second_executor, request)
@@ -66,6 +90,24 @@ def test_linux_sudo_action_anchor_and_timing_are_deterministic() -> None:
     assert first_executor.generate_syslog_event.call_args_list == (
         second_executor.generate_syslog_event.call_args_list
     )
+
+
+def test_linux_sudo_action_renders_canonical_tty_assignment() -> None:
+    """The syslog command should use the session layer's conflict-free TTY."""
+
+    executor = Mock()
+    executor.generate_linux_sudo_processes.return_value = (
+        701258,
+        701259,
+        timedelta(0),
+        "pts/7",
+    )
+
+    LinuxSudoSessionActionBundle(executor=executor, request=_request()).execute()
+
+    command_event = executor.generate_syslog_event.call_args_list[0]
+    assert "TTY=pts/7" in command_event.kwargs["message"]
+    assert "TTY=pts/1" not in command_event.kwargs["message"]
 
 
 def test_linux_sudo_action_rejects_denied_command_as_session() -> None:
@@ -80,7 +122,6 @@ def test_linux_sudo_action_rejects_denied_command_as_session() -> None:
             ),
             sudo_user="deploy",
             uid=1002,
-            pid=701258,
             runtime=timedelta(seconds=1),
         )
 

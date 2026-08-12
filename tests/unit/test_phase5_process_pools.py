@@ -235,7 +235,7 @@ class TestProcessPoolSize:
         dc_host = SimpleNamespace(os="Windows Server 2022", type="domain_controller")
         server_host = SimpleNamespace(os="Windows Server 2022", type="server")
         ws_host = SimpleNamespace(os="Windows 11 Enterprise", type="workstation")
-        noisy_exes = {"cleanmgr.exe", "compattelrunner.exe"}
+        noisy_exes = {"cleanmgr.exe", "compattelrunner.exe", "wsqmcons.exe"}
 
         dc_entries = get_scheduled_task_entries(dc_host)
         server_entries = get_scheduled_task_entries(server_host)

@@ -549,7 +549,9 @@ class NetworkTransactionPlanner:
         hostname_was_explicit = hostname not in (None, "")
         hostname_from_reverse_dns = False
         if hostname is None:
-            reverse_hostname = generator_module.REVERSE_DNS.get(dst_ip)
+            reverse_hostname = executor._scenario_fqdn_for_ip(
+                dst_ip
+            ) or generator_module.REVERSE_DNS.get(dst_ip)
             if reverse_hostname is not None:
                 hostname = reverse_hostname
                 hostname_from_reverse_dns = True
@@ -1267,7 +1269,7 @@ class NetworkTransactionPlanner:
                     history = {
                         "REJ": "Sr",
                         "S0": "S",
-                        "OTH": "Cc",
+                        "OTH": rng.choice(("DAd", "DdA", "ADad")),
                         "S2": "ShADadF",
                         "S3": "ShADadf",
                         "RSTO": "ShADaR",
@@ -1331,6 +1333,8 @@ class NetworkTransactionPlanner:
                         tcp_weights = [entry[1] for entry in candidates]
                 entry = rng.choices(tcp_entries, weights=tcp_weights, k=1)[0]
                 conn_state, _, history = entry
+                if conn_state == "OTH":
+                    history = rng.choice(("DAd", "DdA", "ADad"))
             else:
                 conn_state = "S0"
                 history = "S"

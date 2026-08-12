@@ -174,6 +174,86 @@ def test_generated_windows_browser_proxy_agents_exclude_legacy_ie():
     )
 
 
+def test_explicit_multipart_curl_remains_authoritative_proxy_socket_owner() -> None:
+    """An exact curl form command owns its upload even beyond a generic curl timeout."""
+    start = datetime(2024, 3, 18, 15, 58, 35, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start)
+    generator = ActivityGenerator(state, {})
+    source = System(
+        hostname="WS-LINUX-01",
+        ip="10.10.1.21",
+        os="Ubuntu 22.04",
+        type="workstation",
+    )
+    proxy = System(
+        hostname="PROXY-01",
+        ip="10.10.3.20",
+        os="Ubuntu 22.04",
+        type="server",
+        roles=["forward_proxy"],
+    )
+    archive = "/tmp/mhs-support-48217.tar.gz"
+    command = (
+        "/usr/bin/curl --proxy http://proxy.example:8080 "
+        f"--form diagnostics=@{archive};type=application/gzip "
+        "http://support.example/api/v1/cases/MHS-48217/attachments"
+    )
+    pid = state.create_process(
+        system=source.hostname,
+        parent_pid=0,
+        image="/usr/bin/curl",
+        command_line=command,
+        username="analyst",
+        integrity_level="Medium",
+        logon_id="0x1234",
+    )
+    multipart = build_http_multipart_context(
+        HttpMultipartEntitySpec.model_validate(
+            {
+                "media_type": "multipart/form-data",
+                "parts": [
+                    {
+                        "name": "diagnostics",
+                        "body_len": 1024,
+                        "local_source_path": archive,
+                        "filename": "mhs-support-48217.tar.gz",
+                    }
+                ],
+            }
+        ),
+        stable_key="explicit-owner",
+    )
+    http = HttpContext(
+        method="POST",
+        host="support.example",
+        uri="/api/v1/cases/MHS-48217/attachments",
+        request_body_len=multipart.body_len,
+        request_multipart=multipart,
+    )
+
+    image = generator._caller_explicit_proxy_process_image(
+        source_system=source,
+        pid=pid,
+        process_image="/usr/bin/curl",
+        time=start + timedelta(seconds=30),
+        proxy_context=ProxyContext(
+            client_ip=source.ip,
+            method="POST",
+            url=http.uri,
+            host=http.host,
+            status_code=200,
+            user_agent="curl/7.81.0",
+            proxy_fqdn="proxy.example",
+        ),
+        proxy_sys=proxy,
+        dst_port=80,
+        http=http,
+    )
+
+    assert image == "/usr/bin/curl"
+
+
 def test_activity_generator_collapses_generated_browser_family_user_agents():
     generator = ActivityGenerator(StateManager(), {})
     workstation = System(

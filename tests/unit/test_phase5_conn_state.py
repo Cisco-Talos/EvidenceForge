@@ -98,6 +98,8 @@ class TestConnStateDistribution:
         valid_histories: dict[str, set[str]] = {}
         for state, _, hist in TCP_CONN_STATE_DISTRIBUTION:
             valid_histories.setdefault(state, set()).add(hist)
+        valid_histories["OTH"].update({"DAd", "DdA", "ADad"})
+        assert all("C" not in history and "c" not in history for history in valid_histories["OTH"])
         # TLS handshake failures can refine an initially successful TCP connection
         # into partial-handshake Zeek states after service-layer context is built.
         valid_histories.setdefault("SH", set()).add("Sh")

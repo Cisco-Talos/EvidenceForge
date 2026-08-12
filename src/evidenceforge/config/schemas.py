@@ -61,6 +61,7 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
     http_methods: list[str] = Field(default_factory=list)
     http_statuses: list[int] = Field(default_factory=list)
     requires_http_body: bool = False
+    tls_server_names: list[str] = Field(default_factory=list)
     file_mime_types: list[str] = Field(default_factory=list)
     semantic_claim: Literal[
         "flow_metadata",
@@ -109,6 +110,19 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
             raise ValueError("file_mime_types must not contain duplicates")
         return normalized
 
+    @field_validator("tls_server_names")
+    @classmethod
+    def normalize_tls_server_names(cls, values: list[str]) -> list[str]:
+        """Normalize exact or suffix-wildcard TLS server-name requirements."""
+        normalized = [value.strip().lower().rstrip(".") for value in values]
+        if any(
+            not value or (value.startswith("*.") and value.count("*") > 1) for value in normalized
+        ):
+            raise ValueError("tls_server_names must contain non-empty exact or *.suffix names")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("tls_server_names must not contain duplicates")
+        return normalized
+
     @model_validator(mode="after")
     def validate_semantic_combination(self) -> Self:
         """Reject predicates that cannot be evaluated coherently."""
@@ -121,6 +135,8 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
             raise ValueError("HTTP-specific fields require application_protocol='http'")
         if self.requires_http_body and self.payload_direction not in {"orig", "either"}:
             raise ValueError("requires_http_body needs orig/either payload_direction")
+        if self.tls_server_names and self.application_protocol != "tls":
+            raise ValueError("tls_server_names requires application_protocol='tls'")
         if self.file_mime_types and self.semantic_claim != "file_content":
             raise ValueError("file_mime_types requires semantic_claim='file_content'")
         if self.phase == "response" and not self.requires_response:

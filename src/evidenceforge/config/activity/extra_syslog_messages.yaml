@@ -479,6 +479,7 @@ programs:
   - app: systemd-resolved
     distro: ubuntu
     weight: 1
+    max_per_host_window: 4
     params:
       feature_set:
         - UDP
@@ -501,10 +502,8 @@ programs:
         - "1232"
         - "1472"
     messages:
-      - "Using degraded feature set {degraded_feature_set} instead of UDP+EDNS0 for DNS server {dns_server} after transaction {0}."
-      - "Grace period over, resuming full feature set UDP+EDNS0 for DNS server {dns_server} after probe {0}."
-      - "Flushed {cache_bucket} cache scope {scope} after DNS server {dns_server} changed features."
-      - "Transaction {0} switched to {feature_set} with advertised UDP packet size {packet_size}."
+      - "Using degraded feature set {degraded_feature_set} instead of UDP+EDNS0 for DNS server {dns_server}."
+      - "Grace period over, resuming full feature set (UDP+EDNS0) for DNS server {dns_server}."
 
   - app: thermald
     system_types: [workstation]

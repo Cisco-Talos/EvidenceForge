@@ -1255,6 +1255,12 @@ class StateManager:
         if pid in self._fixed_pid_reservations.get(system, set()):
             return True
         candidate_end = release_time or datetime.max.replace(tzinfo=start_time.tzinfo)
+        ended = self._ended_processes_by_key.get((system, pid))
+        if ended is not None and ended.end_time is not None:
+            ended_start = ensure_utc(ended.start_time)
+            ended_end = ensure_utc(ended.end_time)
+            if ensure_utc(start_time) <= ended_end and ended_start <= ensure_utc(candidate_end):
+                return True
         for reserved_start, reserved_end in self._transient_pid_reservations.get(system, {}).get(
             pid, ()
         ):

@@ -209,6 +209,38 @@ class TestWindowsEventEmitter:
         assert rendered["ProcessName"] == expected_process
         assert rendered["ProcessId"] == f"0x{emitter._system_pids['WIN-TEST-01'][expected_role]:x}"
 
+    def test_render_logoff_uses_host_lsass_provider_pid(self, format_def, temp_output):
+        """A missing per-event PID must resolve to the host's canonical LSASS PID."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        emitter.emit_event = Mock()
+        emitter._system_pids = {"WIN-TEST-01": {"lsass": 4292}}
+        host = HostContext(
+            hostname="WIN-TEST-01",
+            ip="10.0.0.10",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WIN-TEST-01.corp.local",
+            netbios_domain="CORP",
+        )
+        event = OccurrenceBuilder(
+            timestamp=datetime(2024, 1, 15, 10, 31, tzinfo=UTC),
+            event_type="logoff",
+            dst_host=host,
+            auth=AuthContext(
+                username="jsmith",
+                user_sid="S-1-5-21-1-2-3-1001",
+                logon_id="0x12345",
+                logon_type=3,
+            ),
+        )
+
+        emitter._render_logoff(event)
+
+        rendered = emitter.emit_event.call_args.args[0]
+        assert rendered["ExecutionProcessID"] == 4292
+
     def test_emit_event_aligns_provider_execution_ids(self, format_def, temp_output):
         """Security XML provider PID/TID values should look Windows-native."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)

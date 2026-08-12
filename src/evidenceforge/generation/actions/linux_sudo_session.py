@@ -43,7 +43,6 @@ class LinuxSudoSessionRequest:
     command_message: str
     sudo_user: str
     uid: int
-    pid: int
     runtime: timedelta
     source: str = "baseline"
 
@@ -54,8 +53,6 @@ class LinuxSudoSessionRequest:
             raise ValueError("Linux sudo session requests require one allowed COMMAND= message")
         if not self.sudo_user.strip():
             raise ValueError("Linux sudo session requests require a non-empty invoking user")
-        if self.pid <= 0:
-            raise ValueError("Linux sudo session requests require a positive process ID")
         if self.runtime < timedelta(0):
             raise ValueError("Linux sudo session runtime cannot be negative")
 
@@ -66,7 +63,7 @@ class LinuxSudoSessionRequest:
         seed = _stable_seed(
             "action_bundle:linux_sudo_session:"
             f"{self.system.hostname}:{self.time.isoformat()}:{self.command_message}:"
-            f"{self.sudo_user}:{self.uid}:{self.pid}:{self.runtime.total_seconds()}:{self.source}"
+            f"{self.sudo_user}:{self.uid}:{self.runtime.total_seconds()}:{self.source}"
         )
         return f"linux-sudo-session-{seed:016x}"
 
@@ -86,6 +83,31 @@ class LinuxSudoSessionExecutor(Protocol):
         auth: object | None = None,
     ) -> None:
         """Dispatch one canonical syslog event."""
+        ...
+
+    def generate_linux_sudo_processes(
+        self,
+        *,
+        system: System,
+        sudo_time: datetime,
+        child_time: datetime,
+        sudo_user: str,
+        tty: str,
+        command: str,
+        reserve_until: datetime,
+        lifecycle_group_id: str,
+    ) -> tuple[int, int | None, timedelta, str]:
+        """Create session-owned sudo and elevated child processes."""
+        ...
+
+    def terminate_linux_sudo_process(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        pid: int,
+    ) -> None:
+        """Terminate one session-owned sudo-family process."""
         ...
 
 
@@ -111,7 +133,7 @@ class LinuxSudoSessionActionBundle:
         )
 
     def execute(self) -> None:
-        """Emit command authorization, PAM open, then PAM close with one PID."""
+        """Emit one endpoint process around the ordered sudo/PAM lifecycle."""
 
         request = self._request
         auth = AuthContext(
@@ -121,6 +143,7 @@ class LinuxSudoSessionActionBundle:
             elevated=True,
         )
         timing_seed = _stable_seed(f"{request.stable_id}:source_timing")
+        process_time = request.time - timedelta(milliseconds=30 + ((timing_seed >> 24) % 71))
         open_time = request.time + timedelta(milliseconds=12 + (timing_seed % 289))
         close_time = (
             request.time
@@ -128,13 +151,40 @@ class LinuxSudoSessionActionBundle:
             + timedelta(milliseconds=120 + ((timing_seed >> 12) % 831))
         )
         close_time = max(close_time, open_time + timedelta(milliseconds=1))
+        command = request.command_message.split("COMMAND=", 1)[1].strip()
+        tty = (
+            request.command_message.split("TTY=", 1)[1].split(" ;", 1)[0].strip()
+            if "TTY=" in request.command_message
+            else "unknown"
+        )
+        group_id = request.stable_id
+        pid, child_pid, timing_shift, effective_tty = self._executor.generate_linux_sudo_processes(
+            system=request.system,
+            sudo_time=process_time,
+            child_time=open_time + timedelta(milliseconds=1),
+            sudo_user=request.sudo_user,
+            tty=tty,
+            command=command,
+            reserve_until=close_time,
+            lifecycle_group_id=group_id,
+        )
+        if pid <= 0:
+            return
+        command_time = request.time + timing_shift
+        open_time += timing_shift
+        close_time += timing_shift
 
+        command_message = request.command_message.replace(
+            f"TTY={tty} ;",
+            f"TTY={effective_tty} ;",
+            1,
+        )
         self._executor.generate_syslog_event(
             system=request.system,
-            time=request.time,
+            time=command_time,
             app_name="sudo",
-            message=request.command_message,
-            pid=request.pid,
+            message=command_message,
+            pid=pid,
             facility=10,
             severity=5,
             auth=auth,
@@ -147,7 +197,7 @@ class LinuxSudoSessionActionBundle:
                 "pam_unix(sudo:session): session opened for user "
                 f"root(uid=0) by {request.sudo_user}(uid={request.uid})"
             ),
-            pid=request.pid,
+            pid=pid,
             facility=10,
             severity=6,
             auth=auth,
@@ -157,8 +207,21 @@ class LinuxSudoSessionActionBundle:
             time=close_time,
             app_name="sudo",
             message="pam_unix(sudo:session): session closed for user root",
-            pid=request.pid,
+            pid=pid,
             facility=10,
             severity=6,
             auth=auth,
+        )
+        if child_pid is not None:
+            self._executor.terminate_linux_sudo_process(
+                system=request.system,
+                time=max(
+                    open_time + timedelta(milliseconds=2), close_time - timedelta(milliseconds=1)
+                ),
+                pid=child_pid,
+            )
+        self._executor.terminate_linux_sudo_process(
+            system=request.system,
+            time=close_time + timedelta(milliseconds=10 + ((timing_seed >> 32) % 41)),
+            pid=pid,
         )

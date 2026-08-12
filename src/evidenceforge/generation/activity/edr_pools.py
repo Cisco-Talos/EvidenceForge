@@ -205,6 +205,7 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
         "registry_keys_hklm": _is_valid_registry_pool,
         "installed_software_products": _is_valid_installed_software_products,
         "group_policy_extension_guids": _is_valid_guid_string_list,
+        "linux_service_users": _is_valid_string_list,
     }
     sanitized = dict(defaults)
     for key, validator in validators.items():
@@ -254,7 +255,8 @@ def is_service_account(os_category: str, user: str) -> bool:
         return True
     if os_category == "windows":
         return account.upper() in _WINDOWS_SERVICE_USERS or account.endswith("$")
-    return account.lower() in _LINUX_SERVICE_USERS
+    configured = {str(value).lower() for value in load_edr_pools().get("linux_service_users", [])}
+    return account.lower() in _LINUX_SERVICE_USERS or account.lower() in configured
 
 
 def file_path_templates_for_user(

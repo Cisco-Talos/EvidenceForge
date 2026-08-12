@@ -1596,6 +1596,113 @@ class TestActivityGenerator:
         assert logind_events[0].auth.logon_id == logon_id
         assert logind_events[0].auth.session_id == sessions[0].session_id
 
+    def test_linux_local_session_emits_one_login_and_shares_login_process_pid(
+        self, state_manager, test_user
+    ):
+        """One local session owns one LOGIN occurrence and one PAM/eCAR login PID."""
+        syslog_emitter = Mock()
+        syslog_emitter.can_handle.side_effect = lambda event: event.syslog is not None
+        ecar_emitter = Mock()
+        ecar_emitter.can_handle.side_effect = lambda event: (
+            event.event_type
+            in {
+                "logon",
+                "process_create",
+            }
+        )
+        emitters = {"syslog": syslog_emitter, "ecar": ecar_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        linux_server = System(
+            hostname="APP-LINUX-01",
+            ip="10.0.0.42",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        logon_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        logon_id = "0x12345"
+
+        first_id = activity_gen.generate_logon(
+            test_user,
+            linux_server,
+            logon_time,
+            logon_type=2,
+            logon_id=logon_id,
+            lifecycle_group_id="first-consumer",
+        )
+        second_id = activity_gen.generate_logon(
+            test_user,
+            linux_server,
+            logon_time,
+            logon_type=2,
+            logon_id=logon_id,
+            lifecycle_group_id="sibling-consumer",
+        )
+        shell_pid = activity_gen.ensure_linux_session_shell(
+            user=test_user,
+            target_system=linux_server,
+            logon_id=logon_id,
+            logon_time=logon_time,
+            activity_time=logon_time + timedelta(minutes=10),
+        )
+
+        events = [call.args[0] for call in ecar_emitter.emit.call_args_list]
+        login_events = [event for event in events if event.event_type == "logon"]
+        process_events = [
+            event
+            for event in events
+            if event.event_type == "process_create" and event.process.image == "/bin/login"
+        ]
+        pam_event = next(
+            call.args[0]
+            for call in syslog_emitter.emit.call_args_list
+            if "pam_unix(login:session): session opened" in call.args[0].syslog.message
+        )
+
+        assert first_id == second_id == logon_id
+        assert shell_pid is not None
+        assert len(login_events) == 1
+        assert len(process_events) == 1
+        assert pam_event.syslog.pid == process_events[0].process.pid
+
+    def test_linux_sudo_bootstrap_before_window_is_registered_without_login_event(
+        self, state_manager, test_user
+    ):
+        """Carried-in sudo sessions should be state, not boundary LOGIN initiators."""
+        ecar_emitter = Mock()
+        ecar_emitter.can_handle.return_value = True
+        emitters = {"ecar": ecar_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        scenario_start = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        activity_gen._scenario_start_time = scenario_start
+        activity_gen._scenario_end_time = scenario_start + timedelta(hours=6)
+        linux_server = System(
+            hostname="APP-LINUX-01",
+            ip="10.0.0.42",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+
+        sudo_pid, child_pid, _, _ = activity_gen.generate_linux_sudo_processes(
+            system=linux_server,
+            sudo_time=scenario_start + timedelta(seconds=30),
+            child_time=scenario_start + timedelta(seconds=30, milliseconds=200),
+            sudo_user=test_user.username,
+            tty="pts/1",
+            command="/usr/bin/id",
+            reserve_until=scenario_start + timedelta(seconds=32),
+            lifecycle_group_id="sudo-test",
+        )
+
+        sessions = state_manager.get_sessions_for_user(test_user.username)
+        emitted_types = [call.args[0].event_type for call in ecar_emitter.emit.call_args_list]
+        assert sudo_pid > 0
+        assert child_pid is not None
+        assert len(sessions) == 1
+        assert sessions[0].start_time < scenario_start
+        assert "logon" not in emitted_types
+
     def test_linux_local_logon_with_stale_ssh_kind_gets_logind_companion(
         self, state_manager, test_user
     ):

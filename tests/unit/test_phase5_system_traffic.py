@@ -103,6 +103,32 @@ def test_networkmanager_message_timestamp_uses_epoch_time():
     assert _networkmanager_message_timestamp(ts) == "1710763719.7580"
 
 
+def test_systemd_resolved_messages_follow_native_feature_state_transitions():
+    """Resolver health must degrade then resume the same server with native wording."""
+    baseline = object.__new__(BaselineMixin)
+    entry = {
+        "params": {"degraded_feature_set": ["UDP"]},
+        "messages": [
+            "Using degraded feature set {degraded_feature_set} instead of UDP+EDNS0 "
+            "for DNS server {dns_server}.",
+            "Grace period over, resuming full feature set (UDP+EDNS0) for DNS server {dns_server}.",
+        ],
+    }
+    rng = random.Random(3)
+
+    degraded = baseline._render_systemd_resolved_message(
+        entry, "APP-01", ["10.0.0.1", "10.0.0.2"], rng
+    )
+    resumed = baseline._render_systemd_resolved_message(
+        entry, "APP-01", ["10.0.0.1", "10.0.0.2"], rng
+    )
+
+    assert "Using degraded feature set UDP" in degraded
+    assert "after transaction" not in degraded
+    assert "resuming full feature set (UDP+EDNS0)" in resumed
+    assert degraded.rsplit(" ", 1)[-1] == resumed.rsplit(" ", 1)[-1]
+
+
 def test_windows_singleton_service_image_uses_system_process_catalog():
     """Endpoint service agents marked singleton in config should be recognized."""
     assert _is_windows_singleton_service_image(

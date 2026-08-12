@@ -72,6 +72,7 @@ class SignaturePredicate:
     http_methods: tuple[str, ...] = ()
     http_statuses: tuple[int, ...] = ()
     requires_http_body: bool = False
+    tls_server_names: tuple[str, ...] = ()
     file_mime_types: tuple[str, ...] = ()
     semantic_claim: SemanticClaim = "flow_metadata"
 
@@ -92,6 +93,8 @@ class SignaturePredicate:
             raise ValueError("HTTP-specific IDS predicates require application_protocol='http'")
         if self.requires_http_body and self.payload_direction not in {"orig", "either"}:
             raise ValueError("HTTP request bodies require orig/either payload direction")
+        if self.tls_server_names and self.application_protocol != "tls":
+            raise ValueError("TLS server-name requirements need application_protocol='tls'")
         if self.file_mime_types and self.semantic_claim != "file_content":
             raise ValueError("IDS file MIME requirements need semantic_claim='file_content'")
 

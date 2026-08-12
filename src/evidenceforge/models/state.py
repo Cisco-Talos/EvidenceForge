@@ -73,6 +73,7 @@ class ActiveSession:
     session_shell_pid: int | None = None  # Linux: per-session bash login shell
     session_user_manager_pid: int | None = None  # Linux: per-session systemd --user
     session_winlogon_pid: int | None = None  # Windows: per-RDP-session winlogon
+    login_occurrence_emitted: bool = False
     process_tree_root: int | None = None
     last_activity_time: datetime | None = None
     network_close_time: datetime | None = None

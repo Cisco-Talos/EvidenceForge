@@ -29,7 +29,7 @@ and writes to per-host FQDN directories as windows_event_sysmon.xml.
 
 import hashlib
 import random
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty
 from threading import Lock, local
@@ -1978,6 +1978,7 @@ class SysmonEventEmitter(LogEmitter):
                 coerce_windows_event_id(event.get("EventID")),
             )
         self._sync_utc_time_fields()
+        self._shift_followon_utc_times_after_process_create()
         self._sync_process_guids_to_event1_times()
 
         for event in self._event_dicts:
@@ -2140,6 +2141,39 @@ class SysmonEventEmitter(LogEmitter):
             ):
                 repair_delta = envelope_time - initial_envelope
                 event["UtcTime"] = _format_sysmon_utc_time(native_time + repair_delta)
+
+    def _shift_followon_utc_times_after_process_create(self) -> None:
+        """Keep provider-native dependent timestamps after the owning Event 1."""
+
+        create_times: dict[tuple[str, str], str] = {}
+        for event in self._event_dicts:
+            if event.get("EventID") != 1 or not event.get("ProcessGuid"):
+                continue
+            utc_time = event.get("UtcTime")
+            if isinstance(utc_time, str):
+                create_times[(str(event.get("Computer", "")), str(event["ProcessGuid"]))] = utc_time
+
+        for event in self._event_dicts:
+            if event.get("EventID") == 1:
+                continue
+            guid = (
+                event.get("ProcessGuid")
+                or event.get("SourceProcessGuid")
+                or event.get("SourceProcessGUID")
+            )
+            utc_time = event.get("UtcTime")
+            if not guid or not isinstance(utc_time, str):
+                continue
+            create_time = create_times.get((str(event.get("Computer", "")), str(guid)))
+            if create_time is None or utc_time > create_time:
+                continue
+            shifted = datetime.strptime(create_time, "%Y-%m-%d %H:%M:%S.%f").replace(
+                tzinfo=UTC
+            ) + timedelta(milliseconds=1)
+            shifted_text = _format_sysmon_utc_time(shifted)
+            event["UtcTime"] = shifted_text
+            if event.get("EventID") == 11:
+                event["CreationUtcTime"] = shifted_text
 
     def _shift_terminations_after_followons(self) -> None:
         """Prevent Event 5 from preceding visible same-process follow-on telemetry."""

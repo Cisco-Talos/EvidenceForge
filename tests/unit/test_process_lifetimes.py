@@ -6,6 +6,7 @@
 import random
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -72,6 +73,11 @@ def test_sqlcmd_select_query_has_bounded_foreground_lifetime() -> None:
         (
             r"C:\Windows\System32\conhost.exe",
             "conhost.exe 0x4",
+            900.0,
+        ),
+        (
+            r"C:\Windows\System32\taskhostw.exe",
+            "taskhostw.exe /Run",
             900.0,
         ),
     ],
@@ -699,6 +705,43 @@ def test_hourly_module_noise_keeps_long_running_windows_processes() -> None:
     )
 
     assert _eligible_for_hourly_module_load(proc, start + timedelta(hours=2))
+
+
+def test_image_load_after_exact_process_termination_is_suppressed() -> None:
+    start = datetime(2024, 3, 18, 13, 28, 11, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start)
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    dispatcher.dispatch_builder = Mock()
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    system = System(
+        hostname="WS-01",
+        ip="10.10.1.44",
+        os="Windows 11",
+        type="workstation",
+    )
+    user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.local")
+    pid = state.create_process(
+        system=system.hostname,
+        parent_pid=4,
+        image=r"C:\Windows\System32\cmd.exe",
+        command_line="cmd.exe /c whoami",
+        username=user.username,
+        integrity_level="Medium",
+        logon_id="0x1234",
+    )
+    state.end_process(system.hostname, pid, end_time=start + timedelta(seconds=2))
+
+    generator.generate_image_load(
+        user=user,
+        system=system,
+        time=start + timedelta(minutes=3),
+        pid=pid,
+        image=r"C:\Windows\System32\cmd.exe",
+        dll_path=r"C:\Windows\System32\user32.dll",
+    )
+
+    dispatcher.dispatch_builder.assert_not_called()
 
 
 def test_process_termination_dedup_allows_reused_windows_pid() -> None:
