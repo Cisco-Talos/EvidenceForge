@@ -13,7 +13,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge.events.dispatcher import expand_formats
-from evidenceforge.models.exceptions import WorkloadLimitError
 from evidenceforge.models.scenario import Scenario
 
 _DURATION_PART = re.compile(r"(\d+)(ms|[dhms])")
@@ -302,13 +301,10 @@ def enforce_workload_limits(
     limits: WorkloadLimits | None = None,
     allow_large_workload: bool = False,
 ) -> WorkloadEstimate:
-    """Return the estimate or fail before generation allocates output/state."""
+    """Return an estimate without rejecting large workloads.
 
-    estimate = estimate_workload(scenario, scenario_root=scenario_root, limits=limits)
-    if estimate.limit_violations and not allow_large_workload:
-        details = "; ".join(estimate.limit_violations)
-        raise WorkloadLimitError(
-            "Projected workload exceeds the supported envelope: "
-            f"{details}. Use the explicit trusted large-workload override only after review."
-        )
-    return estimate
+    ``allow_large_workload`` remains as a compatibility-only library argument. Resource
+    projections and live machine capacity now inform non-fatal CLI warnings.
+    """
+    _ = allow_large_workload
+    return estimate_workload(scenario, scenario_root=scenario_root, limits=limits)

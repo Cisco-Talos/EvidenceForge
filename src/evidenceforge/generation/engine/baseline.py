@@ -36,6 +36,7 @@ import math
 import random
 import shlex
 import string
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -49,6 +50,7 @@ from evidenceforge.generation.actions import (
     IdsAlertRequest,
     ScheduledScanOverlapActionBundle,
     ScheduledScanOverlapRequest,
+    dhcp_renewal_interval_seconds,
 )
 from evidenceforge.generation.activity.auth_noise import (
     scheduled_stale_credentials_config,
@@ -121,6 +123,11 @@ from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
+
+# Some lifecycle planners author a process owner in a later traversal pass with
+# a canonical start earlier in the same workday. Keep that fixed scheduling
+# horizon open; elapsed scenario history behind it is still sealed every hour.
+_PID_ALLOCATION_OPEN_WINDOW = timedelta(hours=24)
 
 _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY = 0.28
 _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY = 0.18
@@ -479,8 +486,9 @@ def _dhcp_renewal_epochs_for_hour(
     renewal_interval: float,
     current_hour: datetime,
     next_renewal: float | None = None,
+    renewal_interval_factory: Callable[[], float] | None = None,
 ) -> tuple[list[tuple[float, float]], float, float | None]:
-    """Return renewals due in an hour from one lease-scoped T1 interval."""
+    """Return renewals due in an hour from evolving client timer state."""
 
     renewal_interval = max(60.0, renewal_interval)
     hour_start_epoch = current_hour.timestamp()
@@ -501,9 +509,20 @@ def _dhcp_renewal_epochs_for_hour(
             candidate_renewal = next_renewal
             next_renewal = None
 
-        if candidate_renewal >= hour_end_epoch and previous_visible_index is None:
+        if candidate_renewal >= hour_end_epoch:
+            if previous_visible_index is not None:
+                previous_epoch = due[previous_visible_index][0]
+                due[previous_visible_index] = (
+                    previous_epoch,
+                    max(60.0, candidate_renewal - previous_epoch),
+                )
             pending_next_renewal = candidate_renewal
             break
+        next_interval = (
+            max(60.0, renewal_interval_factory())
+            if renewal_interval_factory is not None
+            else renewal_interval
+        )
         if candidate_renewal >= hour_start_epoch:
             if previous_visible_index is not None:
                 previous_epoch = due[previous_visible_index][0]
@@ -511,15 +530,10 @@ def _dhcp_renewal_epochs_for_hour(
                     previous_epoch,
                     max(60.0, candidate_renewal - previous_epoch),
                 )
-            if candidate_renewal >= hour_end_epoch:
-                pending_next_renewal = candidate_renewal
-                break
-            due.append((candidate_renewal, renewal_interval))
+            due.append((candidate_renewal, next_interval))
             previous_visible_index = len(due) - 1
         schedule_anchor = candidate_renewal
-        if candidate_renewal >= hour_end_epoch:
-            break
-
+        renewal_interval = next_interval
     return due, schedule_anchor, pending_next_renewal
 
 
@@ -530,14 +544,12 @@ def _linux_baseline_session_initiator(
     system_type: str = "server",
 ) -> tuple[str, str, str]:
     """Return a plausible PAM initiator for ambient logind session noise."""
-    if system_type == "server":
-        service = rng.choices(("login", "su"), weights=(10, 90), k=1)[0]
-    elif user == "root":
-        service = rng.choices(("login", "su"), weights=(70, 30), k=1)[0]
+    if system_type == "server" or user == "root":
+        service = "login"
     else:
-        service = rng.choices(("login", "su"), weights=(90, 10), k=1)[0]
+        service = "gdm-password"
     app_name = service
-    opener = "LOGIN(uid=0)" if service == "login" else "(uid=0)"
+    opener = "LOGIN(uid=0)" if service == "login" else "gdm(uid=0)"
     message = (
         f"pam_unix({service}:session): session opened for user "
         f"{user}(uid={_linux_uid_for_user(user)}) by {opener}"
@@ -545,11 +557,10 @@ def _linux_baseline_session_initiator(
     return app_name, service, message
 
 
-def _linux_ambient_logind_probability(system_type: str) -> float:
-    """Return thinning probability for generic ambient logind session noise."""
-    if system_type == "server":
-        return 0.05
-    return 0.42
+def _linux_ambient_logind_session_budget(system_type: str, rng: random.Random) -> int:
+    """Return an hourly local-session budget independent of syslog volume."""
+    probability = 0.04 if system_type == "server" else 0.28
+    return int(rng.random() < probability)
 
 
 def _extra_syslog_service_values(
@@ -1200,12 +1211,12 @@ def _hawkes_params_from_persona(persona: Persona | None) -> dict:
 
 
 def _registry_writer_candidates(
-    key: str,
+    target: str,
     sys_pids: dict[str, int],
     desktop_user: str | None,
 ) -> list[tuple[int, str, str]]:
-    """Choose plausible registry writer processes for a key family."""
-    key_lower = key.lower()
+    """Choose plausible registry writer processes for a full target path."""
+    key_lower = target.lower()
 
     def _candidate(pid_key: str, image: str, user: str = "SYSTEM") -> tuple[int, str, str] | None:
         pid = sys_pids.get(pid_key)
@@ -1214,7 +1225,7 @@ def _registry_writer_candidates(
         return pid, image, user
 
     candidates: list[tuple[int, str, str] | None]
-    if key.startswith("HKCU\\"):
+    if target.startswith(("HKCU\\", "HKU\\")):
         if desktop_user is None:
             return []
         if "\\microsoft\\office\\" in key_lower:
@@ -1222,6 +1233,10 @@ def _registry_writer_candidates(
             # system processes. Their own process-side-effect path owns these writes.
             candidates = []
         elif "\\explorer\\" in key_lower or "\\windows\\shell\\" in key_lower:
+            candidates = [
+                _candidate("explorer", r"C:\Windows\explorer.exe", desktop_user),
+            ]
+        elif "\\internet settings\\" in key_lower:
             candidates = [
                 _candidate("explorer", r"C:\Windows\explorer.exe", desktop_user),
             ]
@@ -1234,6 +1249,10 @@ def _registry_writer_candidates(
                     desktop_user,
                 ),
             ]
+    elif "windows defender\\exclusions" in key_lower:
+        # Exclusion changes require an explicit administrative command. Defender
+        # scan processes observe the policy; they do not author ambient changes.
+        candidates = []
     elif "windows defender" in key_lower:
         candidates = [
             _candidate(
@@ -1248,6 +1267,21 @@ def _registry_writer_candidates(
         # CBS state is emitted only with a concrete TiWorker/TrustedInstaller
         # occurrence. Never fabricate that ownership through generic services.
         candidates = []
+    elif "currentversion\\run" in key_lower and "securityhealthsystray" in key_lower:
+        # This value is installed/configured by a concrete maintenance action;
+        # no durable seeded process in the baseline owns an ambient rewrite.
+        candidates = []
+    elif any(
+        marker in key_lower
+        for marker in (
+            "\\policies\\system",
+            "\\firewallpolicy\\",
+            "\\memory management",
+        )
+    ):
+        candidates = [
+            _candidate("svchost_local_system", r"C:\Windows\System32\svchost.exe"),
+        ]
     elif "windowsupdate" in key_lower:
         candidates = [
             _candidate("svchost_wusvcs", r"C:\Windows\System32\svchost.exe"),
@@ -1807,8 +1841,14 @@ class BaselineMixin:
         choice = self._pick_service_account_delegation_process(svc_name, rng, system)
         image = choice["image"]
         normalized_image = image.replace("/", "\\").lower()
+        command_line = str(choice.get("command_line") or image)
+        bounded_lifetime = _windows_foreground_lifetime(image, command_line)
         candidates = []
-        for proc in self.state_manager.get_processes_on_system(system.hostname):
+        for proc in (
+            []
+            if bounded_lifetime is not None
+            else self.state_manager.get_processes_on_system(system.hostname)
+        ):
             if proc.start_time > time:
                 continue
             if proc.username.upper() != "SYSTEM":
@@ -1830,10 +1870,20 @@ class BaselineMixin:
             system=system,
             time=process_time,
             process_name=image,
-            command_line=str(choice.get("command_line") or image),
+            command_line=command_line,
             parent_pid=parent_pid,
             username="SYSTEM",
         )
+        if bounded_lifetime is not None:
+            termination_time = time + timedelta(seconds=rng.uniform(*bounded_lifetime))
+            self.activity_generator.generate_system_process_termination(
+                system=system,
+                time=termination_time,
+                pid=pid,
+                process_name=image,
+                parent_pid=parent_pid,
+                username="SYSTEM",
+            )
         return image, pid
 
     def _next_rsyslog_fd(self, hostname: str, rng: random.Random) -> int:
@@ -2772,7 +2822,7 @@ class BaselineMixin:
                 host_os=system.os,
             )
             writer_candidates = _registry_writer_candidates(
-                key,
+                f"{key}\\{value_name}",
                 sys_pids,
                 system.assigned_user,
             )
@@ -3222,11 +3272,13 @@ class BaselineMixin:
             hour_key = int(current_hour.timestamp())
             for _event_time, event_idx in self._storyline_by_hour.get(hour_key, []):
                 if event_idx not in self._storyline_executed:
+                    self.activity_generator.finalize_ssh_session_lifecycles(_event_time)
                     self._execute_single_storyline_event(event_idx)
                     self._storyline_executed.add(event_idx)
 
             for _event_time, event_idx in self._red_herring_by_hour.get(hour_key, []):
                 if event_idx not in self._red_herring_executed:
+                    self.activity_generator.finalize_ssh_session_lifecycles(_event_time)
                     self._execute_single_red_herring_event(event_idx)
                     self._red_herring_executed.add(event_idx)
 
@@ -3247,6 +3299,7 @@ class BaselineMixin:
         if len(recipients) < 2:
             return
         hourly_rate = email_config.background_messages_per_user_per_day / 24.0
+        planned_messages: list[tuple[datetime, EmailMessageEventSpec, User, System]] = []
         for user in recipients:
             rng = random.Random(
                 _stable_seed(f"baseline_email:{self.scenario.name}:{user.username}:{current_hour}")
@@ -3304,6 +3357,12 @@ class BaselineMixin:
                 mail_action="deliver",
                 outcome="delivered",
             )
+            planned_messages.append((event_time, spec, actor, actor_system))
+
+        for event_time, spec, actor, actor_system in sorted(
+            planned_messages,
+            key=lambda planned: planned[0],
+        ):
             self.activity_generator.generate_email_message(
                 spec=spec,
                 actor=actor,
@@ -3859,7 +3918,11 @@ class BaselineMixin:
                 self._generate_hour(
                     current_hour, enabled_users, emit_storylines=False, flush_emitters=False
                 )
-                self.state_manager.sweep_closed_connections(current_hour + timedelta(hours=1))
+                next_hour = current_hour + timedelta(hours=1)
+                self.state_manager.sweep_closed_connections(next_hour)
+                allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
+                self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
+                self.activity_generator.advance_process_state_watermark(allocation_cutoff)
                 current_hour += timedelta(hours=1)
 
             logger.info(f"Warm-up complete: processed {warmup_count} hours")
@@ -3891,7 +3954,11 @@ class BaselineMixin:
 
             self._generate_hour(current_hour, enabled_users)
             # Evict completed/failed connections to bound memory during long runs
-            self.state_manager.sweep_closed_connections(current_hour + timedelta(hours=1))
+            next_hour = current_hour + timedelta(hours=1)
+            self.state_manager.sweep_closed_connections(next_hour)
+            allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
+            self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
+            self.activity_generator.advance_process_state_watermark(allocation_cutoff)
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
@@ -4538,12 +4605,27 @@ class BaselineMixin:
             if pattern_type == "after_hours_admin":
                 result = generate_after_hours_admin(rng, enabled_users, systems, current_hour)
                 if result:
-                    self.activity_generator.generate_logon(
-                        user=result["user"],
-                        system=result["system"],
-                        time=result["time"],
-                        logon_type=result["logon_type"],
-                    )
+                    target_system = result["system"]
+                    if (
+                        hasattr(self, "world_planner")
+                        and _get_os_category(target_system.os) == "linux"
+                        and (target_system.type or "workstation").lower()
+                        in {"server", "domain_controller"}
+                    ):
+                        self.world_planner.ensure_user_session(
+                            result["user"],
+                            target_system,
+                            result["time"],
+                            rng,
+                            session_kind="ssh",
+                        )
+                    else:
+                        self.activity_generator.generate_logon(
+                            user=result["user"],
+                            system=target_system,
+                            time=result["time"],
+                            logon_type=result["logon_type"],
+                        )
 
             elif pattern_type == "suspicious_cli":
                 result = generate_suspicious_cli(
@@ -5363,7 +5445,7 @@ class BaselineMixin:
             for session in list(sessions):
                 # Never baseline-close a storyline-created session — the
                 # storyline controls when these sessions end.
-                if session.storyline_protected:
+                if session.storyline_protected or session.closure_owned_by_bundle:
                     continue
                 network_close_time = getattr(session, "network_close_time", None)
                 if session.session_kind == "ssh" and network_close_time is not None:
@@ -5440,7 +5522,7 @@ class BaselineMixin:
                 continue
             # Re-check protection — storyline may have marked this session
             # as protected after logoff was planned earlier in the hour.
-            if session.storyline_protected:
+            if session.storyline_protected or session.closure_owned_by_bundle:
                 continue
             user = user_map.get(session.username)
             if not user:
@@ -5855,6 +5937,7 @@ class BaselineMixin:
         planned_logoffs: dict[tuple[str, str], float] | None = None,
     ) -> None:
         """Generate activity for user at specified time."""
+        self.activity_generator.finalize_ssh_session_lifecycles(event_time)
         rng = _get_rng()
         if hasattr(self, "world_model"):
             system = self.world_model.pick_activity_system(user, rng)
@@ -7041,6 +7124,12 @@ class BaselineMixin:
                     source_system=system,
                     hostname=hostname,
                     pid=conn_pid,
+                    suppress_source_pid_inference=(
+                        os_cat == "linux"
+                        and conn_pid <= 0
+                        and conn.get("role") == "_external"
+                        and conn.get("service") in {"http", "ssl", "https"}
+                    ),
                 )
 
         # --- Inbound traffic (connections TO this host from other roles/external) ---
@@ -7752,6 +7841,13 @@ class BaselineMixin:
                     renewal_interval=dhcp_state["renewal_interval"],
                     current_hour=current_hour,
                     next_renewal=dhcp_state.get("next_renewal"),
+                    renewal_interval_factory=lambda lease=lease_time, state=dhcp_state: (
+                        dhcp_renewal_interval_seconds(
+                            lease,
+                            state["renewal_rng"],
+                            timer_granularity=state["timer_granularity"],
+                        )
+                    ),
                 )
                 if renewal_epochs:
                     from evidenceforge.utils.ids import generate_zeek_uid
@@ -7779,6 +7875,8 @@ class BaselineMixin:
                         dhcp_state=dhcp_state,
                     )
                 dhcp_state["last_renewal"] = updated_last_renewal
+                if renewal_epochs:
+                    dhcp_state["renewal_interval"] = renewal_epochs[-1][1]
                 if pending_next_renewal is None:
                     dhcp_state.pop("next_renewal", None)
                 else:
@@ -8132,7 +8230,7 @@ class BaselineMixin:
                         host_os=system.os,
                     )
                     writer_candidates = _registry_writer_candidates(
-                        _key,
+                        f"{_key}\\{_vname}",
                         sys_pids,
                         system.assigned_user,
                     )
@@ -8889,6 +8987,7 @@ class BaselineMixin:
             scenario_start = self.scenario.time_window.start
             boot_uptime = self._kernel_boot_uptimes.get(system.hostname, 500000.0)
             primary_interface = linux_primary_interface(system)
+            ambient_logind_budget = _linux_ambient_logind_session_budget(sys_type, rng)
 
             # Generate scheduled tasks (cron/systemd timers) at real frequencies
             self._generate_scheduled_tasks(
@@ -8997,23 +9096,17 @@ class BaselineMixin:
                                 severity=5,
                             )
                 elif source_roll < 0.32:
-                    if rng.random() >= _linux_ambient_logind_probability(sys_type):
+                    if ambient_logind_budget <= 0:
                         continue
+                    ambient_logind_budget -= 1
                     # Sequential session IDs per host (systemd-logind increments from boot)
                     sid = self.state_manager.next_linux_logind_session_id(system.hostname, rng, ts)
-                    # Use OS-appropriate usernames
                     if sys_type == "server":
-                        session_users = ["admin", "root"]
-                        session_weights = [24, 2]
-                        if not is_rhel_like:
-                            session_users.append("ubuntu")
-                            session_weights.append(1)
-                        user = rng.choices(session_users, weights=session_weights, k=1)[0]
+                        # Headless systems only get a rare, explicit local root console.
+                        user = "root"
                     else:
-                        session_users = ["root", "admin"]
-                        if not is_rhel_like:
-                            session_users.append("ubuntu")
-                        user = rng.choice(session_users)
+                        # Desktop sessions belong to the modeled workstation owner.
+                        user = system.assigned_user or "root"
                     pam_app, pam_service, pam_open = _linux_baseline_session_initiator(
                         user,
                         rng=rng,

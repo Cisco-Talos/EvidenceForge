@@ -9,6 +9,7 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.utils.rng import _stable_seed
 
 _CONFIG_PATH = get_activity_directory() / "smb_file_transfers.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
@@ -37,24 +38,6 @@ def reset_smb_file_transfers_cache() -> None:
     """Clear cached SMB file-transfer config. Intended for tests."""
     global _CACHED_DATA
     _CACHED_DATA = None
-
-
-_SHARES = ("Shared", "Departments", "Projects", "Public", "Operations")
-_DEPARTMENTS = ("Finance", "HR", "Legal", "IT", "Operations", "Sales")
-_PROJECTS = ("Phoenix", "Orion", "Atlas", "Northwind", "Quarterly")
-_BASENAMES = (
-    "budget-review",
-    "vendor-list",
-    "roadmap",
-    "staffing-plan",
-    "incident-notes",
-    "change-request",
-    "customer-export",
-    "runbook",
-    "inventory",
-    "meeting-notes",
-)
-_BINARY_EXTENSIONS = ("zip", "msi", "bak", "dat", "cab")
 
 
 def pick_smb_filename(
@@ -88,20 +71,55 @@ def pick_smb_filename(
     if not isinstance(candidate_templates, list) or not candidate_templates:
         return ""
 
-    basename = rng.choice(_BASENAMES)
-    if rng.random() < 0.35:
-        basename = f"{basename}-{rng.randint(2023, 2026)}"
-    if rng.random() < 0.15:
-        suffix = "".join(rng.choice(string.ascii_uppercase + string.digits) for _ in range(4))
-        basename = f"{basename}-{suffix}"
-
-    placeholders = {
-        "server": server.split(".")[0] or "fileserver",
-        "share": rng.choice(_SHARES),
-        "department": rng.choice(_DEPARTMENTS),
-        "project": rng.choice(_PROJECTS),
-        "basename": basename,
-        "ext": rng.choice(_BINARY_EXTENSIONS),
-        "user": user or "Public",
+    pool_defaults = {
+        "shares": ["Shared"],
+        "departments": ["Operations"],
+        "projects": ["Projects"],
+        "basenames": ["document"],
+        "binary_extensions": ["dat"],
     }
-    return str(rng.choice(candidate_templates)).format(**placeholders)
+    pools = {}
+    for key, defaults in pool_defaults.items():
+        values = [str(value) for value in config.get(key, []) if str(value)]
+        pools[key] = values or defaults
+
+    def _materialize_filename(local_rng: random.Random, *, add_novelty: bool) -> str:
+        lexical_subjects = [str(value) for value in config.get("lexical_subjects", []) if value]
+        lexical_kinds = [str(value) for value in config.get("lexical_document_kinds", []) if value]
+        lexical_qualifiers = [str(value) for value in config.get("lexical_qualifiers", []) if value]
+        composition_probability = float(config.get("lexical_composition_probability", 0.0))
+        if lexical_subjects and lexical_kinds and local_rng.random() < composition_probability:
+            basename = f"{local_rng.choice(lexical_subjects)}-{local_rng.choice(lexical_kinds)}"
+            if lexical_qualifiers and local_rng.random() < 0.45:
+                basename = f"{basename}-{local_rng.choice(lexical_qualifiers)}"
+        else:
+            basename = local_rng.choice(pools["basenames"])
+        if add_novelty and local_rng.random() < 0.35:
+            basename = f"{basename}-{local_rng.randint(2023, 2026)}"
+        if add_novelty and local_rng.random() < 0.15:
+            suffix = "".join(
+                local_rng.choice(string.ascii_uppercase + string.digits) for _ in range(4)
+            )
+            basename = f"{basename}-{suffix}"
+        placeholders = {
+            "server": server.split(".")[0] or "fileserver",
+            "share": local_rng.choice(pools["shares"]),
+            "department": local_rng.choice(pools["departments"]),
+            "project": local_rng.choice(pools["projects"]),
+            "basename": basename,
+            "ext": local_rng.choice(pools["binary_extensions"]),
+            "user": user or "Public",
+        }
+        return str(local_rng.choice(candidate_templates)).format(**placeholders)
+
+    working_set_probability = float(config.get("working_set_probability", 0.0))
+    working_set_size = max(1, int(config.get("working_set_size", 1)))
+    if rng.random() < working_set_probability:
+        stable_rng = random.Random(
+            _stable_seed(f"smb-working-set:{server.lower()}:{user.lower()}:{mime_type}")
+        )
+        working_set = [
+            _materialize_filename(stable_rng, add_novelty=False) for _ in range(working_set_size)
+        ]
+        return rng.choice(working_set)
+    return _materialize_filename(rng, add_novelty=True)

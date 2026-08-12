@@ -159,6 +159,76 @@ def test_windows_one_shot_shell_and_http_commands_have_bounded_lifetimes(
     assert lifetime[1] <= 25.0
 
 
+def test_cmd_c_wrapper_terminates_after_final_foreground_child() -> None:
+    """A noninteractive cmd wrapper closes just after its invoked child exits."""
+    start = datetime(2024, 3, 18, 17, 1, 30, tzinfo=UTC)
+    state = StateManager()
+    events = []
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    original_dispatch = dispatcher.dispatch
+
+    def capture(event):
+        events.append(event)
+        original_dispatch(event)
+
+    dispatcher.dispatch = capture
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    user = User(username="SYSTEM", full_name="SYSTEM", email="system@example.local")
+    system = System(
+        hostname="FILE-SRV-01",
+        ip="10.10.2.20",
+        os="Windows Server 2022",
+        type="server",
+    )
+    logon_id = state.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=5,
+        source_ip="-",
+        start_time=start - timedelta(minutes=5),
+    )
+    state.set_current_time(start)
+    parent_pid = state.create_process(
+        system.hostname,
+        4,
+        r"C:\Windows\System32\cmd.exe",
+        r"C:\Windows\System32\cmd.exe /c net view \\FILE-SRV-01",
+        user.username,
+        "System",
+        logon_id=logon_id,
+    )
+    state.set_current_time(start + timedelta(milliseconds=600))
+    child_pid = state.create_process(
+        system.hostname,
+        parent_pid,
+        r"C:\Windows\System32\net.exe",
+        r"net view \\FILE-SRV-01",
+        user.username,
+        "System",
+        logon_id=logon_id,
+    )
+
+    generator.generate_process_termination(
+        user=user,
+        system=system,
+        time=start + timedelta(seconds=2),
+        pid=child_pid,
+        process_name=r"C:\Windows\System32\net.exe",
+        logon_id=logon_id,
+    )
+
+    terminations = {
+        event.process.pid: event.timestamp
+        for event in events
+        if event.event_type == "process_terminate" and event.process is not None
+    }
+    assert child_pid in terminations
+    assert parent_pid in terminations
+    assert terminations[child_pid] < terminations[parent_pid]
+    assert terminations[parent_pid] - terminations[child_pid] <= timedelta(seconds=1)
+    assert state.get_process(system.hostname, parent_pid) is None
+
+
 @pytest.mark.parametrize(
     ("image", "command_line"),
     [
@@ -171,6 +241,30 @@ def test_linux_http_cli_commands_have_short_lifetimes(image: str, command_line: 
 
     assert lifetime is not None
     assert lifetime[1] <= 12.0
+
+
+@pytest.mark.parametrize(
+    ("image", "command_line", "maximum"),
+    [
+        ("/usr/bin/smbclient", "smbclient //FILE-SRV/Shared -c 'ls'", 20.0),
+        ("/usr/bin/git", "git pull origin release/v2.4", 90.0),
+        ("/usr/bin/npm", "npm run build", 180.0),
+        ("/usr/bin/python3", "python3 --version", 2.0),
+    ],
+)
+def test_linux_bounded_foreground_commands_use_executable_aware_lifetimes(
+    image: str,
+    command_line: str,
+    maximum: float,
+) -> None:
+    lifetime = _linux_foreground_lifetime(image, command_line)
+
+    assert lifetime is not None
+    assert lifetime[1] <= maximum
+
+
+def test_interactive_smbclient_is_not_forced_to_one_shot_lifetime() -> None:
+    assert _linux_foreground_lifetime("/usr/bin/smbclient", "smbclient //FILE-SRV/Shared") is None
 
 
 @pytest.mark.parametrize(
@@ -445,6 +539,51 @@ def test_finalize_foreground_process_lifetimes_preserves_commands_beyond_window(
         pid,
         start,
     )
+
+
+def test_process_watermark_drops_pid_scoped_state_before_reuse() -> None:
+    """A reused PID must not inherit timing, holds, or modules from its old instance."""
+    start = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start)
+    generator = ActivityGenerator(state, {})
+    pid = state.create_process(
+        "WS-01",
+        0,
+        r"C:\old.exe",
+        "old.exe",
+        "analyst",
+        "Medium",
+    )
+    old_key = generator._process_instance_key("WS-01", pid)
+    generator._process_source_create_times[old_key] = start
+    generator._process_source_terminate_times[old_key] = start + timedelta(seconds=1)
+    generator._process_connection_hold_until[old_key] = start + timedelta(seconds=2)
+    generator._loaded_modules_by_process.add(("WS-01", pid, start.isoformat(), r"c:\old.dll"))
+    generator._terminated_process_keys.add(old_key)
+    generator._terminated_process_times[old_key] = start + timedelta(seconds=3)
+    assert state.end_process("WS-01", pid, start + timedelta(seconds=3))
+
+    cutoff = start + timedelta(hours=1)
+    state.advance_pid_allocation_watermark(cutoff)
+    generator.advance_process_state_watermark(cutoff)
+    state._pid_counters["WS-01"] = pid
+    state.set_current_time(cutoff)
+    reused_pid = state.create_process(
+        "WS-01",
+        0,
+        r"C:\new.exe",
+        "new.exe",
+        "analyst",
+        "Medium",
+    )
+
+    assert reused_pid == pid
+    assert generator._process_instance_key("WS-01", pid) != old_key
+    assert generator.process_source_create_time("WS-01", pid) is None
+    assert generator.process_source_terminate_time("WS-01", pid) is None
+    assert not generator._loaded_modules_by_process
+    assert not generator._terminated_process_keys
 
 
 def test_expired_linux_curl_is_not_valid_for_later_network_attribution() -> None:

@@ -172,7 +172,7 @@ def test_temporal_allocation_index_matches_reference_queries() -> None:
 
 
 def test_temporal_allocation_index_prefix_summary_survives_splits() -> None:
-    """Large histories and later out-of-order inserts should keep exact temporal maxima."""
+    """Large histories and later out-of-order inserts keep exact tree summaries."""
     start = datetime(2026, 1, 1, tzinfo=UTC)
     index = TemporalAllocationIndex()
     records = [
@@ -189,6 +189,8 @@ def test_temporal_allocation_index_prefix_summary_survives_splits() -> None:
     after_insert = inserted[0] + timedelta(microseconds=1)
     assert index.max_value_at_or_before(before_insert) == 10_100
     assert index.max_value_at_or_before(after_insert) == inserted[1]
+    assert index.min_value_after(before_insert) == 10_101
+    assert index.first_record_after(before_insert) == inserted
 
 
 def test_temporal_allocation_index_matches_elapsed_delta_reference() -> None:

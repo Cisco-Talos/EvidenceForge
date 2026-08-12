@@ -25,6 +25,7 @@
 import json
 import random
 import tempfile
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -911,7 +912,21 @@ class TestFilesUidCorrelation:
         )
         smb_config = {
             "min_transfer_bytes": 1,
-            "mime_types": [{"mime_type": "application/zip", "weight": 1}],
+            "working_set_probability": 1.0,
+            "working_set_size": 1,
+            "shares": ["Installers"],
+            "departments": ["IT"],
+            "projects": ["Atlas"],
+            "basenames": ["agent"],
+            "binary_extensions": ["zip"],
+            "mime_types": [
+                {
+                    "mime_type": "application/zip",
+                    "weight": 1,
+                    "size_min": 12345,
+                    "size_max": 12345,
+                }
+            ],
             "analyzer_sets": [{"analyzers": ["MD5", "SHA1"], "weight": 1}],
             "filename_templates": [
                 {
@@ -931,10 +946,67 @@ class TestFilesUidCorrelation:
         assert ft is not None
         assert ft.timedout is False
         assert ft.missing_bytes == 0
-        assert ft.seen_bytes == request.transfer_bytes
+        assert ft.seen_bytes == 12345
+        assert ft.total_bytes == 12345
         assert ft.analyzers == ("MD5", "SHA1")
         assert ft.md5
         assert ft.sha1
+
+        repeated = SmbFileTransferMetadataActionBundle(
+            replace(request, transfer_bytes=8_000_000),
+            _AlwaysPeRandom(),
+            smb_config=smb_config,
+        ).execute()
+        assert repeated is not None
+        assert repeated.filename == ft.filename
+        assert repeated.total_bytes == ft.total_bytes
+        assert repeated.md5 == ft.md5
+        assert repeated.sha1 == ft.sha1
+
+    def test_smb_size_bands_create_stable_mid_sized_objects(self):
+        """Weighted size bands should escape the tiny-file floor without losing identity."""
+        config = {
+            "min_transfer_bytes": 1,
+            "working_set_probability": 1.0,
+            "working_set_size": 1,
+            "shares": ["Shared"],
+            "departments": ["Finance"],
+            "projects": ["Atlas"],
+            "basenames": ["forecast"],
+            "binary_extensions": ["zip"],
+            "mime_types": [
+                {
+                    "mime_type": "application/pdf",
+                    "weight": 1,
+                    "size_min": 1024,
+                    "size_max": 2048,
+                    "size_bands": [{"size_min": 262144, "size_max": 524288, "weight": 1}],
+                }
+            ],
+            "analyzer_sets": [{"analyzers": [], "weight": 1}],
+            "filename_templates": [
+                {
+                    "mime_types": ["application/pdf"],
+                    "templates": [r"\\{server}\Shared\forecast.pdf"],
+                    "weight": 1,
+                }
+            ],
+        }
+        request = SmbFileTransferMetadataRequest(
+            src_ip="10.0.0.5",
+            dst_ip="10.0.0.10",
+            transfer_bytes=2_000_000,
+            duration=3.0,
+            server="FILE-SRV-01",
+            user="alex",
+        )
+
+        first = SmbFileTransferMetadataActionBundle(request, random.Random(7), config).execute()
+        second = SmbFileTransferMetadataActionBundle(request, random.Random(7), config).execute()
+
+        assert first is not None and second is not None
+        assert 262144 <= first.total_bytes <= 524288
+        assert first.total_bytes == second.total_bytes
 
 
 class TestSmbFileTransferConfig:
@@ -972,13 +1044,20 @@ class TestSmbFileTransferConfig:
         from evidenceforge.generation.activity.smb_file_transfers import pick_smb_filename
 
         config = {
+            "working_set_probability": 0.0,
+            "working_set_size": 2,
+            "shares": ["Shared"],
+            "departments": ["Finance"],
+            "projects": ["Atlas"],
+            "basenames": ["audit-evidence"],
+            "binary_extensions": ["zip"],
             "filename_templates": [
                 {
                     "mime_types": ["application/pdf"],
                     "templates": [r"\\{server}\Evidence\{basename}.pdf"],
                     "weight": 1,
                 }
-            ]
+            ],
         }
 
         filename = pick_smb_filename(
@@ -991,3 +1070,79 @@ class TestSmbFileTransferConfig:
 
         assert filename.startswith("\\\\files01\\Evidence\\")
         assert filename.endswith(".pdf")
+
+    def test_filename_picker_reuses_durable_working_set_with_long_tail(self):
+        """Most SMB observations should revisit concrete files while retaining novel paths."""
+        from evidenceforge.generation.activity.smb_file_transfers import pick_smb_filename
+
+        config = {
+            "working_set_probability": 0.75,
+            "working_set_size": 4,
+            "shares": ["Shared", "Projects"],
+            "departments": ["Finance", "Engineering"],
+            "projects": ["Atlas", "Orion"],
+            "basenames": [f"document-{index}" for index in range(30)],
+            "binary_extensions": ["zip", "dat"],
+            "filename_templates": [
+                {
+                    "mime_types": ["application/pdf"],
+                    "templates": [r"\\{server}\{share}\{department}\{basename}.pdf"],
+                    "weight": 1,
+                }
+            ],
+        }
+        rng = random.Random(42)
+        filenames = [
+            pick_smb_filename(
+                rng,
+                config,
+                mime_type="application/pdf",
+                server="files01.example.com",
+                user="alice",
+            )
+            for _ in range(100)
+        ]
+
+        assert len(set(filenames)) < 45
+        assert max(filenames.count(filename) for filename in set(filenames)) >= 10
+        assert len(set(filenames)) > config["working_set_size"]
+
+    def test_filename_picker_composes_a_broad_semantic_long_tail(self):
+        """Configured lexical components should survive stem normalization as real diversity."""
+        from evidenceforge.generation.activity.smb_file_transfers import pick_smb_filename
+
+        config = {
+            "working_set_probability": 0.0,
+            "working_set_size": 3,
+            "lexical_composition_probability": 1.0,
+            "shares": ["Shared"],
+            "departments": ["Finance"],
+            "projects": ["Atlas"],
+            "basenames": ["fallback"],
+            "lexical_subjects": [f"subject-{index}" for index in range(20)],
+            "lexical_document_kinds": [f"kind-{index}" for index in range(20)],
+            "lexical_qualifiers": ["draft", "final", "approved"],
+            "binary_extensions": ["zip"],
+            "filename_templates": [
+                {
+                    "mime_types": ["application/pdf"],
+                    "templates": [r"\\{server}\Shared\{basename}.pdf"],
+                    "weight": 1,
+                }
+            ],
+        }
+        rng = random.Random(91)
+        stems = {
+            pick_smb_filename(
+                rng,
+                config,
+                mime_type="application/pdf",
+                server="files01.example.com",
+                user="alice",
+            )
+            .rsplit("\\", 1)[-1]
+            .rsplit(".", 1)[0]
+            for _ in range(60)
+        }
+
+        assert len(stems) >= 45

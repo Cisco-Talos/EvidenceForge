@@ -6,6 +6,34 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.16.0 (2026-08-11)
+
+This minor release replaces static large-workload gating with host-aware resource forecasting,
+makes long-duration PID allocation stable and reusable, and incorporates the latest
+cross-source realism corrections from repeated assessment.
+
+**Adaptive resource forecasting**
+
+- Added deterministic memory, swap, and disk forecasts to validation and generation, with
+  host-capacity-aware low, medium, and high advisories instead of requiring an
+  `--allow-large-workload` override (`6432538d`).
+- Calibrated the model across source-isolated and full-format workloads, documented its fitted
+  intervals, and added CLI, schema, workload, and resource-model regression coverage
+  (`6432538d`).
+
+**Duration-stable process identity**
+
+- Replaced all-history Linux PID uniqueness with a watermarked logical sequence and safe cyclic
+  reuse, while protecting active, fixed, and transient reservations (`89976281`).
+- Applied collision-safe reservation handling to the Windows PID ring, bounded dependent
+  process-instance indexes, and added long-duration state, timing, lifecycle, and evaluator
+  gates (`89976281`).
+
+**Cross-source realism**
+
+- Improved process, network, email, and source-native evidence alignment based on the latest
+  assessment findings, including corrected lifecycle and pivot behavior (`0b14b16a`).
+
 ## v1.15.0 (2026-08-10)
 
 This minor release completes the non-breaking canonical event and action-bundle

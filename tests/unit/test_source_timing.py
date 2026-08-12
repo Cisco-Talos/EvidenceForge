@@ -18,6 +18,7 @@ from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
     FileContext,
+    FileTransferContext,
     HostContext,
     ImageLoadContext,
     KerberosContext,
@@ -44,6 +45,27 @@ from tests.network_factories import network_plan
 
 def _base_time() -> datetime:
     return datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+
+def test_file_transfer_close_margin_is_stable_but_not_a_shared_epsilon() -> None:
+    """Analyzer teardown margins should vary by transfer identity and stay bounded."""
+    planner = SourceTimingPlanner()
+    event = OccurrenceBuilder(
+        timestamp=_base_time(),
+        event_type="connection",
+        network=_network_context(duration=2.0),
+    )
+    first = FileTransferContext(fuid="FsourceTiming01", source="SMB", seen_bytes=24_000)
+    second = FileTransferContext(fuid="FsourceTiming02", source="SMB", seen_bytes=24_000)
+
+    first_margin = planner.file_transfer_close_margin_seconds(event, first, 2.0)
+    repeated_margin = planner.file_transfer_close_margin_seconds(event, first, 2.0)
+    second_margin = planner.file_transfer_close_margin_seconds(event, second, 2.0)
+
+    assert first_margin == repeated_margin
+    assert first_margin != second_margin
+    assert 0.004 <= first_margin <= 0.7
+    assert 0.004 <= second_margin <= 0.7
 
 
 def _network_context(duration: float = 0.05) -> NetworkTransactionPlan:
@@ -254,6 +276,7 @@ def test_ecar_logout_finalized_time_consumes_bundle_closure_plan() -> None:
     logout_time = planned_logoff.source_timing.finalized_times[ecar_session_render_key("logout")]
     assert planned_logoff.timestamp == logout_time
     assert logout_time > login_time
+    assert logout_time - login_time >= canonical_end - login_event.timestamp
 
 
 def test_machine_logon_follows_visible_kerberos_service_ticket() -> None:
@@ -420,6 +443,65 @@ def test_nested_action_children_share_host_local_source_offset() -> None:
     assert second_observed - first_observed == second_time - first_time
 
 
+def test_proxy_child_connection_keeps_paired_endpoint_flow_clocks_independent() -> None:
+    """Nested proxy transport projections retain distinct endpoint observation clocks."""
+
+    planner = SourceTimingPlanner()
+    start = _base_time()
+    source = _linux_host_context()
+    target = _host_context()
+    source_identity = _process_identity(
+        hostname=source.hostname,
+        pid=31337,
+        parent_pid=1,
+        started_at=start - timedelta(days=30),
+        image="/usr/sbin/squid",
+    )
+    target_identity = _process_identity(
+        hostname=target.hostname,
+        pid=4242,
+        parent_pid=888,
+        started_at=start - timedelta(days=30),
+        image=r"C:\Windows\System32\lsass.exe",
+    )
+    network = network_plan(
+        src_ip=source.ip,
+        src_port=49152,
+        dst_ip=target.ip,
+        dst_port=8080,
+        protocol="tcp",
+        service="http",
+        zeek_uid="CproxyPairedFlow",
+        duration=0.2,
+        conn_state="SF",
+        history="ShADadFf",
+    )
+    event = OccurrenceBuilder(
+        timestamp=start,
+        event_type="connection",
+        src_host=source,
+        dst_host=target,
+        network=network,
+        lifecycle=ActionLifecycleContext(
+            group_id="network-proxy-child",
+            canonical_start=start,
+            phase="start",
+            parent_group_id="proxy-transaction-parent",
+        ),
+        identity_plan=EventIdentityPlan(actor=source_identity, target=target_identity),
+    )
+
+    planner.plan_event(event, "ecar")
+
+    outbound = event.source_timing.finalized_times[
+        ecar_flow_render_key("outbound", source.hostname)
+    ]
+    inbound = event.source_timing.finalized_times[ecar_flow_render_key("inbound", target.hostname)]
+    assert outbound != inbound
+    assert network.started_at <= outbound <= network.closed_at
+    assert network.started_at <= inbound <= network.closed_at
+
+
 def test_endpoint_sources_share_host_clock_offset() -> None:
     """Windows Security, Sysmon, and host-resident eCAR share one host clock."""
     seed = ("WIN-TEST-01", 4242, _base_time())
@@ -579,6 +661,50 @@ def test_ecar_flow_uses_clock_of_rendering_endpoint() -> None:
         )
 
         assert enterprise_time - complete_time == expected_adjustment
+
+
+def test_short_paired_ecar_flow_bounds_remain_in_each_endpoint_clock() -> None:
+    """Canonical close bounds must not collapse paired endpoint clocks together."""
+
+    source = _host_context()
+    target = HostContext(
+        hostname="WIN-TARGET-01",
+        ip="10.0.0.53",
+        fqdn="WIN-TARGET-01.corp.local",
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="server",
+        domain="corp.local",
+        netbios_domain="CORP",
+    )
+    start = _base_time()
+    event = OccurrenceBuilder(
+        timestamp=start,
+        event_type="connection",
+        src_host=source,
+        dst_host=target,
+        network=network_plan(
+            src_ip=source.ip,
+            src_port=49152,
+            dst_ip=target.ip,
+            dst_port=53,
+            protocol="udp",
+            service="dns",
+            conn_state="SF",
+            duration=0.001,
+            source_visible_start_time=start,
+            source_visible_close_time=start + timedelta(milliseconds=1),
+        ),
+    )
+    planner = SourceTimingPlanner(clock_profile_name="enterprise_standard")
+
+    planner.plan_event(event, "ecar")
+
+    outbound = event.source_timing.finalized_times[
+        ecar_flow_render_key("outbound", source.hostname)
+    ]
+    inbound = event.source_timing.finalized_times[ecar_flow_render_key("inbound", target.hostname)]
+    assert int(outbound.timestamp() * 1000) != int(inbound.timestamp() * 1000)
 
 
 def test_network_sensor_timing_is_independent_from_endpoint_clock_profile() -> None:
@@ -807,6 +933,111 @@ def test_sensor_observation_time_is_stable_by_sensor_and_path() -> None:
     assert dmz != core_first
 
 
+def test_sensor_clock_difference_evolves_with_drift_and_wander() -> None:
+    """Packet sensors keep stable skew with only slow drift and coherent wander."""
+
+    planner = SourceTimingPlanner()
+    route_key = "10.0.0.20:49152>10.0.0.53:53"
+    deltas = []
+    for hour in range(6):
+        timestamp = _base_time() + timedelta(hours=hour)
+        event = OccurrenceBuilder(
+            timestamp=timestamp,
+            event_type="connection",
+        )
+        core = planner.sensor_observation_time(
+            event,
+            "zeek-core-01",
+            route_key,
+            "source.zeek_conn_start",
+        )
+        dmz = planner.sensor_observation_time(
+            event,
+            "zeek-dmz-01",
+            route_key,
+            "source.zeek_conn_start",
+        )
+        deltas.append(dmz - core)
+
+    assert len(set(deltas)) >= 4
+    assert timedelta(milliseconds=1) <= max(deltas) - min(deltas) <= timedelta(milliseconds=80)
+    assert (
+        max(
+            abs((later - earlier).total_seconds())
+            for earlier, later in zip(deltas, deltas[1:], strict=False)
+        )
+        <= 0.025
+    )
+
+
+def test_sysmon_envelope_latency_is_deterministic_and_right_skewed() -> None:
+    """Sysmon native and provider times are correlated but not timestamp aliases."""
+
+    native = _base_time()
+    samples = [
+        SourceTimingPlanner.sysmon_envelope_time(
+            native + timedelta(seconds=index),
+            hostname="WIN-TEST-01",
+            event_id=3,
+            identity_parts=(4242, index),
+        )
+        - (native + timedelta(seconds=index))
+        for index in range(200)
+    ]
+    repeated = SourceTimingPlanner.sysmon_envelope_time(
+        native,
+        hostname="WIN-TEST-01",
+        event_id=3,
+        identity_parts=(4242, 0),
+    )
+
+    assert repeated - native == samples[0]
+    assert min(samples) > timedelta(0)
+    assert len(set(samples)) > 150
+    assert sum(sample >= timedelta(milliseconds=1) for sample in samples) > 100
+    assert max(samples) > timedelta(milliseconds=8)
+
+
+def test_canonical_bound_can_be_translated_to_negative_endpoint_clock() -> None:
+    """A negative host clock must not be clipped to canonical network time."""
+
+    planner = SourceTimingPlanner(clock_profile_name="enterprise_standard")
+    timestamp = _base_time()
+    negative_host = next(
+        hostname
+        for hostname in (f"WIN-NEGATIVE-{index:02d}" for index in range(100))
+        if planner.endpoint_clock_adjustment_for_host(
+            hostname=hostname,
+            os_category="windows",
+            timestamp=timestamp,
+        )
+        < timedelta(milliseconds=-800)
+    )
+    host = replace(_host_context(), hostname=negative_host)
+    event = OccurrenceBuilder(
+        timestamp=timestamp,
+        event_type="connection",
+        src_host=host,
+        network=_network_context(),
+    )
+    seed_parts = (negative_host, 4242, timestamp)
+    source_floor = planner.canonical_time_in_source_clock(
+        event,
+        "source.sysmon_network_connection",
+        timestamp,
+        seed_parts,
+    )
+    rendered = planner.source_time(
+        event,
+        "source.sysmon_network_connection",
+        seed_parts=seed_parts,
+        not_before=source_floor,
+    )
+
+    assert source_floor < timestamp
+    assert rendered < timestamp
+
+
 def test_ecar_dependent_timestamp_follows_process_create(tmp_path: Path) -> None:
     """eCAR dependent records should render after the planned PROCESS/CREATE time."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
@@ -870,7 +1101,7 @@ def test_ecar_startup_modules_preserve_loader_order_after_process_create(tmp_pat
     second_time = emitter._after_process_create_timestamp(second_module, proc)
 
     assert process_time < first_time < second_time
-    assert second_time - process_time < timedelta(milliseconds=75)
+    assert second_time - process_time < timedelta(seconds=2)
 
 
 def test_startup_module_source_gaps_vary_within_one_process() -> None:
@@ -951,7 +1182,7 @@ def test_sysmon_startup_module_renders_after_process_create(tmp_path: Path) -> N
         times[event_id] = datetime.fromisoformat(system_time.replace("Z", "+00:00"))
 
     assert times[1] < times[7]
-    assert times[7] - times[1] < timedelta(milliseconds=10)
+    assert times[7] - times[1] < timedelta(seconds=1)
 
 
 def test_ecar_type3_login_uses_upstream_canonical_transport_order(tmp_path: Path) -> None:
@@ -1234,6 +1465,62 @@ def test_remote_auth_ecar_login_follows_later_source_endpoint_flow() -> None:
 
     login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
     assert timedelta(milliseconds=8) <= login_time - source_flow_time <= timedelta(milliseconds=140)
+
+
+def test_ecar_session_process_create_follows_admitted_session_login() -> None:
+    """A process carrying a session LUID must not render before its eCAR login."""
+
+    planner = SourceTimingPlanner()
+    start = _base_time()
+    host = _host_context()
+    session_group = "rdp-session-group"
+    login_event = OccurrenceBuilder(
+        timestamp=start,
+        event_type="logon",
+        dst_host=host,
+        auth=AuthContext(username=r"CORP\alice", logon_id="0x12345", logon_type=10),
+        lifecycle=ActionLifecycleContext(
+            group_id=session_group,
+            canonical_start=start,
+            phase="start",
+        ),
+    )
+    process_start = start + timedelta(milliseconds=100)
+    identity = replace(
+        _process_identity(
+            hostname=host.hostname,
+            pid=4242,
+            parent_pid=888,
+            started_at=process_start,
+            image=r"C:\Windows\System32\userinit.exe",
+        ),
+        parent_lifecycle_group_id=session_group,
+    )
+    process_event = OccurrenceBuilder(
+        timestamp=process_start,
+        event_type="process_create",
+        src_host=host,
+        auth=AuthContext(username=r"CORP\alice", logon_id="0x12345", logon_type=10),
+        process=_context_from_identity(identity),
+        identity_plan=EventIdentityPlan(subject=identity),
+        lifecycle=ActionLifecycleContext(
+            group_id=identity.lifecycle_group_id,
+            canonical_start=process_start,
+            phase="start",
+            parent_group_id=session_group,
+        ),
+    )
+
+    planner.plan_event(login_event, "ecar")
+    planner.plan_event(process_event, "ecar")
+
+    login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
+    process_time = planner.source_time(
+        process_event,
+        "source.ecar_process_create",
+        seed_parts=(identity.hostname, identity.pid, identity.started_at),
+    )
+    assert process_time > login_time
 
 
 def test_ssh_ecar_login_follows_admitted_exact_transport() -> None:

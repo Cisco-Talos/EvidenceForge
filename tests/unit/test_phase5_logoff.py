@@ -32,6 +32,7 @@ from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -94,6 +95,67 @@ def _emitted_pam_close_event(mock_emitters: dict[str, Any]) -> Any:
         for event in _emitted_syslog_events(mock_emitters)
         if event.syslog.message.startswith("pam_unix(sshd:session): session closed")
     )
+
+
+def test_baseline_does_not_preempt_bundle_owned_ssh_close(
+    state_manager: StateManager,
+    test_user: User,
+    linux_system: System,
+    timestamp: datetime,
+) -> None:
+    """The SSH action bundle remains the single owner of its deferred close."""
+    logon_id = state_manager.create_session(
+        username=test_user.username,
+        system=linux_system.hostname,
+        logon_type=10,
+        source_ip="10.0.10.50",
+        source_port=51111,
+        session_kind="ssh",
+        start_time=timestamp - timedelta(hours=1),
+        transport_pid=6505,
+    )
+    state_manager.update_session_metadata(
+        logon_id,
+        closure_owned_by_bundle=True,
+        network_close_time=timestamp + timedelta(minutes=8),
+    )
+    engine = type("FakeBaseline", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    engine._get_user_persona = lambda _user: None
+
+    planned = engine._plan_logoffs_for_hour([test_user], timestamp)
+
+    assert planned == {}
+
+
+def test_baseline_still_closes_compatibility_ssh_session_without_bundle_owner(
+    state_manager: StateManager,
+    test_user: User,
+    linux_system: System,
+    timestamp: datetime,
+) -> None:
+    """Compatibility SSH sessions without an action close retain baseline cleanup."""
+    logon_id = state_manager.create_session(
+        username=test_user.username,
+        system=linux_system.hostname,
+        logon_type=10,
+        source_ip="10.0.10.50",
+        source_port=51111,
+        session_kind="ssh",
+        start_time=timestamp - timedelta(hours=1),
+        transport_pid=6505,
+    )
+    state_manager.update_session_metadata(
+        logon_id,
+        network_close_time=timestamp + timedelta(minutes=8),
+    )
+    engine = type("FakeBaseline", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    engine._get_user_persona = lambda _user: None
+
+    planned = engine._plan_logoffs_for_hour([test_user], timestamp)
+
+    assert (linux_system.hostname, logon_id) in planned
 
 
 class TestLogoffWindows:
@@ -550,6 +612,8 @@ class TestLogoffLinux:
             time=timestamp,
             source_ip="10.0.10.50",
             source_port=51111,
+            emit_session_close=True,
+            defer_session_close=True,
             session_end_plan=plan,
         )
         session = next(
@@ -558,6 +622,10 @@ class TestLogoffLinux:
             if session.system == linux_system.hostname
         )
         assert session.end_plan == plan
+        assert not session.closure_owned_by_bundle
+        assert not activity_gen._pending_ssh_session_closures
+        expected_sshd_pid = session.transport_pid
+        assert expected_sshd_pid is not None
         assert session.network_close_time is not None
         assert deadline - timedelta(milliseconds=1500) <= session.network_close_time
         assert session.network_close_time <= deadline - timedelta(milliseconds=100)
@@ -586,12 +654,21 @@ class TestLogoffLinux:
             for call in mock_emitters["ecar"].emit.call_args_list
             if call.args[0].event_type == "logoff"
         )
+        responder_terminate = next(
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "process_terminate"
+            and call.args[0].process is not None
+            and call.args[0].process.pid == expected_sshd_pid
+        )
         assert state_manager.get_session_end_time(session.logon_id) == deadline
+        assert pam_close.syslog.pid == expected_sshd_pid
         assert timedelta(milliseconds=120) <= pam_close.timestamp - session.network_close_time
         assert pam_close.timestamp - session.network_close_time <= timedelta(milliseconds=2500)
         assert pam_close.source_timing.canonical_timestamp == deadline
         assert deadline <= ecar_close.timestamp <= deadline + timedelta(seconds=15)
         assert pam_close.timestamp < logind_close.timestamp <= deadline + timedelta(seconds=4)
+        assert responder_terminate.timestamp >= pam_close.timestamp + timedelta(seconds=3.2)
 
     def test_linux_type10_logoff_gets_pam_close_even_when_kind_was_not_preserved(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters

@@ -223,8 +223,14 @@ class OcspTransactionActionBundle:
         self._planner = planner
         self._request = request
 
-    def execute(self) -> OcspTransactionPlan:
-        """Plan and emit one correlated OCSP HTTP response transaction."""
+    def execute(self) -> OcspTransactionPlan | None:
+        """Plan and emit one in-boundary OCSP HTTP response transaction.
+
+        OCSP validation belongs to the TLS client.  If that client is not a
+        modeled system, its validation traffic occurs outside the generated
+        enterprise collection boundary and must not be projected onto the TLS
+        peer's public address.
+        """
 
         plan = self._planner.plan(self._request)
         tls_network = self._request.tls_event.network
@@ -232,6 +238,8 @@ class OcspTransactionActionBundle:
             raise ValueError("OCSP action bundles require an owning TLS network transaction")
         responder_ip = resolve_domain_ip(plan.responder, src_host=tls_network.src_ip)
         source_system = self._executor._ip_to_system.get(tls_network.src_ip)
+        if source_system is None:
+            return None
         source_os = str(getattr(source_system, "os", "") or "")
         user_agent = pick_proxy_user_agent(
             random.Random(

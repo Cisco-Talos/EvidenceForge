@@ -102,6 +102,7 @@ class ProxyTransactionRequest:
     parent_action_group_id: str | None = None
     source: str = "activity_generator"
     ids_alerts: tuple[IdsAlertPlan, ...] = ()
+    suppress_source_pid_inference: bool = False
 
     @property
     def stable_id(self) -> str:
@@ -115,7 +116,8 @@ class ProxyTransactionRequest:
             f"{self.hostname or ''}:{self.pid}:{self.duration or ''}:"
             f"{self.orig_bytes or ''}:{self.resp_bytes or ''}:"
             f"{self.conn_state or ''}:{self.time.isoformat()}:"
-            f"{self.parent_action_group_id or ''}:{self.source}"
+            f"{self.parent_action_group_id or ''}:{self.source}:"
+            f"{self.suppress_source_pid_inference}"
         )
         return f"proxy-transaction-{seed:016x}"
 
@@ -495,6 +497,7 @@ class ProxyTransactionActionBundle:
             proxy_bypass=True,
             preserve_http_outcome=True,
             process_image=client_process_image,
+            suppress_source_pid_inference=request.suppress_source_pid_inference,
             parent_action_group_id=self.anchor.stable_id,
             preserve_start_time=True,
         )
@@ -805,6 +808,8 @@ class ProxyTransactionActionBundle:
         else:
             client_pid = -1
             client_process_image = None
+            if request.suppress_source_pid_inference:
+                return client_pid, client_process_image
             owned_client_pid, owned_process_image = executor._ensure_explicit_proxy_client_process(
                 source_system=request.source_system,
                 time=request.time,

@@ -75,6 +75,31 @@ external_client_excluded_cidrs:
   - "214.0.0.0/8"
   - "215.0.0.0/8"
 
+# Long-lived service identities that plausibly originate SMB from Linux server
+# roles. Roles without a profile keep the endpoint FLOW unattributed instead of
+# inventing a root-owned smbclient process for every connection.
+linux_smb_connection_owners:
+  - role: app_server
+    key: document_sync
+    image: /opt/meridian/bin/document-sync
+    command_line: /opt/meridian/bin/document-sync --share smb://{target}/Integration --mode poll
+    username: meridian-app
+  - role: database
+    key: database_backup_agent
+    image: /usr/local/sbin/database-backup-agent
+    command_line: /usr/local/sbin/database-backup-agent --repository smb://{target}/DatabaseBackups
+    username: backup
+  - role: mail_server
+    key: attachment_archive
+    image: /usr/libexec/meridian/attachment-archive
+    command_line: /usr/libexec/meridian/attachment-archive --share smb://{target}/MailArchive
+    username: dovecot
+  - role: web_server
+    key: content_publisher
+    image: /opt/meridian/bin/content-publisher
+    command_line: /opt/meridian/bin/content-publisher --share smb://{target}/WebContent
+    username: www-data
+
 public_ntp_servers:
   - name: "time-a-g.nist.gov"
     ip: "129.6.15.28"

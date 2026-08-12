@@ -89,8 +89,8 @@ The singular `include` key is accepted as a convenience for one file, but
 `includes` is the preferred form for new scenarios.
 
 Scenario composition is bounded to 32 levels, 256 files, 16 MiB of source YAML, and 1,000,000
-expanded nodes. These parsing limits are always enforced; the trusted large-workload override
-does not disable them.
+expanded nodes. These parsing and path-safety limits are always enforced independently of the
+generation resource forecast.
 
 For larger exercise families, keep reusable organization context separate from
 scenario-specific narrative files:
@@ -136,15 +136,21 @@ of changing the scenario name or unrelated content to obtain independent determi
 
 Before validation or generation allocates the workload, EvidenceForge estimates the primary
 duration, warm-up, periodic and explicit occurrences, canonical fan-out, rendered records, and
-attachment/email expansion. The default supported envelope is 31 days of primary activity, 7 days
-of warm-up, 1,000,000 periodic occurrences, 5,000,000 explicit occurrences, 20,000,000 canonical
-occurrences, and 200,000,000 rendered records. Per-attachment and aggregate email payload limits
-are also enforced.
+attachment/email expansion. It combines that scenario estimate with currently available RAM,
+free swap, container memory constraints, and free space on the destination filesystem.
 
-`eforge validate` and `eforge generate` reject an estimated overrun. For a reviewed, trusted run
-with adequate resources, pass `--allow-large-workload`; this bypasses the workload estimate only.
-It does not relax YAML ambiguity, include budgets, path containment, regular-file, symlink, or
-archive safety checks.
+Both `eforge validate` and `eforge generate` always print the resulting projected peak-memory and
+output-size ranges. When expected use reaches a material fraction of usable capacity, the forecast
+is followed immediately by a low, medium, or high resource warning. Resource warnings are
+advisory: generation continues without an override flag. YAML ambiguity, include budgets, path
+containment, regular-file, symlink, and archive safety checks remain hard errors because they are
+input-integrity boundaries rather than capacity forecasts.
+
+The forecast identifies its versioned calibration model in the output. Coefficients are measured
+and source-aware—for example, retained Sysmon event state is modeled differently from bounded
+streaming emitters, while output-byte rates account for source eligibility by operating system or
+host role. The calibration can be refined with additional measured runs without changing the CLI
+contract.
 
 ## Environment
 
@@ -485,6 +491,10 @@ Validation warns when a network topology has no firewall entry. Requesting `cisc
         workstations: inside
         servers: inside
         dmz: dmz
+      interface_security_levels: # Optional; conventional outside/dmz/inside use 0/50/100
+        outside: 0
+        dmz: 50
+        inside: 100
       default_action: deny      # deny (default) | permit
       deny_ratio: 5.0           # Deny events per allow event in baseline (default: 5.0)
       threat_detection_rate: 10 # Deny rate (drops/sec) triggering 733100 alerts (0=disabled)
@@ -954,7 +964,13 @@ hostnames, and email addresses still win over fallback pools.
 
 **Endpoint ProcessAccess realism:** Sysmon Event 10 and eCAR PROCESS OPEN rows use canonical `ProcessAccessContext` owned by the generation bundle. Source images such as Defender, CSRSS, services, svchost, WMI, and suspicious tools select source-aware CallTrace palettes from package config; scenario authors do not need to set call traces in YAML.
 
-**PID allocation:** Windows PIDs use a lognormal distribution for gap sizes (mu=1.2, sigma=0.8), producing mostly small gaps with an occasional heavy tail — simulating background process churn consuming PIDs between emitted events. Linux PIDs use a similar but tighter distribution (mu=0.5, sigma=0.6). No fixed choice-set fingerprint.
+**PID allocation:** Windows PIDs preserve a multiples-of-four, heavy-tailed progression through
+the modeled `4,000..65,532` ring. Linux uses an unbounded logical progression rendered into the
+exclusive `pid_max` range `500..4,194,303`, so long scenarios can wrap naturally. Both systems
+reuse a rendered PID only after natural wrap and only when no active process, fixed boot process,
+or unexpired transient source-native companion still owns it. PID reuse is therefore validated as
+non-overlapping lifetimes on one host rather than forbidden across the entire dataset. Allocation
+history is watermarked and duration-stable; no scenario or output-schema setting is required.
 
 **Per-user bash history:** Baseline SSH sessions to Linux servers generate organic admin commands (ls, df -h, ps aux, systemctl status, etc.) for realistic admin users, creating per-user `<username>.bash_history` files on all Linux hosts. Storyline process events on Linux inject 0-3 organic noise commands around each attack command for realistic interleaving. The generator coordinates bash-history timing with foreground process telemetry through an internal Linux shell-command bundle; scenario authors still use normal `process` events and do not need to model the bundle directly.
 

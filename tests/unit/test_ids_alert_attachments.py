@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
+    FileTransferContext,
     HttpContext,
     IdsAlertPlan,
     IdsAlertPolicyContext,
@@ -71,6 +72,8 @@ def _planned_transaction(
     *,
     conn_state: str = "SF",
     service: str = "http",
+    proto: str = "tcp",
+    dst_port: int | None = None,
     orig_payload: int = 200,
     resp_payload: int = 500,
     resp_packets: int = 3,
@@ -92,8 +95,8 @@ def _planned_transaction(
         src_ip="198.51.100.20",
         src_port=52000,
         dst_ip="10.0.0.20",
-        dst_port=80 if service == "http" else 443,
-        protocol="tcp",
+        dst_port=dst_port if dst_port is not None else 80 if service == "http" else 443,
+        protocol=proto,
         service=service,
         zeek_uid="CidsPredicate",
         conn_id="connection-1",
@@ -236,6 +239,142 @@ def test_response_and_scan_predicates_distinguish_payload_free_attempts() -> Non
 
     assert not ids_alert_matches_transaction(response_alert, no_response)
     assert ids_alert_matches_transaction(scan_alert, no_response)
+
+
+def test_stun_success_signature_requires_and_renders_response_payload(tmp_path: Path) -> None:
+    """STUN success alerts require a response and render the responder packet tuple."""
+
+    signature = signature_by_sid(2024392)
+    assert signature is not None
+    alert = IdsAlertActionBundle(
+        IdsAlertRequest(
+            signature=signature,
+            time=T0,
+            src_ip="10.0.0.8",
+            dst_ip="198.51.100.20",
+            dst_port=3478,
+            proto="udp",
+            rng=random.Random(12),
+        )
+    ).execute()
+    assert alert.predicate is not None
+    assert alert.predicate.payload_direction == "resp"
+    assert alert.predicate.requires_response
+    assert not ids_alert_matches_transaction(
+        alert,
+        _planned_transaction(
+            proto="udp",
+            service="stun",
+            dst_port=3478,
+            conn_state="S0",
+            orig_payload=64,
+            resp_payload=0,
+            resp_packets=0,
+        ),
+    )
+    assert ids_alert_matches_transaction(
+        alert,
+        _planned_transaction(
+            proto="udp",
+            service="stun",
+            dst_port=3478,
+            orig_payload=64,
+            resp_payload=64,
+            resp_packets=1,
+        ),
+    )
+
+    output_path = tmp_path / "snort_alert.log"
+    emitter = SnortEmitter(load_format("snort_alert"), output_path)
+    event = OccurrenceBuilder(
+        timestamp=T0,
+        event_type="connection",
+        network=network_plan(
+            src_ip="10.0.0.8",
+            src_port=52000,
+            dst_ip="198.51.100.20",
+            dst_port=3478,
+            protocol="udp",
+        ),
+        ids_alerts=(alert,),
+    )
+    emitter.emit(event)
+    emitter.close()
+
+    assert "198.51.100.20:3478 -> 10.0.0.8:52000" in output_path.read_text(encoding="utf-8")
+
+
+def test_file_download_signature_requires_matching_response_file_mime() -> None:
+    """Response-file rules require a response artifact of the claimed family."""
+
+    signature = signature_by_sid(2000428)
+    assert signature is not None
+    alert = IdsAlertActionBundle(
+        IdsAlertRequest(
+            signature=signature,
+            time=T0,
+            src_ip="10.0.0.8",
+            dst_ip="198.51.100.20",
+            dst_port=80,
+            proto="tcp",
+            rng=random.Random(11),
+        )
+    ).execute()
+    transaction = _planned_transaction(resp_payload=4096)
+    wrong_file = FileTransferContext(mime_type="image/png", is_orig=False)
+    upload = FileTransferContext(mime_type="application/zip", is_orig=True)
+    download = FileTransferContext(mime_type="application/zip", is_orig=False)
+
+    assert not ids_alert_matches_transaction(alert, transaction, http=HttpContext())
+    assert not ids_alert_matches_transaction(
+        alert, transaction, http=HttpContext(), file_transfers=(wrong_file,)
+    )
+    assert not ids_alert_matches_transaction(
+        alert, transaction, http=HttpContext(), file_transfers=(upload,)
+    )
+    assert ids_alert_matches_transaction(
+        alert, transaction, http=HttpContext(), file_transfers=(download,)
+    )
+
+
+def test_snort_response_predicate_renders_responder_packet_direction(tmp_path: Path) -> None:
+    """Response-side IDS evidence renders server-to-client packet endpoints."""
+
+    output_path = tmp_path / "snort_alert.log"
+    emitter = SnortEmitter(load_format("snort_alert"), output_path)
+    event = OccurrenceBuilder(
+        timestamp=T0,
+        event_type="connection",
+        network=network_plan(
+            src_ip="10.0.0.8",
+            src_port=52000,
+            dst_ip="198.51.100.20",
+            dst_port=80,
+            protocol="tcp",
+        ),
+        ids_alerts=(
+            IdsAlertPlan(
+                sid=2000428,
+                message="ZIP response",
+                classification="policy-violation",
+                predicate=SignaturePredicate(
+                    transport_protocol="tcp",
+                    destination_port=80,
+                    phase="response",
+                    payload_direction="resp",
+                    minimum_payload_bytes=1,
+                    requires_response=True,
+                    semantic_claim="response_content",
+                ),
+            ),
+        ),
+    )
+
+    emitter.emit(event)
+    emitter.close()
+
+    line = output_path.read_text(encoding="utf-8")
+    assert "198.51.100.20:80 -> 10.0.0.8:52000" in line
 
 
 def test_cleartext_content_predicate_rejects_opaque_tls() -> None:

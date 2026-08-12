@@ -1,0 +1,279 @@
+{
+  "schema_version": 2,
+  "python": "3.12.12 (main, Oct 28 2025, 11:52:25) [Clang 20.1.4 ]",
+  "platform": "darwin",
+  "measurements": [
+    {
+      "scenario": "iteration-test-expanded-ids",
+      "profile": "zeek",
+      "formats": "zeek",
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 21600,
+      "baseline_only": true,
+      "elapsed_seconds": 16.867,
+      "peak_rss_bytes": 142606336,
+      "output_bytes": 7512385,
+      "workload_estimate": {
+        "primary_duration_seconds": 21600,
+        "warmup_seconds": 7200,
+        "baseline_occurrences": 36000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 36000,
+        "rendered_records": 504000,
+        "attachment_payload_bytes": 5232,
+        "email_artifact_bytes": 6976,
+        "enabled_formats": 14,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 290489680,
+        "expected_bytes": 446907200,
+        "upper_bytes": 715051520
+      },
+      "forecast_disk": {
+        "lower_bytes": 6486976,
+        "expected_bytes": 33702976,
+        "upper_bytes": 158406976
+      }
+    },
+    {
+      "scenario": "iteration-test-expanded-ids",
+      "profile": "zeek",
+      "formats": "zeek",
+      "duration_scale": 2.0,
+      "effective_duration_seconds": 43200,
+      "baseline_only": true,
+      "elapsed_seconds": 27.788,
+      "peak_rss_bytes": 162889728,
+      "output_bytes": 14069564,
+      "workload_estimate": {
+        "primary_duration_seconds": 43200,
+        "warmup_seconds": 7200,
+        "baseline_occurrences": 63000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 63000,
+        "rendered_records": 882000,
+        "attachment_payload_bytes": 10464,
+        "email_artifact_bytes": 13952,
+        "enabled_formats": 14,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 291617414,
+        "expected_bytes": 448642176,
+        "upper_bytes": 717827481
+      },
+      "forecast_disk": {
+        "lower_bytes": 11353952,
+        "expected_bytes": 58981952,
+        "upper_bytes": 277213952
+      }
+    },
+    {
+      "scenario": "iteration-test-expanded-ids",
+      "profile": "sysmon",
+      "formats": "windows_event_sysmon",
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 21600,
+      "baseline_only": true,
+      "elapsed_seconds": 14.673,
+      "peak_rss_bytes": 137084928,
+      "output_bytes": 6039328,
+      "workload_estimate": {
+        "primary_duration_seconds": 21600,
+        "warmup_seconds": 7200,
+        "baseline_occurrences": 36000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 36000,
+        "rendered_records": 36000,
+        "attachment_payload_bytes": 5232,
+        "email_artifact_bytes": 6976,
+        "enabled_formats": 1,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 193992073,
+        "expected_bytes": 298449344,
+        "upper_bytes": 477518950
+      },
+      "forecast_disk": {
+        "lower_bytes": 6486976,
+        "expected_bytes": 18726976,
+        "upper_bytes": 39606976
+      }
+    },
+    {
+      "scenario": "iteration-test-expanded-ids",
+      "profile": "sysmon",
+      "formats": "windows_event_sysmon",
+      "duration_scale": 2.0,
+      "effective_duration_seconds": 43200,
+      "baseline_only": true,
+      "elapsed_seconds": 24.543,
+      "peak_rss_bytes": 162054144,
+      "output_bytes": 11330236,
+      "workload_estimate": {
+        "primary_duration_seconds": 43200,
+        "warmup_seconds": 7200,
+        "baseline_occurrences": 63000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 63000,
+        "rendered_records": 63000,
+        "attachment_payload_bytes": 10464,
+        "email_artifact_bytes": 13952,
+        "enabled_formats": 1,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 202490808,
+        "expected_bytes": 311524320,
+        "upper_bytes": 498438912
+      },
+      "forecast_disk": {
+        "lower_bytes": 11353952,
+        "expected_bytes": 32773952,
+        "upper_bytes": 69313952
+      }
+    },
+    {
+      "scenario": "iteration-test-expanded-ids",
+      "profile": "security",
+      "formats": "windows_event_security",
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 21600,
+      "baseline_only": true,
+      "elapsed_seconds": 17.046,
+      "peak_rss_bytes": 161464320,
+      "output_bytes": 18312078,
+      "workload_estimate": {
+        "primary_duration_seconds": 21600,
+        "warmup_seconds": 7200,
+        "baseline_occurrences": 36000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 36000,
+        "rendered_records": 36000,
+        "attachment_payload_bytes": 5232,
+        "email_artifact_bytes": 6976,
+        "enabled_formats": 1,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 184164073,
+        "expected_bytes": 283329344,
+        "upper_bytes": 453326950
+      },
+      "forecast_disk": {
+        "lower_bytes": 6486976,
+        "expected_bytes": 18726976,
+        "upper_bytes": 39606976
+      }
+    },
+    {
+      "scenario": "iteration-test-expanded-ids",
+      "profile": "security",
+      "formats": "windows_event_security",
+      "duration_scale": 2.0,
+      "effective_duration_seconds": 43200,
+      "baseline_only": true,
+      "elapsed_seconds": 28.914,
+      "peak_rss_bytes": 200343552,
+      "output_bytes": 34614339,
+      "workload_estimate": {
+        "primary_duration_seconds": 43200,
+        "warmup_seconds": 7200,
+        "baseline_occurrences": 63000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 63000,
+        "rendered_records": 63000,
+        "attachment_payload_bytes": 10464,
+        "email_artifact_bytes": 13952,
+        "enabled_formats": 1,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 185291808,
+        "expected_bytes": 285064320,
+        "upper_bytes": 456102912
+      },
+      "forecast_disk": {
+        "lower_bytes": 11353952,
+        "expected_bytes": 32773952,
+        "upper_bytes": 69313952
+      }
+    },
+    {
+      "scenario": "iteration-test-expanded-ids",
+      "profile": "full",
+      "formats": null,
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 21600,
+      "baseline_only": false,
+      "elapsed_seconds": 25.969,
+      "peak_rss_bytes": 215908352,
+      "output_bytes": 46985132,
+      "workload_estimate": {
+        "primary_duration_seconds": 21600,
+        "warmup_seconds": 7200,
+        "baseline_occurrences": 36000,
+        "explicit_occurrences": 12952,
+        "periodic_event_max": 12000,
+        "canonical_occurrences": 140208,
+        "rendered_records": 3224784,
+        "attachment_payload_bytes": 280751,
+        "email_artifact_bytes": 374335,
+        "enabled_formats": 23,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 406950335,
+        "expected_bytes": 626077439,
+        "upper_bytes": 1001723902
+      },
+      "forecast_disk": {
+        "lower_bytes": 25611775,
+        "expected_bytes": 131609023,
+        "upper_bytes": 617289535
+      }
+    },
+    {
+      "scenario": "iteration-test-expanded-ids",
+      "profile": "full",
+      "formats": null,
+      "duration_scale": 2.0,
+      "effective_duration_seconds": 43200,
+      "baseline_only": false,
+      "elapsed_seconds": 47.427,
+      "peak_rss_bytes": 266076160,
+      "output_bytes": 92975091,
+      "workload_estimate": {
+        "primary_duration_seconds": 43200,
+        "warmup_seconds": 7200,
+        "baseline_occurrences": 63000,
+        "explicit_occurrences": 12952,
+        "periodic_event_max": 12000,
+        "canonical_occurrences": 167208,
+        "rendered_records": 3845784,
+        "attachment_payload_bytes": 285983,
+        "email_artifact_bytes": 381311,
+        "enabled_formats": 23,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 415449069,
+        "expected_bytes": 639152415,
+        "upper_bytes": 1022643864
+      },
+      "forecast_disk": {
+        "lower_bytes": 30478751,
+        "expected_bytes": 156887999,
+        "upper_bytes": 736096511
+      }
+    }
+  ]
+}

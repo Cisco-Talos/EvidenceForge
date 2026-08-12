@@ -34,6 +34,7 @@ from pathlib import Path
 
 import click
 import typer
+import yaml
 from pydantic import ValidationError
 from rich.console import Console
 from rich.logging import RichHandler
@@ -49,7 +50,9 @@ from rich.progress import (
 
 from evidenceforge import __version__
 from evidenceforge.generation import GenerationEngine
-from evidenceforge.models.exceptions import ScenarioIncludeError
+from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
+from evidenceforge.generation.workload import estimate_workload
+from evidenceforge.models.exceptions import EvidenceForgeError, ScenarioIncludeError
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.output_targets import (
     OUTPUT_TARGET_FILENAME,
@@ -121,6 +124,75 @@ app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 console = Console()
+
+
+def _format_capacity(value: int) -> str:
+    """Format a byte count using compact binary units."""
+    amount = float(value)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
+        if amount < 1024 or unit == "PiB":
+            return f"{amount:.1f} {unit}"
+        amount /= 1024
+    return f"{amount:.1f} PiB"
+
+
+def _display_resource_forecast(forecast: ResourceForecast) -> None:
+    """Print an informational forecast followed immediately by pressure warnings."""
+    memory = forecast.memory
+    disk = forecast.disk
+    resources = forecast.snapshot
+    console.print("\n[bold blue]Resource forecast[/bold blue]")
+    console.print(
+        "  Projected peak memory: "
+        f"{_format_capacity(memory.lower_bytes)}–{_format_capacity(memory.upper_bytes)} "
+        f"(expected {_format_capacity(memory.expected_bytes)})"
+    )
+    console.print(
+        "  Available memory + swap: "
+        f"{_format_capacity(resources.available_memory_bytes)} + "
+        f"{_format_capacity(resources.free_swap_bytes)} "
+        f"(installed/limited RAM {_format_capacity(resources.total_memory_bytes)})"
+    )
+    console.print(
+        "  Projected output size: "
+        f"{_format_capacity(disk.lower_bytes)}–{_format_capacity(disk.upper_bytes)} "
+        f"(expected {_format_capacity(disk.expected_bytes)})"
+    )
+    console.print(
+        f"  Available disk: {_format_capacity(resources.free_disk_bytes)} on {resources.disk_path}"
+    )
+    console.print(
+        f"  Forecast model: v{forecast.calibration_version}, {forecast.calibration_label}",
+        style="dim",
+    )
+
+    styles = {"low": "yellow", "medium": "dark_orange", "high": "bold red"}
+    for pressure in forecast.pressures:
+        console.print(
+            f"[{styles[pressure.level]}]{pressure.level.upper()} resource warning: "
+            f"projected {pressure.resource} use is {pressure.ratio:.0%} of the "
+            f"forecast's usable {pressure.resource} capacity; generation will continue."
+            f"[/{styles[pressure.level]}]"
+        )
+
+
+def _forecast_for_cli(
+    scenario: Scenario,
+    *,
+    scenario_root: Path,
+    destination: Path,
+) -> ResourceForecast | None:
+    """Build and display a forecast without masking owning validation errors."""
+    try:
+        estimate = estimate_workload(scenario, scenario_root=scenario_root)
+        forecast = build_resource_forecast(scenario, estimate, destination)
+    except (EvidenceForgeError, OSError, ValueError, yaml.YAMLError) as exc:
+        console.print("\n[bold blue]Resource forecast[/bold blue]")
+        console.print(f"  Unavailable until scenario resource errors are resolved: {exc}")
+        return None
+    _display_resource_forecast(forecast)
+    return forecast
+
 
 # Exit codes (per TODO.md specification)
 EXIT_SUCCESS = 0
@@ -238,7 +310,7 @@ def generate(
     allow_large_workload: bool = typer.Option(
         False,
         "--allow-large-workload",
-        help="Trusted override for documented resource limits; path safety remains enforced.",
+        hidden=True,
     ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
@@ -304,7 +376,6 @@ def generate(
             scenario,
             oob_hosts=oob_hosts,
             scenario_root=scenario_file.parent,
-            allow_large_workload=allow_large_workload,
         )
         issues = validator.validate()
 
@@ -405,6 +476,14 @@ def generate(
 
         scenario.output.logs = [{"format": fmt} for fmt in sorted(filtered)]
         console.print(f"[dim]Format filter: generating {sorted(filtered)}[/dim]")
+
+    resource_forecast = _forecast_for_cli(
+        scenario,
+        scenario_root=scenario_dir,
+        destination=ground_truth_dir,
+    )
+    if resource_forecast is None:
+        raise typer.Exit(EXIT_SCHEMA_VALIDATION)
 
     console.print(f"\n[bold]Data directory:[/bold] {data_dir}")
     console.print(f"[bold]Ground truth:[/bold] {ground_truth_dir / 'GROUND_TRUTH.md'}")
@@ -545,6 +624,7 @@ def generate(
                 oob_hosts=oob_hosts,
                 generation_seed=seed,
                 allow_large_workload=allow_large_workload,
+                resource_forecast=resource_forecast,
             )
             engine.generate()
             write_output_target_marker(gen_gt_dir, output_target)
@@ -752,7 +832,7 @@ def validate(
     allow_large_workload: bool = typer.Option(
         False,
         "--allow-large-workload",
-        help="Report, but do not reject, documented generation resource-limit overruns.",
+        hidden=True,
     ),
 ) -> None:
     """Validate a scenario file for schema correctness and cross-reference integrity.
@@ -818,9 +898,14 @@ def validate(
         scenario,
         oob_hosts=oob_hosts,
         scenario_root=scenario_file.parent,
-        allow_large_workload=allow_large_workload,
     )
     issues = validator.validate()
+
+    _forecast_for_cli(
+        scenario,
+        scenario_root=scenario_file.parent,
+        destination=scenario_file.parent,
+    )
 
     if issues:
         console.print(f"\n[yellow]Found {len(issues)} validation issue(s):[/yellow]")

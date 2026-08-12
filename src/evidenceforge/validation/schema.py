@@ -181,7 +181,7 @@ class ScenarioValidator:
         self.scenario = scenario
         self.oob_hosts = tuple(oob_hosts)
         self.scenario_root = Path(scenario_root) if scenario_root is not None else Path.cwd()
-        self.allow_large_workload = allow_large_workload
+        _ = allow_large_workload  # Compatibility-only; capacity overruns are no longer errors.
         self.issues: list[ValidationIssue] = []
 
         # Build lookup sets for fast reference checking
@@ -218,32 +218,6 @@ class ScenarioValidator:
             for host in identity.hosts
         }
 
-    def _validate_workload_limits(self) -> None:
-        """Reject compact scenarios whose projected work exceeds supported defaults."""
-
-        from evidenceforge.generation.workload import estimate_workload
-
-        try:
-            estimate = estimate_workload(self.scenario, scenario_root=self.scenario_root)
-        except (OSError, ValueError, yaml.YAMLError, PathSafetyError):
-            # The owning asset/schema validators provide the actionable parse/path issue.
-            return
-        for violation in estimate.limit_violations:
-            self.issues.append(
-                ValidationIssue(
-                    severity="info" if self.allow_large_workload else "error",
-                    field_path="workload",
-                    message=(
-                        f"Trusted large-workload override accepted: {violation}"
-                        if self.allow_large_workload
-                        else f"Projected workload exceeds the supported envelope: {violation}"
-                    ),
-                    suggestion=(
-                        "Review available capacity, then use --allow-large-workload explicitly."
-                    ),
-                )
-            )
-
     def validate(self) -> list[ValidationIssue]:
         """Run all validation checks and return issues found.
 
@@ -278,7 +252,6 @@ class ScenarioValidator:
         self._validate_spillage_events()
         self._validate_adversarial_payload_events()
         self._validate_email_config()
-        self._validate_workload_limits()
         self._validate_storyline_linkability()
         self._validate_storyline_causal_order()
         self._validate_storyline_event_ids()

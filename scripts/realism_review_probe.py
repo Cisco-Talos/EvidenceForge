@@ -757,20 +757,31 @@ def _check_ecar_lifecycles(
         and record.get("objectID")
         and isinstance(record.get("timestamp_ms"), int | float)
     }
-    linux_process_creates = sorted(
-        (
-            record
-            for record in process_creates.values()
-            if str((record.get("properties") or {}).get("image_path") or "").startswith("/")
-            and isinstance(record.get("pid"), int)
-        ),
-        key=lambda record: (float(record["timestamp_ms"]), str(record.get("id") or "")),
-    )
+    linux_process_creates_by_host: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in process_creates.values():
+        if not str((record.get("properties") or {}).get("image_path") or "").startswith("/"):
+            continue
+        if not isinstance(record.get("pid"), int):
+            continue
+        linux_process_creates_by_host[str(record.get("hostname") or "-")].append(record)
     linux_pid_reversals: list[dict[str, Any]] = []
-    for prior, current in zip(linux_process_creates, linux_process_creates[1:], strict=False):
-        if int(current["pid"]) <= int(prior["pid"]):
+    for hostname, host_records in linux_process_creates_by_host.items():
+        ordered = sorted(
+            host_records,
+            key=lambda record: (float(record["timestamp_ms"]), str(record.get("id") or "")),
+        )
+        for prior, current in zip(ordered, ordered[1:], strict=False):
+            prior_pid = int(prior["pid"])
+            current_pid = int(current["pid"])
+            modeled_wrap = prior_pid >= 4_000_000 and 500 <= current_pid <= 200_000
+            near_simultaneous_reordering = (
+                float(current["timestamp_ms"]) - float(prior["timestamp_ms"])
+            ) <= 30_000
+            if current_pid > prior_pid or modeled_wrap or near_simultaneous_reordering:
+                continue
             linux_pid_reversals.append(
                 {
+                    "hostname": hostname,
                     "prior_pid": prior["pid"],
                     "prior_timestamp_ms": prior["timestamp_ms"],
                     "prior_record_id": prior.get("id"),
@@ -785,7 +796,7 @@ def _check_ecar_lifecycles(
                 check="ecar_linux_pid_chronology",
                 severity="error",
                 path=str(path),
-                message="Linux process-create PIDs reverse without a modeled PID-space wrap",
+                message="Linux process-create PIDs reverse outside a valid PID-space wrap",
                 evidence={
                     "count": len(linux_pid_reversals),
                     "sample": linux_pid_reversals[0],

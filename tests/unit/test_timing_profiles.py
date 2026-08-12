@@ -18,6 +18,7 @@ from evidenceforge.generation.activity.timing_profiles import (
     reset_timing_profiles_cache,
     sample_timing_delta,
     startup_module_observation_timing,
+    sysmon_envelope_timing,
     windows_collision_spacing_config,
 )
 from evidenceforge.generation.causal.engine import ExpandedEvent
@@ -200,14 +201,21 @@ def test_timing_profiles_load_default_relationship():
     assert asset_window.min_ms > zeek_conn_window.max_ms + zeek_http_window.max_ms
 
     sensor_timing = network_sensor_observation_timing()
-    assert sensor_timing.clock_skew_min_us == -35000
-    assert sensor_timing.clock_skew_max_us == 35000
-    assert sensor_timing.path_delay_min_us == 500
-    assert sensor_timing.path_delay_max_us == 25000
+    assert sensor_timing.clock_skew_min_us == -250000
+    assert sensor_timing.clock_skew_max_us == 250000
+    assert sensor_timing.path_delay_min_us == 200
+    assert sensor_timing.path_delay_max_us == 3500
     assert sensor_timing.clock_drift_min_ppm == -1
     assert sensor_timing.event_jitter_min_us == -1500
     assert sensor_timing.event_jitter_max_us == 1500
     assert sensor_timing.capture_loss_probability == 0.12
+
+    sysmon_default = sysmon_envelope_timing(1)
+    sysmon_network = sysmon_envelope_timing(3)
+    assert sysmon_default.median_us == 850
+    assert sysmon_network.median_us == 2100
+    assert sysmon_network.max_us == 35000
+    assert 0 < sysmon_network.tail_probability < 0.1
 
     endpoint_timing = endpoint_clock_timing("enterprise_standard", "windows")
     assert endpoint_timing.host_offset_min_ms == -1250

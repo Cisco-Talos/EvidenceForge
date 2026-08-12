@@ -549,6 +549,14 @@ class TestSslContextPopulation:
         assert ssh_event.network is None
         assert transport_event.network.src_port == 51111
         assert transport_event.network.responding_pid is not None
+        responder_create = next(
+            event
+            for event in events
+            if event.event_type == "system_process_create"
+            and event.process is not None
+            and event.process.pid == transport_event.network.responding_pid
+        )
+        assert transport_event.timestamp <= responder_create.timestamp
 
         syslog_events = [
             event for event in events if event.event_type == "syslog" and event.syslog is not None
@@ -992,7 +1000,8 @@ class TestSslContextPopulation:
             and event.process.pid == close_event.syslog.pid
         )
         assert terminate_event.timestamp > close_event.timestamp
-        assert terminate_event.timestamp <= close_event.timestamp + timedelta(seconds=2)
+        assert terminate_event.timestamp >= close_event.timestamp + timedelta(seconds=3.2)
+        assert terminate_event.timestamp <= close_event.timestamp + timedelta(seconds=5.2)
         assert events.index(terminate_event) < events.index(close_event)
 
     def test_public_ssh_adapter_defers_close_until_dependents_finish(self, activity_gen):
@@ -1028,6 +1037,11 @@ class TestSslContextPopulation:
         )
         assert responder_pid is not None
         assert gen.state_manager.get_process(target.hostname, responder_pid) is not None
+
+        gen.finalize_ssh_session_lifecycles(base_time + timedelta(minutes=1))
+
+        assert not any(event.event_type == "logoff" for event in events)
+        assert gen._pending_ssh_session_closures
 
         gen.finalize_ssh_session_lifecycles(base_time + timedelta(hours=1))
 
@@ -1290,6 +1304,7 @@ class TestSslContextPopulation:
         assert event.protocol.leaf_certificate is None
         assert event.protocol.x509_chain == ()
         assert event.protocol.ssl.cert_chain_fuids == ()
+        assert "X" not in event.protocol.ssl.ssl_history
 
     def test_tls12_preserves_passive_certificate_artifacts(self, activity_gen):
         """TLS 1.2 handshakes still expose certificates to passive Zeek."""
@@ -2700,7 +2715,7 @@ class TestSslContextPopulation:
             "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
             "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
         ]
-        assert base_time < transport_event.timestamp < times[0] < times[1] < times[2]
+        assert base_time <= transport_event.timestamp < times[0] < times[1] < times[2]
         assert (
             timedelta(milliseconds=30)
             <= times[0] - transport_event.timestamp
@@ -3394,7 +3409,7 @@ class TestSslContextPopulation:
             if event.protocol.ssl.version == "TLSv12":
                 assert event.protocol.ssl.ssl_history == "CSIFIFD"
             else:
-                assert event.protocol.ssl.ssl_history == "CSOFFD"
+                assert event.protocol.ssl.ssl_history == "CSD"
 
     def test_single_observed_tls_clients_do_not_resume(self, activity_gen):
         """TLS resumption should require prior client/server pair state."""
@@ -3423,6 +3438,13 @@ class TestSslContextPopulation:
         """OCSP responses should not expire at observation time or flip status per serial."""
         gen, events = activity_gen
         gen.dispatcher.emitters["zeek_ocsp"] = MagicMock()
+        client = System(
+            hostname="WS-CLIENT-01",
+            ip="10.0.10.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        gen._ip_to_system = {client.ip: client}
 
         for offset in range(100):
             gen.generate_connection(
@@ -3437,6 +3459,7 @@ class TestSslContextPopulation:
                 resp_bytes=4096,
                 hostname="pypi.org",
                 conn_state="SF",
+                source_system=client,
             )
             gen._tls_seen_server_names.clear()
 

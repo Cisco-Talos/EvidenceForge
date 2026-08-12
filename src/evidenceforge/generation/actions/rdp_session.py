@@ -350,7 +350,6 @@ class RdpSessionActionBundle:
             session_kind="rdp",
             transport_pid=source_pid if source_pid > 0 else None,
             network_close_time=network_close_time,
-            source_ready_time=logon_time,
         )
 
         return uid

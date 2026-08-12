@@ -250,7 +250,7 @@ class TestParallelGeneration:
             # assert len(zeek_timestamps) >= 0  # Always true, just checking it parses
 
     def test_parallel_generation_cross_log_consistency(self):
-        """Test LogonIDs, PIDs, UIDs are unique across parallel emitters."""
+        """Test LogonIDs, PID lifetimes, and UIDs across parallel emitters."""
         scenario = create_test_scenario(users=5, hours=2)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -258,38 +258,72 @@ class TestParallelGeneration:
             engine.generate()
 
             # Extract cross-references
-            windows_events = parse_windows_log(
-                list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
-            )
-
-            # Verify session-establishing LogonIDs are unique. Workstation unlocks
-            # are 4624 Type 7 re-authentications that can reuse an active interactive
-            # session LogonID. In a slice-of-time dataset, that original session may
-            # have started before the rendered window, so Type 7 is excluded from
-            # this uniqueness contract rather than required to match a visible 4624.
-            session_logon_ids = [
-                e.get("TargetLogonId")
-                for e in windows_events
-                if e.get("TargetLogonId")
-                and e.get("EventID") == "4624"
-                and str(e.get("LogonType")) != "7"
+            windows_events = [
+                event
+                for log_path in Path(tmpdir).rglob("windows_event_security.xml")
+                for event in parse_windows_log(log_path)
             ]
-            assert len(session_logon_ids) > 0
-            assert len(session_logon_ids) == len(set(session_logon_ids)), (
-                "Duplicate LogonIDs found in logon events!"
-            )
 
-            # Verify PID uniqueness per system
-            pids_per_system = {}
-            for e in windows_events:
-                if e.get("EventID") == "4688":  # Process creation
-                    system = e.get("Computer")
-                    pid = e.get("NewProcessId")
-                    if system and pid:
-                        pids_per_system.setdefault(system, []).append(pid)
+            # Dynamically allocated LogonIDs are unique within one host. Workstation
+            # unlocks reuse an active interactive session, while Windows' built-in
+            # service principals intentionally retain their well-known LUIDs across
+            # distinct Type 5 authentication occurrences.
+            well_known_service_ids = {
+                "SYSTEM": "0x3e7",
+                "LOCAL SERVICE": "0x3e5",
+                "NETWORK SERVICE": "0x3e4",
+            }
+            dynamic_logon_ids_by_host: dict[str, list[str]] = {}
+            session_logons = [
+                event
+                for event in windows_events
+                if event.get("TargetLogonId")
+                and event.get("EventID") == "4624"
+                and str(event.get("LogonType")) != "7"
+            ]
+            assert session_logons
+            for event in session_logons:
+                hostname = event.get("Computer")
+                username = str(event.get("TargetUserName") or "").upper()
+                logon_id = str(event["TargetLogonId"]).lower()
+                assert hostname
+                expected_well_known_id = well_known_service_ids.get(username)
+                if expected_well_known_id is not None:
+                    assert str(event.get("LogonType")) == "5"
+                    assert logon_id == expected_well_known_id
+                    continue
 
-            for system, pids in pids_per_system.items():
-                assert len(pids) == len(set(pids)), f"Duplicate PIDs found on {system}!"
+                assert logon_id not in well_known_service_ids.values(), (
+                    f"Well-known LogonID {logon_id} assigned to {username} on {hostname}"
+                )
+                dynamic_logon_ids_by_host.setdefault(hostname, []).append(logon_id)
+
+            for hostname, logon_ids in dynamic_logon_ids_by_host.items():
+                assert len(logon_ids) == len(set(logon_ids)), (
+                    f"Duplicate dynamically allocated LogonIDs found on {hostname}!"
+                )
+
+            # PID values may be reused after exit. They must never identify two
+            # overlapping process lifetimes on the same host.
+            active_pids: dict[str, set[str]] = {}
+            for event in sorted(
+                windows_events,
+                key=lambda item: item.get("TimeCreated", datetime.min.replace(tzinfo=UTC)),
+            ):
+                system = event.get("Computer")
+                if not system:
+                    continue
+                if event.get("EventID") == "4688":
+                    pid = event.get("NewProcessId")
+                    if not pid:
+                        continue
+                    active = active_pids.setdefault(system, set())
+                    assert pid not in active, f"Overlapping PID {pid} found on {system}!"
+                    active.add(pid)
+                elif event.get("EventID") == "4689":
+                    pid = event.get("ProcessId")
+                    if pid:
+                        active_pids.setdefault(system, set()).discard(pid)
 
             # Verify Zeek UID uniqueness
             zeek_events = parse_zeek_log(first_zeek_conn_file(Path(tmpdir)))

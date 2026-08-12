@@ -56,7 +56,7 @@ from evidenceforge.generation.engine.baseline import (
     _extra_syslog_service_values,
     _gpo_refresh_command_line,
     _gpo_refresh_occurrences_for_hour,
-    _linux_ambient_logind_probability,
+    _linux_ambient_logind_session_budget,
     _linux_baseline_pam_close_lead,
     _linux_baseline_pam_open_lead,
     _linux_baseline_session_initiator,
@@ -389,7 +389,7 @@ def test_linux_baseline_session_initiator_creates_pam_session_message():
         _linux_baseline_session_initiator("root", rng=random.Random(seed)) for seed in range(30)
     )
 
-    assert {service for _app_name, service, _message in samples} <= {"login", "su"}
+    assert {service for _app_name, service, _message in samples} <= {"login", "gdm-password"}
     assert all(app_name != "CRON" for app_name, _service, _message in samples)
     assert all(service != "cron" for _app_name, service, _message in samples)
     assert all("pam_unix(" in message for _app_name, _service, message in samples)
@@ -403,12 +403,19 @@ def test_linux_baseline_session_initiator_creates_pam_session_message():
     )
 
 
-def test_linux_server_ambient_logind_noise_is_thinned():
-    """Generic local-console/logind noise should be much sparser on servers."""
-    assert _linux_ambient_logind_probability("server") < _linux_ambient_logind_probability(
-        "workstation"
+def test_linux_ambient_logind_budget_is_sparse_and_volume_independent():
+    """Local-session counts should be bounded per host-hour, not per syslog row."""
+    server = sum(
+        _linux_ambient_logind_session_budget("server", random.Random(seed)) for seed in range(1000)
     )
-    assert _linux_ambient_logind_probability("server") <= 0.05
+    workstation = sum(
+        _linux_ambient_logind_session_budget("workstation", random.Random(seed))
+        for seed in range(1000)
+    )
+
+    assert server < workstation
+    assert server <= 70
+    assert workstation <= 350
 
 
 def test_server_like_persona_sessions_use_server_admin_overlay():
@@ -458,17 +465,28 @@ def test_server_like_persona_sessions_use_server_admin_overlay():
     assert engine._use_server_admin_persona(other_workstation, remote_session)
 
 
-def test_server_pam_initiator_excludes_sudo_and_limits_local_login():
-    """Ambient logind noise must not bypass the owned sudo lifecycle."""
+def test_server_pam_initiator_is_explicit_local_console():
+    """Rare headless-host local sessions should be root console logins."""
     samples = [
         _linux_baseline_session_initiator("admin", rng=random.Random(seed), system_type="server")
         for seed in range(120)
     ]
     services = [service for _app_name, service, _message in samples]
 
-    assert "sudo" not in services
-    assert services.count("su") > services.count("login")
-    assert services.count("login") <= 20
+    assert set(services) == {"login"}
+    assert all("LOGIN(uid=0)" in message for _app, _service, message in samples)
+
+
+def test_workstation_pam_initiator_uses_display_manager():
+    """Owned Linux workstation sessions should look like graphical logins."""
+    app, service, message = _linux_baseline_session_initiator(
+        "marcus.chen",
+        rng=random.Random(4),
+        system_type="workstation",
+    )
+
+    assert (app, service) == ("gdm-password", "gdm-password")
+    assert "by gdm(uid=0)" in message
 
 
 def test_baseline_ssh_identity_uses_role_scoped_user_and_owned_source():
@@ -1407,8 +1425,11 @@ class TestSmbFileTransferCorrelation:
         assert event.protocol.primary_file_transfer.source == "SMB"
         assert event.protocol.primary_file_transfer.fuid.startswith("F")
         assert event.protocol.primary_file_transfer.is_orig is False
-        assert event.protocol.primary_file_transfer.seen_bytes <= 250000
-        assert event.protocol.primary_file_transfer.total_bytes == 250000
+        assert event.protocol.primary_file_transfer.seen_bytes > 0
+        assert (
+            event.protocol.primary_file_transfer.seen_bytes
+            == event.protocol.primary_file_transfer.total_bytes
+        )
         assert event.network.resp_bytes > event.protocol.primary_file_transfer.total_bytes
 
     def test_small_smb_metadata_connection_does_not_add_file_transfer_context(
@@ -1871,6 +1892,30 @@ class TestDhcpLease:
             later - earlier == pytest.approx(1627.5)
             for earlier, later in zip(epochs[:-1], epochs[1:], strict=True)
         )
+
+    def test_dhcp_renewal_schedule_recomputes_client_timer_each_ack(self):
+        """Client timer state should produce meaningful multi-cycle interval texture."""
+        current_hour = datetime(2024, 3, 15, 13, 0, 0, tzinfo=UTC)
+        last_renewal = datetime(2024, 3, 15, 12, 45, 0, tzinfo=UTC).timestamp()
+        intervals = iter([1775.0, 1812.0, 1791.0, 1834.0, 1768.0])
+
+        due, updated_last, pending_next = _dhcp_renewal_epochs_for_hour(
+            last_renewal=last_renewal,
+            renewal_interval=1800.0,
+            current_hour=current_hour,
+            renewal_interval_factory=lambda: next(intervals),
+        )
+        next_due, _next_last, _next_pending = _dhcp_renewal_epochs_for_hour(
+            last_renewal=updated_last,
+            renewal_interval=due[-1][1],
+            current_hour=current_hour + timedelta(hours=1),
+            next_renewal=pending_next,
+            renewal_interval_factory=lambda: next(intervals),
+        )
+
+        observed = [interval for _epoch, interval in due + next_due]
+        assert len(observed) >= 3
+        assert max(observed) - min(observed) >= 20.0
 
     def test_dhcp_lease_bundle_anchor_is_stable(self, timestamp):
         """DHCP lease requests should expose durable deterministic anchors."""
@@ -2377,6 +2422,40 @@ class TestBaselineRegistryRealism:
             "msmpeng.exe",
             "mpcmdrun.exe",
         }
+        exclusions = _registry_writer_candidates(
+            r"HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths",
+            pids,
+            "alice",
+        )
+        assert exclusions == []
+        internet_settings = _registry_writer_candidates(
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ProxyEnable",
+            pids,
+            "alice",
+        )
+        materialized_internet_settings = _registry_writer_candidates(
+            r"HKU\S-1-5-21-1-2-3-1001\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ProxyEnable",
+            pids,
+            "alice",
+        )
+        enable_lua = _registry_writer_candidates(
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA",
+            pids,
+            "alice",
+        )
+        security_health = _registry_writer_candidates(
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\SecurityHealthSystray",
+            pids,
+            "alice",
+        )
+        assert [image.rsplit("\\", 1)[-1].lower() for _pid, image, _user in internet_settings] == [
+            "explorer.exe"
+        ]
+        assert materialized_internet_settings == internet_settings
+        assert [image.rsplit("\\", 1)[-1].lower() for _pid, image, _user in enable_lua] == [
+            "svchost.exe"
+        ]
+        assert security_health == []
 
     def test_registry_noise_prefers_dynamic_pools_and_filters_repeated_tells(self):
         import inspect

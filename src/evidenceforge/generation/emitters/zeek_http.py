@@ -158,6 +158,14 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             event_ts = latest_ts
         if previous_ts is None or event_ts > previous_ts:
             self._last_http_ts_by_uid[uid_key] = event_ts
+        event_ts = _SOURCE_TIMING.packet_child_time(
+            event,
+            "source.zeek_http_request",
+            seed_parts=http_seed_parts,
+            preferred_time=event_ts,
+            not_before=request_not_before,
+            within=within,
+        )
         _SOURCE_TIMING.record_source_time(
             event,
             "source.zeek_http_request",
