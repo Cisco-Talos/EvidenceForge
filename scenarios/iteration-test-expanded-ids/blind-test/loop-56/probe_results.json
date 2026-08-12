@@ -1,9 +1,0 @@
-{
-  "previous_loop_fix": "explicit credential caller semantics",
-  "runas_processes": 1,
-  "bare_runas_commands": 0,
-  "runas_with_user_operand_and_target_command": 1,
-  "runas_terminated": 1,
-  "runas_ecar_lifetime_seconds": 6.304,
-  "result": "PASS"
-}

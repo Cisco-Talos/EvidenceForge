@@ -1,9 +1,0 @@
-Loop 58 automated evaluation
-
-Records: 78,878
-Overall score: 95.76853896801254
-Parseability: 100.0
-Plausibility: 96.70187229783643
-Causality: 89.5696509842438
-Timing: 96.00329073746238
-Acceptance: FAIL (pivot_linkability 50.0 below 80.0 hard threshold)
