@@ -6,6 +6,35 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.17.0 (2026-08-13)
+
+This minor release adds bidirectional HTTP file and multipart-body analysis, promotes the
+iteration benchmark to a canonical regression scenario, and incorporates ten further blind
+assessment loops of cross-source realism hardening.
+
+**HTTP file and multipart analysis**
+
+- Added canonical upload and download file modeling across authored, browser, beacon, and
+  explicit-proxy traffic, with coherent endpoint, Zeek HTTP/files, executable-analysis, ground
+  truth, configuration, and evaluation projections (`4b58bafc`).
+- Added ordered, source-native multipart sections in both HTTP directions, including curl form
+  parsing, endpoint reads, sparse Zeek vectors, proxy propagation, and multipart-aware
+  observation and plausibility checks (`a6f6acb8`).
+
+**Canonical benchmark and regression coverage**
+
+- Promoted the expanded iteration-test scenario as the canonical benchmark and consolidated its
+  generated assessment history into maintained scenario, report, and worklog artifacts
+  (`9ad1eeb1`).
+- Added a representative multipart upload to that benchmark so the new request-body path remains
+  exercised by end-to-end generation and assessment (`0eba2afb`).
+
+**Cross-source realism**
+
+- Completed assessment loops 60–69 and fixed the resulting lifecycle and identity seams across
+  Windows process/authentication telemetry, Linux sudo and PAM sessions, DNS ownership, TLS-aware
+  IDS attachment, multipart process ownership, and source-native timing (`322369c4`).
+
 ## v1.16.0 (2026-08-11)
 
 This minor release replaces static large-workload gating with host-aware resource forecasting,
