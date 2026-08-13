@@ -1401,12 +1401,12 @@ class TestWebAccessCorrelation:
 
 
 class TestSmbFileTransferCorrelation:
-    """SMB data transfers should produce Zeek files.log context when substantial."""
+    """Generic TCP/445 connections remain transport-only after the direct cutover."""
 
-    def test_large_smb_read_adds_file_transfer_context(
+    def test_large_smb_connection_does_not_infer_file_transfer_context(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
-        """Large successful SMB downloads should be observable in files.log."""
+        """Byte volume cannot turn an opaque SMB transport into a file operation."""
         activity_gen.generate_connection(
             src_ip="10.0.10.50",
             dst_ip="10.0.20.5",
@@ -1421,16 +1421,8 @@ class TestSmbFileTransferCorrelation:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        assert event.protocol.primary_file_transfer is not None
-        assert event.protocol.primary_file_transfer.source == "SMB"
-        assert event.protocol.primary_file_transfer.fuid.startswith("F")
-        assert event.protocol.primary_file_transfer.is_orig is False
-        assert event.protocol.primary_file_transfer.seen_bytes > 0
-        assert (
-            event.protocol.primary_file_transfer.seen_bytes
-            == event.protocol.primary_file_transfer.total_bytes
-        )
-        assert event.network.resp_bytes > event.protocol.primary_file_transfer.total_bytes
+        assert event.protocol.primary_file_transfer is None
+        assert event.network.resp_bytes >= 250000
 
     def test_small_smb_metadata_connection_does_not_add_file_transfer_context(
         self, activity_gen, state_manager, mock_emitters, timestamp

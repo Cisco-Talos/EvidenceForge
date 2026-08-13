@@ -262,8 +262,412 @@ class ScenarioValidator:
         self._validate_observation_profile()
         self._validate_network_identities()
         self._validate_traffic_affinities()
+        self._validate_storage()
+        self._validate_legacy_smb_connections()
         self._sort_issues()
         return self.issues
+
+    def _validate_storage(self) -> None:
+        """Validate compiled storage references, audiences, and SMB selections."""
+
+        from evidenceforge.generation.storage_world import StorageWorldModel
+        from evidenceforge.models.scenario import SmbShareLocation
+
+        systems_by_name = {
+            system.hostname.casefold(): system for system in self.scenario.environment.systems
+        }
+        for index, server in enumerate(self.scenario.environment.storage.servers):
+            system = systems_by_name.get(server.system.casefold())
+            if system is None:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.storage.servers.{index}.system",
+                        message=f"Unknown storage server system {server.system!r}",
+                        suggestion="Reference an environment system running Windows.",
+                    )
+                )
+            elif "windows" not in system.os.casefold():
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.storage.servers.{index}.system",
+                        message=f"Storage server {server.system!r} is not a Windows system",
+                        suggestion="V1 canonical storage supports Windows SMB2/3 disk shares only.",
+                    )
+                )
+        try:
+            world = StorageWorldModel.compile(self.scenario)
+        except (KeyError, TypeError, ValueError) as exc:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="environment.storage",
+                    message=f"Storage topology cannot be compiled: {exc}",
+                    suggestion="Correct the referenced volumes, generated-share overrides, or IDs.",
+                )
+            )
+            return
+
+        known_principals = {
+            *(username.casefold() for username in self.usernames),
+            *(group.casefold() for group in self.group_names),
+            *(account.casefold() for account in self.service_accounts),
+            "authenticated users",
+            "domain users",
+            "domain admins",
+            "backup operators",
+        }
+        for server_index, server in enumerate(self.scenario.environment.storage.servers):
+            for share_index, share in enumerate(server.shares):
+                if share.access is None:
+                    continue
+                for field_name in ("read", "modify", "admin", "deny"):
+                    for principal in getattr(share.access, field_name):
+                        if principal.casefold() not in known_principals:
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=(
+                                        f"environment.storage.servers.{server_index}.shares."
+                                        f"{share_index}.access.{field_name}"
+                                    ),
+                                    message=f"Unknown storage access principal {principal!r}",
+                                    suggestion="Reference a scenario user/group or a documented built-in group.",
+                                )
+                            )
+        for index, mapping in enumerate(self.scenario.environment.storage.mappings):
+            if mapping.share.casefold() not in world.shares_by_ref:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.storage.mappings.{index}.share",
+                        message=f"Unknown storage share {mapping.share!r}",
+                        suggestion="Use a compiled <system>.<share-id> reference.",
+                    )
+                )
+            self._validate_storage_audience(index, mapping)
+
+        for section_name, events in (
+            ("storyline", self.scenario.storyline or []),
+            ("red_herrings", self.scenario.red_herrings or []),
+        ):
+            for event_index, event in enumerate(events):
+                for spec_index, spec in enumerate(event.events):
+                    if spec.type != "smb_activity":
+                        continue
+                    path = f"{section_name}.{event_index}.events.{spec_index}"
+                    locations = [
+                        location
+                        for location in (spec.target, spec.source, spec.destination)
+                        if isinstance(location, SmbShareLocation)
+                    ]
+                    for location in locations:
+                        self._validate_smb_location(world, spec, location, path)
+                    if spec.mapping is not None:
+                        mapping = world.mappings_by_id.get(spec.mapping.casefold())
+                        if mapping is None:
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.mapping",
+                                    message=f"Unknown storage mapping {spec.mapping!r}",
+                                    suggestion="Use a mapping ID from environment.storage.mappings.",
+                                )
+                            )
+                        elif all(
+                            location.share.casefold() != mapping.share.casefold()
+                            for location in locations
+                        ):
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.mapping",
+                                    message=(
+                                        f"Mapping {spec.mapping!r} does not target any share used "
+                                        "by this SMB activity"
+                                    ),
+                                    suggestion="Remove the mapping or select its mapped share.",
+                                )
+                            )
+                        elif not self._storage_mapping_applies(
+                            mapping,
+                            actor=event.actor,
+                            system=event.system,
+                        ):
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.mapping",
+                                    message=(
+                                        f"Storage mapping {mapping.id!r} does not apply to "
+                                        f"{event.actor!r} on {event.system!r}"
+                                    ),
+                                    suggestion="Expand its audience or use UNC presentation.",
+                                )
+                            )
+                    elif spec.path_style == "mapped":
+                        applicable = [
+                            mapping
+                            for mapping in world.mappings
+                            if any(
+                                location.share.casefold() == mapping.share.casefold()
+                                for location in locations
+                            )
+                            and self._storage_mapping_applies(
+                                mapping,
+                                actor=event.actor,
+                                system=event.system,
+                            )
+                        ]
+                        if len(applicable) != 1:
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.path_style",
+                                    message=(
+                                        "Mapped SMB presentation must resolve exactly one active "
+                                        f"mapping; found {len(applicable)}"
+                                    ),
+                                    suggestion="Set mapping explicitly or use path_style: unc/auto.",
+                                )
+                            )
+                    access_results: list[tuple[object, bool]] = []
+                    for location in locations:
+                        share = world.shares_by_ref.get(location.share.casefold())
+                        if share is None:
+                            continue
+                        required_operation = spec.operation
+                        if spec.operation == "copy":
+                            required_operation = "read" if location is spec.source else "update"
+                        allowed = self._storage_actor_has_access(
+                            share,
+                            actor=event.actor,
+                            operation=required_operation,
+                        )
+                        access_results.append((share, allowed))
+                    denied = [share for share, allowed in access_results if not allowed]
+                    if spec.outcome == "success" and denied:
+                        denied_refs = ", ".join(share.ref for share in denied)
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=f"{path}.outcome",
+                                message=(
+                                    f"SMB success is impossible because {event.actor!r} cannot "
+                                    f"perform the required access on {denied_refs}"
+                                ),
+                                suggestion="Change access, actor, share, or asserted outcome.",
+                            )
+                        )
+                    if spec.outcome == "access_denied" and access_results and not denied:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=f"{path}.outcome",
+                                message=(
+                                    f"SMB access_denied is not credible because {event.actor!r} "
+                                    "can perform every required share access"
+                                ),
+                                suggestion="Choose an inaccessible target or use outcome: auto.",
+                            )
+                        )
+                    if spec.client is not None:
+                        share_servers = {
+                            world.share(location.share).system.casefold()
+                            for location in locations
+                            if location.share.casefold() in world.shares_by_ref
+                        }
+                        if event.system.casefold() not in share_servers:
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.client",
+                                    message=(
+                                        "External SMB mode requires the parent storyline system "
+                                        "to be one of the referenced share servers"
+                                    ),
+                                    suggestion="Set the storyline system to the target file server.",
+                                )
+                            )
+
+    def _validate_storage_audience(self, index: int, mapping: object) -> None:
+        audience = mapping.audience
+        for field_name, values, known in (
+            ("users", audience.users, self.usernames),
+            ("groups", audience.groups, self.group_names),
+            ("systems", audience.systems, self.hostnames),
+        ):
+            unknown = sorted(set(values) - set(known))
+            if unknown:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.storage.mappings.{index}.audience.{field_name}",
+                        message=f"Unknown storage mapping {field_name}: {', '.join(unknown)}",
+                        suggestion=f"Reference defined scenario {field_name}.",
+                    )
+                )
+
+    def _storage_mapping_applies(self, mapping: object, *, actor: str, system: str) -> bool:
+        user_match = not mapping.users or actor in mapping.users
+        system_match = not mapping.systems or system in mapping.systems
+        return user_match and system_match
+
+    def _storage_actor_has_access(
+        self,
+        share: object,
+        *,
+        actor: str,
+        operation: str,
+    ) -> bool:
+        actor_folded = actor.casefold()
+        groups = {
+            group.name.casefold()
+            for group in self.scenario.environment.groups or []
+            if actor in group.members
+        }
+        principals = {actor_folded, *groups, "authenticated users", "domain users"}
+        deny = {principal.casefold() for principal in share.access.deny}
+        if principals & deny:
+            return False
+        allowed = share.access.read if operation in {"browse", "read"} else share.access.modify
+        return bool(principals & {principal.casefold() for principal in allowed})
+
+    def _validate_smb_location(
+        self, world: object, spec: object, location: object, path: str
+    ) -> None:
+        share = world.shares_by_ref.get(location.share.casefold())
+        if share is None:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path=path,
+                    message=f"Unknown SMB share {location.share!r}",
+                    suggestion="Use a compiled <system>.<share-id> reference.",
+                )
+            )
+            return
+        matches = world.select(
+            share.ref,
+            file_ref=location.file_ref,
+            path=location.path,
+            selector=location.selector,
+        )
+        is_create_destination = spec.operation == "create" or (
+            spec.operation in {"copy", "move"} and location is spec.destination
+        )
+        if is_create_destination:
+            if location.path is not None and matches:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=path,
+                        message=f"SMB destination path {location.path!r} already exists",
+                        suggestion="Choose a missing path or omit it for automatic naming.",
+                    )
+                )
+            return
+        if spec.outcome == "not_found":
+            if matches:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=path,
+                        message="SMB not_found assertion resolves to an existing file",
+                        suggestion="Use a missing explicit share-relative path.",
+                    )
+                )
+            return
+        if location.file_ref is not None and not matches:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path=path,
+                    message=f"Unknown seed file ref {location.file_ref!r} in {share.ref}",
+                    suggestion="Use a seed ref declared by this share.",
+                )
+            )
+            return
+        if location.path is not None and not matches:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path=path,
+                    message=f"SMB path {location.path!r} does not exist in {share.ref}",
+                    suggestion="Use an existing path, create it first, or assert not_found.",
+                )
+            )
+            return
+        if location.selector is not None:
+            if spec.batch is None and len(matches) != 1:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=path,
+                        message=f"Singular SMB selector resolved to {len(matches)} files",
+                        suggestion="Refine it to one match or add bounded batch controls.",
+                    )
+                )
+            elif spec.batch is not None and spec.batch.count is not None:
+                if spec.batch.count > len(matches):
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"{path}.batch.count",
+                            message=(
+                                f"SMB batch requests {spec.batch.count} files but selector "
+                                f"matches {len(matches)}"
+                            ),
+                            suggestion="Reduce count or broaden the selector.",
+                        )
+                    )
+
+    def _validate_legacy_smb_connections(self) -> None:
+        """Emit one migration warning per section for likely inferred-file authoring."""
+
+        file_server_ips = {
+            system.ip
+            for system in self.scenario.environment.systems
+            if "file_server" in {role.casefold().replace("-", "_") for role in system.roles}
+        }
+        for section_name, events in (
+            ("storyline", self.scenario.storyline or []),
+            ("red_herrings", self.scenario.red_herrings or []),
+        ):
+            candidates: list[str] = []
+            for event_index, event in enumerate(events):
+                for spec_index, spec in enumerate(event.events):
+                    if spec.type != "connection":
+                        continue
+                    is_smb = spec.dst_port == 445 or (spec.service or "").casefold() == "smb"
+                    successful = spec.conn_state in {None, "SF"}
+                    likely_semantic = (
+                        spec.orig_bytes is not None
+                        or spec.resp_bytes is not None
+                        or spec.dst_ip in file_server_ips
+                    )
+                    if is_smb and successful and likely_semantic:
+                        candidates.append(f"{section_name}.{event_index}.events.{spec_index}")
+            if candidates:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=section_name,
+                        message=(
+                            f"{len(candidates)} successful SMB connection event(s) appear to "
+                            "rely on legacy inferred SMB behavior. In EvidenceForge 2.0, TCP/445 "
+                            "connection events produce transport evidence only; payload size and "
+                            "file-server role no longer create files, authenticated share "
+                            "sessions, or file operations."
+                        ),
+                        suggestion=(
+                            "Use type: smb_activity for share, path, or file behavior. Keep "
+                            "type: connection for transport, probing, IPC/RPC, or intentionally "
+                            f"opaque SMB. First legacy-looking event: {candidates[0]}."
+                        ),
+                    )
+                )
 
     def _validate_ids_alert_attachments(self) -> None:
         """Resolve attached signatures and reject scenario-wide policy ambiguity."""

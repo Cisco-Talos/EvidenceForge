@@ -370,12 +370,14 @@ def validate_config() -> ValidationResult:
     # Overlay files must parse cleanly before merged loaders use them.
     # If an overlay file has bad YAML, report it as an error rather than
     # letting it crash the merged loaders.
-    from evidenceforge.config.overlay import get_overlay_directory
+    from evidenceforge.config.overlay import get_overlay_directory, retired_overlay_errors
 
     overlay_dir = get_overlay_directory()
     overlay_yaml_files: list[Path] = []
     if overlay_dir and overlay_dir.is_dir():
         overlay_yaml_files = sorted(overlay_dir.rglob("*.yaml"))
+    for relative_path, message in retired_overlay_errors(overlay_dir):
+        result.issues.append(Issue("ERROR", f"overlay/{relative_path}", message))
 
     # File-scoped overlay structure schemas.
     # Maps overlay file path → expected field types.
@@ -482,9 +484,6 @@ def validate_config() -> ValidationResult:
                 "mail_profiles": "name",
                 "aaaa_profiles": "name",
             },
-        },
-        "activity/smb_file_transfers.yaml": {
-            "list_fields": {"mime_types": None, "analyzer_sets": None},
         },
         "activity/network_params.yaml": {
             "list_fields": {
@@ -2638,7 +2637,6 @@ def validate_config() -> ValidationResult:
         PublicNtpServerEntry,
         RemoteThreadStartLocationEntry,
         ScheduledTaskEntry,
-        SmbFileTransferConfig,
         SpawnRuleEntry,
         SuspiciousBenignConfig,
         SyslogProgramEntry,
@@ -2918,15 +2916,6 @@ def validate_config() -> ValidationResult:
     if kerberos_realism_data:
         _SCHEMA_CHECKS.append(
             ([kerberos_realism_data], KerberosRealismConfig, "kerberos_realism.yaml")
-        )
-
-    # smb_file_transfers.yaml
-    from evidenceforge.generation.activity.smb_file_transfers import load_smb_file_transfers
-
-    smb_file_transfer_data = load_smb_file_transfers()
-    if smb_file_transfer_data:
-        _SCHEMA_CHECKS.append(
-            ([smb_file_transfer_data], SmbFileTransferConfig, "smb_file_transfers.yaml")
         )
 
     # http_file_profiles.yaml

@@ -62,6 +62,14 @@ class EventKind(StrEnum):
     SCHEDULED_TASK_ENABLED = "scheduled_task_enabled"
     SENSOR_STARTUP = "sensor_startup"
     SERVICE_INSTALLED = "service_installed"
+    SMB_DIRECTORY_ENUMERATION = "smb_directory_enumeration"
+    SMB_FILE_CLOSE = "smb_file_close"
+    SMB_FILE_DELETE = "smb_file_delete"
+    SMB_FILE_OPEN = "smb_file_open"
+    SMB_FILE_READ = "smb_file_read"
+    SMB_FILE_RENAME = "smb_file_rename"
+    SMB_FILE_WRITE = "smb_file_write"
+    SMB_TREE_CONNECT = "smb_tree_connect"
     SSH_SESSION = "ssh_session"
     SYSLOG = "syslog"
     SYSTEM_PROCESS_CREATE = "system_process_create"
@@ -105,6 +113,7 @@ class ContextKind(StrEnum):
     SERVICE = "service"
     SHELL = "shell"
     SMTP = "smtp"
+    SMB = "smb"
     SRC_HOST = "src_host"
     SSL = "ssl"
     SYSLOG = "syslog"
@@ -137,6 +146,8 @@ class FormatKind(StrEnum):
     ZEEK_PE = "zeek_pe"
     ZEEK_REPORTER = "zeek_reporter"
     ZEEK_SMTP = "zeek_smtp"
+    ZEEK_SMB_FILES = "zeek_smb_files"
+    ZEEK_SMB_MAPPING = "zeek_smb_mapping"
     ZEEK_SSL = "zeek_ssl"
     ZEEK_WEIRD = "zeek_weird"
     ZEEK_X509 = "zeek_x509"
@@ -593,6 +604,59 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         state=StateEffect.READ,
         emitters=_WINDOWS_SECURITY,
     ),
+    **{
+        kind: _contract(
+            kind,
+            required=_contexts(ContextKind.NETWORK, ContextKind.SMB),
+            optional=_contexts(
+                ContextKind.AUTH,
+                ContextKind.DST_HOST,
+                ContextKind.FILE,
+                ContextKind.FILE_TRANSFER,
+                ContextKind.FILE_TRANSFERS,
+                ContextKind.LIFECYCLE,
+                ContextKind.PROCESS,
+                ContextKind.SRC_HOST,
+            ),
+            src=HostSemantic.TRANSPORT_SOURCE,
+            dst=HostSemantic.TRANSPORT_DESTINATION,
+            lifecycle=LifecycleRole.DEPENDENT,
+            state=(
+                StateEffect.READ
+                if kind
+                in {
+                    EventKind.SMB_DIRECTORY_ENUMERATION,
+                    EventKind.SMB_FILE_OPEN,
+                    EventKind.SMB_FILE_READ,
+                }
+                else StateEffect.WRITE
+                if kind
+                in {
+                    EventKind.SMB_FILE_WRITE,
+                    EventKind.SMB_FILE_RENAME,
+                    EventKind.SMB_FILE_DELETE,
+                }
+                else StateEffect.NONE
+            ),
+            emitters=_formats(
+                FormatKind.ECAR,
+                FormatKind.WINDOWS_EVENT_SECURITY,
+                FormatKind.ZEEK_FILES,
+                FormatKind.ZEEK_SMB_FILES,
+                FormatKind.ZEEK_SMB_MAPPING,
+            ),
+        )
+        for kind in (
+            EventKind.SMB_TREE_CONNECT,
+            EventKind.SMB_DIRECTORY_ENUMERATION,
+            EventKind.SMB_FILE_OPEN,
+            EventKind.SMB_FILE_READ,
+            EventKind.SMB_FILE_WRITE,
+            EventKind.SMB_FILE_RENAME,
+            EventKind.SMB_FILE_DELETE,
+            EventKind.SMB_FILE_CLOSE,
+        )
+    },
     EventKind.PASSWORD_CHANGE: _contract(
         EventKind.PASSWORD_CHANGE,
         required=_ACCOUNT_REQUIRED,

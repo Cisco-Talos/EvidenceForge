@@ -49,6 +49,10 @@ from evidenceforge.models.state import (
     OpenConnection,
     RunningProcess,
     RunningThread,
+    SmbFileState,
+    SmbHandleState,
+    SmbSessionState,
+    SmbTreeState,
 )
 from evidenceforge.utils.ids import generate_zeek_uid
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
@@ -73,6 +77,7 @@ _MINUTES_PER_WEEK = 7 * 24 * 60
 _ENDED_IDENTITY_RETENTION = timedelta(hours=48)
 _MAX_RETAINED_PROCESS_IDENTITIES = 500_000
 _MAX_RETAINED_THREAD_IDENTITIES = 1_000_000
+_MAX_SMB_MUTATION_OVERLAY = 100_000
 
 
 def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
@@ -219,6 +224,13 @@ class StateManager:
         )
         self._ended_processes_by_object_id: ExpiringIndex[str, RunningProcess] = ExpiringIndex()
         self._ended_threads: ExpiringIndex[tuple[str, str, int], RunningThread] = ExpiringIndex()
+        self._smb_sessions: dict[str, SmbSessionState] = {}
+        self._smb_session_affinity: dict[tuple[str, str, str, str], str] = {}
+        self._smb_trees: dict[str, SmbTreeState] = {}
+        self._smb_tree_by_session_share: dict[tuple[str, str], str] = {}
+        self._smb_handles: dict[str, SmbHandleState] = {}
+        self._smb_file_overlay: dict[str, SmbFileState] = {}
+        self._smb_file_by_share_path: dict[tuple[str, str], str] = {}
 
     # ========================================
     # Session Management
@@ -2636,6 +2648,310 @@ class StateManager:
         with self._lock:
             return self.state
 
+    # ========================================
+    # Canonical SMB Runtime State
+    # ========================================
+
+    def open_smb_session(
+        self,
+        *,
+        client_ip: str,
+        principal: str,
+        server: str,
+        security_policy: str,
+        logon_id: str,
+        transport_uid: str,
+        started_at: datetime,
+        idle_timeout: timedelta = timedelta(minutes=15),
+        reuse: bool = False,
+    ) -> SmbSessionState:
+        """Create or reuse one bounded SMB application session."""
+
+        started_at = ensure_utc(started_at)
+        key = (client_ip, principal.casefold(), server.casefold(), security_policy)
+        with self._lock:
+            if reuse:
+                session_id = self._smb_session_affinity.get(key)
+                session = self._smb_sessions.get(session_id or "")
+                if (
+                    session is not None
+                    and session.closed_at is None
+                    and session.expires_at >= started_at
+                    and session.started_at + timedelta(hours=1) >= started_at
+                ):
+                    session.expires_at = min(
+                        session.started_at + timedelta(hours=1),
+                        started_at + idle_timeout,
+                    )
+                    return session
+            session_id = stable_uuid(
+                "smb-session",
+                client_ip,
+                principal,
+                server,
+                security_policy,
+                transport_uid,
+                started_at.isoformat(),
+            )
+            session = SmbSessionState(
+                session_id=session_id,
+                client_ip=client_ip,
+                principal=principal,
+                server=server,
+                security_policy=security_policy,
+                logon_id=logon_id,
+                transport_uid=transport_uid,
+                started_at=started_at,
+                expires_at=min(started_at + timedelta(hours=1), started_at + idle_timeout),
+            )
+            self._smb_sessions[session_id] = session
+            self._smb_session_affinity[key] = session_id
+            return session
+
+    def get_or_open_smb_tree(
+        self,
+        session_id: str,
+        share: str,
+        timestamp: datetime,
+    ) -> SmbTreeState:
+        """Return the active tree for a session/share pair or create it."""
+
+        timestamp = ensure_utc(timestamp)
+        key = (session_id, share.casefold())
+        with self._lock:
+            tree_id = self._smb_tree_by_session_share.get(key)
+            tree = self._smb_trees.get(tree_id or "")
+            if tree is not None and tree.closed_at is None:
+                tree.last_activity_at = timestamp
+                return tree
+            tree_id = stable_uuid("smb-tree", session_id, share.casefold())
+            tree = SmbTreeState(
+                tree_id=tree_id,
+                session_id=session_id,
+                share=share,
+                connected_at=timestamp,
+                last_activity_at=timestamp,
+            )
+            self._smb_trees[tree_id] = tree
+            self._smb_tree_by_session_share[key] = tree_id
+            return tree
+
+    def get_smb_tree(self, tree_id: str) -> SmbTreeState | None:
+        """Return one active SMB tree without exposing mutable indexes to callers."""
+
+        with self._lock:
+            return self._smb_trees.get(tree_id)
+
+    def smb_file_is_available(self, file: object) -> bool:
+        """Return whether a compiled catalog entry still exists at its original path."""
+
+        with self._lock:
+            state = self._smb_file_overlay.get(file.file_id)
+            if state is None:
+                return True
+            return (
+                not state.deleted
+                and state.share.casefold() == file.share.casefold()
+                and state.path.casefold() == file.path.casefold()
+            )
+
+    def smb_file_size(self, file: object) -> int:
+        """Return the current size for a compiled catalog entry without touching it."""
+
+        with self._lock:
+            state = self._smb_file_overlay.get(file.file_id)
+            if state is None:
+                return max(0, int(file.size_bytes))
+            return 0 if state.deleted else state.size_bytes
+
+    def open_smb_handle(
+        self,
+        *,
+        tree_id: str,
+        file_id: str,
+        timestamp: datetime,
+        access: str,
+        deny_write: bool = False,
+    ) -> SmbHandleState:
+        """Open one minimal SMB handle."""
+
+        timestamp = ensure_utc(timestamp)
+        with self._lock:
+            handle_id = stable_uuid(
+                "smb-handle",
+                tree_id,
+                file_id,
+                access,
+                timestamp.isoformat(),
+                len(self._smb_handles),
+            )
+            handle = SmbHandleState(
+                handle_id=handle_id,
+                tree_id=tree_id,
+                file_id=file_id,
+                opened_at=timestamp,
+                access=access,
+                deny_write=deny_write,
+            )
+            self._smb_handles[handle_id] = handle
+            return handle
+
+    def has_smb_write_conflict(self, file_id: str) -> bool:
+        """Return whether an active handle denies writes to a file."""
+
+        with self._lock:
+            return any(
+                handle.file_id == file_id and handle.closed_at is None and handle.deny_write
+                for handle in self._smb_handles.values()
+            )
+
+    def close_smb_handle(self, handle_id: str, timestamp: datetime) -> None:
+        """Close and evict one SMB handle."""
+
+        with self._lock:
+            handle = self._smb_handles.get(handle_id)
+            if handle is not None:
+                handle.closed_at = ensure_utc(timestamp)
+                self._smb_handles.pop(handle_id, None)
+
+    def touch_smb_file(self, file: object) -> SmbFileState:
+        """Return a mutable overlay view for one compiled storage file."""
+
+        with self._lock:
+            existing = self._smb_file_overlay.get(file.file_id)
+            if existing is not None:
+                return existing
+            if len(self._smb_file_overlay) >= _MAX_SMB_MUTATION_OVERLAY:
+                raise StateError(
+                    f"SMB mutation overlay exceeds {_MAX_SMB_MUTATION_OVERLAY} touched files"
+                )
+            state = SmbFileState(
+                file_id=file.file_id,
+                share=file.share,
+                path=file.path,
+                version=file.version,
+                size_bytes=file.size_bytes,
+                mime_type=file.mime_type,
+                tags=tuple(file.tags),
+            )
+            self._smb_file_overlay[state.file_id] = state
+            self._smb_file_by_share_path[(state.share.casefold(), state.path.casefold())] = (
+                state.file_id
+            )
+            return state
+
+    def create_smb_file(
+        self,
+        *,
+        share: str,
+        path: str,
+        size_bytes: int,
+        mime_type: str,
+        timestamp: datetime,
+        tags: tuple[str, ...] = (),
+    ) -> SmbFileState:
+        """Create a new file identity in the mutation overlay."""
+
+        with self._lock:
+            if len(self._smb_file_overlay) >= _MAX_SMB_MUTATION_OVERLAY:
+                raise StateError(
+                    f"SMB mutation overlay exceeds {_MAX_SMB_MUTATION_OVERLAY} touched files"
+                )
+            key = (share.casefold(), path.casefold())
+            prior_id = self._smb_file_by_share_path.get(key)
+            prior = self._smb_file_overlay.get(prior_id or "")
+            if prior is not None and not prior.deleted:
+                raise StateError(f"SMB path already exists: {share}:{path}")
+            file_id = f"file-{stable_uuid('smb-created-file', share, path, ensure_utc(timestamp))}"
+            state = SmbFileState(
+                file_id=file_id,
+                share=share,
+                path=path,
+                version=1,
+                size_bytes=max(0, size_bytes),
+                mime_type=mime_type,
+                tags=tags,
+            )
+            self._smb_file_overlay[file_id] = state
+            self._smb_file_by_share_path[key] = file_id
+            return state
+
+    def update_smb_file(self, file_id: str, *, size_bytes: int) -> SmbFileState:
+        """Advance a file content version and size."""
+
+        with self._lock:
+            state = self._smb_file_overlay[file_id]
+            if state.deleted:
+                raise StateError(f"cannot update deleted SMB file {file_id}")
+            state.version += 1
+            state.size_bytes = max(0, size_bytes)
+            return state
+
+    def move_smb_file(self, file_id: str, *, share: str, path: str) -> SmbFileState:
+        """Move a file while preserving its durable identity."""
+
+        with self._lock:
+            state = self._smb_file_overlay[file_id]
+            destination_key = (share.casefold(), path.casefold())
+            destination_id = self._smb_file_by_share_path.get(destination_key)
+            destination = self._smb_file_overlay.get(destination_id or "")
+            if destination is not None and not destination.deleted and destination_id != file_id:
+                raise StateError(f"SMB path already exists: {share}:{path}")
+            old_key = (state.share.casefold(), state.path.casefold())
+            self._smb_file_by_share_path.pop(old_key, None)
+            state.prior_paths = (*state.prior_paths, state.path)
+            state.share = share
+            state.path = path
+            self._smb_file_by_share_path[destination_key] = file_id
+            return state
+
+    def delete_smb_file(self, file_id: str) -> SmbFileState:
+        """Tombstone a file identity."""
+
+        with self._lock:
+            state = self._smb_file_overlay[file_id]
+            state.deleted = True
+            self._smb_file_by_share_path.pop(
+                (state.share.casefold(), state.path.casefold()),
+                None,
+            )
+            return state
+
+    def sweep_smb_state(self, cutoff: datetime) -> None:
+        """Expire SMB sessions, trees, and handles at the hourly state barrier."""
+
+        cutoff = ensure_utc(cutoff)
+        with self._lock:
+            expired_sessions = {
+                session_id
+                for session_id, session in self._smb_sessions.items()
+                if session.expires_at < cutoff or session.closed_at is not None
+            }
+            for session_id in expired_sessions:
+                session = self._smb_sessions.pop(session_id)
+                key = (
+                    session.client_ip,
+                    session.principal.casefold(),
+                    session.server.casefold(),
+                    session.security_policy,
+                )
+                if self._smb_session_affinity.get(key) == session_id:
+                    self._smb_session_affinity.pop(key, None)
+            expired_trees = {
+                tree_id
+                for tree_id, tree in self._smb_trees.items()
+                if tree.session_id in expired_sessions or tree.closed_at is not None
+            }
+            for tree_id in expired_trees:
+                tree = self._smb_trees.pop(tree_id)
+                self._smb_tree_by_session_share.pop(
+                    (tree.session_id, tree.share.casefold()),
+                    None,
+                )
+            for handle_id, handle in list(self._smb_handles.items()):
+                if handle.tree_id in expired_trees or handle.closed_at is not None:
+                    self._smb_handles.pop(handle_id, None)
+
     def get_state_summary(self) -> dict:
         """Get a summary of current state for logging/debugging.
 
@@ -2648,6 +2964,10 @@ class StateManager:
                 "running_processes": len(self.state.running_processes),
                 "open_connections": len(self.state.open_connections),
                 "dns_cache_entries": len(self.state.dns_cache),
+                "smb_sessions": len(self._smb_sessions),
+                "smb_trees": len(self._smb_trees),
+                "smb_handles": len(self._smb_handles),
+                "smb_mutations": len(self._smb_file_overlay),
                 "current_time": str(self.state.current_time) if self.state.current_time else None,
             }
 

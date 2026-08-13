@@ -2801,7 +2801,6 @@ class StorylineMixin:
                 source_file_read_path=source_file_read_path,
             ),
             rng,
-            emit_smb_logon_pair=getattr(self, "_emit_smb_logon_pair", None),
         ).execute()
         if emitted:
             archive.consumed = True
@@ -4153,6 +4152,32 @@ class StorylineMixin:
                     process_shell_key = (system.hostname, process_actor.username)
                     self._storyline_shell_available_at[process_shell_key] = shell_release_time
 
+        elif spec.type == "smb_activity":
+            client_system = None if spec.client is not None else system
+            story_pid, story_image = self._last_storyline_process_for_system(client_system)
+            result = self.activity_generator.generate_smb_activity(
+                spec=spec,
+                actor=actor,
+                parent_system=system,
+                time=time,
+                process_pid=story_pid,
+                process_image=story_image,
+            )
+            malicious_event.update(
+                {
+                    "session_id": result.session_id,
+                    "tree_ids": list(result.tree_ids),
+                    "transport_uids": list(result.transport_uids),
+                    "operations": list(result.operations),
+                    "batch_summary": {
+                        "selected": len(result.operations),
+                        "outcomes": sorted(
+                            {operation["outcome"] for operation in result.operations}
+                        ),
+                    },
+                }
+            )
+
         elif spec.type == "connection":
             source_ip = spec.source_ip or system.ip
             dst_ip = spec.dst_ip
@@ -4642,41 +4667,6 @@ class StorylineMixin:
                 malicious_event["ids_alerts"] = _ids_attachment_ground_truth(
                     getattr(spec, "ids_alerts", [])
                 )
-
-            # Causal expansion: SMB to file server emits type 3 logon pair
-            if dst_port == 445:
-                dst_sys = next(
-                    (s for s in self.scenario.environment.systems if s.ip == logged_dst_ip),
-                    None,
-                )
-                if (
-                    dst_sys
-                    and dst_sys.roles
-                    and "file_server" in [r.lower() for r in dst_sys.roles]
-                ):
-                    if hasattr(self, "_emit_smb_logon_pair"):
-                        smb_source_port = None
-                        matcher = getattr(
-                            self.activity_generator,
-                            "_last_effective_connection_source_port",
-                            None,
-                        )
-                        if matcher is not None:
-                            smb_source_port = matcher(
-                                src_ip=source_ip,
-                                dst_ip=logged_dst_ip,
-                                dst_port=445,
-                                proto="tcp",
-                            )
-                        self._emit_smb_logon_pair(
-                            actor,
-                            dst_sys,
-                            source_ip,
-                            connection_time,
-                            rng,
-                            source_port=smb_source_port,
-                            emit_network_evidence=smb_source_port is None,
-                        )
 
         elif spec.type == "ssh_session":
             target = next(

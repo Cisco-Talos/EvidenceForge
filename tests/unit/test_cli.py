@@ -170,6 +170,118 @@ class TestValidateCommand:
         assert "Projected output size" in result.stdout
         assert "Available disk" in result.stdout
 
+    def test_show_storage_exposes_compiled_authoring_diagnostics(self, tmp_path):
+        """--show-storage should expose topology, policy, scale, and bounded samples."""
+        scenario_file = _write_included_minimal_scenario(tmp_path, name="storage-cli-test")
+        (tmp_path / "environment.yaml").write_text(
+            """
+environment:
+  description: Storage CLI test environment
+  users:
+    - username: test_user
+      full_name: Test User
+      email: test.user@example.com
+      primary_system: TEST-01
+      enabled: true
+  groups:
+    - name: Finance-Users
+      members: [test_user]
+    - name: Finance-Readers
+      members: []
+    - name: Contractors
+      members: []
+  systems:
+    - hostname: TEST-01
+      ip: 10.0.0.1
+      os: Windows 10
+      type: workstation
+    - hostname: FS-01
+      ip: 10.0.0.20
+      os: Windows Server 2022
+      type: server
+      roles: [file_server]
+  storage:
+    population: small
+    activity: low
+    servers:
+      - system: FS-01
+        presets: []
+        audit: high
+        default_volume: data
+        volumes:
+          - id: data
+            mount: 'D:\\'
+            filesystem: ntfs
+            label: SharedData
+          - id: archive
+            mount: 'C:\\Mounts\\Archive\\'
+            filesystem: refs
+            label: ArchiveData
+        shares:
+          - id: finance
+            name: Finance
+            volume: data
+            root: Departments\\Finance
+            preset: department
+            population: medium
+            activity: high
+            encryption: required
+            access:
+              read: [Finance-Readers]
+              modify: [Finance-Users]
+              admin: [Domain Admins]
+              deny: [Contractors]
+            seed_files:
+              - ref: forecast
+                path: Reports\\FY26\\forecast.xlsx
+                size_bytes: 1843200
+                tags: [finance, office]
+    mappings:
+      - id: finance-p
+        share: FS-01.finance
+        audience:
+          groups: [Finance-Users]
+          systems: [TEST-01]
+        drive: 'P:'
+        lifecycle: persistent
+"""
+        )
+
+        result = runner.invoke(
+            app,
+            ["validate", str(scenario_file), "--show-storage"],
+            terminal_width=240,
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        for expected in (
+            "Compiled storage topology",
+            "Volumes",
+            "FS-01.archive",
+            "C:\\Mounts\\Archive\\",
+            "ArchiveData",
+            "Shares",
+            "FS-01.finance",
+            "\\\\FS-01\\Finance",
+            "Population",
+            "medium",
+            "high",
+            "required",
+            "Effective access",
+            "Finance-Readers",
+            "Finance-Users",
+            "Domain Admins",
+            "Contractors",
+            "Bounded catalog samples",
+            "forecast",
+            "Reports\\FY26\\forecast.xlsx",
+            "Mappings",
+            "finance-p",
+            "test_user on TEST-01",
+        ):
+            assert expected in result.stdout
+        assert "Showing up to 3 catalog entries per share" in result.stdout
+
     def test_large_workload_option_is_hidden_from_public_help(self):
         """The obsolete workload override is not part of the visible CLI contract."""
         for command in ("generate", "validate"):

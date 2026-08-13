@@ -503,11 +503,13 @@ proxy legs never advance policy state. Raw Snort events remain an explicit
 source-local escape hatch.
 
 File-transfer callers supply transfer intent layered on top of a transport path.
-`HttpFileTransferActionBundle` and `SmbFileTransferMetadataActionBundle`
-build Zeek files.log metadata, FUIDs, analyzers, hashes, MIME types, filenames,
-byte counts, transfer direction, and optional PE analysis from one transfer
-description. `StagedArchiveSmbReadActionBundle` emits the SMB read that moves a
-staged archive before exfiltration, and `ScpReceiverFileActionBundle` emits only
+`HttpFileTransferActionBundle` builds HTTP file-analysis metadata from one transfer
+description. `SmbActivityActionBundle` composes the canonical network and Windows
+remote-authentication contracts, then owns SMB sessions, trees, handles, file
+operations, storage mutations, and directional file observations. Generic TCP/445
+connections are transport-only. `StagedArchiveSmbReadActionBundle` delegates the SMB
+read that moves a staged archive before exfiltration to that canonical bundle, and
+`ScpReceiverFileActionBundle` emits only
 the receiver-side endpoint file evidence after the SSH bundle owns transport,
 auth, and session timing. Every successfully transmitted, sensor-visible,
 nonempty plaintext/decrypted HTTP request or response entity attaches a

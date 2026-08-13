@@ -46,6 +46,14 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _OVERLAY_DIR_NAME = ".eforge/config"
+_RETIRED_OVERLAYS = {
+    "activity/smb_file_transfers.yaml": (
+        "This overlay was removed in EvidenceForge 2.0 because generic TCP/445 "
+        "connections no longer infer file transfers. Delete the file and model share/file "
+        "behavior with environment.storage and smb_activity; otherwise these settings "
+        "would have no effect."
+    )
+}
 
 
 def get_overlay_directory() -> Path | None:
@@ -75,6 +83,20 @@ def list_overlay_files(overlay_dir: Path | None = None) -> list[str]:
     return sorted(
         str(p.relative_to(overlay_dir)) for p in overlay_dir.rglob("*.yaml") if p.is_file()
     )
+
+
+def retired_overlay_errors(overlay_dir: Path | None = None) -> list[tuple[str, str]]:
+    """Return actionable errors for retired overlay paths that would be ignored."""
+
+    if overlay_dir is None:
+        overlay_dir = get_overlay_directory()
+    if overlay_dir is None:
+        return []
+    return [
+        (relative_path, message)
+        for relative_path, message in _RETIRED_OVERLAYS.items()
+        if (overlay_dir / relative_path).is_file()
+    ]
 
 
 def load_with_overlay(

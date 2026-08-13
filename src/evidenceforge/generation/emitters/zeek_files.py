@@ -48,12 +48,13 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
 
     _log_filename = "files.json"
     _flat_filename = "zeek_files.json"
-    _supported_types: set[str] = {"connection"}
+    _supported_types: set[str] = {"connection", "smb_file_read", "smb_file_write"}
 
     def can_handle(self, event: CanonicalOccurrence) -> bool:
         return (
             event.event_type in self._supported_types
             and event.network is not None
+            and not (event.smb is not None and event.smb.encrypted)
             and (
                 event.protocol.primary_file_transfer is not None
                 or bool(event.protocol.file_transfers)
@@ -96,7 +97,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "analyzers": ft.analyzers if ft.analyzers else None,
                 "mime_type": ft.mime_type or None,
                 "duration": file_duration,
-                "local_orig": net.local_orig if ft.is_orig else net.local_resp,
+                "local_orig": net.local_orig,
                 "is_orig": ft.is_orig,
                 "seen_bytes": ft.seen_bytes,
                 "total_bytes": ft.total_bytes,
@@ -136,7 +137,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "analyzers": ["X509", "MD5", "SHA1", "SHA256"],
                 "mime_type": "application/pkix-cert",
                 "duration": None,
-                "local_orig": net.local_resp,
+                "local_orig": net.local_orig,
                 "is_orig": False,
                 "seen_bytes": size,
                 "total_bytes": size,

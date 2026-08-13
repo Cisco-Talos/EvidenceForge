@@ -63,6 +63,7 @@ from evidenceforge.events.contexts import (
     ScheduledTaskContext,
     ServiceContext,
     ShellContext,
+    SmbContext,
     SmtpContext,
     SslContext,
     SyslogContext,
@@ -110,6 +111,7 @@ class OccurrenceBuilder:
     dns: DnsContext | None = None
     email: EmailContext | None = None
     smtp: SmtpContext | None = None
+    smb: SmbContext | None = None
     file: FileContext | None = None
     registry: RegistryContext | None = None
     remote_thread: RemoteThreadContext | None = None
@@ -257,6 +259,7 @@ class CanonicalOccurrence:
     dns: DnsContext | None = None
     email: EmailContext | None = None
     smtp: SmtpContext | None = None
+    smb: SmbContext | None = None
     file: FileContext | None = None
     registry: RegistryContext | None = None
     remote_thread: RemoteThreadContext | None = None

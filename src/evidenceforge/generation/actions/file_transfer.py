@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import hashlib
 import random
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -44,10 +43,6 @@ from evidenceforge.events.contexts import (
 from evidenceforge.events.identity import EntityIdentity, EventIdentityPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.activity.network import _is_private_ip
-from evidenceforge.generation.activity.smb_file_transfers import (
-    load_smb_file_transfers,
-    pick_smb_filename,
-)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.ids import generate_zeek_uid
@@ -544,180 +539,12 @@ class HttpResponseFileTransferActionBundle:
         return self._bundle.execute()
 
 
-@dataclass(frozen=True, slots=True)
-class SmbFileTransferMetadataRequest:
-    """Intent for one SMB flow that may be visible to Zeek file analysis."""
-
-    src_ip: str
-    dst_ip: str
-    transfer_bytes: int
-    duration: float
-    server: str
-    user: str
-    is_orig: bool = False
-    source: str = "activity_generator"
-
-    @property
-    def stable_id(self) -> str:
-        """Return a deterministic intent identifier for durable references."""
-
-        seed = _stable_seed(
-            "action_bundle:smb_file_transfer_metadata:"
-            f"{self.src_ip}:{self.dst_ip}:{self.transfer_bytes}:{self.duration}:"
-            f"{self.server}:{self.user}:{self.is_orig}:{self.source}"
-        )
-        return f"smb-file-transfer-metadata-{seed:016x}"
-
-
-class SmbFileTransferMetadataActionBundle:
-    """Build source-native Zeek files.log metadata for a substantial SMB transfer."""
-
-    def __init__(
-        self,
-        request: SmbFileTransferMetadataRequest,
-        rng: random.Random,
-        smb_config: Mapping[str, Any] | None = None,
-    ) -> None:
-        self._request = request
-        self._rng = rng
-        self._smb_config = smb_config
-
-    @property
-    def anchor(self) -> ActionAnchor:
-        """Return the stable action anchor."""
-
-        return ActionAnchor(
-            family="smb_file_transfer_metadata",
-            stable_id=self._request.stable_id,
-            source=self._request.source,
-        )
-
-    def execute(self) -> FileTransferContext | None:
-        """Return SMB file-transfer metadata when the flow crosses the configured threshold."""
-
-        smb_config = self._smb_config if self._smb_config is not None else load_smb_file_transfers()
-        min_transfer_bytes = int(smb_config.get("min_transfer_bytes", 32768))
-        if self._request.transfer_bytes < min_transfer_bytes:
-            return None
-
-        mime_type = self._pick_mime_type(smb_config)
-        analyzers = self._pick_analyzers(smb_config)
-        fuid = generate_zeek_uid("F")
-        filename = pick_smb_filename(
-            self._rng,
-            smb_config,
-            mime_type=mime_type,
-            server=self._request.server,
-            user=self._request.user,
-        )
-        file_size = self._stable_file_size(
-            filename,
-            mime_type,
-            smb_config,
-            fallback_size=self._request.transfer_bytes,
-        )
-        file_hashes = file_transfer_hashes(
-            f"smb-file:{filename.casefold()}:{mime_type}:{file_size}",
-            analyzers,
-        )
-        return FileTransferContext(
-            fuid=fuid,
-            source="SMB",
-            depth=0,
-            filename=filename,
-            analyzers=analyzers,
-            mime_type=mime_type,
-            duration=max(0.0, self._request.duration * self._rng.uniform(0.6, 0.98)),
-            local_orig=_is_private_ip(self._request.src_ip),
-            is_orig=self._request.is_orig,
-            seen_bytes=file_size,
-            total_bytes=file_size,
-            missing_bytes=0,
-            overflow_bytes=0,
-            timedout=False,
-            **file_hashes,
-        )
-
-    @staticmethod
-    def _stable_file_size(
-        filename: str,
-        mime_type: str,
-        smb_config: Mapping[str, Any],
-        *,
-        fallback_size: int,
-    ) -> int:
-        """Return durable size metadata for one concrete SMB file identity."""
-        entries = [
-            entry
-            for entry in smb_config.get("mime_types", [])
-            if str(entry.get("mime_type", "")) == mime_type
-        ]
-        if not entries:
-            return 4096
-        entry = entries[0]
-        bands = [band for band in entry.get("size_bands", []) if isinstance(band, Mapping)]
-        seed = _stable_seed(f"smb-file-size:{filename.casefold()}:{mime_type}")
-        if bands:
-            profile_rng = random.Random(seed)
-            band = profile_rng.choices(
-                bands,
-                weights=[max(1, int(candidate.get("weight", 1))) for candidate in bands],
-                k=1,
-            )[0]
-            minimum = max(1, int(band.get("size_min", 1)))
-            maximum = max(minimum, int(band.get("size_max", minimum)))
-            return profile_rng.randint(minimum, maximum)
-        minimum = max(1, int(entry.get("size_min", fallback_size)))
-        maximum = max(minimum, int(entry.get("size_max", minimum)))
-        return minimum + (seed % (maximum - minimum + 1))
-
-    def _pick_mime_type(self, smb_config: Mapping[str, Any]) -> str:
-        """Return a configured SMB file MIME type."""
-
-        mime_entries = smb_config.get("mime_types", [])
-        if not mime_entries:
-            return "application/octet-stream"
-        mime_values = [
-            str(entry.get("mime_type", "application/octet-stream")) for entry in mime_entries
-        ]
-        mime_weights = [int(entry.get("weight", 1)) for entry in mime_entries]
-        return self._rng.choices(mime_values, weights=mime_weights, k=1)[0]
-
-    def _pick_analyzers(self, smb_config: Mapping[str, Any]) -> list[str]:
-        """Return configured Zeek file analyzers for this SMB transfer."""
-
-        analyzer_entries = smb_config.get("analyzer_sets", [])
-        if not analyzer_entries:
-            return []
-        analyzer_values = [entry.get("analyzers", []) for entry in analyzer_entries]
-        analyzer_weights = [int(entry.get("weight", 1)) for entry in analyzer_entries]
-        return list(self._rng.choices(analyzer_values, weights=analyzer_weights, k=1)[0])
-
-
 class FileTransferStorylineExecutor(Protocol):
     """Adapter protocol implemented by the storyline engine."""
 
     activity_generator: Any
     dispatcher: Any
     state_manager: StateManager
-
-
-class SmbLogonPairEmitter(Protocol):
-    """Adapter protocol for SMB companion logon evidence."""
-
-    def __call__(
-        self,
-        user: User,
-        file_server: System,
-        source_ip: str,
-        time: datetime,
-        rng: random.Random,
-        *,
-        source_port: int | None = None,
-        emit_network_evidence: bool = True,
-    ) -> object:
-        """Emit a file-server logon/logoff pair for an SMB transport."""
-        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -768,12 +595,10 @@ class StagedArchiveSmbReadActionBundle:
         executor: FileTransferStorylineExecutor,
         request: StagedArchiveSmbReadRequest,
         rng: random.Random,
-        emit_smb_logon_pair: SmbLogonPairEmitter | None = None,
     ) -> None:
         self._executor = executor
         self._request = request
         self._rng = rng
-        self._emit_smb_logon_pair = emit_smb_logon_pair
 
     @property
     def anchor(self) -> ActionAnchor:
@@ -807,61 +632,78 @@ class StagedArchiveSmbReadActionBundle:
         if transfer_time is None:
             return False
 
-        analyzers = ["MD5", "SHA1"]
-        fuid = generate_zeek_uid("F")
-        hashes = file_transfer_hashes(
-            f"smb:{self._request.source_ip}:{self._request.staging_ip}:"
-            f"{self._request.archive_path}:{transfer_bytes}",
-            analyzers,
+        from evidenceforge.generation.storage_world import CompiledStorageFile
+        from evidenceforge.models.scenario import (
+            SmbActivityEventSpec,
+            SmbClientLocation,
+            SmbExternalClient,
+            SmbShareLocation,
         )
-        self._executor.activity_generator.generate_connection(
-            src_ip=self._request.source_ip,
-            dst_ip=self._request.staging_ip,
-            time=transfer_time,
-            dst_port=445,
-            proto="tcp",
-            service="smb",
-            duration=duration,
-            orig_bytes=self._rng.randint(35_000, 180_000),
-            resp_bytes=transfer_bytes,
-            conn_state="SF",
-            emit_dns=False,
-            source_system=self._request.source_system,
-            pid=self._request.source_pid,
-            process_image=self._request.source_process,
-            file_transfer=FileTransferContext(
-                fuid=fuid,
-                source="SMB",
-                depth=0,
-                filename=self._request.smb_filename,
-                analyzers=analyzers,
-                mime_type="application/zip",
-                duration=max(0.0, duration * self._rng.uniform(0.72, 0.98)),
-                local_orig=True,
-                is_orig=False,
-                seen_bytes=transfer_bytes,
-                total_bytes=transfer_bytes,
-                missing_bytes=0,
-                overflow_bytes=0,
-                timedout=False,
-                **hashes,
+
+        world = self._executor.activity_generator._storage_world
+        server_shares = [
+            share
+            for share in world.shares
+            if share.system.casefold() == self._request.target_system.hostname.casefold()
+        ]
+        if not server_shares:
+            return False
+        unc_parts = [
+            part for part in self._request.smb_filename.replace("/", "\\").split("\\") if part
+        ]
+        share_name = unc_parts[1] if len(unc_parts) > 2 else ""
+        share = next(
+            (
+                candidate
+                for candidate in server_shares
+                if candidate.name.casefold() == share_name.casefold()
             ),
+            server_shares[0],
+        )
+        relative_path = (
+            "\\".join(unc_parts[2:]) if len(unc_parts) > 2 else self._request.archive_path
+        )
+        exact_file = CompiledStorageFile(
+            file_id=stable_uuid(
+                "staged-archive-file",
+                share.ref,
+                relative_path,
+                self._request.archive_path,
+            ),
+            share=share.ref,
+            path=relative_path,
+            size_bytes=transfer_bytes,
+            mime_type="application/zip",
+            tags=("staged_archive",),
+        )
+        external = (
+            None
+            if self._request.source_system is not None
+            else SmbExternalClient(type="external", ip=self._request.source_ip)
+        )
+        self._executor.activity_generator.generate_smb_activity(
+            spec=SmbActivityEventSpec(
+                type="smb_activity",
+                client=external,
+                operation="copy",
+                purpose="collection",
+                source=SmbShareLocation(type="share", share=share.ref, path=relative_path),
+                destination=SmbClientLocation(
+                    type="client",
+                    path=self._request.source_file_read_path or None,
+                ),
+            ),
+            actor=self._request.actor,
+            parent_system=self._request.source_system or self._request.target_system,
+            time=transfer_time,
+            process_pid=self._request.source_pid,
+            process_image=self._request.source_process,
+            files_override=(exact_file,),
         )
         ready_time = transfer_time + timedelta(seconds=duration)
         local_create_time = self._emit_source_local_staging_create(ready_time)
         self._terminate_source_process(ready_time, not_before=local_create_time)
         self._emit_source_file_read(ready_time, not_before=local_create_time)
-        smb_source_port = self._last_smb_connection_source_port()
-        if self._target_is_file_server() and self._emit_smb_logon_pair is not None:
-            self._emit_smb_logon_pair(
-                self._request.actor,
-                self._request.target_system,
-                self._request.source_ip,
-                transfer_time,
-                self._rng,
-                source_port=smb_source_port,
-                emit_network_evidence=smb_source_port is None,
-            )
         return True
 
     def _clamp_after_source_process(
@@ -1087,22 +929,6 @@ class StagedArchiveSmbReadActionBundle:
 
         return self._request.reader_command or self._request.source_command
 
-    def _last_smb_connection_source_port(self) -> int | None:
-        """Return the just-emitted SMB transfer source port when available."""
-        matcher = getattr(
-            self._executor.activity_generator,
-            "_last_effective_connection_source_port",
-            None,
-        )
-        if matcher is None:
-            return None
-        return matcher(
-            src_ip=self._request.source_ip,
-            dst_ip=self._request.staging_ip,
-            dst_port=445,
-            proto="tcp",
-        )
-
     def _transfer_time(self, duration: float) -> datetime | None:
         """Return a transfer time between archive staging and upload."""
 
@@ -1116,11 +942,6 @@ class StagedArchiveSmbReadActionBundle:
             return None
         span = (latest - earliest).total_seconds()
         return earliest + timedelta(seconds=self._rng.uniform(0.0, span))
-
-    def _target_is_file_server(self) -> bool:
-        """Return true when the archive source host should emit SMB logon evidence."""
-
-        return "file_server" in [role.lower() for role in (self._request.target_system.roles or [])]
 
 
 @dataclass(frozen=True, slots=True)

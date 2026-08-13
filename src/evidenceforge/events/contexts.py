@@ -806,6 +806,42 @@ class FileTransferContext:
 
 
 @dataclass(frozen=True, slots=True)
+class SmbContext:
+    """Canonical SMB2/3 application phase attached to an existing transport."""
+
+    phase: Literal[
+        "tree_connect",
+        "directory_enumeration",
+        "open",
+        "read",
+        "write",
+        "rename",
+        "delete",
+        "close",
+    ]
+    operation: str
+    purpose: str
+    session_id: str
+    tree_id: str
+    share_ref: str
+    share_name: str
+    result: str
+    requested_access: Literal["list", "read", "write", "rename", "delete"] = "read"
+    client_path: str = ""
+    local_path: str = ""
+    share_path: str = ""
+    server_path: str = ""
+    share_local_path: str = ""
+    file_id: str = ""
+    content_version: int = 0
+    handle_id: str = ""
+    size_bytes: int = 0
+    previous_path: str = ""
+    encrypted: bool = False
+    audit: Literal["minimal", "standard", "high"] = "standard"
+
+
+@dataclass(frozen=True, slots=True)
 class X509Context:
     """X.509 certificate details for Zeek x509.log."""
 

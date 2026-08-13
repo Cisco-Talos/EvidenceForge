@@ -1,0 +1,87 @@
+population_counts:
+  small: 24
+  medium: 96
+  large: 384
+  auto:
+    collaboration: 128
+    homes: 72
+    software: 48
+    backup: 64
+    dc_policy: 32
+    department: 96
+
+profiles:
+  collaboration:
+    directories: [Projects, Operations, Templates, Team, Reference, Archive]
+    subjects:
+      - project-plan
+      - meeting-notes
+      - status-update
+      - risk-register
+      - change-request
+      - vendor-review
+      - onboarding
+      - service-review
+      - team-roadmap
+      - action-items
+    files:
+      - {extension: .docx, mime: application/vnd.openxmlformats-officedocument.wordprocessingml.document, weight: 24}
+      - {extension: .xlsx, mime: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, weight: 20}
+      - {extension: .pdf, mime: application/pdf, weight: 18}
+      - {extension: .pptx, mime: application/vnd.openxmlformats-officedocument.presentationml.presentation, weight: 10}
+      - {extension: .txt, mime: text/plain, weight: 8}
+  homes:
+    directories: [Documents, Desktop, Downloads, Work, Reports]
+    subjects: [notes, timesheet, expenses, contacts, draft, research, checklist, presentation, schedule]
+    files:
+      - {extension: .docx, mime: application/vnd.openxmlformats-officedocument.wordprocessingml.document, weight: 28}
+      - {extension: .xlsx, mime: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, weight: 20}
+      - {extension: .pdf, mime: application/pdf, weight: 16}
+      - {extension: .txt, mime: text/plain, weight: 12}
+      - {extension: .zip, mime: application/zip, weight: 5}
+  software:
+    directories: [Packages, Drivers, Tools, Updates, Images]
+    subjects: [agent, client, runtime, utilities, deployment, update, installer, driver, toolkit]
+    files:
+      - {extension: .msi, mime: application/x-msi, weight: 30}
+      - {extension: .exe, mime: application/x-dosexec, weight: 24}
+      - {extension: .cab, mime: application/vnd.ms-cab-compressed, weight: 14}
+      - {extension: .zip, mime: application/zip, weight: 18}
+      - {extension: .ps1, mime: text/plain, weight: 6}
+  backup:
+    directories: [Daily, Weekly, Monthly, Database, Servers]
+    subjects: [full-backup, incremental, system-state, database, configuration, archive, snapshot]
+    files:
+      - {extension: .bak, mime: application/octet-stream, weight: 30}
+      - {extension: .vhdx, mime: application/octet-stream, weight: 18}
+      - {extension: .zip, mime: application/zip, weight: 20}
+      - {extension: .7z, mime: application/x-7z-compressed, weight: 16}
+      - {extension: .log, mime: text/plain, weight: 5}
+  dc_policy:
+    directories: [Policies, Scripts, Machine, User, Preferences]
+    subjects: [registry, gpt, policy, startup, logon, groups, scheduledtasks, drives]
+    files:
+      - {extension: .xml, mime: application/xml, weight: 25}
+      - {extension: .ini, mime: text/plain, weight: 20}
+      - {extension: .pol, mime: application/octet-stream, weight: 20}
+      - {extension: .ps1, mime: text/plain, weight: 14}
+      - {extension: .bat, mime: text/plain, weight: 8}
+  department:
+    directories: [Reports, Planning, Procedures, Reviews, Exports, Archive]
+    subjects:
+      - quarterly-forecast
+      - budget-review
+      - monthly-close
+      - expense-export
+      - purchase-order
+      - renewal-tracker
+      - performance-summary
+      - compliance-review
+      - inventory
+      - staffing-plan
+    files:
+      - {extension: .xlsx, mime: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, weight: 30}
+      - {extension: .docx, mime: application/vnd.openxmlformats-officedocument.wordprocessingml.document, weight: 22}
+      - {extension: .pdf, mime: application/pdf, weight: 20}
+      - {extension: .csv, mime: text/csv, weight: 12}
+      - {extension: .pptx, mime: application/vnd.openxmlformats-officedocument.presentationml.presentation, weight: 8}

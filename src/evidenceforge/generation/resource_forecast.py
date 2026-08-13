@@ -348,6 +348,7 @@ def build_resource_forecast(
 
     disk_config = effective_calibration.disk
     bytes_per_second = 0.0
+    zeek_bytes_per_second = 0.0
     for format_name in formats:
         format_config = disk_config.formats.get(format_name)
         if format_config is None:
@@ -358,10 +359,16 @@ def build_resource_forecast(
         bytes_per_second += format_config.bytes_per_host_second * _system_count_for_scope(
             scenario, format_config.system_scope
         )
+        if format_name.startswith("zeek_"):
+            zeek_bytes_per_second += format_config.bytes_per_host_second * _system_count_for_scope(
+                scenario, format_config.system_scope
+            )
+    external_sort_transient = int(estimate.primary_duration_seconds * zeek_bytes_per_second * 1.1)
     expected_disk = int(
         disk_config.base_mib * 1024 * 1024
         + estimate.primary_duration_seconds * bytes_per_second
         + estimate.email_artifact_bytes
+        + external_sort_transient
     )
     disk = ForecastRange(
         lower_bytes=int(expected_disk * disk_config.lower_multiplier),

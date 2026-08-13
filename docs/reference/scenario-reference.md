@@ -288,6 +288,51 @@ unless the event also supplies a hostname or identity. Conflicting identity
 definitions are validation errors; event-level host/IP mismatches against a
 declared identity are warnings.
 
+### SMB Storage
+
+`environment.storage` compiles Windows disk-share topology once. Omit it for deterministic
+file-server portfolios plus DC SYSVOL/NETLOGON defaults. Population controls the bounded,
+duration-independent metadata catalog; activity independently controls baseline frequency.
+
+```yaml
+storage:
+  population: auto
+  activity: normal
+  servers:
+    - system: FS-01
+      presets: [collaboration, homes]
+      audit: standard
+      default_volume: data
+      volumes:
+        - {id: data, mount: 'D:\', filesystem: ntfs, label: SharedData}
+      shares:
+        - id: finance
+          name: Finance
+          volume: data
+          root: Departments\Finance
+          preset: department
+          access:
+            read: [Finance-Readers]
+            modify: [Finance-Users]
+            admin: [Domain Admins]
+          seed_files:
+            - {ref: forecast, path: 'Reports\FY26\forecast.xlsx', size_bytes: 1843200}
+  mappings:
+    - id: finance-p
+      share: FS-01.finance
+      audience: {groups: [Finance-Users], systems: [WS-01]}
+      drive: 'P:'
+      lifecycle: persistent
+```
+
+Shares use stable `<system>.<share-id>` references; seed references are scoped to a share.
+Volumes may be drive roots or absolute folder mounts. Supplied volumes are authoritative,
+explicit shares are additive, and generated shares are changed only through
+`share_overrides`. Access is effective access: deny wins, admin implies modify/read, and
+modify implies read. Use `eforge validate SCENARIO --show-storage` to inspect compiled
+volumes (including unused volumes), share roots and scales, effective access, mappings,
+and up to three metadata-only catalog samples per share.
+
 ### Proxy Deployment
 
 ```yaml
@@ -848,6 +893,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
 | `logoff` | 4634, eCAR LOGOUT | | |
 | `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http/files when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname`, `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent`, `request_body_len`, `request_multipart`, `response_body_len`, `response_multipart`, `ids_alerts` |
+| `smb_activity` | SMB transport/auth/session/tree/file lifecycle; Zeek SMB/files, Windows audit, eCAR | operation-specific share/client location | `purpose`, `batch`, `outcome`, `path_style`, `mapping`, external `client` |
 | `ssh_session` | canonical SSH connection (Zeek conn) + syslog sshd + EDR/eCAR | | `source_ip`, `ids_alerts` |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip`, `ids_alerts` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
@@ -875,6 +921,32 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `raw` | Any single format | `target_format`, `fields` | |
 
 For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event. The generator routes process create/terminate lifecycle and process-owned endpoint side effects through an internal process-execution bundle; scenario authors still describe normal `process` events and do not model the bundle directly.
+
+#### `smb_activity`
+
+Use `smb_activity` for file/share semantics. A generic `connection` on TCP/445 is
+transport-only and never infers authentication or file activity from byte counts.
+
+```yaml
+- type: smb_activity
+  operation: copy
+  purpose: collection
+  source:
+    type: share
+    share: FS-01.finance
+    selector: {path_glob: 'Reports/**/*.xlsx', tags_any: [finance]}
+  destination: {type: client, path: 'C:\ProgramData\cache\'}
+  batch: {count: 25, duration: 4m}
+  outcome: auto
+  path_style: auto
+```
+
+Operations are `browse`, `read`, `create`, `update`, `copy`, `move`, and
+`delete`. Share locations accept at most one of `file_ref`, relative `path`, or
+`selector`; omission requests deterministic selection. Selectors must resolve once unless a
+batch supplies exactly one of `count`, `fraction`, or `all: true`. External initiators use
+`client: {type: external, ip: ...}`, force UNC presentation, and emit no client-host
+telemetry. Explicit outcomes are assertions and are validated against path and access state.
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
 

@@ -98,6 +98,7 @@ class SourceTimingPlanner:
         self._admitted_ecar_remote_transports: dict[_REMOTE_TRANSPORT_KEY, datetime] = {}
         self._admitted_windows_remote_transports: dict[_REMOTE_TRANSPORT_KEY, datetime] = {}
         self._admitted_ecar_transport_transactions: dict[_TRANSACTION_TRANSPORT_KEY, datetime] = {}
+        self._ecar_transport_close_deadlines: dict[_TRANSACTION_TRANSPORT_KEY, datetime] = {}
         self._admitted_windows_transport_transactions: dict[
             _TRANSACTION_TRANSPORT_KEY, datetime
         ] = {}
@@ -229,17 +230,25 @@ class SourceTimingPlanner:
         ):
             timestamp = self._latest_ecar_endpoint_flow_time(event)
             if timestamp is not None:
-                self._admitted_ecar_transport_transactions[
-                    self._transaction_transport_key(
-                        network.stable_id,
-                        event.dst_host.hostname,
-                        network.src_ip,
-                        network.src_port,
-                        network.dst_ip,
-                        network.dst_port,
-                        network.protocol,
-                    )
-                ] = timestamp
+                transaction_key = self._transaction_transport_key(
+                    network.stable_id,
+                    event.dst_host.hostname,
+                    network.src_ip,
+                    network.src_port,
+                    network.dst_ip,
+                    network.dst_port,
+                    network.protocol,
+                )
+                self._admitted_ecar_transport_transactions[transaction_key] = timestamp
+                close_candidates = [network.closed_at]
+                close_candidates.extend(
+                    observation.observed_close_time for observation in event.network_observations
+                )
+                close_candidates = [
+                    candidate for candidate in close_candidates if candidate is not None
+                ]
+                if close_candidates:
+                    self._ecar_transport_close_deadlines[transaction_key] = min(close_candidates)
         if (
             format_name in {"windows_security", "windows_event_security"}
             and event.event_type == "wfp_connection"
@@ -410,6 +419,29 @@ class SourceTimingPlanner:
                         ),
                     ),
                 )
+        primary_transport = (
+            event.remote_auth.primary_transport if event.remote_auth is not None else None
+        )
+        if primary_transport is not None:
+            tuple_view = primary_transport.tuple
+            transaction_key = self._transaction_transport_key(
+                primary_transport.transaction_id,
+                event.remote_auth.target_hostname,
+                tuple_view.src_ip,
+                tuple_view.src_port,
+                tuple_view.dst_ip,
+                tuple_view.dst_port,
+                tuple_view.protocol,
+            )
+            close_candidates = [
+                primary_transport.closed_at,
+                self._ecar_transport_close_deadlines.get(transaction_key),
+            ]
+            close_candidates = [
+                candidate for candidate in close_candidates if candidate is not None
+            ]
+            if close_candidates:
+                timestamp = min(timestamp, min(close_candidates) - _SOURCE_EPSILON)
         plan.finalized_times[ecar_session_render_key(lifecycle)] = timestamp
 
     def _plan_windows_remote_auth_time(self, event: TimingOccurrence) -> TimingOccurrence:
@@ -786,6 +818,7 @@ class SourceTimingPlanner:
                     not_after=not_after,
                     enabled=paired_endpoint,
                 )
+                flow_time = self._clamp_ecar_flow_before_close(event, flow_time)
                 return flow_time, not_before is None or not_before <= flow_time
 
         if drop_late_process_identity and not_before is not None:
@@ -804,6 +837,7 @@ class SourceTimingPlanner:
                 not_after=not_after,
                 enabled=paired_endpoint,
             )
+            flow_time = self._clamp_ecar_flow_before_close(event, flow_time)
             return flow_time, not_before <= flow_time
 
         identity_safe = not_before is None or not_after is None or not_before <= not_after
@@ -823,9 +857,32 @@ class SourceTimingPlanner:
             not_after=not_after,
             enabled=paired_endpoint,
         )
+        flow_time = self._clamp_ecar_flow_before_close(event, flow_time)
         if identity_safe and not_before is not None and flow_time < not_before:
             identity_safe = False
         return flow_time, identity_safe
+
+    @staticmethod
+    def _clamp_ecar_flow_before_close(
+        event: TimingOccurrence,
+        timestamp: datetime,
+    ) -> datetime:
+        """Leave room for source-native authentication after an endpoint FLOW."""
+
+        network = event.network
+        if network is None:
+            return timestamp
+        close_candidates = [network.closed_at]
+        close_candidates.extend(
+            observation.observed_close_time for observation in event.network_observations
+        )
+        close_candidates = [candidate for candidate in close_candidates if candidate is not None]
+        if not close_candidates:
+            return timestamp
+        close_deadline = min(close_candidates)
+        duration = max(timedelta(0), close_deadline - network.started_at)
+        margin = min(timedelta(milliseconds=100), duration / 3)
+        return min(timestamp, max(network.started_at, close_deadline - margin))
 
     @staticmethod
     def _paired_ecar_flow_observation_time(
@@ -1061,6 +1118,34 @@ class SourceTimingPlanner:
                     f"canonical_terminate={event.timestamp.isoformat()} "
                     f"source_terminate={source_time.isoformat()}"
                 )
+            return event
+        if lifecycle.phase == "dependent":
+            key = (format_name, lifecycle.group_id)
+            visible_start = self._latest_session_start_times.get(key)
+            source_time = event.timestamp
+            if visible_start is not None:
+                source_time = max(
+                    source_time,
+                    visible_start
+                    + sample_timing_delta(
+                        "source.session_dependent_after_login",
+                        seed_parts=(
+                            format_name,
+                            lifecycle.group_id,
+                            event.event_type,
+                            event.timestamp,
+                        ),
+                    ),
+                )
+                event = replace(event, timestamp=source_time)
+            previous = self._latest_session_dependent_times.get(key)
+            if previous is not None:
+                source_time = max(source_time, previous + _SOURCE_EPSILON)
+                event = replace(event, timestamp=source_time)
+            self._latest_session_dependent_times[key] = source_time
+            self._latest_session_dependent_descriptions[key] = (
+                f"event={event.event_type} source={source_time.isoformat()}"
+            )
             return event
         if event.event_type != "logoff" or format_name not in _SESSION_CLOSURE_SOURCE_KEYS:
             return event

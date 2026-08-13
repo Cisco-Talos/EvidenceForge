@@ -41,7 +41,7 @@ from evidenceforge.events.base import (
     RawProjectionRequest,
 )
 from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey, shadow_seal
-from evidenceforge.events.network import NetworkSensorObservation
+from evidenceforge.events.network import NetworkSensorObservation, NetworkTransactionPlan
 from evidenceforge.events.observation import (
     ObservationDecision,
     ObservationPolicy,
@@ -70,6 +70,8 @@ FORMAT_GROUPS: dict[str, set[str]] = {
         "zeek_smtp",
         "zeek_ssl",
         "zeek_files",
+        "zeek_smb_files",
+        "zeek_smb_mapping",
         "zeek_x509",
         "zeek_dhcp",
         "zeek_ntp",
@@ -143,6 +145,9 @@ class EventDispatcher:
         self._source_evidence_status: dict[str, dict[str, ObservationSummary]] = {}
         self._latest_network_uid = ""
         self._latest_network_identifiers_by_format: dict[str, str] = {}
+        self._latest_network_observations_uid = ""
+        self._latest_network_observations: tuple[NetworkSensorObservation, ...] = ()
+        self._latest_network_plan: NetworkTransactionPlan | None = None
         self._contract_violation_counts: Counter[str] = Counter()
         self._contract_violations_by_event: Counter[tuple[str, str]] = Counter()
         self.storyline_cluster_id: str | None = None
@@ -211,6 +216,29 @@ class EventDispatcher:
         self._latest_network_uid = canonical_uid
         self._latest_network_identifiers_by_format = identifiers_by_format
 
+    def network_observations_for(
+        self,
+        canonical_uid: str,
+    ) -> tuple[NetworkSensorObservation, ...]:
+        """Return the latest transport's frozen sensor observations.
+
+        Higher-level protocol bundles call this immediately after creating their
+        canonical transport. Reusing the transport observation prevents each
+        application phase from independently jittering the same connection.
+        """
+
+        if canonical_uid != self._latest_network_observations_uid:
+            return ()
+        return self._latest_network_observations
+
+    def network_plan_for(self, canonical_uid: str) -> NetworkTransactionPlan | None:
+        """Return the latest canonical transport plan for immediate composition."""
+
+        plan = self._latest_network_plan
+        if plan is None or plan.zeek_uid != canonical_uid:
+            return None
+        return plan
+
     def record_filtered_network_observation(self) -> None:
         """Record that a storyline network event was filtered before emitter dispatch.
 
@@ -274,6 +302,8 @@ class EventDispatcher:
                 occurrence_key,
             )
         self.state_manager.apply(event)
+        if event.network is not None and not event.network.application_layer_only:
+            self._latest_network_plan = event.network
         if self._is_suppressed(event.timestamp):
             self._record_observation(event, "all", "out_of_window")
             return network_identifiers_by_format
@@ -291,19 +321,26 @@ class EventDispatcher:
         }
         event = replace(event, _observed_formats=frozenset(observed_formats))
         if event.network is not None:
-            planned_observations = self.network_observation_planner.plan(
-                event,
-                observed_formats,
-            )
-            event = replace(
-                event,
-                network_observations=planned_observations,
-                network_observations_planned=bool(planned_observations),
-            )
+            if event.network_observations_planned:
+                planned_observations = event.network_observations
+            else:
+                planned_observations = self.network_observation_planner.plan(
+                    event,
+                    observed_formats,
+                )
+                event = replace(
+                    event,
+                    network_observations=planned_observations,
+                    network_observations_planned=bool(planned_observations),
+                )
             event = replace(
                 event,
                 network_observations=self._admit_network_sensor_observations(event),
             )
+            if not event.network.application_layer_only:
+                self._latest_network_observations_uid = event.network.zeek_uid
+                self._latest_network_observations = event.network_observations
+                self._latest_network_plan = event.network
             self._initialize_network_identifiers(
                 event,
                 matching_emitters,

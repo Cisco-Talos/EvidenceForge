@@ -1,0 +1,33 @@
+# Zeek smb_mapping.log JSON projection.
+name: zeek_smb_mapping
+version: "1.0"
+description: "Zeek SMB tree mapping observations"
+category: network
+fields:
+  - {name: ts, type: timestamp, required: true}
+  - {name: uid, type: string, required: true}
+  - {name: id.orig_h, type: ip_address, required: true}
+  - {name: id.orig_p, type: port, required: true}
+  - {name: id.resp_h, type: ip_address, required: true}
+  - {name: id.resp_p, type: port, required: true}
+  - {name: path, type: string, required: true}
+  - {name: service, type: string, required: true}
+  - {name: native_file_system, type: string, required: false}
+  - {name: share_type, type: string, required: true}
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts | tojson }},
+      "uid": {{ uid | tojson }},
+      "id.orig_h": {{ data['id.orig_h'] | tojson }},
+      "id.orig_p": {{ data['id.orig_p'] | tojson }},
+      "id.resp_h": {{ data['id.resp_h'] | tojson }},
+      "id.resp_p": {{ data['id.resp_p'] | tojson }},
+      "path": {{ path | tojson }},
+      "service": {{ service | tojson }},
+      "native_file_system": {{ native_file_system | tojson }},
+      "share_type": {{ share_type | tojson }}
+    }

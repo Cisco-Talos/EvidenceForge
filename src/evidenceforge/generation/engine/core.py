@@ -112,6 +112,14 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 out-of-band testing (off by default). When set, an adversarial payload's
                 {canary} resolves to the first and all are host-allowlisted.
         """
+        from evidenceforge.config.overlay import retired_overlay_errors
+        from evidenceforge.models.exceptions import ConfigurationError
+
+        retired = retired_overlay_errors()
+        if retired:
+            path, message = retired[0]
+            raise ConfigurationError(f"overlay/{path}: {message}")
+
         self.generation_seed = (
             scenario.generation_seed if generation_seed is None else generation_seed
         )
@@ -398,6 +406,10 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.world_model = WorldModel(self.scenario, self._ad_domain)
         self.activity_generator._world_model = self.world_model
         self.activity_generator._ip_to_system = dict(self.world_model.systems_by_ip)
+        from evidenceforge.generation.storage_world import StorageWorldModel
+
+        self.storage_world = StorageWorldModel.compile(self.scenario)
+        self.activity_generator._storage_world = self.storage_world
 
         # Cache org CIDR networks for external IP exclusion
         import ipaddress as _ipa_core
@@ -452,6 +464,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if "windows_event_security" in self.emitters:
             self.emitters["windows_event_security"]._state_manager = self.state_manager
             self.emitters["windows_event_security"]._system_pids = self._system_pids
+        if "ecar" in self.emitters:
+            self.emitters["ecar"]._state_manager = self.state_manager
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
         self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)
         if self.scenario.storyline:
@@ -636,6 +650,29 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         document = generator.build_document()
         generator.write_json(self.ground_truth_dir / GROUND_TRUTH_JSON_FILENAME, document)
         generator.generate(output_path, document)
+        from evidenceforge.generation.storage_world import write_storage_manifest
+
+        resolved_storage_targets = [
+            {
+                "section": section,
+                "actor": event.get("actor"),
+                "system": event.get("system"),
+                "activity": event.get("activity"),
+                "operations": event.get("operations", []),
+                "batch_summary": event.get("batch_summary", {}),
+            }
+            for section, events in (
+                ("storyline", self.malicious_events),
+                ("red_herring", self.red_herring_events),
+            )
+            for event in events
+            if event.get("type") == "smb_activity"
+        ]
+        write_storage_manifest(
+            self.ground_truth_dir / "STORAGE_MANIFEST.json",
+            self.storage_world,
+            resolved_targets=resolved_storage_targets,
+        )
         write_observation_manifest(
             self.ground_truth_dir / OBSERVATION_MANIFEST_FILENAME,
             self.scenario,

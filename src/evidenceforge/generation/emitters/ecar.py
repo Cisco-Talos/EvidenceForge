@@ -23,6 +23,7 @@
 """Emitter for EDR/XDR host telemetry in eCAR format."""
 
 import json
+import random
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -38,7 +39,7 @@ from evidenceforge.generation.source_timing import (
     ecar_flow_render_key,
     ecar_session_render_key,
 )
-from evidenceforge.utils.rng import stable_uuid
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 
 _ECAR_SORT_PRIORITY = {
     ("USER_SESSION", "LOGIN"): 0,
@@ -203,6 +204,10 @@ class EcarEmitter(HostMultiplexEmitter):
         "create_remote_thread",
         "process_access",
         "service_installed",
+        "smb_file_read",
+        "smb_file_write",
+        "smb_file_rename",
+        "smb_file_delete",
     }
 
     def can_handle(self, event: CanonicalOccurrence) -> bool:
@@ -219,6 +224,9 @@ class EcarEmitter(HostMultiplexEmitter):
             and event.network.application_layer_only
         ):
             return False
+        if event.event_type.startswith("smb_file_") and event.smb is not None:
+            if event.smb.result != "success":
+                return False
         return event.event_type in self._supported_types
 
     def emit(self, event: CanonicalOccurrence) -> None:
@@ -242,6 +250,10 @@ class EcarEmitter(HostMultiplexEmitter):
             "create_remote_thread": self._render_create_remote_thread,
             "process_access": self._render_process_access,
             "service_installed": self._render_service_installed,
+            "smb_file_read": self._render_smb_file_event,
+            "smb_file_write": self._render_smb_file_event,
+            "smb_file_rename": self._render_smb_file_event,
+            "smb_file_delete": self._render_smb_file_event,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(f"EcarEmitter: no render method for {event.event_type}")
@@ -419,6 +431,80 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 
+    def _render_smb_client_file_companion(self, event: CanonicalOccurrence) -> None:
+        """Fan out required local copy/move effects from the same SMB occurrence."""
+
+        smb = event.smb
+        host = event.src_host
+        if smb is None or host is None or not smb.local_path:
+            return
+        source_is_client = smb.phase == "write" and smb.operation in {"copy", "move"}
+        destination_is_client = smb.phase == "read" and smb.operation in {"copy", "move"}
+        if not source_is_client and not destination_is_client:
+            return
+        local_process = event.process
+        timing_rng = random.Random(
+            _stable_seed(
+                f"ecar-smb-client-file:{event.occurrence_id}:{smb.file_id}:{smb.content_version}"
+            )
+        )
+        offset = timedelta(milliseconds=timing_rng.randint(7, 63))
+        local_timestamp = event.timestamp - offset if source_is_client else event.timestamp + offset
+        if source_is_client and event.lifecycle is not None:
+            local_timestamp = max(
+                local_timestamp,
+                event.lifecycle.canonical_start + timedelta(milliseconds=1),
+            )
+        local_event = {
+            "timestamp": local_timestamp,
+            "hostname": self._host_name(host),
+            "object": "FILE",
+            "action": "READ" if source_is_client else "CREATE",
+            "pid": event.network.initiating_pid if event.network is not None else -1,
+            "principal": (
+                local_process.username
+                if local_process is not None and local_process.username
+                else event.auth.username
+                if event.auth
+                else ""
+            ),
+            "file_path": smb.local_path,
+            "file_object_id": stable_uuid(
+                "smb-client-file",
+                host.hostname,
+                smb.local_path,
+                smb.file_id,
+                smb.content_version,
+            ),
+            "content_version": smb.content_version,
+            "_host_fqdn": self._host_fqdn(host),
+        }
+        self._apply_session_properties(local_event, event)
+        if local_process is not None and local_process.logon_id:
+            local_event["logon_id"] = local_process.logon_id
+        else:
+            local_event.pop("logon_id", None)
+        self._apply_process_provenance(local_event, local_process)
+        self._apply_edr_context(local_event, event)
+        for key in (
+            "target_process_uuid",
+            "target_pid",
+            "target_image_path",
+            "target_principal",
+            "target_tid",
+            "tgt_tid",
+        ):
+            local_event.pop(key, None)
+        local_event["objectID"] = local_event["file_object_id"]
+        self._emit_canonical_event(local_event, event)
+        if source_is_client and smb.operation == "move":
+            delete_event = {
+                **local_event,
+                "timestamp": local_timestamp + timedelta(milliseconds=1),
+                "action": "DELETE",
+            }
+            self._emit_canonical_event(delete_event, event)
+
     def _render_logoff(self, event: CanonicalOccurrence) -> None:
         """Render eCAR USER_SESSION/LOGOUT event (logged on dst_host)."""
         host = event.dst_host
@@ -577,6 +663,50 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
+
+    def _render_smb_file_event(self, event: CanonicalOccurrence) -> None:
+        """Render the server-local EDR view of one canonical SMB operation."""
+
+        host = event.dst_host
+        smb = event.smb
+        action_map = {
+            "smb_file_read": "READ",
+            "smb_file_write": "WRITE",
+            "smb_file_rename": "RENAME",
+            "smb_file_delete": "DELETE",
+        }
+        event_data = {
+            "timestamp": event.timestamp,
+            "hostname": self._host_name(host),
+            "object": "FILE",
+            "action": action_map[event.event_type],
+            "pid": event.network.responding_pid if event.network is not None else -1,
+            "principal": event.auth.username if event.auth else "",
+            "file_path": smb.server_path if smb is not None else "",
+            "source_file_path": smb.previous_path if smb is not None else "",
+            "file_object_id": smb.file_id if smb is not None else "",
+            "content_version": smb.content_version if smb is not None else 0,
+            "_host_fqdn": self._host_fqdn(host),
+        }
+        self._apply_session_properties(event_data, event)
+        self._apply_edr_context(event_data, event)
+        state_manager = getattr(self, "_state_manager", None)
+        local_identity = None
+        if state_manager is not None and host is not None and event.network is not None:
+            local_identity = state_manager.get_process_identity(
+                host.hostname,
+                event.network.responding_pid,
+            )
+        if local_identity is None:
+            event_data.pop("actorID", None)
+        else:
+            event_data["actorID"] = local_identity.object_id
+            event_data["pid"] = local_identity.pid
+            self._apply_process_provenance(event_data, local_identity)
+        if smb is not None and smb.file_id:
+            event_data["objectID"] = smb.file_id
+        self._emit_canonical_event(event_data, event)
+        self._render_smb_client_file_companion(event)
 
     def _render_registry_event(self, event: CanonicalOccurrence) -> None:
         """Render eCAR REGISTRY event from canonical RegistryContext (logged on src_host)."""
@@ -808,6 +938,17 @@ class EcarEmitter(HostMultiplexEmitter):
             ecar_flow_render_key(direction, hostname),
             event.network.started_at,
         )
+        close_candidates = [event.network.closed_at]
+        close_candidates.extend(
+            observation.observed_close_time for observation in event.network_observations
+        )
+        close_candidates = [candidate for candidate in close_candidates if candidate is not None]
+        close_deadline = min(close_candidates) if close_candidates else None
+        if close_deadline is not None and timestamp >= close_deadline:
+            timestamp = max(
+                event.network.started_at,
+                close_deadline - timedelta(milliseconds=1),
+            )
         identity_safe = plan.finalized_flags.get(
             ecar_flow_identity_key(direction, hostname),
             not_before is None or not_before <= timestamp,

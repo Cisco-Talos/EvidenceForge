@@ -41,7 +41,7 @@ fields:
     required: true
     description: "Operation performed (CREATE, OPEN, MODIFY, DELETE, etc.)"
     constraints:
-      allowed_values: [CREATE, TERMINATE, OPEN, CLOSE, MODIFY, DELETE, WRITE, READ, CONNECT, ACCEPT, SEND, RECEIVE, LOAD, UNLOAD, START, STOP, LOGIN, LOGOUT, REMOTE_CREATE]
+      allowed_values: [CREATE, TERMINATE, OPEN, CLOSE, MODIFY, DELETE, WRITE, READ, RENAME, CONNECT, ACCEPT, SEND, RECEIVE, LOAD, UNLOAD, START, STOP, LOGIN, LOGOUT, REMOTE_CREATE]
 
   - name: objectID
     type: string
@@ -94,6 +94,21 @@ fields:
     type: string
     required: false
     description: "File path for FILE events"
+
+  - name: source_file_path
+    type: string
+    required: false
+    description: "Prior path for FILE rename events"
+
+  - name: file_object_id
+    type: string
+    required: false
+    description: "Canonical durable file identity when available"
+
+  - name: content_version
+    type: integer
+    required: false
+    description: "Canonical file content version when available"
 
   - name: src_ip
     type: ip_address

@@ -47,6 +47,9 @@ class WorkloadEstimate(BaseModel):
     attachment_payload_bytes: int
     email_artifact_bytes: int
     enabled_formats: int
+    smb_selector_candidates: int = 0
+    smb_batch_operations: int = 0
+    smb_retained_mutations: int = 0
     limit_violations: tuple[str, ...] = ()
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -169,6 +172,16 @@ def estimate_workload(
     periodic_max = 0
     attachment_groups: list[tuple[str, list[int]]] = []
     corpus_groups = _email_corpus_attachment_groups(scenario, scenario_root)
+    try:
+        from evidenceforge.generation.storage_world import StorageWorldModel
+        from evidenceforge.models.scenario import SmbShareLocation
+
+        storage_world = StorageWorldModel.compile(scenario)
+    except (KeyError, TypeError, ValueError):
+        storage_world = None
+    smb_selector_candidates = 0
+    smb_batch_operations = 0
+    smb_retained_mutations = 0
     for authored in [*(scenario.storyline or []), *scenario.red_herrings]:
         for spec in authored.events:
             periodic = _periodic_occurrences(spec, primary_duration_seconds=primary_seconds)
@@ -179,12 +192,38 @@ def estimate_workload(
                 target_ips = getattr(spec, "target_ips", []) or []
                 target_count = len(target_ips) or int(getattr(spec, "target_count", 0) or 0)
                 occurrences = target_count * len(getattr(spec, "ports", []) or [])
+            elif getattr(spec, "type", "") == "smb_activity" and storage_world is not None:
+                location = spec.target or spec.source
+                if isinstance(location, SmbShareLocation):
+                    candidates = storage_world.select(
+                        location.share,
+                        file_ref=location.file_ref,
+                        path=location.path,
+                        selector=location.selector,
+                    )
+                    smb_selector_candidates += len(candidates)
+                    if spec.batch is None:
+                        occurrences = 1
+                    elif spec.batch.count is not None:
+                        occurrences = spec.batch.count
+                    elif spec.batch.fraction is not None:
+                        occurrences = max(1, math.ceil(len(candidates) * spec.batch.fraction))
+                    else:
+                        occurrences = len(candidates)
+                    smb_batch_operations += occurrences
+                    if spec.operation in {"create", "update", "copy", "move", "delete"}:
+                        smb_retained_mutations += occurrences
+                else:
+                    occurrences = 1
             else:
                 occurrences = 1
             explicit_occurrences += occurrences
-            explicit_canonical_occurrences += occurrences * (
-                8 + len(getattr(spec, "ids_alerts", []) or [])
-            )
+            if getattr(spec, "type", "") == "smb_activity":
+                explicit_canonical_occurrences += 5 + occurrences * 3
+            else:
+                explicit_canonical_occurrences += occurrences * (
+                    8 + len(getattr(spec, "ids_alerts", []) or [])
+                )
             if getattr(spec, "type", "") == "email_message":
                 corpus_id = getattr(spec, "corpus_id", None)
                 sizes = (
@@ -290,6 +329,9 @@ def estimate_workload(
         attachment_payload_bytes=attachment_payload_bytes,
         email_artifact_bytes=email_artifact_bytes,
         enabled_formats=enabled_formats,
+        smb_selector_candidates=smb_selector_candidates,
+        smb_batch_operations=smb_batch_operations,
+        smb_retained_mutations=smb_retained_mutations,
         limit_violations=tuple(violations),
     )
 

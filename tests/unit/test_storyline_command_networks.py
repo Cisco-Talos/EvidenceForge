@@ -8,15 +8,13 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from evidenceforge.events.contexts import FileTransferContext, HostContext
+from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.generation.actions import (
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
     ScpReceiverFileActionBundle,
     ScpReceiverFileRequest,
-    SmbFileTransferMetadataActionBundle,
-    SmbFileTransferMetadataRequest,
     StagedArchiveSmbReadActionBundle,
     StagedArchiveSmbReadRequest,
 )
@@ -30,6 +28,12 @@ from evidenceforge.generation.engine.storyline import (
 )
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.storage_world import (
+    CompiledStorageAccess,
+    CompiledStorageShare,
+    CompiledStorageVolume,
+    StorageWorldModel,
+)
 from evidenceforge.models.scenario import (
     BeaconEventSpec,
     ConnectionEventSpec,
@@ -978,6 +982,7 @@ class _FakeActivityGenerator:
     def __init__(self) -> None:
         self.reserved_ports: list[int] = []
         self.connections: list[dict] = []
+        self.smb_activities: list[dict[str, Any]] = []
         self.ssh_sessions: list[dict] = []
         self.explicit_credentials: list[dict] = []
         self.processes: list[dict] = []
@@ -1111,6 +1116,30 @@ class _FakeActivityGenerator:
         )
         self.connections.append(kwargs)
         return "Cscptransfer00001"
+
+    def generate_smb_activity(self, **kwargs: Any) -> SimpleNamespace:
+        """Capture the canonical SMB transport requested by staged-archive tests."""
+
+        self.smb_activities.append(kwargs)
+        spec = kwargs["spec"]
+        files = kwargs.get("files_override") or ()
+        share = self._storage_world.share(spec.source.share)
+        target = self._storage_systems[share.system.casefold()]
+        total_bytes = sum(file.size_bytes for file in files)
+        uid = self.generate_connection(
+            src_ip=kwargs["parent_system"].ip,
+            dst_ip=target.ip,
+            time=kwargs["time"],
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=max(3.0, total_bytes / 25_000_000),
+            orig_bytes=1_200,
+            resp_bytes=total_bytes,
+            pid=kwargs.get("process_pid", -1),
+            process_image=kwargs.get("process_image"),
+        )
+        return SimpleNamespace(transport_uids=(uid,), operations=())
 
     def _last_effective_connection_source_port(
         self,
@@ -1260,6 +1289,46 @@ class _FakeStateManager:
 
     def mark_story_process(self, hostname: str, pid: int) -> None:
         return None
+
+
+def _attach_fake_admin_storage(generator: _FakeActivityGenerator, server: System) -> None:
+    """Give a focused storyline fake the canonical sparse C$ topology."""
+
+    access = CompiledStorageAccess(
+        read=frozenset({"Domain Admins"}),
+        modify=frozenset({"Domain Admins"}),
+        admin=frozenset({"Domain Admins"}),
+        deny=frozenset(),
+    )
+    generator._storage_world = StorageWorldModel(
+        volumes=(
+            CompiledStorageVolume(
+                id="system",
+                system=server.hostname,
+                mount="C:\\",
+                filesystem="ntfs",
+                label="System",
+            ),
+        ),
+        shares=(
+            CompiledStorageShare(
+                ref=f"{server.hostname}.c_admin",
+                system=server.hostname,
+                name="C$",
+                volume="system",
+                root="",
+                preset="collaboration",
+                population="small",
+                activity="low",
+                encryption="not_required",
+                audit="standard",
+                access=access,
+                files=(),
+            ),
+        ),
+        mappings=(),
+    )
+    generator._storage_systems = {server.hostname.casefold(): server}
 
 
 class TestFileTransferActionBundles:
@@ -1431,43 +1500,6 @@ class TestFileTransferActionBundles:
         assert result.file_transfer.source == "HTTP"
         assert result.file_transfer.sha1
         assert result.pe is not None
-
-    def test_smb_file_transfer_metadata_bundle_preserves_direction(self):
-        """SMB files.log metadata should preserve caller-owned transfer direction."""
-        request = SmbFileTransferMetadataRequest(
-            src_ip="10.10.1.35",
-            dst_ip="10.10.2.20",
-            transfer_bytes=65_536,
-            duration=4.2,
-            server="FILE-SRV-01",
-            user="aisha.johnson",
-            is_orig=True,
-        )
-        smb_config = {
-            "min_transfer_bytes": 1024,
-            "mime_types": [{"mime_type": "application/pdf", "weight": 1}],
-            "analyzer_sets": [{"analyzers": ["MD5"], "weight": 1}],
-            "filename_templates": [
-                {
-                    "mime_types": ["application/pdf"],
-                    "templates": [r"\\{server}\Projects\{basename}.pdf"],
-                    "weight": 1,
-                }
-            ],
-        }
-
-        context = SmbFileTransferMetadataActionBundle(
-            request,
-            random.Random(8),
-            smb_config=smb_config,
-        ).execute()
-
-        assert context is not None
-        assert context.source == "SMB"
-        assert context.is_orig is True
-        assert context.total_bytes == 65_536
-        assert context.md5
-        assert context.filename.startswith(r"\\FILE-SRV-01\Projects")
 
     def test_staged_archive_smb_read_bundle_anchor_is_stable(self):
         """Identical staged-archive transfer requests should have stable anchors."""
@@ -2030,6 +2062,7 @@ class TestStorylineCommandSideEffects:
             source_ip=source.ip,
         )
         engine.activity_generator = _FakeActivityGenerator()
+        _attach_fake_admin_storage(engine.activity_generator, file_server)
         engine.activity_generator._ip_to_system = {
             source.ip: source,
             file_server.ip: file_server,
@@ -2167,21 +2200,13 @@ class TestStorylineCommandSideEffects:
             "Chrome/121.0.0.0 Safari/537.36"
         )
 
-        file_transfer = smb_transfer["file_transfer"]
-        assert isinstance(file_transfer, FileTransferContext)
-        assert file_transfer.source == "SMB"
-        assert file_transfer.is_orig is False
-        assert file_transfer.total_bytes == smb_transfer["resp_bytes"]
-        assert file_transfer.filename == (r"\\FILE-SRV-01\C$\ProgramData\Microsoft\cache_7f3a.zip")
-        assert smb_logons == [
-            {
-                "actor": actor.username,
-                "dst": file_server.hostname,
-                "emit_network_evidence": False,
-                "source_port": 50000,
-                "src_ip": source.ip,
-            }
-        ]
+        smb_activity = engine.activity_generator.smb_activities[0]
+        transferred = smb_activity["files_override"][0]
+        assert transferred.size_bytes == smb_transfer["resp_bytes"]
+        assert transferred.path == r"ProgramData\Microsoft\cache_7f3a.zip"
+        assert smb_activity["spec"].operation == "copy"
+        assert smb_activity["spec"].source.share == "FILE-SRV-01.c_admin"
+        assert smb_logons == []
         assert engine.activity_generator.process_terminations[0]["pid"] == smb_transfer["pid"]
 
     def test_compress_archive_exfil_handoff_uses_upload_host_source_read(self):
@@ -2223,6 +2248,7 @@ class TestStorylineCommandSideEffects:
         )
         engine.state_manager = _FakeStateManager()
         engine.activity_generator = _FakeActivityGenerator()
+        _attach_fake_admin_storage(engine.activity_generator, file_server)
         engine.activity_generator._ip_to_system = {
             staging_source.ip: staging_source,
             upload_source.ip: upload_source,
@@ -2334,15 +2360,10 @@ class TestStorylineCommandSideEffects:
         assert source_file_create.timestamp < source_file_read.timestamp
         assert "Chrome/" in upload["http"].user_agent
         assert "Firefox/" not in upload["http"].user_agent
-        assert smb_logons == [
-            {
-                "actor": upload_actor.username,
-                "dst": file_server.hostname,
-                "emit_network_evidence": False,
-                "source_port": 50000,
-                "src_ip": upload_source.ip,
-            }
-        ]
+        smb_activity = engine.activity_generator.smb_activities[0]
+        assert smb_activity["actor"].username == upload_actor.username
+        assert smb_activity["spec"].source.share == "FILE-SRV-01.c_admin"
+        assert smb_logons == []
 
     def test_scp_receiver_file_artifacts_leave_ssh_syslog_to_bundle(self):
         source = System(

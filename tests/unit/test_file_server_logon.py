@@ -3,159 +3,18 @@
 
 """Tests for file server SMB logon event generation."""
 
-import random
-from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 
-class TestEmitSmbLogonPair:
-    """Test _emit_smb_logon_pair helper method."""
+def test_legacy_smb_baseline_helpers_are_removed() -> None:
+    """The direct cutover must not retain a second inferred SMB truth path."""
 
-    def test_successful_logon_requires_successful_smb_transport_state(self):
-        """SMB transports that anchor successful Type 3 logons must be successful."""
-        from evidenceforge.generation.engine.baseline import BaselineMixin
+    from evidenceforge.generation.engine.baseline import BaselineMixin
 
-        assert BaselineMixin._smb_logon_transport_conn_state("smb", True) == "SF"
-        assert BaselineMixin._smb_logon_transport_conn_state("ldap", True) is None
-        assert BaselineMixin._smb_logon_transport_conn_state("smb", False) is None
-
-    def test_emits_logon_and_logoff(self):
-        """Should call generate_logon(type=3) then generate_logoff(type=3)."""
-        import random
-
-        from evidenceforge.generation.engine.baseline import BaselineMixin
-
-        obj = MagicMock()
-        obj.activity_generator = MagicMock()
-        obj.activity_generator.generate_logon.return_value = "0x12345"
-        method = BaselineMixin._emit_smb_logon_pair.__get__(obj)
-
-        user = MagicMock()
-        file_server = MagicMock()
-        file_server.os = "Windows Server 2019"
-        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
-        rng = random.Random(42)
-
-        logon_id = method(user, file_server, "10.10.10.50", ts, rng)
-
-        assert logon_id == "0x12345"
-        obj.activity_generator.generate_logon.assert_called_once_with(
-            user=user,
-            system=file_server,
-            time=ts,
-            logon_type=3,
-            source_ip="10.10.10.50",
-        )
-        obj.activity_generator.generate_logoff.assert_called_once()
-        logoff_args = obj.activity_generator.generate_logoff.call_args
-        assert logoff_args.kwargs["logon_type"] == 3
-        assert logoff_args.kwargs["logon_id"] == "0x12345"
-        # Logoff should be 5-60s after logon
-        logoff_time = logoff_args.kwargs["time"]
-        delay = (logoff_time - ts).total_seconds()
-        assert 5.0 <= delay <= 60.0, f"Logoff delay {delay}s outside [5, 60] range"
-
-    def test_can_bind_to_existing_transport_without_duplicate_network_evidence(self):
-        """Companion SMB logons should reuse the transport port without emitting another flow."""
-        from evidenceforge.generation.engine.baseline import BaselineMixin
-
-        obj = MagicMock()
-        obj.activity_generator = MagicMock()
-        obj.activity_generator.generate_logon.return_value = "0x54321"
-        obj.activity_generator._last_effective_connection_transaction_id.return_value = (
-            "network-connection-000000001234abcd"
-        )
-        method = BaselineMixin._emit_smb_logon_pair.__get__(obj)
-
-        user = MagicMock()
-        file_server = MagicMock()
-        file_server.os = "Windows Server 2019"
-        file_server.ip = "10.10.10.20"
-        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
-        rng = random.Random(42)
-
-        logon_id = method(
-            user,
-            file_server,
-            "10.10.10.50",
-            ts,
-            rng,
-            source_port=50001,
-            emit_network_evidence=False,
-        )
-        obj.activity_generator._last_effective_connection_transaction_id.assert_called_once_with(
-            src_ip="10.10.10.50",
-            src_port=50001,
-            dst_ip="10.10.10.20",
-            dst_port=445,
-            proto="tcp",
-        )
-
-        assert logon_id == "0x54321"
-        obj.activity_generator.generate_logon.assert_called_once_with(
-            user=user,
-            system=file_server,
-            time=ts,
-            logon_type=3,
-            source_ip="10.10.10.50",
-            source_port=50001,
-            emit_network_evidence=False,
-            remote_authentication_transport_id="network-connection-000000001234abcd",
-        )
-        obj.activity_generator.generate_logoff.assert_called_once()
-
-    def test_skips_linux_file_servers(self):
-        """Linux file servers don't get Windows 4624 logon events."""
-        from evidenceforge.generation.engine.baseline import BaselineMixin
-
-        obj = MagicMock()
-        method = BaselineMixin._emit_smb_logon_pair.__get__(obj)
-
-        file_server = MagicMock()
-        file_server.os = "Ubuntu 22.04"
-        rng = random.Random(42)
-        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
-
-        result = method(MagicMock(), file_server, "10.10.10.50", ts, rng)
-
-        assert result is None
-        obj.activity_generator.generate_logon.assert_not_called()
-
-
-class TestEmitSmbFileOperations:
-    """Verify SMB file-server sessions produce a realistic operation mix."""
-
-    def test_emits_read_write_and_other_file_operations(self):
-        """Each SMB file-server session should include READ/WRITE plus other file actions."""
-        from evidenceforge.generation.engine.baseline import BaselineMixin
-
-        obj = MagicMock()
-        obj.activity_generator._build_host_context.return_value = SimpleNamespace(
-            hostname="FS-01",
-            fqdn="fs-01.example.com",
-            os="Windows Server 2022",
-            os_category="windows",
-        )
-        captured = []
-        obj.activity_generator.dispatcher.dispatch_builder.side_effect = captured.append
-        method = BaselineMixin._emit_smb_file_operations.__get__(obj)
-
-        user = SimpleNamespace(username="jdoe")
-        file_server = SimpleNamespace(hostname="FS-01")
-        client = SimpleNamespace(hostname="WS-01")
-        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
-
-        method(user, file_server, client, ts, random.Random(0))
-
-        event_types = {event.event_type for event in captured}
-        assert "file_read" in event_types
-        assert "file_modify" in event_types
-        assert event_types & {"file_create", "file_delete"}
-        assert len(captured) >= 3
-        assert all(event.auth.username == "jdoe" for event in captured)
-        assert all(event.file.pid == 4 for event in captured)
-        assert all(event.file.path.startswith("\\\\FS-01\\") for event in captured)
+    assert not hasattr(BaselineMixin, "_smb_logon_transport_conn_state")
+    assert not hasattr(BaselineMixin, "_emit_smb_logon_pair")
+    assert not hasattr(BaselineMixin, "_emit_smb_file_operations")
 
 
 class TestSmbBrowsingIncludesFileServers:

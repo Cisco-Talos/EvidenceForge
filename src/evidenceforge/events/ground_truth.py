@@ -19,7 +19,7 @@ from evidenceforge.utils.time import resolve_time_window
 logger = logging.getLogger(__name__)
 
 GROUND_TRUTH_JSON_FILENAME = "GROUND_TRUTH.json"
-GROUND_TRUTH_SCHEMA_VERSION = 2
+GROUND_TRUTH_SCHEMA_VERSION = 3
 MAX_GROUND_TRUTH_BYTES = 8_388_608
 
 GroundTruthSection = Literal["storyline", "red_herring"]
@@ -183,6 +183,16 @@ class ConnectionAttributes(GroundTruthAttributesBase):
 
 class SshSessionAttributes(GroundTruthAttributesBase):
     """SSH session event attributes."""
+
+
+class SmbActivityAttributes(GroundTruthAttributesBase):
+    """Resolved canonical SMB activity and batch summary."""
+
+    session_id: str
+    tree_ids: list[str] = Field(default_factory=list)
+    transport_uids: list[str] = Field(default_factory=list)
+    operations: list[dict[str, object]] = Field(default_factory=list)
+    batch_summary: dict[str, object]
 
 
 class RdpSessionAttributes(GroundTruthAttributesBase):
@@ -373,6 +383,11 @@ class SshSessionGroundTruthEvent(GroundTruthEventBase):
     attributes: SshSessionAttributes = Field(default_factory=SshSessionAttributes)
 
 
+class SmbActivityGroundTruthEvent(GroundTruthEventBase):
+    kind: Literal["smb_activity"]
+    attributes: SmbActivityAttributes
+
+
 class RdpSessionGroundTruthEvent(GroundTruthEventBase):
     kind: Literal["rdp_session"]
     attributes: RdpSessionAttributes = Field(default_factory=RdpSessionAttributes)
@@ -552,6 +567,7 @@ GroundTruthEvent = Annotated[
     | LogoffGroundTruthEvent
     | ConnectionGroundTruthEvent
     | SshSessionGroundTruthEvent
+    | SmbActivityGroundTruthEvent
     | RdpSessionGroundTruthEvent
     | AccountCreatedGroundTruthEvent
     | AccountDeletedGroundTruthEvent
@@ -735,7 +751,7 @@ class IdsEvaluationSummary(BaseModel):
 class GroundTruthDocument(BaseModel):
     """Canonical machine-readable ground-truth document."""
 
-    schema_version: Literal[2] = GROUND_TRUTH_SCHEMA_VERSION
+    schema_version: Literal[3] = GROUND_TRUTH_SCHEMA_VERSION
     scenario_name: str
     scenario_description: str
     generated_at: datetime

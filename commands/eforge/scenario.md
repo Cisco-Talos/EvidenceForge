@@ -173,6 +173,17 @@ Inbound traffic respects network topology: DMZ-placed `web_server` hosts attract
 
 `roles` and `services` drive the compiled world model, which decides what a host is for, which infrastructure systems exist, and whether remote activity should look like SSH, RDP, or generic network execution. For server and infrastructure hosts, always specify both whenever the user can provide them. Use `file_server` on Windows file shares so baseline SMB traffic targets them, not only domain controllers.
 
+**SMB storage** — Use `environment.storage` when a scenario needs named Windows
+volumes, drive-root or folder mount diversity, explicit shares, effective access,
+drive mappings, or authored seed files. Omit it when deterministic file-server and
+SYSVOL/NETLOGON defaults are sufficient, and inspect those defaults with
+`eforge validate <scenario> --show-storage`. Use typed `smb_activity` events for
+browse/read/create/update/copy/move/delete semantics. A generic successful
+`connection` on TCP/445 is transport-only in EvidenceForge 2.0 and never implies
+authentication, a mapped share, a file, Windows object auditing, or mutation.
+See `/eforge:references:scenario-reference` before authoring selectors, batches,
+outcomes, mappings, encrypted shares, or external SMB clients.
+
 **Difficulty** — How hard should the attack be to find? This affects baseline noise intensity, how spread out the attack events are, and whether the attacker uses obvious or subtle techniques.
 
 **Red herrings** — Should the dataset include explicit suspicious-but-benign events beyond automatic ambient noise? These are events with innocent explanations that create false leads for analysts: after-hours admin sessions, failed logon bursts from fat-fingered passwords, large outbound transfers that are actually backup sync, service accounts authenticating from unusual hosts. Define these in the `red_herrings:` section — they use the same event types as the storyline but include an `explanation` field for the instructor ground truth. Note: ambient suspicious noise (controlled by `baseline_activity.suspicious_noise`, default "high") is separate and always active.

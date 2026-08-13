@@ -522,6 +522,13 @@ class WindowsEventEmitter(LogEmitter):
         "password_reset",
         "workstation_locked",
         "workstation_unlocked",
+        "smb_tree_connect",
+        "smb_file_open",
+        "smb_file_read",
+        "smb_file_write",
+        "smb_file_rename",
+        "smb_file_delete",
+        "smb_file_close",
     }
 
     @staticmethod
@@ -608,6 +615,13 @@ class WindowsEventEmitter(LogEmitter):
         "group_member_removed_universal",
         "workstation_locked",
         "workstation_unlocked",
+        "smb_tree_connect",
+        "smb_file_open",
+        "smb_file_read",
+        "smb_file_write",
+        "smb_file_rename",
+        "smb_file_delete",
+        "smb_file_close",
     }
 
     def _get_host(self, event: CanonicalOccurrence) -> "HostContext":
@@ -671,6 +685,13 @@ class WindowsEventEmitter(LogEmitter):
             "password_reset": self._render_password_reset,
             "workstation_locked": self._render_workstation_lock,
             "workstation_unlocked": self._render_workstation_unlock,
+            "smb_tree_connect": self._render_smb_audit,
+            "smb_file_open": self._render_smb_audit,
+            "smb_file_read": self._render_smb_audit,
+            "smb_file_write": self._render_smb_audit,
+            "smb_file_rename": self._render_smb_audit,
+            "smb_file_delete": self._render_smb_audit,
+            "smb_file_close": self._render_smb_audit,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -1212,6 +1233,147 @@ class WindowsEventEmitter(LogEmitter):
             "IpPort": _windows_endpoint_port(auth.source_ip or "-", auth.source_port),
         }
         self.emit_event(event_data)
+
+    def _render_smb_audit(self, event: CanonicalOccurrence) -> None:
+        """Render profile-eligible Windows share and object-access auditing."""
+
+        smb = event.smb
+        auth = event.auth
+        host = self._get_host(event)
+        if smb is None or auth is None or smb.audit == "minimal":
+            return
+        failure = smb.result != "success"
+        if event.event_type == "smb_tree_connect":
+            event_ids = (5140,)
+        elif failure:
+            event_ids = (5145,)
+        elif smb.audit == "high" and event.event_type == "smb_file_open":
+            event_ids = (5145, 4656)
+        elif event.event_type in {"smb_file_write", "smb_file_rename", "smb_file_delete"} or (
+            smb.audit == "high" and event.event_type == "smb_file_read"
+        ):
+            if (
+                smb.audit != "high"
+                and _stable_seed(f"smb-standard-object-audit:{smb.file_id}:{smb.content_version}")
+                % 100
+                >= 65
+            ):
+                return
+            event_ids = (4663,)
+        elif smb.audit == "high" and event.event_type == "smb_file_close":
+            event_ids = (4658,)
+        else:
+            return
+        access_mask = {
+            "read": "0x1",
+            "write": "0x2",
+            "rename": "0x10000",
+            "delete": "0x10000",
+            "open": {
+                "list": "0x120089",
+                "read": "0x120089",
+                "write": "0x12019f",
+                "rename": "0x110080",
+                "delete": "0x110080",
+            }[smb.requested_access],
+        }.get(smb.phase, "0x1")
+        access_list = {
+            "read": "%%4416",
+            "write": "%%4417",
+            "rename": "%%1537",
+            "delete": "%%1537",
+            "open": {
+                "list": "%%4416\n%%4419\n%%4423\n%%1538\n%%1541",
+                "read": "%%4416\n%%4419\n%%4423\n%%1538\n%%1541",
+                "write": ("%%4416\n%%4417\n%%4418\n%%4419\n%%4420\n%%4423\n%%4424\n%%1538\n%%1541"),
+                "rename": "%%4423\n%%1537\n%%1541",
+                "delete": "%%4423\n%%1537\n%%1541",
+            }[smb.requested_access],
+        }.get(smb.phase, "%%4416")
+        process_id = event.network.responding_pid if event.network is not None else 4
+        if process_id <= 0:
+            process_id = 4
+        process_name = "System"
+        state_manager = getattr(self, "_state_manager", None)
+        if state_manager is not None:
+            running = state_manager.get_process(host.hostname, process_id)
+            if running is not None:
+                process_name = running.image
+        handle_id = f"0x{_stable_seed(smb.handle_id or smb.tree_id) & 0xFFFFFFFF:x}"
+        share_local_path = smb.share_local_path.rstrip("\\")
+        if share_local_path and not share_local_path.startswith("\\??\\"):
+            share_local_path = f"\\??\\{share_local_path}"
+        common = {
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": self._security_provider_pid(host),
+            "SubjectUserSid": auth.user_sid,
+            "SubjectUserName": auth.username,
+            "SubjectDomainName": _subject_domain(auth.username, host.netbios_domain),
+            "SubjectLogonId": auth.logon_id,
+        }
+        for index, event_id in enumerate(event_ids):
+            rng = self._event_rng(event, f"smb-{event_id}")
+            data = {
+                **common,
+                "EventID": event_id,
+                "TimeCreated": event.timestamp
+                + timedelta(microseconds=index * rng.randint(120, 850)),
+                "ExecutionThreadID": rng.randint(100, 500),
+            }
+            if event_id in {4656, 4663}:
+                data.update(
+                    {
+                        "ObjectServer": "Security",
+                        "ObjectType": "File",
+                        "ObjectName": smb.server_path,
+                        "HandleId": handle_id,
+                        "AccessMask": access_mask,
+                        "AccessList": access_list,
+                        "ProcessId": f"0x{process_id:x}",
+                        "ProcessName": process_name,
+                        "ResourceAttributes": "-",
+                    }
+                )
+                if event_id == 4656:
+                    data.update(
+                        {
+                            "TransactionId": "{00000000-0000-0000-0000-000000000000}",
+                            "AccessReason": "-",
+                            "PrivilegeList": "-",
+                            "RestrictedSidCount": 0,
+                        }
+                    )
+            elif event_id == 4658:
+                data.update(
+                    {
+                        "ObjectServer": "Security",
+                        "HandleId": handle_id,
+                        "ProcessId": f"0x{process_id:x}",
+                        "ProcessName": process_name,
+                    }
+                )
+            else:
+                data.update(
+                    {
+                        "ObjectType": "File",
+                        "IpAddress": self._ipv6_mapped(auth.source_ip),
+                        "IpPort": auth.source_port,
+                        "ShareName": f"\\\\*\\{smb.share_name}",
+                        "ShareLocalPath": share_local_path,
+                        "AccessMask": access_mask,
+                        "AccessList": access_list,
+                    }
+                )
+                if event_id == 5145:
+                    data.update(
+                        {
+                            "RelativeTargetName": smb.share_path,
+                            "AccessReason": "-",
+                        }
+                    )
+            self.emit_event(data)
 
     def _render_wfp_connection(self, event: CanonicalOccurrence) -> None:
         """Render Windows 5156 (WFP connection permitted)."""

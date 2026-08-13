@@ -40,7 +40,7 @@ SAMPLE_DATA_DIR = Path(__file__).parent.parent.parent / "sample_data" / "Zeek-JS
 
 
 class TestParserRegistration:
-    """All 13 Zeek parsers should be registered."""
+    """All Zeek parsers should be registered."""
 
     ZEEK_FORMATS = {
         "zeek_conn",
@@ -56,6 +56,8 @@ class TestParserRegistration:
         "zeek_pe",
         "zeek_packet_filter",
         "zeek_reporter",
+        "zeek_smb_files",
+        "zeek_smb_mapping",
     }
 
     def test_all_zeek_parsers_registered(self):
@@ -66,6 +68,24 @@ class TestParserRegistration:
         for fmt in self.ZEEK_FORMATS:
             parser = get_parser(fmt)
             assert parser.format_name == fmt
+
+    def test_smb_parsers_discover_sensor_outputs(self, tmp_path):
+        sensor_dir = tmp_path / "zeek-core"
+        sensor_dir.mkdir()
+        mapping = sensor_dir / "smb_mapping.json"
+        files = sensor_dir / "smb_files.json"
+        mapping.write_text('{"ts":1,"uid":"C1","path":"\\\\\\\\FS-01\\\\Shared"}\n')
+        files.write_text('{"ts":2,"uid":"C1","action":"SMB::FILE_READ","name":"report.docx"}\n')
+
+        discovered = discover_log_files(tmp_path)
+
+        assert discovered["zeek_smb_mapping"] == [mapping]
+        assert discovered["zeek_smb_files"] == [files]
+        assert list(get_parser("zeek_smb_mapping").parse_file(mapping))[0].fields["uid"] == "C1"
+        assert (
+            list(get_parser("zeek_smb_files").parse_file(files))[0].fields["action"]
+            == "SMB::FILE_READ"
+        )
 
 
 class TestProxyParserRegistration:

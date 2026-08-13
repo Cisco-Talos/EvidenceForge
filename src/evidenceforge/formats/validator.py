@@ -305,6 +305,8 @@ STRICT_FORMATS: frozenset[str] = frozenset(
     {
         "syslog",
         "zeek_files",
+        "zeek_smb_files",
+        "zeek_smb_mapping",
         "zeek_conn",
         "zeek_http",
         "zeek_ssl",

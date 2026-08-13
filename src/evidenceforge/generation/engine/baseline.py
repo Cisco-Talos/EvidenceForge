@@ -4002,6 +4002,7 @@ class BaselineMixin:
                 )
                 next_hour = current_hour + timedelta(hours=1)
                 self.state_manager.sweep_closed_connections(next_hour)
+                self.state_manager.sweep_smb_state(next_hour)
                 allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
                 self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
                 self.activity_generator.advance_process_state_watermark(allocation_cutoff)
@@ -4038,6 +4039,7 @@ class BaselineMixin:
             # Evict completed/failed connections to bound memory during long runs
             next_hour = current_hour + timedelta(hours=1)
             self.state_manager.sweep_closed_connections(next_hour)
+            self.state_manager.sweep_smb_state(next_hour)
             allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
             self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
             self.activity_generator.advance_process_state_watermark(allocation_cutoff)
@@ -6733,89 +6735,6 @@ class BaselineMixin:
                 continue
         logger.warning("Internal IP %s not in any defined segment (%s)", ip, context)
 
-    def _emit_smb_logon_pair(
-        self,
-        user: Any,
-        file_server: Any,
-        source_ip: str,
-        time: datetime,
-        rng: Any,
-        *,
-        source_port: int | None = None,
-        emit_network_evidence: bool = True,
-    ) -> str | None:
-        """Emit type 3 network logon + logoff pair on a file server for SMB access.
-
-        In real Windows, every authenticated SMB share access produces:
-        - 4624 type 3 (network logon) on the file server
-        - 4634 (logoff) after the file access session closes
-        """
-        from evidenceforge.generation.activity.generator import _get_os_category
-
-        if _get_os_category(file_server.os) != "windows":
-            return None
-
-        logon_kwargs: dict[str, Any] = {
-            "user": user,
-            "system": file_server,
-            "time": time,
-            "logon_type": 3,
-            "source_ip": source_ip,
-        }
-        if source_port is not None:
-            logon_kwargs["source_port"] = source_port
-        if not emit_network_evidence:
-            logon_kwargs["emit_network_evidence"] = False
-            transaction_matcher = getattr(
-                self.activity_generator,
-                "_last_effective_connection_transaction_id",
-                None,
-            )
-            if transaction_matcher is not None and source_port is not None:
-                transaction_id = transaction_matcher(
-                    src_ip=source_ip,
-                    src_port=source_port,
-                    dst_ip=file_server.ip,
-                    dst_port=445,
-                    proto="tcp",
-                )
-                if isinstance(transaction_id, str) and transaction_id:
-                    logon_kwargs["remote_authentication_transport_id"] = transaction_id
-
-        logon_id = self.activity_generator.generate_logon(
-            **logon_kwargs,
-        )
-        logoff_delay = rng.uniform(5.0, 60.0)
-        logoff_time = time + timedelta(seconds=logoff_delay)
-        self.activity_generator.generate_logoff(
-            user=user,
-            system=file_server,
-            time=logoff_time,
-            logon_id=logon_id,
-            logon_type=3,
-        )
-        return logon_id
-
-    def _last_smb_connection_source_port(
-        self,
-        *,
-        source_ip: str,
-        dst_ip: str,
-    ) -> int | None:
-        """Return the source port from the most recent matching SMB transport."""
-        activity_generator = getattr(self, "activity_generator", None)
-        matcher = getattr(activity_generator, "_last_effective_connection_source_port", None)
-        if matcher is None:
-            return None
-        return matcher(src_ip=source_ip, dst_ip=dst_ip, dst_port=445, proto="tcp")
-
-    @staticmethod
-    def _smb_logon_transport_conn_state(service: Any, will_emit_logon: bool) -> str | None:
-        """Return the SMB transport state required by a successful companion logon."""
-        if will_emit_logon and str(service or "").lower() == "smb":
-            return "SF"
-        return None
-
     def _build_smb_targets(self, system: Any, dc_ips: list[str]) -> tuple[list[str], list[Any]]:
         """Build weighted SMB targets for Windows client browsing noise."""
         dc_targets = [ip for ip in dc_ips if ip != system.ip]
@@ -6830,75 +6749,6 @@ class BaselineMixin:
             weight = 3 if fs.ip not in dc_targets else 2
             targets.extend([fs.ip] * weight)
         return targets, fs_targets
-
-    def _emit_smb_file_operations(
-        self,
-        user: Any,
-        file_server: Any,
-        client_system: Any,
-        time: datetime,
-        rng: Any,
-    ) -> None:
-        """Emit eCAR file operations that make SMB sessions look like file work."""
-        from evidenceforge.events.base import OccurrenceBuilder
-        from evidenceforge.events.contexts import AuthContext, FileContext
-
-        host_ctx = self.activity_generator._build_host_context(file_server)
-        username = getattr(user, "username", "unknown")
-        client_name = getattr(client_system, "hostname", "client").lower()
-        share = rng.choice(["Departments", "Finance", "Projects", "Shared", "IT"])
-        stems = [
-            "budget-review",
-            "client-onboarding",
-            "change-request",
-            "expense-export",
-            "incident-summary",
-            "inventory",
-            "maintenance-window",
-            "monthly-close",
-            "oncall-roster",
-            "purchase-order",
-            "quarterly-report",
-            "renewal-tracker",
-            "risk-register",
-            "server-build",
-            "vendor-list",
-            "project-plan",
-            "meeting-notes",
-            "policy-update",
-            "service-review",
-            "status-update",
-            "team-roadmap",
-        ]
-        extensions = ["docx", "xlsx", "pdf", "pptx", "txt"]
-        op_count = rng.randint(3, 8)
-        operation_choices = ["file_read", "file_read", "file_read", "file_modify", "file_create"]
-        session_operations = ["file_read", "file_modify"]
-        if rng.random() < 0.18:
-            session_operations.append("file_create")
-        if rng.random() < 0.08:
-            session_operations.append("file_delete")
-        while len(session_operations) < op_count:
-            session_operations.append(rng.choice(operation_choices))
-        rng.shuffle(session_operations)
-
-        for idx, event_type in enumerate(session_operations):
-            stem = rng.choice(stems)
-            ext = rng.choice(extensions)
-            file_path = rf"\\{file_server.hostname}\{share}\{client_name}\{stem}-{rng.randint(1, 99):02d}.{ext}"
-            self.activity_generator.dispatcher.dispatch_builder(
-                OccurrenceBuilder(
-                    timestamp=time + timedelta(milliseconds=idx * rng.randint(200, 1500)),
-                    event_type=event_type,
-                    src_host=host_ctx,
-                    auth=AuthContext(username=username),
-                    file=FileContext(
-                        path=file_path,
-                        action=event_type.removeprefix("file_"),
-                        pid=4,
-                    ),
-                )
-            )
 
     def _emit_ecar_file_churn(
         self,
@@ -7191,6 +7041,17 @@ class BaselineMixin:
                             time=tgs_time,
                         )
 
+                if conn.get("service") == "smb" and any(
+                    share.system.casefold()
+                    == str(
+                        getattr(self.activity_generator._ip_to_system.get(dst_ip), "hostname", "")
+                    ).casefold()
+                    for share in self.activity_generator._storage_world.shares
+                ):
+                    # Canonical document/SYSVOL activity is owned by the bounded
+                    # SMB workload below. Do not add a second opaque profile flow.
+                    continue
+
                 self.activity_generator.generate_connection(
                     src_ip=system.ip,
                     dst_ip=dst_ip,
@@ -7434,12 +7295,12 @@ class BaselineMixin:
                                 time=tgs_time,
                             )
 
-                        will_emit_smb_logon = bool(
-                            conn.get("service") == "smb"
-                            and is_internal_src
-                            and src_sys
-                            and "file_server" in roles
-                        )
+                        if conn.get("service") == "smb" and any(
+                            share.system.casefold() == system.hostname.casefold()
+                            for share in self.activity_generator._storage_world.shares
+                        ):
+                            continue
+
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
                             dst_ip=effective_dst_ip,
@@ -7450,51 +7311,11 @@ class BaselineMixin:
                             duration=rng.uniform(0.05, 5.0),
                             orig_bytes=rng.randint(200, 5000),
                             resp_bytes=rng.randint(500, 50000),
-                            conn_state=self._smb_logon_transport_conn_state(
-                                conn.get("service"),
-                                will_emit_smb_logon,
-                            ),
+                            conn_state="SF" if conn.get("service") == "smb" else None,
                             source_system=src_sys,
                             emit_dns=is_internal_src,
                             hostname=dst_hostname,
                         )
-                        smb_source_port = self._last_smb_connection_source_port(
-                            source_ip=src_ip,
-                            dst_ip=effective_dst_ip,
-                        )
-
-                        # SMB access to file servers produces type 3 logon
-                        if (
-                            conn.get("service") == "smb"
-                            and is_internal_src
-                            and src_sys
-                            and "file_server" in roles
-                        ):
-                            src_sessions = self.state_manager.get_sessions_on_system(
-                                src_sys.hostname
-                            )
-                            for sess in src_sessions:
-                                if sess.logon_type in (2, 10, 11):
-                                    smb_user = next(
-                                        (
-                                            u
-                                            for u in self.scenario.environment.users
-                                            if u.username == sess.username
-                                        ),
-                                        None,
-                                    )
-                                    if smb_user:
-                                        self._emit_smb_logon_pair(
-                                            smb_user,
-                                            system,
-                                            src_ip,
-                                            ts,
-                                            rng,
-                                            source_port=smb_source_port,
-                                            emit_network_evidence=smb_source_port is None,
-                                        )
-                                        break
-
         # --- Persona traffic (user-level, during active sessions) ---
         # Only real interactive user sessions get persona traffic — skip
         # SYSTEM, LOCAL SERVICE, NETWORK SERVICE, machine accounts, etc.
@@ -7641,6 +7462,14 @@ class BaselineMixin:
                 # For HTTP/HTTPS: generate browsing session with subresources,
                 # referrer chains, and cross-domain CDN fan-out.
                 svc = conn.get("service", "")
+                if svc == "smb" and any(
+                    share.system.casefold()
+                    == str(
+                        getattr(self.activity_generator._ip_to_system.get(dst_ip), "hostname", "")
+                    ).casefold()
+                    for share in self.activity_generator._storage_world.shares
+                ):
+                    continue
                 is_server_source = self._is_server_admin_persona_source(system)
                 if svc in ("ssl", "http") and hostname and not is_server_source:
                     self._emit_browsing_session(
@@ -7978,7 +7807,7 @@ class BaselineMixin:
                 # Include DC SYSVOL/GPO traffic and weight file servers higher
                 # when present; file-server environments should still produce
                 # SMB even if no DC role has been inferred.
-                smb_targets, fs_targets = self._build_smb_targets(system, dc_ips)
+                smb_targets, _fs_targets = self._build_smb_targets(system, dc_ips)
                 if smb_targets:
                     _smb_lo, _smb_hi = self._resolve_traffic_rate("smb_interval")
                     _smb_lo, _smb_hi = self._scaled_interval_range(
@@ -7999,7 +7828,14 @@ class BaselineMixin:
                         ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
                         smb_dst_ip = rng.choice(smb_targets)
-                        smb_dst_sys = next((s for s in fs_targets if s.ip == smb_dst_ip), None)
+                        smb_dst_sys = next(
+                            (
+                                candidate
+                                for candidate in self.scenario.environment.systems
+                                if candidate.ip == smb_dst_ip
+                            ),
+                            None,
+                        )
                         if smb_dst_sys:
                             operation_profile = rng.choices(
                                 ["read", "write", "metadata"],
@@ -8022,57 +7858,82 @@ class BaselineMixin:
                             duration = rng.uniform(0.1, 2.0)
                             orig_bytes = rng.randint(200, 2_000)
                             resp_bytes = rng.randint(500, 5_000)
-                        will_emit_smb_logon = smb_dst_sys is not None
-                        self.activity_generator.generate_connection(
-                            src_ip=system.ip,
-                            dst_ip=smb_dst_ip,
-                            time=ts,
-                            dst_port=445,
-                            proto="tcp",
-                            service="smb",
-                            duration=duration,
-                            orig_bytes=orig_bytes,
-                            resp_bytes=resp_bytes,
-                            conn_state=self._smb_logon_transport_conn_state(
-                                "smb",
-                                will_emit_smb_logon,
-                            ),
-                            emit_dns=rng.random() > 0.02,
-                            source_system=system,
-                            pid=4,  # SMB: kernel System process
-                        )
-                        smb_source_port = self._last_smb_connection_source_port(
-                            source_ip=system.ip,
-                            dst_ip=smb_dst_ip,
-                        )
-                        # Emit type 3 logon on file server for SMB access
+                        ws_user = None
+                        ws_session = None
                         if smb_dst_sys:
-                            # Find active user on this workstation
-                            ws_sessions = self.state_manager.get_sessions_on_system(system.hostname)
-                            for sess in ws_sessions:
-                                if sess.logon_type in (2, 10, 11):
-                                    ws_user = next(
-                                        (
-                                            u
-                                            for u in self.scenario.environment.users
-                                            if u.username == sess.username
-                                        ),
-                                        None,
-                                    )
-                                    if ws_user:
-                                        self._emit_smb_logon_pair(
-                                            ws_user,
-                                            smb_dst_sys,
-                                            system.ip,
-                                            ts,
-                                            rng,
-                                            source_port=smb_source_port,
-                                            emit_network_evidence=smb_source_port is None,
-                                        )
-                                        self._emit_smb_file_operations(
-                                            ws_user, smb_dst_sys, system, ts, rng
-                                        )
-                                        break
+                            for sess in self.state_manager.get_sessions_on_system(system.hostname):
+                                if sess.logon_type not in (2, 10, 11):
+                                    continue
+                                ws_user = next(
+                                    (
+                                        user
+                                        for user in self.scenario.environment.users
+                                        if user.username == sess.username
+                                    ),
+                                    None,
+                                )
+                                if ws_user is not None:
+                                    ws_session = sess
+                                    break
+                        server_shares = (
+                            [
+                                share
+                                for share in self.activity_generator._storage_world.shares
+                                if share.system.casefold() == smb_dst_sys.hostname.casefold()
+                                and share.files
+                            ]
+                            if smb_dst_sys is not None
+                            else []
+                        )
+                        if ws_user is not None and server_shares:
+                            from evidenceforge.models.scenario import (
+                                SmbActivityEventSpec,
+                                SmbShareLocation,
+                            )
+
+                            dc_shares = [
+                                candidate
+                                for candidate in server_shares
+                                if candidate.preset == "dc_policy"
+                            ]
+                            share = rng.choice(dc_shares or server_shares)
+                            if dc_shares and operation_profile == "write":
+                                operation_profile = "read"
+                            operation = {
+                                "read": "read",
+                                "write": "update",
+                                "metadata": "browse",
+                            }[operation_profile]
+                            self.activity_generator.generate_smb_activity(
+                                spec=SmbActivityEventSpec(
+                                    type="smb_activity",
+                                    operation=operation,
+                                    purpose="interactive",
+                                    target=SmbShareLocation(type="share", share=share.ref),
+                                ),
+                                actor=ws_user,
+                                parent_system=system,
+                                time=ts,
+                                process_pid=ws_session.explorer_pid if ws_session else -1,
+                                process_image=r"C:\Windows\explorer.exe" if ws_session else "",
+                                reuse_session=True,
+                            )
+                        else:
+                            self.activity_generator.generate_connection(
+                                src_ip=system.ip,
+                                dst_ip=smb_dst_ip,
+                                time=ts,
+                                dst_port=445,
+                                proto="tcp",
+                                service="smb",
+                                duration=duration,
+                                orig_bytes=orig_bytes,
+                                resp_bytes=resp_bytes,
+                                conn_state="SF",
+                                emit_dns=rng.random() > 0.02,
+                                source_system=system,
+                                pid=4,
+                            )
                         t += smb_interval
 
             # Kerberos

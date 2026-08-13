@@ -24,7 +24,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from types import ModuleType
@@ -38,34 +37,6 @@ if TYPE_CHECKING:
     from evidenceforge.events.base import OccurrenceBuilder
     from evidenceforge.generation.actions.network_connection import NetworkConnectionRequest
     from evidenceforge.generation.activity.generator import ActivityGenerator
-
-
-def _network_with_smb_file_accounting(network: Any, file_transfer: Any) -> Any:
-    """Return canonical transport accounting large enough for its SMB object."""
-
-    file_bytes = max(
-        int(getattr(file_transfer, "seen_bytes", 0)),
-        int(getattr(file_transfer, "total_bytes", 0) or 0),
-    )
-    if file_bytes <= 0:
-        return network
-    required_payload = file_bytes + max(1024, int(file_bytes * 0.018))
-    prefix = "orig" if file_transfer.is_orig else "resp"
-    payload_name = f"{prefix}_bytes"
-    packets_name = f"{prefix}_pkts"
-    ip_bytes_name = f"{prefix}_ip_bytes"
-    current_payload = int(getattr(network, payload_name, 0) or 0)
-    if current_payload >= required_payload:
-        return network
-    packets = max(int(getattr(network, packets_name, 0) or 0), math.ceil(required_payload / 1460))
-    ip_bytes = max(
-        int(getattr(network, ip_bytes_name, 0) or 0),
-        required_payload + (packets * 40),
-    )
-    setattr(network, payload_name, required_payload)
-    setattr(network, packets_name, packets)
-    setattr(network, ip_bytes_name, ip_bytes)
-    return network
 
 
 @dataclass(slots=True)
@@ -383,10 +354,6 @@ class NetworkTransactionPlanner:
 
     def execute(self, request: NetworkConnectionRequest) -> str:
         """Expand one network connection request into canonical evidence."""
-        from evidenceforge.generation.actions.file_transfer import (
-            SmbFileTransferMetadataActionBundle,
-            SmbFileTransferMetadataRequest,
-        )
         from evidenceforge.generation.actions.proxy_transaction import (
             ProxyTransactionActionBundle,
             ProxyTransactionRequest,
@@ -2402,41 +2369,6 @@ class NetworkTransactionPlanner:
                 dst_ip=dst_ip,
                 rng=rng,
             )
-
-        if (
-            not suppress_application_side_effects
-            and event.file_transfer is None
-            and service == "smb"
-            and proto == "tcp"
-            and dst_port == 445
-            and event.network.conn_state == "SF"
-        ):
-            transfer_bytes = max(event.network.orig_bytes or 0, event.network.resp_bytes or 0)
-            smb_server = ""
-            if event.dst_host is not None:
-                smb_server = event.dst_host.hostname or event.dst_host.fqdn
-            if not smb_server:
-                smb_server = generator_module.REVERSE_DNS.get(
-                    event.network.dst_ip, event.network.dst_ip
-                )
-            smb_user = getattr(resolved_source_system, "assigned_user", "") or "Public"
-            event.file_transfer = SmbFileTransferMetadataActionBundle(
-                SmbFileTransferMetadataRequest(
-                    src_ip=event.network.src_ip,
-                    dst_ip=event.network.dst_ip,
-                    transfer_bytes=transfer_bytes,
-                    duration=event.network.duration or 0.0,
-                    server=smb_server,
-                    user=smb_user,
-                    is_orig=(event.network.orig_bytes or 0) >= (event.network.resp_bytes or 0),
-                ),
-                rng,
-            ).execute()
-            if event.file_transfer is not None:
-                event.network = _network_with_smb_file_accounting(
-                    event.network,
-                    event.file_transfer,
-                )
 
         # NTP context for Zeek ntp.log fan-out. Zeek ntp.log records server response
         # fields, so only attach the context when the matching conn.log row has a

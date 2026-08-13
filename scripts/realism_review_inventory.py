@@ -600,6 +600,10 @@ def _dynamic_constructor_types(
         return {name for name in emitter_event_types if name.startswith("scheduled_task_")}
     if scope.endswith("_execute_group_membership_change_bundle"):
         return {name for name in emitter_event_types if name.startswith("group_member_")}
+    if scope.endswith("SmbActivityActionBundle._emit_phase"):
+        return {name for name in emitter_event_types if name.startswith("smb_")} | {
+            "smb_directory_enumeration"
+        }
     return set()
 
 

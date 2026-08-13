@@ -59,6 +59,8 @@ profiles:
           zeek_http: 0.006
           zeek_ssl: 0.006
           zeek_files: 0.010
+          zeek_smb_files: 0.010
+          zeek_smb_mapping: 0.004
           zeek_x509: 0.010
           zeek_ocsp: 0.012
           zeek_ntp: 0.003
@@ -132,6 +134,8 @@ profiles:
           zeek_http: 0.016
           zeek_ssl: 0.016
           zeek_files: 0.024
+          zeek_smb_files: 0.024
+          zeek_smb_mapping: 0.010
           zeek_x509: 0.024
           zeek_ocsp: 0.030
           zeek_ntp: 0.008

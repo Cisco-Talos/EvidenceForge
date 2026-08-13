@@ -86,6 +86,11 @@ relationships:
     position: after
     min_ms: 8
     max_ms: 140
+  source.session_dependent_after_login:
+    class: source_latency
+    position: after
+    min_ms: 8
+    max_ms: 75
   windows.special_privilege_after_logon:
     class: source_latency
     position: after

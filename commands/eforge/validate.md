@@ -22,6 +22,21 @@ Default to `eforge` for all CLI execution. If `eforge` is not found and you are
 in an EvidenceForge source checkout, retry the same command with
 `uv run eforge ...`.
 
+When a scenario uses `environment.storage` or `smb_activity`, also run
+`eforge validate <scenario-file> --show-storage`. Review the compiled volumes,
+mounts, public share references, mappings, access summaries, population/activity
+scales, and bounded corpus samples; these deterministic defaults are part of the
+authoring contract even when `environment.storage` is omitted.
+
+The storage preview is read-only and includes every compiled volume, including
+volumes that currently host no share. Separate sections show volume mount,
+filesystem, label, and share count; UNC and server-local share roots; resolved
+population, activity, audit, encryption, and catalog counts; effective
+read/modify/admin/deny access; up to three metadata-only catalog samples per
+share; and each mapping's resolved user/system audience. Generated file and
+directory IDs remain internal. The command does not generate logs or write
+`STORAGE_MANIFEST.json`.
+
 For transport-owner `ids_alerts` on connections, beacons, SSH/RDP, authored
 DHCP, scans, and DNS families, explain schema errors precisely: SIDs
 must be unique within the event and resolve through merged

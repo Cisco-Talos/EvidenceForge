@@ -28,7 +28,7 @@ from pathlib import Path
 from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
-from evidenceforge.evaluation.storyline import _match_activity, resolve_storyline
+from evidenceforge.evaluation.storyline import ResolvedEvent, _match_activity, resolve_storyline
 from evidenceforge.events.ground_truth import GroundTruthDocument
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.files import load_yaml
@@ -98,6 +98,56 @@ def _scenario_with_storyline(storyline_yaml: list[dict]) -> Scenario:
         storyline=[StorylineEvent(**e) for e in storyline_yaml],
         output=OutputSpec(logs=[{"format": "windows"}], destination="./out"),
     )
+
+
+def test_smb_trace_matching_uses_canonical_transport_and_file_identities():
+    scorer = CausalityScorer()
+    scorer._smb_gt = {
+        "smb-read": {
+            "transport_uids": ["C-SMB-1"],
+            "operations": [
+                {
+                    "share": "FS-01.finance",
+                    "path": r"Reports\FY26\forecast.xlsx",
+                    "fuid": "F-SMB-1",
+                }
+            ],
+        }
+    }
+    event = ResolvedEvent(
+        index=0,
+        time=T0,
+        actor="jsmith",
+        system="WS-01",
+        system_ip="10.0.0.10",
+        activity="Read forecast",
+        details={},
+        event_types=["smb_activity"],
+        storyline_id="smb-read",
+    )
+
+    assert scorer._smb_record_matches({"uid": "C-SMB-1"}, "zeek_smb_files", event)
+    assert scorer._smb_record_matches({"fuid": "F-SMB-1"}, "zeek_files", event)
+    assert scorer._smb_record_matches(
+        {
+            "EventID": 4663,
+            "SubjectUserName": "jsmith",
+            "ObjectName": r"D:\Departments\Finance\Reports\FY26\forecast.xlsx",
+        },
+        "windows_event_security",
+        event,
+    )
+    assert scorer._smb_record_matches(
+        {
+            "object": "FILE",
+            "action": "READ",
+            "principal": "jsmith",
+            "file_path": r"D:\Departments\Finance\Reports\FY26\forecast.xlsx",
+        },
+        "ecar",
+        event,
+    )
+    assert not scorer._smb_record_matches({"uid": "C-OTHER"}, "zeek_conn", event)
 
 
 class TestProcessParentIntegrity:

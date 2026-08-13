@@ -31,6 +31,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 import typer
@@ -47,6 +48,7 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
+from rich.text import Text
 
 from evidenceforge import __version__
 from evidenceforge.generation import GenerationEngine
@@ -60,6 +62,9 @@ from evidenceforge.output_targets import (
     write_output_target_marker,
 )
 from evidenceforge.utils import load_scenario_yaml
+
+if TYPE_CHECKING:
+    from evidenceforge.generation.storage_world import StorageWorldModel
 
 
 class AbbreviatedGroup(typer.core.TyperGroup):
@@ -124,6 +129,96 @@ app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 console = Console()
+
+_STORAGE_SAMPLE_SIZE = 3
+
+
+def _print_storage_field(label: str, value: str) -> None:
+    """Print one unescaped storage diagnostic field without table truncation."""
+    console.print(Text.assemble((f"    {label}: ", "bold"), value))
+
+
+def _print_compiled_storage(storage_world: "StorageWorldModel") -> None:
+    """Render author-facing diagnostics for a compiled storage world."""
+    console.print("\n[bold]Compiled storage topology[/bold]")
+    if not storage_world.volumes:
+        console.print("[dim]No Windows storage volumes or SMB disk shares were compiled.[/dim]")
+        return
+
+    console.print("\n[bold]Volumes[/bold]")
+    for volume in storage_world.volumes:
+        volume_ref = f"{volume.system}.{volume.id}"
+        share_count = sum(
+            share.system.casefold() == volume.system.casefold()
+            and share.volume.casefold() == volume.id.casefold()
+            for share in storage_world.shares
+        )
+        console.print(Text(f"  {volume_ref}", style="bold"))
+        _print_storage_field("Mount", volume.mount)
+        _print_storage_field("Filesystem", volume.filesystem)
+        _print_storage_field("Label", volume.label)
+        _print_storage_field("Shares", str(share_count))
+
+    console.print("\n[bold]Shares[/bold]")
+    for share in storage_world.shares:
+        console.print(Text(f"  {share.ref}", style="bold"))
+        _print_storage_field("UNC root", storage_world.unc_path(share))
+        _print_storage_field("Server root", storage_world.server_local_path(share, ""))
+        _print_storage_field("Volume", f"{share.system}.{share.volume}")
+        _print_storage_field("Preset", share.preset)
+        _print_storage_field("Population", share.population)
+        _print_storage_field("Activity", share.activity)
+        _print_storage_field("Files", str(len(share.files)))
+        _print_storage_field("Audit", share.audit)
+        _print_storage_field("Encryption", share.encryption)
+
+    console.print("\n[bold]Effective access[/bold]")
+    for share in storage_world.shares:
+        console.print(Text(f"  {share.ref}", style="bold"))
+        _print_storage_field("Read", ", ".join(sorted(share.access.read, key=str.casefold)) or "-")
+        _print_storage_field(
+            "Modify", ", ".join(sorted(share.access.modify, key=str.casefold)) or "-"
+        )
+        _print_storage_field(
+            "Admin", ", ".join(sorted(share.access.admin, key=str.casefold)) or "-"
+        )
+        _print_storage_field("Deny", ", ".join(sorted(share.access.deny, key=str.casefold)) or "-")
+
+    console.print("\n[bold]Bounded catalog samples[/bold]")
+    for share in storage_world.shares:
+        console.print(Text(f"  {share.ref} ({len(share.files)} files)", style="bold"))
+        if not share.files:
+            console.print("    [dim](empty)[/dim]")
+            continue
+        seed_files = [file for file in share.files if file.seed_ref]
+        generated_files = [file for file in share.files if not file.seed_ref]
+        samples = (*seed_files, *generated_files)[:_STORAGE_SAMPLE_SIZE]
+        for file in samples:
+            sample_kind = f"seed {file.seed_ref}" if file.seed_ref else "generated"
+            tags = ", ".join(file.tags) or "-"
+            console.print(
+                Text(
+                    f"    {sample_kind}: {file.path} ({file.size_bytes} bytes; "
+                    f"{file.mime_type}; tags: {tags})"
+                )
+            )
+    console.print(
+        f"[dim]Showing up to {_STORAGE_SAMPLE_SIZE} catalog entries per share; "
+        "generated file and directory IDs remain internal.[/dim]"
+    )
+
+    if storage_world.mappings:
+        console.print("\n[bold]Mappings[/bold]")
+        for mapping in storage_world.mappings:
+            audience = ", ".join(sorted(mapping.users, key=str.casefold)) or "all allowed users"
+            if mapping.systems:
+                systems = ", ".join(sorted(mapping.systems, key=str.casefold))
+                audience = f"{audience} on {systems}"
+            console.print(Text(f"  {mapping.id}", style="bold"))
+            _print_storage_field("Share", mapping.share)
+            _print_storage_field("Drive", mapping.drive)
+            _print_storage_field("Lifecycle", mapping.lifecycle)
+            _print_storage_field("Effective audience", audience)
 
 
 def _format_capacity(value: int) -> str:
@@ -834,6 +929,14 @@ def validate(
         "--allow-large-workload",
         hidden=True,
     ),
+    show_storage: bool = typer.Option(
+        False,
+        "--show-storage",
+        help=(
+            "Show compiled SMB volumes, share roots/scales/access, mappings, "
+            "and bounded catalog samples."
+        ),
+    ),
 ) -> None:
     """Validate a scenario file for schema correctness and cross-reference integrity.
 
@@ -900,6 +1003,15 @@ def validate(
         scenario_root=scenario_file.parent,
     )
     issues = validator.validate()
+
+    if show_storage and not any(
+        issue.severity == "error" and issue.field_path.startswith("environment.storage")
+        for issue in issues
+    ):
+        from evidenceforge.generation.storage_world import StorageWorldModel
+
+        storage_world = StorageWorldModel.compile(scenario)
+        _print_compiled_storage(storage_world)
 
     _forecast_for_cli(
         scenario,

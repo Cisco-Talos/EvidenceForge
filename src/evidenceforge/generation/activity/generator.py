@@ -170,6 +170,9 @@ from evidenceforge.generation.actions import (
     ScheduledTaskRequest,
     ServiceLogonActionBundle,
     ServiceLogonRequest,
+    SmbActivityActionBundle,
+    SmbActivityRequest,
+    SmbActivityResult,
     SshSessionActionBundle,
     SshSessionRequest,
     WindowsRemoteAuthenticationActionBundle,
@@ -229,7 +232,13 @@ from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
 from evidenceforge.models.exceptions import GenerationError, PathSafetyError, StateError
-from evidenceforge.models.scenario import EmailMessageEventSpec, ProxyAuthPolicyConfig, System, User
+from evidenceforge.models.scenario import (
+    EmailMessageEventSpec,
+    ProxyAuthPolicyConfig,
+    SmbActivityEventSpec,
+    System,
+    User,
+)
 from evidenceforge.models.state import ActiveSession, RunningProcess
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.paths import write_exclusive_child_stream
@@ -10107,6 +10116,16 @@ class ActivityGenerator:
                 logon_id,
                 parent_lifecycle_group_id=remote_authentication_plan.stable_id,
             )
+        event.lifecycle = ActionLifecycleContext(
+            group_id=lifecycle_group_id,
+            canonical_start=time,
+            phase="start",
+            parent_group_id=(
+                remote_authentication_plan.stable_id
+                if remote_authentication_plan is not None
+                else None
+            ),
+        )
 
         # Attach SyslogContext for Linux SSH sessions only (not network/interactive)
         session_for_syslog = self.state_manager.get_session(logon_id) if logon_id else None
@@ -14319,6 +14338,34 @@ class ActivityGenerator:
         return NetworkConnectionActionBundle(
             executor=self,
             request=request,
+        ).execute()
+
+    def generate_smb_activity(
+        self,
+        *,
+        spec: SmbActivityEventSpec,
+        actor: User,
+        parent_system: System,
+        time: datetime,
+        process_pid: int = -1,
+        process_image: str = "",
+        reuse_session: bool = False,
+        files_override: tuple[Any, ...] = (),
+    ) -> SmbActivityResult:
+        """Generate one bounded canonical SMB2/3 disk-share activity burst."""
+
+        return SmbActivityActionBundle(
+            self,
+            SmbActivityRequest(
+                spec=spec,
+                actor=actor,
+                parent_system=parent_system,
+                time=time,
+                process_pid=process_pid,
+                process_image=process_image,
+                reuse_session=reuse_session,
+                files_override=files_override,
+            ),
         ).execute()
 
     def generate_email_message(

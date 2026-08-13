@@ -1363,23 +1363,6 @@ class KerberosRealismConfig(BaseModel, extra="forbid"):
         return self
 
 
-# --- SMB File Transfers ---
-
-
-class SmbFileSizeBand(BaseModel, extra="forbid"):
-    """One weighted file-size band for an SMB MIME family."""
-
-    size_min: int = Field(ge=1)
-    size_max: int = Field(ge=1)
-    weight: int = Field(gt=0)
-
-    @model_validator(mode="after")
-    def size_range_ordered(self) -> Self:
-        if self.size_max < self.size_min:
-            raise ValueError("size_max must be greater than or equal to size_min")
-        return self
-
-
 class HttpRequestProfilesConfig(BaseModel, extra="forbid"):
     """Request-entity classification values in http_file_profiles.yaml."""
 
@@ -1466,99 +1449,6 @@ class HttpMultipartProfilesConfig(BaseModel, extra="forbid"):
         if set(values) != required or len(values) != len(required):
             raise ValueError("multipart header_order must list every supported header exactly once")
         return values
-
-
-class SmbMimeTypeEntry(BaseModel, extra="forbid"):
-    """A weighted MIME type in smb_file_transfers.yaml."""
-
-    mime_type: str
-    weight: int
-    size_min: int = Field(ge=1)
-    size_max: int = Field(ge=1)
-    size_bands: list[SmbFileSizeBand] = Field(default_factory=list)
-
-    @field_validator("weight")
-    @classmethod
-    def weight_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("weight must be positive")
-        return v
-
-    @model_validator(mode="after")
-    def size_range_ordered(self) -> Self:
-        if self.size_max < self.size_min:
-            raise ValueError("size_max must be greater than or equal to size_min")
-        return self
-
-
-class SmbAnalyzerSetEntry(BaseModel, extra="forbid"):
-    """A weighted Zeek file analyzer set in smb_file_transfers.yaml."""
-
-    analyzers: list[str]
-    weight: int
-
-    @field_validator("weight")
-    @classmethod
-    def weight_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("weight must be positive")
-        return v
-
-
-class SmbFilenameTemplateEntry(BaseModel, extra="forbid"):
-    """A weighted SMB filename template set in smb_file_transfers.yaml."""
-
-    mime_types: list[str] = Field(default_factory=list)
-    templates: list[str]
-    weight: int
-
-    @field_validator("templates")
-    @classmethod
-    def templates_non_empty(cls, v: list[str]) -> list[str]:
-        if not v:
-            raise ValueError("templates must not be empty")
-        return v
-
-    @field_validator("weight")
-    @classmethod
-    def weight_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("weight must be positive")
-        return v
-
-
-class SmbFileTransferConfig(BaseModel, extra="forbid"):
-    """Root schema for smb_file_transfers.yaml."""
-
-    min_transfer_bytes: int
-    working_set_probability: float = Field(ge=0.0, le=1.0)
-    working_set_size: int = Field(ge=1, le=100)
-    lexical_composition_probability: float = Field(default=0.0, ge=0.0, le=1.0)
-    shares: list[str] = Field(min_length=1)
-    departments: list[str] = Field(min_length=1)
-    projects: list[str] = Field(min_length=1)
-    basenames: list[str] = Field(min_length=1)
-    lexical_subjects: list[str] = Field(default_factory=list)
-    lexical_document_kinds: list[str] = Field(default_factory=list)
-    lexical_qualifiers: list[str] = Field(default_factory=list)
-    binary_extensions: list[str] = Field(min_length=1)
-    mime_types: list[SmbMimeTypeEntry]
-    analyzer_sets: list[SmbAnalyzerSetEntry]
-    filename_templates: list[SmbFilenameTemplateEntry] = Field(default_factory=list)
-
-    @field_validator("min_transfer_bytes")
-    @classmethod
-    def min_transfer_bytes_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("min_transfer_bytes must be positive")
-        return v
-
-    @field_validator("mime_types", "analyzer_sets")
-    @classmethod
-    def non_empty_weighted_lists(cls, v: list[Any]) -> list[Any]:
-        if not v:
-            raise ValueError("weighted lists must not be empty")
-        return v
 
 
 # --- Auth Noise ---
@@ -2395,6 +2285,8 @@ class ObservationProfileEntry(BaseModel, extra="forbid"):
         "zeek_smtp": "zeek",
         "zeek_ssl": "zeek",
         "zeek_files": "zeek",
+        "zeek_smb_files": "zeek",
+        "zeek_smb_mapping": "zeek",
         "zeek_x509": "zeek",
         "zeek_dhcp": "zeek",
         "zeek_ntp": "zeek",

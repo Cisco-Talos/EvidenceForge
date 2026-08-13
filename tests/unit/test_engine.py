@@ -103,8 +103,10 @@ class TestGenerationEngine:
             patch("evidenceforge.generation.engine.emitter_setup.SnortEmitter") as m4,
             patch("evidenceforge.generation.engine.emitter_setup.WebEmitter") as m5,
             patch("evidenceforge.generation.engine.emitter_setup.ZeekSmtpEmitter") as m6,
+            patch("evidenceforge.generation.engine.emitter_setup.ZeekSmbFilesEmitter") as m7,
+            patch("evidenceforge.generation.engine.emitter_setup.ZeekSmbMappingEmitter") as m8,
         ):
-            yield m1, m2, m3, m4, m5, m6
+            yield m1, m2, m3, m4, m5, m6, m7, m8
 
     @pytest.fixture
     def minimal_scenario(self):
@@ -275,15 +277,17 @@ class TestGenerationEngine:
         engine = GenerationEngine(minimal_scenario, tmp_path)
         engine._initialize()
 
-        # Verify emitters created: windows (2: security + sysmon) + zeek (14) = 16
+        # Verify emitters created: windows (2: security + sysmon) + zeek (16) = 18
         assert mock_windows.called
         assert mock_zeek.called
-        assert len(engine.emitters) == 16
+        assert len(engine.emitters) == 18
         assert "windows_event_security" in engine.emitters
         assert "zeek_conn" in engine.emitters
         assert "zeek_http" in engine.emitters
         assert "zeek_ssl" in engine.emitters
         assert "zeek_files" in engine.emitters
+        assert "zeek_smb_mapping" in engine.emitters
+        assert "zeek_smb_files" in engine.emitters
 
     @patch("evidenceforge.generation.engine.core.ActivityGenerator")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")

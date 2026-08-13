@@ -18,7 +18,7 @@ fields:
     required: true
     description: "Windows Event ID"
     constraints:
-      allowed_values: [1102, 4624, 4625, 4634, 4648, 4672, 4688, 4689, 4697, 4698, 4699, 4700, 4701, 4720, 4723, 4724, 4726, 4728, 4729, 4732, 4733, 4738, 4756, 4757, 4768, 4769, 4770, 4771, 4776, 4800, 4801, 5156]
+      allowed_values: [1102, 4624, 4625, 4634, 4648, 4656, 4658, 4663, 4672, 4688, 4689, 4697, 4698, 4699, 4700, 4701, 4720, 4723, 4724, 4726, 4728, 4729, 4732, 4733, 4738, 4756, 4757, 4768, 4769, 4770, 4771, 4776, 4800, 4801, 5140, 5145, 5156]
 
   - name: TimeCreated
     type: timestamp
@@ -1191,6 +1191,93 @@ variants:
         type: string
         required: false
 
+  - name: object_handle_requested
+    event_id: "4656"
+    description: "A handle to an object was requested"
+    fields:
+      - {name: SubjectUserSid, type: sid, required: true}
+      - {name: SubjectUserName, type: string, required: true}
+      - {name: SubjectDomainName, type: string, required: true}
+      - {name: SubjectLogonId, type: hex_string, required: true}
+      - {name: ObjectServer, type: string, required: true}
+      - {name: ObjectType, type: string, required: true}
+      - {name: ObjectName, type: string, required: true}
+      - {name: HandleId, type: hex_string, required: true}
+      - {name: TransactionId, type: string, required: true}
+      - {name: AccessList, type: string, required: true}
+      - {name: AccessReason, type: string, required: true}
+      - {name: AccessMask, type: hex_string, required: true}
+      - {name: PrivilegeList, type: string, required: true}
+      - {name: RestrictedSidCount, type: integer, required: true}
+      - {name: ProcessId, type: hex_string, required: true}
+      - {name: ProcessName, type: string, required: true}
+      - {name: ResourceAttributes, type: string, required: true}
+
+  - name: object_handle_closed
+    event_id: "4658"
+    description: "A handle to an object was closed"
+    fields:
+      - {name: SubjectUserSid, type: sid, required: true}
+      - {name: SubjectUserName, type: string, required: true}
+      - {name: SubjectDomainName, type: string, required: true}
+      - {name: SubjectLogonId, type: hex_string, required: true}
+      - {name: ObjectServer, type: string, required: true}
+      - {name: HandleId, type: hex_string, required: true}
+      - {name: ProcessId, type: hex_string, required: true}
+      - {name: ProcessName, type: string, required: true}
+
+  - name: object_access
+    event_id: "4663"
+    description: "An attempt was made to access an object"
+    fields:
+      - {name: SubjectUserSid, type: sid, required: true}
+      - {name: SubjectUserName, type: string, required: true}
+      - {name: SubjectDomainName, type: string, required: true}
+      - {name: SubjectLogonId, type: hex_string, required: true}
+      - {name: ObjectServer, type: string, required: true}
+      - {name: ObjectType, type: string, required: true}
+      - {name: ObjectName, type: string, required: true}
+      - {name: HandleId, type: hex_string, required: true}
+      - {name: AccessList, type: string, required: true}
+      - {name: AccessMask, type: hex_string, required: true}
+      - {name: ProcessId, type: hex_string, required: true}
+      - {name: ProcessName, type: string, required: true}
+      - {name: ResourceAttributes, type: string, required: true}
+
+  - name: network_share_access
+    event_id: "5140"
+    description: "A network share object was accessed"
+    fields:
+      - {name: SubjectUserSid, type: sid, required: true}
+      - {name: SubjectUserName, type: string, required: true}
+      - {name: SubjectDomainName, type: string, required: true}
+      - {name: SubjectLogonId, type: hex_string, required: true}
+      - {name: ObjectType, type: string, required: true}
+      - {name: IpAddress, type: ip_address, required: true}
+      - {name: IpPort, type: integer, required: true}
+      - {name: ShareName, type: string, required: true}
+      - {name: ShareLocalPath, type: string, required: true}
+      - {name: AccessMask, type: hex_string, required: true}
+      - {name: AccessList, type: string, required: true}
+
+  - name: network_share_access_check
+    event_id: "5145"
+    description: "Network share access was checked"
+    fields:
+      - {name: SubjectUserSid, type: sid, required: true}
+      - {name: SubjectUserName, type: string, required: true}
+      - {name: SubjectDomainName, type: string, required: true}
+      - {name: SubjectLogonId, type: hex_string, required: true}
+      - {name: ObjectType, type: string, required: true}
+      - {name: IpAddress, type: ip_address, required: true}
+      - {name: IpPort, type: integer, required: true}
+      - {name: ShareName, type: string, required: true}
+      - {name: ShareLocalPath, type: string, required: true}
+      - {name: RelativeTargetName, type: string, required: true}
+      - {name: AccessMask, type: hex_string, required: true}
+      - {name: AccessList, type: string, required: true}
+      - {name: AccessReason, type: string, required: true}
+
 # Output template in Windows Event Log XML format
 output:
   format: xml
@@ -1211,9 +1298,9 @@ output:
         <Provider Name="Microsoft-Windows-Security-Auditing" Guid="{54849625-5478-4994-a5ba-3e3b0328c30d}"/>
         {% endif %}
         <EventID>{{ EventID }}</EventID>
-        <Version>{{ 2 if EventID in [4688, 4624] else 1 if EventID == 5156 else 0 }}</Version>
+        <Version>{{ 2 if EventID in [4688, 4624] else 1 if EventID in [4656, 4663, 5156] else 0 }}</Version>
         <Level>{{ Level }}</Level>
-        <Task>{{ {1102: 104, 4624: 12544, 4625: 12544, 4634: 12545, 4648: 12544, 4672: 12548, 4688: 13312, 4689: 13313, 4697: 12289, 4698: 12804, 4699: 12804, 4700: 12804, 4701: 12804, 4720: 13824, 4723: 13824, 4724: 13824, 4726: 13824, 4728: 13826, 4729: 13826, 4732: 13826, 4733: 13826, 4738: 13824, 4756: 13826, 4757: 13826, 4768: 14339, 4769: 14337, 4770: 14339, 4771: 14339, 4776: 14336, 4800: 12551, 4801: 12551, 5156: 12810}.get(EventID, 0) }}</Task>
+        <Task>{{ {1102: 104, 4624: 12544, 4625: 12544, 4634: 12545, 4648: 12544, 4656: 12800, 4658: 12800, 4663: 12800, 4672: 12548, 4688: 13312, 4689: 13313, 4697: 12289, 4698: 12804, 4699: 12804, 4700: 12804, 4701: 12804, 4720: 13824, 4723: 13824, 4724: 13824, 4726: 13824, 4728: 13826, 4729: 13826, 4732: 13826, 4733: 13826, 4738: 13824, 4756: 13826, 4757: 13826, 4768: 14339, 4769: 14337, 4770: 14339, 4771: 14339, 4776: 14336, 4800: 12551, 4801: 12551, 5140: 12808, 5145: 12811, 5156: 12810}.get(EventID, 0) }}</Task>
         <Opcode>0</Opcode>
         <Keywords>{{ Keywords | default('0x8020000000000000') }}</Keywords>
         <TimeCreated SystemTime="{{ TimeCreated }}"/>
@@ -1466,6 +1553,73 @@ output:
         <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
         <Data Name="TargetLogonId">{{ TargetLogonId }}</Data>
         <Data Name="SessionId">{{ SessionId }}</Data>
+        {% elif EventID == 4656 %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="ObjectServer">{{ ObjectServer }}</Data>
+        <Data Name="ObjectType">{{ ObjectType }}</Data>
+        <Data Name="ObjectName">{{ ObjectName }}</Data>
+        <Data Name="HandleId">{{ HandleId }}</Data>
+        <Data Name="TransactionId">{{ TransactionId }}</Data>
+        <Data Name="AccessList">{{ AccessList }}</Data>
+        <Data Name="AccessReason">{{ AccessReason }}</Data>
+        <Data Name="AccessMask">{{ AccessMask }}</Data>
+        <Data Name="PrivilegeList">{{ PrivilegeList }}</Data>
+        <Data Name="RestrictedSidCount">{{ RestrictedSidCount }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="ProcessName">{{ ProcessName }}</Data>
+        <Data Name="ResourceAttributes">{{ ResourceAttributes }}</Data>
+        {% elif EventID == 4658 %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="ObjectServer">{{ ObjectServer }}</Data>
+        <Data Name="HandleId">{{ HandleId }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="ProcessName">{{ ProcessName }}</Data>
+        {% elif EventID == 4663 %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="ObjectServer">{{ ObjectServer }}</Data>
+        <Data Name="ObjectType">{{ ObjectType }}</Data>
+        <Data Name="ObjectName">{{ ObjectName }}</Data>
+        <Data Name="HandleId">{{ HandleId }}</Data>
+        <Data Name="AccessList">{{ AccessList }}</Data>
+        <Data Name="AccessMask">{{ AccessMask }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="ProcessName">{{ ProcessName }}</Data>
+        <Data Name="ResourceAttributes">{{ ResourceAttributes }}</Data>
+        {% elif EventID == 5140 %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="ObjectType">{{ ObjectType }}</Data>
+        <Data Name="IpAddress">{{ IpAddress }}</Data>
+        <Data Name="IpPort">{{ IpPort }}</Data>
+        <Data Name="ShareName">{{ ShareName }}</Data>
+        <Data Name="ShareLocalPath">{{ ShareLocalPath }}</Data>
+        <Data Name="AccessMask">{{ AccessMask }}</Data>
+        <Data Name="AccessList">{{ AccessList }}</Data>
+        {% elif EventID == 5145 %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="ObjectType">{{ ObjectType }}</Data>
+        <Data Name="IpAddress">{{ IpAddress }}</Data>
+        <Data Name="IpPort">{{ IpPort }}</Data>
+        <Data Name="ShareName">{{ ShareName }}</Data>
+        <Data Name="ShareLocalPath">{{ ShareLocalPath }}</Data>
+        <Data Name="RelativeTargetName">{{ RelativeTargetName }}</Data>
+        <Data Name="AccessMask">{{ AccessMask }}</Data>
+        <Data Name="AccessList">{{ AccessList }}</Data>
+        <Data Name="AccessReason">{{ AccessReason }}</Data>
         {% elif EventID == 5156 %}
         <Data Name="ProcessID">{{ ProcessID }}</Data>
         <Data Name="Application">{{ Application }}</Data>

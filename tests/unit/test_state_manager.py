@@ -35,6 +35,7 @@ from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation import state_manager as state_manager_module
 from evidenceforge.generation.indexes import TemporalAllocationIndex
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.models.exceptions import StateError
 
 
@@ -847,6 +848,82 @@ class TestStateManagerInit:
         assert win_pid % 4 == 0
         assert next_pid % 4 == 0
         assert sm._pid_os["win01"] == "windows"
+
+
+class TestSmbState:
+    """Canonical SMB runtime identity and bounded-lifecycle behavior."""
+
+    def test_file_identity_version_move_delete_and_recreate(self):
+        sm = StateManager()
+        now = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
+        compiled = CompiledStorageFile(
+            file_id="file-seed",
+            share="FS-01.finance",
+            path="Reports\\forecast.xlsx",
+            size_bytes=100,
+            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        touched = sm.touch_smb_file(compiled)
+        updated = sm.update_smb_file(touched.file_id, size_bytes=125)
+        moved = sm.move_smb_file(
+            updated.file_id,
+            share="FS-01.finance",
+            path="Archive\\forecast.xlsx",
+        )
+        deleted = sm.delete_smb_file(moved.file_id)
+        recreated = sm.create_smb_file(
+            share="FS-01.finance",
+            path="Reports\\forecast.xlsx",
+            size_bytes=90,
+            mime_type=compiled.mime_type,
+            timestamp=now,
+        )
+
+        assert updated.version == 2
+        assert moved.file_id == compiled.file_id
+        assert moved.prior_paths == ("Reports\\forecast.xlsx",)
+        assert deleted.deleted is True
+        assert recreated.file_id != compiled.file_id
+        assert recreated.version == 1
+        assert sm.smb_file_is_available(compiled) is False
+
+    def test_session_affinity_reuses_then_expires_within_hard_bound(self):
+        sm = StateManager()
+        start = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
+        first = sm.open_smb_session(
+            client_ip="10.0.0.5",
+            principal="alice",
+            server="FS-01",
+            security_policy="standard",
+            logon_id="0x100",
+            transport_uid="C-first",
+            started_at=start,
+            reuse=True,
+        )
+        reused = sm.open_smb_session(
+            client_ip="10.0.0.5",
+            principal="alice",
+            server="FS-01",
+            security_policy="standard",
+            logon_id="0x200",
+            transport_uid="C-second",
+            started_at=start + timedelta(minutes=5),
+            reuse=True,
+        )
+        tree = sm.get_or_open_smb_tree(
+            reused.session_id,
+            "FS-01.finance",
+            start + timedelta(minutes=5),
+        )
+
+        assert reused.session_id == first.session_id
+        assert sm.get_smb_tree(tree.tree_id) == tree
+
+        sm.sweep_smb_state(start + timedelta(hours=2))
+
+        assert sm.get_smb_tree(tree.tree_id) is None
+        assert sm.get_state_summary()["smb_sessions"] == 0
 
 
 class TestSessionManagement:

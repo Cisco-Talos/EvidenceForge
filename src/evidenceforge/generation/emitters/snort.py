@@ -57,6 +57,7 @@ class SnortEmitter(SensorMultiplexEmitter):
     _log_filename = "snort_alert.log"
     _flat_filename = "snort_alert.log"
     _sort_before_flush: bool = True
+    _external_sorting: bool = False
     _include_sensor_identity: bool = True
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:

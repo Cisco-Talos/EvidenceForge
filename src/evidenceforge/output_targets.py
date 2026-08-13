@@ -95,6 +95,8 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
     "zeek_smtp": TargetFormatPolicy("zeek_smtp", "ndjson", "ndjson"),
     "zeek_ssl": TargetFormatPolicy("zeek_ssl", "ndjson", "ndjson"),
     "zeek_files": TargetFormatPolicy("zeek_files", "ndjson", "ndjson"),
+    "zeek_smb_files": TargetFormatPolicy("zeek_smb_files", "ndjson", "ndjson"),
+    "zeek_smb_mapping": TargetFormatPolicy("zeek_smb_mapping", "ndjson", "ndjson"),
     "zeek_dhcp": TargetFormatPolicy("zeek_dhcp", "ndjson", "ndjson"),
     "zeek_ntp": TargetFormatPolicy("zeek_ntp", "ndjson", "ndjson"),
     "zeek_weird": TargetFormatPolicy("zeek_weird", "ndjson", "ndjson"),

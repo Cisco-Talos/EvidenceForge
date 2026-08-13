@@ -33,6 +33,7 @@ Sub-scores (weights sum to 1.0):
 
 import ipaddress
 import logging
+import ntpath
 import re
 from collections import defaultdict
 from dataclasses import replace
@@ -105,6 +106,12 @@ class CausalityScorer(DimensionScorer):
         # by _spillage_record_matches to verify the credential landed in the logs.
         self._spillage_gt = context.spillage_ground_truth or {}
         self._email_gt = context.email_ground_truth or {}
+        self._smb_gt: dict[str, dict[str, Any]] = {}
+        if context.ground_truth is not None:
+            for record in context.ground_truth.events:
+                if record.kind != "smb_activity" or not record.storyline_id:
+                    continue
+                self._smb_gt[record.storyline_id] = record.attributes.model_dump(mode="python")
         # storyline_id -> adversarial-payload labels (from the canonical GROUND_TRUTH.json)
         # + per-format searchable text (parsed fields + raw lines, newline-normalized)
         # so a labeled payload — including a CRLF split that spans two physical
@@ -145,6 +152,20 @@ class CausalityScorer(DimensionScorer):
                     if apgt.get("target_system"):
                         event.details["hostname"] = apgt["target_system"]
                         event.details["_anchor_host_adversarial_payload"] = apgt["target_system"]
+                smbgt = self._smb_gt.get(event.storyline_id)
+                if smbgt and "smb_activity" in event.event_types:
+                    matching = next(
+                        (
+                            record
+                            for record in context.ground_truth.events
+                            if record.storyline_id == event.storyline_id
+                            and record.kind == "smb_activity"
+                        ),
+                        None,
+                    )
+                    if matching is not None:
+                        event.time = matching.time
+                        event.details["_anchor_time_smb_activity"] = matching.time
             self._proxy_mode = scenario.environment.proxy.mode
             self._proxy_listener_port = scenario.environment.proxy.listener_port
             self._proxy_ips = {
@@ -376,6 +397,7 @@ class CausalityScorer(DimensionScorer):
                     "client_addr",
                     "host",
                     "server_name",
+                    "IpAddress",
                 ):
                     ip_val = rec.fields.get(ip_field)
                     if ip_val and ip_val not in (hostname, ""):
@@ -391,6 +413,13 @@ class CausalityScorer(DimensionScorer):
         text = str(value).strip().lower()
         if not text or text == "-":
             return ""
+        try:
+            address = ipaddress.ip_address(text)
+            if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+                return str(address.ipv4_mapped)
+            return str(address)
+        except ValueError:
+            pass
         return cls._normalize_beacon_host(text) or text
 
     # --- Trace finding ---
@@ -591,6 +620,9 @@ class CausalityScorer(DimensionScorer):
         explicit_dst = event.details.get("dst_ip")
         if explicit_dst:
             lookup_keys.append(str(explicit_dst))
+        client = event.details.get("client")
+        if isinstance(client, dict) and client.get("ip"):
+            lookup_keys.append(str(client["ip"]))
         # Per-type destination host (the spillage/adversarial web server) takes
         # precedence over the shared hostname slot when both types share a step.
         expected_hostname = event.details.get(f"_anchor_host_{event_type}") or event.details.get(
@@ -741,6 +773,8 @@ class CausalityScorer(DimensionScorer):
                 return self._beacon_dst_matches(f, expected_dst) or self._beacon_dst_matches(
                     f, expected_hostname
                 )
+        elif event_type == "smb_activity":
+            return self._smb_record_matches(f, format_name, event)
         elif event_type == "process_terminate":
             if format_name == "windows_event_security":
                 return f.get("EventID") == 4689 and self._host_matches(
@@ -1057,6 +1091,117 @@ class CausalityScorer(DimensionScorer):
             return self._email_read_record_matches(f, format_name, event)
         elif event_type == "raw":
             return self._raw_record_matches(f, format_name, event)
+        return False
+
+    def _smb_record_matches(
+        self,
+        fields: dict[str, Any],
+        format_name: str,
+        event: ResolvedEvent,
+    ) -> bool:
+        """Match an SMB trace against its canonical ground-truth identities."""
+        ground_truth = self._smb_gt.get(event.storyline_id)
+        if ground_truth is None:
+            return False
+
+        operations = ground_truth.get("operations") or []
+        transport_uids = {str(uid) for uid in ground_truth.get("transport_uids") or [] if uid}
+        fuids = {str(operation.get("fuid")) for operation in operations if operation.get("fuid")}
+        relative_paths = {
+            self._normalize_smb_path(str(operation.get("path")))
+            for operation in operations
+            if operation.get("path")
+        }
+        basenames = {path.rsplit("\\", maxsplit=1)[-1] for path in relative_paths if path}
+        share_ids = {
+            str(operation.get("share", "")).rsplit(".", maxsplit=1)[-1].casefold()
+            for operation in operations
+            if operation.get("share")
+        }
+
+        if format_name == "zeek_conn":
+            return str(fields.get("uid") or "") in transport_uids
+        if format_name == "zeek_smb_mapping":
+            return str(
+                fields.get("uid") or ""
+            ) in transport_uids or self._smb_path_or_share_matches(
+                (fields.get("path"), fields.get("service")),
+                relative_paths,
+                basenames,
+                share_ids,
+            )
+        if format_name == "zeek_smb_files":
+            combined_path = ntpath.join(
+                str(fields.get("path") or ""),
+                str(fields.get("name") or ""),
+            )
+            return str(
+                fields.get("uid") or ""
+            ) in transport_uids or self._smb_path_or_share_matches(
+                (combined_path,),
+                relative_paths,
+                basenames,
+                share_ids,
+            )
+        if format_name == "zeek_files":
+            return str(fields.get("fuid") or "") in fuids
+
+        if format_name == "windows_event_security":
+            if fields.get("EventID") not in {4656, 4658, 4660, 4663, 5140, 5145}:
+                return False
+            if not self._user_matches(fields.get("SubjectUserName"), event.actor):
+                return False
+            candidate_values = (
+                fields.get("RelativeTargetName"),
+                fields.get("ObjectName"),
+                fields.get("ShareName"),
+            )
+            return self._smb_path_or_share_matches(
+                candidate_values,
+                relative_paths,
+                basenames,
+                share_ids,
+            )
+
+        if format_name == "ecar":
+            return (
+                fields.get("object") == "FILE"
+                and self._user_matches(fields.get("principal"), event.actor)
+                and self._smb_path_or_share_matches(
+                    (fields.get("file_path"),),
+                    relative_paths,
+                    basenames,
+                    share_ids,
+                )
+            )
+        return False
+
+    @staticmethod
+    def _normalize_smb_path(value: str) -> str:
+        """Normalize a Windows path for case-insensitive suffix comparison."""
+        return value.replace("/", "\\").strip("\\").casefold()
+
+    @classmethod
+    def _smb_path_or_share_matches(
+        cls,
+        candidates: tuple[Any, ...],
+        relative_paths: set[str],
+        basenames: set[str],
+        share_ids: set[str],
+    ) -> bool:
+        """Return whether source-native path/share text identifies the SMB object."""
+        for candidate in candidates:
+            normalized = cls._normalize_smb_path(str(candidate or ""))
+            if not normalized:
+                continue
+            if any(
+                normalized == path or normalized.endswith(f"\\{path}") for path in relative_paths
+            ):
+                return True
+            if normalized.rsplit("\\", maxsplit=1)[-1] in basenames:
+                return True
+            if normalized.rsplit("\\", maxsplit=1)[-1] in share_ids:
+                return True
         return False
 
     def _email_message_record_matches(
@@ -2223,7 +2368,15 @@ class CausalityScorer(DimensionScorer):
         if trace.source_format != "cisco_asa":
             for hf in ["Computer", "hostname"]:
                 if hf in f and f[hf]:
-                    checks.append(("hostname", self._host_matches(f[hf], event.system)))
+                    if "smb_activity" in event.event_types:
+                        expected_hosts = self._smb_expected_hosts(event)
+                        host_matches = any(
+                            self._host_matches(f[hf], expected_host)
+                            for expected_host in expected_hosts
+                        )
+                    else:
+                        host_matches = self._host_matches(f[hf], event.system)
+                    checks.append(("hostname", host_matches))
                     break
         if "source_ip" in details:
             for ipf in ["IpAddress", "id.orig_h", "src_ip"]:
@@ -2242,6 +2395,16 @@ class CausalityScorer(DimensionScorer):
                     checks.append(("dst_ip", dst_ok))
                     break
         return checks
+
+    def _smb_expected_hosts(self, event: ResolvedEvent) -> set[str]:
+        """Return legitimate client and server hosts for dual-view SMB evidence."""
+        expected = {event.system}
+        ground_truth = self._smb_gt.get(event.storyline_id) or {}
+        for operation in ground_truth.get("operations") or []:
+            share = str(operation.get("share") or "")
+            if "." in share:
+                expected.add(share.split(".", maxsplit=1)[0])
+        return expected
 
     @staticmethod
     def _ip_matches(actual: Any, expected: Any) -> bool:

@@ -74,8 +74,6 @@ from evidenceforge.generation.actions.file_transfer import (
     HttpResponseFileTransferResult,
     ScpReceiverFileActionBundle,
     ScpReceiverFileRequest,
-    SmbFileTransferMetadataActionBundle,
-    SmbFileTransferMetadataRequest,
     StagedArchiveSmbReadActionBundle,
     StagedArchiveSmbReadRequest,
     file_transfer_hashes,
@@ -145,6 +143,11 @@ from evidenceforge.generation.actions.scanner_probe import (
     ScheduledScanOverlapRequest,
     WebScanActionBundle,
     WebScanRequest,
+)
+from evidenceforge.generation.actions.smb_activity import (
+    SmbActivityActionBundle,
+    SmbActivityRequest,
+    SmbActivityResult,
 )
 from evidenceforge.generation.actions.ssh_session import (
     SshSessionActionBundle,
@@ -247,8 +250,9 @@ __all__ = [
     "MachineAccountLogonRequest",
     "ScpReceiverFileActionBundle",
     "ScpReceiverFileRequest",
-    "SmbFileTransferMetadataActionBundle",
-    "SmbFileTransferMetadataRequest",
+    "SmbActivityActionBundle",
+    "SmbActivityRequest",
+    "SmbActivityResult",
     "StagedArchiveSmbReadActionBundle",
     "StagedArchiveSmbReadRequest",
     "file_transfer_hashes",

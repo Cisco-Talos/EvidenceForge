@@ -49,6 +49,7 @@ from typing import Any
 from evidenceforge.events.network import NetworkSensorObservation
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.utils.paths import sanitize_path_component
 
 logger = logging.getLogger(__name__)
@@ -164,6 +165,8 @@ class _SingleZeekWriter:
         buffer_size: int = 10000,
         sort_before_flush: bool = False,
         sort_key: Callable[[str], Any] | None = None,
+        buffer_bytes: int = 16 * 1024 * 1024,
+        external_sorting: bool = True,
     ):
         self.output_path = output_path
         self.buffer: list[str] = []
@@ -172,8 +175,22 @@ class _SingleZeekWriter:
         self._lock = Lock()
         self._sort_before_flush = sort_before_flush
         self._sort_key = sort_key
+        self._sorted_writer = (
+            ExternalSortedLineWriter(
+                output_path,
+                sort_key=sort_key or (lambda line: line),
+                buffer_size=buffer_size,
+                buffer_bytes=buffer_bytes,
+            )
+            if sort_before_flush and external_sorting
+            else None
+        )
 
     def write(self, rendered: str) -> None:
+        if self._sorted_writer is not None:
+            self._sorted_writer.write(rendered)
+            self.event_count = self._sorted_writer.event_count
+            return
         with self._lock:
             self.buffer.append(rendered)
             self.event_count += 1
@@ -181,8 +198,19 @@ class _SingleZeekWriter:
                 self._flush_unlocked()
 
     def flush(self) -> None:
+        if self._sorted_writer is not None:
+            self._sorted_writer.flush()
+            return
         with self._lock:
             self._flush_unlocked()
+            if not self._sort_before_flush or not self.output_path.exists():
+                return
+            lines = self.output_path.read_text(encoding="utf-8").splitlines()
+            lines.sort(key=self._sort_key or (lambda line: line))
+            with self.output_path.open("w", encoding="utf-8", newline="\n") as stream:
+                for line in lines:
+                    stream.write(line)
+                    stream.write("\n")
 
     def _flush_unlocked(self) -> None:
         if not self.buffer:
@@ -201,22 +229,13 @@ class _SingleZeekWriter:
         self.buffer.clear()
 
     def close(self) -> None:
-        """Flush pending lines and sort the complete NDJSON file by timestamp."""
+        """Flush pending lines and publish deterministic timestamp ordering."""
+        if self._sorted_writer is not None:
+            self._sorted_writer.close()
+            self.event_count = self._sorted_writer.event_count
+            return
         with self._lock:
             self._flush_unlocked()
-            if not self._sort_before_flush or not self.output_path.exists():
-                return
-            lines = [line for line in self.output_path.read_text(encoding="utf-8").splitlines()]
-            if not lines:
-                return
-            if self._sort_key:
-                lines.sort(key=self._sort_key)
-            else:
-                lines.sort()
-            with open(self.output_path, "w", encoding="utf-8") as f:
-                for line in lines:
-                    f.write(line)
-                    f.write("\n")
 
 
 class SensorMultiplexEmitter(LogEmitter):
@@ -232,6 +251,7 @@ class SensorMultiplexEmitter(LogEmitter):
     _flat_filename: str = ""  # Used only for explicit direct-file mode.
     _supported_types: set[str] = set()
     _sort_before_flush: bool = True
+    _external_sorting: bool = True
     _include_sensor_identity: bool = False
 
     def __init__(
@@ -285,6 +305,7 @@ class SensorMultiplexEmitter(LogEmitter):
                 self._buffer_size,
                 sort_before_flush=self._sort_before_flush,
                 sort_key=getattr(self, "_sort_key_func", self._sort_key_func),
+                external_sorting=self._external_sorting,
             )
             self._writers[safe_sensor] = writer
             logger.debug(f"Created Zeek writer: {path}")

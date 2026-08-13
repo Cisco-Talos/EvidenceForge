@@ -111,9 +111,9 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] **P2** Revisit proxy access log realism and parser compatibility; consider
   switching `proxy_access.log` from W3C Extended format to Apache/Nginx
   combined-style output with absolute URLs and CONNECT targets.
-- [ ] **P2** Design richer persona/host story packs, including
-  industry-specific bundles, once the first broad workstation-normal expansion
-  lands.
+- [ ] **P3** Design richer persona, host, and storage story packs, including optional
+  data-only industry-specific SMB share/corpus vocabulary and workflow profiles,
+  after the generic workstation and SMB storage models pass realism assessment.
 - [ ] **P2** Review shared Windows Event XML helper opportunities across
   Security and Sysmon emitters without hiding provider-specific field semantics.
 - [ ] **P2** Add output-target ingest guides covering which generated sources
@@ -169,11 +169,33 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P3** Add explicit HTTP chunked/content-coded multipart framing. Model
   chunk layout and Zeek weird behavior separately from semantic parts, and model
   top-level gzip/deflate before enabling these authored combinations.
-- [ ] **P2** Redesign SMB around canonical sessions and operations: correlate
-  share mapping, realistic paths/names and file metadata, reads and writes,
-  endpoint evidence, `smb_files.log`, and bidirectional `files.log`; widen
-  ordinary transfer size/path distributions and add organically recurring
-  documents instead of semantically assembled one-off filenames.
+- [x] **P2** Replace inferred SMB/445 file behavior with canonical Windows SMB2/3
+  storage activity: reusable sessions/trees, share mappings and mount paths,
+  stateful file operations, native Zeek SMB/file projection, and correlated
+  Windows/eCAR evidence. Generic connection events remain transport-only. See the
+  [SMB redesign worklog](docs/worklog/2026-08-13-smb-redesign.md).
+- [ ] **P3** Add generalized Zeek `kerberos.log` and `ntlm.log` projections across
+  applicable authentication protocols, including SMB, with sensor-visibility and
+  encryption semantics; do not implement SMB-private authentication emitters.
+- [ ] **P3** Evaluate capacity/free-space, quotas, disk-full outcomes, deduplication,
+  sparse allocation, and storage compression for the bounded canonical catalog.
+- [ ] **P3** Expand SMB failure and lifecycle texture beyond common outcomes,
+  including stale mappings and interrupted or partial operations.
+- [ ] **P3** Extend SMB authorization with optional dual share/NTFS ACLs, inheritance
+  and deny ordering, per-path ACLs, and public SACL/audit-policy authoring.
+- [ ] **P3** Add optional actor-native SMB endpoint companions for MRU state,
+  antivirus scans, search indexing, and backup-agent activity, gated by host role,
+  installed software, and collection profile.
+- [ ] **P3** Evaluate higher-fidelity Zeek SMB file analysis against native pcaps,
+  including compatible cross-operation FUID reuse, span/offset aggregation, timeout
+  finalization, and partial MIME/hash semantics; implement only analyst-visible value.
+- [ ] **P3** Optionally materialize SMB file artifacts and richer physical/semantic
+  lineage from canonical metadata/version state without requiring artifacts for
+  standard datasets; evaluate durable recursive directory mutation separately.
+- [ ] **P3** Extend canonical SMB based on scenario demand with selected Linux/Samba,
+  SMB1, DFS, IPC$/named-pipe/print, clustering, leases/oplocks/durable handles,
+  byte-range locks, multichannel/RDMA/QUIC, and advanced dialect/signing/authentication
+  or server-wide encryption controls.
 - [ ] **P3** Add FTP control and data-channel protocol support with
   authentication, `RETR`/`STOR`, paths and results, `ftp.log`, and directional
   file analysis.

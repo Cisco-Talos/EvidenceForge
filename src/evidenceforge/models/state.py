@@ -193,6 +193,62 @@ class OpenConnection:
 
 
 @dataclass
+class SmbSessionState:
+    """Active SMB application session attached to one authenticated transport."""
+
+    session_id: str
+    client_ip: str
+    principal: str
+    server: str
+    security_policy: str
+    logon_id: str
+    transport_uid: str
+    started_at: datetime
+    expires_at: datetime
+    closed_at: datetime | None = None
+
+
+@dataclass
+class SmbTreeState:
+    """Reusable tree connection to one share."""
+
+    tree_id: str
+    session_id: str
+    share: str
+    connected_at: datetime
+    last_activity_at: datetime
+    closed_at: datetime | None = None
+
+
+@dataclass
+class SmbHandleState:
+    """Minimal active file handle and share-mode state."""
+
+    handle_id: str
+    tree_id: str
+    file_id: str
+    opened_at: datetime
+    access: str
+    deny_write: bool = False
+    closed_at: datetime | None = None
+
+
+@dataclass
+class SmbFileState:
+    """Copy-on-write mutable view over one compiled storage file."""
+
+    file_id: str
+    share: str
+    path: str
+    version: int
+    size_bytes: int
+    mime_type: str
+    tags: tuple[str, ...] = ()
+    deleted: bool = False
+    prior_paths: tuple[str, ...] = ()
+
+
+@dataclass
 class GeneratorState:
     """Complete runtime state for log generation.
 

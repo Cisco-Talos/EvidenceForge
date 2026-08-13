@@ -203,8 +203,8 @@ class TestGroundTruthGenerator:
             intent_execution_snapshot=execution.snapshot(),
         ).build_document()
 
-        assert document.schema_version == 2
-        with pytest.raises(ValueError, match="Input should be 2"):
+        assert document.schema_version == 3
+        with pytest.raises(ValueError, match="Input should be 3"):
             type(document).model_validate(
                 {
                     **document.model_dump(mode="python"),

@@ -113,6 +113,8 @@ Before running generation:
 - Verify the scenario file exists and is valid YAML
 - Read the scenario to understand what will be generated (users, systems, time window, formats)
 - Run `eforge validate <scenario-file>` to catch issues early
+- If SMB storage is present or implied by Windows file-server/DC roles, run
+  `eforge validate <scenario-file> --show-storage` and review the compiled topology
 - Give the user a brief summary: "This will generate ~X hours of logs for Y users across Z formats"
 
 ### 2. Run Generation
@@ -158,6 +160,8 @@ scenarios/<scenario-name>/
   GROUND_TRUTH.json      ← generated canonical machine-readable ground-truth document;
                            written for every successful run and used to derive
                            GROUND_TRUTH.md
+  STORAGE_MANIFEST.json  ← compiled storage topology, public refs, corpus summaries,
+                           mappings, and resolved SMB storyline targets
   OBSERVATION_MANIFEST.json ← generated source-observation manifest for eval
   OUTPUT_TARGET.txt      ← "default" or "sof-elk"
   data/                  ← generated log files

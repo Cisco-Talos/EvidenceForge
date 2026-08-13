@@ -753,7 +753,7 @@ class TestGroundTruthJson:
     def test_record_shape_hash_and_rendered(self, scenarios_dir):
         document = _gt([_spill_event(rendered_value="'q v'")], scenarios_dir).build_document()
         rec = document.model_dump(mode="python", exclude_none=True)["events"][0]
-        assert document.schema_version == 2 and rec["kind"] == "spillage"
+        assert document.schema_version == 3 and rec["kind"] == "spillage"
         assert rec["storyline_id"] == "spill-1" and rec["record_id"] == "spill-1#0"
         assert rec["ground_truth_section"] == "storyline" and rec["emitted"] is True
         assert (

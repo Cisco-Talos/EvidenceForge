@@ -124,6 +124,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
     _flat_filename = "cisco_asa.log"
     _supported_types: set[str] = {"connection"}
     _sort_before_flush = True
+    _external_sorting = False
     _sort_key_func = staticmethod(rfc3164_timestamp_sort_key)
 
     def __init__(

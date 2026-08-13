@@ -26,6 +26,8 @@ disk:
     zeek_ssl: {bytes_per_host_second: 1.5, system_scope: all}
     zeek_smtp: {bytes_per_host_second: 0.6, system_scope: all}
     zeek_files: {bytes_per_host_second: 1.0, system_scope: all}
+    zeek_smb_files: {bytes_per_host_second: 0.8, system_scope: windows}
+    zeek_smb_mapping: {bytes_per_host_second: 0.2, system_scope: windows}
     zeek_x509: {bytes_per_host_second: 1.0, system_scope: all}
     zeek_ocsp: {bytes_per_host_second: 0.2, system_scope: all}
     zeek_dhcp: {bytes_per_host_second: 0.7, system_scope: all}

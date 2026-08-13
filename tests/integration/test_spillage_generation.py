@@ -160,7 +160,7 @@ class TestSpillageGeneration:
             "http_referrer",
         }
         for r in recs:
-            assert r["kind"] == "spillage" and r["schema_version"] == 2
+            assert r["kind"] == "spillage" and r["schema_version"] == 3
             assert r["surface"] in (
                 "shell_history",
                 "process_command_line",

@@ -58,6 +58,51 @@ _HOSTNAME_RE = re.compile(
     r"^(?!-)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?)*$"
 )
 
+_WINDOWS_RESERVED_PATH_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+
+
+def _normalize_smb_relative_path(value: str, field_name: str, *, allow_empty: bool) -> str:
+    """Normalize and validate a case-insensitive Windows share-relative path."""
+
+    normalized = value.replace("/", "\\").strip("\\")
+    if not normalized:
+        if allow_empty:
+            return ""
+        raise ValueError(f"{field_name} must name a share-relative path")
+    if re.match(r"^[a-zA-Z]:", value) or value.startswith(("\\", "/")):
+        raise ValueError(f"{field_name} must be relative to its share")
+    parts = normalized.split("\\")
+    for part in parts:
+        if not part or part in {".", ".."}:
+            raise ValueError(f"{field_name} cannot contain empty, '.' or '..' components")
+        if ":" in part:
+            raise ValueError(f"{field_name} cannot contain alternate data streams")
+        if part.endswith((" ", ".")):
+            raise ValueError(f"{field_name} components cannot end in a space or period")
+        stem = part.split(".", 1)[0].upper()
+        if stem in _WINDOWS_RESERVED_PATH_NAMES:
+            raise ValueError(f"{field_name} contains reserved Windows name {part!r}")
+    return "\\".join(parts)
+
+
+def _validate_windows_absolute_path(value: str, field_name: str) -> str:
+    """Validate an absolute Windows drive path and normalize separators."""
+
+    normalized = value.replace("/", "\\")
+    if not re.match(r"^[a-zA-Z]:\\", normalized):
+        raise ValueError(f"{field_name} must be an absolute Windows drive path")
+    suffix = normalized[3:]
+    if suffix:
+        _normalize_smb_relative_path(suffix, field_name, allow_empty=True)
+    return normalized
+
 
 def _validate_hostname(v: str, field_name: str = "hostname") -> str:
     """Validate a bare hostname/FQDN — reject schemes, ports, paths, whitespace."""
@@ -862,6 +907,217 @@ class ConnectionEventSpec(_IdsAttachableEventSpec):
         if v is not None:
             _validate_hostname(v, "connection.hostname")
         return v
+
+
+class SmbFileSelector(BaseModel):
+    """AND-combined selector over a compiled share catalog."""
+
+    path_glob: str | None = None
+    extensions: list[str] = Field(default_factory=list)
+    tags_any: list[str] = Field(default_factory=list)
+    min_size_bytes: int | None = Field(default=None, ge=0)
+    max_size_bytes: int | None = Field(default=None, ge=0)
+
+    @field_validator("extensions")
+    @classmethod
+    def normalize_extensions(cls, value: list[str]) -> list[str]:
+        normalized = [
+            item.lower() if item.startswith(".") else f".{item.lower()}" for item in value
+        ]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("selector extensions must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_selector(self) -> "SmbFileSelector":
+        if not any(
+            (
+                self.path_glob,
+                self.extensions,
+                self.tags_any,
+                self.min_size_bytes is not None,
+                self.max_size_bytes is not None,
+            )
+        ):
+            raise ValueError("SMB selector must define at least one criterion")
+        if (
+            self.min_size_bytes is not None
+            and self.max_size_bytes is not None
+            and self.min_size_bytes > self.max_size_bytes
+        ):
+            raise ValueError("selector min_size_bytes must be <= max_size_bytes")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class SmbShareLocation(BaseModel):
+    """A location inside a modeled SMB disk share."""
+
+    type: Literal["share"] = "share"
+    share: str
+    file_ref: str | None = None
+    path: str | None = None
+    selector: SmbFileSelector | None = None
+
+    @field_validator("path")
+    @classmethod
+    def normalize_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_smb_relative_path(value, "SMB share path", allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_locator(self) -> "SmbShareLocation":
+        locator_count = sum(
+            value is not None for value in (self.file_ref, self.path, self.selector)
+        )
+        if locator_count > 1:
+            raise ValueError("share location accepts at most one of file_ref, path, or selector")
+        if self.file_ref == "auto" or self.path == "auto":
+            raise ValueError("omit the SMB locator to request automatic selection")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class SmbClientLocation(BaseModel):
+    """A local path on the initiating Windows client."""
+
+    type: Literal["client"] = "client"
+    path: str | None = None
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_windows_absolute_path(value, "SMB client path")
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+SmbLocation = Annotated[SmbShareLocation | SmbClientLocation, Discriminator("type")]
+
+
+class SmbExternalClient(BaseModel):
+    """Unmodeled SMB initiator that produces no client-host telemetry."""
+
+    type: Literal["external"] = "external"
+    ip: str
+    hostname: str | None = None
+
+    @field_validator("ip")
+    @classmethod
+    def validate_ip(cls, value: str) -> str:
+        try:
+            ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise ValueError(f"SMB external client IP is invalid: {value!r}") from exc
+        return value
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, value: str | None) -> str | None:
+        if value is not None:
+            return _validate_hostname(value, "smb_activity.client.hostname")
+        return value
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class SmbBatchSpec(BaseModel):
+    """Bounded selection controls for one SMB activity burst."""
+
+    count: int | None = Field(default=None, gt=0)
+    fraction: float | None = Field(default=None, gt=0.0, le=1.0)
+    all: bool | None = None
+    duration: str | None = None
+
+    @field_validator("duration")
+    @classmethod
+    def validate_duration(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"(\d+(?:ms|[dhms]))+", value):
+            raise ValueError("SMB batch duration must be a duration like '4m' or '30s'")
+        return value
+
+    @model_validator(mode="after")
+    def validate_mode(self) -> "SmbBatchSpec":
+        selected = sum(
+            (
+                self.count is not None,
+                self.fraction is not None,
+                self.all is True,
+            )
+        )
+        if selected != 1:
+            raise ValueError("SMB batch requires exactly one of count, fraction, or all: true")
+        if self.all is False:
+            raise ValueError("omit SMB batch all instead of setting it to false")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class SmbActivityEventSpec(_IdsAttachableEventSpec):
+    """Canonical SMB disk-share activity."""
+
+    type: Literal["smb_activity"] = "smb_activity"
+    operation: Literal["browse", "read", "create", "update", "copy", "move", "delete"]
+    purpose: Literal[
+        "auto",
+        "interactive",
+        "administrative",
+        "software",
+        "backup",
+        "collection",
+        "ransomware",
+    ] = "auto"
+    target: SmbShareLocation | None = None
+    source: SmbLocation | None = None
+    destination: SmbLocation | None = None
+    batch: SmbBatchSpec | None = None
+    outcome: Literal["auto", "success", "access_denied", "not_found", "sharing_violation"] = "auto"
+    path_style: Literal["auto", "unc", "mapped"] = "auto"
+    mapping: str | None = None
+    client: SmbExternalClient | None = None
+
+    @model_validator(mode="after")
+    def validate_operation_shape(self) -> "SmbActivityEventSpec":
+        if self.operation in {"copy", "move"}:
+            if self.target is not None or self.source is None or self.destination is None:
+                raise ValueError(
+                    f"SMB {self.operation} requires source and destination and forbids target"
+                )
+            if not isinstance(self.source, SmbShareLocation) and not isinstance(
+                self.destination, SmbShareLocation
+            ):
+                raise ValueError(f"SMB {self.operation} requires at least one share location")
+            if isinstance(self.destination, SmbShareLocation) and (
+                self.destination.file_ref is not None or self.destination.selector is not None
+            ):
+                raise ValueError("SMB destinations cannot use file_ref or selector")
+            if (
+                self.batch is not None
+                and isinstance(self.destination, SmbShareLocation)
+                and self.destination.path is not None
+            ):
+                raise ValueError("batched SMB destinations cannot use one explicit file path")
+        elif self.target is None or self.source is not None or self.destination is not None:
+            raise ValueError(f"SMB {self.operation} requires target and forbids source/destination")
+
+        if self.operation == "create" and self.target is not None:
+            if self.target.file_ref is not None or self.target.selector is not None:
+                raise ValueError("SMB create target must use a missing path or automatic selection")
+        if self.operation == "create" and self.outcome == "sharing_violation":
+            raise ValueError("SMB create cannot assert sharing_violation on a missing path")
+        if self.outcome == "not_found" and (self.target is None or self.target.path is None):
+            raise ValueError("SMB not_found requires an explicit target path")
+        if self.path_style == "mapped" and self.client is not None:
+            raise ValueError("external SMB clients cannot use mapped path presentation")
+        if self.mapping is not None and self.path_style == "unc":
+            raise ValueError("SMB mapping cannot be combined with path_style: unc")
+        return self
 
 
 class SshSessionEventSpec(_IdsAttachableEventSpec):
@@ -1740,6 +1996,7 @@ EventSpec = Annotated[
     | FailedLogonEventSpec
     | LogoffEventSpec
     | ConnectionEventSpec
+    | SmbActivityEventSpec
     | SshSessionEventSpec
     | RdpSessionEventSpec
     | AccountCreatedEventSpec
@@ -2337,6 +2594,220 @@ class EmailConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class StorageVolumeConfig(BaseModel):
+    """One Windows storage volume or folder-mounted volume."""
+
+    id: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    mount: str
+    filesystem: Literal["ntfs", "refs"] = "ntfs"
+    label: str | None = None
+
+    @field_validator("mount")
+    @classmethod
+    def validate_mount(cls, value: str) -> str:
+        return _validate_windows_absolute_path(value, "storage volume mount")
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageAccessConfig(BaseModel):
+    """Effective access groups for one share."""
+
+    read: list[str] = Field(default_factory=list)
+    modify: list[str] = Field(default_factory=list)
+    admin: list[str] = Field(default_factory=list)
+    deny: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_unique_entries(self) -> "StorageAccessConfig":
+        for field_name in ("read", "modify", "admin", "deny"):
+            values = getattr(self, field_name)
+            if len(values) != len({value.casefold() for value in values}):
+                raise ValueError(f"storage access {field_name} entries must be unique")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageSeedFileConfig(BaseModel):
+    """Explicit evidence-addressable seed file in one share."""
+
+    ref: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    path: str
+    size_bytes: int = Field(..., ge=0)
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("path")
+    @classmethod
+    def normalize_path(cls, value: str) -> str:
+        return _normalize_smb_relative_path(value, "storage seed file path", allow_empty=False)
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageShareConfig(BaseModel):
+    """Explicit SMB disk share rooted on one configured volume."""
+
+    id: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    name: str
+    volume: str
+    root: str = ""
+    preset: Literal[
+        "collaboration",
+        "homes",
+        "software",
+        "backup",
+        "dc_policy",
+        "department",
+    ] = "collaboration"
+    population: Literal["auto", "small", "medium", "large"] | None = None
+    activity: Literal["low", "normal", "high"] | None = None
+    encryption: Literal["not_required", "required"] = "not_required"
+    access: StorageAccessConfig | None = None
+    seed_files: list[StorageSeedFileConfig] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not value or any(character in value for character in "\\/:"):
+            raise ValueError("storage share name cannot be empty or contain path separators")
+        return value
+
+    @field_validator("root")
+    @classmethod
+    def normalize_root(cls, value: str) -> str:
+        return _normalize_smb_relative_path(value, "storage share root", allow_empty=True)
+
+    @model_validator(mode="after")
+    def validate_seed_files(self) -> "StorageShareConfig":
+        refs = [seed.ref.casefold() for seed in self.seed_files]
+        paths = [seed.path.casefold() for seed in self.seed_files]
+        if len(refs) != len(set(refs)):
+            raise ValueError("storage seed file refs must be unique within a share")
+        if len(paths) != len(set(paths)):
+            raise ValueError("storage seed file paths must be case-insensitively unique")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageShareOverrideConfig(BaseModel):
+    """Partial override for a documented generated share reference."""
+
+    share: str
+    population: Literal["auto", "small", "medium", "large"] | None = None
+    activity: Literal["low", "normal", "high"] | None = None
+    encryption: Literal["not_required", "required"] | None = None
+    access: StorageAccessConfig | None = None
+    seed_files: list[StorageSeedFileConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_override(self) -> "StorageShareOverrideConfig":
+        if not any(
+            (
+                self.population is not None,
+                self.activity is not None,
+                self.encryption is not None,
+                self.access is not None,
+                bool(self.seed_files),
+            )
+        ):
+            raise ValueError("storage share override must change at least one field")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageServerConfig(BaseModel):
+    """Storage configuration for one modeled Windows server."""
+
+    system: str
+    presets: list[Literal["collaboration", "homes", "software", "backup", "dc_policy"]] | None = (
+        None
+    )
+    audit: Literal["minimal", "standard", "high"] = "standard"
+    default_volume: str | None = None
+    volumes: list[StorageVolumeConfig] | None = None
+    shares: list[StorageShareConfig] = Field(default_factory=list)
+    share_overrides: list[StorageShareOverrideConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_server_storage(self) -> "StorageServerConfig":
+        if self.presets is not None and len(self.presets) != len(set(self.presets)):
+            raise ValueError("storage server presets must be unique")
+        if self.volumes is not None and not self.volumes:
+            raise ValueError("storage server volumes cannot be an empty list")
+        volumes = self.volumes or []
+        volume_ids = [volume.id.casefold() for volume in volumes]
+        mounts = [volume.mount.casefold().rstrip("\\") for volume in volumes]
+        if len(volume_ids) != len(set(volume_ids)):
+            raise ValueError("storage volume IDs must be unique per server")
+        if len(mounts) != len(set(mounts)):
+            raise ValueError("storage volume mounts must be unique per server")
+        if len(volumes) > 1 and self.default_volume is None:
+            raise ValueError("storage server with multiple volumes requires default_volume")
+        if self.default_volume is not None and self.default_volume.casefold() not in set(
+            volume_ids
+        ):
+            raise ValueError("storage server default_volume must reference a configured volume")
+        share_ids = [share.id.casefold() for share in self.shares]
+        share_names = [share.name.casefold() for share in self.shares]
+        if len(share_ids) != len(set(share_ids)) or len(share_names) != len(set(share_names)):
+            raise ValueError("storage share IDs and names must be unique per server")
+        volume_id_set = set(volume_ids)
+        for share in self.shares:
+            if volumes is not None and share.volume.casefold() not in volume_id_set:
+                raise ValueError(
+                    f"storage share {share.id!r} references unknown volume {share.volume!r}"
+                )
+        override_refs = [override.share.casefold() for override in self.share_overrides]
+        if len(override_refs) != len(set(override_refs)):
+            raise ValueError("storage share override references must be unique")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageMappingConfig(BaseModel):
+    """Drive mapping available to an audience of modeled clients."""
+
+    id: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    share: str
+    audience: TrafficAudience = Field(default_factory=TrafficAudience)
+    drive: str | None = None
+    lifecycle: Literal["persistent", "on_demand"] = "persistent"
+
+    @field_validator("drive")
+    @classmethod
+    def validate_drive(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"[H-Zh-z]:", value):
+            raise ValueError("storage mapping drive must be H: through Z:")
+        return value.upper() if value is not None else None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageConfig(BaseModel):
+    """Scenario storage topology and workload controls."""
+
+    population: Literal["auto", "small", "medium", "large"] = "auto"
+    activity: Literal["low", "normal", "high"] = "normal"
+    servers: list[StorageServerConfig] = Field(default_factory=list)
+    mappings: list[StorageMappingConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_unique_ids(self) -> "StorageConfig":
+        systems = [server.system.casefold() for server in self.servers]
+        mappings = [mapping.id.casefold() for mapping in self.mappings]
+        if len(systems) != len(set(systems)):
+            raise ValueError("environment.storage server systems must be unique")
+        if len(mappings) != len(set(mappings)):
+            raise ValueError("environment.storage mapping IDs must be unique")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 class StaleAccount(BaseModel):
     """Stale/inactive account that generates background failed logon noise.
 
@@ -2402,6 +2873,10 @@ class Environment(BaseModel):
     groups: list[Group] | None = Field(default_factory=list)
     network: NetworkConfig | None = Field(
         None, description="Optional network topology and sensor config"
+    )
+    storage: StorageConfig = Field(
+        default_factory=StorageConfig,
+        description="Deterministic Windows SMB2/3 disk-share topology and workload controls.",
     )
     proxy: ProxyConfig = Field(
         default_factory=ProxyConfig,
