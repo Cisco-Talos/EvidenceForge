@@ -98,6 +98,7 @@ class _NetworkOccurrenceDraft:
     ocsp: Any = None
     ocsp_transaction: Any = None
     pe: Any = None
+    pe_analyses: list[Any] = field(default_factory=list)
     proxy: Any = None
     firewall: Any = None
     parent_action_group_id: str | None = None
@@ -133,6 +134,7 @@ class _NetworkOccurrenceDraft:
             ocsp=self.ocsp,
             ocsp_transaction=self.ocsp_transaction,
             pe=self.pe,
+            pe_analyses=self.pe_analyses,
             proxy=self.proxy,
             firewall=self.firewall,
             lifecycle=ActionLifecycleContext(
@@ -283,6 +285,102 @@ class NetworkTransactionPlanner:
         )
         return True
 
+    def _emit_http_multipart_endpoint_reads(
+        self,
+        event: Any,
+        source_system: Any | None,
+        target_system: Any | None,
+        source_pid: int,
+        source_process: Any | None,
+        endpoint_time: datetime,
+    ) -> None:
+        """Emit source-native file reads for locally owned transmitting multipart parts."""
+
+        http = event.protocol.http
+        network = event.network
+        if http is None or network is None:
+            return
+
+        from evidenceforge.events.base import OccurrenceBuilder
+        from evidenceforge.events.contexts import AuthContext, FileContext, ProcessContext
+
+        effective_source_pid = (
+            source_pid if source_pid > 0 else int(getattr(source_process, "pid", -1) or -1)
+        )
+        directions = (
+            (http.request_multipart, source_system, effective_source_pid, source_process),
+            (http.response_multipart, target_system, network.responding_pid, None),
+        )
+        for multipart, system, pid, canonical_process in directions:
+            if multipart is None or system is None or pid <= 0:
+                continue
+            if multipart.local_reads_emitted:
+                continue
+            running = self._executor.state_manager.get_process(system.hostname, pid)
+            if running is None and canonical_process is None:
+                continue
+            local_parts = [part for part in multipart.leaf_parts() if part.local_source_path]
+            for index, part in enumerate(local_parts):
+                transfer_anchor = endpoint_time
+                read_time = transfer_anchor - timedelta(milliseconds=max(1, 150 - min(index, 100)))
+                process_start = (
+                    running.start_time
+                    if running is not None
+                    else canonical_process.start_time
+                    if canonical_process is not None
+                    else None
+                )
+                if process_start is not None:
+                    read_time = max(
+                        read_time,
+                        process_start + timedelta(milliseconds=1 + index),
+                    )
+                username = (
+                    running.username
+                    if running is not None
+                    else canonical_process.username
+                    if canonical_process is not None
+                    else ""
+                )
+                logon_id = (
+                    running.logon_id
+                    if running is not None
+                    else canonical_process.logon_id
+                    if canonical_process is not None
+                    else ""
+                )
+                self._executor.dispatcher.dispatch_builder(
+                    OccurrenceBuilder(
+                        timestamp=read_time,
+                        event_type="file_read",
+                        src_host=self._executor._build_host_context(system),
+                        auth=AuthContext(
+                            username=username,
+                            logon_id=logon_id,
+                        ),
+                        process=ProcessContext(
+                            pid=pid,
+                            parent_pid=(
+                                running.parent_pid
+                                if running is not None
+                                else canonical_process.parent_pid
+                            ),
+                            image=(
+                                running.image if running is not None else canonical_process.image
+                            ),
+                            command_line=(
+                                running.command_line
+                                if running is not None
+                                else canonical_process.command_line
+                            ),
+                            username=username,
+                            logon_id=logon_id,
+                            start_time=process_start,
+                        ),
+                        file=FileContext(path=part.local_source_path, action="read", pid=pid),
+                    )
+                )
+
     def execute(self, request: NetworkConnectionRequest) -> str:
         """Expand one network connection request into canonical evidence."""
         from evidenceforge.generation.actions.file_transfer import (
@@ -319,7 +417,6 @@ class NetworkTransactionPlanner:
         x509_chain = request.x509_chain
         ids_alerts = list(request.ids_alerts)
         http = request.http
-        caller_supplied_http = http is not None
         file_transfer = request.file_transfer
         file_transfers = request.file_transfers
         pe = request.pe
@@ -452,7 +549,9 @@ class NetworkTransactionPlanner:
         hostname_was_explicit = hostname not in (None, "")
         hostname_from_reverse_dns = False
         if hostname is None:
-            reverse_hostname = generator_module.REVERSE_DNS.get(dst_ip)
+            reverse_hostname = executor._scenario_fqdn_for_ip(
+                dst_ip
+            ) or generator_module.REVERSE_DNS.get(dst_ip)
             if reverse_hostname is not None:
                 hostname = reverse_hostname
                 hostname_from_reverse_dns = True
@@ -1170,7 +1269,7 @@ class NetworkTransactionPlanner:
                     history = {
                         "REJ": "Sr",
                         "S0": "S",
-                        "OTH": "Cc",
+                        "OTH": rng.choice(("DAd", "DdA", "ADad")),
                         "S2": "ShADadF",
                         "S3": "ShADadf",
                         "RSTO": "ShADaR",
@@ -1234,6 +1333,8 @@ class NetworkTransactionPlanner:
                         tcp_weights = [entry[1] for entry in candidates]
                 entry = rng.choices(tcp_entries, weights=tcp_weights, k=1)[0]
                 conn_state, _, history = entry
+                if conn_state == "OTH":
+                    history = rng.choice(("DAd", "DdA", "ADad"))
             else:
                 conn_state = "S0"
                 history = "S"
@@ -1788,6 +1889,8 @@ class NetworkTransactionPlanner:
             event.file_transfers = list(file_transfers)
         if pe is not None:
             event.pe = pe
+        if request.pe_analyses:
+            event.pe_analyses = list(request.pe_analyses)
         if ocsp is not None:
             event.ocsp = ocsp
         if request.ocsp_transaction is not None:
@@ -2294,11 +2397,10 @@ class NetworkTransactionPlanner:
             )
 
         if not suppress_application_side_effects:
-            generator_module._attach_http_response_file_transfer(
+            generator_module._attach_http_file_transfers(
                 event,
                 dst_ip=dst_ip,
                 rng=rng,
-                probabilistic_file_analysis=not caller_supplied_http,
             )
 
         if (
@@ -2771,6 +2873,16 @@ class NetworkTransactionPlanner:
             )
             executor._last_connection_effective_time = event.timestamp
             executor._last_connection_effective_transaction_id = event.network.stable_id
+            executor._last_connection_http_context = event.protocol.http
+            executor._last_connection_file_transfers = event.protocol.file_transfers
+        self._emit_http_multipart_endpoint_reads(
+            event,
+            resolved_source_system or source_system,
+            target_system,
+            pid,
+            process_ctx,
+            request.time,
+        )
         network_identifiers_by_format = executor.dispatcher.dispatch_builder(event) or {}
         executor._maybe_emit_ocsp_transaction(event)
         if generic_ssh_preauth_pid is not None and target_system is not None:

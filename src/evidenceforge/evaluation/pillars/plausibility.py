@@ -371,6 +371,12 @@ class PlausibilityScorer(DimensionScorer):
         if len(failures) < 10:
             failures.extend(email_failures[: 10 - len(failures)])
 
+        http_matched, http_agreeing, http_failures = _score_http_file_consistency(records)
+        total_matched += http_matched
+        total_agreeing += http_agreeing
+        if len(failures) < 10:
+            failures.extend(http_failures[: 10 - len(failures)])
+
         crypto_matched, crypto_agreeing, crypto_failures = (
             _score_cryptographic_protocol_consistency(records)
         )
@@ -908,6 +914,100 @@ def _score_email_evidence_consistency(
             elif len(failures) < 10:
                 failures.append(f"email artifact subject disagrees for msg_id {msg_id}")
 
+    return matched, agreeing, failures
+
+
+def _score_http_file_consistency(
+    records: dict[str, list[ParsedRecord]],
+) -> tuple[int, int, list[str]]:
+    """Return HTTP-to-files FUID, direction, MIME, size, and UID agreement."""
+
+    file_index = {
+        (record.source_instance, str(record.fields.get("fuid"))): record
+        for record in records.get("zeek_files", [])
+        if record.fields.get("fuid")
+    }
+    matched = 0
+    agreeing = 0
+    failures: list[str] = []
+
+    def check(condition: bool, message: str) -> None:
+        nonlocal matched, agreeing
+        matched += 1
+        if condition:
+            agreeing += 1
+        elif len(failures) < 10:
+            failures.append(message)
+
+    for http in records.get("zeek_http", []):
+        for side, is_orig, body_field in (
+            ("orig", True, "request_body_len"),
+            ("resp", False, "response_body_len"),
+        ):
+            fuids = http.fields.get(f"{side}_fuids") or []
+            if not isinstance(fuids, list):
+                fuids = [fuids]
+            mime_types = http.fields.get(f"{side}_mime_types") or []
+            filenames = http.fields.get(f"{side}_filenames") or []
+            referenced_files: list[ParsedRecord] = []
+            for fuid in fuids:
+                file_record = file_index.get((http.source_instance, str(fuid)))
+                check(file_record is not None, f"HTTP {side} fuid {fuid} has no files.log row")
+                if file_record is None:
+                    continue
+                referenced_files.append(file_record)
+                fields = file_record.fields
+                check(
+                    fields.get("is_orig") is is_orig, f"HTTP {side} fuid {fuid} direction differs"
+                )
+                conn_uids = fields.get("conn_uids") or []
+                check(http.fields.get("uid") in conn_uids, f"HTTP {side} fuid {fuid} UID differs")
+            body_len = http.fields.get(body_field)
+            if isinstance(body_len, int) and referenced_files:
+                ordinary = (
+                    len(referenced_files) == 1
+                    and referenced_files[0].fields.get("total_bytes") == body_len
+                )
+                if ordinary:
+                    check(
+                        referenced_files[0].fields.get("total_bytes") == body_len,
+                        f"HTTP {side} fuid {fuids[0]} size differs",
+                    )
+                else:
+                    observed_leaf_bytes = sum(
+                        int(record.fields.get("seen_bytes") or 0) for record in referenced_files
+                    )
+                    check(
+                        observed_leaf_bytes <= body_len,
+                        f"HTTP {side} multipart leaf bytes exceed the entity body",
+                    )
+
+            candidate_mimes = [
+                record.fields.get("mime_type")
+                for record in referenced_files
+                if record.fields.get("mime_type")
+            ]
+            candidate_filenames = [
+                record.fields.get("filename")
+                for record in referenced_files
+                if record.fields.get("filename")
+            ]
+            if mime_types:
+                check(
+                    all(
+                        candidate_mimes.count(value) >= mime_types.count(value)
+                        for value in mime_types
+                    ),
+                    f"HTTP {side} sparse MIME projection differs from files.log",
+                )
+            if filenames:
+                check(
+                    all(
+                        candidate_filenames.count(value) >= filenames.count(value)
+                        for value in filenames
+                    ),
+                    f"HTTP {side} sparse filename projection differs from files.log",
+                )
     return matched, agreeing, failures
 
 

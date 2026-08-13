@@ -136,7 +136,7 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P1** Give one-shot Windows foreground tools executable-aware lifetimes so argument-less
   `runas.exe`, `git`, `kubectl`, `wevtutil`, and similar commands do not survive until interactive
   session teardown unless an explicit hung/long-running outcome owns that lifecycle.
-- [ ] **P1** Add source-side file-read, archive, browser-upload, or
+- [x] **P1** Add source-side file-read, archive, browser-upload, or
   proxy-client staging evidence around large outbound HTTP POST/upload flows so
   multi-hundred-MB uploads have plausible endpoint preparation and ownership.
 - [ ] **P1** Model Windows inbound/server-side endpoint network telemetry for
@@ -159,9 +159,27 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P1** Improve public PTR, TLS, and provider realism so public reverse DNS
   is sparse/provider-style rather than forward-hostname-derived, and
   SNI/certificate issuer/provider relationships remain plausible.
-- [ ] **P2** Widen ordinary SMB file-transfer filename, path, and size
-  distributions; add organically recurring documents and fewer semantically
-  assembled one-off business filenames.
+- [x] **P2** Add true HTTP multipart transactions with ordered/nested parts,
+  per-part size/MIME/filename/FUID metadata, envelope overhead, curl form parsing,
+  multiple correlated local file reads, proxy legs, and span-aware loss. See the
+  [research/implementation record](docs/worklog/2026-08-12-http-multipart-zeek-research.md).
+- [ ] **P2** Add HTTP range identity and reassembly for 206 and
+  `multipart/byteranges`, including cross-transaction and cross-connection FUID
+  reuse, sparse offsets, instance size, overlap, and missing-range semantics.
+- [ ] **P3** Add explicit HTTP chunked/content-coded multipart framing. Model
+  chunk layout and Zeek weird behavior separately from semantic parts, and model
+  top-level gzip/deflate before enabling these authored combinations.
+- [ ] **P2** Redesign SMB around canonical sessions and operations: correlate
+  share mapping, realistic paths/names and file metadata, reads and writes,
+  endpoint evidence, `smb_files.log`, and bidirectional `files.log`; widen
+  ordinary transfer size/path distributions and add organically recurring
+  documents instead of semantically assembled one-off filenames.
+- [ ] **P3** Add FTP control and data-channel protocol support with
+  authentication, `RETR`/`STOR`, paths and results, `ftp.log`, and directional
+  file analysis.
+- [ ] **P3** Add TLS client-certificate/mTLS profiles with client chains,
+  `client_cert_chain_fuids`, X.509/file projection, and TLS-version-specific
+  visibility semantics.
 - [ ] **P2** Add friction and timing texture to staged intrusion/exfiltration
   chains, including retries, failed commands, dwell-time slack, partial cleanup,
   tool residue, competing benign traffic, and less perfectly staged large-file
@@ -205,7 +223,7 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P2** Improve eCAR `FLOW` actor semantics so rows with PIDs either carry
   coherent process/principal context or intentionally omit actor identity when
   endpoint attribution is unavailable.
-- [ ] **P2** Enforce Zeek file/connection timing contracts so `files.log` rows
+- [x] **P2** Enforce Zeek file/connection timing contracts so `files.log` rows
   referencing a connection UID land inside that visible connection interval, or
   the connection timing expands to cover the file observation.
 - [ ] **P2** Improve Linux eCAR thread semantics so `tid` is populated from a

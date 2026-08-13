@@ -44,6 +44,32 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_http_file_mime(self, monkeypatch):
+        from evidenceforge.generation.activity import http_file_profiles
+
+        monkeypatch.setattr(
+            http_file_profiles,
+            "load_http_file_profiles",
+            lambda: {
+                "extension_mime_types": {".rar": "not-a-mime"},
+                "request_profiles": {
+                    "browser_form": "application/x-www-form-urlencoded",
+                    "json_api": "application/json",
+                    "binary": "application/octet-stream",
+                    "json_uri_tokens": ["/api/"],
+                },
+            },
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "http_file_profiles.yaml"
+            and "invalid MIME type" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_web_scan_rate_cap(self, monkeypatch):
         from evidenceforge.config import web_scan_presets
 

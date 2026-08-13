@@ -93,13 +93,13 @@ signatures:
       application_protocol: tls
       inspection: metadata
       semantic_claim: response_content
-  - {sid: 2016360, rev: 1, message: "ET INFO Observed Discord Domain (discordapp.com)", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
-  - {sid: 2023882, rev: 2, message: "ET INFO Observed Telegram Domain (t.me)", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
-  - {sid: 2025712, rev: 2, message: "ET INFO External IP Lookup Domain (ipify.org)", classification: "misc-activity", priority: 2, proto: tcp, dst_port: 443, direction: out}
-  - {sid: 2024897, rev: 3, message: "ET INFO External IP Lookup (ipinfo.io)", classification: "misc-activity", priority: 2, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2016360, rev: 1, message: "ET INFO Observed Discord Domain (discordapp.com)", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out, predicate: {phase: established, application_protocol: tls, tls_server_names: [discordapp.com, "*.discordapp.com"]}}
+  - {sid: 2023882, rev: 2, message: "ET INFO Observed Telegram Domain (t.me)", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out, predicate: {phase: established, application_protocol: tls, tls_server_names: [t.me, "*.t.me"]}}
+  - {sid: 2025712, rev: 2, message: "ET INFO External IP Lookup Domain (ipify.org)", classification: "misc-activity", priority: 2, proto: tcp, dst_port: 443, direction: out, predicate: {phase: established, application_protocol: tls, tls_server_names: [ipify.org, "*.ipify.org"]}}
+  - {sid: 2024897, rev: 3, message: "ET INFO External IP Lookup (ipinfo.io)", classification: "misc-activity", priority: 2, proto: tcp, dst_port: 443, direction: out, predicate: {phase: established, application_protocol: tls, tls_server_names: [ipinfo.io, "*.ipinfo.io"]}}
   - {sid: 2028401, rev: 1, message: "ET JA3 Hash - Possible Malware - Various RAT", classification: "potentially-bad-traffic", priority: 1, proto: tcp, dst_port: 443, direction: out}
-  - {sid: 2024290, rev: 2, message: "ET INFO Observed AWS S3 Domain (s3.amazonaws.com)", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
-  - {sid: 2025991, rev: 2, message: "ET INFO Observed Cloudflare DNS Over HTTPS Domain (cloudflare-dns.com)", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2024290, rev: 2, message: "ET INFO Observed AWS S3 Domain (s3.amazonaws.com)", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out, predicate: {phase: established, application_protocol: tls, tls_server_names: [s3.amazonaws.com, "*.s3.amazonaws.com"]}}
+  - {sid: 2025991, rev: 2, message: "ET INFO Observed Cloudflare DNS Over HTTPS Domain (cloudflare-dns.com)", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out, predicate: {phase: established, application_protocol: tls, tls_server_names: [cloudflare-dns.com, "*.cloudflare-dns.com"]}}
   - {sid: 2023672, rev: 2, message: "ET INFO Python-urllib Outbound Request", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
   - {sid: 2022476, rev: 1, message: "ET INFO LibreSSL Outbound Connection", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
 

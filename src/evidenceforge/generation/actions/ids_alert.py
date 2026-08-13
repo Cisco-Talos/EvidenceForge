@@ -224,6 +224,7 @@ def _predicate_from_signature(
         http_methods=tuple(spec.http_methods),
         http_statuses=tuple(spec.http_statuses),
         requires_http_body=spec.requires_http_body,
+        tls_server_names=tuple(spec.tls_server_names),
         file_mime_types=tuple(spec.file_mime_types),
         semantic_claim=spec.semantic_claim,
     )
@@ -301,6 +302,14 @@ def ids_alert_matches_transaction(
         return False
     if predicate.requires_http_body and (http is None or int(http.request_body_len or 0) <= 0):
         return False
+    if predicate.tls_server_names:
+        server_name = str(getattr(ssl, "server_name", "") or "").lower().rstrip(".")
+        if not any(
+            server_name == expected
+            or (expected.startswith("*.") and server_name.endswith(expected[1:]))
+            for expected in predicate.tls_server_names
+        ):
+            return False
     if predicate.semantic_claim == "dns_query" and dns is None:
         return False
     if predicate.semantic_claim == "dns_response" and (dns is None or not has_response):

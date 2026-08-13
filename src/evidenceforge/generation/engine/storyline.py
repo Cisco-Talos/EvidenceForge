@@ -66,6 +66,7 @@ from evidenceforge.generation.activity.external_actor_profiles import pick_exter
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
     apply_transfer_size_variance,
+    infer_mime_type_from_path,
     is_stable_resource_path,
     normalize_mime_type_for_path,
     response_size_for_mime,
@@ -1406,7 +1407,9 @@ class StorylineMixin:
         if not hasattr(self, "_storyline_host_available_at"):
             self._storyline_host_available_at: dict[tuple[str, str], datetime] = {}
 
-    def _record_last_storyline_process(self, system: System, pid: int, image: str) -> None:
+    def _record_last_storyline_process(
+        self, system: System, pid: int, image: str, command_line: str = ""
+    ) -> None:
         """Record the last storyline process by host for later network provenance."""
         if not hasattr(self, "_last_storyline_process_by_system"):
             self._last_storyline_process_by_system: dict[str, tuple[int, str]] = {}
@@ -1414,6 +1417,14 @@ class StorylineMixin:
         self._last_storyline_pid = pid
         self._last_storyline_image = image
         self._last_storyline_system = system.hostname
+        if command_line:
+            if not hasattr(self, "_last_storyline_process_command_by_system"):
+                self._last_storyline_process_command_by_system: dict[str, tuple[int, str, str]] = {}
+            self._last_storyline_process_command_by_system[system.hostname] = (
+                pid,
+                image,
+                command_line,
+            )
 
     def _record_storyline_process_ref(
         self,
@@ -2410,6 +2421,280 @@ class StorylineMixin:
         return None
 
     @staticmethod
+    def _http_request_entity_from_command(command_line: str, request_body_len: int) -> Any | None:
+        """Resolve a curl upload's local and wire-visible entity metadata."""
+
+        if not command_line or "curl" not in command_line.casefold() or request_body_len <= 0:
+            return None
+        try:
+            windows_command = bool(re.search(r"(?:^|\s)[A-Za-z]:\\", command_line))
+            tokens = shlex.split(command_line, posix=not windows_command)
+        except ValueError:
+            return None
+        if any(
+            token in {"-F", "--form", "--form-string"}
+            or token.startswith(("--form=", "--form-string="))
+            for token in tokens
+        ):
+            return None
+        local_path = ""
+        wire_filename = ""
+        encoding = "raw"
+        for index, token in enumerate(tokens):
+            value = tokens[index + 1].strip("\"'") if index + 1 < len(tokens) else ""
+            candidate = ""
+            if token.startswith("--data-binary="):
+                data_value = token.split("=", 1)[1].strip("\"'")
+                candidate = data_value[1:] if data_value.startswith("@") else ""
+            elif token == "--data-binary":
+                candidate = value[1:] if value.startswith("@") else ""
+            elif token.startswith("--upload-file="):
+                candidate = token.split("=", 1)[1].strip("\"'")
+            elif token in {"--upload-file", "-T"}:
+                candidate = value
+            if candidate:
+                if candidate != "-":
+                    local_path = candidate
+                    break
+            if token in {"-F", "--form"} and "@" in value:
+                upload_value = value.split("@", 1)[1]
+                local_path = upload_value.split(";", 1)[0]
+                if local_path == "-":
+                    local_path = ""
+                    continue
+                filename_match = re.search(r"(?:^|;)filename=([^;]+)", upload_value)
+                wire_filename = (
+                    filename_match.group(1).strip("\"'")
+                    if filename_match is not None
+                    else local_path.replace("\\", "/").rsplit("/", 1)[-1]
+                )
+                encoding = "multipart"
+                break
+        if not local_path:
+            return None
+        local_path = local_path.strip("\"'")
+        local_filename = local_path.replace("\\", "/").rsplit("/", 1)[-1]
+        explicit_content_type = ""
+        for index, token in enumerate(tokens):
+            if token not in {"-H", "--header"} or index + 1 >= len(tokens):
+                continue
+            header = tokens[index + 1].strip("\"'")
+            if header.casefold().startswith("content-type:"):
+                explicit_content_type = header.split(":", 1)[1].strip().split(";", 1)[0]
+                break
+        mime_type = explicit_content_type or infer_mime_type_from_path(
+            local_path, "application/octet-stream"
+        )
+        from evidenceforge.events.contexts import HttpRequestEntityContext
+
+        return HttpRequestEntityContext(
+            size=request_body_len,
+            mime_type=mime_type,
+            content_identity=f"local-upload:{local_path}:{request_body_len}:{mime_type}",
+            encoding=encoding,
+            local_source_path=local_path,
+            local_source_filename=local_filename,
+            wire_filename=wire_filename,
+        )
+
+    @staticmethod
+    def _http_request_multipart_from_command(
+        command_line: str,
+        request_body_len: int,
+        *,
+        stable_key: str = "curl-command",
+    ) -> Any | None:
+        """Resolve every curl form argument into one exact multipart request entity."""
+
+        if not command_line or "curl" not in command_line.casefold() or request_body_len <= 0:
+            return None
+        try:
+            windows_command = bool(re.search(r"(?:^|\s)[A-Za-z]:\\", command_line))
+            tokens = shlex.split(command_line, posix=not windows_command)
+        except ValueError:
+            return None
+
+        form_values: list[tuple[str, bool]] = []
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            value = ""
+            literal = False
+            if token in {"-F", "--form", "--form-string"}:
+                if index + 1 >= len(tokens):
+                    raise ValueError(f"curl {token} requires a form argument")
+                value = tokens[index + 1]
+                literal = token == "--form-string"
+                index += 2
+            elif token.startswith("--form="):
+                value = token.split("=", 1)[1]
+                index += 1
+            elif token.startswith("--form-string="):
+                value = token.split("=", 1)[1]
+                literal = True
+                index += 1
+            elif token.startswith("-F") and len(token) > 2:
+                value = token[2:]
+                index += 1
+            else:
+                index += 1
+                continue
+            form_values.append((value, literal))
+        if not form_values:
+            return None
+
+        from evidenceforge.generation.activity.http_multipart import (
+            build_http_multipart_context,
+        )
+        from evidenceforge.models.http import HttpMultipartEntitySpec
+
+        parts: list[dict[str, Any]] = []
+        for raw_value, force_literal in form_values:
+            if "=" not in raw_value:
+                raise ValueError(f"curl form argument requires name=value: {raw_value!r}")
+            name, form_value = raw_value.split("=", 1)
+            if not name:
+                raise ValueError("HTTP multipart form field names must not be empty")
+            if force_literal:
+                parts.append({"name": name, "value": form_value})
+                continue
+
+            segments = form_value.split(";")
+            content = segments[0]
+            modifiers: dict[str, str] = {}
+            for segment in segments[1:]:
+                if "=" not in segment:
+                    continue
+                key, modifier_value = segment.split("=", 1)
+                modifiers[key.casefold()] = modifier_value.strip("\"'")
+            if content.startswith(("@", "<")):
+                file_mode = content[0]
+                local_path = content[1:].strip("\"'")
+                if not local_path or local_path == "-":
+                    raise ValueError(
+                        "curl multipart stdin requires an explicit authored multipart size"
+                    )
+                filename = modifiers.get("filename", "")
+                if file_mode == "@" and not filename:
+                    filename = local_path.replace("\\", "/").rsplit("/", 1)[-1]
+                part: dict[str, Any] = {
+                    "name": name,
+                    "local_source_path": local_path,
+                    "filename": filename or None,
+                    "content_type": modifiers.get("type") or None,
+                    "transfer_encoding": modifiers.get("encoder", "binary"),
+                }
+                parts.append({key: value for key, value in part.items() if value is not None})
+            else:
+                part = {
+                    "name": name,
+                    "value": content,
+                    "content_type": modifiers.get("type") or None,
+                    "transfer_encoding": modifiers.get("encoder", "binary"),
+                }
+                parts.append({key: value for key, value in part.items() if value is not None})
+
+        spec = HttpMultipartEntitySpec.model_validate(
+            {"media_type": "multipart/form-data", "parts": parts}
+        )
+        return build_http_multipart_context(
+            spec,
+            stable_key=stable_key,
+            client_family="curl",
+            asserted_body_len=request_body_len,
+        )
+
+    def _emit_http_upload_file_read(
+        self,
+        *,
+        actor: User,
+        system: System | None,
+        pid: int,
+        process_image: str,
+        command_line: str,
+        entity: Any,
+        connection_time: datetime,
+    ) -> None:
+        """Emit endpoint evidence only when an HTTP body resolves to a local file."""
+
+        if system is None or pid <= 0 or not entity.local_source_path:
+            return
+        from evidenceforge.events.base import OccurrenceBuilder
+        from evidenceforge.events.contexts import AuthContext, FileContext, ProcessContext
+
+        running = self.state_manager.get_process(system.hostname, pid)
+        read_time = connection_time - timedelta(milliseconds=120)
+        if running is not None:
+            read_time = max(read_time, running.start_time + timedelta(milliseconds=1))
+        self.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
+                timestamp=read_time,
+                event_type="file_read",
+                src_host=self.activity_generator._build_host_context(system),
+                auth=AuthContext(username=actor.username),
+                process=ProcessContext(
+                    pid=pid,
+                    parent_pid=running.parent_pid if running is not None else 0,
+                    image=process_image,
+                    command_line=command_line,
+                    username=actor.username,
+                    logon_id=running.logon_id if running is not None else "",
+                    start_time=running.start_time if running is not None else None,
+                ),
+                file=FileContext(path=entity.local_source_path, action="read", pid=pid),
+                storyline_origin=True,
+            )
+        )
+
+    @staticmethod
+    def _validate_multipart_command_agreement(authored: Any, command: Any) -> None:
+        """Require an explicit multipart entity and correlated curl form to describe one body."""
+
+        authored_parts = authored.leaf_parts()
+        command_parts = command.leaf_parts()
+        if len(authored_parts) != len(command_parts):
+            raise ValueError(
+                "explicit request_multipart and correlated curl form must have the same part count"
+            )
+        for index, (expected, observed) in enumerate(
+            zip(authored_parts, command_parts, strict=True)
+        ):
+            if (
+                expected.local_source_path != observed.local_source_path
+                or expected.wire_filename != observed.wire_filename
+            ):
+                raise ValueError(
+                    "explicit request_multipart disagrees with correlated curl form at part "
+                    f"{index}"
+                )
+
+    def _emit_http_multipart_file_reads(
+        self,
+        *,
+        actor: User,
+        system: System | None,
+        pid: int,
+        process_image: str,
+        command_line: str,
+        multipart: Any,
+        connection_time: datetime,
+    ) -> None:
+        """Emit ordered endpoint reads for multipart leaves backed by local files."""
+
+        for index, part in enumerate(multipart.leaf_parts() if multipart is not None else ()):
+            if not part.local_source_path:
+                continue
+            self._emit_http_upload_file_read(
+                actor=actor,
+                system=system,
+                pid=pid,
+                process_image=process_image,
+                command_line=command_line,
+                entity=part,
+                connection_time=connection_time - timedelta(milliseconds=index),
+            )
+
+    @staticmethod
     def _command_uses_dotnet_webclient(command_line: str) -> bool:
         """Return true for raw System.Net.WebClient download commands."""
         for text in StorylineMixin._http_url_search_texts(command_line):
@@ -2609,7 +2894,7 @@ class StorylineMixin:
             from_storyline=True,
         )
         self.activity_generator._record_user_process(system, actor, pid, process_name)
-        self._record_last_storyline_process(system, pid, process_name)
+        self._record_last_storyline_process(system, pid, process_name, command_line)
         return pid, process_name, command_line
 
     def _last_storyline_process_for_system(self, system: System | None) -> tuple[int, str | None]:
@@ -3437,7 +3722,7 @@ class StorylineMixin:
                 suppress_command_file_effect=output_file is not None,
             )
             self.activity_generator._record_user_process(system, process_actor, pid, process_name)
-            self._record_last_storyline_process(system, pid, process_name)
+            self._record_last_storyline_process(system, pid, process_name, process_command_line)
             process_ref = getattr(spec, "process_ref", None)
             if process_ref is not None:
                 self._record_storyline_process_ref(
@@ -3896,11 +4181,22 @@ class StorylineMixin:
             s_ob, s_rb = _size_storyline_connection(spec, rng)
             # Build HttpContext if HTTP fields are provided
             http_ctx = None
-            if spec.method or spec.uri:
+            authored_request_body_len = getattr(spec, "request_body_len", None)
+            authored_request_multipart = getattr(spec, "request_multipart", None)
+            authored_response_multipart = getattr(spec, "response_multipart", None)
+            if (
+                spec.method
+                or spec.uri
+                or authored_request_body_len is not None
+                or authored_request_multipart is not None
+                or authored_response_multipart is not None
+            ):
                 from evidenceforge.events.contexts import HttpContext
 
                 # Context-aware response sizing (or author-specified override)
-                _method = spec.method or "GET"
+                _method = spec.method or (
+                    "POST" if authored_request_body_len or authored_request_multipart else "GET"
+                )
                 _uri_raw = spec.uri or "/"
                 _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
                 _is_c2_http = _is_c2_http_request(
@@ -3928,7 +4224,11 @@ class StorylineMixin:
                     use_connection_path_hints=True,
                 )
                 request_body_len = (
-                    max(0, s_ob or 0) if _method not in {"GET", "HEAD", "CONNECT", "OPTIONS"} else 0
+                    authored_request_body_len
+                    if authored_request_body_len is not None
+                    else max(0, s_ob or 0)
+                    if _method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}
+                    else 0
                 )
                 if request_body_len == 0 and _method == "POST":
                     request_body_len = rng.randint(100, 10000)
@@ -3957,6 +4257,25 @@ class StorylineMixin:
                     resp_mime_types=[_mime_type] if (spec.status_code or 200) == 200 else [],
                     tags=[],
                 )
+                if (
+                    authored_request_multipart is not None
+                    or authored_response_multipart is not None
+                ):
+                    from evidenceforge.generation.activity.http_multipart import (
+                        apply_http_multipart_specs,
+                    )
+
+                    http_ctx = apply_http_multipart_specs(
+                        http_ctx,
+                        stable_key=(
+                            f"storyline:{system.hostname}:{source_ip}:{effective_dst_ip}:"
+                            f"{time.isoformat()}:{_uri_raw}"
+                        ),
+                        request_spec=authored_request_multipart,
+                        response_spec=authored_response_multipart,
+                        request_body_assertion=authored_request_body_len,
+                        response_body_assertion=spec.response_body_len,
+                    )
 
             # Resolve source system from source_ip (not storyline system, which may be the target)
             src_sys = None
@@ -3966,9 +4285,84 @@ class StorylineMixin:
             elif source_ip == system.ip:
                 src_sys = system
             story_pid, story_image = self._last_storyline_process_for_system(src_sys)
+            story_proc = (
+                self.state_manager.get_process(src_sys.hostname, story_pid)
+                if story_pid > 0 and src_sys is not None
+                else None
+            )
+            story_command = story_proc.command_line if story_proc is not None else ""
+            if src_sys is not None and not story_command:
+                recorded_process = getattr(
+                    self, "_last_storyline_process_command_by_system", {}
+                ).get(src_sys.hostname)
+                if recorded_process is not None:
+                    recorded_pid, recorded_image, recorded_command = recorded_process
+                    target_url = f"{spec.hostname or effective_dst_ip}{spec.uri or '/'}"
+                    if target_url in recorded_command:
+                        story_pid = recorded_pid
+                        story_image = recorded_image
+                        story_command = recorded_command
+            upload_read_emitted = False
+            if http_ctx is not None and http_ctx.request_body_len > 0:
+                if http_ctx.request_multipart is not None:
+                    command_multipart = self._http_request_multipart_from_command(
+                        story_command,
+                        http_ctx.request_body_len,
+                        stable_key=(
+                            f"storyline-curl-validation:{source_ip}:{effective_dst_ip}:"
+                            f"{time.isoformat()}:{http_ctx.uri}"
+                        ),
+                    )
+                    if command_multipart is not None:
+                        self._validate_multipart_command_agreement(
+                            http_ctx.request_multipart,
+                            command_multipart,
+                        )
+                request_multipart = (
+                    None
+                    if http_ctx.request_multipart is not None
+                    else self._http_request_multipart_from_command(
+                        story_command,
+                        http_ctx.request_body_len,
+                        stable_key=(
+                            f"storyline-curl:{source_ip}:{effective_dst_ip}:"
+                            f"{time.isoformat()}:{http_ctx.uri}"
+                        ),
+                    )
+                )
+                request_entity = (
+                    None
+                    if request_multipart is not None or http_ctx.request_multipart is not None
+                    else self._http_request_entity_from_command(
+                        story_command, http_ctx.request_body_len
+                    )
+                )
+                if request_multipart is not None:
+                    http_ctx = replace(
+                        http_ctx,
+                        request_content_type=(
+                            f"{request_multipart.media_type}; boundary={request_multipart.boundary}"
+                        ),
+                        request_multipart=request_multipart,
+                    )
+                elif request_entity is not None:
+                    http_ctx = replace(
+                        http_ctx,
+                        request_content_type=request_entity.mime_type,
+                        request_entity=request_entity,
+                    )
+                    if not _is_exfil_connection_spec(spec):
+                        self._emit_http_upload_file_read(
+                            actor=actor,
+                            system=src_sys,
+                            pid=story_pid,
+                            process_image=story_image,
+                            command_line=story_command,
+                            entity=request_entity,
+                            connection_time=time,
+                        )
+                        upload_read_emitted = True
             if story_pid > 0 and src_sys is not None and service in {"ssl", "https"}:
-                story_proc = self.state_manager.get_process(src_sys.hostname, story_pid)
-                story_command = story_proc.command_line if story_proc is not None else ""
                 if self._command_contains_raw_tcp_endpoint(
                     story_command,
                     effective_dst_ip,
@@ -3992,7 +4386,7 @@ class StorylineMixin:
                 conn_hostname = ""  # suppress — raw IP
                 emit_dns = False
             s_conn_state = spec.conn_state or "SF"
-            story_command = story_image or ""
+            story_command = story_command or story_image or ""
             if _is_exfil_connection_spec(spec):
                 story_pid, story_image, story_command = (
                     self._ensure_storyline_upload_process_for_exfil(
@@ -4017,6 +4411,95 @@ class StorylineMixin:
                         or (http_ctx.user_agent or "").strip().lower() == "mozilla/5.0"
                     ):
                         http_ctx = replace(http_ctx, user_agent=upload_user_agent)
+                    if (
+                        http_ctx.request_entity is None
+                        and http_ctx.request_multipart is None
+                        and http_ctx.request_body_len > 0
+                    ):
+                        request_multipart = self._http_request_multipart_from_command(
+                            story_command,
+                            http_ctx.request_body_len,
+                            stable_key=(
+                                f"storyline-exfil-curl:{source_ip}:{effective_dst_ip}:"
+                                f"{time.isoformat()}:{http_ctx.uri}"
+                            ),
+                        )
+                        request_entity = (
+                            None
+                            if request_multipart is not None
+                            else self._http_request_entity_from_command(
+                                story_command, http_ctx.request_body_len
+                            )
+                        )
+                        if request_multipart is not None:
+                            http_ctx = replace(
+                                http_ctx,
+                                request_content_type=(
+                                    f"{request_multipart.media_type}; "
+                                    f"boundary={request_multipart.boundary}"
+                                ),
+                                request_multipart=request_multipart,
+                            )
+                        elif request_entity is not None:
+                            http_ctx = replace(
+                                http_ctx,
+                                request_content_type=request_entity.mime_type,
+                                request_entity=request_entity,
+                            )
+                    staged_archive = self._matching_storyline_staged_archive_for_exfil(
+                        source_ip=source_ip,
+                        exfil_time=time,
+                    )
+                    if (
+                        http_ctx.request_entity is None
+                        and http_ctx.request_multipart is None
+                        and http_ctx.request_body_len > 0
+                        and staged_archive is not None
+                        and src_sys is not None
+                    ):
+                        from evidenceforge.events.contexts import HttpRequestEntityContext
+
+                        local_path = self._local_staging_path_for_archive(
+                            actor,
+                            src_sys,
+                            staged_archive.archive_path,
+                        )
+                        mime_type = infer_mime_type_from_path(
+                            local_path,
+                            "application/octet-stream",
+                        )
+                        request_entity = HttpRequestEntityContext(
+                            size=http_ctx.request_body_len,
+                            mime_type=mime_type,
+                            content_identity=(
+                                f"staged-upload:{src_sys.hostname}:{local_path}:"
+                                f"{http_ctx.request_body_len}"
+                            ),
+                            local_source_path=local_path,
+                            local_source_filename=(
+                                local_path.replace("\\", "/").rsplit("/", 1)[-1]
+                            ),
+                        )
+                        http_ctx = replace(
+                            http_ctx,
+                            request_content_type=mime_type,
+                            request_entity=request_entity,
+                        )
+                    if (
+                        not upload_read_emitted
+                        and http_ctx.request_entity is not None
+                        and staged_archive is None
+                    ):
+                        self._emit_http_upload_file_read(
+                            actor=actor,
+                            system=src_sys,
+                            pid=story_pid,
+                            process_image=story_image,
+                            command_line=story_command,
+                            entity=http_ctx.request_entity,
+                            connection_time=time,
+                        )
+                        upload_read_emitted = True
                 self._emit_storyline_archive_transfer_before_exfil(
                     actor=actor,
                     source_ip=source_ip,
@@ -4033,6 +4516,23 @@ class StorylineMixin:
                 network_time=time,
                 rng=rng,
             )
+            if http_ctx is not None and http_ctx.request_multipart is not None:
+                self._emit_http_multipart_file_reads(
+                    actor=actor,
+                    system=src_sys,
+                    pid=story_pid,
+                    process_image=story_image,
+                    command_line=story_command,
+                    multipart=http_ctx.request_multipart,
+                    connection_time=connection_time,
+                )
+                http_ctx = replace(
+                    http_ctx,
+                    request_multipart=replace(
+                        http_ctx.request_multipart,
+                        local_reads_emitted=True,
+                    ),
+                )
             ids_alerts = _build_ids_alert_contexts(
                 getattr(spec, "ids_alerts", []),
                 time=connection_time,
@@ -4073,6 +4573,71 @@ class StorylineMixin:
             malicious_event["dst_ip"] = logged_dst_ip
             malicious_event["dst_port"] = dst_port
             malicious_event["uid"] = _ground_truth_uid(uid, source_ip, logged_dst_ip)
+            if http_ctx is not None and http_ctx.request_entity is not None:
+                malicious_event["http_upload"] = {
+                    "request_body_len": http_ctx.request_body_len,
+                    "mime_type": http_ctx.request_entity.mime_type,
+                    "local_source_path": http_ctx.request_entity.local_source_path,
+                    "local_source_filename": http_ctx.request_entity.local_source_filename,
+                    "wire_filename": http_ctx.request_entity.wire_filename or None,
+                }
+            if http_ctx is not None and (
+                http_ctx.request_multipart is not None or http_ctx.response_multipart is not None
+            ):
+                last_transfers = getattr(
+                    self.activity_generator,
+                    "_last_connection_file_transfers",
+                    (),
+                )
+                multipart_fuids: dict[tuple[int, ...], list[str]] = {}
+                response_multipart_fuids: dict[tuple[int, ...], list[str]] = {}
+                for transfer in last_transfers:
+                    if not transfer.multipart_part_path:
+                        continue
+                    target = multipart_fuids if transfer.is_orig else response_multipart_fuids
+                    target.setdefault(transfer.multipart_part_path, []).append(transfer.fuid)
+
+                def _multipart_truth(entity: Any, *, response: bool) -> dict[str, Any]:
+                    fuid_map = response_multipart_fuids if response else multipart_fuids
+                    return {
+                        "body_len": entity.body_len,
+                        "media_type": entity.media_type,
+                        "boundary": entity.boundary,
+                        "parts": [
+                            {
+                                "path": list(part.path),
+                                "name": part.name,
+                                "decoded_size": part.decoded_size,
+                                "encoded_size": part.encoded_size,
+                                "local_source_path": part.local_source_path or None,
+                                "local_source_filename": part.local_source_filename or None,
+                                "wire_filename": part.wire_filename or None,
+                                "declared_mime_type": part.declared_content_type or None,
+                                "detected_mime_type": part.detected_mime_type or None,
+                                "transfer_encoding": part.transfer_encoding,
+                                "endpoint_read_owner_pid": (
+                                    story_pid
+                                    if not response and part.local_source_path and story_pid > 0
+                                    else None
+                                ),
+                                "fuids": fuid_map.get(part.path, []),
+                            }
+                            for part in entity.leaf_parts()
+                        ],
+                    }
+
+                malicious_event["http_multipart"] = {
+                    "request": (
+                        _multipart_truth(http_ctx.request_multipart, response=False)
+                        if http_ctx.request_multipart is not None
+                        else None
+                    ),
+                    "response": (
+                        _multipart_truth(http_ctx.response_multipart, response=True)
+                        if http_ctx.response_multipart is not None
+                        else None
+                    ),
+                }
             if getattr(spec, "ids_alerts", []):
                 malicious_event["ids_alerts"] = _ids_attachment_ground_truth(
                     getattr(spec, "ids_alerts", [])
@@ -4743,6 +5308,9 @@ class StorylineMixin:
                     spec.method
                     or spec.uri
                     or spec.user_agent
+                    or getattr(spec, "request_body_len", None) is not None
+                    or spec.request_multipart is not None
+                    or spec.response_multipart is not None
                     or profile_user_agent is not None
                     or first_sequence_entry is not None
                 ):
@@ -4798,8 +5366,15 @@ class StorylineMixin:
                             use_connection_path_hints=False,
                         )
                     )
+                    request_override = _range_or_value(
+                        _entry_value(first_sequence_entry, "request_body_len"), rng
+                    )
                     request_body_len = (
-                        max(0, s_ob or 0)
+                        request_override
+                        if request_override is not None
+                        else getattr(spec, "request_body_len", None)
+                        if getattr(spec, "request_body_len", None) is not None
+                        else max(0, s_ob or 0)
                         if _method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}
                         else 0
                     )
@@ -4833,6 +5408,30 @@ class StorylineMixin:
                         resp_mime_types=[_mime_type] if _status_code == 200 else [],
                         tags=[],
                     )
+                    first_request_multipart = (
+                        _entry_value(first_sequence_entry, "request_multipart")
+                        or spec.request_multipart
+                    )
+                    first_response_multipart = (
+                        _entry_value(first_sequence_entry, "response_multipart")
+                        or spec.response_multipart
+                    )
+                    if first_request_multipart is not None or first_response_multipart is not None:
+                        from evidenceforge.generation.activity.http_multipart import (
+                            apply_http_multipart_specs,
+                        )
+
+                        http_ctx = apply_http_multipart_specs(
+                            http_ctx,
+                            stable_key=(
+                                f"beacon:{system.hostname}:{beacon_src_ip}:{beacon_dst_ip}:"
+                                f"{start.isoformat()}:0:{_uri_raw}"
+                            ),
+                            request_spec=first_request_multipart,
+                            response_spec=first_response_multipart,
+                            request_body_assertion=request_override,
+                            response_body_assertion=response_override,
+                        )
 
                 # Hostname / DNS resolution (same logic as connection handler)
                 from evidenceforge.generation.activity.network import REVERSE_DNS
@@ -4903,6 +5502,9 @@ class StorylineMixin:
                     _entry_value(tick_sequence_entry, "response_body_len"),
                     rng,
                 )
+                tick_request_override = _range_or_value(
+                    _entry_value(tick_sequence_entry, "request_body_len"), rng
+                )
                 tick_orig_bytes = (
                     _range_or_value(_entry_value(tick_sequence_entry, "orig_bytes"), rng)
                     if tick_sequence_entry is not None
@@ -4923,8 +5525,26 @@ class StorylineMixin:
                     or attempt_count == 0
                 )
                 tick_http_ctx = http_ctx
-                if tick_http_ctx is not None and tick_sequence_entry is not None:
+                if tick_http_ctx is not None and (
+                    tick_sequence_entry is not None
+                    or spec.request_multipart is not None
+                    or spec.response_multipart is not None
+                ):
                     tick_mime_type = normalize_mime_type_for_path(tick_uri, "text/html")
+                    tick_request_body_len = (
+                        tick_request_override
+                        if tick_request_override is not None
+                        else getattr(spec, "request_body_len", None)
+                        if getattr(spec, "request_body_len", None) is not None
+                        else max(0, tick_orig_bytes)
+                        if str(tick_method).upper() not in {"GET", "HEAD", "CONNECT", "OPTIONS"}
+                        else 0
+                    )
+                    tick_response_body_len = (
+                        tick_response_override
+                        if tick_response_override is not None
+                        else tick_http_ctx.response_body_len
+                    )
                     tick_http_ctx = replace(
                         tick_http_ctx,
                         method=str(tick_method),
@@ -4939,19 +5559,43 @@ class StorylineMixin:
                             404: "Not Found",
                             500: "Internal Server Error",
                         }.get(int(tick_status_code), "OK"),
-                        response_body_len=tick_response_override
-                        if tick_response_override is not None
-                        else tick_http_ctx.response_body_len,
-                        request_body_len=max(0, tick_orig_bytes)
-                        if str(tick_method).upper() not in {"GET", "HEAD", "CONNECT", "OPTIONS"}
-                        else 0,
+                        response_body_len=tick_response_body_len,
+                        response_multipart=None,
+                        request_body_len=tick_request_body_len,
+                        request_entity=None,
+                        request_multipart=None,
                         referrer=_entry_value(tick_sequence_entry, "referrer")
-                        if _entry_value(tick_sequence_entry, "referrer") is not None
+                        if tick_sequence_entry is not None
+                        and _entry_value(tick_sequence_entry, "referrer") is not None
                         else tick_http_ctx.referrer,
                         tags=list(tick_http_ctx.tags),
                         resp_fuids=list(tick_http_ctx.resp_fuids),
                         resp_mime_types=[tick_mime_type] if int(tick_status_code) == 200 else [],
                     )
+                    tick_request_multipart = (
+                        _entry_value(tick_sequence_entry, "request_multipart")
+                        or spec.request_multipart
+                    )
+                    tick_response_multipart = (
+                        _entry_value(tick_sequence_entry, "response_multipart")
+                        or spec.response_multipart
+                    )
+                    if tick_request_multipart is not None or tick_response_multipart is not None:
+                        from evidenceforge.generation.activity.http_multipart import (
+                            apply_http_multipart_specs,
+                        )
+
+                        tick_http_ctx = apply_http_multipart_specs(
+                            tick_http_ctx,
+                            stable_key=(
+                                f"beacon:{system.hostname}:{beacon_src_ip}:{beacon_dst_ip}:"
+                                f"{tick_time.isoformat()}:{attempt_count}:{tick_uri}"
+                            ),
+                            request_spec=tick_request_multipart,
+                            response_spec=tick_response_multipart,
+                            request_body_assertion=tick_request_override,
+                            response_body_assertion=tick_response_override,
+                        )
                     if tick_response_override is not None:
                         tick_resp_bytes = max(
                             tick_resp_bytes,
@@ -4962,6 +5606,7 @@ class StorylineMixin:
                     and http_is_c2
                     and spec.response_body_len is None
                     and tick_response_override is None
+                    and (tick_http_ctx or http_ctx).response_multipart is None
                 ):
                     tick_http_body_len = _c2_http_response_size(
                         rng,
@@ -4984,6 +5629,30 @@ class StorylineMixin:
                         actor,
                         src_sys,
                         tick_time,
+                    )
+                if tick_http_ctx is not None and tick_http_ctx.request_multipart is not None:
+                    running_beacon = (
+                        self.state_manager.get_process(src_sys.hostname, story_pid)
+                        if src_sys is not None and story_pid > 0
+                        else None
+                    )
+                    self._emit_http_multipart_file_reads(
+                        actor=actor,
+                        system=src_sys,
+                        pid=story_pid,
+                        process_image=story_image,
+                        command_line=(
+                            running_beacon.command_line if running_beacon is not None else ""
+                        ),
+                        multipart=tick_http_ctx.request_multipart,
+                        connection_time=tick_time,
+                    )
+                    tick_http_ctx = replace(
+                        tick_http_ctx,
+                        request_multipart=replace(
+                            tick_http_ctx.request_multipart,
+                            local_reads_emitted=True,
+                        ),
                     )
                 tick_ids_alerts = _build_ids_alert_contexts(
                     getattr(spec, "ids_alerts", []),

@@ -328,6 +328,37 @@ class TestPerSensorDirectoryRouting:
         assert render_data["ts"] == closed
         assert render_data["duration"] == 0.0
 
+    def test_http_originator_fuid_uses_sensor_local_projection(self):
+        """HTTP orig_fuids and files.log IDs share the sensor-local identifier."""
+
+        fmt = load_format("zeek_http")
+        started = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+        observation = NetworkSensorObservation(
+            sensor_identity="core",
+            path_role="internal",
+            capture_profile="full",
+            tuple_view=NetworkTuple("10.0.0.1", 51000, "10.0.0.2", 80, "tcp"),
+            connection_uid="CObservedUpload1",
+            connection_ids=(("CCanonicalUpload1", "CObservedUpload1"),),
+            file_ids=(("FCanonicalUpload1", "FObservedUpload1"),),
+            local_orig=True,
+            local_resp=True,
+            observed_start_time=started,
+            observed_close_time=started + timedelta(seconds=1),
+            traffic=NetworkTrafficLedger(),
+            visible_formats=frozenset({"zeek_http", "zeek_files"}),
+        )
+        emitter = ZeekEmitter(fmt, Path("unused.json"))
+        render_data = {
+            "uid": "CCanonicalUpload1",
+            "orig_fuids": ["FCanonicalUpload1"],
+        }
+
+        emitter._apply_sensor_observation(render_data, observation, started)
+
+        assert render_data["uid"] == "CObservedUpload1"
+        assert render_data["orig_fuids"] == ["FObservedUpload1"]
+
     def test_sensor_observation_contains_dns_response_interval(self):
         """A projected DNS response interval ends no later than its sensor flow."""
 

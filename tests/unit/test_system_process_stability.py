@@ -354,7 +354,11 @@ class TestProtectionListCompleteness:
     """Verify the protection list covers all seeded process names."""
 
     def test_windows_seeded_processes_match_protection_patterns(self):
-        """Every Windows seeded process image must match a system_patterns entry."""
+        """Long-lived Windows seed images should match a protection pattern.
+
+        Seeded taskhostw is protected by its exact PID instead: dynamically
+        materialized task hosts are finite and must remain lifecycle-eligible.
+        """
         # Images seeded in _seed_windows_process_tree
         seeded_images = [
             r"C:\Windows\System32\smss.exe",
@@ -365,7 +369,6 @@ class TestProtectionListCompleteness:
             r"C:\Windows\System32\svchost.exe",
             r"C:\ProgramData\Microsoft\Windows Defender\Platform\MsMpEng.exe",
             r"C:\Windows\System32\SearchIndexer.exe",
-            r"C:\Windows\System32\taskhostw.exe",
             r"C:\Windows\System32\winlogon.exe",
             r"C:\Windows\System32\userinit.exe",
             r"C:\Windows\explorer.exe",
@@ -389,7 +392,6 @@ class TestProtectionListCompleteness:
             "dwm.exe",
             "userinit.exe",
             "runtimebroker",
-            "taskhostw",
             "searchindexer",
             "msmpeng",
             "sqlservr",

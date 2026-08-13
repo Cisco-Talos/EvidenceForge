@@ -27,6 +27,7 @@ from pydantic import (
 )
 
 from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
+from evidenceforge.models.http import HttpMultipartEntitySpec
 
 TLS_SERIAL_LENGTH_MAX_WEIGHT = 1_000_000
 KERBEROS_TRANSPORT_MAX_WEIGHT = 1_000_000
@@ -60,6 +61,7 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
     http_methods: list[str] = Field(default_factory=list)
     http_statuses: list[int] = Field(default_factory=list)
     requires_http_body: bool = False
+    tls_server_names: list[str] = Field(default_factory=list)
     file_mime_types: list[str] = Field(default_factory=list)
     semantic_claim: Literal[
         "flow_metadata",
@@ -108,6 +110,19 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
             raise ValueError("file_mime_types must not contain duplicates")
         return normalized
 
+    @field_validator("tls_server_names")
+    @classmethod
+    def normalize_tls_server_names(cls, values: list[str]) -> list[str]:
+        """Normalize exact or suffix-wildcard TLS server-name requirements."""
+        normalized = [value.strip().lower().rstrip(".") for value in values]
+        if any(
+            not value or (value.startswith("*.") and value.count("*") > 1) for value in normalized
+        ):
+            raise ValueError("tls_server_names must contain non-empty exact or *.suffix names")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("tls_server_names must not contain duplicates")
+        return normalized
+
     @model_validator(mode="after")
     def validate_semantic_combination(self) -> Self:
         """Reject predicates that cannot be evaluated coherently."""
@@ -120,6 +135,8 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
             raise ValueError("HTTP-specific fields require application_protocol='http'")
         if self.requires_http_body and self.payload_direction not in {"orig", "either"}:
             raise ValueError("requires_http_body needs orig/either payload_direction")
+        if self.tls_server_names and self.application_protocol != "tls":
+            raise ValueError("tls_server_names requires application_protocol='tls'")
         if self.file_mime_types and self.semantic_claim != "file_content":
             raise ValueError("file_mime_types requires semantic_claim='file_content'")
         if self.phase == "response" and not self.requires_response:
@@ -1363,6 +1380,94 @@ class SmbFileSizeBand(BaseModel, extra="forbid"):
         return self
 
 
+class HttpRequestProfilesConfig(BaseModel, extra="forbid"):
+    """Request-entity classification values in http_file_profiles.yaml."""
+
+    browser_form: str
+    json_api: str
+    binary: str
+    json_uri_tokens: list[str] = Field(min_length=1)
+
+    @field_validator("browser_form", "json_api", "binary")
+    @classmethod
+    def mime_type_is_valid(cls, value: str) -> str:
+        if not re.fullmatch(r"[^/\s]+/[^/\s]+", value):
+            raise ValueError("must be a MIME type such as application/json")
+        return value
+
+    @field_validator("json_uri_tokens")
+    @classmethod
+    def uri_tokens_are_non_empty(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("json_uri_tokens must contain non-empty strings")
+        return values
+
+
+class HttpFileProfilesConfig(BaseModel, extra="forbid"):
+    """Root schema for bidirectional HTTP file-analysis profiles."""
+
+    extension_mime_types: dict[str, str]
+    request_profiles: HttpRequestProfilesConfig
+    multipart: HttpMultipartProfilesConfig
+
+    @field_validator("extension_mime_types")
+    @classmethod
+    def extensions_and_mime_types_are_valid(cls, values: dict[str, str]) -> dict[str, str]:
+        if not values:
+            raise ValueError("extension_mime_types must not be empty")
+        for extension, mime_type in values.items():
+            if not re.fullmatch(r"\.[a-z0-9]+", extension):
+                raise ValueError(f"invalid lowercase file extension {extension!r}")
+            if not re.fullmatch(r"[^/\s]+/[^/\s]+", mime_type):
+                raise ValueError(f"invalid MIME type {mime_type!r} for {extension}")
+        return values
+
+
+class HttpMultipartBoundaryProfile(BaseModel, extra="forbid"):
+    """Deterministic multipart boundary morphology for one client family."""
+
+    prefix: str = Field(min_length=1, max_length=50)
+    suffix_length: int = Field(ge=4, le=40)
+
+
+class HttpMultipartProfilesConfig(BaseModel, extra="forbid"):
+    """Multipart serializer and Zeek projection limits."""
+
+    boundaries: dict[str, HttpMultipartBoundaryProfile]
+    header_order: list[
+        Literal["content_disposition", "content_type", "content_length", "transfer_encoding"]
+    ]
+    max_parts: int = Field(ge=1, le=1000)
+    max_depth: int = Field(ge=1, le=100)
+    max_files_orig: int = Field(ge=1, le=1000)
+    max_files_resp: int = Field(ge=1, le=1000)
+    quoted_printable_escape_percent: int = Field(ge=0, le=100)
+
+    @field_validator("boundaries")
+    @classmethod
+    def required_boundary_families_exist(
+        cls, values: dict[str, HttpMultipartBoundaryProfile]
+    ) -> dict[str, HttpMultipartBoundaryProfile]:
+        required = {"browser", "curl", "generic"}
+        missing = required - set(values)
+        if missing:
+            raise ValueError(f"multipart boundaries missing families: {sorted(missing)}")
+        return values
+
+    @field_validator("header_order")
+    @classmethod
+    def header_order_is_complete(cls, values: list[str]) -> list[str]:
+        required = {
+            "content_disposition",
+            "content_type",
+            "content_length",
+            "transfer_encoding",
+        }
+        if set(values) != required or len(values) != len(required):
+            raise ValueError("multipart header_order must list every supported header exactly once")
+        return values
+
+
 class SmbMimeTypeEntry(BaseModel, extra="forbid"):
     """A weighted MIME type in smb_file_transfers.yaml."""
 
@@ -1829,7 +1934,10 @@ class BeaconProfileHttpEntry(BaseModel, extra="forbid"):
     status_code: int | None = Field(default=None, ge=100, le=599)
     user_agent: str | None = None
     referrer: str | None = None
+    request_body_len: list[int] | int | None = None
+    request_multipart: HttpMultipartEntitySpec | None = None
     response_body_len: list[int] | int | None = None
+    response_multipart: HttpMultipartEntitySpec | None = None
     orig_bytes: list[int] | int | None = None
     resp_bytes: list[int] | int | None = None
     weight: float = Field(default=1.0, gt=0.0)
@@ -1849,7 +1957,7 @@ class BeaconProfileHttpEntry(BaseModel, extra="forbid"):
             raise ValueError("uri must start with '/' and contain no whitespace")
         return v
 
-    @field_validator("response_body_len", "orig_bytes", "resp_bytes")
+    @field_validator("request_body_len", "response_body_len", "orig_bytes", "resp_bytes")
     @classmethod
     def byte_value_or_range(cls, v: list[int] | int | None, info: ValidationInfo):
         if v is None:
@@ -1865,6 +1973,16 @@ class BeaconProfileHttpEntry(BaseModel, extra="forbid"):
         if v[0] < 0 or v[1] < v[0]:
             raise ValueError(f"{info.field_name} range must be non-negative [lo, hi]")
         return v
+
+    @model_validator(mode="after")
+    def multipart_body_length_is_exact(self) -> BeaconProfileHttpEntry:
+        """Reject ranged outer sizes for deterministically serialized multipart entities."""
+
+        if self.request_multipart is not None and isinstance(self.request_body_len, list):
+            raise ValueError("request_multipart requires an exact request_body_len assertion")
+        if self.response_multipart is not None and isinstance(self.response_body_len, list):
+            raise ValueError("response_multipart requires an exact response_body_len assertion")
+        return self
 
 
 class BeaconProfileEntry(BaseModel, extra="forbid"):

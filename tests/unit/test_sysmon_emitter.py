@@ -951,6 +951,29 @@ class TestSysmonEventEmitter:
 
         assert emitter._event_dicts[0]["TimeCreated"] == create_time + timedelta(milliseconds=1)
 
+    def test_follow_on_native_utc_shifted_after_process_create(self, format_def, temp_output):
+        """Dependent payload UtcTime should not precede its owning Event 1 payload time."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+        process_guid = "{12345678-abcd-ef01-2345-678901234567}"
+        emitter._event_dicts = [
+            {
+                "EventID": 1,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": process_guid,
+                "UtcTime": "2024-01-15 10:00:10.000",
+            },
+            {
+                "EventID": 7,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": process_guid,
+                "UtcTime": "2024-01-15 10:00:09.998",
+            },
+        ]
+
+        emitter._shift_followon_utc_times_after_process_create()
+
+        assert emitter._event_dicts[1]["UtcTime"] == "2024-01-15 10:00:10.001"
+
     def test_process_create_shifted_after_visible_parent_create_transitively(
         self, format_def, temp_output
     ):

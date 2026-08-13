@@ -26,7 +26,7 @@ import json
 import random
 import tempfile
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import yaml
@@ -47,9 +47,13 @@ from evidenceforge.generation.actions.file_transfer import (
     SmbFileTransferMetadataRequest,
 )
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
-from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
+from evidenceforge.generation.emitters.zeek_files import (
+    ZeekFilesEmitter,
+    _bounded_file_transfer_observation,
+    _related_http_analyzer_timestamp,
+)
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
-from evidenceforge.generation.emitters.zeek_pe import ZeekPeEmitter
+from evidenceforge.generation.emitters.zeek_pe import ZeekPeEmitter, _pe_analyzer_timestamp
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 from tests.network_factories import network_plan
 
@@ -188,6 +192,12 @@ class TestFilesFormatAccuracy:
             rows = [json.loads(line) for line in output.read_text().splitlines()]
             assert rows[0]["local_orig"] is False
             assert rows[1]["local_orig"] is True
+            assert rows[0]["is_orig"] is True
+            assert rows[0]["tx_hosts"] == ["198.51.100.77"]
+            assert rows[0]["rx_hosts"] == ["10.55.10.31"]
+            assert rows[1]["is_orig"] is True
+            assert rows[1]["tx_hosts"] == ["10.55.20.25"]
+            assert rows[1]["rx_hosts"] == ["203.0.113.88"]
 
     def test_fuid_has_f_prefix(self):
         """fuid should start with 'F' prefix."""
@@ -585,6 +595,65 @@ class TestFilesUidCorrelation:
         assert result.pe is not None
         assert isinstance(result.pe.compile_ts, int)
         assert result.pe.compile_ts <= int(request.timestamp.timestamp()) - (30 * 24 * 60 * 60)
+
+    def test_request_pe_timestamp_uses_its_directional_file_transfer(self):
+        """PE timing follows the referenced upload when both HTTP directions have files."""
+
+        event = OccurrenceBuilder(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=network_plan(
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="10.0.0.10",
+                dst_port=80,
+                protocol="tcp",
+                service="http",
+                conn_state="SF",
+                zeek_uid="CBidirectionalPe1",
+                duration=2.0,
+            ),
+            http=HttpContext(
+                method="POST",
+                host="upload.example.test",
+                uri="/accept",
+                request_body_len=8192,
+                response_body_len=4096,
+                orig_fuids=("FUploadPe1234567",),
+                orig_mime_types=("application/x-msdownload",),
+                resp_fuids=("FResponse1234567",),
+                resp_mime_types=("application/octet-stream",),
+            ),
+            file_transfer=FileTransferContext(
+                fuid="FResponse1234567",
+                source="HTTP",
+                is_orig=False,
+                duration=0.02,
+                seen_bytes=4096,
+                total_bytes=4096,
+            ),
+            file_transfers=[
+                FileTransferContext(
+                    fuid="FUploadPe1234567",
+                    source="HTTP",
+                    is_orig=True,
+                    duration=0.4,
+                    seen_bytes=8192,
+                    total_bytes=8192,
+                )
+            ],
+            pe=PeContext(id="FUploadPe1234567", compile_ts=1_700_000_000),
+        )
+        upload = next(transfer for transfer in event.protocol.file_transfers if transfer.is_orig)
+
+        file_ts, file_duration = _bounded_file_transfer_observation(
+            event,
+            min_start=_related_http_analyzer_timestamp(event, upload),
+            file_transfer=upload,
+        )
+        pe_ts = _pe_analyzer_timestamp(event)
+
+        assert file_ts < pe_ts < file_ts + timedelta(seconds=file_duration)
 
     def test_http_file_analysis_stays_complete_until_sensor_observation(self):
         """Canonical HTTP content stays complete until the sensor plans capture loss."""

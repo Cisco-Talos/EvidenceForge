@@ -616,6 +616,13 @@ class WindowsEventEmitter(LogEmitter):
             return event.dst_host or event.src_host
         return event.src_host or event.dst_host
 
+    def _security_provider_pid(self, host: "HostContext", reported_pid: int = 0) -> int:
+        """Return the host's canonical Security-Auditing provider process PID."""
+        if reported_pid > 0:
+            return reported_pid
+        system_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
+        return int(system_pids.get("lsass", 600))
+
     def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Windows emitter handles events on Windows hosts."""
         host = self._get_host(event)
@@ -692,7 +699,7 @@ class WindowsEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
-            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 500),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
@@ -728,7 +735,7 @@ class WindowsEventEmitter(LogEmitter):
                 "Computer": host.fqdn,
                 "Channel": "Security",
                 "Level": 0,
-                "ExecutionProcessID": auth.reporting_pid or 600,
+                "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
                 "ExecutionThreadID": rng.randint(100, 500),
                 "SubjectUserSid": auth.user_sid,
                 "SubjectUserName": auth.username,
@@ -820,7 +827,7 @@ class WindowsEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
-            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 500),
             "TargetUserSid": auth.user_sid,
             "TargetUserName": auth.username,
@@ -850,7 +857,7 @@ class WindowsEventEmitter(LogEmitter):
             "Channel": "Security",
             "Level": 0,
             "Keywords": "0x8010000000000000",  # Audit Failure
-            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
@@ -1009,7 +1016,7 @@ class WindowsEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
-            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 500),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
@@ -1050,7 +1057,7 @@ class WindowsEventEmitter(LogEmitter):
                 "Computer": host.fqdn,
                 "Channel": "Security",
                 "Level": 0,
-                "ExecutionProcessID": auth.reporting_pid or 600,
+                "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
                 "ExecutionThreadID": rng.randint(100, 500),
                 "SubjectUserSid": auth.user_sid,
                 "SubjectUserName": auth.username,
@@ -1080,7 +1087,7 @@ class WindowsEventEmitter(LogEmitter):
             "Channel": "Security",
             "Level": 0,
             "Keywords": "0x8010000000000000" if is_failure else "0x8020000000000000",
-            "ExecutionProcessID": krb.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, krb.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 500),
             "TargetUserName": krb.target_username,
             "TargetDomainName": krb.target_domain,
@@ -1113,7 +1120,7 @@ class WindowsEventEmitter(LogEmitter):
             "Channel": "Security",
             "Level": 0,
             "Keywords": "0x8010000000000000" if is_failure else "0x8020000000000000",
-            "ExecutionProcessID": krb.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, krb.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 500),
             "TargetUserName": krb.target_username.split("@", 1)[0],
             "TargetDomainName": krb.target_domain,
@@ -1139,7 +1146,7 @@ class WindowsEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
-            "ExecutionProcessID": krb.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, krb.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 500),
             "TargetUserName": krb.target_username,
             "TargetDomainName": krb.target_domain,
@@ -1165,7 +1172,7 @@ class WindowsEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
-            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 500),
             "PackageName": "MICROSOFT_AUTHENTICATION_PACKAGE_V1_0",
             "TargetUserName": auth.username,
@@ -1186,7 +1193,7 @@ class WindowsEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
-            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
@@ -1355,7 +1362,7 @@ class WindowsEventEmitter(LogEmitter):
             "Channel": "Security",
             "Level": 0,
             "Keywords": "0x8010000000000000",  # Always Audit Failure
-            "ExecutionProcessID": krb.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, krb.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 500),
             "TargetUserName": krb.target_username,
             "TargetSid": krb.target_sid,
@@ -1407,7 +1414,7 @@ class WindowsEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
-            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
@@ -1443,7 +1450,7 @@ class WindowsEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
-            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
@@ -1478,7 +1485,7 @@ class WindowsEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
-            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 9999),
             "MemberName": grp.member_name,
             "MemberSid": grp.member_sid,
@@ -1516,7 +1523,7 @@ class WindowsEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
-            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 9999),
             "TargetUserName": acct.target_username,
             "TargetDomainName": acct.target_domain or host.netbios_domain,
@@ -1561,7 +1568,7 @@ class WindowsEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
-            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
             "ExecutionThreadID": rng.randint(100, 9999),
             "TargetUserName": acct.target_username,
             "TargetDomainName": acct.target_domain or host.netbios_domain,

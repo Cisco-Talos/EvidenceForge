@@ -66,6 +66,9 @@ from evidenceforge.generation.actions.email import (
     EmailDeliveryResult,
 )
 from evidenceforge.generation.actions.file_transfer import (
+    HttpFileTransferActionBundle,
+    HttpFileTransferRequest,
+    HttpFileTransferResult,
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
     HttpResponseFileTransferResult,
@@ -212,6 +215,9 @@ __all__ = [
     "HttpResponseFileTransferActionBundle",
     "HttpResponseFileTransferRequest",
     "HttpResponseFileTransferResult",
+    "HttpFileTransferActionBundle",
+    "HttpFileTransferRequest",
+    "HttpFileTransferResult",
     "http_response_parent_duration_floor",
     "http_response_transfer_duration_floor",
     "IdsAlertActionBundle",

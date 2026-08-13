@@ -368,7 +368,8 @@ class TestFilePaths:
             }
 
             assert all(effect is not None for effect in effects)
-            assert all(effect[0] == "modify" for effect in effects if effect is not None)
+            expected_action = "read" if "dbus-daemon" in process_name else "modify"
+            assert all(effect[0] == expected_action for effect in effects if effect is not None)
             assert not any(
                 effect is not None
                 and (effect[1].startswith(("/tmp/", "/var/tmp/")) or "/.cache-" in effect[1])
@@ -388,6 +389,38 @@ class TestFilePaths:
         )
 
         assert effect is None
+
+    def test_application_service_principals_skip_generic_user_file_churn(self):
+        for principal in ("dovecot", "meridian-app", "postfix"):
+            effect = select_ambient_file_churn_effect(
+                "/usr/libexec/vendor/service",
+                "/usr/libexec/vendor/service --foreground",
+                "linux",
+                random.Random(5),
+                principal,
+                get_file_paths("linux"),
+                ["create"],
+                [1],
+            )
+
+            assert effect is None
+
+    def test_dbus_ambient_state_is_read_only(self):
+        effects = {
+            select_ambient_file_churn_effect(
+                "/usr/bin/dbus-daemon",
+                "/usr/bin/dbus-daemon --system",
+                "linux",
+                random.Random(seed),
+                "messagebus",
+                get_file_paths("linux"),
+                ["modify"],
+                [1],
+            )
+            for seed in range(10)
+        }
+
+        assert all(effect is not None and effect[0] == "read" for effect in effects)
 
     def test_linux_web_daemon_ambient_churn_uses_matching_service_family(self):
         generic_paths = get_file_paths("linux")

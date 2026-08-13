@@ -116,6 +116,8 @@ from evidenceforge.generation.actions import (
     FailedLogonRequest,
     GroupMembershipChangeActionBundle,
     GroupMembershipChangeRequest,
+    HttpFileTransferActionBundle,
+    HttpFileTransferRequest,
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
     KerberosConnectionAuditActionBundle,
@@ -752,6 +754,7 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
     """Keep caller-provided HTTP metadata source-native before cross-source fan-out."""
     from evidenceforge.generation.activity.http_content import (
         coerce_response_size_for_mime,
+        http_response_body_is_prohibited,
         http_status_message,
         is_download_scale_mime,
         is_stable_resource_path,
@@ -763,7 +766,7 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
     status_code = http.status_code
     response_body_len = max(0, http.response_body_len)
     status_msg = http.status_msg
-    bodyless_status = status_code in {204, 304} or method == "HEAD"
+    bodyless_status = http_response_body_is_prohibited(method, status_code)
 
     if bodyless_status:
         response_body_len = 0
@@ -779,7 +782,7 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
         status_msg = http_status_message(status_code)
 
     resp_mime_types = list(http.resp_mime_types)
-    if 200 <= status_code < 300 and method not in {"CONNECT", "HEAD"}:
+    if 200 <= status_code < 300 and not bodyless_status:
         mime_type = (
             resp_mime_types[0]
             if resp_mime_types
@@ -799,15 +802,13 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
                 mime_type,
                 response_body_len,
             )
-    if (
-        not resp_mime_types
-        or response_body_len <= 0
-        or method == "HEAD"
-        or bodyless_status
-        or status_code in {301, 302}
-        or status_code >= 400
-    ):
+    if not resp_mime_types or response_body_len <= 0 or bodyless_status:
         mime_type = resp_mime_types[0] if resp_mime_types else ""
+        if not mime_type and response_body_len > 0 and status_code < 300:
+            mime_type = normalize_mime_type_for_path(
+                http.uri,
+                "application/octet-stream",
+            )
         resp_mime_types = response_mime_types_for_status(
             status_code,
             mime_type,
@@ -881,17 +882,6 @@ def _apply_plaintext_http_policy(
     )
 
 
-_HTTP_FILE_TRANSFER_MIME_TYPES = {
-    "application/octet-stream",
-    "application/pdf",
-    "application/vnd.debian.binary-package",
-    "application/vnd.ms-cab-compressed",
-    "application/x-gzip",
-    "application/x-msdownload",
-    "application/zip",
-}
-_HTTP_FILE_TRANSFER_BODY_THRESHOLD = 64 * 1024
-_HTTP_FILE_TRANSFER_LARGE_BODY_THRESHOLD = 1_000_000
 _SSH_CLIENT_IDENTITY_FILES = (
     "~/.ssh/id_ed25519",
     "~/.ssh/id_rsa",
@@ -968,48 +958,122 @@ def _ssh_command_target(target_host: str, attempted_username: str | None) -> str
     return target_host
 
 
-def _http_response_requires_file_transfer(http: HttpContext) -> bool:
-    """Return whether Zeek should always analyze this HTTP response body as a file."""
-
-    if http.response_body_len >= _HTTP_FILE_TRANSFER_LARGE_BODY_THRESHOLD:
-        return True
-    mime_type = http.resp_mime_types[0] if http.resp_mime_types else ""
-    return (
-        http.response_body_len >= _HTTP_FILE_TRANSFER_BODY_THRESHOLD
-        and mime_type in _HTTP_FILE_TRANSFER_MIME_TYPES
-    )
-
-
-def _attach_http_response_file_transfer(
+def _attach_http_file_transfers(
     event: OccurrenceBuilder,
     *,
     dst_ip: str,
     rng: random.Random,
-    probabilistic_file_analysis: bool,
 ) -> None:
-    """Attach source-native Zeek files.log metadata for eligible HTTP responses."""
+    """Attach source-native Zeek files.log metadata for visible HTTP entities."""
 
-    if event.network is None or event.http is None or event.file_transfer is not None:
+    if event.network is None or event.http is None:
         return
     if event.network.service != "http" or event.network.conn_state != "SF":
         return
     http = event.http
     method = (http.method or "GET").upper()
-    if (
-        method in {"CONNECT", "HEAD"}
-        or not (200 <= http.status_code < 300)
-        or http.response_body_len <= 100
-        or not http.resp_mime_types
-    ):
-        return
 
-    required = _http_response_requires_file_transfer(http)
-    if probabilistic_file_analysis:
-        sampled = rng.random() < 0.3
-        should_attach = required or sampled
-    else:
-        should_attach = required
-    if not should_attach:
+    existing = [
+        transfer
+        for transfer in (event.file_transfer, *event.file_transfers)
+        if transfer is not None
+    ]
+    has_request_transfer = any(transfer.is_orig for transfer in existing)
+    has_response_transfer = any(not transfer.is_orig for transfer in existing)
+
+    if http.request_body_len > 0 and not has_request_transfer:
+        from evidenceforge.generation.activity.http_file_profiles import (
+            request_content_type_for_activity,
+        )
+
+        request_entity = http.request_entity
+        request_mime = http.request_content_type or (
+            request_entity.mime_type if request_entity is not None else ""
+        )
+        if not request_mime:
+            request_mime = request_content_type_for_activity(
+                method,
+                http.uri,
+                http.user_agent,
+                local_source_path=(request_entity.local_source_path if request_entity else ""),
+            )
+        request_duration_floor = http_response_parent_duration_floor(http.request_body_len)
+        if request_duration_floor > 0:
+            request_floor_rng = random.Random(
+                _stable_seed(
+                    "http_request_file_transfer_parent_duration:"
+                    f"{event.network.src_ip}:{event.network.src_port}:"
+                    f"{event.network.dst_ip}:{event.network.dst_port}:"
+                    f"{http.host}:{http.uri}:{http.request_body_len}:"
+                    f"{event.timestamp.isoformat()}"
+                )
+            )
+            event.network.duration = max(
+                event.network.duration or 0.0,
+                request_duration_floor + request_floor_rng.uniform(0.05, 0.55),
+            )
+            if event.proxy is not None:
+                event.proxy = replace(
+                    event.proxy,
+                    time_taken=_proxy_time_taken_ms(
+                        event.network.duration,
+                        rng,
+                        method=event.proxy.method,
+                        status_code=event.proxy.status_code,
+                        cache_result=event.proxy.cache_result,
+                    ),
+                )
+        content_identity = (
+            request_entity.content_identity
+            if request_entity is not None
+            else (
+                f"http-request:{http.host}:{http.uri}:{method}:"
+                f"{http.request_body_len}:{request_mime}"
+            )
+        )
+        request_result = HttpFileTransferActionBundle(
+            HttpFileTransferRequest(
+                host=http.host,
+                uri=http.uri,
+                dst_ip=dst_ip,
+                body_len=http.request_body_len,
+                mime_types=(request_mime,),
+                timestamp=event.timestamp,
+                is_orig=True,
+                multipart=http.request_multipart,
+                filename=request_entity.wire_filename if request_entity else "",
+                content_identity=content_identity,
+                parent_duration=event.network.duration,
+            ),
+            rng,
+        ).execute()
+        event.file_transfers.extend(request_result.file_transfers)
+        request_transfers = request_result.file_transfers
+        from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
+
+        max_files_orig = int(load_http_file_profiles()["multipart"]["max_files_orig"])
+        request_referenced = request_transfers[:max_files_orig]
+        event.http = replace(
+            event.http,
+            request_content_type=request_mime,
+            orig_fuids=tuple(transfer.fuid for transfer in request_referenced),
+            orig_filenames=tuple(
+                transfer.filename for transfer in request_referenced if transfer.filename
+            ),
+            orig_mime_types=tuple(
+                transfer.mime_type for transfer in request_transfers if transfer.mime_type
+            )[:max_files_orig],
+        )
+        event.pe_analyses.extend(request_result.pe_analyses)
+
+    http = event.http
+    from evidenceforge.generation.activity.http_content import http_response_has_entity_body
+
+    if has_response_transfer or not http_response_has_entity_body(
+        method,
+        http.status_code,
+        http.response_body_len,
+    ):
         return
 
     duration_floor = http_response_parent_duration_floor(http.response_body_len)
@@ -1045,17 +1109,31 @@ def _attach_http_response_file_transfer(
             response_body_len=http.response_body_len,
             response_mime_types=list(http.resp_mime_types),
             timestamp=event.timestamp,
+            multipart=http.response_multipart,
             parent_duration=event.network.duration,
         ),
         rng,
     ).execute()
-    event.file_transfer = file_result.file_transfer
+    if file_result.file_transfers and event.file_transfer is None:
+        event.file_transfer = file_result.file_transfers[0]
+        event.file_transfers.extend(file_result.file_transfers[1:])
+    else:
+        event.file_transfers.extend(file_result.file_transfers)
+    from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
+
+    max_files_resp = int(load_http_file_profiles()["multipart"]["max_files_resp"])
+    response_referenced = file_result.file_transfers[:max_files_resp]
     event.http = replace(
         event.http,
-        resp_fuids=(event.file_transfer.fuid,),
-        resp_mime_types=(event.file_transfer.mime_type,),
+        resp_fuids=tuple(transfer.fuid for transfer in response_referenced),
+        resp_filenames=tuple(
+            transfer.filename for transfer in response_referenced if transfer.filename
+        ),
+        resp_mime_types=tuple(
+            transfer.mime_type for transfer in file_result.file_transfers if transfer.mime_type
+        )[:max_files_resp],
     )
-    event.pe = file_result.pe
+    event.pe_analyses.extend(file_result.pe_analyses)
 
 
 def _http_context_flow_body_len(http: HttpContext, side: str) -> int:
@@ -1103,7 +1181,9 @@ def _http_request_header_len(http: HttpContext, transaction_count: int) -> int:
         header_lines.append(f'If-None-Match: W/"{seed & 0xFFFFFFFF:x}"')
     if body_len > 0:
         header_lines.append(f"Content-Length: {body_len}")
-        header_lines.append("Content-Type: application/x-www-form-urlencoded")
+        header_lines.append(
+            f"Content-Type: {http.request_content_type or 'application/octet-stream'}"
+        )
     base_len = sum(len(line.encode("utf-8")) + 2 for line in header_lines) + 2
     per_transaction_extra = 24 + (seed % 97)
     return (base_len + per_transaction_extra) * transaction_count
@@ -2420,8 +2500,8 @@ TCP_CONN_STATE_DISTRIBUTION = [
     # Half-closed states — ~2% (one side closed, other didn't respond)
     ("S2", 1, "ShADadF"),  # Orig sent FIN, responder never replied
     ("S3", 1, "ShADadf"),  # Resp sent FIN, originator never replied
-    # Midstream (OTH) — ~1% (partial captures, NAT state loss)
-    ("OTH", 1, "Cc"),  # Midstream traffic (no SYN/SYN-ACK seen)
+    # Midstream (OTH) — ~1% (partial captures, asymmetric routing, NAT state loss)
+    ("OTH", 1, "DAd"),  # Midstream bidirectional data/ACK (handshake not observed)
 ]
 
 # Zeek UDP connection state distribution
@@ -3007,6 +3087,25 @@ def _dns_reverse_query(ip: str) -> str:
     """Return the in-addr.arpa owner name for an IPv4 address."""
     octets = ip.split(".")
     return ".".join(reversed(octets)) + ".in-addr.arpa"
+
+
+def _dns_reverse_ipv4(query: str) -> str | None:
+    """Return the IPv4 address encoded by an in-addr.arpa owner name."""
+    normalized = query.lower().rstrip(".")
+    suffix = ".in-addr.arpa"
+    if not normalized.endswith(suffix):
+        return None
+    labels = normalized[: -len(suffix)].split(".")
+    if len(labels) != 4:
+        return None
+    candidate = ".".join(reversed(labels))
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        return None
+    if not isinstance(address, ipaddress.IPv4Address):
+        return None
+    return str(address)
 
 
 def _public_dns_ptr_response(ip: str, forward_hostname: str | None) -> tuple[str, int, list[str]]:
@@ -4264,6 +4363,8 @@ class ActivityGenerator:
         self._linux_shell_last_session_close: dict[tuple[str, str], datetime] = {}
         self._linux_local_logon_syslog_sessions: set[str] = set()
         self._linux_local_logind_session_ids: dict[str, int] = {}
+        self._linux_sudo_tty_assignments: dict[tuple[str, str, str], str] = {}
+        self._linux_sudo_tty_owners: dict[tuple[str, str], tuple[str, str, str]] = {}
         self._ssh_session_ready_times: dict[str, datetime] = {}
         self._pending_ssh_session_closures: list[
             tuple[datetime, Any, Any, OccurrenceBuilder, Any]
@@ -4917,6 +5018,13 @@ class ActivityGenerator:
         if "." in system_host:
             return system_host
         return f"{system_host}.{ad_domain}"
+
+    def _scenario_fqdn_for_ip(self, ip: str) -> str | None:
+        """Return the current scenario's canonical hostname for an owned IP."""
+        system = getattr(self, "_ip_to_system", {}).get(ip)
+        if system is None:
+            return None
+        return self._dns_canonical_internal_hostname(str(getattr(system, "hostname", "") or ""))
 
     def _unique_environment_systems(self) -> list[Any]:
         """Return scenario systems once, preserving environment order where possible."""
@@ -7321,7 +7429,7 @@ class ActivityGenerator:
         rng = _get_rng()
         proxy_hostname = hostname
         if proxy_hostname is None:
-            proxy_hostname = REVERSE_DNS.get(dst_ip)
+            proxy_hostname = self._scenario_fqdn_for_ip(dst_ip) or REVERSE_DNS.get(dst_ip)
         if proxy_hostname is None:
             proxy_hostname = _generate_random_hostname(rng, dst_ip)
         if proxy_hostname == "":
@@ -8598,8 +8706,27 @@ class ActivityGenerator:
                 proxy_context=proxy_context,
                 proxy_sys=proxy_sys,
                 dst_port=origin_port,
+                http=event.http,
             )
             if caller_process_image is not None:
+                running = self.state_manager.get_process(source_system.hostname, current_pid)
+                if running is not None and self._process_owns_multipart_proxy_request(
+                    process=running,
+                    candidate_image=caller_process_image,
+                    http=event.http,
+                ):
+                    process_user_agent = _http_user_agent_for_process(
+                        caller_process_image,
+                        running.command_line,
+                    )
+                    event.http = replace(
+                        event.http,
+                        user_agent=process_user_agent,
+                        referrer=_source_native_http_referrer(
+                            process_user_agent,
+                            event.http.referrer,
+                        ),
+                    )
                 self._set_connection_process_context(
                     event,
                     source_system=source_system,
@@ -8663,6 +8790,7 @@ class ActivityGenerator:
         proxy_context: ProxyContext,
         proxy_sys: System,
         dst_port: int,
+        http: HttpContext | None = None,
     ) -> str | None:
         """Return the caller process image when valid proxy client telemetry owns it."""
         if pid <= 0 or source_system is None:
@@ -8671,15 +8799,22 @@ class ActivityGenerator:
         running = self.state_manager.get_process(source_system.hostname, pid)
         if running is None:
             return None
-        if self._foreground_process_expired_for_attribution(
+        candidate_image = running.image or process_image
+        if not candidate_image:
+            return None
+        owns_multipart_request = self._process_owns_multipart_proxy_request(
+            process=running,
+            candidate_image=candidate_image,
+            http=http,
+        )
+        if not owns_multipart_request and self._foreground_process_expired_for_attribution(
             source_system,
             running,
             time=time,
         ):
             return None
-        candidate_image = running.image or process_image
-        if not candidate_image:
-            return None
+        if owns_multipart_request:
+            return candidate_image
 
         hint = self._explicit_proxy_client_process_hint(
             user_agent=proxy_context.user_agent,
@@ -8730,6 +8865,32 @@ class ActivityGenerator:
         ):
             return None
         return candidate_image
+
+    @staticmethod
+    def _process_owns_multipart_proxy_request(
+        *,
+        process: Any,
+        candidate_image: str,
+        http: HttpContext | None,
+    ) -> bool:
+        """Recognize an explicit curl form command as the multipart socket owner."""
+        if http is None or http.request_multipart is None:
+            return False
+        if ntpath.basename(candidate_image).lower() not in {"curl", "curl.exe"}:
+            return False
+        command = str(getattr(process, "command_line", "") or "")
+        command_lower = command.lower()
+        if not any(marker in command_lower for marker in (" --form ", " -f ")):
+            return False
+        target = f"{http.host}{http.uri}".lower()
+        if target not in command_lower:
+            return False
+        local_parts = [
+            part for part in http.request_multipart.leaf_parts() if part.local_source_path
+        ]
+        return bool(local_parts) and all(
+            part.local_source_path.lower() in command_lower for part in local_parts
+        )
 
     @staticmethod
     def _windows_proxy_pid_should_be_replaced(process: Any) -> bool:
@@ -9770,6 +9931,16 @@ class ActivityGenerator:
         if request.session_end_plan is not None:
             self.state_manager.plan_session_end(logon_id, request.session_end_plan)
 
+        session_for_login = self.state_manager.get_session(logon_id)
+        if (
+            os_cat == "linux"
+            and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
+            and session_for_login is not None
+            and session_for_login.login_occurrence_emitted
+        ):
+            session_for_login.last_activity_time = time
+            return logon_id
+
         auth_logon_guid = self.state_manager.get_or_create_session_logon_guid(
             logon_id,
             system.hostname,
@@ -10033,6 +10204,10 @@ class ActivityGenerator:
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch_builder(event)
+        if os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES:
+            session_for_login = self.state_manager.get_session(logon_id)
+            if session_for_login is not None:
+                session_for_login.login_occurrence_emitted = True
 
         # Interactive child processes cannot be visible to eCAR before the
         # source-native session login that owns their LogonID.  The session
@@ -10135,6 +10310,26 @@ class ActivityGenerator:
         )
         pam_actor = "LOGIN(uid=0)" if pam_service == "login" else "gdm(uid=0)"
         pam_time = logind_time - timedelta(milliseconds=rng.randint(3000, 8000))
+        if pam_service == "login":
+            root_parent_pid = self._linux_anchor_pid(system, pam_time)
+            pam_pid = self.generate_process(
+                user=user,
+                system=system,
+                time=pam_time,
+                logon_id=logon_id,
+                process_name="/bin/login",
+                command_line=f"login -- {user.username}",
+                parent_pid=root_parent_pid,
+                suppress_command_file_effect=True,
+                lifecycle_group_id=session.lifecycle_group_id,
+            )
+            session.process_tree_root = pam_pid
+        else:
+            pam_pid = self.state_manager.allocate_transient_linux_pid(
+                system.hostname,
+                pam_time,
+                os_category="linux",
+            )
         self.generate_syslog_event(
             system=system,
             time=pam_time,
@@ -10143,11 +10338,7 @@ class ActivityGenerator:
                 f"pam_unix({pam_service}:session): session opened for user "
                 f"{user.username}(uid={_linux_uid_for_user(user.username)}) by {pam_actor}"
             ),
-            pid=self.state_manager.allocate_transient_linux_pid(
-                system.hostname,
-                pam_time,
-                os_category="linux",
-            ),
+            pid=pam_pid,
             facility=10,
             auth=AuthContext(
                 username=user.username,
@@ -10831,12 +11022,11 @@ class ActivityGenerator:
             "emit_4771": auth_package in ("Kerberos", "Negotiate"),
         }
 
-    @staticmethod
-    def _workstation_name_for_source(source_ip: str) -> str:
+    def _workstation_name_for_source(self, source_ip: str) -> str:
         """Return a plausible WorkstationName for a failed network logon source."""
         if not source_ip or source_ip == "-":
             return "-"
-        rdns = REVERSE_DNS.get(source_ip, "")
+        rdns = self._scenario_fqdn_for_ip(source_ip) or REVERSE_DNS.get(source_ip, "")
         if rdns:
             return rdns.split(".", 1)[0].upper()
         return source_ip
@@ -14026,6 +14216,7 @@ class ActivityGenerator:
         file_transfer: FileTransferContext | None = None,
         file_transfers: list[FileTransferContext] | None = None,
         pe: PeContext | None = None,
+        pe_analyses: list[PeContext] | None = None,
         ocsp: OcspContext | None = None,
         ocsp_transaction: OcspTransactionPlan | None = None,
         proxy: Optional["ProxyContext"] = None,
@@ -14105,6 +14296,7 @@ class ActivityGenerator:
             file_transfer=file_transfer,
             file_transfers=tuple(file_transfers or ()),
             pe=pe,
+            pe_analyses=tuple(pe_analyses or ()),
             ocsp=ocsp,
             ocsp_transaction=ocsp_transaction,
             proxy=proxy,
@@ -18813,7 +19005,7 @@ class ActivityGenerator:
         activity_time: datetime,
     ) -> int | None:
         """Create or return a visible Linux shell that owns session child processes."""
-        session = self.state_manager.get_session(logon_id)
+        session = self.state_manager.get_session_at(logon_id, activity_time)
         if session is None or session.system != target_system.hostname:
             return None
         if not _session_active_for_activity(session, activity_time, margin_seconds=1.5):
@@ -18874,6 +19066,22 @@ class ActivityGenerator:
             scenario_floor = scenario_start + timedelta(milliseconds=400 + (shell_seed % 2500))
             pre_command_gap = timedelta(seconds=4 + (shell_seed % 75))
             bash_time = max(scenario_floor, activity_time - pre_command_gap)
+        session_root = (
+            self.state_manager.get_process(target_system.hostname, session.process_tree_root)
+            if session.process_tree_root
+            else None
+        )
+        if (
+            session_root is not None
+            and session_root.image
+            in {
+                "/bin/login",
+                "/usr/libexec/gnome-terminal-server",
+            }
+            and ensure_utc(session_root.start_time) >= bash_time
+            and ensure_utc(session_root.start_time) < activity_time
+        ):
+            bash_time = ensure_utc(session_root.start_time) + timedelta(milliseconds=120)
         readiness_gap = timedelta(milliseconds=2200 + (shell_seed % 5200))
         latest_bash_time = activity_time - readiness_gap
         if bash_time > latest_bash_time and latest_bash_time > logon_time:
@@ -20089,6 +20297,10 @@ class ActivityGenerator:
         qtype_name = (dns.query_type or "").upper()
         if qtype_name in {"A", "AAAA", "PTR", "MX", "NS", "SOA"}:
             dns.query = self._dns_canonical_internal_hostname(dns.query) or dns.query
+        reverse_ip = _dns_reverse_ipv4(dns.query) if qtype_name == "PTR" else None
+        reverse_name = self._scenario_fqdn_for_ip(reverse_ip) if reverse_ip else None
+        if reverse_name and dns.rcode == "NOERROR" and dns.answers:
+            dns.answers = [reverse_name]
         email_dns_system = self._email_dns_system_for_hostname(dns.query)
         email_dns_ip = str(getattr(email_dns_system, "ip", "") or "") if email_dns_system else ""
         if email_dns_ip and qtype_name == "A":
@@ -20102,6 +20314,7 @@ class ActivityGenerator:
         is_internal = (
             qtype_name == "SRV"
             or _dns_is_internal_name(dns.query, ad_domain)
+            or bool(reverse_ip and _is_private_ip(reverse_ip))
             or email_dns_system is not None
         )
         if is_internal:
@@ -20268,10 +20481,10 @@ class ActivityGenerator:
 
         rng = _get_rng()
 
-        # Use explicit hostname if provided (domain-first selection),
-        # otherwise fall back to REVERSE_DNS lookup
+        # Use explicit hostname if provided (domain-first selection), then the
+        # current scenario's owned systems, and only then packaged DNS data.
         if not hostname:
-            hostname = REVERSE_DNS.get(dst_ip)
+            hostname = self._scenario_fqdn_for_ip(dst_ip) or REVERSE_DNS.get(dst_ip)
         if not hostname:
             if _is_private_ip(dst_ip):
                 hostname = _generate_internal_hostname(
@@ -20425,7 +20638,7 @@ class ActivityGenerator:
             qtype, qtype_name = 12, "PTR"
             query = _dns_reverse_query(dst_ip)
             if _is_private_ip(dst_ip):
-                answers = [hostname]
+                answers = [self._scenario_fqdn_for_ip(dst_ip) or hostname]
             else:
                 answers = [_generate_rdns_name(rng, dst_ip, hostname)]
         elif qtype_roll < 0.98:
@@ -20436,8 +20649,7 @@ class ActivityGenerator:
                 domain = ad_domain
                 query = rng.choice(_AD_SRV_QUERIES).format(domain=domain)
                 dc_sys = _get_rng().choice(dc_systems)
-                dc_ip = dc_sys.ip
-                dc_hostname = REVERSE_DNS.get(dc_ip, f"{dc_sys.hostname}.{domain}")
+                dc_hostname = self._scenario_fqdn_for_ip(dc_sys.ip) or dc_sys.hostname
                 svc_prefix = query.split(".")[0]
                 port = _SRV_PORT_MAP.get(svc_prefix, 389)
                 answers = [f"0 100 {port} {dc_hostname}"]
@@ -20469,6 +20681,7 @@ class ActivityGenerator:
         query_is_internal = (
             qtype_name == "SRV"
             or _dns_is_internal_name(query, ad_domain)
+            or (qtype_name == "PTR" and _is_private_ip(dst_ip))
             or query_email_system is not None
         )
         if query_is_internal and not _is_private_ip(dns_server_ip):
@@ -20582,7 +20795,7 @@ class ActivityGenerator:
                 companion_qtype = 12
                 companion_query = _dns_reverse_query(dst_ip)
                 if _is_private_ip(dst_ip):
-                    companion_answers = [hostname]
+                    companion_answers = [self._scenario_fqdn_for_ip(dst_ip) or hostname]
                 else:
                     (
                         companion_rcode,
@@ -24468,6 +24681,16 @@ class ActivityGenerator:
                 dll_path,
             )
             return
+        if time >= proc.start_time and not self.state_manager.is_process_active_at(
+            system.hostname, pid, time
+        ):
+            logger.debug(
+                "Skipping image load outside owning process lifetime: %s pid=%s dll=%s",
+                system.hostname,
+                pid,
+                dll_path,
+            )
+            return
         image = normalize_defender_platform_path(proc.image, system.hostname)
         dll_path = self._materialize_module_profile_path(
             dll_path,
@@ -25047,7 +25270,6 @@ class ActivityGenerator:
         command_message: str,
         sudo_user: str,
         uid: int,
-        pid: int,
         runtime: timedelta,
     ) -> None:
         """Generate one allowed sudo command and its ordered PAM lifecycle."""
@@ -25060,10 +25282,171 @@ class ActivityGenerator:
                 command_message=command_message,
                 sudo_user=sudo_user,
                 uid=uid,
-                pid=pid,
                 runtime=runtime,
             ),
         ).execute()
+
+    def generate_linux_sudo_processes(
+        self,
+        *,
+        system: System,
+        sudo_time: datetime,
+        child_time: datetime,
+        sudo_user: str,
+        tty: str,
+        command: str,
+        reserve_until: datetime,
+        lifecycle_group_id: str,
+    ) -> tuple[int, int | None, timedelta, str]:
+        """Create a sudo process and elevated child under a live user shell."""
+
+        import shlex
+
+        user = self._user_model_for_username(sudo_user)
+        requested_tty_key = (system.hostname, sudo_user, tty)
+        assigned_tty = self._linux_sudo_tty_assignments.get(requested_tty_key)
+        if assigned_tty is None:
+            assigned_tty = tty
+            owner_key = self._linux_sudo_tty_owners.get((system.hostname, assigned_tty))
+            if owner_key is not None and owner_key != requested_tty_key:
+                prefix, separator, suffix = tty.rpartition("/")
+                try:
+                    next_index = int(suffix) + 1 if separator else 0
+                except ValueError:
+                    prefix, separator, next_index = "pts", "/", 0
+                while (system.hostname, f"{prefix}{separator}{next_index}") in (
+                    self._linux_sudo_tty_owners
+                ):
+                    next_index += 1
+                assigned_tty = f"{prefix}{separator}{next_index}"
+            self._linux_sudo_tty_assignments[requested_tty_key] = assigned_tty
+            self._linux_sudo_tty_owners[(system.hostname, assigned_tty)] = requested_tty_key
+        tty_key = (system.hostname, sudo_user, assigned_tty)
+        tty_sessions = getattr(self, "_linux_sudo_tty_sessions", None)
+        if tty_sessions is None:
+            tty_sessions = {}
+            self._linux_sudo_tty_sessions = tty_sessions
+        tty_available = getattr(self, "_linux_sudo_tty_available", None)
+        if tty_available is None:
+            tty_available = {}
+            self._linux_sudo_tty_available = tty_available
+        available = tty_available.get(tty_key)
+        effective_sudo_time = sudo_time
+        if available is not None and effective_sudo_time <= available:
+            effective_sudo_time = available + timedelta(milliseconds=20)
+        timing_shift = effective_sudo_time - sudo_time
+        child_time += timing_shift
+        reserve_until += timing_shift
+        tty_available[tty_key] = reserve_until
+
+        session = None
+        existing_logon_id = tty_sessions.get(tty_key)
+        if existing_logon_id:
+            candidate = self.state_manager.get_session_at(existing_logon_id, effective_sudo_time)
+            if candidate is not None and _session_active_for_activity(
+                candidate, effective_sudo_time
+            ):
+                session = candidate
+        if session is None:
+            session_seed = _stable_seed(
+                "sudo-session-bootstrap:"
+                f"{system.hostname}:{sudo_user}:{assigned_tty}:{sudo_time.date()}"
+            )
+            session_time = effective_sudo_time - timedelta(
+                seconds=75 + (session_seed % 526),
+            )
+            scenario_start = getattr(self, "_scenario_start_time", None)
+            scenario_start = ensure_utc(scenario_start) if scenario_start is not None else None
+            logon_id = f"0x{session_seed & 0x0FFFFFFF:x}"
+            if scenario_start is not None and session_time < scenario_start:
+                self.state_manager.register_session(
+                    logon_id=logon_id,
+                    username=user.username,
+                    system=system.hostname,
+                    logon_type=2,
+                    source_ip="-",
+                    start_time=session_time,
+                    session_kind="interactive",
+                    lifecycle_group_id=lifecycle_group_id,
+                )
+            else:
+                logon_id = self.generate_logon(
+                    user=user,
+                    system=system,
+                    time=session_time,
+                    logon_type=2,
+                    source_ip=None,
+                    emit_network_evidence=False,
+                    logon_id=logon_id,
+                    reuse_required_at=child_time,
+                    lifecycle_group_id=lifecycle_group_id,
+                )
+            session = self.state_manager.get_session(logon_id)
+            if session is None:
+                return 0, None, timing_shift, assigned_tty
+            tty_sessions[tty_key] = logon_id
+        shell_pid = self.ensure_linux_session_shell(
+            user=user,
+            target_system=system,
+            logon_id=session.logon_id,
+            logon_time=session.start_time,
+            activity_time=effective_sudo_time,
+        )
+        if shell_pid is None:
+            return 0, None, timing_shift, assigned_tty
+        sudo_pid = self.generate_process(
+            user=user,
+            system=system,
+            time=effective_sudo_time,
+            logon_id=session.logon_id,
+            process_name="/usr/bin/sudo",
+            command_line=f"sudo {command}",
+            parent_pid=shell_pid,
+            suppress_command_file_effect=True,
+            concurrency_group_id=lifecycle_group_id,
+        )
+        try:
+            executable = shlex.split(command)[0]
+        except (ValueError, IndexError):
+            executable = ""
+        if not executable:
+            return sudo_pid, None, timing_shift, assigned_tty
+        if "/" not in executable:
+            executable = f"/usr/bin/{executable}"
+        root_user = self._user_model_for_username("root")
+        child_pid = self.generate_process(
+            user=root_user,
+            system=system,
+            time=child_time,
+            logon_id=session.logon_id,
+            process_name=executable,
+            command_line=command,
+            parent_pid=sudo_pid,
+            suppress_command_file_effect=True,
+            concurrency_group_id=lifecycle_group_id,
+        )
+        return sudo_pid, child_pid, timing_shift, assigned_tty
+
+    def terminate_linux_sudo_process(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        pid: int,
+    ) -> None:
+        """Terminate one sudo-family process using its canonical owner and session."""
+
+        process = self.state_manager.get_process(system.hostname, pid)
+        if process is None:
+            return
+        self.generate_process_termination(
+            user=self._user_model_for_username(process.username),
+            system=system,
+            time=time,
+            pid=pid,
+            process_name=process.image,
+            logon_id=process.logon_id,
+        )
 
     def generate_raw(
         self,

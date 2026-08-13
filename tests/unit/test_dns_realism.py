@@ -1613,6 +1613,48 @@ class TestWeirdProtocolConstraint:
         assert event.dns.query == "WEB-EXT-01.example.org"
         assert event.dns.AA is True
 
+    def test_direct_ptr_for_owned_ip_uses_canonical_reverse_identity(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Owned reverse zones should not inherit a caller's unrelated forward alias."""
+        from evidenceforge.generation.activity.generator import _dns_base_ttl
+
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        activity_gen._ip_to_system = {dc.ip: dc}
+        activity_gen._ad_domain = "example.org"
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            dns=DnsContext(
+                query="10.0.0.10.in-addr.arpa",
+                query_type="PTR",
+                qtype=12,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["nas-04.example.org"],
+                AA=False,
+                rtt=0.004,
+            ),
+            orig_bytes=80,
+            resp_bytes=140,
+        )
+
+        event = mock_emitters["zeek_dns"].emit.call_args[0][0]
+        assert event.dns.answers == ["DC-01.example.org"]
+        assert event.dns.AA is True
+        assert event.dns.TTLs == [float(_dns_base_ttl(event.dns.query, True))]
+
     def test_direct_emitter_preserves_dns_rtt_duration(self, timestamp, tmp_path):
         """Direct sensor rendering does not invent unexplained duration variance."""
         fmt = load_format("zeek_conn")
@@ -2001,6 +2043,33 @@ class TestDnsSupportQueryTypes:
         assert event.dns.answers == ["v=spf1 include:_spf.example.com ~all"]
         assert event.dns.TTLs and 0 < event.dns.TTLs[0] <= 1800
 
+    def test_generated_ptr_for_owned_ip_uses_canonical_reverse_identity(
+        self, activity_gen, timestamp, mock_emitters, monkeypatch
+    ):
+        """Generated PTR answers remain canonical when the forward target is an alias."""
+        self._force_dns_random(monkeypatch, [0.9])
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        activity_gen._ip_to_system = {dc.ip: dc}
+        activity_gen._ad_domain = "example.org"
+        activity_gen._dns_server_ips = [dc.ip]
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip=dc.ip,
+            time=timestamp,
+            hostname="nas-04.example.org",
+        )
+
+        event = mock_emitters["zeek_dns"].emit.call_args[0][0]
+        assert event.dns.query_type == "PTR"
+        assert event.dns.answers == ["DC-01.example.org"]
+        assert event.dns.AA is True
+
     def test_mx_roll_on_cdn_hostname_falls_back_to_txt(
         self, activity_gen, timestamp, mock_emitters, monkeypatch
     ):
@@ -2198,6 +2267,7 @@ class TestDnsSupportQueryTypes:
         self, activity_gen, timestamp, mock_emitters, monkeypatch
     ):
         import evidenceforge.generation.activity.generator as generator_module
+        from evidenceforge.generation.activity.network import REVERSE_DNS
 
         self._force_dns_random(monkeypatch, [0.5, 0.95, 0.5])
         monkeypatch.setattr(
@@ -2224,6 +2294,9 @@ class TestDnsSupportQueryTypes:
         activity_gen._dc_systems = [dc]
         activity_gen._ad_domain = "example.com"
         activity_gen._dns_server_ips = [dc.ip]
+        # Another generation in the same process may have registered this IP
+        # under a different scenario. SRV ownership must remain scenario-local.
+        monkeypatch.setitem(REVERSE_DNS, dc.ip, "hostA.corp.local")
 
         activity_gen._emit_dns_lookup(
             src_ip=proxy.ip,

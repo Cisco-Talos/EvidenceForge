@@ -303,12 +303,14 @@ def _email_scenario(*, include_email_config: bool = True) -> Scenario:
                         hostname="zeek-core",
                         monitoring_segments=["corp"],
                         log_formats=["zeek"],
+                        capture_profile="well_synced",
                     )
                 ],
             ),
             email=email,
         ),
         time_window=TimeWindow(start="2026-01-05T14:00:00Z", duration="1h", warmup="1h"),
+        observation_profile="complete",
         baseline_activity=BaselineActivity(
             description="Minimal baseline",
             intensity="low",

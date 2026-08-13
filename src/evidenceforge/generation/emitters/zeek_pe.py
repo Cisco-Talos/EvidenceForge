@@ -46,35 +46,35 @@ class ZeekPeEmitter(SensorMultiplexEmitter):
     _supported_types: set[str] = {"connection"}
 
     def can_handle(self, event: CanonicalOccurrence) -> bool:
-        return event.event_type in self._supported_types and event.protocol.pe is not None
+        return event.event_type in self._supported_types and bool(event.protocol.pe_analyses)
 
     def emit(self, event: CanonicalOccurrence) -> None:
-        pe = event.protocol.pe
-        event_data: dict[str, Any] = {
-            "ts": _pe_analyzer_timestamp(event),
-            "id": pe.id,
-            "machine": pe.machine,
-            "compile_ts": pe.compile_ts,
-            "os": pe.os,
-            "subsystem": pe.subsystem,
-            "is_exe": pe.is_exe,
-            "is_64bit": pe.is_64bit,
-            "uses_aslr": pe.uses_aslr,
-            "uses_dep": pe.uses_dep,
-            "uses_code_integrity": pe.uses_code_integrity,
-            "uses_seh": pe.uses_seh,
-            "has_import_table": pe.has_import_table,
-            "has_export_table": pe.has_export_table,
-            "has_cert_table": pe.has_cert_table,
-            "has_debug_data": pe.has_debug_data,
-            "section_names": pe.section_names,
-            **self._sensor_metadata(
-                event,
-                self.format_def.name if self.format_def else "zeek_pe",
-                analyzer_file_id=pe.id,
-            ),
-        }
-        self.emit_event(event_data)
+        for pe in event.protocol.pe_analyses:
+            event_data: dict[str, Any] = {
+                "ts": _pe_analyzer_timestamp(event, pe),
+                "id": pe.id,
+                "machine": pe.machine,
+                "compile_ts": pe.compile_ts,
+                "os": pe.os,
+                "subsystem": pe.subsystem,
+                "is_exe": pe.is_exe,
+                "is_64bit": pe.is_64bit,
+                "uses_aslr": pe.uses_aslr,
+                "uses_dep": pe.uses_dep,
+                "uses_code_integrity": pe.uses_code_integrity,
+                "uses_seh": pe.uses_seh,
+                "has_import_table": pe.has_import_table,
+                "has_export_table": pe.has_export_table,
+                "has_cert_table": pe.has_cert_table,
+                "has_debug_data": pe.has_debug_data,
+                "section_names": pe.section_names,
+                **self._sensor_metadata(
+                    event,
+                    self.format_def.name if self.format_def else "zeek_pe",
+                    analyzer_file_id=pe.id,
+                ),
+            }
+            self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         optional_fields = ["section_names"]
@@ -84,15 +84,20 @@ class ZeekPeEmitter(SensorMultiplexEmitter):
         return self._render_zeek_json(event_data)
 
 
-def _pe_analyzer_timestamp(event: CanonicalOccurrence) -> datetime:
+def _pe_analyzer_timestamp(event: CanonicalOccurrence, pe: Any | None = None) -> datetime:
     """Return a PE analyzer time after the owning files.log artifact."""
-    pe = event.protocol.pe
+    pe = pe or event.protocol.pe
     if pe is None:
         return event.timestamp
-    if event.network is not None and event.protocol.primary_file_transfer is not None:
+    owning_transfer = next(
+        (transfer for transfer in event.protocol.file_transfers if transfer.fuid == pe.id),
+        None,
+    )
+    if event.network is not None and owning_transfer is not None:
         file_ts, file_duration = _bounded_file_transfer_observation(
             event,
-            min_start=_related_http_analyzer_timestamp(event),
+            min_start=_related_http_analyzer_timestamp(event, owning_transfer),
+            file_transfer=owning_transfer,
         )
         duration_us = max(0, int(file_duration * 1_000_000))
         if duration_us <= 1:

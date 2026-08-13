@@ -33,12 +33,82 @@ from evidenceforge.evaluation.pillars.parseability import (
     ParseabilityScorer,
     _normalize_for_validation,
 )
-from evidenceforge.evaluation.pillars.plausibility import PlausibilityScorer
+from evidenceforge.evaluation.pillars.plausibility import (
+    PlausibilityScorer,
+    _score_http_file_consistency,
+)
 
 # Alias for tests that use the old RecordFidelityScorer name
 RecordFidelityScorer = ParseabilityScorer
 
 GOOD_FIXTURES = Path(__file__).parent.parent / "fixtures" / "eval" / "good"
+
+
+def test_http_upload_file_consistency_checks_direction_size_mime_and_uid() -> None:
+    """Evaluator accepts a fully correlated originator-side HTTP file row."""
+
+    http = _make_record(
+        "zeek_http",
+        {
+            "uid": "CUpload",
+            "request_body_len": 44_040_192,
+            "orig_fuids": ["FUpload"],
+            "orig_mime_types": ["application/vnd.rar"],
+        },
+    )
+    file_record = _make_record(
+        "zeek_files",
+        {
+            "fuid": "FUpload",
+            "conn_uids": ["CUpload"],
+            "is_orig": True,
+            "total_bytes": 44_040_192,
+            "mime_type": "application/vnd.rar",
+        },
+    )
+
+    matched, agreeing, failures = _score_http_file_consistency(
+        {"zeek_http": [http], "zeek_files": [file_record]}
+    )
+
+    assert matched == agreeing == 5
+    assert failures == []
+
+
+def test_http_multipart_consistency_accepts_sparse_vectors_and_envelope_overhead() -> None:
+    """Multipart filenames/MIME are present-value vectors, not FUID-aligned arrays."""
+
+    http = _make_record(
+        "zeek_http",
+        {
+            "uid": "CMultipart",
+            "request_body_len": 440,
+            "orig_fuids": ["F1", "F2", "F3", "F4"],
+            "orig_filenames": ["file"],
+            "orig_mime_types": ["text/plain"],
+        },
+    )
+    files = [
+        _make_record(
+            "zeek_files",
+            {
+                "fuid": f"F{index}",
+                "conn_uids": ["CMultipart"],
+                "is_orig": True,
+                "seen_bytes": size,
+                **({"filename": "file"} if index == 3 else {}),
+                **({"mime_type": "text/plain"} if index == 4 else {}),
+            },
+        )
+        for index, size in enumerate((38, 1, 6, 22), start=1)
+    ]
+
+    matched, agreeing, failures = _score_http_file_consistency(
+        {"zeek_http": [http], "zeek_files": files}
+    )
+
+    assert matched == agreeing
+    assert failures == []
 
 
 def _make_record(format_name: str, fields: dict, errors: list[str] | None = None) -> ParsedRecord:

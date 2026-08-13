@@ -57,7 +57,10 @@ scheduled_tasks:
       - "cleanmgr.exe /autoclean /d C:"
     parent: svchost_local_system
   - image: "C:\\Windows\\System32\\wsqmcons.exe"
-    weight: 4
+    system_types: [workstation]
+    weight: 1
+    max_per_host_window: 1
+    cooldown_hours: 24
     command_templates:
       - "wsqmcons.exe"
     parent: svchost_local_system

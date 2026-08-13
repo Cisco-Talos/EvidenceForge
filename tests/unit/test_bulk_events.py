@@ -167,6 +167,7 @@ class TestBeaconEventSpec:
             orig_bytes=500,
             resp_bytes=1000,
             conn_state="SF",
+            request_body_len=700,
             response_body_len=1000,
             interval="5m",
             duration="2h",
@@ -174,6 +175,20 @@ class TestBeaconEventSpec:
         )
         assert spec.hostname == "evil.com"
         assert spec.orig_bytes == 500
+        assert spec.request_body_len == 700
+
+    def test_http_sequence_accepts_request_body_ranges(self):
+        spec = BeaconEventSpec(
+            dst_ip="1.2.3.4",
+            service="http",
+            interval="5m",
+            count=2,
+            http_sequence=[
+                {"method": "POST", "uri": "/api/checkin", "request_body_len": [96, 144]}
+            ],
+        )
+
+        assert spec.http_sequence[0].request_body_len == [96, 144]
 
     def test_rejects_rate(self):
         with pytest.raises(ValidationError, match="interval"):
@@ -414,8 +429,18 @@ class TestIterPeriodicTicks:
             action="allow",
             jitter=0.0,
             http_sequence=[
-                {"method": "GET", "uri": "/check?k={base64url:8}", "resp_bytes": [100, 200]},
-                {"method": "POST", "uri": "/task/{hex8}", "orig_bytes": [300, 400]},
+                {
+                    "method": "GET",
+                    "uri": "/check?k={base64url:8}",
+                    "request_body_len": 0,
+                    "resp_bytes": [100, 200],
+                },
+                {
+                    "method": "POST",
+                    "uri": "/task/{hex8}",
+                    "request_body_len": 512,
+                    "orig_bytes": [300, 400],
+                },
             ],
         )
 
@@ -431,7 +456,9 @@ class TestIterPeriodicTicks:
         calls = engine.activity_generator.generate_connection.call_args_list
         uris = [call.kwargs["http"].uri for call in calls]
         methods = [call.kwargs["http"].method for call in calls]
+        request_sizes = [call.kwargs["http"].request_body_len for call in calls]
         assert methods == ["GET", "POST", "GET", "POST"]
+        assert request_sizes == [0, 512, 0, 512]
         assert uris[0].startswith("/check?k=")
         assert uris[1].startswith("/task/")
         assert uris[0] != uris[2]

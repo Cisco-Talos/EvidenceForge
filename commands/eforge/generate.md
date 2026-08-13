@@ -177,6 +177,29 @@ scenarios/<scenario-name>/
     ...
 ```
 
+For plaintext HTTP uploads, verify the request `http.json` row's `orig_fuids`
+against `files.json`: the file must be `is_orig: true`, share the connection UID,
+and agree on request body size and MIME type. A raw curl `--data-binary @path`
+upload should have local source details in `GROUND_TRUTH.json` and endpoint FILE/READ
+evidence, but no Zeek filename; multipart may expose one. Background POST/PUT/PATCH
+bodies receive the same network file analysis without invented endpoint reads.
+HTTPS bodies remain opaque, and explicit plaintext proxies can produce one sensor-local
+FUID per successfully traversed leg.
+
+For multipart, verify the outer request/response body length includes boundaries,
+part headers, separators, and encoded leaf bytes, while each `files.json` row
+uses the decoded leaf size. FUIDs follow discovery order and stop at 15 in
+`http.json`, but all leaf files remain present. Filename and MIME vectors are
+sparse and are not positionally aligned with FUIDs. Each resolved local part
+should have one transmitting-process FILE/READ; literals should have none.
+
+For responses, complete observation should give every transmitted nonempty
+plaintext/decrypted HTTP entity a `resp_fuids` join to an `is_orig: false`
+`files.json` row, even for tiny redirects or error pages. HEAD, 1xx, 204, 205,
+304, successful CONNECT, zero-byte, and failed-transport responses remain
+fileless. On a proxy MISS, verify both leg-local FUIDs describe identical content;
+on a HIT or proxy error, verify only the client leg has the response file.
+
 If generated output (`data/`, `GROUND_TRUTH.md`, `GROUND_TRUTH.json`, `OBSERVATION_MANIFEST.json`, `ARTIFACTS_MANIFEST.json`, `OUTPUT_TARGET.txt`, or `artifacts/`) already exists, the CLI prompts before overwriting. Use `--force` to skip the prompt (for automation / AI use). `ENVIRONMENT.md` is scenario-authored and is preserved.
 
 ### 3. Post-Generation

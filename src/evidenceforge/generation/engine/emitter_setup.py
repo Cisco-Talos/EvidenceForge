@@ -578,15 +578,6 @@ class EmitterSetupMixin:
         self._external_scanner_ips = [ip for ip, _ in pool]
         self._external_scanner_weights = [w for _, w in pool]
 
-        # Register system IP→FQDN mappings so DNS queries use correct hostnames
-        # (e.g., DC-01.meridian-healthcare.com instead of host-10.corp.local)
-        from evidenceforge.generation.activity.network import REVERSE_DNS
-
-        ad_domain = self._resolve_ad_domain()
-        for system in self.scenario.environment.systems:
-            fqdn = f"{system.hostname}.{ad_domain}"
-            REVERSE_DNS[system.ip] = fqdn
-
         # Share system PIDs with activity generator for dynamic ParentProcessName
         self.activity_generator._system_pids = self._system_pids
         self.activity_generator._all_system_ips = [s.ip for s in self.scenario.environment.systems]

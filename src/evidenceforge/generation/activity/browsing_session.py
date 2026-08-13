@@ -16,6 +16,7 @@ import random
 from dataclasses import dataclass
 from datetime import datetime
 
+from evidenceforge.events.contexts import HttpMultipartEntityContext
 from evidenceforge.generation.activity.http_content import (
     apply_transfer_size_variance,
     is_stable_resource_path,
@@ -52,6 +53,10 @@ class BrowsingRequest:
     response_body_len: int  # Estimated response size in bytes
     request_body_len: int  # Estimated request size in bytes
     status_code: int = 200  # HTTP response status
+    request_content_type: str = ""  # Explicit application-profile request MIME
+    request_wire_filename: str = ""  # Filename exposed by request encoding, if any
+    request_multipart: HttpMultipartEntityContext | None = None
+    response_multipart: HttpMultipartEntityContext | None = None
 
 
 _INTENSITY_PARAMS: dict[str, dict[str, tuple[int, int]]] = {

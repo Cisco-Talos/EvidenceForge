@@ -6,6 +6,7 @@
 import random
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -335,6 +336,32 @@ def test_file_download_signature_requires_matching_response_file_mime() -> None:
     assert ids_alert_matches_transaction(
         alert, transaction, http=HttpContext(), file_transfers=(download,)
     )
+
+
+def test_domain_signature_requires_matching_tls_server_name() -> None:
+    """A named-domain IDS claim must be observable on the exact TLS flow."""
+    signature = signature_by_sid(2025712)
+    assert signature is not None
+    alert = IdsAlertActionBundle(
+        IdsAlertRequest(
+            signature=signature,
+            time=T0,
+            src_ip="10.0.0.8",
+            dst_ip="198.51.100.20",
+            dst_port=443,
+            proto="tcp",
+            rng=random.Random(11),
+        )
+    ).execute()
+    transaction = _planned_transaction(dst_port=443, service="ssl")
+
+    assert ids_alert_matches_transaction(
+        alert, transaction, ssl=SimpleNamespace(server_name="api.ipify.org")
+    )
+    assert not ids_alert_matches_transaction(
+        alert, transaction, ssl=SimpleNamespace(server_name="api.hubspot.com")
+    )
+    assert not ids_alert_matches_transaction(alert, transaction, ssl=None)
 
 
 def test_snort_response_predicate_renders_responder_packet_direction(tmp_path: Path) -> None:

@@ -516,7 +516,7 @@ class SensorMultiplexEmitter(LogEmitter):
             original_fuid = render_data.get(fuid_field)
             if isinstance(original_fuid, str):
                 render_data[fuid_field] = observation.file_id(original_fuid)
-        for fuid_list_field in ("cert_chain_fuids", "resp_fuids", "fuids"):
+        for fuid_list_field in ("cert_chain_fuids", "orig_fuids", "resp_fuids", "fuids"):
             fuid_values = render_data.get(fuid_list_field)
             if isinstance(fuid_values, (list, tuple)):
                 if fuid_list_field == "cert_chain_fuids":

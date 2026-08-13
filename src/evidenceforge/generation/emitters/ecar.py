@@ -493,6 +493,22 @@ class EcarEmitter(HostMultiplexEmitter):
             plan.subject if plan is not None and isinstance(plan.subject, ProcessIdentity) else proc
         )
         event_ts = self._process_create_timestamp(event, process_identity)
+        parent_identity = (
+            plan.actor if plan is not None and isinstance(plan.actor, ProcessIdentity) else None
+        )
+        if parent_identity is not None:
+            dependent_times = getattr(self, "_process_dependent_source_times", None)
+            if dependent_times is None:
+                dependent_times = {}
+                self._process_dependent_source_times = dependent_times
+            parent_key = (
+                self._host_name(host),
+                parent_identity.pid,
+                parent_identity.started_at,
+            )
+            previous = dependent_times.get(parent_key)
+            if previous is None or event_ts > previous:
+                dependent_times[parent_key] = event_ts
         event_data = {
             "timestamp": event_ts,
             "hostname": self._host_name(host),
@@ -605,8 +621,9 @@ class EcarEmitter(HostMultiplexEmitter):
             principal = proc.username
         else:
             principal = event.auth.username if event.auth else ""
+        render_timestamp = self._after_process_create_timestamp(event, process_identity)
         event_data = {
-            "timestamp": self._after_process_create_timestamp(event, process_identity),
+            "timestamp": render_timestamp,
             "hostname": self._host_name(host),
             "object": "MODULE",
             "action": "LOAD",
@@ -617,6 +634,18 @@ class EcarEmitter(HostMultiplexEmitter):
         }
         if proc:
             event_data["image_path"] = proc.image
+            dependent_times = getattr(self, "_process_dependent_source_times", None)
+            if dependent_times is None:
+                dependent_times = {}
+                self._process_dependent_source_times = dependent_times
+            process_key = (
+                self._host_name(host),
+                proc.pid,
+                getattr(process_identity, "started_at", None) or proc.start_time,
+            )
+            previous = dependent_times.get(process_key)
+            if previous is None or render_timestamp > previous:
+                dependent_times[process_key] = render_timestamp
         self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
@@ -1055,6 +1084,12 @@ class EcarEmitter(HostMultiplexEmitter):
             if isinstance(proc, ProcessIdentity)
             else start_time
         )
+        dependent_floor = getattr(self, "_process_dependent_source_times", {}).get(
+            (self._host_name(event.src_host), getattr(proc, "pid", -1), start_time)
+        )
+        not_before = max(event.timestamp, process_create_ts + canonical_lifetime)
+        if dependent_floor is not None:
+            not_before = max(not_before, dependent_floor + timedelta(milliseconds=1))
         return _SOURCE_TIMING.source_time(
             event,
             "source.ecar_process_terminate",
@@ -1064,7 +1099,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 start_time,
                 event.timestamp,
             ),
-            not_before=max(event.timestamp, process_create_ts + canonical_lifetime),
+            not_before=not_before,
         )
 
     def _render_service_installed(self, event: CanonicalOccurrence) -> None:

@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import Mock
 
 from evidenceforge.events.authentication import (
     RemoteAuthenticationPlan,
@@ -355,6 +356,13 @@ def test_ecar_identity_plan_preserves_parent_create_dependent_terminate_order(
         ),
         identity_plan=EventIdentityPlan(actor=child),
     )
+    parent_terminate_event = OccurrenceBuilder(
+        timestamp=child.started_at + timedelta(milliseconds=1),
+        event_type="process_terminate",
+        src_host=host,
+        process=_context_from_identity(parent),
+        identity_plan=EventIdentityPlan(subject=parent),
+    )
     terminate_event = OccurrenceBuilder(
         timestamp=child.started_at + timedelta(seconds=2),
         event_type="process_terminate",
@@ -363,11 +371,23 @@ def test_ecar_identity_plan_preserves_parent_create_dependent_terminate_order(
         identity_plan=EventIdentityPlan(subject=child),
     )
     planner = SourceTimingPlanner()
-    for event in (parent_event, child_event, file_event, terminate_event):
+    for event in (
+        parent_event,
+        child_event,
+        parent_terminate_event,
+        file_event,
+        terminate_event,
+    ):
         planner.plan_event(event, format_name="ecar")
 
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
-    for event in (parent_event, child_event, file_event, terminate_event):
+    for event in (
+        parent_event,
+        child_event,
+        parent_terminate_event,
+        file_event,
+        terminate_event,
+    ):
         emitter.emit(event)
     emitter.close()
 
@@ -378,6 +398,11 @@ def test_ecar_identity_plan_preserves_parent_create_dependent_terminate_order(
     child_create = next(
         row for row in rows if row.get("objectID") == child.object_id and row["action"] == "CREATE"
     )
+    parent_terminate = next(
+        row
+        for row in rows
+        if row.get("objectID") == parent.object_id and row["action"] == "TERMINATE"
+    )
     file_create = next(row for row in rows if row["object"] == "FILE")
     child_terminate = next(
         row
@@ -386,6 +411,7 @@ def test_ecar_identity_plan_preserves_parent_create_dependent_terminate_order(
     )
 
     assert parent_create["timestamp_ms"] < child_create["timestamp_ms"]
+    assert child_create["timestamp_ms"] < parent_terminate["timestamp_ms"]
     assert child_create["timestamp_ms"] < file_create["timestamp_ms"]
     assert file_create["timestamp_ms"] < child_terminate["timestamp_ms"]
 
@@ -1267,6 +1293,46 @@ def test_ecar_process_terminate_preserves_rendered_lifetime(tmp_path: Path) -> N
 
     assert terminate_time >= process_time + timedelta(seconds=6)
     assert terminate_time < process_time + timedelta(seconds=12)
+
+
+def test_ecar_process_terminate_follows_delayed_module_observation(tmp_path: Path) -> None:
+    """A delayed module observation cannot render after its process termination."""
+    emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
+    emitter.emit_event = Mock()
+    base = _base_time()
+    host = _host_context()
+    identity = _process_identity(
+        hostname=host.hostname,
+        pid=4242,
+        parent_pid=888,
+        started_at=base,
+        image=r"C:\Windows\System32\cmd.exe",
+    )
+    proc = _context_from_identity(identity)
+    module_event = OccurrenceBuilder(
+        timestamp=base + timedelta(seconds=4),
+        event_type="image_load",
+        src_host=host,
+        process=proc,
+        image_load=ImageLoadContext(
+            image_loaded=r"C:\Windows\System32\user32.dll",
+            load_phase="runtime",
+        ),
+        identity_plan=EventIdentityPlan(actor=identity),
+    )
+    terminate_event = OccurrenceBuilder(
+        timestamp=base + timedelta(seconds=5),
+        event_type="process_terminate",
+        src_host=host,
+        process=proc,
+        identity_plan=EventIdentityPlan(subject=identity),
+    )
+
+    emitter._render_module_event(module_event)
+    module_time = emitter.emit_event.call_args.args[0]["timestamp"]
+    terminate_time = emitter._process_terminate_timestamp(terminate_event, identity)
+
+    assert terminate_time > module_time
 
 
 def test_ecar_logon_does_not_render_self_sourced_remote_ip(tmp_path: Path) -> None:
