@@ -47,6 +47,8 @@ class WorkloadEstimate(BaseModel):
     attachment_payload_bytes: int
     email_artifact_bytes: int
     enabled_formats: int
+    smb_activity_events: int = 0
+    smb_catalog_files: int = 0
     smb_selector_candidates: int = 0
     smb_batch_operations: int = 0
     smb_retained_mutations: int = 0
@@ -180,6 +182,10 @@ def estimate_workload(
     except (KeyError, TypeError, ValueError):
         storage_world = None
     smb_selector_candidates = 0
+    smb_activity_events = 0
+    smb_catalog_files = (
+        sum(len(share.files) for share in storage_world.shares) if storage_world is not None else 0
+    )
     smb_batch_operations = 0
     smb_retained_mutations = 0
     for authored in [*(scenario.storyline or []), *scenario.red_herrings]:
@@ -219,6 +225,7 @@ def estimate_workload(
                 occurrences = 1
             explicit_occurrences += occurrences
             if getattr(spec, "type", "") == "smb_activity":
+                smb_activity_events += 1
                 explicit_canonical_occurrences += 5 + occurrences * 3
             else:
                 explicit_canonical_occurrences += occurrences * (
@@ -329,6 +336,8 @@ def estimate_workload(
         attachment_payload_bytes=attachment_payload_bytes,
         email_artifact_bytes=email_artifact_bytes,
         enabled_formats=enabled_formats,
+        smb_activity_events=smb_activity_events,
+        smb_catalog_files=smb_catalog_files,
         smb_selector_candidates=smb_selector_candidates,
         smb_batch_operations=smb_batch_operations,
         smb_retained_mutations=smb_retained_mutations,

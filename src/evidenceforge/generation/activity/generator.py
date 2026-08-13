@@ -25506,6 +25506,9 @@ class ActivityGenerator:
 
         from evidenceforge.events.base import RawProjectionRequest
 
+        if target_format not in self.dispatcher.emitters:
+            # A valid raw format may be intentionally absent after --formats filtering.
+            return
         fields = dict(fields)
         host_ctx = self._build_host_context(system) if system else None
         if target_format == "syslog" and str(fields.get("app_name", "")).startswith("apache"):

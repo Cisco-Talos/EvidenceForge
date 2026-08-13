@@ -193,6 +193,9 @@ class SmbActivityActionBundle:
             source_ip=client_ip,
             source_port=source_port,
         )
+        filesystem = self.world.volumes_by_ref[
+            f"{share.system}.{share.volume}".casefold()
+        ].filesystem
         self._emit_phase(
             event_type="smb_tree_connect",
             timestamp=auth_time + timedelta(milliseconds=tree_delay_ms),
@@ -212,6 +215,7 @@ class SmbActivityActionBundle:
                 share_local_path=self.world.server_local_path(share, ""),
                 result="success",
                 requested_access=self._requested_access(),
+                filesystem=filesystem,
                 encrypted=share.encryption == "required",
                 audit=share.audit,
             ),
@@ -547,6 +551,9 @@ class SmbActivityActionBundle:
             content_version=state.version,
             handle_id=handle.handle_id if handle is not None else "",
             size_bytes=state.size_bytes,
+            filesystem=self.world.volumes_by_ref[
+                f"{share.system}.{share.volume}".casefold()
+            ].filesystem,
             encrypted=share.encryption == "required",
             audit=share.audit,
         )

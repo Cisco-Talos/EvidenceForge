@@ -837,6 +837,7 @@ class SmbContext:
     handle_id: str = ""
     size_bytes: int = 0
     previous_path: str = ""
+    filesystem: Literal["ntfs", "refs"] = "ntfs"
     encrypted: bool = False
     audit: Literal["minimal", "standard", "high"] = "standard"
 

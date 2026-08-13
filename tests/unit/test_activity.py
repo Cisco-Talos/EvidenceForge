@@ -315,6 +315,17 @@ def test_zeek_connection_observation_time_varies_submillisecond_suffixes():
 
 
 class TestApacheRawSyslogNormalization:
+    def test_generate_raw_skips_format_disabled_by_output_filter(self):
+        """Valid raw events should not fail when their emitter was intentionally filtered."""
+        dispatcher = EventDispatcher(state_manager=StateManager(), emitters={})
+        generator = ActivityGenerator(dispatcher.state_manager, {}, dispatcher=dispatcher)
+
+        generator.generate_raw(
+            datetime(2024, 3, 18, 12, 0, tzinfo=UTC),
+            "syslog",
+            {"message": "filtered"},
+        )
+
     def test_embedded_timestamp_regex_matches_apache_variants(self):
         """Apache raw syslog timestamp normalization should keep common timestamp variants."""
         pattern = generator_module._APACHE_EMBEDDED_TS_RE

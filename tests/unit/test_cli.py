@@ -167,7 +167,8 @@ class TestValidateCommand:
         assert "Resource forecast" in result.stdout
         assert "Projected peak memory" in result.stdout
         assert "Available memory + swap" in result.stdout
-        assert "Projected output size" in result.stdout
+        assert "Projected final output" in result.stdout
+        assert "Projected peak working disk" in result.stdout
         assert "Available disk" in result.stdout
 
     def test_show_storage_exposes_compiled_authoring_diagnostics(self, tmp_path):
@@ -254,6 +255,9 @@ environment:
         )
 
         assert result.exit_code == EXIT_SUCCESS, result.stdout
+        assert "╭" in result.stdout
+        assert "┬" in result.stdout
+        assert "╯" in result.stdout
         for expected in (
             "Compiled storage topology",
             "Volumes",
@@ -440,7 +444,8 @@ name: test
         assert result.exit_code == EXIT_SUCCESS
         assert "✓" in result.stdout or "complete" in result.stdout.lower()
         assert "Resource forecast" in result.stdout
-        assert "Projected output size" in result.stdout
+        assert "Projected final output" in result.stdout
+        assert "Projected peak working disk" in result.stdout
         assert mock_engine.generate.called
         assert mock_engine_class.call_args.kwargs["output_target"] == OutputTarget.DEFAULT
         assert mock_engine_class.call_args.kwargs["resource_forecast"].disk.expected_bytes > 0

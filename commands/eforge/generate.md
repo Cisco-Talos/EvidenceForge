@@ -115,6 +115,9 @@ Before running generation:
 - Run `eforge validate <scenario-file>` to catch issues early
 - If SMB storage is present or implied by Windows file-server/DC roles, run
   `eforge validate <scenario-file> --show-storage` and review the compiled topology
+- Review both forecast lines: final output is the durable dataset size, while peak
+  working disk also includes temporary Zeek external-sort runs. SMB batch count and
+  source-native evidence fan-out affect both estimates; logical SMB file sizes do not.
 - Give the user a brief summary: "This will generate ~X hours of logs for Y users across Z formats"
 
 ### 2. Run Generation

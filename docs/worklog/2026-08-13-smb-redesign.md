@@ -53,6 +53,34 @@ Windows, and eCAR evidence.
 - 2026-08-13: Expanded `validate --show-storage` from a compact share/mapping
   summary into explicit volume, share-root, resolved scale/policy, effective-access,
   bounded catalog-sample, and mapping-audience diagnostics, including unused volumes.
+- 2026-08-13: Recalibrated validation/generation resource forecasting as model v3.
+  Final output and peak working disk are now separate, SMB catalog/batch/mutation and
+  source fan-out affect estimates, and the calibration harness measures transient allocated
+  spool space as well as final logical bytes. Matched source-isolated runs reproduced the
+  146-operation SMB output delta within 0.01 MiB for Zeek, Windows Security, and eCAR; 7-day
+  and 31-day holdouts kept every measured resource inside its forecast interval.
+- 2026-08-13: Restored the expanded `validate --show-storage` preview to wrapping
+  Rich tables, splitting share locations from policy/catalog fields and rendering
+  bounded samples per share so exact paths and access details remain readable on
+  ordinary terminal widths.
+- 2026-08-13: Refined mapped-drive policy: authored SMB mappings may use `D:`
+  through `Z:`, while `A:`/`B:` remain reserved, `C:` remains the local system
+  drive, and automatic mapping allocation remains constrained to `H:` through
+  `Z:`. The iteration scenario now exercises an explicit `F:` mapping.
+- 2026-08-13: Expanded the canonical iteration-test scenario with explicit NTFS
+  drive-root and ReFS folder-mount storage, mapped and UNC access, effective ACLs,
+  encrypted and unencrypted shares, deterministic seed files, benign browse/read/
+  create/update/move activity, a denied access attempt, and bounded attacker copies
+  followed by local archive staging.
+- 2026-08-13: The iteration generation check caught and fixed a hardcoded Zeek
+  `native_file_system: NTFS` projection. Canonical SMB phases now carry the
+  compiled volume filesystem, so ReFS-backed mappings render as `ReFS`; the
+  attacker collection step also establishes a user-owned PowerShell process
+  before the correlated SMB copies instead of falling back to PID 4.
+- 2026-08-13: Focused `--formats zeek,windows,ecar` generation exposed a raw
+  Syslog dispatch into an intentionally filtered emitter. Raw escape-hatch events
+  now skip valid disabled formats while the dispatcher retains its fail-fast
+  behavior for genuinely unknown direct requests.
 - 2026-08-13: An initial blind assessment found server audit ordering, SID,
   native event-shape, share-root, transport-byte, and sensor-timing defects. The
   owning lifecycle, identity, transport-plan, source-timing, and emitter-schema
@@ -94,6 +122,19 @@ Windows, and eCAR evidence.
   P2 collection texture.
 - Post-review focused source-timing/eCAR/SMB tests: 160 passed, followed by 55
   passed after exact sensor-close deadline propagation.
+- SMB-aware resource-forecast recalibration: matched source-isolated output deltas agreed within
+  0.01 MiB, all short/7-day/31-day holdouts landed inside their v3 memory/final-output/working-disk
+  intervals, 69 focused tests passed, and the full non-slow suite passed 5,530 tests with 21 skips.
+- Iteration scenario follow-up: `validate --show-storage` passed with only the
+  scenario's pre-existing topology/pivot warnings; 62 focused SMB/storage/CLI
+  tests passed; full and `--formats zeek,windows,ecar` generations completed.
+  Output inspection confirmed mapped Finance reads/writes/rename, a denied read,
+  bounded collection FUIDs, ReFS mapping projection, encrypted-share operation
+  opacity, server-local paths, and non-System client file actors.
+- Mapped-drive policy follow-up: 18 storage tests and 95 CLI/skill-install tests
+  passed; repository-wide Ruff checks and formatting passed; iteration-test
+  validation resolved the explicit Finance mapping to `F:` while automatic-drive
+  coverage remained constrained to `H:` through `Z:`.
 - Final `git diff --check`, repository-wide Ruff lint, and Ruff formatting checks
   passed. Version and changelog artifacts remain untouched.
 

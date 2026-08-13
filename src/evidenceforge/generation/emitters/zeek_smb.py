@@ -36,7 +36,7 @@ class ZeekSmbMappingEmitter(SensorMultiplexEmitter):
             "id.resp_p": net.dst_port,
             "path": f"\\\\{smb.share_ref.split('.', 1)[0]}\\{smb.share_name}",
             "service": smb.share_name,
-            "native_file_system": "NTFS",
+            "native_file_system": {"ntfs": "NTFS", "refs": "ReFS"}[smb.filesystem],
             "share_type": "DISK",
             **self._sensor_metadata(event, self.format_def.name),
         }

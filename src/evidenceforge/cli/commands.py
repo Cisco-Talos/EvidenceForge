@@ -37,6 +37,7 @@ import click
 import typer
 import yaml
 from pydantic import ValidationError
+from rich import box
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.progress import (
@@ -48,6 +49,7 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
+from rich.table import Table
 from rich.text import Text
 
 from evidenceforge import __version__
@@ -133,9 +135,12 @@ console = Console()
 _STORAGE_SAMPLE_SIZE = 3
 
 
-def _print_storage_field(label: str, value: str) -> None:
-    """Print one unescaped storage diagnostic field without table truncation."""
-    console.print(Text.assemble((f"    {label}: ", "bold"), value))
+def _storage_table(*columns: tuple[str, str]) -> Table:
+    """Build a consistent wrapping table for exact storage diagnostics."""
+    table = Table(box=box.ROUNDED, header_style="bold cyan", pad_edge=False)
+    for heading, justify in columns:
+        table.add_column(heading, justify=justify, overflow="fold")
+    return table
 
 
 def _print_compiled_storage(storage_world: "StorageWorldModel") -> None:
@@ -146,6 +151,13 @@ def _print_compiled_storage(storage_world: "StorageWorldModel") -> None:
         return
 
     console.print("\n[bold]Volumes[/bold]")
+    volumes_table = _storage_table(
+        ("Volume", "left"),
+        ("Mount", "left"),
+        ("Filesystem", "left"),
+        ("Label", "left"),
+        ("Shares", "right"),
+    )
     for volume in storage_world.volumes:
         volume_ref = f"{volume.system}.{volume.id}"
         share_count = sum(
@@ -153,55 +165,115 @@ def _print_compiled_storage(storage_world: "StorageWorldModel") -> None:
             and share.volume.casefold() == volume.id.casefold()
             for share in storage_world.shares
         )
-        console.print(Text(f"  {volume_ref}", style="bold"))
-        _print_storage_field("Mount", volume.mount)
-        _print_storage_field("Filesystem", volume.filesystem)
-        _print_storage_field("Label", volume.label)
-        _print_storage_field("Shares", str(share_count))
+        volumes_table.add_row(
+            Text(volume_ref),
+            Text(volume.mount),
+            Text(volume.filesystem),
+            Text(volume.label),
+            str(share_count),
+        )
+    console.print(volumes_table)
 
     console.print("\n[bold]Shares[/bold]")
+    console.print("[bold cyan]Locations[/bold cyan]")
+    share_locations_table = _storage_table(
+        ("Share", "left"),
+        ("UNC root", "left"),
+        ("Server root", "left"),
+        ("Volume", "left"),
+    )
     for share in storage_world.shares:
-        console.print(Text(f"  {share.ref}", style="bold"))
-        _print_storage_field("UNC root", storage_world.unc_path(share))
-        _print_storage_field("Server root", storage_world.server_local_path(share, ""))
-        _print_storage_field("Volume", f"{share.system}.{share.volume}")
-        _print_storage_field("Preset", share.preset)
-        _print_storage_field("Population", share.population)
-        _print_storage_field("Activity", share.activity)
-        _print_storage_field("Files", str(len(share.files)))
-        _print_storage_field("Audit", share.audit)
-        _print_storage_field("Encryption", share.encryption)
+        share_locations_table.add_row(
+            Text(share.ref),
+            Text(storage_world.unc_path(share)),
+            Text(storage_world.server_local_path(share, "")),
+            Text(f"{share.system}.{share.volume}"),
+        )
+    console.print(share_locations_table)
+
+    console.print("[bold cyan]Policy and catalog[/bold cyan]")
+    share_policy_table = _storage_table(
+        ("Share", "left"),
+        ("Preset", "left"),
+        ("Population", "left"),
+        ("Activity", "left"),
+        ("Files", "right"),
+        ("Audit", "left"),
+        ("Encryption", "left"),
+    )
+    for share in storage_world.shares:
+        share_policy_table.add_row(
+            Text(share.ref),
+            Text(share.preset),
+            Text(share.population),
+            Text(share.activity),
+            str(len(share.files)),
+            Text(share.audit),
+            Text(share.encryption),
+        )
+    console.print(share_policy_table)
 
     console.print("\n[bold]Effective access[/bold]")
+    data_access_table = _storage_table(
+        ("Share", "left"),
+        ("Read", "left"),
+        ("Modify", "left"),
+    )
     for share in storage_world.shares:
-        console.print(Text(f"  {share.ref}", style="bold"))
-        _print_storage_field("Read", ", ".join(sorted(share.access.read, key=str.casefold)) or "-")
-        _print_storage_field(
-            "Modify", ", ".join(sorted(share.access.modify, key=str.casefold)) or "-"
+        data_access_table.add_row(
+            Text(share.ref),
+            Text(", ".join(sorted(share.access.read, key=str.casefold)) or "-"),
+            Text(", ".join(sorted(share.access.modify, key=str.casefold)) or "-"),
         )
-        _print_storage_field(
-            "Admin", ", ".join(sorted(share.access.admin, key=str.casefold)) or "-"
+    console.print(data_access_table)
+
+    console.print("[bold cyan]Administration and denies[/bold cyan]")
+    administrative_access_table = _storage_table(
+        ("Share", "left"),
+        ("Admin", "left"),
+        ("Deny", "left"),
+    )
+    for share in storage_world.shares:
+        administrative_access_table.add_row(
+            Text(share.ref),
+            Text(", ".join(sorted(share.access.admin, key=str.casefold)) or "-"),
+            Text(", ".join(sorted(share.access.deny, key=str.casefold)) or "-"),
         )
-        _print_storage_field("Deny", ", ".join(sorted(share.access.deny, key=str.casefold)) or "-")
+    console.print(administrative_access_table)
 
     console.print("\n[bold]Bounded catalog samples[/bold]")
     for share in storage_world.shares:
-        console.print(Text(f"  {share.ref} ({len(share.files)} files)", style="bold"))
         if not share.files:
-            console.print("    [dim](empty)[/dim]")
             continue
+        console.print(f"[bold cyan]{share.ref}[/bold cyan] [dim]({len(share.files)} files)[/dim]")
+        samples_table = _storage_table(
+            ("Kind", "left"),
+            ("Path", "left"),
+            ("Size", "right"),
+        )
+        metadata_table = _storage_table(
+            ("Kind", "left"),
+            ("MIME", "left"),
+            ("Tags", "left"),
+        )
         seed_files = [file for file in share.files if file.seed_ref]
         generated_files = [file for file in share.files if not file.seed_ref]
         samples = (*seed_files, *generated_files)[:_STORAGE_SAMPLE_SIZE]
         for file in samples:
             sample_kind = f"seed {file.seed_ref}" if file.seed_ref else "generated"
             tags = ", ".join(file.tags) or "-"
-            console.print(
-                Text(
-                    f"    {sample_kind}: {file.path} ({file.size_bytes} bytes; "
-                    f"{file.mime_type}; tags: {tags})"
-                )
+            samples_table.add_row(
+                Text(sample_kind),
+                Text(file.path),
+                f"{file.size_bytes} bytes",
             )
+            metadata_table.add_row(
+                Text(sample_kind),
+                Text(file.mime_type),
+                Text(tags),
+            )
+        console.print(samples_table)
+        console.print(metadata_table)
     console.print(
         f"[dim]Showing up to {_STORAGE_SAMPLE_SIZE} catalog entries per share; "
         "generated file and directory IDs remain internal.[/dim]"
@@ -209,16 +281,26 @@ def _print_compiled_storage(storage_world: "StorageWorldModel") -> None:
 
     if storage_world.mappings:
         console.print("\n[bold]Mappings[/bold]")
+        mappings_table = _storage_table(
+            ("Mapping", "left"),
+            ("Share", "left"),
+            ("Drive", "left"),
+            ("Lifecycle", "left"),
+            ("Effective audience", "left"),
+        )
         for mapping in storage_world.mappings:
             audience = ", ".join(sorted(mapping.users, key=str.casefold)) or "all allowed users"
             if mapping.systems:
                 systems = ", ".join(sorted(mapping.systems, key=str.casefold))
                 audience = f"{audience} on {systems}"
-            console.print(Text(f"  {mapping.id}", style="bold"))
-            _print_storage_field("Share", mapping.share)
-            _print_storage_field("Drive", mapping.drive)
-            _print_storage_field("Lifecycle", mapping.lifecycle)
-            _print_storage_field("Effective audience", audience)
+            mappings_table.add_row(
+                Text(mapping.id),
+                Text(mapping.share),
+                Text(mapping.drive),
+                Text(mapping.lifecycle),
+                Text(audience),
+            )
+        console.print(mappings_table)
 
 
 def _format_capacity(value: int) -> str:
@@ -234,6 +316,7 @@ def _format_capacity(value: int) -> str:
 def _display_resource_forecast(forecast: ResourceForecast) -> None:
     """Print an informational forecast followed immediately by pressure warnings."""
     memory = forecast.memory
+    final_output = forecast.final_output
     disk = forecast.disk
     resources = forecast.snapshot
     console.print("\n[bold blue]Resource forecast[/bold blue]")
@@ -249,7 +332,13 @@ def _display_resource_forecast(forecast: ResourceForecast) -> None:
         f"(installed/limited RAM {_format_capacity(resources.total_memory_bytes)})"
     )
     console.print(
-        "  Projected output size: "
+        "  Projected final output: "
+        f"{_format_capacity(final_output.lower_bytes)}–"
+        f"{_format_capacity(final_output.upper_bytes)} "
+        f"(expected {_format_capacity(final_output.expected_bytes)})"
+    )
+    console.print(
+        "  Projected peak working disk: "
         f"{_format_capacity(disk.lower_bytes)}–{_format_capacity(disk.upper_bytes)} "
         f"(expected {_format_capacity(disk.expected_bytes)})"
     )

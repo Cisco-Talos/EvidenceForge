@@ -1,24 +1,47 @@
-version: 2
-calibration_label: "assessment-scaled empirical model"
+version: 3
+calibration_label: "SMB-aware empirical working-set model"
 
 memory:
   base_mib: 90
-  emitter_queue_mib_per_format: 1
+  emitter_queue_mib_per_format: 0.5
   baseline_bytes_per_occurrence: 700
   explicit_bytes_per_occurrence: 3800
+  baseline_occurrence_retention_cap: 20000
+  explicit_occurrence_retention_cap: 50000
   fixed_mib_by_format:
     windows_event_security: 20
   baseline_bytes_per_occurrence_by_format:
     windows_event_sysmon: 300
     windows_event_security: 350
-  lower_multiplier: 0.75
+  smb_catalog_bytes_per_file: 900
+  smb_retained_bytes_per_mutation: 700
+  external_sort_mib_per_zeek_format: 0.0
+  smb_bytes_per_operation_by_format:
+    windows_event_security: 22500
+    ecar: 4500
+  lower_multiplier: 0.73
   upper_multiplier: 1.35
 
 disk:
-  base_mib: 0.5
+  base_mib: 0.1
   unknown_format_bytes_per_host_second: 10.0
-  lower_multiplier: 0.15
+  lower_multiplier: 0.14
   upper_multiplier: 1.50
+  peak_lower_multiplier: 0.10
+  external_sort_transient_multiplier: 1.05
+  smb_activity_sidecar_bytes: 1000
+  smb_operation_sidecar_bytes: 850
+  smb_activity_fixed_bytes_by_format:
+    zeek_conn: 450
+    zeek_smb_mapping: 350
+    windows_event_security: 8000
+    ecar: 1000
+  smb_operation_bytes_by_format:
+    zeek_files: 400
+    zeek_smb_files: 300
+    windows_event_security: 5000
+    windows_event_sysmon: 0
+    ecar: 750
   formats:
     zeek_conn: {bytes_per_host_second: 8.0, system_scope: all}
     zeek_dns: {bytes_per_host_second: 3.5, system_scope: all}

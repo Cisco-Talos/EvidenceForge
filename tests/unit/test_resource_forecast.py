@@ -29,6 +29,64 @@ def _minimal_scenario() -> Scenario:
     return Scenario(**load_yaml(fixture))
 
 
+def _smb_scenario(*, batch_all: bool) -> Scenario:
+    """Return a compact scenario whose only variable is authored SMB batch size."""
+    fixture = Path(__file__).parent.parent / "fixtures" / "scenarios" / "minimal.yaml"
+    data = load_yaml(fixture)
+    data["environment"]["systems"].append(
+        {
+            "hostname": "FS-01",
+            "ip": "10.0.0.20",
+            "os": "Windows Server 2022",
+            "type": "server",
+            "roles": ["file_server"],
+        }
+    )
+    data["environment"]["network"]["segments"][0]["systems"].append("FS-01")
+    data["environment"]["storage"] = {
+        "population": "small",
+        "servers": [
+            {
+                "system": "FS-01",
+                "presets": [],
+                "volumes": [{"id": "data", "mount": "D:\\"}],
+                "shares": [
+                    {
+                        "id": "team",
+                        "name": "Team",
+                        "volume": "data",
+                        "root": "Team",
+                        "preset": "collaboration",
+                    }
+                ],
+            }
+        ],
+    }
+    event: dict[str, object] = {
+        "type": "smb_activity",
+        "operation": "read",
+        "target": {"type": "share", "share": "FS-01.team"},
+    }
+    if batch_all:
+        event["batch"] = {"all": True}
+    data["storyline"] = [
+        {
+            "id": "smb-read",
+            "time": "+30m",
+            "actor": "test_user",
+            "system": "TEST-01",
+            "activity": "Read team files",
+            "events": [event],
+        }
+    ]
+    data["output"]["logs"] = [
+        {"format": "zeek"},
+        {"format": "windows"},
+        {"format": "ecar"},
+    ]
+    return Scenario(**data)
+
+
 def _snapshot(*, memory_and_swap: int, disk: int) -> ResourceSnapshot:
     return ResourceSnapshot(
         total_memory_bytes=max(memory_and_swap, _GIB),
@@ -85,9 +143,13 @@ def test_forecast_always_reports_memory_disk_and_calibration() -> None:
 
     assert forecast.memory.lower_bytes < forecast.memory.expected_bytes
     assert forecast.memory.expected_bytes < forecast.memory.upper_bytes
+    assert forecast.final_output.lower_bytes < forecast.final_output.expected_bytes
+    assert forecast.final_output.expected_bytes < forecast.final_output.upper_bytes
     assert forecast.disk.lower_bytes < forecast.disk.expected_bytes
     assert forecast.disk.expected_bytes < forecast.disk.upper_bytes
-    assert forecast.calibration_version == 2
+    assert forecast.disk.lower_bytes >= forecast.final_output.lower_bytes
+    assert forecast.disk.expected_bytes >= forecast.final_output.expected_bytes
+    assert forecast.calibration_version == 3
     assert forecast.pressures == ()
 
 
@@ -97,6 +159,71 @@ def test_disk_calibration_covers_every_shipped_output_format() -> None:
     calibration = load_resource_forecast_calibration()
 
     assert shipped_formats <= set(calibration.disk.formats)
+
+
+def test_smb_batch_operations_increase_final_output_and_peak_disk() -> None:
+    """SMB-heavy authored scenarios must not share a duration-only disk forecast."""
+    snapshot = _snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB)
+    single = _smb_scenario(batch_all=False)
+    batch = _smb_scenario(batch_all=True)
+
+    single_forecast = build_resource_forecast(
+        single,
+        estimate_workload(single),
+        Path("/forecast-target"),
+        snapshot=snapshot,
+    )
+    batch_estimate = estimate_workload(batch)
+    batch_forecast = build_resource_forecast(
+        batch,
+        batch_estimate,
+        Path("/forecast-target"),
+        snapshot=snapshot,
+    )
+
+    assert batch_estimate.smb_activity_events == 1
+    assert batch_estimate.smb_batch_operations == 24
+    assert batch_estimate.smb_catalog_files >= 24
+    assert batch_forecast.final_output.expected_bytes > single_forecast.final_output.expected_bytes
+    assert batch_forecast.disk.expected_bytes > single_forecast.disk.expected_bytes
+    assert batch_forecast.disk.expected_bytes > batch_forecast.final_output.expected_bytes
+
+
+def test_bounded_zeek_memory_forecast_saturates_for_long_duration() -> None:
+    """Streaming occurrence memory must not grow linearly after its retention cap."""
+    scenario = _smb_scenario(batch_all=True)
+    scenario = scenario.model_copy(
+        update={"output": scenario.output.model_copy(update={"logs": [{"format": "zeek"}]})}
+    )
+    seven_days = scenario.model_copy(
+        update={
+            "time_window": scenario.time_window.model_copy(update={"duration": "7d", "end": None})
+        }
+    )
+    thirty_one_days = scenario.model_copy(
+        update={
+            "time_window": scenario.time_window.model_copy(update={"duration": "31d", "end": None})
+        }
+    )
+    snapshot = _snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB)
+
+    seven_day_forecast = build_resource_forecast(
+        seven_days,
+        estimate_workload(seven_days),
+        Path("/forecast-target"),
+        snapshot=snapshot,
+    )
+    thirty_one_day_forecast = build_resource_forecast(
+        thirty_one_days,
+        estimate_workload(thirty_one_days),
+        Path("/forecast-target"),
+        snapshot=snapshot,
+    )
+
+    assert thirty_one_day_forecast.memory.expected_bytes == seven_day_forecast.memory.expected_bytes
+    assert thirty_one_day_forecast.final_output.expected_bytes > (
+        seven_day_forecast.final_output.expected_bytes
+    )
 
 
 def test_memory_pressure_uses_low_medium_and_high_levels() -> None:

@@ -96,6 +96,7 @@ def _forecast(output: Path) -> ResourceForecast:
         calibration_version=1,
         calibration_label="test",
         memory=ForecastRange(lower_bytes=1, expected_bytes=1, upper_bytes=1),
+        final_output=ForecastRange(lower_bytes=1, expected_bytes=1, upper_bytes=1),
         disk=ForecastRange(lower_bytes=1, expected_bytes=1, upper_bytes=1),
         snapshot=ResourceSnapshot(
             total_memory_bytes=available,
@@ -363,6 +364,7 @@ def test_encrypted_share_keeps_mapping_and_endpoint_evidence_but_hides_operation
     tmp_path: Path,
 ) -> None:
     data = _base_scenario(scenarios_dir)
+    data["environment"]["storage"]["servers"][0]["volumes"][0]["filesystem"] = "refs"
     data["environment"]["storage"]["servers"][0]["shares"][0]["encryption"] = "required"
     data["storyline"] = [
         {
@@ -389,9 +391,11 @@ def test_encrypted_share_keeps_mapping_and_endpoint_evidence_but_hides_operation
     GenerationEngine(Scenario(**data), tmp_path, resource_forecast=_forecast(tmp_path)).generate()
 
     endpoint_records = _json_records(tmp_path, "ecar.json")
-    assert any(
-        record.get("service") == "Finance" for record in _json_records(tmp_path, "smb_mapping.json")
-    )
+    mappings = _json_records(tmp_path, "smb_mapping.json")
+    assert any(record.get("service") == "Finance" for record in mappings)
+    assert {
+        record["native_file_system"] for record in mappings if record["service"] == "Finance"
+    } == {"ReFS"}
     assert not any(
         record.get("name") == "forecast.xlsx"
         for record in _json_records(tmp_path, "smb_files.json")

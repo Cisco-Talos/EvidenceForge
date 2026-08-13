@@ -2780,8 +2780,8 @@ class StorageMappingConfig(BaseModel):
     @field_validator("drive")
     @classmethod
     def validate_drive(cls, value: str | None) -> str | None:
-        if value is not None and not re.fullmatch(r"[H-Zh-z]:", value):
-            raise ValueError("storage mapping drive must be H: through Z:")
+        if value is not None and not re.fullmatch(r"[D-Zd-z]:", value):
+            raise ValueError("storage mapping drive must be D: through Z:")
         return value.upper() if value is not None else None
 
     model_config = ConfigDict(extra="forbid", frozen=True)

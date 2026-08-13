@@ -1,0 +1,208 @@
+{
+  "schema_version": 3,
+  "python": "3.12.12 (main, Oct 28 2025, 11:52:25) [Clang 20.1.4 ]",
+  "platform": "darwin",
+  "measurements": [
+    {
+      "scenario": "smb-resource-calibration",
+      "profile": "zeek",
+      "formats": "zeek",
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 7200,
+      "baseline_only": true,
+      "elapsed_seconds": 2.606,
+      "peak_rss_bytes": 96731136,
+      "output_bytes": 59413,
+      "output_bytes_by_name": {
+        "COLLECTION_PROFILE.json": 3927,
+        "GROUND_TRUTH.json": 690,
+        "GROUND_TRUTH.md": 345,
+        "OBSERVATION_MANIFEST.json": 289,
+        "OUTPUT_TARGET.txt": 8,
+        "STORAGE_MANIFEST.json": 2547,
+        "conn.json": 28249,
+        "dns.json": 7804,
+        "files.json": 4940,
+        "http.json": 558,
+        "ocsp.json": 307,
+        "smb_files.json": 1502,
+        "smb_mapping.json": 1620,
+        "ssl.json": 2538,
+        "x509.json": 4089
+      },
+      "peak_working_disk_bytes": 122880,
+      "output_sha256": "d2e8da53f983f0e6bd81d936953ae879cb6c6da1efc6f51bde3eb48105e0abc7",
+      "pid_lifecycles": {
+        "creates": 0,
+        "terminations": 0,
+        "reused_pids": 0,
+        "overlaps": 0,
+        "stale_terminations": 0,
+        "linux_wraps": 0,
+        "unexplained_linux_reversals": 0
+      },
+      "workload_estimate": {
+        "primary_duration_seconds": 7200,
+        "warmup_seconds": 28800,
+        "baseline_occurrences": 5000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 5000,
+        "rendered_records": 80000,
+        "attachment_payload_bytes": 0,
+        "email_artifact_bytes": 0,
+        "enabled_formats": 16,
+        "smb_activity_events": 0,
+        "smb_catalog_files": 480,
+        "smb_selector_candidates": 0,
+        "smb_batch_operations": 0,
+        "smb_retained_mutations": 0,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 77885487,
+        "expected_bytes": 106692448,
+        "upper_bytes": 144034804
+      },
+      "forecast_final_output": {
+        "lower_bytes": 55604,
+        "expected_bytes": 397177,
+        "upper_bytes": 595765
+      },
+      "forecast_disk": {
+        "lower_bytes": 70411,
+        "expected_bytes": 704113,
+        "upper_bytes": 1056169
+      }
+    },
+    {
+      "scenario": "smb-resource-calibration",
+      "profile": "security",
+      "formats": "windows_event_security",
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 7200,
+      "baseline_only": true,
+      "elapsed_seconds": 1.495,
+      "peak_rss_bytes": 102678528,
+      "output_bytes": 473205,
+      "output_bytes_by_name": {
+        "COLLECTION_PROFILE.json": 3925,
+        "GROUND_TRUTH.json": 690,
+        "GROUND_TRUTH.md": 345,
+        "OBSERVATION_MANIFEST.json": 289,
+        "OUTPUT_TARGET.txt": 8,
+        "STORAGE_MANIFEST.json": 2547,
+        "windows_event_security.xml": 465401
+      },
+      "peak_working_disk_bytes": 495616,
+      "output_sha256": "397972f5520d00310d10a47b884bb1fa40f65c26595b9d23a9fa93d75539a389",
+      "pid_lifecycles": {
+        "creates": 0,
+        "terminations": 0,
+        "reused_pids": 0,
+        "overlaps": 0,
+        "stale_terminations": 0,
+        "linux_wraps": 0,
+        "unexplained_linux_reversals": 0
+      },
+      "workload_estimate": {
+        "primary_duration_seconds": 7200,
+        "warmup_seconds": 28800,
+        "baseline_occurrences": 5000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 5000,
+        "rendered_records": 5000,
+        "attachment_payload_bytes": 0,
+        "email_artifact_bytes": 0,
+        "enabled_formats": 1,
+        "smb_activity_events": 0,
+        "smb_catalog_files": 480,
+        "smb_selector_candidates": 0,
+        "smb_batch_operations": 0,
+        "smb_retained_mutations": 0,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 88731243,
+        "expected_bytes": 121549648,
+        "upper_bytes": 164092024
+      },
+      "forecast_final_output": {
+        "lower_bytes": 204183,
+        "expected_bytes": 1458457,
+        "upper_bytes": 2187685
+      },
+      "forecast_disk": {
+        "lower_bytes": 204183,
+        "expected_bytes": 1458457,
+        "upper_bytes": 2187685
+      }
+    },
+    {
+      "scenario": "smb-resource-calibration",
+      "profile": "ecar",
+      "formats": "ecar",
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 7200,
+      "baseline_only": true,
+      "elapsed_seconds": 1.366,
+      "peak_rss_bytes": 96010240,
+      "output_bytes": 210985,
+      "output_bytes_by_name": {
+        "COLLECTION_PROFILE.json": 3925,
+        "GROUND_TRUTH.json": 690,
+        "GROUND_TRUTH.md": 345,
+        "OBSERVATION_MANIFEST.json": 289,
+        "OUTPUT_TARGET.txt": 8,
+        "STORAGE_MANIFEST.json": 2547,
+        "ecar.json": 203181
+      },
+      "peak_working_disk_bytes": 233472,
+      "output_sha256": "d161402439b7cc1c16dab0cf366e5ad350020f07361bdb3062324db8888fd539",
+      "pid_lifecycles": {
+        "creates": 38,
+        "terminations": 39,
+        "reused_pids": 0,
+        "overlaps": 0,
+        "stale_terminations": 0,
+        "linux_wraps": 0,
+        "unexplained_linux_reversals": 0
+      },
+      "workload_estimate": {
+        "primary_duration_seconds": 7200,
+        "warmup_seconds": 28800,
+        "baseline_occurrences": 5000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 5000,
+        "rendered_records": 5000,
+        "attachment_payload_bytes": 0,
+        "email_artifact_bytes": 0,
+        "enabled_formats": 1,
+        "smb_activity_events": 0,
+        "smb_catalog_files": 480,
+        "smb_selector_candidates": 0,
+        "smb_batch_operations": 0,
+        "smb_retained_mutations": 0,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 72144533,
+        "expected_bytes": 98828128,
+        "upper_bytes": 133417972
+      },
+      "forecast_final_output": {
+        "lower_bytes": 75159,
+        "expected_bytes": 536857,
+        "upper_bytes": 805285
+      },
+      "forecast_disk": {
+        "lower_bytes": 75159,
+        "expected_bytes": 536857,
+        "upper_bytes": 805285
+      }
+    }
+  ],
+  "failures": []
+}

@@ -68,6 +68,7 @@ class ResourceForecast(BaseModel):
     calibration_version: int
     calibration_label: str
     memory: ForecastRange
+    final_output: ForecastRange
     disk: ForecastRange
     snapshot: ResourceSnapshot
     pressures: tuple[ResourcePressure, ...] = ()
@@ -77,11 +78,17 @@ class ResourceForecast(BaseModel):
 
 class _MemoryCalibration(BaseModel):
     base_mib: int = Field(gt=0)
-    emitter_queue_mib_per_format: int = Field(ge=0)
+    emitter_queue_mib_per_format: float = Field(ge=0)
     baseline_bytes_per_occurrence: int = Field(ge=0)
     explicit_bytes_per_occurrence: int = Field(ge=0)
+    baseline_occurrence_retention_cap: int = Field(gt=0)
+    explicit_occurrence_retention_cap: int = Field(gt=0)
     fixed_mib_by_format: dict[str, float] = Field(default_factory=dict)
     baseline_bytes_per_occurrence_by_format: dict[str, int] = Field(default_factory=dict)
+    smb_catalog_bytes_per_file: int = Field(ge=0)
+    smb_retained_bytes_per_mutation: int = Field(ge=0)
+    external_sort_mib_per_zeek_format: float = Field(ge=0)
+    smb_bytes_per_operation_by_format: dict[str, int] = Field(default_factory=dict)
     lower_multiplier: float = Field(gt=0)
     upper_multiplier: float = Field(gt=0)
 
@@ -120,6 +127,12 @@ class _DiskCalibration(BaseModel):
     unknown_format_bytes_per_host_second: float = Field(ge=0)
     lower_multiplier: float = Field(gt=0)
     upper_multiplier: float = Field(gt=0)
+    peak_lower_multiplier: float = Field(gt=0)
+    external_sort_transient_multiplier: float = Field(ge=0)
+    smb_activity_sidecar_bytes: int = Field(ge=0)
+    smb_operation_sidecar_bytes: int = Field(ge=0)
+    smb_activity_fixed_bytes_by_format: dict[str, int] = Field(default_factory=dict)
+    smb_operation_bytes_by_format: dict[str, int] = Field(default_factory=dict)
     formats: dict[str, _DiskFormatCalibration]
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -127,7 +140,7 @@ class _DiskCalibration(BaseModel):
     @model_validator(mode="after")
     def validate_multipliers(self) -> Self:
         """Require expected disk use to remain inside the forecast interval."""
-        if self.lower_multiplier > 1 or self.upper_multiplier < 1:
+        if self.lower_multiplier > 1 or self.peak_lower_multiplier > 1 or self.upper_multiplier < 1:
             raise ValueError("disk multipliers must bracket the expected value 1.0")
         return self
 
@@ -330,8 +343,16 @@ def build_resource_forecast(
     expected_memory = (
         memory_config.base_mib * 1024 * 1024
         + format_count * memory_config.emitter_queue_mib_per_format * 1024 * 1024
-        + estimate.baseline_occurrences * memory_config.baseline_bytes_per_occurrence
-        + estimate.explicit_occurrences * memory_config.explicit_bytes_per_occurrence
+        + min(
+            estimate.baseline_occurrences,
+            memory_config.baseline_occurrence_retention_cap,
+        )
+        * memory_config.baseline_bytes_per_occurrence
+        + min(
+            estimate.explicit_occurrences,
+            memory_config.explicit_occurrence_retention_cap,
+        )
+        * memory_config.explicit_bytes_per_occurrence
         + estimate.email_artifact_bytes
     )
     expected_memory += int(
@@ -340,6 +361,19 @@ def build_resource_forecast(
     expected_memory += estimate.baseline_occurrences * sum(
         memory_config.baseline_bytes_per_occurrence_by_format.get(name, 0) for name in formats
     )
+    expected_memory += estimate.smb_catalog_files * memory_config.smb_catalog_bytes_per_file
+    expected_memory += (
+        estimate.smb_retained_mutations * memory_config.smb_retained_bytes_per_mutation
+    )
+    expected_memory += int(
+        sum(name.startswith("zeek_") for name in formats)
+        * memory_config.external_sort_mib_per_zeek_format
+        * 1024
+        * 1024
+    )
+    expected_memory += estimate.smb_batch_operations * sum(
+        memory_config.smb_bytes_per_operation_by_format.get(name, 0) for name in formats
+    )
     memory = ForecastRange(
         lower_bytes=int(expected_memory * memory_config.lower_multiplier),
         expected_bytes=expected_memory,
@@ -347,31 +381,53 @@ def build_resource_forecast(
     )
 
     disk_config = effective_calibration.disk
-    bytes_per_second = 0.0
-    zeek_bytes_per_second = 0.0
+    format_output_bytes: dict[str, int] = {}
     for format_name in formats:
         format_config = disk_config.formats.get(format_name)
         if format_config is None:
-            bytes_per_second += disk_config.unknown_format_bytes_per_host_second * len(
-                scenario.environment.systems
+            format_output_bytes[format_name] = int(
+                estimate.primary_duration_seconds
+                * disk_config.unknown_format_bytes_per_host_second
+                * len(scenario.environment.systems)
             )
             continue
-        bytes_per_second += format_config.bytes_per_host_second * _system_count_for_scope(
-            scenario, format_config.system_scope
+        format_output_bytes[format_name] = int(
+            estimate.primary_duration_seconds
+            * format_config.bytes_per_host_second
+            * _system_count_for_scope(scenario, format_config.system_scope)
         )
-        if format_name.startswith("zeek_"):
-            zeek_bytes_per_second += format_config.bytes_per_host_second * _system_count_for_scope(
-                scenario, format_config.system_scope
-            )
-    external_sort_transient = int(estimate.primary_duration_seconds * zeek_bytes_per_second * 1.1)
-    expected_disk = int(
+        format_output_bytes[format_name] += (
+            estimate.smb_activity_events
+            * disk_config.smb_activity_fixed_bytes_by_format.get(format_name, 0)
+            + estimate.smb_batch_operations
+            * disk_config.smb_operation_bytes_by_format.get(format_name, 0)
+        )
+    expected_final_output = int(
         disk_config.base_mib * 1024 * 1024
-        + estimate.primary_duration_seconds * bytes_per_second
+        + sum(format_output_bytes.values())
         + estimate.email_artifact_bytes
-        + external_sort_transient
+        + estimate.smb_activity_events * disk_config.smb_activity_sidecar_bytes
+        + estimate.smb_batch_operations * disk_config.smb_operation_sidecar_bytes
+    )
+    expected_zeek_output = sum(
+        byte_count
+        for format_name, byte_count in format_output_bytes.items()
+        if format_name.startswith("zeek_")
+    )
+    external_sort_transient = int(
+        expected_zeek_output * disk_config.external_sort_transient_multiplier
+    )
+    expected_disk = expected_final_output + external_sort_transient
+    final_output = ForecastRange(
+        lower_bytes=int(expected_final_output * disk_config.lower_multiplier),
+        expected_bytes=expected_final_output,
+        upper_bytes=int(expected_final_output * disk_config.upper_multiplier),
     )
     disk = ForecastRange(
-        lower_bytes=int(expected_disk * disk_config.lower_multiplier),
+        lower_bytes=max(
+            final_output.lower_bytes,
+            int(expected_disk * disk_config.peak_lower_multiplier),
+        ),
         expected_bytes=expected_disk,
         upper_bytes=int(expected_disk * disk_config.upper_multiplier),
     )
@@ -401,6 +457,7 @@ def build_resource_forecast(
         calibration_version=effective_calibration.version,
         calibration_label=effective_calibration.calibration_label,
         memory=memory,
+        final_output=final_output,
         disk=disk,
         snapshot=resources,
         pressures=pressures,

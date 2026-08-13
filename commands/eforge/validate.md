@@ -28,14 +28,21 @@ mounts, public share references, mappings, access summaries, population/activity
 scales, and bounded corpus samples; these deterministic defaults are part of the
 authoring contract even when `environment.storage` is omitted.
 
-The storage preview is read-only and includes every compiled volume, including
-volumes that currently host no share. Separate sections show volume mount,
-filesystem, label, and share count; UNC and server-local share roots; resolved
+The storage preview is read-only and uses wrapping Rich tables. It includes every
+compiled volume, including volumes that currently host no share. Separate tables show
+volume mount, filesystem, label, and share count; UNC and server-local share roots; resolved
 population, activity, audit, encryption, and catalog counts; effective
-read/modify/admin/deny access; up to three metadata-only catalog samples per
-share; and each mapping's resolved user/system audience. Generated file and
-directory IDs remain internal. The command does not generate logs or write
-`STORAGE_MANIFEST.json`.
+read/modify/admin/deny access; per-share path/size and MIME/tag tables with up to
+three metadata-only catalog samples; and each mapping's resolved user/system
+audience. Generated file and directory IDs remain internal. The command does not
+generate logs or write `STORAGE_MANIFEST.json`.
+
+The resource forecast reports final output separately from peak working disk.
+Peak working disk includes temporary bounded Zeek sort runs. For SMB scenarios,
+confirm that the forecast reflects catalog size, resolved batch operations,
+retained mutations, and the selected Zeek/Windows/eCAR outputs; logical remote
+file sizes are metadata and do not consume output space unless artifact
+materialization is added in a future version.
 
 For transport-owner `ids_alerts` on connections, beacons, SSH/RDP, authored
 DHCP, scans, and DNS families, explain schema errors precisely: SIDs

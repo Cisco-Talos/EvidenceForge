@@ -180,6 +180,9 @@ SYSVOL/NETLOGON defaults are sufficient, and inspect those defaults with
 browse/read/create/update/copy/move/delete semantics. A generic successful
 `connection` on TCP/445 is transport-only in EvidenceForge 2.0 and never implies
 authentication, a mapped share, a file, Windows object auditing, or mutation.
+For mapped drives, explicitly authored mappings may use `D:` through `Z:`;
+`A:`/`B:` are reserved and `C:` is the local system drive. Omit `drive` to let
+the engine allocate deterministically from `H:` through `Z:`.
 See ``references/scenario-reference.md`` before authoring selectors, batches,
 outcomes, mappings, encrypted shares, or external SMB clients.
 

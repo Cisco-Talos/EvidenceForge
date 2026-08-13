@@ -278,6 +278,89 @@ environment:
       services: ["mysql", "ssh"]
       roles: ["database"]
 
+  storage:
+    population: medium
+    activity: normal
+    servers:
+      - system: FILE-SRV-01
+        presets: [collaboration, homes]
+        audit: high
+        default_volume: data
+        volumes:
+          - id: data
+            mount: 'D:\'
+            filesystem: ntfs
+            label: SharedData
+          - id: archive
+            mount: 'C:\Mounts\Archive\'
+            filesystem: refs
+            label: ClinicalArchive
+        shares:
+          - id: finance
+            name: Finance
+            volume: data
+            root: 'Departments\Finance'
+            preset: department
+            population: medium
+            activity: high
+            encryption: not_required
+            access:
+              read: [finance]
+              modify: [finance]
+              admin: [domain-admins]
+              deny: [sales]
+            seed_files:
+              - ref: q1_forecast
+                path: 'Q1\FY24\Q1-forecast.xlsx'
+                size_bytes: 1843200
+                tags: [finance, office, forecast]
+              - ref: q1_budget
+                path: 'Q1\FY24\Q1-budget.xlsx'
+                size_bytes: 937984
+                tags: [finance, office, budget]
+              - ref: q1_variance
+                path: 'Q1\FY24\Q1-variance.xlsx'
+                size_bytes: 716800
+                tags: [finance, office, variance]
+              - ref: q1_board_pack
+                path: 'Q1\FY24\Q1-board-pack.pdf'
+                size_bytes: 4928307
+                tags: [finance, pdf, board]
+              - ref: q1_close_notes
+                path: 'Q1\FY24\Q1-close-notes.docx'
+                size_bytes: 284672
+                tags: [finance, office, close]
+              - ref: variance_draft
+                path: 'Q1\FY24\Drafts\variance-notes.docx'
+                size_bytes: 198144
+                tags: [finance, office, draft]
+          - id: clinical-exports
+            name: ClinicalExports
+            volume: archive
+            root: 'Clinical\Exports'
+            preset: backup
+            population: small
+            activity: low
+            encryption: required
+            access:
+              read: [analytics]
+              modify: [analytics]
+              admin: [domain-admins]
+              deny: []
+            seed_files:
+              - ref: deidentified_claims
+                path: 'Audit\2024-03\deidentified-claims-sample.csv'
+                size_bytes: 8650752
+                tags: [clinical, export, csv, deidentified]
+    mappings:
+      - id: finance-f
+        share: FILE-SRV-01.finance
+        audience:
+          groups: [finance]
+          systems: [WS-DRAMIREZ-01]
+        drive: 'F:'
+        lifecycle: persistent
+
   network:
     public_cidrs: ["203.14.220.0/28"]
     segments:
@@ -569,6 +652,103 @@ red_herrings:
         response_body_len: 96
         technique: "Benign - Vendor Support"
         description: "Vendor support accepts the multipart diagnostics upload"
+
+  - id: rh-005
+    time: "+4h05m"
+    actor: diego.ramirez
+    system: WS-DRAMIREZ-01
+    activity: "Finance user completes a routine month-end document work burst on the mapped share"
+    explanation: "Diego reviews, edits, creates, and publishes ordinary Finance documents through his persistent F: mapping."
+    event_spacing:
+      mode: explicit_offsets
+      offsets: ["0s", "20s", "1m", "2m", "3m"]
+    events:
+      - type: smb_activity
+        operation: browse
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_forecast
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Browse the quarter-end working set through F:"
+      - type: smb_activity
+        operation: read
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_budget
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Open the current quarter budget workbook"
+      - type: smb_activity
+        operation: update
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_variance
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Save updated variance calculations"
+      - type: smb_activity
+        operation: create
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          path: 'Q1\FY24\Working\close-checklist.txt'
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Create a close checklist on the Finance share"
+      - type: smb_activity
+        operation: move
+        purpose: interactive
+        source:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: variance_draft
+        destination:
+          type: share
+          share: FILE-SRV-01.finance
+          path: 'Q1\FY24\Published\variance-notes.docx'
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Publish a draft by moving it within the same share"
+
+  - id: rh-006
+    time: "+4h40m"
+    actor: marcus.chen
+    system: WS-MCHEN-01
+    activity: "Sysadmin retrieves a deidentified audit sample from the encrypted clinical export share"
+    explanation: "Marcus copies an approved deidentified sample for a scheduled access-control review; SMB encryption limits network-layer file visibility."
+    events:
+      - type: smb_activity
+        operation: copy
+        purpose: administrative
+        source:
+          type: share
+          share: FILE-SRV-01.clinical-exports
+          file_ref: deidentified_claims
+        destination:
+          type: client
+          path: 'C:\Users\marcus.chen\Downloads\deidentified-claims-sample.csv'
+        outcome: success
+        path_style: unc
+        technique: "Benign - IT Maintenance"
+        description: "Copy an approved audit sample over an encrypted SMB share"
 
   - id: rh-002
     time: "+5h10m"
@@ -1344,26 +1524,93 @@ storyline:
         description: "DGA-style DNS lookups"
 
   - id: evt-022
+    time: "+4h58m"
+    actor: aisha.johnson
+    system: WS-AJOHNSON-01
+    activity: "Attacker tests the compromised help desk identity against the Finance share"
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: collection
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_forecast
+        outcome: access_denied
+        path_style: unc
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "Denied attempt to read a Finance workbook as the help desk user"
+
+  - id: evt-022b
     time: "+5h01m"
-    actor: svc_mhsync
-    system: FILE-SRV-01
-    activity: "Backdoor account authenticates to FILE-SRV-01 and stages sensitive data"
+    actor: marcus.chen
+    system: WS-AJOHNSON-01
+    activity: "Attacker uses stolen administrator credentials to collect Finance and clinical exports over SMB"
+    event_spacing:
+      mode: explicit_offsets
+      offsets: ["0s", "10s", "11s", "12s", "14s", "20s"]
     events:
       - type: logon
-        logon_type: 3
+        logon_type: 9
         source_ip: "10.10.1.35"
-        technique: "T1078 - Valid Accounts"
-        description: "Backdoor account network logon to file server"
-      - type: process
-        process_name: "C:\\Windows\\System32\\net.exe"
-        command_line: "net view \\\\FILE-SRV-01"
-        technique: "T1135 - Network Share Discovery"
-        description: "Enumerate file server shares"
+        technique: "T1078.002 - Valid Accounts: Domain Accounts"
+        description: "Create a new-credentials session for the stolen administrator identity"
       - type: process
         process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-        command_line: "powershell.exe -NoProfile -Command \"Compress-Archive -Path \\\\FILE-SRV-01\\Finance\\Q1\\*,\\\\FILE-SRV-01\\Patients\\Exports\\* -DestinationPath C:\\ProgramData\\Microsoft\\cache_7f3a.zip\""
+        command_line: "powershell.exe -NoProfile -Command \"New-Item -ItemType Directory -Force C:\\ProgramData\\Microsoft\\VaultCache\\Finance,C:\\ProgramData\\Microsoft\\VaultCache\\Clinical | Out-Null\""
+        supplementary: none
+        technique: "T1059.001 - Command and Scripting Interpreter: PowerShell"
+        description: "Prepare local collection directories under the stolen administrator session"
+      - type: smb_activity
+        operation: browse
+        purpose: collection
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_forecast
+        outcome: success
+        path_style: unc
+        technique: "T1135 - Network Share Discovery"
+        description: "Enumerate Finance content with stolen administrator credentials"
+      - type: smb_activity
+        operation: copy
+        purpose: collection
+        source:
+          type: share
+          share: FILE-SRV-01.finance
+          selector:
+            path_glob: 'Q1\**\*'
+            extensions: [.xlsx, .docx, .pdf]
+            tags_any: [finance]
+        destination:
+          type: client
+          path: 'C:\ProgramData\Microsoft\VaultCache\Finance\'
+        batch:
+          count: 5
+          duration: "2s"
+        outcome: success
+        path_style: unc
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "Copy a bounded Finance working set to local staging"
+      - type: smb_activity
+        operation: copy
+        purpose: collection
+        source:
+          type: share
+          share: FILE-SRV-01.clinical-exports
+          file_ref: deidentified_claims
+        destination:
+          type: client
+          path: 'C:\ProgramData\Microsoft\VaultCache\Clinical\deidentified-claims-sample.csv'
+        outcome: success
+        path_style: unc
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "Copy a clinical export from an encrypted share to local staging"
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -NoProfile -Command \"Compress-Archive -Path C:\\ProgramData\\Microsoft\\VaultCache\\Finance\\*,C:\\ProgramData\\Microsoft\\VaultCache\\Clinical\\* -DestinationPath C:\\ProgramData\\Microsoft\\cache_7f3a.zip\""
         technique: "T1560.001 - Archive Collected Data: Archive via Utility"
-        description: "Compress staged finance and patient data"
+        description: "Compress locally staged Finance and clinical data"
 
   - id: evt-023
     time: "+5h15m"
@@ -1551,16 +1798,6 @@ storyline:
       - type: logoff
         technique: "T1078 - Valid Accounts"
         description: "Logoff from compromised workstation"
-
-  - id: evt-034
-    time: "+5h56m"
-    actor: svc_mhsync
-    system: FILE-SRV-01
-    activity: "Backdoor account session logs off FILE-SRV-01"
-    events:
-      - type: logoff
-        technique: "T1078 - Valid Accounts"
-        description: "Logoff from file server"
 
   - id: evt-035
     time: "+5h57m"

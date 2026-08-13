@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from evidenceforge.generation.storage_world import StorageWorldModel
-from evidenceforge.models.scenario import Scenario, SmbActivityEventSpec
+from evidenceforge.models.scenario import Scenario, SmbActivityEventSpec, StorageMappingConfig
 from evidenceforge.utils import load_yaml
 from evidenceforge.validation import ScenarioValidator
 
@@ -148,6 +148,41 @@ def test_explicit_storage_resolves_mount_access_seed_and_mapping(scenarios_dir: 
     assert "Finance-Users" in share.access.modify
     assert "Finance-Users" in share.access.read
     assert share.audit == "high" and share.activity == "high"
+
+
+@pytest.mark.parametrize("drive", ["D:", "F:", "Z:", "d:"])
+def test_explicit_storage_mapping_accepts_d_through_z(drive: str) -> None:
+    mapping = StorageMappingConfig.model_validate(
+        {"id": "department-drive", "share": "FS-01.department", "drive": drive}
+    )
+
+    assert mapping.drive == drive.upper()
+
+
+@pytest.mark.parametrize("drive", ["A:", "B:", "C:", "AA:", "H", "1:"])
+def test_storage_mapping_rejects_reserved_system_and_malformed_drives(drive: str) -> None:
+    with pytest.raises(ValidationError, match="D: through Z:"):
+        StorageMappingConfig.model_validate(
+            {"id": "department-drive", "share": "FS-01.department", "drive": drive}
+        )
+
+
+def test_automatic_storage_mapping_remains_h_through_z(scenarios_dir: Path) -> None:
+    data = _storage_scenario_data(scenarios_dir)
+    data["environment"]["storage"] = {
+        "servers": [{"system": "FS-01", "presets": ["collaboration"]}],
+        "mappings": [
+            {
+                "id": "automatic-drive",
+                "share": "FS-01.collaboration",
+                "audience": {"users": ["test_user"]},
+            }
+        ],
+    }
+
+    mapping = StorageWorldModel.compile(Scenario(**data)).mappings_by_id["automatic-drive"]
+
+    assert "H:" <= mapping.drive <= "Z:"
 
 
 @pytest.mark.parametrize(

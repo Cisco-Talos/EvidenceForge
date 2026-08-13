@@ -278,10 +278,10 @@ storage:
           seed_files:
             - {ref: forecast, path: 'Reports\FY26\forecast.xlsx', size_bytes: 1843200}
   mappings:
-    - id: finance-p
+    - id: finance-f
       share: FS-01.finance
       audience: {groups: [Finance-Users], systems: [WS-01]}
-      drive: 'P:'
+      drive: 'F:'
       lifecycle: persistent
 ```
 
@@ -289,9 +289,12 @@ Shares use stable `<system>.<share-id>` references; seed references are scoped t
 Volumes may be drive roots or absolute folder mounts. Supplied volumes are authoritative,
 explicit shares are additive, and generated shares are changed only through
 `share_overrides`. Access is effective access: deny wins, admin implies modify/read, and
-modify implies read. Use `eforge validate SCENARIO --show-storage` to inspect compiled
-volumes (including unused volumes), share roots and scales, effective access, mappings,
-and up to three metadata-only catalog samples per share.
+modify implies read. Explicit SMB mappings may use `D:` through `Z:`; `A:` and `B:` are
+reserved and `C:` remains the local system drive. When `drive` is omitted, automatic
+allocation uses only `H:` through `Z:`. Use
+`eforge validate SCENARIO --show-storage` to inspect compiled volumes (including unused
+volumes), share roots and scales, effective access, mappings, and up to three metadata-only
+catalog samples per share.
 
 ### Proxy Deployment
 

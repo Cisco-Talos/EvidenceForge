@@ -139,9 +139,13 @@ duration, warm-up, periodic and explicit occurrences, canonical fan-out, rendere
 attachment/email expansion. It combines that scenario estimate with currently available RAM,
 free swap, container memory constraints, and free space on the destination filesystem.
 
-Both `eforge validate` and `eforge generate` always print the resulting projected peak-memory and
-output-size ranges. When expected use reaches a material fraction of usable capacity, the forecast
-is followed immediately by a low, medium, or high resource warning. Resource warnings are
+Both `eforge validate` and `eforge generate` always print projected peak-memory, final-output, and
+peak-working-disk ranges. Peak working disk includes bounded Zeek external-sort runs that coexist
+temporarily with the final output. SMB estimates account for compiled catalog metadata, retained
+mutations, authored activity/session overhead, batch operation count, and source-specific rendered
+evidence; logical SMB file sizes are not counted because V1 does not materialize file payloads.
+When expected use reaches a material fraction of usable capacity, the forecast is followed
+immediately by a low, medium, or high resource warning. Resource warnings are
 advisory: generation continues without an override flag. YAML ambiguity, include budgets, path
 containment, regular-file, symlink, and archive safety checks remain hard errors because they are
 input-integrity boundaries rather than capacity forecasts.
@@ -149,8 +153,9 @@ input-integrity boundaries rather than capacity forecasts.
 The forecast identifies its versioned calibration model in the output. Coefficients are measured
 and source-aware—for example, retained Sysmon event state is modeled differently from bounded
 streaming emitters, while output-byte rates account for source eligibility by operating system or
-host role. The calibration can be refined with additional measured runs without changing the CLI
-contract.
+host role. Calibration model v3 adds measured canonical SMB costs and separately measures final
+logical bytes and peak allocated working bytes. The calibration can be refined with additional
+measured runs without changing the CLI contract.
 
 ## Environment
 
@@ -318,10 +323,10 @@ storage:
           seed_files:
             - {ref: forecast, path: 'Reports\FY26\forecast.xlsx', size_bytes: 1843200}
   mappings:
-    - id: finance-p
+    - id: finance-f
       share: FS-01.finance
       audience: {groups: [Finance-Users], systems: [WS-01]}
-      drive: 'P:'
+      drive: 'F:'
       lifecycle: persistent
 ```
 
@@ -329,9 +334,12 @@ Shares use stable `<system>.<share-id>` references; seed references are scoped t
 Volumes may be drive roots or absolute folder mounts. Supplied volumes are authoritative,
 explicit shares are additive, and generated shares are changed only through
 `share_overrides`. Access is effective access: deny wins, admin implies modify/read, and
-modify implies read. Use `eforge validate SCENARIO --show-storage` to inspect compiled
-volumes (including unused volumes), share roots and scales, effective access, mappings,
-and up to three metadata-only catalog samples per share.
+modify implies read. Explicit SMB mappings may use `D:` through `Z:`; `A:` and `B:` are
+reserved and `C:` remains the local system drive. When `drive` is omitted, automatic
+allocation uses only `H:` through `Z:`. Use
+`eforge validate SCENARIO --show-storage` to inspect compiled volumes (including unused
+volumes), share roots and scales, effective access, mappings, and up to three metadata-only
+catalog samples per share.
 
 ### Proxy Deployment
 

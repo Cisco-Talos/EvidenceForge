@@ -1,0 +1,283 @@
+{
+  "schema_version": 3,
+  "python": "3.12.12 (main, Oct 28 2025, 11:52:25) [Clang 20.1.4 ]",
+  "platform": "darwin",
+  "measurements": [
+    {
+      "scenario": "smb-resource-calibration",
+      "profile": "zeek",
+      "formats": "zeek",
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 7200,
+      "baseline_only": false,
+      "elapsed_seconds": 3.012,
+      "peak_rss_bytes": 97763328,
+      "output_bytes": 296312,
+      "output_bytes_by_name": {
+        "COLLECTION_PROFILE.json": 3935,
+        "GROUND_TRUTH.json": 85150,
+        "GROUND_TRUTH.md": 1345,
+        "OBSERVATION_MANIFEST.json": 2349,
+        "OUTPUT_TARGET.txt": 8,
+        "STORAGE_MANIFEST.json": 51184,
+        "conn.json": 27561,
+        "dns.json": 7753,
+        "files.json": 48569,
+        "http.json": 558,
+        "ocsp.json": 307,
+        "smb_files.json": 61374,
+        "smb_mapping.json": 2998,
+        "ssl.json": 1802,
+        "x509.json": 1419
+      },
+      "peak_working_disk_bytes": 323584,
+      "output_sha256": "1f17878bcf70dd5ce6b990b9ff7b31961f96bba7bdde4424271154869ea8ba3e",
+      "pid_lifecycles": {
+        "creates": 0,
+        "terminations": 0,
+        "reused_pids": 0,
+        "overlaps": 0,
+        "stale_terminations": 0,
+        "linux_wraps": 0,
+        "unexplained_linux_reversals": 0
+      },
+      "workload_estimate": {
+        "primary_duration_seconds": 7200,
+        "warmup_seconds": 28800,
+        "baseline_occurrences": 5000,
+        "explicit_occurrences": 146,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 5468,
+        "rendered_records": 87488,
+        "attachment_payload_bytes": 0,
+        "email_artifact_bytes": 0,
+        "enabled_formats": 16,
+        "smb_activity_events": 6,
+        "smb_catalog_files": 480,
+        "smb_selector_candidates": 2016,
+        "smb_batch_operations": 146,
+        "smb_retained_mutations": 95,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 78339036,
+        "expected_bytes": 107313748,
+        "upper_bytes": 144873559
+      },
+      "forecast_final_output": {
+        "lower_bytes": 88798,
+        "expected_bytes": 634277,
+        "upper_bytes": 951415
+      },
+      "forecast_disk": {
+        "lower_bytes": 105356,
+        "expected_bytes": 1053563,
+        "upper_bytes": 1580344
+      }
+    },
+    {
+      "scenario": "smb-resource-calibration",
+      "profile": "security",
+      "formats": "windows_event_security",
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 7200,
+      "baseline_only": false,
+      "elapsed_seconds": 1.642,
+      "peak_rss_bytes": 107233280,
+      "output_bytes": 1388240,
+      "output_bytes_by_name": {
+        "COLLECTION_PROFILE.json": 3933,
+        "GROUND_TRUTH.json": 85296,
+        "GROUND_TRUTH.md": 1345,
+        "OBSERVATION_MANIFEST.json": 2434,
+        "OUTPUT_TARGET.txt": 8,
+        "STORAGE_MANIFEST.json": 51184,
+        "windows_event_security.xml": 1244040
+      },
+      "peak_working_disk_bytes": 1404928,
+      "output_sha256": "c1f31b88b96c00b9728c6c97427aa89cb6f8ff4a51c1caeda492194d4c8b9e09",
+      "pid_lifecycles": {
+        "creates": 0,
+        "terminations": 0,
+        "reused_pids": 0,
+        "overlaps": 0,
+        "stale_terminations": 0,
+        "linux_wraps": 0,
+        "unexplained_linux_reversals": 0
+      },
+      "workload_estimate": {
+        "primary_duration_seconds": 7200,
+        "warmup_seconds": 28800,
+        "baseline_occurrences": 5000,
+        "explicit_occurrences": 146,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 5468,
+        "rendered_records": 5468,
+        "attachment_payload_bytes": 0,
+        "email_artifact_bytes": 0,
+        "enabled_formats": 1,
+        "smb_activity_events": 6,
+        "smb_catalog_files": 480,
+        "smb_selector_candidates": 2016,
+        "smb_batch_operations": 146,
+        "smb_retained_mutations": 95,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 91582842,
+        "expected_bytes": 125455948,
+        "upper_bytes": 169365529
+      },
+      "forecast_final_output": {
+        "lower_bytes": 331317,
+        "expected_bytes": 2366557,
+        "upper_bytes": 3549835
+      },
+      "forecast_disk": {
+        "lower_bytes": 331317,
+        "expected_bytes": 2366557,
+        "upper_bytes": 3549835
+      }
+    },
+    {
+      "scenario": "smb-resource-calibration",
+      "profile": "ecar",
+      "formats": "ecar",
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 7200,
+      "baseline_only": false,
+      "elapsed_seconds": 1.486,
+      "peak_rss_bytes": 95846400,
+      "output_bytes": 458396,
+      "output_bytes_by_name": {
+        "COLLECTION_PROFILE.json": 3933,
+        "GROUND_TRUTH.json": 85150,
+        "GROUND_TRUTH.md": 1345,
+        "OBSERVATION_MANIFEST.json": 2349,
+        "OUTPUT_TARGET.txt": 8,
+        "STORAGE_MANIFEST.json": 51184,
+        "ecar.json": 314427
+      },
+      "peak_working_disk_bytes": 471040,
+      "output_sha256": "f1660762193c496513adc376b2457140916d0056c9c434d142645f43b9dedb6e",
+      "pid_lifecycles": {
+        "creates": 38,
+        "terminations": 35,
+        "reused_pids": 0,
+        "overlaps": 0,
+        "stale_terminations": 0,
+        "linux_wraps": 0,
+        "unexplained_linux_reversals": 0
+      },
+      "workload_estimate": {
+        "primary_duration_seconds": 7200,
+        "warmup_seconds": 28800,
+        "baseline_occurrences": 5000,
+        "explicit_occurrences": 146,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 5468,
+        "rendered_records": 5468,
+        "attachment_payload_bytes": 0,
+        "email_artifact_bytes": 0,
+        "enabled_formats": 1,
+        "smb_activity_events": 6,
+        "smb_catalog_files": 480,
+        "smb_selector_candidates": 2016,
+        "smb_batch_operations": 146,
+        "smb_retained_mutations": 95,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 73077692,
+        "expected_bytes": 100106428,
+        "upper_bytes": 135143677
+      },
+      "forecast_final_output": {
+        "lower_bytes": 109543,
+        "expected_bytes": 782457,
+        "upper_bytes": 1173685
+      },
+      "forecast_disk": {
+        "lower_bytes": 109543,
+        "expected_bytes": 782457,
+        "upper_bytes": 1173685
+      }
+    },
+    {
+      "scenario": "smb-resource-calibration",
+      "profile": "full",
+      "formats": null,
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 7200,
+      "baseline_only": false,
+      "elapsed_seconds": 3.516,
+      "peak_rss_bytes": 109756416,
+      "output_bytes": 2057139,
+      "output_bytes_by_name": {
+        "COLLECTION_PROFILE.json": 3936,
+        "GROUND_TRUTH.json": 87212,
+        "GROUND_TRUTH.md": 1345,
+        "OBSERVATION_MANIFEST.json": 3518,
+        "OUTPUT_TARGET.txt": 8,
+        "STORAGE_MANIFEST.json": 51184,
+        "conn.json": 27561,
+        "dns.json": 7753,
+        "ecar.json": 314427,
+        "files.json": 48569,
+        "http.json": 558,
+        "ocsp.json": 307,
+        "smb_files.json": 61374,
+        "smb_mapping.json": 2998,
+        "ssl.json": 1802,
+        "windows_event_security.xml": 1244040,
+        "windows_event_sysmon.xml": 199128,
+        "x509.json": 1419
+      },
+      "peak_working_disk_bytes": 2097152,
+      "output_sha256": "62e28c4d9484d9e2df1623a6eca7fe6c7cf1a0481fd85e1f599f097527e9da1a",
+      "pid_lifecycles": {
+        "creates": 38,
+        "terminations": 35,
+        "reused_pids": 0,
+        "overlaps": 0,
+        "stale_terminations": 0,
+        "linux_wraps": 0,
+        "unexplained_linux_reversals": 0
+      },
+      "workload_estimate": {
+        "primary_duration_seconds": 7200,
+        "warmup_seconds": 28800,
+        "baseline_occurrences": 5000,
+        "explicit_occurrences": 146,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 5468,
+        "rendered_records": 103892,
+        "attachment_payload_bytes": 0,
+        "email_artifact_bytes": 0,
+        "enabled_formats": 19,
+        "smb_activity_events": 6,
+        "smb_catalog_files": 480,
+        "smb_selector_candidates": 2016,
+        "smb_batch_operations": 146,
+        "smb_retained_mutations": 95,
+        "limit_violations": []
+      },
+      "forecast_memory": {
+        "lower_bytes": 100046596,
+        "expected_bytes": 137050132,
+        "upper_bytes": 185017678
+      },
+      "forecast_final_output": {
+        "lower_bytes": 526368,
+        "expected_bytes": 3759777,
+        "upper_bytes": 5639665
+      },
+      "forecast_disk": {
+        "lower_bytes": 526368,
+        "expected_bytes": 4179063,
+        "upper_bytes": 6268594
+      }
+    }
+  ],
+  "failures": []
+}

@@ -4,7 +4,8 @@
 
 Replace the static generation workload rejection and public `--allow-large-workload` requirement
 with an always-visible, machine-aware forecast. Validation and generation must report projected
-peak memory, available RAM plus swap, projected output size, and destination filesystem capacity.
+peak memory, available RAM plus swap, projected final output, peak working disk, and destination
+filesystem capacity.
 When projected pressure is material, output a low, medium, or high advisory warning and continue.
 
 ## Design
@@ -96,3 +97,50 @@ Raw measurements are stored in:
 - `docs/design/resource-forecast-calibration-holdout-sources.json`
 - `docs/design/resource-forecast-calibration-holdout-full.json`
 - `docs/design/resource-forecast-calibration-holdout-independent.json`
+
+## Canonical SMB recalibration (2026-08-13)
+
+Calibration model v3 separates final logical output from peak working-disk demand. The latter adds
+the bounded Zeek external-sort runs that coexist with the merge destination. Workload estimation
+now supplies compiled SMB catalog size, authored activity count, resolved batch operations, and
+retained mutations. Source-specific output terms cover fixed SMB session/tree overhead and
+per-operation Zeek, Windows Security, and eCAR evidence; separate sidecar terms cover ground truth,
+storage-manifest targets, and observation metadata. Logical SMB file sizes remain excluded because
+canonical V1 generates metadata/evidence rather than payload artifacts.
+
+The calibration harness now samples unique allocated filesystem blocks during generation (hard
+links counted once), records final bytes per generated filename, and can retain storylines in
+source-isolated profiles. The representative calibration scenario exercises single and batched
+reads, updates, copies, deletes, high auditing, mapped paths, a folder-mounted ReFS volume, and an
+encrypted share. Matched baseline runs isolate the canonical SMB increment.
+
+For the 146-operation authored SMB workload, the measured-versus-forecast final-output deltas were
+0.226/0.226 MiB for Zeek, 0.873/0.866 MiB for Windows Security, and 0.236/0.234 MiB for eCAR. Peak
+RSS deltas were 0.98 MiB, 4.34 MiB, and -0.16 MiB respectively; the small negative eCAR delta is
+ordinary process-RSS noise, and every absolute measurement landed inside the calibrated memory
+interval. This confirms that SMB operation fan-out is represented directly rather than hidden in
+the duration-only background rates.
+
+The duration holdout covered 7-day and 31-day Zeek-only and full-format runs. Zeek peak RSS stayed
+bounded at 101.3/114.3 MiB while final output grew from 3.57 to 14.99 MiB. Full-format peak RSS was
+186.7/345.2 MiB and final output was 71.16/308.81 MiB. All measured memory, final-output, and peak
+working-disk values landed inside their v3 intervals. The low-intensity holdout deliberately leaves
+the expected final-size estimate conservative; its lower/upper interval accounts for variation in
+baseline intensity, topology, and source eligibility. Final output retains the tighter 14% lower
+multiplier, while peak working disk uses a separate 10% lower multiplier because output-rate and
+external-sort overlap uncertainty compound.
+
+Raw measurements:
+
+- `docs/design/resource-forecast-calibration-smb-v3.json`
+- `docs/design/resource-forecast-calibration-smb-v3-baseline.json`
+- `docs/design/resource-forecast-calibration-smb-v3-long.json`
+
+Verification after the v3 fit:
+
+- Focused resource/workload/CLI/SMB suite: 69 passed.
+- Full non-slow suite: 5,530 passed and 21 skipped in 382.74 seconds.
+- `eforge validate-config`: 91 files checked with no findings.
+- Repository-wide Ruff lint, Ruff format, and `git diff --check`: passed.
+- Real `eforge validate --show-storage` output displayed separate peak-memory, final-output, and
+  peak-working-disk forecasts under calibration model v3.

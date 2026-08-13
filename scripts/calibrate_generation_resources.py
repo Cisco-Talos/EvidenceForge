@@ -40,6 +40,33 @@ def _directory_bytes(path: Path) -> int:
     return total
 
 
+def _directory_bytes_by_name(path: Path) -> dict[str, int]:
+    """Return final logical bytes grouped by generated filename."""
+    totals: dict[str, int] = {}
+    for candidate in path.rglob("*"):
+        if candidate.is_file() and not candidate.is_symlink():
+            totals[candidate.name] = totals.get(candidate.name, 0) + candidate.stat().st_size
+    return dict(sorted(totals.items()))
+
+
+def _directory_allocated_bytes(path: Path) -> int:
+    """Return uniquely allocated bytes, counting temporary spool files and hard links once."""
+    total = 0
+    seen_inodes: set[tuple[int, int]] = set()
+    if not path.exists():
+        return 0
+    for candidate in path.rglob("*"):
+        if not candidate.is_file() or candidate.is_symlink():
+            continue
+        stat = candidate.stat()
+        inode = (stat.st_dev, stat.st_ino)
+        if inode in seen_inodes:
+            continue
+        seen_inodes.add(inode)
+        total += int(getattr(stat, "st_blocks", 0)) * 512 or stat.st_size
+    return total
+
+
 def _directory_digest(path: Path) -> str:
     """Return a stable digest of every generated artifact path and byte sequence."""
     digest = hashlib.sha256()
@@ -146,10 +173,12 @@ def _worker(
     output: Path,
     result_path: Path,
     formats: str | None,
+    include_storyline_in_profiles: bool,
     duration_scale: float,
 ) -> int:
     """Generate one scaled scenario in this isolated child process."""
     from evidenceforge.events.dispatcher import expand_formats
+    from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
     from evidenceforge.generation.engine import GenerationEngine
     from evidenceforge.models.scenario import Scenario
     from evidenceforge.utils.files import load_scenario_yaml
@@ -175,16 +204,32 @@ def _worker(
         selected = requested & available
         if not selected:
             raise ValueError(f"profile formats do not intersect scenario output: {formats}")
-        scenario = scenario.model_copy(
-            update={
-                "storyline": [],
-                "red_herrings": [],
-                "output": scenario.output.model_copy(
-                    update={"logs": [{"format": name} for name in sorted(selected)]}
-                ),
-            }
+        updates: dict[str, Any] = {
+            "output": scenario.output.model_copy(
+                update={"logs": [{"format": name} for name in sorted(selected)]}
+            )
+        }
+        if not include_storyline_in_profiles:
+            updates.update({"storyline": [], "red_herrings": []})
+        scenario = scenario.model_copy(update=updates)
+
+    measured_peak_working_disk = 0
+    original_merge = ExternalSortedLineWriter._merge_runs_unlocked
+
+    def measured_merge(
+        writer: ExternalSortedLineWriter,
+        paths: list[Path] | tuple[Path, ...],
+        destination: Path,
+    ) -> None:
+        """Measure allocated bytes while immutable runs and merge output coexist."""
+        nonlocal measured_peak_working_disk
+        original_merge(writer, paths, destination)
+        measured_peak_working_disk = max(
+            measured_peak_working_disk,
+            _directory_allocated_bytes(output),
         )
 
+    ExternalSortedLineWriter._merge_runs_unlocked = measured_merge
     engine = GenerationEngine(
         scenario,
         output / "data",
@@ -198,7 +243,8 @@ def _worker(
             {
                 "scenario_name": scenario.name,
                 "effective_duration_seconds": scaled_seconds,
-                "baseline_only": formats is not None,
+                "baseline_only": formats is not None and not include_storyline_in_profiles,
+                "instrumented_peak_working_disk_bytes": measured_peak_working_disk,
                 "workload_estimate": engine.workload_estimate.model_dump(mode="json"),
                 "resource_forecast": engine.resource_forecast.model_dump(mode="json"),
             }
@@ -212,6 +258,7 @@ def _measure(
     scenario: Path,
     profile_name: str,
     formats: str | None,
+    include_storyline_in_profiles: bool,
     duration_scale: float,
 ) -> dict[str, Any]:
     """Generate one scenario in a child process and return calibration measurements."""
@@ -233,6 +280,8 @@ def _measure(
         ]
         if formats:
             command.extend(("--worker-formats", formats))
+        if include_storyline_in_profiles:
+            command.append("--worker-include-storyline-in-profiles")
         started = time.monotonic()
         child = subprocess.Popen(
             command,
@@ -242,8 +291,14 @@ def _measure(
         )
         process = psutil.Process(child.pid)
         peak_rss = 0
+        peak_working_disk = 0
+        next_disk_sample = 0.0
         while child.poll() is None:
             peak_rss = max(peak_rss, _tree_rss(process))
+            now = time.monotonic()
+            if now >= next_disk_sample:
+                peak_working_disk = max(peak_working_disk, _directory_allocated_bytes(output))
+                next_disk_sample = now + 0.2
             time.sleep(0.05)
         stdout, stderr = child.communicate()
         elapsed = time.monotonic() - started
@@ -256,6 +311,12 @@ def _measure(
         worker_data = json.loads(worker_result.read_text(encoding="utf-8"))
         forecast = worker_data["resource_forecast"]
         pid_lifecycles = _ecar_pid_lifecycle_summary(output)
+        final_output_bytes = _directory_bytes(output)
+        peak_working_disk = max(peak_working_disk, _directory_allocated_bytes(output))
+        peak_working_disk = max(
+            peak_working_disk,
+            int(worker_data.get("instrumented_peak_working_disk_bytes", 0)),
+        )
         return {
             "scenario": worker_data["scenario_name"],
             "profile": profile_name,
@@ -265,11 +326,14 @@ def _measure(
             "baseline_only": worker_data["baseline_only"],
             "elapsed_seconds": round(elapsed, 3),
             "peak_rss_bytes": peak_rss,
-            "output_bytes": _directory_bytes(output),
+            "output_bytes": final_output_bytes,
+            "output_bytes_by_name": _directory_bytes_by_name(output),
+            "peak_working_disk_bytes": peak_working_disk,
             "output_sha256": _directory_digest(output),
             "pid_lifecycles": pid_lifecycles,
             "workload_estimate": worker_data["workload_estimate"],
             "forecast_memory": forecast["memory"],
+            "forecast_final_output": forecast["final_output"],
             "forecast_disk": forecast["disk"],
         }
 
@@ -290,11 +354,21 @@ def _parser() -> argparse.ArgumentParser:
         default=[1.0],
         help="Positive duration multipliers to measure (default: 1).",
     )
+    parser.add_argument(
+        "--include-storyline-in-profiles",
+        action="store_true",
+        help="Keep storyline/red-herring events in source-isolated format profiles.",
+    )
     parser.add_argument("--output-json", type=Path, help="Write the result document to this path.")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--worker-output", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--worker-result", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--worker-formats", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--worker-include-storyline-in-profiles",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--worker-duration-scale", type=float, help=argparse.SUPPRESS)
     return parser
 
@@ -306,7 +380,7 @@ def _write_document(
 ) -> None:
     """Persist a resumable calibration checkpoint or print the final document."""
     document = {
-        "schema_version": 2,
+        "schema_version": 3,
         "python": sys.version,
         "platform": sys.platform,
         "measurements": measurements,
@@ -341,6 +415,7 @@ def main() -> int:
             args.worker_output,
             args.worker_result,
             args.worker_formats,
+            args.worker_include_storyline_in_profiles,
             args.worker_duration_scale,
         )
 
@@ -356,7 +431,15 @@ def main() -> int:
         for profile_name, formats in profiles:
             for scale in args.duration_scale:
                 try:
-                    measurements.append(_measure(scenario, profile_name, formats, scale))
+                    measurements.append(
+                        _measure(
+                            scenario,
+                            profile_name,
+                            formats,
+                            args.include_storyline_in_profiles,
+                            scale,
+                        )
+                    )
                 except RuntimeError as exc:
                     failures.append(
                         {
