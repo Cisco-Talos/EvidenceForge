@@ -7,6 +7,8 @@ import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from evidenceforge.composition import compile_scenario
+from evidenceforge.composition.packs import PackRepository
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.resource_forecast import (
     ForecastRange,
@@ -14,7 +16,7 @@ from evidenceforge.generation.resource_forecast import (
     ResourceSnapshot,
 )
 from evidenceforge.models.scenario import Scenario
-from evidenceforge.utils import load_yaml
+from evidenceforge.utils import load_yaml, write_yaml
 
 
 def _base_scenario(scenarios_dir: Path) -> dict:
@@ -180,6 +182,169 @@ def test_semantic_smb_read_projects_correlated_sparse_evidence(
     assert smb_truth["attributes"]["operations"][0]["path"] == ("Reports\\FY26\\forecast.xlsx")
     assert smb_truth["attributes"]["transport_uids"][0] in {record["uid"] for record in connections}
     assert any(share["ref"] == "FS-01.finance" for share in manifest["shares"])
+
+
+def test_organization_pack_tiny_storage_vocabulary_generates_with_auto_population(
+    tmp_path: Path,
+) -> None:
+    pack_root = PackRepository(tmp_path).create_skeleton(
+        "organization",
+        "tiny-storage-org",
+        "1.0.0",
+    )
+    write_yaml(
+        {
+            "storage_catalog": {
+                "records": {
+                    "description": "One intentionally tiny reusable record vocabulary.",
+                    "data": {
+                        "directories": ["Records"],
+                        "subjects": ["Case"],
+                        "files": [
+                            {
+                                "extension": ".pdf",
+                                "mime": "application/pdf",
+                                "weight": 1,
+                            }
+                        ],
+                    },
+                }
+            }
+        },
+        pack_root / "catalogs/storage_catalog.yaml",
+    )
+    write_yaml(
+        {
+            "environment": {
+                "description": "Fictional organization with a compact record library.",
+                "timezone": {"default": "UTC"},
+                "domain": "tiny-storage.example",
+                "users": [
+                    {
+                        "username": "casey.lee",
+                        "full_name": "Casey Lee",
+                        "email": "casey.lee@tiny-storage.example",
+                        "primary_system": "TINY-WS-01",
+                    }
+                ],
+                "systems": [
+                    {
+                        "hostname": "TINY-WS-01",
+                        "ip": "10.88.10.21",
+                        "os": "Windows 11",
+                        "type": "workstation",
+                        "assigned_user": "casey.lee",
+                        "roles": ["workstation"],
+                    },
+                    {
+                        "hostname": "TINY-FILE-01",
+                        "ip": "10.88.20.20",
+                        "os": "Windows Server 2022",
+                        "type": "server",
+                        "services": ["SMB"],
+                        "roles": ["file_server"],
+                    },
+                ],
+                "storage": {
+                    "servers": [
+                        {
+                            "system": "TINY-FILE-01",
+                            "presets": [],
+                            "volumes": [{"id": "data", "mount": "D:\\"}],
+                            "shares": [
+                                {
+                                    "id": "records",
+                                    "name": "Records",
+                                    "volume": "data",
+                                    "preset": "records",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+        },
+        pack_root / "model/environment.yaml",
+    )
+    write_yaml(
+        {
+            "baseline_activity": {
+                "description": "Low-volume background activity.",
+                "intensity": "low",
+                "variation": "medium",
+                "suspicious_noise": "low",
+                "traffic_rates": {"smb_interval": 50000},
+            }
+        },
+        pack_root / "model/baseline_activity.yaml",
+    )
+    scenario_path = tmp_path / "scenario.yaml"
+    write_yaml(
+        {
+            "scenario_version": "2.0",
+            "composition": {
+                "organization": {
+                    "source": "project",
+                    "name": "tiny-storage-org",
+                    "version": "1.0.0",
+                }
+            },
+            "name": "tiny-storage-organization-regression",
+            "description": "Read from a storage vocabulary smaller than auto population.",
+            "time_window": {
+                "start": "2026-08-17T10:00:00Z",
+                "duration": "20m",
+            },
+            "storyline": [
+                {
+                    "id": "read-record",
+                    "time": "+10m",
+                    "actor": "casey.lee",
+                    "system": "TINY-WS-01",
+                    "activity": "Read one organization record.",
+                    "events": [
+                        {
+                            "type": "smb_activity",
+                            "operation": "read",
+                            "target": {
+                                "type": "share",
+                                "share": "TINY-FILE-01.records",
+                            },
+                            "outcome": "success",
+                        }
+                    ],
+                }
+            ],
+            "output": {
+                "logs": [{"format": "windows"}, {"format": "ecar"}],
+                "destination": "./output",
+                "compression": False,
+            },
+        },
+        scenario_path,
+    )
+
+    compiled = compile_scenario(scenario_path, project_root=tmp_path)
+    output = tmp_path / "generated"
+    GenerationEngine(
+        compiled.scenario,
+        output,
+        resource_forecast=_forecast(output),
+        compiled_scenario=compiled,
+        scenario_root=tmp_path,
+    ).generate()
+
+    manifest = json.loads((output / "STORAGE_MANIFEST.json").read_text(encoding="utf-8"))
+    share = next(item for item in manifest["shares"] if item["ref"] == "TINY-FILE-01.records")
+    assert share["preset"] == "tiny-storage-org:records"
+    assert share["file_count"] == 36
+    assert share["population_resolution"] == {
+        "requested_file_count": 64,
+        "effective_file_count": 36,
+        "realizable_file_count": 36,
+        "capped": True,
+    }
+    assert manifest["resolved_storyline_targets"][0]["operations"][0]["path"]
 
 
 def test_high_audit_smb_lifecycle_uses_native_fields_and_ordering(

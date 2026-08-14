@@ -10,11 +10,14 @@ This document describes the EvidenceForge scenario file schema, including Phase 
 
 Scenario files are YAML documents that define the environment, users, systems, personas, and storyline for log generation. All fields marked "Phase 2.4+" are optional and backward compatible with Phase 1 scenarios.
 
-Scenario 1.0 remains the compatibility format shown throughout this field reference. Scenario 2.0
-uses `scenario_version: "2.0"` and may optionally select exact industry packs or one organization
-pack through `composition`; without that section it is fully monolithic. See
-[Scenario 2.0 and composable packs](SCENARIO_PACKS.md) for repositories, fixed catalogs,
-qualified references, precedence, CLI workflows, and authoritative generated artifacts.
+Scenario 1.0 remains fully supported and is the compatibility format shown throughout this field
+reference. Scenario 2.0 uses `scenario_version: "2.0"` and may remain monolithic or explicitly
+select exact industry packs or one organization pack through `composition`. Packs are optional;
+no-pack scenarios do not scan for packs or warn about their absence. Pack exports use qualified
+`<pack-name>:<local-name>` references. Use `eforge pack list --json`, `eforge pack show`, and
+`eforge resolve --explain-composition --json` to inspect composition. See
+[Scenario 2.0 and composable packs](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/reference/SCENARIO_PACKS.md)
+for repositories, fixed catalogs, precedence, CLI workflows, and authoritative artifacts.
 
 ## Top-Level Structure
 
@@ -931,7 +934,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `workstation_lock` | Windows 4800 (workstation locked) | | |
 | `workstation_unlock` | Windows 4624 type 7 re-auth followed by 4801 unlock | | |
 | `spillage` | Synthetic credential leaked into a semantic surface (`shell_history` → bash history; `process_command_line` → process/EDR telemetry; `syslog_message` → syslog; `http_request_url`/`http_referrer` → a web server's `web_access` log), per-event varied, + canonical `GROUND_TRUTH.json` tracking (emitted or explicitly skipped) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `http_*` surfaces need a compatible `web_server`-role host |
-| `adversarial_payload` | Known log-pipeline weakness payload (ANSI escape, CRLF log-forging, CSV formula, Log4Shell/JNDI, reflected XSS, SQL injection, structured-log/JSON injection, oversized field; each family ships a canonical form plus seed-picked evasion variants) injected into a semantic surface (`syslog_message`, `process_command_line`, `http_user_agent`, `http_request_url`, `http_referrer`, `dns_qname`, `auth_user`), per-surface encoded, + canonical `GROUND_TRUTH.json` tracking (`kind: adversarial_payload`, incl. `ids_alert` for signature-mapped cleartext-http families). See [adversarial_payload.md](adversarial_payload.md) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `syslog_message` and `auth_user` are Linux-only; `dns_qname` needs a network sensor emitting Zeek; `http_*` surfaces need a compatible `web_server`-role host; an optional generation-time live-callback (OOB) mode (`generate`/`validate --oob-host`, opt-in) can replace the inert default canary — by default payloads use the non-resolving canary `canary.eforge.invalid` and are never executed, see [adversarial_payload.md](adversarial_payload.md) |
+| `adversarial_payload` | Known log-pipeline weakness payload (ANSI escape, CRLF log-forging, CSV formula, Log4Shell/JNDI, reflected XSS, SQL injection, structured-log/JSON injection, oversized field; each family ships a canonical form plus seed-picked evasion variants) injected into a semantic surface (`syslog_message`, `process_command_line`, `http_user_agent`, `http_request_url`, `http_referrer`, `dns_qname`, `auth_user`), per-surface encoded, + canonical `GROUND_TRUTH.json` tracking (`kind: adversarial_payload`, incl. `ids_alert` for signature-mapped cleartext-http families). See [adversarial_payload.md](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/reference/adversarial_payload.md) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `syslog_message` and `auth_user` are Linux-only; `dns_qname` needs a network sensor emitting Zeek; `http_*` surfaces need a compatible `web_server`-role host; an optional generation-time live-callback (OOB) mode (`generate`/`validate --oob-host`, opt-in) can replace the inert default canary — by default payloads use the non-resolving canary `canary.eforge.invalid` and are never executed, see [adversarial_payload.md](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/reference/adversarial_payload.md) |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event. The generator routes process create/terminate lifecycle and process-owned endpoint side effects through an internal process-execution bundle; scenario authors still describe normal `process` events and do not model the bundle directly.
@@ -1033,10 +1036,10 @@ automated, interval-driven, or explicitly minutes/hours apart.
 
 **Network-level red herrings:** The suspicious noise generator includes network-layer patterns: high-entropy DNS queries (CDN subdomains, DoH providers), unusual outbound connections (cloud backup sync, dev tool endpoints), and scheduled vulnerability scan overlaps. Controlled by `baseline_activity.suspicious_noise` level.
 
-The suspicious DNS and unusual outbound target pools are reusable configuration
-data in `activity/suspicious_benign.yaml`; edit that config overlay when a
-project needs different benign red-herring identities. Storyline-authored IPs,
-hostnames, and email addresses still win over fallback pools.
+The suspicious DNS and unusual outbound target pools are reusable configuration data in
+`activity/suspicious_benign.yaml`. Change that project overlay only when the project's ambient
+benign identities should change. If one scenario needs a specific malicious or benign IP, hostname,
+or email address, author it explicitly in the scenario; authored identities win over fallback pools.
 
 **Entity lifecycle validation:** The engine validates that process injection events target existing PIDs and that event timestamps don't precede system boot times. Warnings are logged for impossible sequences.
 
@@ -1603,6 +1606,10 @@ output:
   destination: ./output
   compression: false           # Optional (default: false)
 ```
+
+`destination` is retained as authored metadata and in resolved provenance. Current CLI generation
+writes the bundle beside the scenario by default; pass `eforge generate --output <bundle-root>` to
+choose another location explicitly.
 
 Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR record format), `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 

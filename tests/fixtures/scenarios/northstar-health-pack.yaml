@@ -7,7 +7,7 @@ composition:
 name: northstar-health-baseline
 description: "Northstar Health organization-pack baseline generation example."
 time_window:
-  start: "2026-08-14T14:00:00Z"
+  start: "2026-08-14T13:00:00Z"
   duration: "1h"
   warmup: "1h"
 output:

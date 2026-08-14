@@ -99,6 +99,8 @@ class CompiledStorageShare(BaseModel):
     audit: str
     access: CompiledStorageAccess
     files: tuple[CompiledStorageFile, ...]
+    requested_file_count: int | None = Field(default=None, ge=0)
+    realizable_file_count: int | None = Field(default=None, ge=0)
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -213,27 +215,36 @@ class StorageWorldModel:
         sample_size: int = 5,
         resolved_targets: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        shares: list[dict[str, Any]] = []
+        for share in self.shares:
+            share_document: dict[str, Any] = {
+                "ref": share.ref,
+                "system": share.system,
+                "name": share.name,
+                "volume": share.volume,
+                "root": share.root,
+                "preset": share.preset,
+                "population": share.population,
+                "activity": share.activity,
+                "encryption": share.encryption,
+                "audit": share.audit,
+                "file_count": len(share.files),
+                "sample_paths": [file.path for file in share.files[:sample_size]],
+                "seed_refs": [file.seed_ref for file in share.files if file.seed_ref],
+            }
+            if share.requested_file_count is not None:
+                share_document["population_resolution"] = {
+                    "requested_file_count": share.requested_file_count,
+                    "effective_file_count": len(share.files),
+                    "realizable_file_count": share.realizable_file_count,
+                    "capped": True,
+                }
+            shares.append(share_document)
+
         manifest = {
             "schema_version": 1,
             "volumes": [volume.model_dump(mode="json") for volume in self.volumes],
-            "shares": [
-                {
-                    "ref": share.ref,
-                    "system": share.system,
-                    "name": share.name,
-                    "volume": share.volume,
-                    "root": share.root,
-                    "preset": share.preset,
-                    "population": share.population,
-                    "activity": share.activity,
-                    "encryption": share.encryption,
-                    "audit": share.audit,
-                    "file_count": len(share.files),
-                    "sample_paths": [file.path for file in share.files[:sample_size]],
-                    "seed_refs": [file.seed_ref for file in share.files if file.seed_ref],
-                }
-                for share in self.shares
-            ],
+            "shares": shares,
             "mappings": [mapping.model_dump(mode="json") for mapping in self.mappings],
         }
         if resolved_targets is not None:
@@ -370,6 +381,25 @@ class _StorageWorldCompiler:
                 )
                 for volume in configured_volumes
             ]
+        admin_volume = next(
+            (volume for volume in volumes if volume.mount.casefold() == "c:\\"),
+            None,
+        )
+        if admin_volume is None:
+            existing_volume_ids = {volume.id.casefold() for volume in volumes}
+            admin_volume_id = "system"
+            suffix = 2
+            while admin_volume_id.casefold() in existing_volume_ids:
+                admin_volume_id = f"system{suffix}"
+                suffix += 1
+            admin_volume = CompiledStorageVolume(
+                id=admin_volume_id,
+                system=system.hostname,
+                mount="C:\\",
+                filesystem="ntfs",
+                label="System",
+            )
+            volumes.append(admin_volume)
         self.volumes.extend(volumes)
         default_volume = (
             server.default_volume
@@ -382,7 +412,7 @@ class _StorageWorldCompiler:
             for preset in presets
             for share in self._generated_shares(system, preset, default_volume, audit)
         ]
-        generated.extend(self._compatibility_shares(system, default_volume, audit))
+        generated.extend(self._compatibility_shares(system, admin_volume.id, audit))
         explicit_shares = list(server.shares) if server is not None else []
         known_volume_ids = {volume.id.casefold() for volume in volumes}
         unknown_share_volumes = sorted(
@@ -543,11 +573,20 @@ class _StorageWorldCompiler:
         ref = f"{system.hostname}.{share.id}"
         population = share.population or self.config.population
         activity = share.activity or self.config.activity
-        files = (
-            ()
-            if share.name.casefold() in {"c$", "admin$"}
-            else self._compile_catalog(ref, share.preset, population, share.seed_files)
-        )
+        requested_file_count: int | None = None
+        realizable_file_count: int | None = None
+        if share.name.casefold() in {"c$", "admin$"}:
+            files = ()
+        else:
+            files, requested_count, realizable_count = self._compile_catalog(
+                ref,
+                share.preset,
+                population,
+                share.seed_files,
+            )
+            if requested_count > realizable_count:
+                requested_file_count = requested_count
+                realizable_file_count = realizable_count
         return CompiledStorageShare(
             ref=ref,
             system=system.hostname,
@@ -561,6 +600,8 @@ class _StorageWorldCompiler:
             audit=audit,
             access=self._effective_access(share.access),
             files=files,
+            requested_file_count=requested_file_count,
+            realizable_file_count=realizable_file_count,
         )
 
     def _compile_catalog(
@@ -569,11 +610,29 @@ class _StorageWorldCompiler:
         preset: str,
         population: str,
         seeds: list[StorageSeedFileConfig],
-    ) -> tuple[CompiledStorageFile, ...]:
+    ) -> tuple[tuple[CompiledStorageFile, ...], int, int]:
         data = _load_catalog_config()
         profile = data["profiles"][preset]
         counts = data["population_counts"]
-        count = int(counts["auto"].get(preset, 64) if population == "auto" else counts[population])
+        configured_count = int(
+            counts["auto"].get(preset, 64) if population == "auto" else counts[population]
+        )
+        directory_variants = self._directory_variants(profile)
+        subject_variants = self._subject_variants(profile)
+        file_profiles = self._file_profiles_by_extension(profile)
+        filename_variants = self._filename_variants(subject_variants, file_profiles)
+        generated_capacity = len(directory_variants) * len(filename_variants)
+        external_seed_count = sum(
+            not self._path_is_generated_candidate(
+                seed.path,
+                directory_variants=directory_variants,
+                filename_variants=filename_variants,
+            )
+            for seed in seeds
+        )
+        realizable_count = generated_capacity + external_seed_count
+        requested_count = max(configured_count, len(seeds))
+        target_count = min(requested_count, realizable_count)
         rng = random.Random(_stable_seed(f"storage-catalog:{self.scenario.name}:{share_ref}"))
         files: list[CompiledStorageFile] = []
         used_paths: set[str] = set()
@@ -592,10 +651,10 @@ class _StorageWorldCompiler:
             )
             used_paths.add(seed.path.casefold())
         attempts = 0
-        while len(files) < max(count, len(seeds)):
+        while len(files) < target_count:
             attempts += 1
-            if attempts > count * 20 + 100:
-                raise ValueError(f"unable to build unique storage catalog for {share_ref}")
+            if attempts > target_count * 20 + 100:
+                break
             directory = rng.choice(profile["directories"])
             if rng.random() < 0.28:
                 directory = f"{directory}\\{rng.randint(2023, 2027)}"
@@ -622,7 +681,113 @@ class _StorageWorldCompiler:
                 )
             )
             used_paths.add(path.casefold())
-        return tuple(sorted(files, key=lambda file: file.path.casefold()))
+
+        # Rejection sampling preserves the historical output for ordinary profiles. If a
+        # compact pack vocabulary approaches its finite product, finish from the explicit
+        # candidate space so compilation is bounded and cannot fail from duplicate draws.
+        if len(files) < target_count:
+            for directory in directory_variants.values():
+                for filename, extension_key, file_profile in filename_variants.values():
+                    path = f"{directory}\\{filename}"
+                    if path.casefold() in used_paths:
+                        continue
+                    files.append(
+                        CompiledStorageFile(
+                            file_id=self._file_id(share_ref, path),
+                            share=share_ref,
+                            path=path,
+                            size_bytes=self._file_size(rng, extension_key, preset),
+                            mime_type=str(file_profile["mime"]),
+                            tags=(preset, directory.split("\\", 1)[0].casefold()),
+                        )
+                    )
+                    used_paths.add(path.casefold())
+                    if len(files) >= target_count:
+                        break
+                if len(files) >= target_count:
+                    break
+        if len(files) != target_count:
+            raise ValueError(
+                f"storage catalog capacity calculation failed for {share_ref}: "
+                f"expected {target_count} files, built {len(files)}"
+            )
+        return (
+            tuple(sorted(files, key=lambda file: file.path.casefold())),
+            requested_count,
+            realizable_count,
+        )
+
+    @staticmethod
+    def _directory_variants(profile: dict[str, Any]) -> dict[str, str]:
+        """Return case-insensitively unique directory variants in authored order."""
+
+        variants: dict[str, str] = {}
+        for raw_directory in profile["directories"]:
+            directory = str(raw_directory)
+            for candidate in (directory, *(f"{directory}\\{year}" for year in range(2023, 2028))):
+                variants.setdefault(candidate.casefold(), candidate)
+        return variants
+
+    @staticmethod
+    def _subject_variants(profile: dict[str, Any]) -> dict[str, str]:
+        """Return case-insensitively unique subject variants in authored order."""
+
+        variants: dict[str, str] = {}
+        for raw_subject in profile["subjects"]:
+            subject = str(raw_subject)
+            for candidate in (
+                subject,
+                *(
+                    f"{subject}-{suffix}"
+                    for suffix in ("draft", "final", "review", "v2", "approved")
+                ),
+            ):
+                variants.setdefault(candidate.casefold(), candidate)
+        return variants
+
+    @staticmethod
+    def _file_profiles_by_extension(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """Return one file profile per case-insensitive extension in authored order."""
+
+        profiles: dict[str, dict[str, Any]] = {}
+        for file_profile in profile["files"]:
+            extension = str(file_profile["extension"])
+            profiles.setdefault(extension.casefold(), file_profile)
+        return profiles
+
+    @staticmethod
+    def _filename_variants(
+        subject_variants: dict[str, str],
+        file_profiles: dict[str, dict[str, Any]],
+    ) -> dict[str, tuple[str, str, dict[str, Any]]]:
+        """Return unique filename products with their owning extension profile."""
+
+        variants: dict[str, tuple[str, str, dict[str, Any]]] = {}
+        for subject in subject_variants.values():
+            for extension_key, file_profile in file_profiles.items():
+                filename = f"{subject}{file_profile['extension']}"
+                variants.setdefault(
+                    filename.casefold(),
+                    (filename, extension_key, file_profile),
+                )
+        return variants
+
+    @staticmethod
+    def _path_is_generated_candidate(
+        path: str,
+        *,
+        directory_variants: dict[str, str],
+        filename_variants: dict[str, tuple[str, str, dict[str, Any]]],
+    ) -> bool:
+        """Return whether a seed path occupies one generated product slot."""
+
+        normalized = path.replace("/", "\\").casefold()
+        if "\\" not in normalized:
+            return False
+        directory, filename = normalized.rsplit("\\", 1)
+        if directory not in directory_variants:
+            return False
+        return filename in filename_variants
 
     @staticmethod
     def _mime_for_path(profile: dict[str, Any], path: str) -> str:

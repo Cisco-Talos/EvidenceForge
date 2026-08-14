@@ -6,13 +6,13 @@ This document provides AI coding agents with everything needed to write consiste
 
 EvidenceForge generates realistic synthetic security logs for cybersecurity threat hunting training and research. The system uses a two-phase hybrid architecture:
 
-**Phase 1 - Scenario Creation (Skill-assisted):** Claude Code Skills guide users through scenario creation via structured interviews. Skills research TTPs via MITRE ATT&CK, expand high-level descriptions into detailed execution plans, and output structured YAML scenario files with companion research markdown.
+**Phase 1 - Scenario Creation (Skill-assisted):** AI agent skills guide users through scenario creation via structured interviews. Skills research TTPs via MITRE ATT&CK, expand high-level descriptions into detailed execution plans, and output structured YAML scenario files with companion research markdown.
 
 **Phase 2 - Log Generation (Deterministic):** Generation engine executes the detailed scenario plan WITHOUT any LLM calls, producing large-scale, temporally consistent datasets across multiple log formats (Windows Event Logs, Zeek, Syslog, Snort/Suricata, web logs) with coordinated cross-references (matching LogonIDs, PIDs, session data).
 
 This architecture combines LLM flexibility/realism with deterministic speed, cost-efficiency, and reproducibility.
 
-**Key Principle:** The `eforge` CLI is a deterministic tool. Creative/interactive work happens through Claude Code Skills, not built-in LLM calls. Phase 2 is a deterministic renderer that executes the plan. Never call LLMs during generation. LLM integration is not built-in; scenario creation uses Claude Code Skills.
+**Key Principle:** The `eforge` CLI is a deterministic tool. Creative/interactive work happens through AI agent skills, not built-in LLM calls. Phase 2 is a deterministic renderer that executes the plan. Never call LLMs during generation. LLM integration is not built-in; scenario creation uses skills outside the generation engine.
 
 **Storyline Events (Phase 8.4):** Storyline entries use typed `events` lists, not free-text keyword matching. Each event has a `type` field (`process`, `logon`, `connection`, `ssh_session`, etc.) with per-type validated fields. The `activity` field is documentation only (for GROUND_TRUTH.md). See `docs/reference/scenario-reference.md` for the full event type reference.
 
@@ -735,26 +735,47 @@ coverage during release validation.
 
 ## Skills
 
-Claude Code Skills handle the interactive, creative aspects of scenario creation.
+Agent skills handle the interactive, creative authoring and operational workflows around the
+deterministic `eforge` CLI.
 
-**Location:** `commands/eforge/` directory
+**Canonical location:** `commands/eforge/`. Claude Code installs these files under
+`.claude/commands/eforge/`. ChatGPT and Codex install converted `SKILL.md` trees under
+`.agents/skills/`. The project-local `.agents/` tree is generated, ignored by Git, and must not be
+edited or committed; change only the canonical sources and installer.
 
 **Skills:**
+
 - `/eforge scenario` — Guided scenario creation through a structured interview, producing a validated YAML scenario file
+- `/eforge pack` — Discover, inspect, validate, initialize, and copy industry or organization packs
+- `/eforge industry-pack` — Author reusable industry catalogs and verify their composition behavior
+- `/eforge organization-pack` — Author organization environments/baselines with exact industry dependencies
 - `/eforge generate` — Generation workflow that validates a scenario and runs the deterministic engine
 - `/eforge validate` — Validate a scenario file for schema correctness and cross-reference integrity
 - `/eforge evaluate` — Run data quality evaluation on generated output
+- `/eforge config` — Manage project configuration overlays and their cross-file dependencies
 
-Skills are markdown prompt files (`.md`), not Python code. They run inside Claude Code, not inside the `eforge` CLI process. They follow a hybrid interview pattern (structured questions first, then free-form refinement) and reference `docs/reference/scenario-reference.md` for schema validity.
+Skills are Markdown prompt files, not Python code, and run in the selected agent rather than inside
+the `eforge` CLI process. Keep detailed reusable schemas under `commands/eforge/references/` and
+bundle only the references each ChatGPT/Codex skill needs through
+`src/evidenceforge/cli/install_skills.py`.
 
 **Important:** When modifying the scenario schema (adding/removing/changing fields in Pydantic models or `docs/reference/scenario-reference.md`), always update the corresponding skills in `commands/eforge/` to reflect the changes — especially `scenario.md` (YAML templates and validation rules) and `validate.md` (error handling guidance).
 
 ### Adding a New Skill
-1. Create `commands/eforge/{name}.md` with the skill prompt
-2. Follow the hybrid interview pattern
-3. Reference `docs/reference/scenario-reference.md` for output validity
-4. Test interactively in Claude Code
-5. Update `install-skills` command if needed
+
+1. Create the canonical `commands/eforge/{name}.md` prompt with valid `name` and `description`
+   frontmatter.
+2. Add detailed bundled material under `commands/eforge/references/` only when progressive
+   disclosure is useful; reference it from the canonical prompt with `/eforge:references:<name>`.
+3. Add the command, per-skill reference bundle, reference rewrites, and cross-skill command rewrites
+   to `src/evidenceforge/cli/install_skills.py`.
+4. Extend `tests/unit/test_install_skills.py`; its source-manifest invariant requires every
+   top-level canonical command to have a ChatGPT/Codex mapping.
+5. Regenerate the ignored local `.agents/skills/` copies with
+   `eforge install-skills --agent chatgpt` and review the generated `SKILL.md` frontmatter and local
+   reference links. Do not hand-edit or commit them.
+6. Test the installed Claude and ChatGPT/Codex artifacts interactively, including routing between
+   related skills and any deterministic CLI validation workflow.
 
 ## Known Design Decisions (do not flag as bugs)
 

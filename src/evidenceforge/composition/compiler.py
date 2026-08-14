@@ -33,6 +33,13 @@ from .models import (
     SelectedPack,
 )
 from .packs import LoadedPack, PackRepository
+from .semantic_validation import (
+    packaged_builtin_application_ids,
+    packaged_builtin_dns_domains,
+    packaged_builtin_dns_tags,
+    packaged_builtin_executable_claims,
+    validate_selected_pack_semantics,
+)
 
 CONFIG_FAMILY_REGISTRY: dict[str, str] = {
     "persona_catalog": "pack-safe",
@@ -174,6 +181,101 @@ def _load_project_overlays(project_root: Path) -> dict[str, Any]:
     return overlays
 
 
+def _project_pack_adapter_merge_decisions(
+    catalogs: dict[str, dict[str, Any]],
+    project_overlays: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Describe concrete project-overlay collisions with pack-adapted runtime entries."""
+
+    decisions: list[dict[str, str]] = []
+
+    def record(relative_path: str, item_path: str, *, replace: bool) -> None:
+        decisions.append(
+            {
+                "path": f"{relative_path}:{item_path}",
+                "action": "replace" if replace else "merge",
+                "lower_layer": "pack-adapter",
+                "higher_layer": f"project-overlay:{relative_path}",
+                "winner": "project-overlay" if replace else "combined",
+            }
+        )
+
+    dns_overlay = project_overlays.get("activity/dns_registry.yaml")
+    if isinstance(dns_overlay, dict):
+        pack_domains = {
+            str(endpoint.get("domain"))
+            for entry in catalogs.get("destination_catalog", {}).values()
+            for endpoint in entry.get("data", {}).get("endpoints", [])
+            if isinstance(endpoint, dict) and endpoint.get("domain")
+        }
+        for entry in dns_overlay.get("domains", []):
+            if not isinstance(entry, dict) or entry.get("domain") not in pack_domains:
+                continue
+            domain = str(entry["domain"])
+            record(
+                "activity/dns_registry.yaml",
+                f"domains[{domain}]",
+                replace=entry.get("_replace") is True,
+            )
+
+    application_overlay = project_overlays.get("activity/application_catalog.yaml")
+    if isinstance(application_overlay, dict):
+        pack_application_ids: set[str] = set()
+        for process_name, process_entry in catalogs.get("process_catalog", {}).items():
+            process_data = process_entry.get("data", {})
+            pack_application_ids.update(
+                f"{process_name}::{builtin_id}" for builtin_id in process_data.get("builtins", [])
+            )
+            namespace = process_name.split(":", 1)[0]
+            pack_application_ids.update(
+                custom_id if ":" in custom_id else f"{namespace}:{custom_id}"
+                for custom in process_data.get("custom", [])
+                if isinstance(custom, dict) and isinstance((custom_id := custom.get("id")), str)
+            )
+        for entry in application_overlay.get("applications", []):
+            if not isinstance(entry, dict) or entry.get("id") not in pack_application_ids:
+                continue
+            application_id = str(entry["id"])
+            record(
+                "activity/application_catalog.yaml",
+                f"applications[{application_id}]",
+                replace=entry.get("_replace") is True,
+            )
+
+    storage_overlay = project_overlays.get("activity/storage_catalog.yaml")
+    if isinstance(storage_overlay, dict):
+        profiles = storage_overlay.get("profiles")
+        if isinstance(profiles, dict):
+            for profile_name in sorted(set(profiles) & set(catalogs.get("storage_catalog", {}))):
+                record(
+                    "activity/storage_catalog.yaml",
+                    f"profiles.{profile_name}",
+                    replace=False,
+                )
+
+    traffic_overlay = project_overlays.get("activity/traffic_profiles.yaml")
+    if isinstance(traffic_overlay, dict):
+        overlay_personas = traffic_overlay.get("pack_persona_traffic")
+        if isinstance(overlay_personas, dict):
+            pack_groups = {
+                (str(persona), traffic_name)
+                for traffic_name, traffic_entry in catalogs.get("traffic_catalog", {}).items()
+                for persona in traffic_entry.get("data", {}).get("audience", [])
+            }
+            for persona, groups in overlay_personas.items():
+                if not isinstance(groups, dict):
+                    continue
+                for traffic_name in groups:
+                    if (str(persona), str(traffic_name)) in pack_groups:
+                        record(
+                            "activity/traffic_profiles.yaml",
+                            f"pack_persona_traffic.{persona}.{traffic_name}",
+                            replace=False,
+                        )
+
+    return sorted(decisions, key=lambda decision: decision["path"])
+
+
 def _load_packaged_defaults() -> dict[str, Any]:
     """Snapshot all packaged semantic YAML outside the independently resolved pack repository."""
 
@@ -214,10 +316,13 @@ def _merge_keyed_list(
     *,
     key_field: str,
     path: tuple[str, ...],
+    replacements: list[tuple[str, ...]] | None = None,
 ) -> list[Any]:
     """Merge a registered keyed list while preserving deterministic lower order."""
 
     if not all(isinstance(entry, dict) and key_field in entry for entry in (*lower, *higher)):
+        if replacements is not None and lower != higher:
+            replacements.append(path)
         return copy.deepcopy(higher)
     result = copy.deepcopy(lower)
     positions = {str(entry[key_field]).casefold(): index for index, entry in enumerate(result)}
@@ -226,7 +331,10 @@ def _merge_keyed_list(
         if key in positions:
             index = positions[key]
             result[index] = _merge_registered(
-                result[index], incoming, path=(*path, str(incoming[key_field]))
+                result[index],
+                incoming,
+                path=(*path, str(incoming[key_field])),
+                replacements=replacements,
             )
         else:
             positions[key] = len(result)
@@ -234,7 +342,13 @@ def _merge_keyed_list(
     return result
 
 
-def _merge_registered(lower: Any, higher: Any, *, path: tuple[str, ...] = ()) -> Any:
+def _merge_registered(
+    lower: Any,
+    higher: Any,
+    *,
+    path: tuple[str, ...] = (),
+    replacements: list[tuple[str, ...]] | None = None,
+) -> Any:
     """Apply explicit scenario/org merge behavior; the higher-precedence value wins."""
 
     if isinstance(lower, dict) and isinstance(higher, dict):
@@ -242,15 +356,30 @@ def _merge_registered(lower: Any, higher: Any, *, path: tuple[str, ...] = ()) ->
         for key, incoming in higher.items():
             child_path = (*path, str(key))
             if key in result:
-                result[key] = _merge_registered(result[key], incoming, path=child_path)
+                result[key] = _merge_registered(
+                    result[key],
+                    incoming,
+                    path=child_path,
+                    replacements=replacements,
+                )
             else:
                 result[key] = copy.deepcopy(incoming)
         return result
     if isinstance(lower, list) and isinstance(higher, list):
         key_field = _KEYED_LIST_FIELDS.get(path)
         if key_field is not None:
-            return _merge_keyed_list(lower, higher, key_field=key_field, path=path)
+            return _merge_keyed_list(
+                lower,
+                higher,
+                key_field=key_field,
+                path=path,
+                replacements=replacements,
+            )
+        if replacements is not None and lower != higher:
+            replacements.append(path)
         return copy.deepcopy(higher)
+    if replacements is not None and lower != higher:
+        replacements.append(path)
     return copy.deepcopy(higher)
 
 
@@ -335,12 +464,12 @@ def _resolve_composition(
         expected_type="organization",
         declaring_file=organization_declaring_file,
     )
-    for dependency in organization.manifest.industry_dependencies:
+    for index, dependency in enumerate(organization.manifest.industry_dependencies):
         selected.append(
             repository.resolve(
                 dependency,
                 expected_type="industry",
-                declaring_file=organization.root / "pack.yaml",
+                declaring_file=organization.industry_dependency_declaring_files[index],
             )
         )
     selected.append(organization)
@@ -394,6 +523,9 @@ def compile_scenario(
     selected: list[LoadedPack] = []
     catalogs: dict[str, dict[str, Any]] = {}
     catalog_origins: dict[str, str] = {}
+    catalog_field_origins: dict[str, str] = {}
+    organization_model_origins: dict[str, str] = {}
+    merge_decisions: list[dict[str, str]] = []
     authored_kind: str
     if raw.get("scenario_version") == "2.0":
         try:
@@ -417,17 +549,43 @@ def compile_scenario(
         selected, organization_index = _resolve_composition(
             composition, graph, resolved_project_root
         )
+        if selected:
+            validate_selected_pack_semantics(
+                selected,
+                builtin_application_ids=packaged_builtin_application_ids(),
+                builtin_dns_tags=packaged_builtin_dns_tags(),
+                builtin_executable_claims=packaged_builtin_executable_claims(),
+                builtin_dns_domains=packaged_builtin_dns_domains(),
+            )
         catalogs, catalog_origins = _merge_catalogs(selected, organization_index=organization_index)
+        for pack in selected:
+            catalog_field_origins.update(pack.catalog_field_origins)
         lower: dict[str, Any] = {}
+        organization: LoadedPack | None = None
         if organization_index is not None:
             organization = selected[organization_index]
+            organization_model_origins = dict(organization.organization_model_origins)
             if organization.environment:
                 lower["environment"] = organization.environment
             if organization.baseline_activity:
                 lower["baseline_activity"] = organization.baseline_activity
         if catalogs.get("persona_catalog"):
             lower["personas"] = list(catalogs["persona_catalog"].values())
-        scenario_data = _merge_registered(lower, authored)
+        replacement_paths: list[tuple[str, ...]] = []
+        scenario_data = _merge_registered(lower, authored, replacements=replacement_paths)
+        if organization is not None:
+            organization_identity = organization.selected().location
+            merge_decisions.extend(
+                {
+                    "path": ".".join(path),
+                    "action": "replace",
+                    "lower_layer": organization_identity,
+                    "higher_layer": "scenario",
+                    "winner": "scenario",
+                }
+                for path in sorted(set(replacement_paths))
+                if path and path[0] in {"environment", "baseline_activity"}
+            )
         scenario_data["version"] = "2.0"
         authored_kind = "scenario-2.0"
     else:
@@ -451,6 +609,7 @@ def compile_scenario(
     scenario, embedded_yaml_assets = _embed_scenario_assets(scenario, graph)
 
     project_overlays = _load_project_overlays(resolved_project_root)
+    merge_decisions.extend(_project_pack_adapter_merge_decisions(catalogs, project_overlays))
     effective_config = EffectiveConfig(
         project_root=".",
         packaged_defaults=_load_packaged_defaults(),
@@ -486,10 +645,16 @@ def compile_scenario(
     )
     provenance = {
         "authored_kind": authored_kind,
+        "scenario_source_count": len(graph.sources),
+        "selected_pack_count": len(selected),
         "source_count": len(graph.sources),
+        "source_count_scope": "scenario-source-graph",
         "field_origins": _portable_field_origins(graph),
+        "organization_model_origins": organization_model_origins,
         "catalog_origins": catalog_origins,
+        "catalog_field_origins": catalog_field_origins,
         "project_overlay_files": sorted(project_overlays),
+        "merge_decisions": merge_decisions,
         "selected_packs": [pack.selected().model_dump(mode="json") for pack in selected],
         "composition_precedence": [
             "package-defaults",

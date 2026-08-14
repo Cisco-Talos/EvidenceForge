@@ -116,6 +116,24 @@ def _collect_application_ids() -> list[str]:
     return sorted(app["id"] for app in data.get("applications", []) if "id" in app)
 
 
+def _collect_pack_builtin_application_ids() -> list[str]:
+    """Collect stable application IDs allowed by the public pack schema."""
+
+    from evidenceforge.composition.semantic_validation import (
+        packaged_builtin_application_ids,
+    )
+
+    return sorted(packaged_builtin_application_ids())
+
+
+def _collect_pack_builtin_dns_tags() -> list[str]:
+    """Collect stable packaged DNS tags allowed by the public pack schema."""
+
+    from evidenceforge.composition.semantic_validation import packaged_builtin_dns_tags
+
+    return sorted(packaged_builtin_dns_tags())
+
+
 def _collect_system_roles() -> list[str]:
     """Collect author-facing system role names from role-aware config.
 
@@ -321,6 +339,8 @@ def gather_info(field: str | None = None) -> dict[str, Any]:
         "formats": lambda: _collect_formats(formats_dir),
         "dns_tags": _collect_dns_tags,
         "application_ids": _collect_application_ids,
+        "pack_builtin_application_ids": _collect_pack_builtin_application_ids,
+        "pack_builtin_dns_tags": _collect_pack_builtin_dns_tags,
         "system_roles": _collect_system_roles,
         "web_scan_presets": _collect_web_scan_presets,
         "beacon_profiles": _collect_beacon_profiles,
@@ -403,6 +423,16 @@ def format_human_readable(data: dict[str, Any]) -> str:
     lines.append(_format_list(app_ids))
     lines.append("")
 
+    pack_app_ids = data["pack_builtin_application_ids"]
+    lines.append(f"Pack built-in application IDs ({len(pack_app_ids)}):")
+    lines.append(_format_list(pack_app_ids))
+    lines.append("")
+
+    pack_dns_tags = data["pack_builtin_dns_tags"]
+    lines.append(f"Pack built-in DNS tags ({len(pack_dns_tags)}):")
+    lines.append(_format_list(pack_dns_tags))
+    lines.append("")
+
     beacon_profiles = data["beacon_profiles"]
     lines.append(f"Beacon profiles ({len(beacon_profiles)}):")
     lines.append(_format_list(beacon_profiles))
@@ -447,6 +477,10 @@ _FIELD_DESCRIPTIONS: dict[str, str] = {
     "pack_roots.package": "Installed read-only pack repository",
     "pack_roots.project": "Project-local editable pack repository",
     "packs": "Exact packaged and project-local pack references",
+    "pack_builtin_application_ids": (
+        "Stable packaged application IDs allowed in pack process profiles"
+    ),
+    "pack_builtin_dns_tags": "Stable packaged DNS tags allowed in pack low-level traffic",
     "paths.activity": "Activity config directory (dns, traffic, apps, etc.)",
     "paths.config_root": "Root config directory",
     "paths.evaluation": "Evaluation rules directory",

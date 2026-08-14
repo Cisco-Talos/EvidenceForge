@@ -2,5 +2,15 @@ application_catalog:
   clinical-portal:
     description: "Synthetic browser-based clinical records application."
     data:
-      category: clinical
-      protocols: [https]
+      personas: [clinical_coordinator]
+      processes: [clinical-browser]
+      connections:
+        claims:
+          destination: claims-clearinghouse
+          service: web
+  clinical-tools:
+    description: "Local clinical email and document applications."
+    data:
+      personas: [clinical_coordinator]
+      processes: [clinical-workstation]
+      connections: {}

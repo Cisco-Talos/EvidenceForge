@@ -29,7 +29,16 @@ from pathlib import Path
 
 from evidenceforge.utils.files import ensure_directory
 
-CHATGPT_SKILL_NAMES = ("scenario", "generate", "validate", "evaluate", "config")
+CHATGPT_SKILL_NAMES = (
+    "scenario",
+    "generate",
+    "validate",
+    "evaluate",
+    "config",
+    "pack",
+    "industry-pack",
+    "organization-pack",
+)
 
 _CHATGPT_REFERENCES_BY_SKILL = {
     "config": (
@@ -51,19 +60,38 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/evidence-formats.md",
         "references/scenario-reference.md",
     ),
-    "scenario": (
-        "references/evidence-formats.md",
+    "industry-pack": (
+        "references/pack-reference.md",
         "references/scenario-reference.md",
     ),
-    "validate": ("references/scenario-reference.md",),
+    "organization-pack": (
+        "references/pack-reference.md",
+        "references/scenario-reference.md",
+    ),
+    "pack": ("references/pack-reference.md",),
+    "scenario": (
+        "references/evidence-formats.md",
+        "references/pack-reference.md",
+        "references/scenario-authoring.md",
+        "references/scenario-reference.md",
+    ),
+    "validate": (
+        "references/pack-reference.md",
+        "references/scenario-reference.md",
+    ),
 }
 
 _CHATGPT_REFERENCE_REWRITES = {
+    "/eforge:references:pack-reference": "`references/pack-reference.md`",
+    "/eforge:references:scenario-authoring": "`references/scenario-authoring.md`",
     "/eforge:references:scenario-reference": "`references/scenario-reference.md`",
     "/eforge:references:evidence-formats": "`references/evidence-formats.md`",
 }
 
 _CHATGPT_COMMAND_REWRITES = {
+    "/eforge industry-pack": "the `eforge-industry-pack` skill",
+    "/eforge organization-pack": "the `eforge-organization-pack` skill",
+    "/eforge pack": "the `eforge-pack` skill",
     "/eforge scenario": "the `eforge-scenario` skill",
     "/eforge generate": "the `eforge-generate` skill",
     "/eforge validate": "the `eforge-validate` skill",
@@ -338,6 +366,7 @@ def _chatgpt_frontmatter_text(source: Path, frontmatter_lines: list[str]) -> str
     """Build ChatGPT-compatible SKILL.md frontmatter from Claude command metadata."""
     name = _extract_frontmatter_value(frontmatter_lines, "name", source)
     description_lines = _extract_frontmatter_block(frontmatter_lines, "description", source)
+    description_lines = _rewrite_chatgpt_content("\n".join(description_lines)).splitlines()
 
     return (
         "---\n"
@@ -352,11 +381,18 @@ def _chatgpt_frontmatter_text(source: Path, frontmatter_lines: list[str]) -> str
     )
 
 
-def _rewrite_chatgpt_skill_body(body: str) -> str:
-    """Adapt Claude-specific references in a skill body for ChatGPT."""
-    content = body
+def _rewrite_chatgpt_content(content: str) -> str:
+    """Adapt Claude-specific skill and reference invocations for ChatGPT."""
+
+    # Canonical Claude sources normally format command/reference invocations as
+    # inline code. Consume those delimiters with the invocation before applying
+    # the replacement so generated Markdown cannot contain nested backticks.
+    for old, new in _CHATGPT_REFERENCE_REWRITES.items():
+        content = content.replace(f"`{old}`", new)
     for old, new in _CHATGPT_REFERENCE_REWRITES.items():
         content = content.replace(old, new)
+    for old, new in _CHATGPT_COMMAND_REWRITES.items():
+        content = content.replace(f"`{old}`", new)
     for old, new in _CHATGPT_COMMAND_REWRITES.items():
         content = content.replace(old, new)
     return content
@@ -413,7 +449,7 @@ def _chatgpt_skill_text(source: Path) -> str:
     """Read a command file and convert it to a valid ChatGPT SKILL.md file."""
     content = source.read_text(encoding="utf-8")
     frontmatter_lines, body = _split_frontmatter(content, source)
-    return _chatgpt_frontmatter_text(source, frontmatter_lines) + _rewrite_chatgpt_skill_body(body)
+    return _chatgpt_frontmatter_text(source, frontmatter_lines) + _rewrite_chatgpt_content(body)
 
 
 def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
@@ -453,9 +489,9 @@ def install_chatgpt_skills(target_dir: Path) -> tuple[list[str], list[str]]:
     """Install EvidenceForge skills to a ChatGPT skills directory.
 
     Creates one ChatGPT skill directory per EvidenceForge command, each with a
-    SKILL.md file and bundled references. Existing EvidenceForge-owned skill
-    directories are updated and stale EvidenceForge-owned skill directories are
-    removed.
+    SKILL.md file and bundled references adapted to local ChatGPT skill links.
+    Existing EvidenceForge-owned skill directories are updated, and stale files
+    within the currently installed skill directories are removed.
 
     Args:
         target_dir: ChatGPT skills directory, e.g. .agents/skills/.
@@ -487,7 +523,10 @@ def install_chatgpt_skills(target_dir: Path) -> tuple[list[str], list[str]]:
 
         for rel_path, ref_source in sorted(skill_reference_files.items()):
             dest = _safe_install_destination(skill_dir, rel_path)
-            _copy_file_no_follow(ref_source, dest)
+            _write_text_no_follow(
+                dest,
+                _rewrite_chatgpt_content(ref_source.read_text(encoding="utf-8")),
+            )
             installed.append(f"{skill_name}/{rel_path}")
 
         for stale in _remove_stale_files(skill_dir, skill_manifest):

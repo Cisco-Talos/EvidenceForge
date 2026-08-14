@@ -41,9 +41,11 @@ from evidenceforge.models.exceptions import (
 )
 from evidenceforge.utils import (
     ScenarioIncludeBudget,
+    ScenarioIncludeBudgetState,
     convert_to_output_timezone,
     ensure_directory,
     get_system_timezone,
+    load_scenario_source_graph,
     load_scenario_yaml,
     load_yaml,
     parse_duration,
@@ -746,6 +748,24 @@ includes:
                 scenario_file,
                 include_budget=ScenarioIncludeBudget(max_nodes=4),
             )
+
+    def test_source_graphs_can_share_one_cumulative_include_budget(self, tmp_path):
+        """Related YAML roots cannot each reset the same composition budget."""
+
+        first = tmp_path / "first.yaml"
+        second = tmp_path / "second.yaml"
+        third = tmp_path / "third.yaml"
+        first.write_text("first: true\n", encoding="utf-8")
+        second.write_text("second: true\n", encoding="utf-8")
+        third.write_text("DO_NOT_PARSE: [invalid\n", encoding="utf-8")
+        state = ScenarioIncludeBudgetState(ScenarioIncludeBudget(max_files=2))
+
+        load_scenario_source_graph(first, include_budget_state=state)
+        load_scenario_source_graph(second, include_budget_state=state)
+        with pytest.raises(ScenarioIncludeError, match="file count exceeds limit 2") as exc_info:
+            load_scenario_source_graph(third, include_budget_state=state)
+
+        assert "DO_NOT_PARSE" not in str(exc_info.value)
 
     def test_resolve_safe_child_path_accepts_one_filename(self, tmp_path):
         """Safe generated filenames should resolve beneath the declared root."""

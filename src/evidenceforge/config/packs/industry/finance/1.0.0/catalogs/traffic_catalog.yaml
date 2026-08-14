@@ -3,11 +3,14 @@ traffic_catalog:
     description: "Weekday settlement and reporting traffic shape."
     data:
       audience: [finance_operations]
-      cadence: weekday-close
-      outbound:
-        - role: _external
-          port: 443
-          service: ssl
+      applications:
+        - application: treasury-portal
+          connection: payment-portal
           weight: 20
-          emit_dns: true
-          dns_tags: [finance]
+      outbound: []
+      cadence:
+        pattern: weighted
+        days: [mon, tue, wed, thu, fri]
+        windows:
+          - start: "15:00"
+            end: "18:00"

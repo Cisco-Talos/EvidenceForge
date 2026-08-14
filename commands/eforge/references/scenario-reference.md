@@ -10,16 +10,20 @@ This document describes the EvidenceForge scenario file schema, including Phase 
 
 Scenario files are YAML documents that define the environment, users, systems, personas, and storyline for log generation. All fields marked "Phase 2.4+" are optional and backward compatible with Phase 1 scenarios.
 
-Scenario 1.0 remains fully supported. Scenario 2.0 uses `scenario_version: "2.0"` and can remain
-monolithic or explicitly select direct industry packs or one organization pack through
-`composition`. Pack references are exact; exports use `<pack-name>:<local-name>`. Use
-`eforge pack list --json`, `eforge pack show`, and `eforge resolve --explain-composition --json`
-to discover and inspect composition. Packs are optional and no-pack scenarios do not warn.
+Scenario 1.0 remains fully supported and is the compatibility format shown throughout this field
+reference. Scenario 2.0 uses `scenario_version: "2.0"` and may remain monolithic or explicitly
+select exact industry packs or one organization pack through `composition`. Packs are optional;
+no-pack scenarios do not scan for packs or warn about their absence. Pack exports use qualified
+`<pack-name>:<local-name>` references. Use `eforge pack list --json`, `eforge pack show`, and
+`eforge resolve --explain-composition --json` to inspect composition. See
+[Scenario 2.0 and composable packs](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/reference/SCENARIO_PACKS.md)
+for repositories, fixed catalogs, precedence, CLI workflows, and authoritative artifacts.
 
 ## Top-Level Structure
 
 ```yaml
 version: "1.0"
+generation_seed: 42          # Optional uint64 (default: 42); controls deterministic substreams
 name: scenario-name          # Alphanumeric, dash, underscore
 description: |
   Multi-line scenario description
@@ -73,6 +77,10 @@ EvidenceForge reports a validation-time input error that names the conflicting
 field and source files. Lists such as `storyline`, `users`, and `systems` are
 owned as whole fields and are not automatically concatenated.
 
+Duplicate mapping keys within any YAML file are rejected before composition. A scenario must
+express one unambiguous value for each field; duplicate keys are never treated as last-value-wins
+overrides.
+
 Nested includes are allowed and are resolved relative to the file that declares
 them:
 
@@ -88,6 +96,10 @@ environment:
 
 The singular `include` key is accepted as a convenience for one file, but
 `includes` is the preferred form for new scenarios.
+
+Scenario composition is bounded to 32 levels, 256 files, 16 MiB of source YAML, and 1,000,000
+expanded nodes. These parsing and path-safety limits are always enforced independently of the
+generation resource forecast.
 
 For larger exercise families, keep reusable organization context separate from
 scenario-specific narrative files:
@@ -117,6 +129,42 @@ change a shared organization section, copy that organization include into the
 scenario's local `includes/` directory and include the local copy instead of the
 shared one. Do not include both copies of the same section, because duplicate
 fields are validation errors rather than overrides.
+
+## Deterministic Seed and Workload Envelope
+
+`generation_seed` is a public unsigned 64-bit integer. Identical scenario content, seed, selected
+formats, and generator version reproduce the same deterministic substreams. The CLI can override
+the scenario value for one run:
+
+```bash
+uv run eforge generate scenario.yaml --seed 8675309 -o output
+```
+
+The effective seed is recorded in `collection_profile.json`. Use explicit seed matrices instead
+of changing the scenario name or unrelated content to obtain independent deterministic runs.
+
+Before validation or generation allocates the workload, EvidenceForge estimates the primary
+duration, warm-up, periodic and explicit occurrences, canonical fan-out, rendered records, and
+attachment/email expansion. It combines that scenario estimate with currently available RAM,
+free swap, container memory constraints, and free space on the destination filesystem.
+
+Both `eforge validate` and `eforge generate` always print projected peak-memory, final-output, and
+peak-working-disk ranges. Peak working disk includes bounded Zeek external-sort runs that coexist
+temporarily with the final output. SMB estimates account for compiled catalog metadata, retained
+mutations, authored activity/session overhead, batch operation count, and source-specific rendered
+evidence; logical SMB file sizes are not counted because V1 does not materialize file payloads.
+When expected use reaches a material fraction of usable capacity, the forecast is followed
+immediately by a low, medium, or high resource warning. Resource warnings are
+advisory: generation continues without an override flag. YAML ambiguity, include budgets, path
+containment, regular-file, symlink, and archive safety checks remain hard errors because they are
+input-integrity boundaries rather than capacity forecasts.
+
+The forecast identifies its versioned calibration model in the output. Coefficients are measured
+and source-aware—for example, retained Sysmon event state is modeled differently from bounded
+streaming emitters, while output-byte rates account for source eligibility by operating system or
+host role. Calibration model v3 adds measured canonical SMB costs and separately measures final
+logical bytes and peak allocated working bytes. The calibration can be refined with additional
+measured runs without changing the CLI contract.
 
 ## Environment
 
@@ -226,7 +274,7 @@ systems:
     type: workstation          # Required: workstation|server|domain_controller
     assigned_user: jsmith      # Optional: reference to username
     services: ["IIS"]          # Optional
-    roles: [web_server]        # Optional: forward_proxy, web_server, dns_server, mail_server
+    roles: [web_server]        # Optional: forward_proxy, web_server, dns_server, dhcp_server, mail_server
 ```
 
 `roles` and `services` materially affect realism. They feed the compiled world model that drives infrastructure discovery, proxy routing, legitimate lateral-movement patterns, and whether remote access should look like SSH, RDP, or generic network activity.
@@ -421,6 +469,7 @@ The `roles` field declares a system's function in the network. The engine uses r
 - `domain_controller` — outbound: inter-DC replication; inbound: Kerberos/LDAP/DNS from all hosts
 - `forward_proxy` — routes outbound HTTP/HTTPS traffic through this system; generates proxy access logs with CONNECT entries for HTTPS and full destination URLs
 - `dns_server` — DNS resolution target
+- `dhcp_server` — DHCP acquisition/renewal target; pair with a concrete service such as `windows-dhcp-server` or `dhcpd`
 
 Inbound traffic is constrained by network topology: DMZ hosts receive substantial external traffic, while internal servers only receive connections from other internal systems. The firewall policy determines what gets permitted vs denied — denied connection attempts still produce firewall deny records and source-side sensor visibility.
 
@@ -504,6 +553,10 @@ Validation warns when a network topology has no firewall entry. Requesting `cisc
         workstations: inside
         servers: inside
         dmz: dmz
+      interface_security_levels: # Optional; conventional outside/dmz/inside use 0/50/100
+        outside: 0
+        dmz: 50
+        inside: 100
       default_action: deny      # deny (default) | permit
       deny_ratio: 5.0           # Deny events per allow event in baseline (default: 5.0)
       threat_detection_rate: 10 # Deny rate (drops/sec) triggering 733100 alerts (0=disabled)
@@ -585,7 +638,7 @@ The engine manages user sessions with exact transport-type matching. When a stor
 Multi-phase remote activities use action-bundle semantics internally. For example,
 an SSH request is modeled as one SSH session action that coordinates transport,
 auth, session, process, bash-history, endpoint/EDR, and teardown evidence before
-the engine dispatches individual canonical `SecurityEvent`s. An RDP request is
+the engine dispatches individual `CanonicalOccurrence` snapshots. An RDP request is
 modeled as one remote interactive session action that coordinates source-side
 `mstsc.exe`, TCP/3389 transport, target Type 10 logon/session metadata, and
 source-visible ordering before dispatch. Windows remote-admin events such as
@@ -881,7 +934,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `workstation_lock` | Windows 4800 (workstation locked) | | |
 | `workstation_unlock` | Windows 4624 type 7 re-auth followed by 4801 unlock | | |
 | `spillage` | Synthetic credential leaked into a semantic surface (`shell_history` → bash history; `process_command_line` → process/EDR telemetry; `syslog_message` → syslog; `http_request_url`/`http_referrer` → a web server's `web_access` log), per-event varied, + canonical `GROUND_TRUTH.json` tracking (emitted or explicitly skipped) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `http_*` surfaces need a compatible `web_server`-role host |
-| `adversarial_payload` | Known log-pipeline weakness payload (ANSI escape, CRLF log-forging, CSV formula, Log4Shell/JNDI, reflected XSS, SQL injection, structured-log/JSON injection, oversized field; each family ships a canonical form plus seed-picked evasion variants) injected into a semantic surface (`syslog_message`, `process_command_line`, `http_user_agent`, `http_request_url`, `http_referrer`, `dns_qname`, `auth_user`), per-surface encoded, + canonical `GROUND_TRUTH.json` tracking (`kind: adversarial_payload`, incl. `ids_alert` for signature-mapped cleartext-http families). See [adversarial_payload.md](adversarial_payload.md) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `syslog_message` and `auth_user` are Linux-only; `dns_qname` needs a network sensor emitting Zeek; `http_*` surfaces need a compatible `web_server`-role host; an optional generation-time live-callback (OOB) mode (`generate`/`validate --oob-host`, opt-in) can replace the inert default canary — by default payloads use the non-resolving canary `canary.eforge.invalid` and are never executed, see [adversarial_payload.md](adversarial_payload.md) |
+| `adversarial_payload` | Known log-pipeline weakness payload (ANSI escape, CRLF log-forging, CSV formula, Log4Shell/JNDI, reflected XSS, SQL injection, structured-log/JSON injection, oversized field; each family ships a canonical form plus seed-picked evasion variants) injected into a semantic surface (`syslog_message`, `process_command_line`, `http_user_agent`, `http_request_url`, `http_referrer`, `dns_qname`, `auth_user`), per-surface encoded, + canonical `GROUND_TRUTH.json` tracking (`kind: adversarial_payload`, incl. `ids_alert` for signature-mapped cleartext-http families). See [adversarial_payload.md](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/reference/adversarial_payload.md) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `syslog_message` and `auth_user` are Linux-only; `dns_qname` needs a network sensor emitting Zeek; `http_*` surfaces need a compatible `web_server`-role host; an optional generation-time live-callback (OOB) mode (`generate`/`validate --oob-host`, opt-in) can replace the inert default canary — by default payloads use the non-resolving canary `canary.eforge.invalid` and are never executed, see [adversarial_payload.md](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/reference/adversarial_payload.md) |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event. The generator routes process create/terminate lifecycle and process-owned endpoint side effects through an internal process-execution bundle; scenario authors still describe normal `process` events and do not model the bundle directly.
@@ -979,14 +1032,14 @@ automated, interval-driven, or explicitly minutes/hours apart.
 
 **Legitimate lateral movement:** 26 patterns of inter-server traffic are auto-generated based on the environment topology. These include backup agents, monitoring, AD replication, application-to-database connections, config management, and more. Patterns are conditional on having the required infrastructure (assign `roles` like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` on systems to enable specific patterns).
 
-**Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. That model is then used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned. Correlated multi-event activities route through action bundles so storyline, baseline, red-herring, and scanner/noise intent share the same lifecycle and evidence semantics. Successful logons, failed logons, logoffs, service logons, machine-account logons, anonymous logons, NTLM validation, and workstation lock/unlock evidence use internal auth/session bundles so scenario authors can describe normal typed auth events while the generator owns session IDs, lock state, source endpoints, validation evidence, and termination ordering. DC-side Kerberos ticket evidence uses the internal Kerberos/DC bundle so TGT/TGS timing, source IP/port, TGT cache behavior, and service-principal identity stay aligned. Windows audit/account-management events use internal Windows audit bundles so subject session ownership, target identity, source timing, and Sysmon/eCAR process-access context stay aligned. Connections use the internal network-connection bundle so `connection`, `beacon`, scanner/probe, proxy, firewall, IDS, EDR/eCAR FLOW, DNS, TLS, HTTP, and Windows WFP evidence share one source/destination tuple and visibility decision.
+**Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. DHCP server, DNS resolver, domain controller, forward proxy, SSH receiver, and RDP receiver are typed capabilities used consistently by baseline and storyline planning. An activity that requires a distinct peer excludes its requesting host; missing capability remains missing instead of becoming the sole host or a fabricated address. Optional baseline activity skips that family, while authored intent that cannot satisfy its required contract is rejected. Public recursive DNS and NTP endpoints shipped as validated configuration are external capabilities only for traffic that can realistically use them. The model is also used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned. Correlated multi-event activities route through action bundles so storyline, baseline, red-herring, and scanner/noise intent share the same lifecycle and evidence semantics. Successful logons, failed logons, logoffs, service logons, machine-account logons, anonymous logons, NTLM validation, and workstation lock/unlock evidence use internal auth/session bundles so scenario authors can describe normal typed auth events while the generator owns session IDs, lock state, source endpoints, validation evidence, and termination ordering. DC-side Kerberos ticket evidence uses the internal Kerberos/DC bundle so TGT/TGS timing, source IP/port, TGT cache behavior, and service-principal identity stay aligned. Windows audit/account-management events use internal Windows audit bundles so subject session ownership, target identity, source timing, and Sysmon/eCAR process-access context stay aligned. Connections use the internal network-connection bundle so `connection`, `beacon`, scanner/probe, proxy, firewall, IDS, EDR/eCAR FLOW, DNS, TLS, HTTP, and Windows WFP evidence share one source/destination tuple and visibility decision.
 
 **Network-level red herrings:** The suspicious noise generator includes network-layer patterns: high-entropy DNS queries (CDN subdomains, DoH providers), unusual outbound connections (cloud backup sync, dev tool endpoints), and scheduled vulnerability scan overlaps. Controlled by `baseline_activity.suspicious_noise` level.
 
-The target pools behind those ambient network red herrings live in
-`activity/suspicious_benign.yaml`. If a scenario needs a specific malicious or
-benign IP/domain, author it explicitly in the scenario; config identity pools
-are only fallback/background data.
+The suspicious DNS and unusual outbound target pools are reusable configuration data in
+`activity/suspicious_benign.yaml`. Change that project overlay only when the project's ambient
+benign identities should change. If one scenario needs a specific malicious or benign IP, hostname,
+or email address, author it explicitly in the scenario; authored identities win over fallback pools.
 
 **Entity lifecycle validation:** The engine validates that process injection events target existing PIDs and that event timestamps don't precede system boot times. Warnings are logged for impossible sequences.
 
@@ -1006,7 +1059,13 @@ are only fallback/background data.
 
 **Endpoint ProcessAccess realism:** Sysmon Event 10 and eCAR PROCESS OPEN rows use canonical `ProcessAccessContext` owned by the generation bundle. Source images such as Defender, CSRSS, services, svchost, WMI, and suspicious tools select source-aware CallTrace palettes from package config; scenario authors do not need to set call traces in YAML.
 
-**PID allocation:** Windows PIDs use a lognormal distribution for gap sizes (mu=1.2, sigma=0.8), producing mostly small gaps with an occasional heavy tail — simulating background process churn consuming PIDs between emitted events. Linux PIDs use a similar but tighter distribution (mu=0.5, sigma=0.6). No fixed choice-set fingerprint.
+**PID allocation:** Windows PIDs preserve a multiples-of-four, heavy-tailed progression through
+the modeled `4,000..65,532` ring. Linux uses an unbounded logical progression rendered into the
+exclusive `pid_max` range `500..4,194,303`, so long scenarios can wrap naturally. Both systems
+reuse a rendered PID only after natural wrap and only when no active process, fixed boot process,
+or unexpired transient source-native companion still owns it. PID reuse is therefore validated as
+non-overlapping lifetimes on one host rather than forbidden across the entire dataset. Allocation
+history is watermarked and duration-stable; no scenario or output-schema setting is required.
 
 **Per-user bash history:** Baseline SSH sessions to Linux servers generate organic admin commands (ls, df -h, ps aux, systemctl status, etc.) for realistic admin users, creating per-user `<username>.bash_history` files on all Linux hosts. Storyline process events on Linux inject 0-3 organic noise commands around each attack command for realistic interleaving. The generator coordinates bash-history timing with foreground process telemetry through an internal Linux shell-command bundle; scenario authors still use normal `process` events and do not need to model the bundle directly.
 
@@ -1026,7 +1085,7 @@ Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attack
       technique: "T1200 - Hardware Additions"
 ```
 
-Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC (using diversified OUI prefixes from `network_params.yaml`) from the system IP and uses the system's configured IP if omitted. DHCP acquisition and renewal are modeled internally as a DHCP lease action bundle: one lease identity drives Zeek DHCP/conn fan-out, lease metadata, link-local visibility, and Linux `dhclient` syslog companions. DHCP broadcast is link-local in the generator: it appears on SPAN-style Zeek sensors monitoring the client's segment and does not traverse unrelated TAP/firewall boundaries unless a separate relay/server transaction is modeled.
+Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC (using diversified OUI prefixes from `network_params.yaml`) from the system IP and uses the system's configured IP if omitted. The scenario must contain a distinct modeled DHCP server, declared with `roles: [dhcp_server]` or a recognized DHCP service. Authored `dhcp_lease` intent fails validation without one; optional baseline DHCP activity is skipped. DHCP acquisition and renewal are modeled internally as a DHCP lease action bundle: one lease identity drives Zeek DHCP/conn fan-out, lease metadata, link-local visibility, and Linux `dhclient` syslog companions. The lease's T1 renewal interval is selected once and retained for that lifecycle. DHCP broadcast is link-local in the generator: it appears on SPAN-style Zeek sensors monitoring the client's segment and does not traverse unrelated TAP/firewall boundaries unless a separate relay/server transaction is modeled.
 
 ### Port Scan Events
 
@@ -1113,36 +1172,52 @@ Timing fields: `start_time` (optional, defaults to parent event time), `interval
 ### Correlated IDS attachments
 
 Typed `connection`, `beacon`, `ssh_session`, `rdp_session`, `dhcp_lease`,
-`port_scan`, `dns_query`, `dga_queries`, `dns_tunnel`, and `web_scan` events
-accept `ids_alerts`, a list of configured SIDs. An
-omitted policy inherits the signature's `alert_policy`; `policy: every` replaces
-it; an object replaces it with `detection_filter`, `event_filter`, or both.
-Tracking is `by_src` or `by_dst`; event-filter types are `limit`, `threshold`,
-and `both`; counts and windows are positive integers. The same SID must have one
-effective policy throughout a scenario.
+`port_scan`, `dns_query`, `dga_queries`, `dns_tunnel`, and `web_scan` events may
+assert one or more configured signature matches with `ids_alerts`. EvidenceForge resolves each SID from
+`activity/ids_signatures.yaml` and attaches it to every physical canonical
+connection produced by the event. The resulting Snort row therefore shares the
+sensor-observed timestamp, source port, tuple, and NAT/PAT view with the related
+network evidence. This is an assertion that the signature matched; EvidenceForge
+does not execute the complete Snort rule predicate.
+
+Attachments fan out only across transports owned by that authored event: one
+SSH/RDP session transport, the authored DHCP transaction, every scan probe or
+web request, and every authored DNS/DGA/tunnel query. Later automatic DHCP
+renewals do not inherit the assertion, and DNS-tunnel background cover traffic
+does not inherit a tunnel signature. Web-scan preset alerts coexist with
+authored alerts; an authored attachment wins if both use the same `(gid, sid)`.
+`email_message` and `email_read` do not yet accept attachments. A network tuple
+alone never creates a Snort alert, and IDS sensors do not decrypt traffic.
 
 ```yaml
-ids_alerts:
-  - sid: 2028401
-  - sid: 2002910
-    policy:
-      detection_filter: {track: by_src, count: 5, seconds: 60}
-      event_filter: {type: limit, track: by_src, count: 1, seconds: 300}
+- type: beacon
+  dst_ip: 45.83.221.30
+  dst_port: 443
+  service: ssl
+  interval: 2m
+  duration: 45m
+  ids_alerts:
+    - sid: 2028401
+    - sid: 2002910
+      policy:
+        detection_filter: {track: by_src, count: 5, seconds: 60}
+        event_filter: {type: limit, track: by_src, count: 1, seconds: 300}
 ```
 
-Attachments assert a match; EvidenceForge does not evaluate the complete Snort
-rule predicate. Filtering is per sensor after visibility, timing, and NAT/PAT
-projection. Explicit proxies carry candidates on both physical legs where those
-legs exist; denials and cache hits do not create origin alerts. Prefer attachments
-over raw Snort events for cross-source correlation.
+An omitted `policy` inherits the signature's optional `alert_policy`. Use
+`policy: every` to replace that default and alert on every visible candidate.
+A policy object replaces the signature default and may contain
+`detection_filter`, `event_filter`, or both. Filters support `track: by_src` or
+`by_dst`; event-filter types are `limit`, `threshold`, and `both`; `count` and
+`seconds` must be positive integers. The same SID must have one effective policy
+throughout a scenario.
 
-Attachments fan out only to transports owned by the authored event: the SSH/RDP
-session connection, the authored DHCP transaction, each scan/web request, or
-each authored DNS/DGA/tunnel query. Automatic DHCP renewals and DNS-tunnel cover
-traffic do not inherit the assertion. Authored web-scan attachments coexist with
-preset alerts and win a same-`(gid, sid)` collision. A tuple without an explicit
-or built-in IDS context never alerts. Email transports remain deferred, and IDS
-sensors do not decrypt traffic.
+Filtering is per IDS sensor and post-NAT sensor-visible IP. Observation drops,
+invisible connections, warm-up records, and output-window clipping do not advance
+filter state. With explicit proxies, attachments follow the client-to-proxy and
+proxy-to-origin physical legs; sensor placement selects the visible side. Denials
+and cache hits do not invent an origin leg. Prefer this facility over raw Snort
+events whenever the alert must correlate with canonical network evidence.
 
 ### DNS Query Events
 
@@ -1531,6 +1606,10 @@ output:
   destination: ./output
   compression: false           # Optional (default: false)
 ```
+
+`destination` is retained as authored metadata and in resolved provenance. Current CLI generation
+writes the bundle beside the scenario by default; pass `eforge generate --output <bundle-root>` to
+choose another location explicitly.
 
 Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR record format), `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 

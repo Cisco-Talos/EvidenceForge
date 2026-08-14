@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+import random
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from evidenceforge.composition.artifacts import (
 from evidenceforge.composition.models import EffectiveConfig, PackReference
 from evidenceforge.composition.packs import CATALOG_FILES, PackRepository
 from evidenceforge.config.provider import effective_config_scope
-from evidenceforge.generation.activity.dns_registry import load_dns_registry
+from evidenceforge.generation.activity.dns_registry import load_dns_registry, pick_domain_and_ip
 from evidenceforge.generation.activity.network import REVERSE_DNS
 from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
 from evidenceforge.generation.storage_world import _load_catalog_config
@@ -104,9 +105,9 @@ def test_organization_pack_brings_exact_industry_and_environment() -> None:
             entry["domain"] == "claims.healthcare.example"
             for entry in load_dns_registry()["domains"]
         )
-        assert load_traffic_profiles()["persona_traffic"]["healthcare:clinical_coordinator"][
-            "outbound"
-        ]
+        assert load_traffic_profiles()["pack_persona_traffic"]["healthcare:clinical_coordinator"][
+            "healthcare:clinical-shift"
+        ]["outbound"]
 
 
 def test_all_packaged_samples_have_the_fixed_catalog_contract() -> None:
@@ -177,7 +178,7 @@ def test_peer_industry_namespace_collision_is_not_order_resolved(tmp_path: Path)
     }
     path = _write_yaml(tmp_path / "scenario.yaml", raw)
 
-    with pytest.raises(PackError, match="peer industry pack collision"):
+    with pytest.raises(PackError, match="share namespace 'healthcare'.*different exact identities"):
         compile_scenario(path)
 
 
@@ -204,12 +205,30 @@ def test_project_overlay_precedes_pack_adapter(tmp_path: Path) -> None:
 
     compiled = compile_scenario(scenario)
     with effective_config_scope(compiled.effective_config):
+        traffic = load_traffic_profiles()["pack_persona_traffic"]
+        application_connection = next(
+            connection
+            for connection in traffic["healthcare:clinical_coordinator"][
+                "healthcare:clinical-shift"
+            ]["outbound"]
+            if connection.get("pack_application")
+        )
         entry = next(
             item
             for item in load_dns_registry()["domains"]
             if item["domain"] == "claims.healthcare.example"
         )
+        resolved_domain, resolved_ip = pick_domain_and_ip(
+            random.Random(42),
+            *application_connection["dns_tags"],
+            src_host="NSH-CLIN-01",
+        )
     assert entry["ips"] == ["203.0.113.44"]
+    assert entry["tags"] == ["healthcare"]
+    assert (resolved_domain, resolved_ip) == (
+        "claims.healthcare.example",
+        "203.0.113.44",
+    )
 
 
 def test_pack_init_creates_complete_non_overwriting_skeleton(tmp_path: Path) -> None:
@@ -301,6 +320,75 @@ def test_pack_internal_include_is_semantic_and_digest_tracked(tmp_path: Path) ->
 
     assert "included:records" in pack.catalogs["storage_catalog"]
     assert "catalogs/storage.yaml" in pack.assets
+
+    scenario_document = load_yaml(_MINIMAL)
+    scenario_document.pop("version")
+    scenario_document["scenario_version"] = "2.0"
+    scenario_document["composition"] = {
+        "industries": [
+            {
+                "source": "project",
+                "name": "included",
+                "version": "1.0.0",
+            }
+        ]
+    }
+    scenario_path = _write_yaml(tmp_path / "included-scenario.yaml", scenario_document)
+    compiled = compile_scenario(scenario_path, project_root=tmp_path)
+
+    assert (
+        compiled.provenance["catalog_field_origins"][
+            "storage_catalog.included:records.data.files.0.mime"
+        ]
+        == "catalogs/storage.yaml"
+    )
+
+
+def test_organization_model_origins_retain_included_pack_paths(tmp_path: Path) -> None:
+    """Organization provenance points to the exact portable model include source."""
+
+    repository = PackRepository(tmp_path)
+    packaged = repository.resolve(
+        PackReference(source="package", name="northstar-health", version="1.0.0"),
+        expected_type="organization",
+    )
+    root = repository.copy(packaged, name="included-northstar", version="1.0.0")
+    fragments = root / "model" / "fragments"
+    fragments.mkdir()
+
+    environment_path = root / "model" / "environment.yaml"
+    environment_document = yaml.safe_load(environment_path.read_text(encoding="utf-8"))
+    domain = environment_document["environment"].pop("domain")
+    environment_document["includes"] = ["fragments/domain.yaml"]
+    _write_yaml(environment_path, environment_document)
+    _write_yaml(fragments / "domain.yaml", {"environment": {"domain": domain}})
+
+    baseline_path = root / "model" / "baseline_activity.yaml"
+    baseline_document = yaml.safe_load(baseline_path.read_text(encoding="utf-8"))
+    intensity = baseline_document["baseline_activity"].pop("intensity")
+    baseline_document["includes"] = ["fragments/baseline.yaml"]
+    _write_yaml(baseline_path, baseline_document)
+    _write_yaml(
+        fragments / "baseline.yaml",
+        {"baseline_activity": {"intensity": intensity}},
+    )
+
+    scenario_document = load_yaml(_NORTHSTAR)
+    scenario_document["composition"]["organization"] = {
+        "source": "project",
+        "name": "included-northstar",
+        "version": "1.0.0",
+    }
+    scenario_document.pop("environment", None)
+    scenario_document.pop("baseline_activity", None)
+    scenario_path = _write_yaml(tmp_path / "included-org-scenario.yaml", scenario_document)
+
+    compiled = compile_scenario(scenario_path, project_root=tmp_path)
+
+    origins = compiled.provenance["organization_model_origins"]
+    assert origins["environment.domain"] == "model/fragments/domain.yaml"
+    assert origins["baseline_activity.intensity"] == "model/fragments/baseline.yaml"
+    assert all(not Path(origin).is_absolute() for origin in origins.values())
 
 
 def test_pack_rejects_unconstrained_assets(tmp_path: Path) -> None:

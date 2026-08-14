@@ -3,11 +3,16 @@ traffic_catalog:
     description: "Build and deployment traffic shape."
     data:
       audience: [platform_engineer]
-      cadence: continuous-delivery
-      outbound:
-        - role: _external
-          port: 443
-          service: ssl
+      applications:
+        - application: continuous-delivery
+          connection: registry
           weight: 20
-          emit_dns: true
-          dns_tags: [dev]
+      outbound: []
+      cadence:
+        pattern: periodic
+        days: [mon, tue, wed, thu, fri]
+        windows:
+          - start: "08:00"
+            end: "20:00"
+        interval_minutes: 45
+        jitter_minutes: 5

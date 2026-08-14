@@ -54,10 +54,11 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P1** Build dedicated industry/organization pack-authoring skills and integrate them with
-  the scenario skill. Base the workflow on `pack init`, `pack copy`, stable JSON validation, and
-  composition explain/provenance output; test pack-authoring reliability before claiming that the
-  AI authoring-complexity problem is solved.
+- [x] **P1** Build dedicated pack-management, industry-pack, and organization-pack authoring
+  skills and integrate pack discovery/consumption with the scenario, config, and validation
+  workflows. The implementation adds runtime-effective public catalogs, stable JSON validation and
+  provenance, safe init/copy lifecycles, and six successful clean-room authoring trials. See the
+  [pack-authoring skills worklog](docs/worklog/2026-08-14-pack-authoring-skills.md).
 - [x] **P1** Complete realism-remediation Batches 0–2: approve the canonical contracts, add the
   behavior-preserving contract foundation, and implement the session/process/authentication
   vertical slice. See the [approved contracts](docs/design/realism-review/contract-proposals.md),

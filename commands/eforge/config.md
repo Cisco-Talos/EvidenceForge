@@ -7,9 +7,11 @@ description: >
   activity. Use this skill when the user wants to add a persona, add a domain or website, add an
   application, change browsing intensity, update traffic weights, add bash commands, customize
   proxy URI templates, or validate config file integrity — even if they don't say "config".
-  This is for changing the underlying data library, not for creating scenarios (use eforge:scenario
-  for that) or running generation (use eforge:generate). Trigger on phrases like "add a persona",
-  "new domain", "new application", "check my config", "dns registry", "application catalog".
+  This is for changing the underlying data library, not for creating scenarios (use the scenario
+  skill), authoring public Scenario 2.0 packs (use the industry-pack or organization-pack skill),
+  or running generation (use the generate skill). Trigger on phrases like
+  "add a persona", "new domain", "new application", "check my config", "dns registry",
+  "application catalog", or ".eforge/config" when the requested target is a project overlay.
 ---
 
 # EvidenceForge Configuration Manager
@@ -40,11 +42,11 @@ The `eforge info` command has three modes — do not mix them:
 
 When writing to the overlay, files are partial — they contain ONLY the user's new or changed entries. The engine merges them with package defaults automatically. Mirror the package directory structure: `activity/`, `personas/`, etc.
 
-Scenario 2.0 packs are a separate data-driven layer. Use `eforge info pack_roots`, `eforge info
-packs`, and `eforge pack show <ref> --json` to inspect them. Do not place pack files under
-`.eforge/config` or expose internal config filenames through a pack. Use this skill for overlays;
-dedicated pack-construction skills are a follow-on. If the user explicitly asks only for a skeleton
-or editable fork, use `eforge pack init` or `eforge pack copy` and validate the result.
+Scenario 2.0 packs are a separate data-driven layer. Do not place pack files under `.eforge/config`
+or expose internal config filenames through a pack. Use this skill only for internal project
+overlays. Route pack inventory, lifecycle, exact references, digests, dependencies, and composition
+provenance to `/eforge pack`; route sector catalogs to `/eforge industry-pack`; and route reusable
+organization catalogs, environment, and baseline activity to `/eforge organization-pack`.
 
 **Rules:**
 - Do NOT use `find`, `ls`, `grep`, or `glob` to locate config files — use `eforge info`

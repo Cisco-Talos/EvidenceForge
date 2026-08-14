@@ -416,7 +416,11 @@ def setup_logging(verbose: bool = False, debug: bool = False) -> None:
     )
 
 
-def _normalize_oob_hosts(oob_host: list[str]) -> tuple[str, ...]:
+def _normalize_oob_hosts(
+    oob_host: list[str],
+    *,
+    json_output: bool = False,
+) -> tuple[str, ...]:
     """Normalize/validate operator-supplied --oob-host values for fail-fast CLI UX.
 
     Delegates the actual contract to ``adversarial_payload.normalize_oob_host`` — the single
@@ -439,7 +443,10 @@ def _normalize_oob_hosts(oob_host: list[str]) -> tuple[str, ...]:
         try:
             normalized.append(normalize_oob_host(raw))
         except AdversarialPayloadSafetyError as exc:
-            console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
+            if json_output:
+                print(json.dumps({"valid": False, "error": str(exc)}, indent=2, sort_keys=True))
+            else:
+                console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
             raise typer.Exit(EXIT_INPUT_ERROR) from exc
     return tuple(dict.fromkeys(normalized))
 
@@ -479,7 +486,7 @@ def generate(
         None,
         "--output",
         "-o",
-        help="Output directory for generated logs (overrides scenario setting)",
+        help="Output bundle root (default: directory containing the scenario)",
     ),
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Enable verbose (INFO level) logging"
@@ -863,6 +870,7 @@ def generate(
                     OBSERVATION_MANIFEST_FILENAME,
                     ARTIFACTS_MANIFEST_FILENAME,
                     COLLECTION_PROFILE_FILENAME,
+                    "STORAGE_MANIFEST.json",
                     OUTPUT_TARGET_FILENAME,
                     RESOLVED_SCENARIO_FILENAME,
                     GENERATION_MANIFEST_FILENAME,
@@ -936,7 +944,7 @@ def resolve_cmd(
 ) -> None:
     """Compile a scenario into a self-contained authoritative YAML document."""
 
-    oob_hosts = _normalize_oob_hosts(oob_host)
+    oob_hosts = _normalize_oob_hosts(oob_host, json_output=json_output)
     try:
         compiled = compile_scenario(scenario_file, project_root=project_root)
         validator, issues = _validate_compiled_scenario(
@@ -1087,16 +1095,17 @@ def validate(
         scenario_file.parent,
     )
 
+    from evidenceforge.config.provider import effective_config_scope
+
     if show_storage and not any(
         issue.severity == "error" and issue.field_path.startswith("environment.storage")
         for issue in issues
     ):
         from evidenceforge.generation.storage_world import StorageWorldModel
 
-        storage_world = StorageWorldModel.compile(scenario)
+        with effective_config_scope(compiled.effective_config):
+            storage_world = StorageWorldModel.compile(scenario)
         _print_compiled_storage(storage_world)
-
-    from evidenceforge.config.provider import effective_config_scope
 
     with effective_config_scope(compiled.effective_config):
         _forecast_for_cli(
@@ -1508,11 +1517,19 @@ def install_skills_cmd(
                 "Use /eforge scenario, /eforge generate, /eforge validate, "
                 "/eforge evaluate, or /eforge config."
             )
+            console.print(
+                "Manage packs with /eforge pack; author them with /eforge industry-pack "
+                "or /eforge organization-pack."
+            )
         else:
             console.print(f"\n[bold green]✓ Skills installed to {target_dir}[/bold green]")
             console.print(
                 "Use the eforge-scenario, eforge-generate, eforge-validate, "
                 "eforge-evaluate, or eforge-config skills."
+            )
+            console.print(
+                "Manage packs with eforge-pack; author them with eforge-industry-pack "
+                "or eforge-organization-pack."
             )
 
     if global_install and "chatgpt" in successful_agents:

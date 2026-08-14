@@ -21841,6 +21841,7 @@ class ActivityGenerator:
                     if activity_type == "process_user_apps":
                         from evidenceforge.generation.activity.application_catalog import (
                             get_child_processes,
+                            parameterize_scoped_command,
                         )
 
                         exe_lower = effect_process_name.rsplit("\\", 1)[-1].lower()
@@ -21852,7 +21853,11 @@ class ActivityGenerator:
                             for entry in rng.sample(child_entries, num_children):
                                 child_time = process_time + timedelta(seconds=rng.uniform(0.5, 3.0))
                                 child_image = entry["image"]
-                                child_cmd = entry["command_line"]
+                                child_cmd = parameterize_scoped_command(
+                                    rng,
+                                    entry["command_line"],
+                                    entry,
+                                )
                                 if "{username}" in child_image:
                                     child_image = child_image.replace("{username}", user.username)
                                 if "{username}" in child_cmd:

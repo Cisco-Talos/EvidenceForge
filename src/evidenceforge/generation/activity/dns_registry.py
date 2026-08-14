@@ -125,11 +125,32 @@ def get_domains_by_tag(*tags: str) -> list[dict]:
     Returns:
         List of domain entry dicts with keys: domain, ips, tags.
     """
-    index = _build_tag_index()
     if not tags:
         return []
 
+    data = load_dns_registry()
+    raw_exact_destinations = data.get("_pack_exact_destination_domains", {})
+    exact_destinations = raw_exact_destinations if isinstance(raw_exact_destinations, dict) else {}
+    exact_domains = {
+        str(tag): {str(domain) for domain in domains}
+        for tag, domains in exact_destinations.items()
+        if isinstance(domains, list)
+    }
+    if any(tag in exact_domains for tag in tags):
+        tag_set = set(tags)
+        return [
+            entry
+            for entry in data.get("domains", [])
+            if all(
+                entry.get("domain") in exact_domains[tag]
+                if tag in exact_domains
+                else tag in entry.get("tags", [])
+                for tag in tag_set
+            )
+        ]
+
     # Start with entries matching first tag, intersect with remaining tags
+    index = _build_tag_index()
     tag_set = set(tags)
     candidates = index.get(tags[0], [])
     return [entry for entry in candidates if tag_set.issubset(set(entry.get("tags", [])))]

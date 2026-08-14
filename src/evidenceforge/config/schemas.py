@@ -532,6 +532,7 @@ class PlatformConfig(BaseModel, extra="forbid"):
     image_path: str
     pe_metadata: dict[str, str] | None = None
     command_templates: list[str] | None = None
+    command_parameter_pools: dict[str, list[str]] | None = None
     children: list[str] | None = None
     loaded_modules: list[LoadedModuleEntry] | None = None
 

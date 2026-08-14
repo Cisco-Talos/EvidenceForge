@@ -1,6 +1,13 @@
 process_catalog:
+  finance-browser:
+    description: "Browser process used for treasury and settlement portals."
+    data:
+      builtins: [chrome]
+      custom: []
+      document_terms: []
   finance-reporting:
     description: "Finance reporting and reconciliation process vocabulary."
     data:
-      process_names: ["EXCEL.EXE", "AcroRd32.exe"]
+      builtins: [excel, acrobat]
+      custom: []
       document_terms: ["reconciliation", "settlement", "close", "variance"]

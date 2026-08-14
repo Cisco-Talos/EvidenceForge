@@ -7,14 +7,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, NoReturn
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from evidenceforge.composition.compiler import resolve_management_project_root
-from evidenceforge.composition.models import PackType
-from evidenceforge.composition.packs import PackRepository, parse_pack_cli_reference
+from evidenceforge.composition.models import PackReference, PackType
+from evidenceforge.composition.packs import LoadedPack, PackRepository, parse_pack_cli_reference
 from evidenceforge.models.exceptions import PackError
 
 pack_app = typer.Typer(help="Create, inspect, copy, and validate scenario packs.")
@@ -27,7 +28,7 @@ def _repository(project_root: Path | None) -> PackRepository:
     return PackRepository(resolve_management_project_root(project_root))
 
 
-def _pack_payload(pack: object) -> dict:
+def _pack_payload(pack: LoadedPack) -> dict[str, Any]:
     """Return stable machine-readable pack metadata."""
 
     return {
@@ -46,6 +47,29 @@ def _pack_payload(pack: object) -> dict:
     }
 
 
+def _emit_json(payload: dict[str, Any]) -> None:
+    """Emit one stable JSON result without Rich formatting."""
+
+    typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _fail(
+    exc: Exception,
+    *,
+    json_output: bool,
+    json_payload: dict[str, Any],
+    text_label: str = "Error",
+    exit_code: int = 1,
+) -> NoReturn:
+    """Render a command failure through exactly one text or JSON channel."""
+
+    if json_output:
+        _emit_json({**json_payload, "error": str(exc)})
+    else:
+        console.print(f"[bold red]{text_label}:[/bold red] {exc}", style="red")
+    raise typer.Exit(exit_code) from exc
+
+
 @pack_app.command("list")
 def list_packs(
     json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
@@ -56,11 +80,10 @@ def list_packs(
     try:
         packs = _repository(project_root).list()
     except PackError as exc:
-        console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
-        raise typer.Exit(1) from exc
+        _fail(exc, json_output=json_output, json_payload={"packs": []})
     payload = [_pack_payload(pack) for pack in packs]
     if json_output:
-        print(json.dumps({"packs": payload}, indent=2, sort_keys=True))
+        _emit_json({"packs": payload})
         return
     table = Table("Source", "Type", "Name", "Version", "Digest")
     for pack in payload:
@@ -98,10 +121,9 @@ def show_pack(
     try:
         payload = _pack_payload(_resolve_cli_pack(reference, project_root))
     except (PackError, ValueError) as exc:
-        console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
-        raise typer.Exit(1) from exc
+        _fail(exc, json_output=json_output, json_payload={"valid": False})
     if json_output:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        _emit_json(payload)
         return
     console.print(f"[bold]{payload['type']}:{payload['name']}@{payload['version']}[/bold]")
     console.print(payload["description"])
@@ -123,23 +145,24 @@ def validate_pack(
     try:
         repository = _repository(project_root)
         pack = _resolve_cli_pack(reference, project_root)
-        dependencies = []
-        for dependency in pack.manifest.industry_dependencies:
-            resolved = repository.resolve(
-                dependency,
-                expected_type="industry",
-                declaring_file=pack.root / "pack.yaml",
-            )
-            dependencies.append(resolved.selected().model_dump(mode="json"))
-        payload = {"valid": True, "pack": _pack_payload(pack), "dependencies": dependencies}
+        dependencies = repository.validate_semantics(pack)
+        payload = {
+            "valid": True,
+            "pack": _pack_payload(pack),
+            "dependencies": [
+                dependency.selected().model_dump(mode="json") for dependency in dependencies
+            ],
+        }
     except (PackError, ValueError) as exc:
-        if json_output:
-            print(json.dumps({"valid": False, "error": str(exc)}, indent=2, sort_keys=True))
-        else:
-            console.print(f"[bold red]Invalid pack:[/bold red] {exc}", style="red")
-        raise typer.Exit(2) from exc
+        _fail(
+            exc,
+            json_output=json_output,
+            json_payload={"valid": False},
+            text_label="Invalid pack",
+            exit_code=2,
+        )
     if json_output:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        _emit_json(payload)
     else:
         console.print(
             f"[green]✓[/green] Valid {pack.manifest.type} pack "
@@ -152,15 +175,23 @@ def init_pack(
     pack_type: PackType = typer.Argument(..., help="industry or organization"),
     name: str = typer.Argument(...),
     version: str = typer.Option(..., "--version"),
+    json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
     project_root: Path | None = typer.Option(None, "--project-root"),
 ) -> None:
     """Create a complete project-local pack skeleton."""
 
     try:
-        destination = _repository(project_root).create_skeleton(pack_type, name, version)
+        repository = _repository(project_root)
+        destination = repository.create_skeleton(pack_type, name, version)
+        pack = repository.resolve(
+            PackReference(source="project", name=name, version=version),
+            expected_type=pack_type,
+        )
     except (PackError, ValueError) as exc:
-        console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
-        raise typer.Exit(1) from exc
+        _fail(exc, json_output=json_output, json_payload={"created": False})
+    if json_output:
+        _emit_json({"created": True, "pack": _pack_payload(pack)})
+        return
     console.print(f"[green]✓[/green] Created {destination}")
 
 
@@ -169,6 +200,7 @@ def copy_pack(
     reference: str = typer.Argument(..., help="source:type:name@version or pack path"),
     name: str = typer.Option(..., "--name"),
     version: str = typer.Option(..., "--version"),
+    json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
     project_root: Path | None = typer.Option(None, "--project-root"),
 ) -> None:
     """Copy a validated pack into the project repository with a new identity."""
@@ -177,7 +209,19 @@ def copy_pack(
         repository = _repository(project_root)
         source_pack = _resolve_cli_pack(reference, project_root)
         destination = repository.copy(source_pack, name=name, version=version)
+        copied_pack = repository.resolve(
+            PackReference(source="project", name=name, version=version),
+            expected_type=source_pack.manifest.type,
+        )
     except (PackError, ValueError) as exc:
-        console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
-        raise typer.Exit(1) from exc
+        _fail(exc, json_output=json_output, json_payload={"copied": False})
+    if json_output:
+        _emit_json(
+            {
+                "copied": True,
+                "source_pack": _pack_payload(source_pack),
+                "pack": _pack_payload(copied_pack),
+            }
+        )
+        return
     console.print(f"[green]✓[/green] Copied pack to {destination}")

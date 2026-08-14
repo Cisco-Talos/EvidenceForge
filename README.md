@@ -27,7 +27,7 @@ Most synthetic log generators produce isolated, single-format data that experien
 
 - **Network visibility modeling.** Define sensor placement (SPAN/TAP), monitored segments, and direction. EvidenceForge determines which connections each sensor can see and only emits network logs where they'd realistically appear.
 
-- **Deterministic engine, LLM-assisted authoring.** Scenario creation uses Claude Code Skills for interactive, research-backed attack planning. Log generation is fully deterministic — no LLM calls, no API costs, reproducible output every time.
+- **Deterministic engine, skill-assisted authoring.** Scenario creation uses AI agent skills for interactive, research-backed attack planning. Log generation is fully deterministic — no LLM calls, no API costs, reproducible output every time.
 
 - **Built-in quality evaluation.** A 4-pillar scoring framework (22 sub-scores) measures
   parseability, plausibility, causality, and timing, with additional concern-oriented views for
@@ -68,10 +68,17 @@ EvidenceForge includes agent skills for interactive, guided workflows. These are
 | Skill | Description |
 |-------|-------------|
 | `/eforge scenario` | Guided scenario creation through a structured interview. Researches TTPs via MITRE ATT&CK, builds environment/network/personas, outputs validated YAML + student context document. |
+| `/eforge pack` | Discovers, compares, inspects, validates, initializes, and copies industry or organization packs. |
+| `/eforge industry-pack` | Authors reusable industry catalogs with exact references, qualified exports, validation, and composition smoke tests. |
+| `/eforge organization-pack` | Authors concrete organization environments and baselines with pinned industry dependencies, validation, and composition smoke tests. |
 | `/eforge generate` | Validates the scenario, runs the generation engine, monitors output, and diagnoses errors. |
 | `/eforge validate` | Checks a scenario for schema correctness and cross-reference integrity. Fixes simple issues, escalates structural problems. |
 | `/eforge evaluate` | Runs the data quality evaluation, interprets scores, reviews records for realism, and suggests improvements. |
 | `/eforge config` | Add, modify, or remove personas, domains, applications, and other configuration data. Handles cross-file dependencies automatically. See [Customizing Configuration](docs/reference/CUSTOMIZING_CONFIG.md). |
+
+The table shows Claude Code command names. In ChatGPT and Codex, use the corresponding
+`eforge-scenario`, `eforge-pack`, `eforge-industry-pack`, `eforge-organization-pack`,
+`eforge-generate`, `eforge-validate`, `eforge-evaluate`, and `eforge-config` skills.
 
 `uv run eforge install-skills` installs project-local skills for both Claude Code
 and ChatGPT. Claude commands go under `.claude/commands/`; ChatGPT skills go
@@ -112,7 +119,8 @@ All commands accept `--help` and `-h` for usage information.
 
 EvidenceForge ships with 50+ YAML config files controlling DNS domains, applications, personas, traffic profiles, and more. You can customize these using a project-local overlay at `.eforge/config/` — your changes survive package upgrades and merge automatically with built-in defaults.
 
-The recommended approach is the Claude Code skill:
+The recommended approach is the agent skill (`/eforge config` in Claude Code or `eforge-config` in
+ChatGPT/Codex):
 
 ```
 /eforge config add a nurse persona for a healthcare scenario
@@ -129,8 +137,11 @@ and baseline. Existing Scenario 1.0 files and monolithic Scenario 2.0 files requ
 not scan for or warn about them.
 
 EvidenceForge ships `finance`, `healthcare`, and `technology` industry examples plus the fictional
-`northstar-health` organization example. Start with `eforge pack list --json`, and see
-[Scenario 2.0 and composable packs](docs/reference/SCENARIO_PACKS.md) for the complete contract.
+`northstar-health` organization example. Start with the `/eforge pack` (Claude Code) or
+`eforge-pack` (ChatGPT/Codex) skill, or run `eforge pack list --json`. See
+[Scenario 2.0 and composable packs](docs/reference/SCENARIO_PACKS.md) for the composition and
+lifecycle guide and the [Pack Authoring Reference](commands/eforge/references/pack-reference.md)
+for exact catalog fields, cadence, validation, and consumer-harness workflows.
 
 ## What It Does
 
