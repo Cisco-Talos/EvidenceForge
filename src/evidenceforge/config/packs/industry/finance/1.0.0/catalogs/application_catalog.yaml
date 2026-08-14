@@ -2,5 +2,15 @@ application_catalog:
   treasury-portal:
     description: "Synthetic treasury and cash-position portal profile."
     data:
-      category: finance
-      protocols: [https]
+      personas: [finance_operations]
+      processes: [finance-browser]
+      connections:
+        payment-portal:
+          destination: payment-network
+          service: web
+  reporting-tools:
+    description: "Local finance reporting and reconciliation applications."
+    data:
+      personas: [finance_operations]
+      processes: [finance-reporting]
+      connections: {}

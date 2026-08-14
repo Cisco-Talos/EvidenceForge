@@ -71,6 +71,12 @@ environment:
         direction: bidirectional
         placement: span
         log_formats: [zeek]
+      - type: firewall
+        name: northstar-edge-fw
+        monitoring_segments: [clinical_lan, server_lan]
+        direction: bidirectional
+        placement: tap
+        log_formats: [cisco_asa]
   email:
     accepted_domains: [northstarhealth.lab]
     mail_servers:

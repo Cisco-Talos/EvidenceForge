@@ -57,6 +57,9 @@ checkpoints/
 # Claude Code sessions
 .claude/
 
+# Generated ChatGPT/Codex skill installs (canonical sources: commands/eforge/)
+.agents/
+
 # EvidenceForge project-local config overlay
 .eforge/
 

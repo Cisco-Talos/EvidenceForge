@@ -98,7 +98,9 @@ def get_apps_for_persona(
             continue
         # Must be available on this system type (if filtering)
         if system_type:
-            allowed_types = app.get("system_types", _ALL_SYSTEM_TYPES)
+            allowed_types = app.get("system_types")
+            if allowed_types is None:
+                allowed_types = _ALL_SYSTEM_TYPES
             if system_type not in allowed_types:
                 continue
         results.append(app)
@@ -194,7 +196,8 @@ def is_system_type_allowed(
             or (lower + ".exe") == basename
             or basename.replace(".exe", "") == lower
         ):
-            return system_type in app.get("system_types", _ALL_SYSTEM_TYPES)
+            allowed_types = app.get("system_types")
+            return system_type in (_ALL_SYSTEM_TYPES if allowed_types is None else allowed_types)
     return True
 
 
@@ -400,7 +403,7 @@ def _child_image_from_command(
     return fallback_image_path
 
 
-def get_child_processes(os_category: str, parent_exe: str) -> list[dict[str, str]]:
+def get_child_processes(os_category: str, parent_exe: str) -> list[dict[str, Any]]:
     """Get child process definitions for a given parent executable.
 
     Children use the executable named by their command line when it is present,
@@ -434,6 +437,7 @@ def get_child_processes(os_category: str, parent_exe: str) -> list[dict[str, str
             {
                 "image": _child_image_from_command(os_category, cmd, image_path),
                 "command_line": cmd,
+                "command_parameter_pools": platform.get("command_parameter_pools", {}),
             }
             for cmd in children
         ]
@@ -504,7 +508,82 @@ def pick_app_and_command(
     if "{username}" in image_path:
         image_path = image_path.replace("{username}", username)
     command_line = rng.choice(platform["command_templates"])
+    command_line = parameterize_scoped_command(rng, command_line, platform)
     return image_path, command_line
+
+
+def parameterize_scoped_command(
+    rng: random.Random,
+    command_line: str,
+    platform: dict[str, Any],
+) -> str:
+    """Expand only the parameter pools attached to the selected process platform."""
+
+    pools = platform.get("command_parameter_pools", {})
+    if not isinstance(pools, dict):
+        return command_line
+    for _pass in range(3):
+        changed = False
+        for key, raw_values in pools.items():
+            if not isinstance(raw_values, list):
+                continue
+            values = [str(value) for value in raw_values if str(value)]
+            if not values:
+                continue
+            placeholder = "{" + str(key) + "}"
+            while placeholder in command_line:
+                command_line = command_line.replace(placeholder, rng.choice(values), 1)
+                changed = True
+        if not changed:
+            break
+    return command_line
+
+
+def get_applications_for_ids(
+    application_ids: list[str],
+    os_category: str,
+) -> list[dict[str, Any]]:
+    """Return exact OS-compatible catalog entries for pack application bindings."""
+
+    requested = set(application_ids)
+    return [
+        app
+        for app in load_catalog().get("applications", [])
+        if app.get("id") in requested and os_category in app.get("platforms", {})
+    ]
+
+
+def get_executables_for_application_ids(
+    application_ids: list[str],
+    os_category: str,
+) -> list[str]:
+    """Return exact executable basenames for public pack application bindings."""
+
+    executables: list[str] = []
+    for app in get_applications_for_ids(application_ids, os_category):
+        image_path = str(app["platforms"][os_category].get("image_path") or "")
+        basename = image_path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if basename:
+            executables.append(basename)
+    return list(dict.fromkeys(executables))
+
+
+def is_browser_application_process(
+    application_ids: list[str],
+    os_category: str,
+    process_image: str,
+) -> bool:
+    """Return whether the selected exact process is cataloged as a browser."""
+
+    selected_executable = process_image.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for app in get_applications_for_ids(application_ids, os_category):
+        platform = app["platforms"][os_category]
+        executable = (
+            str(platform.get("image_path") or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+        )
+        if executable == selected_executable and "browser" in app.get("categories", []):
+            return True
+    return False
 
 
 def is_singleton_application_image(image_path: str, os_category: str) -> bool:

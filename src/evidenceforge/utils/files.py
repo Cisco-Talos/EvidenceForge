@@ -25,6 +25,7 @@
 import copy
 import hashlib
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -58,13 +59,31 @@ class ScenarioIncludeBudget:
 
 
 @dataclass(slots=True)
-class _ScenarioIncludeBudgetState:
-    """Mutable counters scoped to one scenario load."""
+class ScenarioIncludeBudgetState:
+    """Mutable counters shared by one bounded composition load."""
 
     budget: ScenarioIncludeBudget
     files: int = 0
     bytes: int = 0
     nodes: int = 0
+
+    @property
+    def remaining_bytes(self) -> int:
+        """Return the maximum bytes that the next source read may consume."""
+
+        return max(0, self.budget.max_bytes - self.bytes)
+
+    def check_before_read(self, path: Path, *, depth: int) -> None:
+        """Reject depth or file-count overflow before opening another source."""
+
+        if depth > self.budget.max_depth:
+            raise ScenarioIncludeError(
+                f"Scenario include depth exceeds limit {self.budget.max_depth}: {path}"
+            )
+        if self.files >= self.budget.max_files:
+            raise ScenarioIncludeError(
+                f"Scenario include file count exceeds limit {self.budget.max_files}: {path}"
+            )
 
     def consume(self, path: Path, *, depth: int, size: int) -> None:
         """Account for one file before reading it and reject budget overflow."""
@@ -166,6 +185,7 @@ def load_scenario_yaml(
     path: Path | str,
     *,
     include_budget: ScenarioIncludeBudget | None = None,
+    allowed_root: Path | None = None,
 ) -> dict[str, Any]:
     """Load a scenario YAML file and expand top-level includes.
 
@@ -178,6 +198,8 @@ def load_scenario_yaml(
         path: Path to scenario YAML file
         include_budget: Optional bounded composition policy. Defaults to the documented hard
             safety limits.
+        allowed_root: Optional lexical root that every source must remain beneath. Include
+            candidates are checked before filesystem access.
 
     Returns:
         Expanded scenario dictionary
@@ -187,20 +209,47 @@ def load_scenario_yaml(
         ConfigurationError: If YAML is invalid
         ScenarioIncludeError: If include expansion fails
     """
-    return load_scenario_source_graph(path, include_budget=include_budget).data
+    return load_scenario_source_graph(
+        path,
+        include_budget=include_budget,
+        allowed_root=allowed_root,
+    ).data
 
 
 def load_scenario_source_graph(
     path: Path | str,
     *,
     include_budget: ScenarioIncludeBudget | None = None,
+    include_budget_state: ScenarioIncludeBudgetState | None = None,
+    allowed_root: Path | None = None,
 ) -> LoadedSourceGraph:
-    """Load an authored scenario once while retaining sources and field origins."""
+    """Load an authored scenario once while retaining sources and field origins.
+
+    Args:
+        path: Root YAML document to load.
+        include_budget: Optional limits for this source graph. Mutually exclusive with
+            ``include_budget_state``.
+        include_budget_state: Optional mutable counters shared across several related source
+            graphs, such as all semantic documents in one pack.
+        allowed_root: Optional lexical root that every source must remain beneath.
+    """
+
+    if include_budget is not None and include_budget_state is not None:
+        raise ValueError("include_budget and include_budget_state are mutually exclusive")
 
     scenario_path = Path(os.path.abspath(Path(path)))
-    budget_state = _ScenarioIncludeBudgetState(include_budget or ScenarioIncludeBudget())
+    lexical_allowed_root = Path(os.path.abspath(allowed_root)) if allowed_root is not None else None
+    _assert_source_within_allowed_root(
+        scenario_path,
+        lexical_allowed_root,
+        referenced_from=None,
+    )
+    budget_state = include_budget_state or ScenarioIncludeBudgetState(
+        include_budget or ScenarioIncludeBudget()
+    )
     sources: dict[Path, LoadedScenarioSource] = {}
-    root_content = _read_source_bytes(scenario_path)
+    budget_state.check_before_read(scenario_path, depth=1)
+    root_content = _read_source_bytes(scenario_path, max_bytes=budget_state.remaining_bytes)
     root_data = _load_raw_yaml(scenario_path, root_content)
     if root_data.get("kind") == "evidenceforge.resolved-scenario":
         budget_state.consume(scenario_path, depth=1, size=len(root_content))
@@ -224,6 +273,7 @@ def load_scenario_source_graph(
         budget_state=budget_state,
         sources=sources,
         preloaded={scenario_path: (root_content, root_data)},
+        allowed_root=lexical_allowed_root,
     )
     return LoadedSourceGraph(
         root=scenario_path,
@@ -233,7 +283,7 @@ def load_scenario_source_graph(
     )
 
 
-def _read_source_bytes(path: Path) -> bytes:
+def _read_source_bytes(path: Path, *, max_bytes: int | None = None) -> bytes:
     """Read one source without following a final-component symlink."""
 
     if any(component.is_symlink() for component in (path, *path.parents)):
@@ -248,7 +298,15 @@ def _read_source_bytes(path: Path) -> bytes:
     except OSError as exc:
         raise ScenarioIncludeError(f"Unable to safely open scenario source {path}: {exc}") from exc
     with os.fdopen(descriptor, "rb") as source_file:
-        return source_file.read()
+        metadata = os.fstat(source_file.fileno())
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ScenarioIncludeError(f"Scenario source is not a regular file: {path}")
+        if max_bytes is not None and metadata.st_size > max_bytes:
+            raise ScenarioIncludeError(f"Scenario include bytes exceed limit {max_bytes}: {path}")
+        content = source_file.read() if max_bytes is None else source_file.read(max_bytes + 1)
+        if max_bytes is not None and len(content) > max_bytes:
+            raise ScenarioIncludeError(f"Scenario include bytes exceed limit {max_bytes}: {path}")
+        return content
 
 
 def _load_raw_yaml(path: Path, content: bytes) -> dict[str, Any]:
@@ -273,9 +331,10 @@ def _load_yaml_with_includes(
     path: Path,
     *,
     stack: tuple[Path, ...],
-    budget_state: _ScenarioIncludeBudgetState,
+    budget_state: ScenarioIncludeBudgetState,
     sources: dict[Path, LoadedScenarioSource],
     preloaded: dict[Path, tuple[bytes, dict[str, Any]]] | None = None,
+    allowed_root: Path | None = None,
 ) -> tuple[dict[str, Any], dict[tuple[str, ...], Path]]:
     """Load a YAML mapping, recursively expanding its scenario includes."""
     if path in stack:
@@ -285,7 +344,9 @@ def _load_yaml_with_includes(
     if preloaded is not None and path in preloaded:
         content, data = preloaded.pop(path)
     else:
-        content = _read_source_bytes(path)
+        depth = len(stack) + 1
+        budget_state.check_before_read(path, depth=depth)
+        content = _read_source_bytes(path, max_bytes=budget_state.remaining_bytes)
         data = _load_raw_yaml(path, content)
     budget_state.consume(path, depth=len(stack) + 1, size=len(content))
     sources[path] = LoadedScenarioSource(
@@ -302,6 +363,11 @@ def _load_yaml_with_includes(
 
     for include_entry in include_entries:
         include_path = _resolve_include_path(include_entry, path)
+        _assert_source_within_allowed_root(
+            include_path,
+            allowed_root,
+            referenced_from=path,
+        )
         if not include_path.exists():
             raise ScenarioIncludeError(
                 f"Scenario include not found: {include_path} (referenced from {path})"
@@ -312,6 +378,7 @@ def _load_yaml_with_includes(
             budget_state=budget_state,
             sources=sources,
             preloaded=preloaded,
+            allowed_root=allowed_root,
         )
         _merge_disjoint_mapping(
             merged,
@@ -380,6 +447,25 @@ def _resolve_include_path(include_entry: str, including_path: Path) -> Path:
     if not include_path.is_absolute():
         include_path = including_path.parent / include_path
     return Path(os.path.abspath(include_path))
+
+
+def _assert_source_within_allowed_root(
+    path: Path,
+    allowed_root: Path | None,
+    *,
+    referenced_from: Path | None,
+) -> None:
+    """Reject an out-of-root source before any filesystem operation can observe it."""
+
+    if allowed_root is None:
+        return
+    try:
+        path.relative_to(allowed_root)
+    except ValueError as exc:
+        context = f" (referenced from {referenced_from})" if referenced_from is not None else ""
+        raise ScenarioIncludeError(
+            f"Scenario source escapes allowed root {allowed_root}: {path}{context}"
+        ) from exc
 
 
 def _merge_disjoint_mapping(

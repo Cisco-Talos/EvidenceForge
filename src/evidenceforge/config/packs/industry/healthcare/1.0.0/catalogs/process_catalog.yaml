@@ -1,6 +1,13 @@
 process_catalog:
+  clinical-browser:
+    description: "Browser process used for clinical and claims portals."
+    data:
+      builtins: [chrome]
+      custom: []
+      document_terms: []
   clinical-workstation:
     description: "Clinical workstation process vocabulary."
     data:
-      process_names: ["chrome.exe", "OUTLOOK.EXE", "AcroRd32.exe"]
-      document_terms: ["care-plan", "schedule", "referral", "discharge"]
+      builtins: [outlook, acrobat]
+      custom: []
+      document_terms: []

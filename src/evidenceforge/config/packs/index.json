@@ -1,9 +1,9 @@
 {
   "packs": {
-    "industry/finance/1.0.0": "91405b0c8173ed179135142dac7e9d0d8b4c3208d0ec6fc0e2184341203d0715",
-    "industry/healthcare/1.0.0": "7b824261d5fbdd7a476d5bbb8a919892329916a8558530397479587bb4aa1d82",
-    "industry/technology/1.0.0": "8d309720a72b4509dc3d9af6f59f40106b9b33251abd548cc2292fa1e978d55f",
-    "organization/northstar-health/1.0.0": "63b3a7101db211e4ddfd3be9f5737bdb9c1158e578e5250e07fa19c5868e5e5a"
+    "industry/finance/1.0.0": "aa92013da611dc042437a083c03a22191c298e5f61933194bed49a4eae1625bc",
+    "industry/healthcare/1.0.0": "79a78d1248e203c638c48cf2ff00c5eac4990efa227fc0bbf817dcef7e36d943",
+    "industry/technology/1.0.0": "30f82b61821e14dd907fc762a6ac7dd5a20f9a298a185d4943b2db913f3451a0",
+    "organization/northstar-health/1.0.0": "cb26ef1eeeb7e9f8a3aafeecf4510d3d1bd62a1e20d425cf1f81c1fde6ce81a0"
   },
   "schema_version": "1.0"
 }

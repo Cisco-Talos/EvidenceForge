@@ -286,6 +286,23 @@ environment:
             assert expected in result.stdout
         assert "Showing up to 3 catalog entries per share" in result.stdout
 
+    def test_show_storage_uses_compiled_pack_catalog(self):
+        """Qualified pack presets remain available to validation diagnostics."""
+
+        result = runner.invoke(
+            app,
+            [
+                "validate",
+                "tests/fixtures/scenarios/northstar-health-pack.yaml",
+                "--show-storage",
+            ],
+            terminal_width=240,
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        assert "healthcare:clinical-department" in result.stdout
+        assert "Fatal error" not in result.stdout
+
     def test_large_workload_option_is_hidden_from_public_help(self):
         """The obsolete workload override is not part of the visible CLI contract."""
         for command in ("generate", "validate"):
@@ -590,6 +607,23 @@ output:
         call_kwargs = mock_engine_class.call_args.kwargs
         assert "progress_callback" in call_kwargs
         assert callable(call_kwargs["progress_callback"])
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_reports_storage_manifest(self, mock_engine_class, scenarios_dir, tmp_path):
+        """Successful generation lists the storage sidecar when the engine emitted it."""
+
+        mock_engine = Mock()
+        mock_engine.generate.side_effect = lambda: (tmp_path / "STORAGE_MANIFEST.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+        mock_engine_class.return_value = mock_engine
+
+        result = runner.invoke(
+            app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)]
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "STORAGE_MANIFEST.json" in result.stdout
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_rejects_dangling_generated_report_symlink(

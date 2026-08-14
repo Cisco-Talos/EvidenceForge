@@ -133,9 +133,21 @@ def test_resolve_explanation_is_portable_and_non_overwriting(tmp_path: Path) -> 
         "healthcare",
         "northstar-health",
     ]
-    assert payload["composition"]["field_origins"]
+    composition = payload["composition"]
+    assert composition["scenario_source_count"] == 1
+    assert composition["selected_pack_count"] == 2
+    assert composition["source_count"] == 1
+    assert composition["source_count_scope"] == "scenario-source-graph"
+    assert composition["field_origins"]
+    assert all(not origin.startswith("/") for origin in composition["field_origins"].values())
+    assert composition["organization_model_origins"]["environment.domain"] == (
+        "model/environment.yaml"
+    )
+    assert composition["organization_model_origins"]["baseline_activity.intensity"] == (
+        "model/baseline_activity.yaml"
+    )
     assert all(
-        not origin.startswith("/") for origin in payload["composition"]["field_origins"].values()
+        not origin.startswith("/") for origin in composition["organization_model_origins"].values()
     )
     output.write_text("different\n", encoding="utf-8")
     refused = runner.invoke(
@@ -144,3 +156,84 @@ def test_resolve_explanation_is_portable_and_non_overwriting(tmp_path: Path) -> 
     )
     assert refused.exit_code != 0
     assert json.loads(refused.stdout)["valid"] is False
+
+
+def test_resolve_explanation_reports_concrete_layer_replacements(tmp_path: Path) -> None:
+    """Explain output names actual scenario and project-overlay winners over pack data."""
+
+    scenario_document = yaml.safe_load(_NORTHSTAR.read_text(encoding="utf-8"))
+    scenario_document["environment"] = {"domain": "scenario-winner.example"}
+    scenario_path = tmp_path / "scenario.yaml"
+    scenario_path.write_text(
+        yaml.safe_dump(scenario_document, sort_keys=False),
+        encoding="utf-8",
+    )
+    overlay_root = tmp_path / ".eforge" / "config" / "activity"
+    overlay_root.mkdir(parents=True)
+    (overlay_root / "dns_registry.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "domains": [
+                    {
+                        "domain": "claims.healthcare.example",
+                        "ips": ["203.0.113.44"],
+                        "tags": ["healthcare"],
+                        "_replace": True,
+                    }
+                ]
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "resolve",
+            str(scenario_path),
+            "--output",
+            str(tmp_path / "resolved.yaml"),
+            "--project-root",
+            str(tmp_path),
+            "--explain-composition",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    decisions = json.loads(result.stdout)["composition"]["merge_decisions"]
+    assert {
+        "path": "environment.domain",
+        "action": "replace",
+        "lower_layer": "package:organization:northstar-health@1.0.0",
+        "higher_layer": "scenario",
+        "winner": "scenario",
+    } in decisions
+    assert {
+        "path": "activity/dns_registry.yaml:domains[claims.healthcare.example]",
+        "action": "replace",
+        "lower_layer": "pack-adapter",
+        "higher_layer": "project-overlay:activity/dns_registry.yaml",
+        "winner": "project-overlay",
+    } in decisions
+
+
+def test_resolve_invalid_oob_host_keeps_json_error_contract(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "resolve",
+            str(_NORTHSTAR),
+            "--output",
+            str(tmp_path / "resolved.yaml"),
+            "--oob-host",
+            "com",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["valid"] is False
+    assert "--oob-host 'com' must be a concrete registrable domain" in payload["error"]

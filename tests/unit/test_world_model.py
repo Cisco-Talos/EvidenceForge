@@ -1111,6 +1111,67 @@ def test_connection_owner_process_uses_scenario_internal_urls(
     assert "corp.local" not in proc.command_line
 
 
+def test_exact_custom_application_without_system_types_is_eligible(
+    monkeypatch: pytest.MonkeyPatch,
+    planner: WorldPlanner,
+    systems: dict[str, System],
+    users: dict[str, User],
+    state_manager: StateManager,
+) -> None:
+    """Omitted custom-process system types allow every supported host type."""
+
+    session_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+    system = systems["WKS-02"]
+    user = users["dev.user"]
+    state_manager.set_current_time(session_time)
+    logon_id = state_manager.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=2,
+        source_ip=system.ip,
+        session_kind="interactive",
+    )
+    session = state_manager.get_session(logon_id)
+    assert session is not None
+    exact_application = {
+        "id": "custom:case-client",
+        "personas": [user.persona],
+        "platforms": {
+            "windows": {
+                "image_path": r"C:\Program Files\Case Client\case-client.exe",
+                "command_templates": ["case-client.exe --review"],
+            }
+        },
+        "categories": ["user_app"],
+        "system_types": None,
+        "selection_weight": 7,
+        "singleton_per_session": False,
+    }
+    monkeypatch.setattr(
+        "evidenceforge.generation.activity.application_catalog.get_applications_for_ids",
+        lambda _application_ids, _os_category: [exact_application],
+    )
+    monkeypatch.setattr(
+        "evidenceforge.generation.activity.application_catalog.get_executables_for_application_ids",
+        lambda _application_ids, _os_category: ["case-client.exe"],
+    )
+
+    pid = planner.ensure_connection_process(
+        user=user,
+        system=system,
+        session=session,
+        time=session_time,
+        service="ssl",
+        rng=random.Random(11),
+        application_ids=["custom:case-client"],
+    )
+
+    process = state_manager.get_process(system.hostname, pid)
+    assert process is not None
+    assert process.image == r"C:\Program Files\Case Client\case-client.exe"
+    assert process.command_line == "case-client.exe --review"
+
+
 def test_ldapsearch_connection_process_uses_scenario_base_dn_and_short_lifetime(
     monkeypatch: pytest.MonkeyPatch,
     scenario: Scenario,

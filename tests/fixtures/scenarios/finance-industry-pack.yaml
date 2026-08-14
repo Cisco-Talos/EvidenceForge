@@ -7,7 +7,7 @@ composition:
 name: finance-industry-baseline
 description: "Direct industry-pack example with a scenario-local environment."
 time_window:
-  start: "2026-08-14T13:00:00Z"
+  start: "2026-08-14T19:00:00Z"
   duration: "1h"
   warmup: "1h"
 environment:

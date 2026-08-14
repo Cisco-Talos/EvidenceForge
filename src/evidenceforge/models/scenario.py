@@ -2967,11 +2967,12 @@ class Environment(BaseModel):
 class OutputSpec(BaseModel):
     """Output specification.
 
-    Defines what log formats to generate and where to write them.
+    Defines what log formats to generate and retains the authored destination hint.
 
     Attributes:
         logs: List of log format specifications (format-specific dicts)
-        destination: Output directory path
+        destination: Authored output hint retained for compatibility and resolved provenance. The
+            CLI writes beside the scenario unless ``--output`` selects a different bundle root.
         compression: Whether to compress output files
     """
 

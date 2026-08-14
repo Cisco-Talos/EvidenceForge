@@ -2,5 +2,9 @@ application_catalog:
   continuous-delivery:
     description: "Synthetic continuous-delivery application family."
     data:
-      category: engineering
-      protocols: [https, ssh]
+      personas: [platform_engineer]
+      processes: [engineering-toolchain]
+      connections:
+        registry:
+          destination: artifact-registry
+          service: web

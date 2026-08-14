@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import evidenceforge.generation.storage_world as storage_world_module
 from evidenceforge.generation.storage_world import StorageWorldModel
 from evidenceforge.models.scenario import Scenario, SmbActivityEventSpec, StorageMappingConfig
 from evidenceforge.utils import load_yaml
@@ -72,6 +73,7 @@ def test_omitted_storage_compiles_duration_independent_diverse_defaults(
     assert any(volume.mount == "D:\\" for volume in first.volumes)
     assert any(volume.mount == "C:\\Mounts\\Data\\" for volume in first.volumes)
     assert first.manifest() == second.manifest()
+    assert all("population_resolution" not in share for share in first.manifest()["shares"])
     assert first.share("FS-01.c_admin").files == ()
     assert "DC-01.backup" not in refs
 
@@ -148,6 +150,128 @@ def test_explicit_storage_resolves_mount_access_seed_and_mapping(scenarios_dir: 
     assert "Finance-Users" in share.access.modify
     assert "Finance-Users" in share.access.read
     assert share.audit == "high" and share.activity == "high"
+
+
+def test_administrative_shares_use_implicit_ntfs_system_volume(scenarios_dir: Path) -> None:
+    data = _storage_scenario_data(scenarios_dir)
+    data["environment"]["storage"] = {
+        "servers": [
+            {
+                "system": "FS-01",
+                "presets": [],
+                "default_volume": "data",
+                "volumes": [
+                    {
+                        "id": "data",
+                        "mount": "D:\\",
+                        "filesystem": "refs",
+                    }
+                ],
+                "shares": [
+                    {
+                        "id": "department",
+                        "name": "Department",
+                        "volume": "data",
+                        "root": "Department",
+                        "preset": "department",
+                    }
+                ],
+            }
+        ]
+    }
+
+    world = StorageWorldModel.compile(Scenario(**data))
+    c_admin = world.share("FS-01.c_admin")
+    admin = world.share("FS-01.admin")
+    department = world.share("FS-01.department")
+    system_volume = world.volumes_by_ref[f"FS-01.{c_admin.volume}".casefold()]
+
+    assert admin.volume == c_admin.volume
+    assert system_volume.mount == "C:\\"
+    assert system_volume.filesystem == "ntfs"
+    assert world.server_local_path(c_admin, "Windows\\Temp\\sample.txt") == (
+        "C:\\Windows\\Temp\\sample.txt"
+    )
+    assert world.server_local_path(admin, "Temp\\sample.txt") == ("C:\\Windows\\Temp\\sample.txt")
+    assert department.volume == "data"
+    assert world.volumes_by_ref["fs-01.data"].filesystem == "refs"
+
+
+@pytest.mark.parametrize(
+    ("population", "requested_count"),
+    [("auto", 64), ("medium", 96), ("large", 384)],
+)
+def test_tiny_storage_vocabulary_caps_population_to_unique_product(
+    scenarios_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    population: str,
+    requested_count: int,
+) -> None:
+    data = _storage_scenario_data(scenarios_dir)
+    data["environment"]["systems"] = [
+        system
+        for system in data["environment"]["systems"]
+        if system["hostname"] in {"TEST-01", "FS-01"}
+    ]
+    data["environment"]["storage"] = {
+        "population": population,
+        "servers": [
+            {
+                "system": "FS-01",
+                "presets": [],
+                "volumes": [{"id": "data", "mount": "D:\\"}],
+                "shares": [
+                    {
+                        "id": "records",
+                        "name": "Records",
+                        "volume": "data",
+                        "preset": "tiny:records",
+                    }
+                ],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        storage_world_module,
+        "_load_catalog_config",
+        lambda: {
+            "population_counts": {
+                "small": 24,
+                "medium": 96,
+                "large": 384,
+                "auto": {},
+            },
+            "profiles": {
+                "tiny:records": {
+                    "directories": ["Records"],
+                    "subjects": ["Case"],
+                    "files": [
+                        {
+                            "extension": ".pdf",
+                            "mime": "application/pdf",
+                            "weight": 1,
+                        }
+                    ],
+                }
+            },
+        },
+    )
+
+    world = StorageWorldModel.compile(Scenario(**data))
+    share = world.share("FS-01.records")
+    share_manifest = next(
+        item for item in world.manifest()["shares"] if item["ref"] == "FS-01.records"
+    )
+
+    assert len(share.files) == 36
+    assert len({file.path.casefold() for file in share.files}) == 36
+    assert "Records\\Case.pdf" in {file.path for file in share.files}
+    assert share_manifest["population_resolution"] == {
+        "requested_file_count": requested_count,
+        "effective_file_count": 36,
+        "realizable_file_count": 36,
+        "capped": True,
+    }
 
 
 @pytest.mark.parametrize("drive", ["D:", "F:", "Z:", "d:"])

@@ -18,13 +18,16 @@ output/
   GROUND_TRUTH.md                          # Human-readable answer key rendered from the JSON document
   OBSERVATION_MANIFEST.json                # Source-observation manifest for eval
   ARTIFACTS_MANIFEST.json                  # Generated artifact manifest, when artifacts exist
+  COLLECTION_PROFILE.json                 # Blind-safe collection/export semantics
+  STORAGE_MANIFEST.json                    # Compiled SMB storage model, when storage is configured
   OUTPUT_TARGET.txt                        # "default", "sof-elk", or "splunk"; missing legacy marker means default
+  RESOLVED_SCENARIO.yaml                   # Authoritative self-contained generation input
+  GENERATION_MANIFEST.json                 # Run identity and hashes; written last
   ENVIRONMENT.md                           # Optional student-facing environment description
   artifacts/
     email/
       <artifact-id>.eml                    # Optional RFC 5322 message artifacts
   data/                                    # Generated logs for every output target
-    COLLECTION_PROFILE.json                # Blind-safe collection/export semantics
     <hostname.domain>/                     # Per-host directories (FQDN)
       windows_event_security.xml           # Windows Security XML document, or splunk XML event stream
       windows_event_sysmon.xml             # Sysmon XML document, or splunk XML event stream
@@ -60,8 +63,13 @@ formats. Scenario YAML and `--formats` remain canonical: request
 on, then choose the target at generation time.
 When `OUTPUT_TARGET.txt` is missing, `eforge eval` treats the dataset as
 legacy/default output.
-For practical ingestion and validation guidance by target, see
-[Output Target Ingest Guides](../output-targets/README.md).
+For practical ingestion and validation guidance by target, see the
+[Output Target Ingest Guides](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/output-targets/README.md).
+
+`COLLECTION_PROFILE.json` at the output root is a blind-safe source collection
+sidecar. It records the primary collection window, selected observation profile,
+source-family tail policies, and export ordering semantics without storyline
+identifiers, exercise labels, ground-truth events, or scenario narrative details.
 
 Target-specific behavior in V1:
 
@@ -168,8 +176,12 @@ event as a separate record on Linux.
 | 4776 | NTLM Credential Validation | Authentication | Field names: TargetUserName (not LogonAccount), Workstation (not SourceWorkstation). Status reflects validation success or failure. |
 | 5156 | WFP Connection Permitted | Network | Application path uses device format (`\device\harddiskvolume1\...`). Direction: %%14592=Inbound, %%14593=Outbound. |
 
+EventRecordIDs are assigned in one final chronological pass per host/channel. Because this format
+is a selected projection rather than a complete EVTX channel, gaps model omitted same-channel
+records. Hidden counts are derived from elapsed time and conservative host/channel background
+rates, with a peak-rate safety bound; Security Event 1102 starts a new channel epoch at record 1.
+
 **Known Limitations:**
-- EventRecordIDs use probabilistic gaps (15% chance +2-8, 3% chance +20-200) rather than correlating with unlogged events
 - Execution ProcessID for auth events uses the lsass.exe PID; for process/WFP events uses the System process (PID 4, now properly registered)
 - Account management events (4720-4738) and group membership events (4728-4757) require storyline triggers; they are not generated in baseline activity
 - SubjectDomainName correctly uses "NT AUTHORITY" for SYSTEM, NETWORK SERVICE, and LOCAL SERVICE accounts
@@ -242,7 +254,6 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 **Known Limitations:**
 - Native Zeek `kerberos.log` and `ntlm.log` authentication projections are deferred; SMB authentication still has eligible Windows/eCAR evidence
 - Encrypted SMB share operations are intentionally opaque to `smb_files.log` and `files.log`; eligible endpoint evidence is independent
-- No SMTP log — email traffic appears in conn.log only
 - http.log only for port 80; HTTPS content is not decrypted (as expected)
 - `missed_bytes` is probabilistic (~3% of long TCP connections) rather than from actual packet capture
 - All timestamps use 6-digit microsecond precision
@@ -295,9 +306,9 @@ that RFC5424 shape. The `sof-elk` target emits a BSD/RFC3164 envelope
 partitions files by event year so SOF-ELK can recover the timestamp year from
 the archive path. `eforge eval` accepts both current target variants plus older
 legacy RFC5424 and flat BSD/RFC3164 files. All generated syslog entries are
-rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive
+rendered from `SyslogContext` on `CanonicalOccurrence` — the emitter doesn't derive
 messages from other contexts. Multi-phase activities such as SSH sessions are
-coordinated by action-bundle semantics above individual `SecurityEvent`s: the
+coordinated by action-bundle semantics above individual canonical occurrences: the
 bundle owns lifecycle, ordering, source timing, and shared identities, while each
 syslog row remains a distinct canonical occurrence. Remote Linux `sshd`
 failed-password rows reuse the same source port as the companion Zeek SSH
@@ -341,35 +352,42 @@ Per-user command history for Linux systems. Baseline SSH sessions to Linux serve
 **File:** `snort_alert.log`
 **Format:** Snort fast alert format
 
-Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections. IDS signature-to-context construction is owned by the internal IDS alert action bundle so Snort/Suricata rows render canonical network/DNS/HTTP evidence rather than independently inventing alert payloads.
+Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical CanonicalOccurrence dispatch. Storyline generates true-positive alerts for malicious connections. IDS signature-to-context construction is owned by the internal IDS alert action bundle so Snort/Suricata rows render canonical network/DNS/HTTP evidence rather than independently inventing alert payloads.
 
 Typed `connection`, `beacon`, `ssh_session`, `rdp_session`, `dhcp_lease`,
-`port_scan`, `dns_query`, `dga_queries`, `dns_tunnel`, and `web_scan` events may
-attach multiple configured SIDs with `ids_alerts`. The attachment asserts a
-match; EvidenceForge does not execute the full rule predicate or decrypt
-traffic. A tuple without an explicit or built-in IDS context does not alert.
-Filtering is deferred until sensor visibility, clock, and
-NAT/PAT projection are known, then tracked independently per sensor and visible
-source/destination IP. `GROUND_TRUTH.json`/`.md` expose effective policy and
-candidate/emitted/policy-filtered totals; policy suppression appears as
-`filtered` IDS evidence in `OBSERVATION_MANIFEST.json`. Raw Snort events are
-unchanged.
+`port_scan`, `dns_query`, `dga_queries`, `dns_tunnel`, and `web_scan` events can
+attach multiple configured SIDs with `ids_alerts`. Attachments assert that a
+signature matches; the generator does not run the full Snort rule predicate or
+decrypt traffic. A network tuple without an explicit or built-in IDS context
+does not alert. Candidates are projected through sensor
+visibility, clock, and NAT/PAT views before per-sensor `detection_filter` and
+`event_filter` state is applied. Deferred candidates use a disk-backed spool and
+are deterministically ordered, so long beacons stay memory-bounded and authored
+storyline order cannot change filtering results. Raw Snort events retain their
+existing source-local behavior.
 
-The optional schema-v1 `ids_evaluation` section in `GROUND_TRUTH.json` is the
+Each attachment follows only the physical transports owned by its authored
+event. SSH/RDP attach to their session transport, DHCP only to the explicitly
+authored transaction, scans and web scans to each probe/request, and DNS families
+to their authored queries. Automatic DHCP renewals and DNS-tunnel background
+cover queries do not inherit attachments. Authored web-scan SIDs coexist with
+automatic preset/path/rate alerts and take precedence on a duplicate `(gid, sid)`.
+Email transport attachments remain deferred.
+
+`GROUND_TRUTH.json` and `.md` record each attached SID, its effective policy, and
+candidate/emitted/policy-filtered sensor totals. Policy suppression is also
+reported as `filtered` IDS evidence in `OBSERVATION_MANIFEST.json`; collection
+drops and output-window clipping are distinct and never advance filter counters.
+
+The optional `ids_evaluation` section in ground-truth schema v2 is the
 automated acceptance contract. For each sensor and `(gid, sid)` it records
 candidate, emitted, policy-filtered, visible/delayed, and authorized-origin
 totals plus a SHA-256 digest over normalized alerts in file order. Normalization
 covers sensor identity, UTC timestamp, signature metadata, protocol, full tuple,
-and the sensor-visible NAT/PAT projection. Overall IDS observation totals
-reconcile visible, delayed, dropped, filtered, and out-of-window attempts. The
+and the sensor-visible NAT/PAT projection. Overall observation totals reconcile
+visible, delayed, dropped, filtered, and out-of-window IDS attempts. The
 Markdown IDS Evaluation Summary renders the same counts with abbreviated
 digests.
-
-Attachments follow only owned transports: the SSH/RDP session connection, the
-authored DHCP transaction, each scan/web request, and each authored DNS-family
-query. Automatic DHCP renewals and DNS-tunnel cover queries do not inherit them.
-Authored web-scan SIDs coexist with automatic alerts and win duplicate
-`(gid, sid)` collisions. Email transport attachments remain deferred.
 
 Web scan events (`web_scan` storyline type) generate three layers of IDS alerts:
 1. **Scanner UA detection** — identifies the scanning tool by user-agent (non-TLS only)
@@ -380,8 +398,8 @@ Alert format: `[gid:sid:rev]` where `gid` defaults to 1, `sid` identifies the ru
 
 **Known Limitations:**
 - IDS alert variety is limited to curated SID pools (not full ruleset simulation)
-- Attached alerts do not support rule parsing, `rate_filter`, CIDR suppression,
-  or IPS actions
+- Signature attachments declare matches; they do not parse or execute Snort rules,
+  `rate_filter`, CIDR suppression, or IPS actions
 
 ---
 

@@ -1134,6 +1134,7 @@ class WorldPlanner:
         rng: random.Random,
         effective_persona: str | None = None,
         destination_hostname: str | None = None,
+        application_ids: list[str] | None = None,
     ) -> int:
         """Resolve or create a user process that can own a network connection.
 
@@ -1143,8 +1144,38 @@ class WorldPlanner:
                 cataloged for this persona instead of the user's normal one.
             destination_hostname: Optional resolved destination hostname used to
                 select a plausible owning app for generic services like SSL.
+            application_ids: Exact application-catalog IDs compiled from a pack
+                application binding. When supplied, these replace the legacy
+                service-to-executable inference.
         """
-        compatible_exes = get_service_to_exes().get(service, [])
+        os_cat = self.world_model.hosts[system.hostname].os_category
+        persona = (user.persona or "default").lower()
+        exact_applications: list[dict[str, Any]] = []
+        if application_ids:
+            from evidenceforge.generation.activity.application_catalog import (
+                get_applications_for_ids,
+            )
+
+            system_type = getattr(system, "type", None)
+            exact_applications = [
+                app
+                for app in get_applications_for_ids(application_ids, os_cat)
+                if persona in app.get("personas", [])
+                and (
+                    app.get("system_types") is None
+                    or system_type is None
+                    or system_type in app["system_types"]
+                )
+            ]
+            compatible_exes = [
+                str(app["platforms"][os_cat]["image_path"])
+                .replace("\\", "/")
+                .rsplit("/", 1)[-1]
+                .lower()
+                for app in exact_applications
+            ]
+        else:
+            compatible_exes = get_service_to_exes().get(service, [])
         if not compatible_exes:
             return -1
         compatible_exes = [
@@ -1184,24 +1215,49 @@ class WorldPlanner:
             broad_hits = len(exe_tags & destination_tags & broad_tags)
             return specific_hits * 100 + broad_hits
 
-        history_key = (system.hostname, user.username)
-        history = self.activity_generator._user_process_history.get(history_key, [])
-        best_existing: tuple[int, int, int] | None = None
-        for idx, (pid, image) in enumerate(reversed(history)):
-            proc = self.state_manager.get_process(system.hostname, pid)
-            if proc is None or proc.start_time > time:
-                continue
-            if proc.logon_id and proc.logon_id != session.logon_id:
-                continue
-            exe = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            if exe in _SHELL_EXES:
-                continue
-            if exe in compatible_exes:
-                score = _destination_score(exe)
-                if score > 0 and (best_existing is None or (score, -idx) > best_existing[:2]):
-                    best_existing = (score, -idx, pid)
-        if best_existing is not None:
-            return best_existing[2]
+        if exact_applications:
+            compatible_exact_images = {
+                str(app["platforms"][os_cat]["image_path"])
+                .replace("{username}", user.username)
+                .replace("/", "\\")
+                .casefold()
+                for app in exact_applications
+            }
+            effective_time = ensure_utc(time)
+            active_exact_processes = [
+                process
+                for process in self.state_manager.get_processes_for_session(
+                    session.logon_id,
+                    system.hostname,
+                )
+                if process.username.casefold() == user.username.casefold()
+                and ensure_utc(process.start_time) <= effective_time
+                and process.image.replace("/", "\\").casefold() in compatible_exact_images
+            ]
+            if active_exact_processes:
+                return max(
+                    active_exact_processes,
+                    key=lambda process: (ensure_utc(process.start_time), process.pid),
+                ).pid
+        else:
+            history_key = (system.hostname, user.username)
+            history = self.activity_generator._user_process_history.get(history_key, [])
+            best_existing: tuple[int, int, int] | None = None
+            for idx, (pid, image) in enumerate(reversed(history)):
+                proc = self.state_manager.get_process(system.hostname, pid)
+                if proc is None or proc.start_time > time:
+                    continue
+                if proc.logon_id and proc.logon_id != session.logon_id:
+                    continue
+                exe = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if exe in _SHELL_EXES:
+                    continue
+                if exe in compatible_exes:
+                    score = _destination_score(exe)
+                    if score > 0 and (best_existing is None or (score, -idx) > best_existing[:2]):
+                        best_existing = (score, -idx, pid)
+            if best_existing is not None:
+                return best_existing[2]
 
         from evidenceforge.generation.activity.application_catalog import (
             get_app_categories,
@@ -1211,10 +1267,10 @@ class WorldPlanner:
             is_singleton_application_image,
             is_system_type_allowed,
             load_catalog,
+            parameterize_scoped_command,
             resolve_image_path,
         )
 
-        os_cat = self.world_model.hosts[system.hostname].os_category
         # _server_admin is a policy overlay: use the user's real persona for
         # catalog eligibility, then exclude browser/office categories that
         # are inappropriate on servers (no Chrome/Outlook on DC via RDP).
@@ -1222,7 +1278,6 @@ class WorldPlanner:
         # security_analyst) can use admin tools (dsquery, ldapsearch) when
         # doing remote server administration.
         is_server_admin = effective_persona == "_server_admin"
-        persona = (user.persona or "default").lower()
         _SERVER_EXCLUDED_CATEGORIES = {"browser", "office", "code", "build"}
 
         def _is_allowed(exe: str) -> bool:
@@ -1247,24 +1302,38 @@ class WorldPlanner:
                     return False
             return allowed
 
-        os_exes = [e for e in compatible_exes if _is_allowed(e)]
-        if destination_tags:
-            scored_exes = [(e, _destination_score(e)) for e in os_exes]
-            os_exes = [e for e, score in scored_exes if score > 0]
-        if not os_exes:
-            # No persona-approved executable for this service — don't
-            # relax past the allowlist (that would spawn forbidden tools
-            # like sqlcmd.exe for accountants).  Return -1 (no owning process).
-            return -1
-        if destination_tags:
-            weights = [_destination_score(e) for e in os_exes]
-            target_exe = rng.choices(os_exes, weights=weights, k=1)[0]
+        selected_platform: dict[str, Any] | None = None
+        selected_singleton = False
+        if exact_applications:
+            selected_app = rng.choices(
+                exact_applications,
+                weights=[int(app.get("selection_weight", 10)) for app in exact_applications],
+                k=1,
+            )[0]
+            selected_platform = selected_app["platforms"][os_cat]
+            image = str(selected_platform["image_path"]).replace("{username}", user.username)
+            target_exe = image.replace("\\", "/").rsplit("/", 1)[-1].lower()
+            selected_singleton = bool(selected_app.get("singleton_per_session"))
         else:
-            target_exe = rng.choice(os_exes)
-        image = resolve_image_path(target_exe, os_cat, username=user.username)
+            os_exes = [e for e in compatible_exes if _is_allowed(e)]
+            if destination_tags:
+                scored_exes = [(e, _destination_score(e)) for e in os_exes]
+                os_exes = [e for e, score in scored_exes if score > 0]
+            if not os_exes:
+                # No persona-approved executable for this service — don't
+                # relax past the allowlist (that would spawn forbidden tools
+                # like sqlcmd.exe for accountants). Return no owning process.
+                return -1
+            if destination_tags:
+                weights = [_destination_score(e) for e in os_exes]
+                target_exe = rng.choices(os_exes, weights=weights, k=1)[0]
+            else:
+                target_exe = rng.choice(os_exes)
+            image = resolve_image_path(target_exe, os_cat, username=user.username)
+            selected_singleton = is_singleton_application_image(image, os_cat)
 
         singleton_key = None
-        if is_singleton_application_image(image, os_cat):
+        if selected_singleton:
             singleton_key = self.activity_generator._singleton_application_key(
                 system,
                 user.username,
@@ -1275,24 +1344,40 @@ class WorldPlanner:
         # Build a realistic command line from the catalog template when
         # available, instead of emitting the bare executable name.
         command_line = target_exe
-        catalog = load_catalog()
-        for app in catalog.get("applications", []):
-            plat = app.get("platforms", {}).get(os_cat)
-            if not plat:
-                continue
-            plat_image = plat.get("image_path", "")
-            plat_exe = plat_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            if plat_exe == target_exe.lower() or plat_exe.replace(".exe", "") == target_exe.lower():
-                templates = plat.get("command_templates", [])
-                if templates:
-                    command_line = rng.choice(templates)
-                    command_line = self.activity_generator._parameterize_command_for_system(
-                        rng,
-                        command_line,
-                        username=user.username,
-                        system=system,
-                    )
-                break
+        if selected_platform is not None:
+            templates = selected_platform.get("command_templates", [])
+            if templates:
+                command_line = rng.choice(templates)
+                command_line = parameterize_scoped_command(rng, command_line, selected_platform)
+                command_line = self.activity_generator._parameterize_command_for_system(
+                    rng,
+                    command_line,
+                    username=user.username,
+                    system=system,
+                )
+        else:
+            catalog = load_catalog()
+            for app in catalog.get("applications", []):
+                plat = app.get("platforms", {}).get(os_cat)
+                if not plat:
+                    continue
+                plat_image = plat.get("image_path", "")
+                plat_exe = plat_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if (
+                    plat_exe == target_exe.lower()
+                    or plat_exe.replace(".exe", "") == target_exe.lower()
+                ):
+                    templates = plat.get("command_templates", [])
+                    if templates:
+                        command_line = rng.choice(templates)
+                        command_line = parameterize_scoped_command(rng, command_line, plat)
+                        command_line = self.activity_generator._parameterize_command_for_system(
+                            rng,
+                            command_line,
+                            username=user.username,
+                            system=system,
+                        )
+                    break
 
         # Backdate the process slightly, but never before the session started
         proc_time = time - timedelta(seconds=rng.uniform(0.5, 3.0))

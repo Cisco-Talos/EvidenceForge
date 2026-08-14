@@ -1,6 +1,9 @@
 # Customizing EvidenceForge Configuration
 
-EvidenceForge ships with 50+ YAML configuration files that control every aspect of realistic log generation — DNS domains, applications, personas, traffic profiles, spawn rules, and more. You can customize these to match your scenario's environment without modifying the installed package.
+EvidenceForge ships with 50+ YAML configuration files that control data-driven generation such as
+DNS domains, applications, personas, traffic profiles, and spawn rules. You can customize the
+project-safe families without modifying the installed package. Safety, evaluation, resource, OOB,
+and runtime policy remain engine-owned.
 
 Scenario 2.0 industry and organization packs are also data-driven configuration, but they are not
 ordinary `.eforge/config` overlays. Packs use stable public catalogs under `.eforge/packs`, are
@@ -8,9 +11,25 @@ selected explicitly by a scenario, and cannot override engine safety/evaluation/
 Use overlays for project-wide internal configuration tuning; use packs for versioned, composable
 scenario context. See [Scenario 2.0 and composable packs](SCENARIO_PACKS.md).
 
-## The Overlay System
+## Choose between a scenario, pack, and overlay
 
-EvidenceForge uses a **project-local overlay** at `.eforge/config/` in your working directory. Overlay files contain only your additions or changes — the engine merges them with package defaults at load time.
+| Need | Authoring layer |
+|---|---|
+| One exercise's users, systems, identities, time, storyline, or output | Scenario |
+| Reusable sector personas, applications, destinations, traffic, or storage vocabulary | Industry pack |
+| Reusable concrete organization environment and baseline | Organization pack |
+| Project-wide tuning of an existing internal config family | `.eforge/config` overlay |
+
+Packs have versioned public schemas and explicit Scenario 2.0 selection. Overlays use internal
+configuration filenames and implicitly affect every scenario compiled under that project root.
+Do not make a pack depend on an overlay-only ID: other users may select the pack without that
+project configuration. Use a pack catalog export or a stable packaged-only built-in ID instead.
+
+## The overlay system
+
+EvidenceForge uses a **project-local overlay** at `<project-root>/.eforge/config/`. Overlay files
+contain only your additions or changes; the compiler snapshots them into the immutable per-run
+effective configuration and merges them with package defaults through family-specific rules.
 
 ```
 your-project/
@@ -32,9 +51,16 @@ your-project/
 
 Your overlay is never touched by package upgrades. Run `eforge info overlay.exists` to check if you have one.
 
-**Important:** The overlay is discovered from the current working directory. Always run `eforge` commands from your project root (where `.eforge/config/` lives). Running from a subdirectory will miss the overlay and fall back to package defaults silently.
+Scenario `validate`, `resolve`, and `generate` choose the project root deterministically: explicit
+`--project-root`, otherwise the nearest ancestor of the root scenario containing `.eforge`,
+otherwise the root scenario's directory. They do not fall back to the shell's working directory.
+Pass an absolute `--project-root` in automation and chat-driven workflows.
 
-## Recommended: Use `/eforge:config`
+Standalone `eforge info` and `eforge validate-config` retain the ambient overlay compatibility
+workflow and inspect `.eforge/config` in the current working directory. Run those commands from
+the project root.
+
+## Recommended: use the matching skill
 
 The easiest way to customize configuration is through the Claude Code skill:
 
@@ -62,6 +88,11 @@ The skill automatically:
 
 **Tip:** Always use `/eforge:config` explicitly — the skill may not auto-trigger on short prompts like "add a persona."
 
+Use `/eforge:industry-pack` or `/eforge:organization-pack` instead when the data must be portable,
+versioned, and selected explicitly by Scenario 2.0. Use `/eforge:pack` for discovery, inspection,
+copying, versioning, and validation. In ChatGPT and Codex, the corresponding names are
+`eforge-industry-pack`, `eforge-organization-pack`, and `eforge-pack`.
+
 ## Inspecting Current Configuration
 
 The `eforge info` command shows what's configured, including overlay customizations:
@@ -85,6 +116,33 @@ eforge info --fields
 # Machine-readable output
 eforge info --json
 ```
+
+### Public pack inventories
+
+Pack schemas deliberately expose only stable packaged inventories, not whatever internal IDs an
+author happens to have in an overlay. Before authoring pack process or low-level traffic entries,
+inspect:
+
+```bash
+eforge info pack_builtin_application_ids
+eforge info pack_builtin_dns_tags
+```
+
+Each process-catalog entry's `data.builtins` list accepts IDs from the first inventory. Pack
+low-level outbound DNS selection accepts tags from the second inventory or tags defined by that
+pack. Overlay-only application IDs and DNS tags are not portable pack dependencies.
+
+When a Scenario 2.0 composition and project overlay are both present, the effective order is:
+
+1. Installed EvidenceForge defaults.
+2. Direct industry packs.
+3. The organization pack.
+4. Project `.eforge/config` overlays.
+5. Scenario-local model fields and authored overrides.
+
+Each public pack catalog and internal overlay family has an explicit adapter or merge rule. There
+is no universal recursive pack merge. Peer industry export collisions fail instead of depending on
+selection order.
 
 ## Manual Editing
 
@@ -259,6 +317,7 @@ For full field schemas and conventions, see the reference docs installed with th
 | Host activity (bash, systemd, syslog) | `/eforge:references:config-host-activity` |
 | Cross-file dependency map | `/eforge:references:config-dependency-graph` |
 | Validation checks | `/eforge:references:config-validation` |
+| Industry/organization pack fields and workflows | `/eforge:references:pack-reference` |
 
 ### IDS signature alert-policy overlays
 

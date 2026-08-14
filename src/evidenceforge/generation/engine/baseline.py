@@ -6627,7 +6627,12 @@ class BaselineMixin:
             else:
                 tags = ("background", os_cat)
             for _ in range(8):
-                if service == "ssl":
+                # Qualified pack tags identify an exact public destination
+                # export. Route those through the DNS registry directly;
+                # TLS profile selection is intentionally broad and would
+                # otherwise replace the authored destination family.
+                exact_pack_destination = bool(dns_tags) and any(":" in tag for tag in dns_tags)
+                if service == "ssl" and not exact_pack_destination:
                     from evidenceforge.generation.activity.tls_realism import pick_tls_destination
 
                     domain, ip = pick_tls_destination(
@@ -6908,6 +6913,7 @@ class BaselineMixin:
         active user sessions on this host.
         """
         from evidenceforge.generation.activity.traffic_profiles import (
+            get_pack_persona_traffic_groups,
             get_persona_connections,
             get_role_connections,
         )
@@ -7338,8 +7344,10 @@ class BaselineMixin:
             use_server_admin_persona = self._use_server_admin_persona(system, session)
             if use_server_admin_persona:
                 persona_conns = get_persona_connections("_server_admin", os_cat)
+                pack_persona_groups: list[dict[str, Any]] = []
             else:
                 persona_conns = get_persona_connections(persona, os_cat)
+                pack_persona_groups = get_pack_persona_traffic_groups(persona, os_cat)
             # Database hosts should not inherit generic server-admin package
             # update/dashboard browsing. Keep admin sessions focused on
             # database-adjacent control-plane activity.
@@ -7351,7 +7359,7 @@ class BaselineMixin:
                         conn.get("role") == "_external" and conn.get("service") in {"http", "ssl"}
                     )
                 ]
-            if not persona_conns:
+            if not persona_conns and not pack_persona_groups:
                 continue
             p_weights = [c.get("weight", 1) for c in persona_conns]
             # Fewer persona connections than role connections; scaled by intensity
@@ -7363,7 +7371,7 @@ class BaselineMixin:
                 _pc_hi,
                 persona=persona,
             )
-            num_persona = rng.randint(_pc_lo, _pc_hi) if is_business else 0
+            num_persona = rng.randint(_pc_lo, _pc_hi) if is_business and persona_conns else 0
             # Clamp timestamps to session lifetime within this hour
             session_start_sec = max(0.0, (session.start_time - current_hour).total_seconds())
             session_deadline = _session_activity_deadline(session, current_hour, planned_logoffs)
@@ -7502,6 +7510,299 @@ class BaselineMixin:
                         pid=persona_pid,
                     )
 
+            if pack_persona_groups and user_obj is not None:
+                self._generate_pack_persona_traffic(
+                    current_hour=current_hour,
+                    system=system,
+                    user_obj=user_obj,
+                    groups=pack_persona_groups,
+                    os_cat=os_cat,
+                    count_range=(_pc_lo, _pc_hi),
+                    planned_logoffs=planned_logoffs,
+                    use_server_admin_persona=use_server_admin_persona,
+                )
+
+    def _claim_hourly_pack_traffic_groups(
+        self,
+        *,
+        current_hour: datetime,
+        system: Any,
+        user_obj: Any,
+        groups: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Claim each user/host/group schedule once, independent of active session count."""
+
+        hour_key = ensure_utc(current_hour).isoformat()
+        state = getattr(self, "_pack_traffic_hour_claims", None)
+        if state is None or state[0] != hour_key:
+            state = (hour_key, set())
+            self._pack_traffic_hour_claims = state
+        claims: set[tuple[str, str, str]] = state[1]
+        unclaimed: list[dict[str, Any]] = []
+        for group in groups:
+            claim = (system.hostname, user_obj.username, str(group["id"]))
+            if claim in claims:
+                continue
+            claims.add(claim)
+            unclaimed.append(group)
+        return unclaimed
+
+    def _generate_pack_persona_traffic(
+        self,
+        *,
+        current_hour: datetime,
+        system: Any,
+        user_obj: Any,
+        groups: list[dict[str, Any]],
+        os_cat: str,
+        count_range: tuple[int, int],
+        planned_logoffs: dict[tuple[str, str], float] | None,
+        use_server_admin_persona: bool,
+    ) -> None:
+        """Generate cadence-aware, exact application/destination pack traffic."""
+
+        from evidenceforge.generation.activity.pack_traffic import (
+            cadence_allows_event_time,
+            scheduled_pack_event_times,
+        )
+
+        groups = self._claim_hourly_pack_traffic_groups(
+            current_hour=current_hour,
+            system=system,
+            user_obj=user_obj,
+            groups=groups,
+        )
+        if not groups:
+            return
+        schedule_seed = (
+            f"pack_traffic:{self.scenario.name}:{system.hostname}:"
+            f"{user_obj.username}:{current_hour.isoformat()}"
+        )
+        allocation_rng = random.Random(_stable_seed(f"{schedule_seed}:allocation"))
+        weighted_groups = [
+            group
+            for group in groups
+            if str((group.get("cadence") or {}).get("pattern", "weighted")) == "weighted"
+        ]
+        allocations: dict[str, int] = {str(group["id"]): 0 for group in weighted_groups}
+        if weighted_groups:
+            lo, hi = count_range
+            weighted_count = allocation_rng.randint(lo, hi)
+            group_weights = [
+                max(1, sum(int(item.get("weight", 1)) for item in group["outbound"]))
+                for group in weighted_groups
+            ]
+            for selected in allocation_rng.choices(
+                weighted_groups,
+                weights=group_weights,
+                k=weighted_count,
+            ):
+                allocations[str(selected["id"])] += 1
+
+        scheduled: list[tuple[datetime, dict[str, Any], dict[str, Any]]] = []
+        for group in groups:
+            group_id = str(group["id"])
+            group_rng = random.Random(_stable_seed(f"{schedule_seed}:{group_id}"))
+            cadence = group.get("cadence")
+            pattern = str((cadence or {}).get("pattern", "weighted"))
+            event_times = scheduled_pack_event_times(
+                cadence=cadence,
+                scenario_start=self.start_time or current_hour,
+                current_hour=current_hour,
+                zone=getattr(self, "_scenario_tz", UTC),
+                schedule_key=(
+                    f"{self.scenario.name}:{system.hostname}:{user_obj.username}:{group_id}"
+                ),
+                weighted_count=allocations.get(group_id, 0) if pattern == "weighted" else 0,
+                rng=group_rng,
+            )
+            connections = group["outbound"]
+            weights = [int(connection.get("weight", 1)) for connection in connections]
+            for event_time in event_times:
+                connection = group_rng.choices(connections, weights=weights, k=1)[0]
+                scheduled.append((event_time, group, connection))
+
+        # Periodic and burst groups are additive, but remain bounded by the
+        # existing persona-traffic workload scale for this host and hour.
+        _lo, hi = count_range
+        hourly_cap = max(1, hi * 2)
+        scheduled.sort(key=lambda item: (item[0], str(item[1]["id"])))
+        for event_time, group, conn in scheduled[:hourly_cap]:
+            active_sessions = [
+                candidate
+                for candidate in self.state_manager.get_sessions_on_system(system.hostname)
+                if candidate.username == user_obj.username
+                and candidate.logon_type in (2, 10, 11)
+                and _session_active_at(
+                    candidate,
+                    event_time,
+                    current_hour,
+                    planned_logoffs,
+                )
+            ]
+            if not active_sessions:
+                continue
+            session = max(
+                active_sessions,
+                key=lambda candidate: (
+                    ensure_utc(candidate.start_time),
+                    str(candidate.logon_id),
+                ),
+            )
+            dst_ip, hostname = self._resolve_role(
+                conn["role"],
+                system.ip,
+                allocation_rng,
+                os_cat=os_cat,
+                dns_tags=conn.get("dns_tags"),
+                src_host=system.hostname,
+                service=conn.get("service", ""),
+                source_system_type=getattr(system, "type", None),
+                source_user=user_obj,
+            )
+            if not dst_ip:
+                continue
+            if conn["port"] in _BASELINE_GUARDED_SUCCESS_PORTS:
+                target_system = getattr(self.activity_generator, "_ip_to_system", {}).get(dst_ip)
+                guarded_target = _baseline_success_target_for_guarded_port(
+                    self.scenario.environment.systems,
+                    system,
+                    target_system,
+                    conn["port"],
+                    allocation_rng,
+                )
+                if guarded_target is None:
+                    continue
+                if guarded_target is not target_system:
+                    dst_ip = guarded_target.ip
+                    hostname = self.world_model.fqdn_for_system(guarded_target)
+
+            event_time = self._pace_interactive_startup_activity(
+                session=session,
+                system=system,
+                user=user_obj,
+                candidate_time=event_time,
+                activity_key=f"pack:{group['id']}:{hostname or conn['role']}",
+                current_hour=current_hour,
+                planned_logoffs=planned_logoffs,
+            )
+            if event_time is None or not _session_active_at(
+                session, event_time, current_hour, planned_logoffs
+            ):
+                continue
+            if not cadence_allows_event_time(
+                group.get("cadence"),
+                event_time,
+                getattr(self, "_scenario_tz", UTC),
+            ):
+                # Startup pacing may move an otherwise valid scheduled event.
+                # Never emit it after the authored local cadence window closes.
+                continue
+            if not self._package_maintenance_connection_allowed(system, hostname, event_time):
+                continue
+
+            is_application_connection = bool(conn.get("pack_application"))
+            process_pid = -1
+            if is_application_connection:
+                effective_persona = "_server_admin" if use_server_admin_persona else None
+                process_pid = self.world_planner.ensure_connection_process(
+                    user=user_obj,
+                    system=system,
+                    session=session,
+                    time=event_time,
+                    service=conn.get("service", ""),
+                    rng=allocation_rng,
+                    effective_persona=effective_persona,
+                    destination_hostname=hostname,
+                    application_ids=conn.get("application_ids"),
+                )
+                if process_pid < 0:
+                    # An application binding promises process attribution from its
+                    # exact public process graph. Do not let a downstream browser
+                    # bundle substitute an unrelated ambient process when the
+                    # bound process cannot be made active in this session.
+                    continue
+            self.state_manager.set_current_time(event_time)
+            service = conn.get("service", "")
+            is_server_source = self._is_server_admin_persona_source(system)
+            exact_browser_process = False
+            selected_process = None
+            if is_application_connection:
+                from evidenceforge.generation.activity.application_catalog import (
+                    is_browser_application_process,
+                )
+
+                selected_process = self.state_manager.get_process(system.hostname, process_pid)
+                exact_browser_process = selected_process is not None and (
+                    is_browser_application_process(
+                        conn.get("application_ids") or [],
+                        os_cat,
+                        selected_process.image,
+                    )
+                )
+            if (
+                is_application_connection
+                and service in ("ssl", "http")
+                and hostname
+                and not is_server_source
+                and exact_browser_process
+            ):
+                user_agent_override: str | None = None
+                if conn.get("pack_application"):
+                    from evidenceforge.generation.activity.proxy_user_agents import (
+                        browser_user_agent_for_process,
+                    )
+
+                    if selected_process is not None:
+                        ua_rng = random.Random(
+                            _stable_seed(
+                                "pack_application_user_agent:"
+                                f"{system.hostname}:{selected_process.image.lower()}"
+                            )
+                        )
+                        user_agent_override = browser_user_agent_for_process(
+                            ua_rng,
+                            system,
+                            selected_process.image,
+                            hostname=hostname,
+                            domain_tags=list(conn.get("dns_tags") or []),
+                        )
+                    else:
+                        user_agent_override = ""
+                self._emit_browsing_session(
+                    system=system,
+                    user_obj=user_obj,
+                    session=session,
+                    hostname=hostname,
+                    dst_ip=dst_ip,
+                    conn=conn,
+                    base_ts=event_time,
+                    persona_pid=process_pid,
+                    os_cat=os_cat,
+                    rng=allocation_rng,
+                    latest_request_time=_session_activity_deadline(
+                        session, current_hour, planned_logoffs
+                    ),
+                    user_agent_override=user_agent_override,
+                )
+            else:
+                self.activity_generator.generate_connection(
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    time=event_time,
+                    dst_port=conn["port"],
+                    proto=conn.get("proto", "tcp"),
+                    service=conn.get("service"),
+                    duration=allocation_rng.uniform(0.1, 10.0),
+                    orig_bytes=allocation_rng.randint(200, 8000),
+                    resp_bytes=allocation_rng.randint(500, 80000),
+                    emit_dns=conn.get("emit_dns", False),
+                    source_system=system,
+                    hostname=hostname,
+                    pid=process_pid,
+                    suppress_source_pid_inference=not is_application_connection,
+                )
+
     def _emit_browsing_session(
         self,
         system: Any,
@@ -7515,6 +7816,7 @@ class BaselineMixin:
         os_cat: str,
         rng: Any,
         latest_request_time: datetime | None = None,
+        user_agent_override: str | None = None,
     ) -> None:
         """Generate a multi-request browsing session for an HTTP/HTTPS persona connection.
 
@@ -7555,14 +7857,16 @@ class BaselineMixin:
                     intensity = getattr(p, "browsing_intensity", "normal")
                     break
 
-        session_ua = self._source_sticky_browser_user_agent(
-            source_system=system,
-            src_ip=system.ip,
-            os_cat=os_cat,
-            rng=rng,
-            hostname=hostname,
-            domain_tags=tuple(domain_tags),
-        )
+        session_ua = user_agent_override
+        if session_ua is None:
+            session_ua = self._source_sticky_browser_user_agent(
+                source_system=system,
+                src_ip=system.ip,
+                os_cat=os_cat,
+                rng=rng,
+                hostname=hostname,
+                domain_tags=tuple(domain_tags),
+            )
 
         BrowserSessionActionBundle(
             request=BrowserSessionRequest(

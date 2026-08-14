@@ -880,7 +880,12 @@ class NetworkTransactionPlanner:
         if kerberos_dc_hostname and src_port is not None and src_port > 0:
             executor._reserve_kerberos_source_port(src_ip, kerberos_dc_hostname, time, src_port)
 
-        if service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
+        if (
+            service == "dns"
+            and proto in ("udp", "tcp")
+            and dst_port == 53
+            and not suppress_source_pid_inference
+        ):
             dns_pid = executor._infer_connection_pid(
                 resolved_source_system, service, dst_port, proto
             )

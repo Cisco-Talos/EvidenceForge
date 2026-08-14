@@ -26,3 +26,10 @@ def test_system_roles_include_author_facing_topology_and_activity_roles():
         "workstation",
     } <= roles
     assert "_default" not in roles
+
+
+def test_pack_builtin_inventories_are_packaged_only_and_stable():
+    info = gather_info()
+
+    assert {"chrome", "excel", "acrobat"} <= set(info["pack_builtin_application_ids"])
+    assert {"web", "saas", "storage"} <= set(info["pack_builtin_dns_tags"])

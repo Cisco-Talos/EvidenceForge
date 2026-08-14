@@ -19,7 +19,10 @@ output/
   OBSERVATION_MANIFEST.json                # Source-observation manifest for eval
   ARTIFACTS_MANIFEST.json                  # Generated artifact manifest, when artifacts exist
   COLLECTION_PROFILE.json                 # Blind-safe collection/export semantics
+  STORAGE_MANIFEST.json                    # Compiled SMB storage model, when storage is configured
   OUTPUT_TARGET.txt                        # "default", "sof-elk", or "splunk"; missing legacy marker means default
+  RESOLVED_SCENARIO.yaml                   # Authoritative self-contained generation input
+  GENERATION_MANIFEST.json                 # Run identity and hashes; written last
   ENVIRONMENT.md                           # Optional student-facing environment description
   artifacts/
     email/
@@ -60,8 +63,8 @@ formats. Scenario YAML and `--formats` remain canonical: request
 on, then choose the target at generation time.
 When `OUTPUT_TARGET.txt` is missing, `eforge eval` treats the dataset as
 legacy/default output.
-For practical ingestion and validation guidance by target, see
-[Output Target Ingest Guides](../output-targets/README.md).
+For practical ingestion and validation guidance by target, see the
+[Output Target Ingest Guides](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/output-targets/README.md).
 
 `COLLECTION_PROFILE.json` at the output root is a blind-safe source collection
 sidecar. It records the primary collection window, selected observation profile,
@@ -251,7 +254,6 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 **Known Limitations:**
 - Native Zeek `kerberos.log` and `ntlm.log` authentication projections are deferred; SMB authentication still has eligible Windows/eCAR evidence
 - Encrypted SMB share operations are intentionally opaque to `smb_files.log` and `files.log`; eligible endpoint evidence is independent
-- No SMTP log — email traffic appears in conn.log only
 - http.log only for port 80; HTTPS content is not decrypted (as expected)
 - `missed_bytes` is probabilistic (~3% of long TCP connections) rather than from actual packet capture
 - All timestamps use 6-digit microsecond precision
