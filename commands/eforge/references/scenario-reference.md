@@ -6,6 +6,16 @@ description: "Scenario Schema Reference"
 
 This document describes the EvidenceForge scenario file schema, including Phase 2.4 enhanced fields.
 
+## Contents
+
+- [Overview](#overview), [top-level structure](#top-level-structure), and [includes](#includes)
+- [Seed and workload](#deterministic-seed-and-workload-envelope)
+- [Environment](#environment), including identity, systems, SMB, proxy, email, and sensors
+- [Personas](#personas), [time window](#time-window), and [baseline activity](#baseline-activity)
+- [Observation profile](#observation-profile)
+- [Storyline and typed events](#storyline)
+- [Output](#output) and [backward compatibility](#backward-compatibility)
+
 ## Overview
 
 Scenario files are YAML documents that define the environment, users, systems, personas, and storyline for log generation. All fields marked "Phase 2.4+" are optional and backward compatible with Phase 1 scenarios.
@@ -140,7 +150,7 @@ the scenario value for one run:
 uv run eforge generate scenario.yaml --seed 8675309 -o output
 ```
 
-The effective seed is recorded in `collection_profile.json`. Use explicit seed matrices instead
+The effective seed is recorded in `COLLECTION_PROFILE.json`. Use explicit seed matrices instead
 of changing the scenario name or unrelated content to obtain independent deterministic runs.
 
 Before validation or generation allocates the workload, EvidenceForge estimates the primary
@@ -197,7 +207,8 @@ Stale accounts generate multiple types of background evidence: failed network lo
 
 ### Timezone Configuration
 
-All internal timestamps are stored in UTC. The timezone configuration controls output formatting.
+Generated evidence timestamps are emitted in UTC. The timezone configuration controls local
+business-hour and activity scheduling plus evaluator context; it does not localize emitted logs.
 
 - **default**: Applied to all systems unless overridden (default: `"UTC"`)
 - **systems**: Pattern-based overrides using fnmatch glob syntax (`*`, `?`, `[seq]`)
@@ -905,12 +916,12 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 
 | Type | Generates | Required Fields | Optional Fields |
 |------|-----------|-----------------|-----------------|
-| `process` | 4688, Sysmon 1, eCAR PROCESS | `process_name` | `command_line`, `supplementary` (auto/none) |
+| `process` | 4688, Sysmon 1, eCAR PROCESS | `process_name` | `command_line`, `process_ref`, `parent_ref`, `supplementary` (auto/none) |
 | `logon` | 4624, target-host 4672 for elevated sessions, eCAR LOGIN | | `logon_type` (default 3), `source_ip` |
-| `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
+| `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3), `target_username` |
 | `logoff` | 4634, eCAR LOGOUT | | |
-| `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http/files when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname`, `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent`, `request_body_len`, `request_multipart`, `response_body_len`, `response_multipart`, `ids_alerts` |
-| `smb_activity` | SMB transport/auth/session/tree/file lifecycle; Zeek SMB/files, Windows audit, eCAR | operation-specific share/client location | `purpose`, `batch`, `outcome`, `path_style`, `mapping`, external `client` |
+| `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http/files when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname`, `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent`, `referrer`, `request_body_len`, `request_multipart`, `response_body_len`, `response_multipart`, `orig_bytes`, `resp_bytes`, `conn_state`, `ids_alerts` |
+| `smb_activity` | SMB transport/auth/session/tree/file lifecycle; Zeek SMB/files, Windows audit, eCAR | `operation` plus its share/client location shape | `purpose`, `batch`, `outcome`, `path_style`, `mapping`, external `client`, `ids_alerts` |
 | `ssh_session` | canonical SSH connection (Zeek conn) + syslog sshd + EDR/eCAR | | `source_ip`, `ids_alerts` |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip`, `ids_alerts` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
@@ -920,6 +931,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `scheduled_task_created` | 4698 | `task_name` | `task_content` |
 | `log_cleared` | 1102 | | |
 | `create_remote_thread` | Sysmon 8, eCAR THREAD/REMOTE_CREATE | `target_process` | |
+| `process_access` | Sysmon 10, eCAR PROCESS/OPEN | | `target_process` (default `lsass.exe`), `access_mask` (default `0x1010`) |
 | `dhcp_lease` | Zeek dhcp.log | | `mac_address`, `requested_ip`, `ids_alerts` |
 | `port_scan` | ASA 106023 (bulk denies) | `target_ips` or `target_segment` | `source_ip`, `target_count`, `ports`, `protocol`, `scan_rate`, `ids_alerts` |
 | `beacon` | Zeek conn/proxy/ASA/Snort (periodic connections) | `dst_ip`, `interval`, one of `end_time`/`duration`/`count` | `action` (allow/deny), `hostname`, `service`, `protocol`, `source_ip`, `method`, `uri`, `user_agent`, `referrer`, `status_code`, `orig_bytes`, `resp_bytes`, `profile`, `http_sequence`, `ids_alerts`, `jitter` (default: 0.15) |
@@ -934,7 +946,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `workstation_lock` | Windows 4800 (workstation locked) | | |
 | `workstation_unlock` | Windows 4624 type 7 re-auth followed by 4801 unlock | | |
 | `spillage` | Synthetic credential leaked into a semantic surface (`shell_history` → bash history; `process_command_line` → process/EDR telemetry; `syslog_message` → syslog; `http_request_url`/`http_referrer` → a web server's `web_access` log), per-event varied, + canonical `GROUND_TRUTH.json` tracking (emitted or explicitly skipped) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `http_*` surfaces need a compatible `web_server`-role host |
-| `adversarial_payload` | Known log-pipeline weakness payload (ANSI escape, CRLF log-forging, CSV formula, Log4Shell/JNDI, reflected XSS, SQL injection, structured-log/JSON injection, oversized field; each family ships a canonical form plus seed-picked evasion variants) injected into a semantic surface (`syslog_message`, `process_command_line`, `http_user_agent`, `http_request_url`, `http_referrer`, `dns_qname`, `auth_user`), per-surface encoded, + canonical `GROUND_TRUTH.json` tracking (`kind: adversarial_payload`, incl. `ids_alert` for signature-mapped cleartext-http families). See [adversarial_payload.md](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/reference/adversarial_payload.md) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `syslog_message` and `auth_user` are Linux-only; `dns_qname` needs a network sensor emitting Zeek; `http_*` surfaces need a compatible `web_server`-role host; an optional generation-time live-callback (OOB) mode (`generate`/`validate --oob-host`, opt-in) can replace the inert default canary — by default payloads use the non-resolving canary `canary.eforge.invalid` and are never executed, see [adversarial_payload.md](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/reference/adversarial_payload.md) |
+| `adversarial_payload` | Known log-pipeline weakness payload (ANSI escape, CRLF log-forging, CSV formula, Log4Shell/JNDI, reflected XSS, SQL injection, structured-log/JSON injection, oversized field; each family ships a canonical form plus seed-picked evasion variants) injected into a semantic surface (`syslog_message`, `process_command_line`, `http_user_agent`, `http_request_url`, `http_referrer`, `dns_qname`, `auth_user`), per-surface encoded, + canonical `GROUND_TRUTH.json` tracking (`kind: adversarial_payload`, incl. `ids_alert` for signature-mapped cleartext-http families). See [adversarial_payload.md](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/reference/adversarial_payload.md) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `syslog_message` and `auth_user` are Linux-only; `dns_qname` needs a network sensor emitting Zeek; `http_*` surfaces need a compatible `web_server`-role host; optional live-callback mode requires a fresh matching `--oob-host` on each `resolve`, `validate`, or `generate` invocation — by default payloads use the non-resolving canary `canary.eforge.invalid` and are never executed, see [adversarial_payload.md](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/reference/adversarial_payload.md) |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event. The generator routes process create/terminate lifecycle and process-owned endpoint side effects through an internal process-execution bundle; scenario authors still describe normal `process` events and do not model the bundle directly.
@@ -1075,7 +1087,7 @@ Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attack
 
 ```yaml
 - time: "+5m"
-  actor: attacker
+  actor: root
   system: ROGUE-LAPTOP
   activity: "Rogue device obtains IP via DHCP"
   events:
@@ -1093,7 +1105,7 @@ Use `port_scan` for network reconnaissance, host sweeps, lateral scans, or worm-
 
 ```yaml
 - time: "+1h"
-  actor: attacker
+  actor: www-data
   system: WEB-EXT-01
   activity: "Port scan of server VLAN from compromised DMZ host"
   events:
@@ -1117,7 +1129,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
 ```yaml
 # Allowed beacon through proxy
 - time: "+3h"
-  actor: attacker
+  actor: marcus.chen
   system: workstation01
   activity: "C2 beacon to attacker infrastructure"
   events:
@@ -1134,7 +1146,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
 
 # Explicit per-beat HTTP variation
 - time: "+3h30m"
-  actor: attacker
+  actor: marcus.chen
   system: workstation01
   activity: "C2 beacon with rotating tasking paths"
   events:
@@ -1153,7 +1165,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
 
 # Denied beacon (equivalent to former blocked_c2)
 - time: "+5h"
-  actor: attacker
+  actor: SYSTEM
   system: DC-01
   activity: "Blocked C2 beaconing — firewall denies outbound from DC"
   events:
@@ -1390,7 +1402,7 @@ For web-based attack steps (SQL injection, web shell access, etc.), use `connect
 
 ```yaml
 - time: "+1h10m"
-  actor: attacker
+  actor: www-data
   system: WEB-01
   activity: "SQL injection probe against EHR portal"
   events:
@@ -1479,7 +1491,7 @@ The `raw` event type targets a specific output format with arbitrary field data.
 
 ```yaml
 - time: "+2h"
-  actor: attacker
+  actor: www-data
   system: WEB-01
   activity: "Custom syslog entry"
   events:
@@ -1496,27 +1508,14 @@ The `raw` event type targets a specific output format with arbitrary field data.
 
 `target_format` must be a supported format name (e.g., `syslog`, `windows_event_security`, `ecar`, `zeek_conn`). The `fields` dict is passed directly to the target emitter without schema validation — ensure field names match the format's expected structure. The event's timestamp is automatically injected if not provided in `fields`.
 
-### Correlated Events for Process Commands
+### Causal Expansion and Process Commands
 
-When a `process` event declares a command that would produce additional audit events in a real environment, those correlated events should be explicitly declared in the same step's `events` list. This ensures complete, realistic log output regardless of what command is being run.
+Author the primary real-world typed intent. Action bundles and causal expansion own ordinary DNS,
+transport, authentication, session, audit, source fan-out, and lifecycle companions. Do not add
+renderer-shaped rows or manually recreate those siblings.
 
-The table below shows common categories of commands and the correlated event types to declare alongside the `process` event:
-
-| Command Category | Example Commands | Correlated Event Type |
-|-----------------|------------------|----------------------|
-| Account creation | `net user /add`, `useradd`, `New-ADUser`, `dsadd user` | `account_created` |
-| Account deletion | `net user /delete`, `userdel`, `Remove-ADUser` | `account_deleted` |
-| Group membership changes | `net group /add`, `net localgroup /add`, `Add-ADGroupMember`, `usermod -aG` | `group_member_added` |
-| Service creation | `sc create`, `New-Service`, `systemctl enable` | `service_installed` |
-| Scheduled task creation | `schtasks /Create`, `at`, `crontab -e`, `Register-ScheduledTask` | `scheduled_task_created` |
-| Log clearing | `wevtutil cl`, `Clear-EventLog`, `rm /var/log/*` | `log_cleared` |
-| Process injection | mimikatz `sekurlsa::`, reflective DLL injection, process hollowing | `create_remote_thread` |
-
-This is not an exhaustive list -- any command that would produce a distinct audit trail should have its correlated events declared explicitly.
-
-#### Engine Safety Net
-
-The engine automatically infers correlated events for 6 common Windows command patterns when `supplementary: auto` (the default) is set on a process event:
+For a Windows `process`, `supplementary: auto` (the default) recognizes six common command
+families and emits their audit companion:
 
 | Command Pattern | Auto-Inferred Event |
 |----------------|---------------------|
@@ -1527,72 +1526,25 @@ The engine automatically infers correlated events for 6 common Windows command p
 | `sc create <name> binPath=` | 4697 (service installed) |
 | `wevtutil cl Security` | 1102 (log cleared) |
 
-This safety net catches common cases, but should not be relied upon as the primary mechanism -- always declare correlated events explicitly. If the same event type is already in the `events` list, auto-inference skips it (no duplicates). Set `supplementary: none` to disable auto-inference entirely.
+Do not duplicate an inferred companion. Add an explicit typed sibling only when that action is
+independently part of the narrative or exact authored fields are required; use
+`supplementary: none` when the explicit declaration should be the sole owner. Specialized
+`process_access` and `create_remote_thread` events remain appropriate when process access or
+injection is itself the narrative.
 
-### Best Practices
+Cross-system Kerberos, DNS, transport, and session evidence is also bundle-owned for typed logon,
+connection, SSH, and RDP intent. Author a separate event only for a separate real-world action.
 
-1. **Always declare the primary action explicitly** -- don't rely on inference for the main event
-2. **Declare correlated events for process commands** -- if a command creates an account, installs a service, clears logs, etc., add the corresponding event type to the `events` list
-3. **Explicitly declare cross-system events** -- inference cannot generate events on other systems (e.g., DC Kerberos for domain logon, RDP logon on target)
-4. **Explicitly declare events when field precision matters** -- auto-inference uses deterministic identity-directory values; declare typed account/identity events when a specific target, group, SID, UID, or account relationship matters to the exercise
-5. **Use explicit events for specialized detection types** -- CreateRemoteThread, LSASS access; inference doesn't detect these patterns
-
-### Examples
-
-**Password spray + lateral movement:**
-```yaml
-- time: "+30m"
-  actor: attacker
-  system: WS-01
-  activity: "Password spray against domain accounts"
-  events:
-    - type: failed_logon
-      source_ip: "185.220.101.34"
-    - type: failed_logon
-      source_ip: "185.220.101.34"
-    - type: logon
-      source_ip: "185.220.101.34"
-      logon_type: 3
-```
-
-**Process with explicit correlated events:**
 ```yaml
 - time: "+1h"
-  actor: attacker
+  actor: marcus.chen
   system: DC-01
-  activity: "Create backdoor domain account"
+  activity: "Create a domain service account"
   events:
     - type: process
       process_name: "C:\\Windows\\System32\\net.exe"
       command_line: "net user svc-audit P@ss! /add /domain"
-    - type: account_created
-      target_username: "svc-audit"
-```
-
-**Service persistence with correlated audit event:**
-```yaml
-- time: "+1h15m"
-  actor: attacker
-  system: WEB-01
-  activity: "Install malicious service for persistence"
-  events:
-    - type: process
-      process_name: "C:\\Windows\\System32\\sc.exe"
-      command_line: "sc create evilsvc binPath= C:\\Windows\\Temp\\payload.exe start= auto"
-    - type: service_installed
-      service_name: "evilsvc"
-      service_file_name: "C:\\Windows\\Temp\\payload.exe"
-```
-
-**Explicit cross-system events:**
-```yaml
-- time: "+1h30m"
-  actor: attacker
-  system: WEB-01
-  activity: "SSH lateral movement to web server"
-  events:
-    - type: ssh_session
-      source_ip: "10.20.10.13"
+      supplementary: auto
 ```
 
 ## Output
@@ -1615,7 +1567,7 @@ Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR recor
 
 Output formats here are canonical and target-neutral. Choose target-specific
 file shapes, such as SOF-ELK® Snare Windows events or year-partitioned RFC3164
-syslog, with `eforge generate --target default|sof-elk`; do not encode a parser
+syslog, with `eforge generate --target default|sof-elk|splunk`; do not encode a parser
 target in scenario YAML.
 
 `proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear. Current proxy behavior assumes TLS interception, so HTTPS can include CONNECT plus inspected request rows; non-intercepting tunnel-only proxy behavior is deferred.

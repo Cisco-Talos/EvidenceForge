@@ -6,7 +6,7 @@
 # Depended on by: generation engine (MAC address generation)
 # Depends on: nothing — standalone
 #
-# Full schema: see commands/eforge/references/config-network-params.md
+# Authoring reference: commands/eforge/references/config-dns-network.md
 
 oui_prefixes:
   - prefix: "D4:BE:D9"

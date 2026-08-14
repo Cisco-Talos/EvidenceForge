@@ -10,7 +10,7 @@
 #                 site_maps.yaml (domain keys)
 # Depends on: nothing — this is the root data source
 #
-# Full schema: see commands/eforge/references/config-dns-registry.md
+# Authoring reference: commands/eforge/references/config-dns-network.md
 
 # Valid tags for domain classification. The validator checks domains
 # against this list. Add custom tags here or via overlay.

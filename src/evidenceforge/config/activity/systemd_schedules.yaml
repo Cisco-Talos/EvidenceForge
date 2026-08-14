@@ -34,7 +34,7 @@
 # Depended on by: generation engine (periodic syslog events on Linux)
 # Depends on: nothing — standalone (distro/role filters are soft matches)
 #
-# Full schema: see commands/eforge/references/config-systemd-schedules.md
+# Authoring reference: commands/eforge/references/config-host-activity.md
 
 schedules:
   # === Systemd timers ===

@@ -8,7 +8,7 @@
 # parent: values (services, svchost_netsvcs, etc.) are symbolic names
 # resolved at generation time.
 #
-# Full schema: see commands/eforge/references/config-system-processes.md
+# Authoring reference: commands/eforge/references/config-apps-processes.md
 
 scheduled_tasks:
   - image: "C:\\Windows\\System32\\svchost.exe"

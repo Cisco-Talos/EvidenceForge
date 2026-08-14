@@ -1,12 +1,12 @@
-# IDS Signature Configuration
+# IDS signature overlays
 
 ## File and overlay
 
 Package defaults live in `activity/ids_signatures.yaml`. Project changes belong
 in `.eforge/config/activity/ids_signatures.yaml`. Entries merge by `sid`, so an
 overlay can add a signature or replace selected fields, including its default
-alert policy. Reset/reload config state (or start a new CLI process) after edits,
-then run `eforge validate-config`.
+alert policy. Start a new CLI process after edits, then run
+`eforge validate-config --project-root <root> --json`.
 
 ```yaml
 signatures:
@@ -67,3 +67,15 @@ above 2,147,483,647. `eforge validate <scenario>` rejects unknown or duplicate
 attachment SIDs and conflicting effective policies for one SID. Protocol, port,
 and direction mismatches are advisory warnings because nonstandard deployments
 can be intentional.
+
+Alert cadence, attachment, and inspection visibility are semantic choices. Do not add or change them
+merely to remove a warning; ask when the user did not specify the intended policy. A project overlay
+cannot authorize decryption, OOB behavior, or evaluator-policy changes.
+
+## `snort_classifications.yaml`
+
+The `classifications` mapping resolves a signature's classtype identifier to the source-native Snort
+display description. Supplying this root replaces the entire packaged mapping, so copy every
+classification before changing one description. It does not add alert logic or attach a signature
+to traffic. Keep identifiers aligned with `ids_signatures.yaml`, and do not rename a classtype merely
+to change presentation text.

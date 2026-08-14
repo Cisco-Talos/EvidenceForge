@@ -24,6 +24,7 @@
 
 import importlib.resources
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -45,20 +46,24 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/config-apps-processes.md",
         "references/config-dependency-graph.md",
         "references/config-dns-network.md",
-        "references/config-evaluation.md",
-        "references/config-formats.md",
         "references/config-host-activity.md",
         "references/config-ids.md",
         "references/config-personas.md",
         "references/config-validation.md",
     ),
     "evaluate": (
-        "references/evidence-formats.md",
-        "references/scenario-reference.md",
+        "references/evidence-endpoint-linux.md",
+        "references/evidence-network-ids.md",
+        "references/evidence-web-email.md",
+        "references/evidence-windows.md",
+        "references/generation-bundle-targets.md",
     ),
     "generate": (
-        "references/evidence-formats.md",
-        "references/scenario-reference.md",
+        "references/evidence-endpoint-linux.md",
+        "references/evidence-network-ids.md",
+        "references/evidence-web-email.md",
+        "references/evidence-windows.md",
+        "references/generation-bundle-targets.md",
     ),
     "industry-pack": (
         "references/pack-reference.md",
@@ -70,23 +75,30 @@ _CHATGPT_REFERENCES_BY_SKILL = {
     ),
     "pack": ("references/pack-reference.md",),
     "scenario": (
-        "references/evidence-formats.md",
-        "references/pack-reference.md",
-        "references/scenario-authoring.md",
-        "references/scenario-reference.md",
+        "references/evidence-endpoint-linux.md",
+        "references/evidence-network-ids.md",
+        "references/evidence-web-email.md",
+        "references/evidence-windows.md",
+        "references/generation-bundle-targets.md",
+        "references/scenario-briefing.md",
+        "references/scenario-core.md",
+        "references/scenario-email.md",
+        "references/scenario-environment.md",
+        "references/scenario-http.md",
+        "references/scenario-pack-consumption.md",
+        "references/scenario-payloads.md",
+        "references/scenario-smb.md",
+        "references/scenario-storyline.md",
     ),
     "validate": (
-        "references/pack-reference.md",
-        "references/scenario-reference.md",
+        "references/validation-safety.md",
+        "references/validation-storage.md",
     ),
 }
 
-_CHATGPT_REFERENCE_REWRITES = {
-    "/eforge:references:pack-reference": "`references/pack-reference.md`",
-    "/eforge:references:scenario-authoring": "`references/scenario-authoring.md`",
-    "/eforge:references:scenario-reference": "`references/scenario-reference.md`",
-    "/eforge:references:evidence-formats": "`references/evidence-formats.md`",
-}
+_CHATGPT_REFERENCE_INVOCATION = re.compile(
+    r"`?/eforge:references:(?P<name>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)`?"
+)
 
 _CHATGPT_COMMAND_REWRITES = {
     "/eforge industry-pack": "the `eforge-industry-pack` skill",
@@ -387,10 +399,10 @@ def _rewrite_chatgpt_content(content: str) -> str:
     # Canonical Claude sources normally format command/reference invocations as
     # inline code. Consume those delimiters with the invocation before applying
     # the replacement so generated Markdown cannot contain nested backticks.
-    for old, new in _CHATGPT_REFERENCE_REWRITES.items():
-        content = content.replace(f"`{old}`", new)
-    for old, new in _CHATGPT_REFERENCE_REWRITES.items():
-        content = content.replace(old, new)
+    content = _CHATGPT_REFERENCE_INVOCATION.sub(
+        lambda match: f"`references/{match.group('name')}.md`",
+        content,
+    )
     for old, new in _CHATGPT_COMMAND_REWRITES.items():
         content = content.replace(f"`{old}`", new)
     for old, new in _CHATGPT_COMMAND_REWRITES.items():

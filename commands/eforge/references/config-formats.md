@@ -1,90 +1,17 @@
-# Format Definition Configuration Reference
+# Output format definitions (developer-only)
 
-> **This reference supports `/eforge config`.** If you are trying to add, modify, or remove config entries, invoke `/eforge config` instead of using this reference directly. This file contains schema details that the config skill reads during execution.
->
-> To discover config file paths, run `eforge info <field>` (e.g., `eforge info paths.activity`). Run `eforge info --fields` to see all available fields.
+This is not a project-overlay authoring reference. Installed output-format definitions are
+engine-owned because emitters, parsers, evaluation rules, output targets, sidecars, and security
+contracts must agree on their schemas.
 
-Schema documentation for log format definition files in `src/evidenceforge/config/formats/`.
+Package format YAML lives under `src/evidenceforge/config/formats/`, including Windows, Sysmon,
+eCAR, Zeek protocol/file/SMB views, proxy/web, IDS, and syslog formats. Query the live CLI or package
+directory rather than relying on a fixed format count in skill text.
 
----
+Use the scenario skill to select supported output formats and the evaluate skill to inspect their
+quality. A request to add or change a format is a source-code development task. For an authorized
+developer change, update the definition, renderer/emitter, parser, evaluator expectations,
+documentation, and round-trip tests together.
 
-## Overview
-
-Each format file defines the schema for one log output type. These are standalone files with no cross-file dependencies (except evaluation rules reference their field names). There are 23 format definitions covering:
-
-| Category | Formats |
-|----------|---------|
-| Windows | `windows_event_security`, `windows_event_sysmon` |
-| Zeek (Network) | `zeek_conn`, `zeek_dns`, `zeek_http`, `zeek_smtp`, `zeek_ssl`, `zeek_x509`, `zeek_files`, `zeek_dhcp`, `zeek_ntp`, `zeek_ocsp`, `zeek_pe`, `zeek_packet_filter`, `zeek_reporter`, `zeek_weird` |
-| Other Network | `snort_alert`, `cisco_asa`, `proxy_access`, `web_access` |
-| Host (Linux) | `syslog`, `bash_history` |
-| EDR | `ecar` |
-
-## Schema
-
-```yaml
-name: zeek_conn                              # Format identifier
-version: "1.0"                               # Schema version
-description: "Zeek conn.log format"          # Human-readable description
-category: network                            # Category: network, host, edr
-
-fields:
-  - name: ts                                 # Field name in output
-    type: timestamp                          # Data type
-    required: true                           # Required in every record
-    description: "Timestamp of connection"   # Human-readable description
-
-  - name: uid
-    type: string
-    required: true
-    description: "Unique connection ID"
-    constraints:                             # Optional validation constraints
-      pattern: "^[A-Za-z0-9]{17,19}$"
-
-  - name: id.orig_p
-    type: port
-    required: true
-    description: "Originator port"
-    constraints:
-      min: 0
-      max: 65535
-```
-
-## Field Types
-
-| Type | Description | Example |
-|------|-------------|---------|
-| `timestamp` | ISO 8601 or epoch timestamp | `1609459200.000000` |
-| `string` | Free-text string | `"Cqt7c92LCc2q0m5Nj"` |
-| `ip_address` | IPv4 or IPv6 address | `"192.168.1.100"` |
-| `port` | Port number (0-65535) | `443` |
-| `integer` | Whole number | `4624` |
-| `float` | Decimal number | `0.003` |
-| `boolean` | True/false | `true` |
-| `enum` | One of a fixed set of values | `"tcp"` |
-
-## Constraint Types
-
-| Constraint | Applies To | Description |
-|-----------|------------|-------------|
-| `pattern` | string | Regex pattern the value must match |
-| `min` / `max` | integer, float, port | Value range |
-| `values` | enum | List of allowed values |
-| `min_length` | string | Minimum string length |
-
-## Conventions
-
-- Format names use snake_case matching the output file prefix
-- Fields are listed in the order they appear in the output
-- The `required: true` fields must be present in every generated record
-- Optional fields may be omitted or set to `"-"` (Zeek convention) when not applicable
-- `constraints:` are used by the evaluation engine, not enforced during generation
-
-## When to Modify Format Files
-
-Format definitions rarely need modification. Common reasons:
-- Adding support for a new Zeek log type → create a new format file
-- Adding a field that the engine now generates → add field definition
-- Correcting field constraints for evaluation accuracy → update constraints
-
-After modifying, check `evaluation/co_occurrence.yaml` and `evaluation/distributions.yaml` for rules that reference the changed fields.
+Do not place format YAML under `.eforge/config`, expose it through a pack, or treat a copied package
+file as a supported project override.

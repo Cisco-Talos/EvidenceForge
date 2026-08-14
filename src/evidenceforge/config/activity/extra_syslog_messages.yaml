@@ -14,7 +14,7 @@
 # Depended on by: generation engine (syslog baseline diversity)
 # Depends on: nothing — standalone (distro/role filters are soft matches)
 #
-# Full schema: see commands/eforge/references/config-extra-syslog-messages.md
+# Authoring reference: commands/eforge/references/config-host-activity.md
 
 programs:
   - app: NetworkManager

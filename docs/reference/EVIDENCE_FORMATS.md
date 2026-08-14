@@ -6,6 +6,16 @@ description: "Evidence Formats Reference"
 
 This document lists every evidence type EvidenceForge can generate, where to find it in the output, and any known limitations.
 
+## Contents
+
+[Output layout](#output-directory-structure) · [targets](#output-targets) ·
+[email](#email-artifacts-and-zeek-smtp) · [Windows Security](#windows-security-events) ·
+[Sysmon](#windows-sysmon-events) · [Zeek](#zeek-network-logs) ·
+[eCAR](#ecar-format-simulated-edr-telemetry) · [Linux syslog](#linux-syslog) ·
+[bash](#bash-history) · [IDS](#snortsuricata-ids-alerts) ·
+[Cisco ASA](#cisco-asa-firewall-syslog) · [web](#web-access-log) ·
+[proxy](#http-proxy-log)
+
 ## Output Directory Structure
 
 One generation run emits one output target. The tree below shows default,
@@ -23,7 +33,7 @@ output/
   OUTPUT_TARGET.txt                        # "default", "sof-elk", or "splunk"; missing legacy marker means default
   RESOLVED_SCENARIO.yaml                   # Authoritative self-contained generation input
   GENERATION_MANIFEST.json                 # Run identity and hashes; written last
-  ENVIRONMENT.md                           # Optional student-facing environment description
+  ENVIRONMENT.md                           # Optional authored collateral; generation does not create it
   artifacts/
     email/
       <artifact-id>.eml                    # Optional RFC 5322 message artifacts
@@ -71,7 +81,7 @@ sidecar. It records the primary collection window, selected observation profile,
 source-family tail policies, and export ordering semantics without storyline
 identifiers, exercise labels, ground-truth events, or scenario narrative details.
 
-Target-specific behavior in V1:
+Current target-specific behavior:
 
 | Canonical format | `default` target | `sof-elk` target | `splunk` target |
 | --- | --- | --- | --- |
@@ -80,7 +90,9 @@ Target-specific behavior in V1:
 | `syslog` | `<host>/syslog.log` as RFC5424 | `<host>/<year>/syslog.log` as RFC3164/BSD | `<host>/syslog.log` as RFC5424 |
 | `cisco_asa` | `<firewall>/cisco_asa.log` | `<firewall>/<year>/cisco_asa.log` | `<firewall>/cisco_asa.log` |
 | Zeek | `<sensor>/<logtype>.json` only when Zeek sensors are configured | Unchanged | Unchanged |
-| Proxy, web access, IDS, eCAR, bash history | Unchanged | Unchanged | Unchanged |
+| `web_access` | `<host>/web_access.log` as combined text | Combined text | `<host>/web_access.log` as Apache TA-compatible JSON |
+| `proxy_access` | `<host>/proxy_access.log` as extended combined text | Plain combined text | `<host>/proxy_access.log` as Apache TA-compatible proxy JSON with CIM tagging |
+| IDS, eCAR, bash history | Unchanged | Unchanged | Unchanged |
 
 ---
 
@@ -109,11 +121,11 @@ top-level `ARTIFACTS_MANIFEST.json`; materialized email messages live outside
   SMTP hops, including the text body and attachments.
 
 Zeek SMTP rows share UIDs with `conn.json`, include envelope/header metadata for
-plaintext transfer, and honor STARTTLS visibility. If a server-to-server hop
-uses STARTTLS before message transfer, protected fields such as `subject`,
+plaintext transfer, and honor STARTTLS visibility. If a client-submission or
+server-to-server hop uses STARTTLS before message transfer, protected fields such as `subject`,
 `msg_id`, `from`, `to`, `user_agent`, and attachment `fuids` are omitted from
-the `smtp.json` row. Client submission is plaintext on port 587 in V1; server
-relay uses port 25. Every SMTP server hop contributes a `Received` header in the
+the `smtp.json` row. Client submission uses port 587 and may upgrade to STARTTLS;
+server relay uses port 25. Every SMTP server hop contributes a `Received` header in the
 materialized `.eml` artifact.
 
 Mailbox reads from `email_read` and automatic recipient-read behavior are opaque
@@ -123,7 +135,7 @@ content.
 
 Exchange is modeled as a behavioral flavor for SMTP and HTTPS/OWA-style mailbox
 access only. Native Exchange message-tracking or IIS/Exchange logs are not
-emitted in V1.
+currently emitted.
 
 ## Windows Security Events
 
@@ -254,7 +266,7 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 **Known Limitations:**
 - Native Zeek `kerberos.log` and `ntlm.log` authentication projections are deferred; SMB authentication still has eligible Windows/eCAR evidence
 - Encrypted SMB share operations are intentionally opaque to `smb_files.log` and `files.log`; eligible endpoint evidence is independent
-- http.log only for port 80; HTTPS content is not decrypted (as expected)
+- Ordinary TLS (`service: ssl`) remains opaque, so its HTTPS content does not produce `http.log`; `http.log` is not limited to port 80 and can represent cleartext or proxy-inspected HTTP on other ports
 - `missed_bytes` is probabilistic (~3% of long TCP connections) rather than from actual packet capture
 - All timestamps use 6-digit microsecond precision
 
@@ -267,7 +279,7 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 
 Simulated EDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an EDR agent would observe.
 
-**Record structure:** Every eCAR record contains `pid` and `tid` as always-present top-level integers (`-1` = unavailable). `ppid` appears on PROCESS events only. The `properties` map contains event-specific key-value pairs where all values are strings (including ports).
+**Record structure:** `pid`, `tid`, and `ppid` are optional top-level integers, emitted only when a source-native nonnegative value is known. The `properties` map contains event-specific key-value pairs where all values are strings (including ports).
 
 **Entity correlation (objectID/actorID graph):** Each record carries a persistent `objectID` (UUID) that identifies the entity being acted upon. Entity lifecycle events share the same objectID — e.g., a PROCESS/CREATE and PROCESS/TERMINATE for the same process, or a USER_SESSION/LOGIN and USER_SESSION/LOGOUT for the same session. The optional `actorID` field links to the objectID of the entity that performed the action — e.g., a PROCESS/CREATE's actorID points to its parent process's objectID, and a FILE/CREATE's actorID points to the process that created it.
 
@@ -285,8 +297,8 @@ Simulated EDR telemetry rendered in MITRE CAR-based eCAR format. Represents what
 **Known Limitations:**
 - eCAR format represents an optional EDR layer — not all systems may have it enabled
 - FLOW events carry the initiating system process pid when endpoint attribution is available (svchost for DNS/NTP, lsass for Kerberos/LDAP, System PID 4 for SMB, mstsc.exe for RDP); pid/tid fields are omitted when unavailable instead of rendering placeholder IDs
-- Limited EDR object diversity on Linux (mainly PROCESS + USER_SESSION)
-- File paths cycle through a small set of templates
+- Linux coverage focuses on PROCESS, USER_SESSION, FLOW, and FILE evidence rather than every endpoint object family
+- File paths come from curated, OS-aware profiles rather than a complete endpoint inventory
 
 ---
 
@@ -314,20 +326,19 @@ syslog row remains a distinct canonical occurrence. Remote Linux `sshd`
 failed-password rows reuse the same source port as the companion Zeek SSH
 connection tuple.
 
-| Program | Description | Notes |
+| Activity/program family | Description | Notes |
 |---------|-------------|-------|
-| sshd | SSH authentication | Accepted/Failed password, session opened/closed, pam_unix messages. |
-| systemd | Service management | Started/stopped service units. |
-| systemd-logind | Login sessions | New session, removed session. |
-| CRON | Scheduled tasks | cron job execution. |
-| kernel | Kernel messages | UFW firewall blocks, uptime, hardware. |
-| sudo | Privilege escalation | Command execution via sudo. |
-| su | User switching | Switch user events. |
-| systemd-timesyncd | NTP sync | Time synchronization status. |
-| snapd | Snap packages | Ubuntu snap daemon messages. |
+| `sshd` and PAM | SSH authentication | Public-key/password authentication, accepted/failed auth, and session lifecycle. |
+| `systemd`, `systemd-logind`, `systemd-journald`, `systemd-timesyncd` | Service, session, journal, and time lifecycle | Includes timer activity and sparse journald housekeeping. |
+| `CRON`, `cron`, `anacron` | Scheduled work | Distro-aware scheduled jobs and coherent anacron runs. |
+| Package maintenance | Package management | Distro-aware systemd lifecycle and `unattended-upgr`/PackageKit detail for apt/dnf activity. |
+| `logrotate` and related service/timer rows | Log maintenance | Start/finish and per-file rotation detail. |
+| `kernel` and UFW | Kernel and firewall | Boot/uptime, audit, and blocked-network evidence. |
+| `sudo`, `su`, `polkitd` | Privilege and authorization | Command, user-switch, and host-appropriate policy events. |
+| Host/role-specific daemons | Workstation and server background activity | Includes network, resolver, logging, snap, firmware, desktop, storage, and service-aware programs. |
 
 **Known Limitations:**
-- Limited program variety (~9 programs vs 30+ on real servers)
+- Program and message coverage is curated and role/distro-aware, not a complete operating-system journal
 - No application-specific logs (nginx, postfix, mysql, etc.) even when services are declared
 - No SSH protocol negotiation messages (key exchange, cipher selection) before auth
 - Bash history may be sparse relative to SSH session duration
@@ -456,11 +467,12 @@ without a matching firewall entry is a validation error.
 ## Web Access Log
 
 **File:** `web_access.log`
-**Format:** Apache/Nginx combined log format
+**Default/SOF-ELK format:** Apache/Nginx combined log text
+**Splunk format:** NDJSON records compatible with the Apache TA `apache:access:json` sourcetype
 
 HTTP access logs for web server systems.
 
-Entries use Apache/Nginx combined syntax:
+Default and SOF-ELK entries use Apache/Nginx combined syntax:
 
 ```text
 client-ip - username [dd/Mon/yyyy:HH:MM:SS zone] "METHOD path HTTP/version" status bytes "Referer" "User-Agent"
@@ -476,7 +488,9 @@ client-ip - username [dd/Mon/yyyy:HH:MM:SS zone] "METHOD path HTTP/version" stat
 ## HTTP Proxy Log
 
 **File:** `<proxy-hostname.domain>/proxy_access.log`
-**Format:** Apache/Nginx combined log format
+**Default format:** Extended Apache/Nginx combined text with optional proxy metadata
+**SOF-ELK format:** Plain Apache/Nginx combined text
+**Splunk format:** Apache TA-compatible NDJSON with EvidenceForge proxy fields and CIM tagging
 
 Forward proxy access logs for systems with the `forward_proxy` role. This is a
 host/proxy log, not a network sensor log, so proxy-only labs do not need
@@ -490,8 +504,8 @@ at the proxy and no proxy-to-origin Zeek, IDS, or firewall evidence is emitted.
 HTTP/S storyline `beacon` events from proxied hosts use the same explicit proxy
 routing, including proxy-side denied CONNECT/GET evidence for `action: deny`.
 
-The proxy log uses the same Apache/Nginx combined syntax as `web_access.log`,
-with proxy request targets in the quoted request field:
+Default and SOF-ELK proxy logs use the same Apache/Nginx combined syntax as
+`web_access.log`, with proxy request targets in the quoted request field:
 
 ```text
 client-ip - username [dd/Mon/yyyy:HH:MM:SS zone] "METHOD request-target HTTP/version" status bytes "Referer" "User-Agent"

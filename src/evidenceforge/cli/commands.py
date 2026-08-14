@@ -33,7 +33,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import click
 import typer
@@ -374,15 +374,34 @@ def _forecast_for_cli(
     destination: Path,
 ) -> ResourceForecast | None:
     """Build and display a forecast without masking owning validation errors."""
+    forecast, error = _build_resource_forecast_for_cli(
+        scenario,
+        scenario_root=scenario_root,
+        destination=destination,
+    )
+    if error is not None:
+        console.print("\n[bold blue]Resource forecast[/bold blue]")
+        console.print(f"  Unavailable until scenario resource errors are resolved: {error}")
+        return None
+    assert forecast is not None
+    _display_resource_forecast(forecast)
+    return forecast
+
+
+def _build_resource_forecast_for_cli(
+    scenario: Scenario,
+    *,
+    scenario_root: Path,
+    destination: Path,
+) -> tuple[ResourceForecast | None, str | None]:
+    """Build a forecast for text or JSON callers without writing console output."""
+
     try:
         estimate = estimate_workload(scenario, scenario_root=scenario_root)
         forecast = build_resource_forecast(scenario, estimate, destination)
     except (EvidenceForgeError, OSError, ValueError, yaml.YAMLError) as exc:
-        console.print("\n[bold blue]Resource forecast[/bold blue]")
-        console.print(f"  Unavailable until scenario resource errors are resolved: {exc}")
-        return None
-    _display_resource_forecast(forecast)
-    return forecast
+        return None, str(exc)
+    return forecast, None
 
 
 # Exit codes (per TODO.md specification)
@@ -431,30 +450,300 @@ def _normalize_oob_hosts(
     Shared by `generate` and `validate`. Prints a friendly error and raises
     typer.Exit(EXIT_INPUT_ERROR) on a bad value.
     """
-    from evidenceforge.generation.adversarial_payload import (
-        AdversarialPayloadSafetyError,
-        normalize_oob_host,
+    from evidenceforge.generation.adversarial_payload import AdversarialPayloadSafetyError
+
+    try:
+        return _normalize_oob_host_values(oob_host)
+    except AdversarialPayloadSafetyError as exc:
+        if json_output:
+            print(json.dumps({"valid": False, "error": str(exc)}, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR) from exc
+
+
+def _normalize_oob_host_values(oob_host: list[str]) -> tuple[str, ...]:
+    """Normalize OOB hosts while leaving presentation and exit handling to the caller."""
+
+    from evidenceforge.generation.adversarial_payload import normalize_oob_host
+
+    normalized = [normalize_oob_host(raw) for raw in oob_host if raw.strip()]
+    return tuple(dict.fromkeys(normalized))
+
+
+def _scenario_summary(scenario: Scenario) -> dict[str, Any]:
+    """Return the bounded scenario summary used by machine-readable validation."""
+
+    network = scenario.environment.network
+    return {
+        "name": scenario.name,
+        "version": scenario.version,
+        "description": scenario.description,
+        "generation_seed": scenario.generation_seed,
+        "users": len(scenario.environment.users),
+        "systems": len(scenario.environment.systems),
+        "personas": len(scenario.personas or []),
+        "storyline_events": len(scenario.storyline or []),
+        "red_herrings": len(scenario.red_herrings or []),
+        "network": {
+            "segments": len(network.segments) if network else 0,
+            "sensors": len(network.sensors) if network else 0,
+        },
+        "output_formats": sorted(
+            str(entry["format"])
+            for entry in scenario.output.logs
+            if isinstance(entry, dict) and "format" in entry
+        ),
+    }
+
+
+def _field_origin_payload(
+    compiled: CompiledScenario,
+    field_path: str,
+    scenario_file: Path,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Resolve the closest portable authored or organization-pack field origin."""
+
+    normalized = field_path.replace("[", ".").replace("]", "")
+    diagnostic_match = _closest_diagnostic_origin(
+        compiled.diagnostic_field_origins,
+        normalized,
+    )
+    if diagnostic_match is not None:
+        origin, declaring_field = diagnostic_match
+        provenance: dict[str, Any] = {
+            "origin_kind": "authored-field",
+            "field_path": declaring_field,
+        }
+        authored_origins = compiled.provenance.get("field_origins", {})
+        if isinstance(authored_origins, dict):
+            portable_origin = authored_origins.get(declaring_field)
+            if isinstance(portable_origin, str):
+                provenance["portable_source"] = portable_origin
+        return (
+            {"kind": "authored-file", "path": str(origin)},
+            provenance,
+        )
+
+    candidates: list[str] = []
+    current = normalized
+    while current:
+        candidates.append(current)
+        current = current.rpartition(".")[0]
+
+    authored_origins = compiled.provenance.get("field_origins", {})
+    if isinstance(authored_origins, dict):
+        for candidate in candidates:
+            origin = authored_origins.get(candidate)
+            if isinstance(origin, str):
+                return (
+                    {"kind": "scenario-source", "path": origin},
+                    {"origin_kind": "authored-field", "field_path": candidate},
+                )
+
+    organization_origins = compiled.provenance.get("organization_model_origins", {})
+    if isinstance(organization_origins, dict):
+        organization = next(
+            (pack for pack in reversed(compiled.selected_packs) if pack.type == "organization"),
+            None,
+        )
+        for candidate in candidates:
+            origin = organization_origins.get(candidate)
+            if isinstance(origin, str):
+                provenance: dict[str, Any] = {
+                    "origin_kind": "organization-pack",
+                    "field_path": candidate,
+                    "relative_path": origin,
+                }
+                if organization is not None:
+                    provenance["pack"] = organization.model_dump(mode="json")
+                return (
+                    {"kind": "pack-source", "path": origin},
+                    provenance,
+                )
+
+    return (
+        {"kind": "input", "path": str(scenario_file)},
+        {"origin_kind": "input-fallback"},
     )
 
-    normalized: list[str] = []
-    for raw in oob_host:
-        if not raw.strip():
-            continue
-        try:
-            normalized.append(normalize_oob_host(raw))
-        except AdversarialPayloadSafetyError as exc:
-            if json_output:
-                print(json.dumps({"valid": False, "error": str(exc)}, indent=2, sort_keys=True))
-            else:
-                console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
-            raise typer.Exit(EXIT_INPUT_ERROR) from exc
-    return tuple(dict.fromkeys(normalized))
+
+def _closest_diagnostic_origin(
+    origins: dict[str, Path],
+    field_path: str,
+) -> tuple[Path, str] | None:
+    """Find the nearest exact, parent, or unambiguous child declaring file."""
+
+    candidate = field_path
+    while candidate:
+        exact = origins.get(candidate)
+        if exact is not None:
+            return exact, candidate
+        descendants = {
+            source for path, source in origins.items() if path.startswith(f"{candidate}.")
+        }
+        if len(descendants) == 1:
+            return next(iter(descendants)), candidate
+        candidate = candidate.rpartition(".")[0]
+    return None
+
+
+def _validation_issue_payload(
+    issue: "ValidationIssue",
+    compiled: CompiledScenario,
+    scenario_file: Path,
+) -> dict[str, Any]:
+    """Serialize one semantic issue with best-effort portable source provenance."""
+
+    source, provenance = _field_origin_payload(compiled, issue.field_path, scenario_file)
+    return {
+        "code": "scenario.semantic",
+        "severity": issue.severity,
+        "field_path": issue.field_path,
+        "message": issue.message,
+        "suggestion": issue.suggestion,
+        "source": source,
+        "provenance": provenance,
+    }
+
+
+def _exception_issue_payloads(exc: Exception, scenario_file: Path) -> list[dict[str, Any]]:
+    """Convert a compilation failure and any chained Pydantic details into issues."""
+
+    raw_origins = getattr(exc, "diagnostic_field_origins", {})
+    diagnostic_origins = (
+        raw_origins
+        if isinstance(raw_origins, dict)
+        and all(
+            isinstance(key, str) and isinstance(value, Path) for key, value in raw_origins.items()
+        )
+        else {}
+    )
+    raw_prefix = getattr(exc, "diagnostic_path_prefix", None)
+    path_prefix = raw_prefix if isinstance(raw_prefix, str) and raw_prefix else None
+    diagnostic_editable = getattr(exc, "diagnostic_editable", True) is not False
+    diagnostic_kind = getattr(exc, "diagnostic_input_kind", "unknown")
+    resolved_guidance = (
+        "Regenerate this authoritative artifact from authored input, or restore an identical "
+        "untampered copy."
+    )
+    cause: BaseException | None = exc
+    while cause is not None:
+        if isinstance(cause, ValidationError):
+            issues: list[dict[str, Any]] = []
+            for error in cause.errors():
+                error_path = ".".join(str(part) for part in error["loc"])
+                field_path = ".".join(part for part in (path_prefix, error_path) if part) or "$"
+                origin = _closest_diagnostic_origin(diagnostic_origins, field_path)
+                source: dict[str, str]
+                provenance: dict[str, Any]
+                if origin is not None:
+                    source_path, declaring_field = origin
+                    source = {"kind": "authored-file", "path": str(source_path)}
+                    provenance = {
+                        "origin_kind": "authored-field",
+                        "field_path": declaring_field,
+                    }
+                else:
+                    source = {"kind": "input", "path": str(scenario_file)}
+                    provenance = {"origin_kind": "input-fallback"}
+                issues.append(
+                    {
+                        "code": f"scenario.schema.{error['type']}",
+                        "severity": "error",
+                        "field_path": field_path,
+                        "message": error["msg"],
+                        "suggestion": (
+                            "Edit this field in its declaring source to match the scenario schema."
+                            if diagnostic_editable
+                            else resolved_guidance
+                        ),
+                        "source": source,
+                        "provenance": provenance,
+                    }
+                )
+            return issues
+        cause = cause.__cause__
+
+    if isinstance(exc, ScenarioIncludeError):
+        code, field_path = "scenario.include", "includes"
+    elif isinstance(exc, PackError):
+        code, field_path = "scenario.pack", "composition"
+    elif isinstance(exc, SchemaValidationError):
+        code, field_path = "scenario.schema", "$"
+    elif isinstance(exc, FileNotFoundError):
+        code, field_path = "input.not_found", "$"
+    else:
+        code, field_path = "input.invalid", "$"
+    suggestion = resolved_guidance if diagnostic_kind == "resolved" else None
+    return [
+        {
+            "code": code,
+            "severity": "error",
+            "field_path": field_path,
+            "message": str(exc),
+            "suggestion": suggestion,
+            "source": {"kind": "input", "path": str(scenario_file)},
+            "provenance": {"origin_kind": "input-fallback"},
+        }
+    ]
+
+
+def _validation_json_payload(
+    *,
+    scenario_file: Path,
+    input_kind: str,
+    project_root: Path | None,
+    issues: list[dict[str, Any]],
+    scenario: dict[str, Any] | None = None,
+    selected_packs: list[dict[str, Any]] | None = None,
+    resource_forecast: dict[str, Any] | None = None,
+    storage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the stable Scenario validation JSON envelope."""
+
+    counts = {
+        severity: sum(issue.get("severity") == severity for issue in issues)
+        for severity in ("error", "warning", "info")
+    }
+    valid = counts["error"] == 0
+    status = "invalid" if not valid else "valid_with_warnings" if counts["warning"] else "valid"
+    payload: dict[str, Any] = {
+        "schema_version": "1.0",
+        "valid": valid,
+        "status": status,
+        "input": {"path": str(scenario_file), "kind": input_kind},
+        "severity_counts": counts,
+        "issues": issues,
+        "suggestions": [
+            {
+                "field_path": issue["field_path"],
+                "message": issue["suggestion"],
+                "source": issue["source"],
+            }
+            for issue in issues
+            if issue.get("suggestion")
+        ],
+        "scenario": scenario,
+        "composition": {
+            "project_root": str(project_root) if project_root is not None else None,
+            "selected_packs": selected_packs or [],
+        },
+        "resource_forecast": resource_forecast,
+    }
+    if storage is not None:
+        payload["storage"] = storage
+    if not valid and issues:
+        payload["error"] = issues[0]["message"]
+    return payload
 
 
 def _validate_compiled_scenario(
     compiled: CompiledScenario,
     oob_hosts: tuple[str, ...],
     scenario_root: Path,
+    *,
+    allow_large_workload: bool = False,
 ) -> tuple["ScenarioValidator", list["ValidationIssue"]]:
     """Run cross-reference validation inside the compilation's config scope."""
 
@@ -468,6 +757,7 @@ def _validate_compiled_scenario(
             compiled.scenario,
             oob_hosts=oob_hosts,
             scenario_root=scenario_root,
+            allow_large_workload=allow_large_workload,
         )
         return validator, validator.validate()
 
@@ -477,10 +767,6 @@ def generate(
     scenario_file: Path = typer.Argument(
         ...,
         help="Path to scenario YAML file",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
     ),
     output: Path | None = typer.Option(
         None,
@@ -549,6 +835,13 @@ def generate(
     - 21: Generation error
     - 130: Interrupted (Ctrl+C)
     """
+    if not scenario_file.is_file() or not os.access(scenario_file, os.R_OK):
+        console.print(
+            f"[bold red]Error:[/bold red] Scenario file not found or unreadable: {scenario_file}",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
     setup_logging(verbose, debug)
     logger = logging.getLogger(__name__)
     try:
@@ -600,7 +893,14 @@ def generate(
         )
 
         if issues:
-            console.print(f"\n[yellow]Found {len(issues)} validation issue(s):[/yellow]")
+            counts = {
+                severity: sum(issue.severity == severity for issue in issues)
+                for severity in ("error", "warning", "info")
+            }
+            headline_color = "red" if counts["error"] else "yellow" if counts["warning"] else "cyan"
+            console.print(
+                f"\n[{headline_color}]Found {len(issues)} validation issue(s):[/{headline_color}]"
+            )
             for issue in issues:
                 if issue.severity == "error":
                     color, icon = "red", "✗"
@@ -622,8 +922,12 @@ def generate(
                     "\n[bold red]Validation failed with errors. Cannot proceed with generation.[/bold red]"
                 )
                 raise typer.Exit(EXIT_SCHEMA_VALIDATION)
-            else:
+            if counts["warning"]:
                 console.print("\n[yellow]Warnings found but proceeding with generation...[/yellow]")
+            else:
+                console.print(
+                    "\n[cyan]Informational findings only; proceeding with generation...[/cyan]"
+                )
         else:
             console.print("[green]✓[/green] All cross-references valid")
 
@@ -674,6 +978,17 @@ def generate(
         # scenarios/<name>/scenario.yaml → data goes to scenarios/<name>/data/
         data_dir = scenario_dir / "data"
         ground_truth_dir = scenario_dir
+    if (
+        compiled.authored_kind == "resolved"
+        and ground_truth_dir.resolve() == scenario_file.resolve().parent
+    ):
+        console.print(
+            "[bold red]Error:[/bold red] A resolved scenario cannot be replayed into "
+            "the directory that contains the authoritative input. Choose a distinct "
+            "bundle root with --output.",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
     artifacts_dir = ground_truth_dir / "artifacts"
 
     from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
@@ -922,18 +1237,24 @@ def generate(
 def resolve_cmd(
     scenario_file: Path = typer.Argument(
         ...,
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
         help="Authored or authoritative scenario YAML.",
     ),
-    output: Path = typer.Option(..., "--output", "-o", help="Resolved YAML output file."),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help=("Resolved YAML output file. Optional only with --explain-composition --json."),
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit stable JSON diagnostics."),
     explain_composition: bool = typer.Option(
         False,
         "--explain-composition",
         help="Report selected packs, precedence, and catalog field origins.",
+    ),
+    include_effective_scenario: bool = typer.Option(
+        False,
+        "--include-effective-scenario",
+        help="Include the compiled effective scenario in JSON composition explanations.",
     ),
     project_root: Path | None = typer.Option(None, "--project-root"),
     oob_host: list[str] = typer.Option(
@@ -943,6 +1264,29 @@ def resolve_cmd(
     ),
 ) -> None:
     """Compile a scenario into a self-contained authoritative YAML document."""
+
+    if not scenario_file.is_file() or not os.access(scenario_file, os.R_OK):
+        message = f"scenario file not found or unreadable: {scenario_file}"
+        if json_output:
+            print(json.dumps({"valid": False, "error": message}, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {message}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
+    if include_effective_scenario and not (explain_composition and json_output):
+        message = "--include-effective-scenario requires --explain-composition --json"
+        if json_output:
+            print(json.dumps({"valid": False, "error": message}, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {message}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
+    if output is None and not (explain_composition and json_output):
+        message = "--output is required unless using --explain-composition --json"
+        if json_output:
+            print(json.dumps({"valid": False, "error": message}, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {message}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
 
     oob_hosts = _normalize_oob_hosts(oob_host, json_output=json_output)
     try:
@@ -959,19 +1303,22 @@ def resolve_cmd(
                 if issue.severity == "error"
             )
             raise SchemaValidationError(messages)
-        content = serialize_resolved_document(build_resolved_document(compiled))
-        if output.is_symlink():
-            raise PermissionError(f"refusing to write resolved scenario through symlink: {output}")
-        if output.exists():
-            if output.read_bytes() != content:
-                raise FileExistsError(
-                    f"resolved output already exists with different content: {output}"
+        if output is not None:
+            content = serialize_resolved_document(build_resolved_document(compiled))
+            if output.is_symlink():
+                raise PermissionError(
+                    f"refusing to write resolved scenario through symlink: {output}"
                 )
-        else:
-            output.parent.mkdir(parents=True, exist_ok=True)
-            temporary = output.with_name(f".{output.name}.tmp-{os.getpid()}")
-            temporary.write_bytes(content)
-            temporary.replace(output)
+            if output.exists():
+                if output.read_bytes() != content:
+                    raise FileExistsError(
+                        f"resolved output already exists with different content: {output}"
+                    )
+            else:
+                output.parent.mkdir(parents=True, exist_ok=True)
+                temporary = output.with_name(f".{output.name}.tmp-{os.getpid()}")
+                temporary.write_bytes(content)
+                temporary.replace(output)
     except (EvidenceForgeError, OSError, ValidationError) as exc:
         if json_output:
             print(json.dumps({"valid": False, "error": str(exc)}, indent=2, sort_keys=True))
@@ -981,15 +1328,19 @@ def resolve_cmd(
 
     payload = {
         "valid": True,
-        "output": str(output),
+        "output": str(output) if output is not None else None,
+        "written": output is not None,
         "compiled_sha256": compiled.digests.get("compiled_sha256"),
         "selected_packs": [pack.model_dump(mode="json") for pack in compiled.selected_packs],
     }
     if explain_composition:
         payload["composition"] = compiled.provenance
+    if include_effective_scenario:
+        payload["effective_scenario"] = compiled.scenario.model_dump(mode="json")
     if json_output:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
+        assert output is not None
         console.print(f"[green]✓[/green] Wrote authoritative scenario: {output}")
         if explain_composition:
             console.print_json(json.dumps(compiled.provenance, sort_keys=True))
@@ -1000,7 +1351,6 @@ def validate(
     scenario_file: Path = typer.Argument(
         ...,
         help="Path to scenario YAML file",
-        exists=True,
         file_okay=True,
         dir_okay=False,
         readable=True,
@@ -1032,6 +1382,11 @@ def validate(
         "--project-root",
         help="Explicit project root for .eforge/config and project pack resolution.",
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit a stable machine-readable validation envelope.",
+    ),
 ) -> None:
     """Validate a scenario file for schema correctness and cross-reference integrity.
 
@@ -1043,31 +1398,83 @@ def validate(
     - 1: YAML parse error, file I/O error, or invalid --oob-host
     - 2: Schema validation or cross-reference error
     """
-    console.print("[bold blue]EvidenceForge Scenario Validator[/bold blue]")
-    console.print(f"Scenario: {scenario_file}\n")
+    from evidenceforge.composition.compiler import resolve_project_root
 
-    # Normalize/validate --oob-host the same way `generate` does, so a literal OOB payload
-    # validates identically here (fail fast on a bad value before loading the scenario).
-    oob_hosts: tuple[str, ...] = _normalize_oob_hosts(oob_host)
+    fallback_project_root = (
+        project_root.resolve() if project_root is not None else scenario_file.resolve().parent
+    )
+    if not scenario_file.is_file():
+        exc = FileNotFoundError(f"scenario file not found: {scenario_file}")
+        if json_output:
+            payload = _validation_json_payload(
+                scenario_file=scenario_file,
+                input_kind="missing",
+                project_root=fallback_project_root,
+                issues=_exception_issue_payloads(exc, scenario_file),
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
 
-    # Step 1: Compile authored or authoritative input.
+    if not json_output:
+        console.print("[bold blue]EvidenceForge Scenario Validator[/bold blue]")
+        console.print(f"Scenario: {scenario_file}\n")
+
+    try:
+        oob_hosts = (
+            _normalize_oob_host_values(oob_host) if json_output else _normalize_oob_hosts(oob_host)
+        )
+    except ValueError as exc:
+        payload = _validation_json_payload(
+            scenario_file=scenario_file,
+            input_kind="unknown",
+            project_root=fallback_project_root,
+            issues=_exception_issue_payloads(exc, scenario_file),
+        )
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        raise typer.Exit(EXIT_INPUT_ERROR) from exc
+
     try:
         compiled = compile_scenario(scenario_file, project_root=project_root)
         scenario = compiled.scenario
-    except ScenarioIncludeError as e:
-        console.print("[bold red]Scenario include validation failed:[/bold red]")
-        console.print(f"  [red]✗ {e}[/red]")
-        raise typer.Exit(EXIT_SCHEMA_VALIDATION)
-    except (PackError, SchemaValidationError) as e:
-        console.print("[bold red]Scenario compilation failed:[/bold red]")
-        console.print(f"  [red]✗ {e}[/red]")
-        raise typer.Exit(EXIT_SCHEMA_VALIDATION)
-    except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] Failed to parse YAML: {e}", style="red")
-        raise typer.Exit(EXIT_INPUT_ERROR)
+    except (ScenarioIncludeError, PackError, SchemaValidationError, ValidationError) as exc:
+        if json_output:
+            diagnostic_kind = getattr(exc, "diagnostic_input_kind", "unknown")
+            input_kind = diagnostic_kind if isinstance(diagnostic_kind, str) else "unknown"
+            payload = _validation_json_payload(
+                scenario_file=scenario_file,
+                input_kind=input_kind,
+                project_root=fallback_project_root,
+                issues=_exception_issue_payloads(exc, scenario_file),
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        elif isinstance(exc, ScenarioIncludeError):
+            console.print("[bold red]Scenario include validation failed:[/bold red]")
+            console.print(f"  [red]✗ {exc}[/red]")
+        else:
+            console.print("[bold red]Scenario compilation failed:[/bold red]")
+            console.print(f"  [red]✗ {exc}[/red]")
+        raise typer.Exit(EXIT_SCHEMA_VALIDATION) from exc
+    except (OSError, yaml.YAMLError, UnicodeError) as exc:
+        if json_output:
+            payload = _validation_json_payload(
+                scenario_file=scenario_file,
+                input_kind="unknown",
+                project_root=fallback_project_root,
+                issues=_exception_issue_payloads(exc, scenario_file),
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] Failed to parse YAML: {exc}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR) from exc
 
-    # Step 2: Report the already validated canonical runtime model.
-    try:
+    resolved_project_root = (
+        None
+        if compiled.authored_kind == "resolved"
+        else resolve_project_root(scenario_file, project_root)
+    )
+    if not json_output:
         console.print(f"[green]✓[/green] Schema valid: {scenario.name}")
         console.print(f"  Users: {len(scenario.environment.users)}")
         console.print(f"  Systems: {len(scenario.environment.systems)}")
@@ -1079,43 +1486,90 @@ def validate(
             segments = len(scenario.environment.network.segments)
             sensors = len(scenario.environment.network.sensors)
             console.print(f"  Network: {segments} segments, {sensors} sensors")
-    except ValidationError as e:
-        console.print("[bold red]Schema validation failed:[/bold red]")
-        for error in e.errors():
-            loc = " → ".join(str(x) for x in error["loc"])
-            console.print(f"  [red]✗ {loc}[/red]")
-            console.print(f"    {error['msg']}", style="red")
-        raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+        console.print("\n[bold]Validating cross-references...[/bold]")
 
-    # Step 3: Cross-reference validation
-    console.print("\n[bold]Validating cross-references...[/bold]")
     validator, issues = _validate_compiled_scenario(
         compiled,
         oob_hosts,
         scenario_file.parent,
+        allow_large_workload=allow_large_workload,
     )
 
     from evidenceforge.config.provider import effective_config_scope
 
-    if show_storage and not any(
+    storage_has_errors = any(
         issue.severity == "error" and issue.field_path.startswith("environment.storage")
         for issue in issues
-    ):
+    )
+    storage_world = None
+    if show_storage and not storage_has_errors:
         from evidenceforge.generation.storage_world import StorageWorldModel
 
         with effective_config_scope(compiled.effective_config):
             storage_world = StorageWorldModel.compile(scenario)
-        _print_compiled_storage(storage_world)
+        if not json_output:
+            _print_compiled_storage(storage_world)
 
     with effective_config_scope(compiled.effective_config):
-        _forecast_for_cli(
-            scenario,
-            scenario_root=scenario_file.parent,
-            destination=scenario_file.parent,
+        if json_output:
+            forecast, forecast_error = _build_resource_forecast_for_cli(
+                scenario,
+                scenario_root=scenario_file.parent,
+                destination=scenario_file.parent,
+            )
+        else:
+            forecast = _forecast_for_cli(
+                scenario,
+                scenario_root=scenario_file.parent,
+                destination=scenario_file.parent,
+            )
+            forecast_error = None
+
+    if json_output:
+        issue_payloads = [
+            _validation_issue_payload(issue, compiled, scenario_file) for issue in issues
+        ]
+        forecast_payload: dict[str, Any]
+        if forecast is not None:
+            forecast_payload = {"available": True, **forecast.model_dump(mode="json")}
+        else:
+            forecast_payload = {"available": False, "error": forecast_error}
+        storage_payload: dict[str, Any] | None = None
+        if show_storage:
+            if storage_world is None:
+                storage_payload = {
+                    "available": False,
+                    "error": "unavailable until storage validation errors are resolved",
+                }
+            else:
+                storage_payload = {
+                    "available": True,
+                    **storage_world.manifest(sample_size=_STORAGE_SAMPLE_SIZE),
+                }
+        payload = _validation_json_payload(
+            scenario_file=scenario_file,
+            input_kind=compiled.authored_kind,
+            project_root=resolved_project_root,
+            issues=issue_payloads,
+            scenario=_scenario_summary(scenario),
+            selected_packs=[pack.model_dump(mode="json") for pack in compiled.selected_packs],
+            resource_forecast=forecast_payload,
+            storage=storage_payload,
         )
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        if validator.has_errors():
+            raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+        return
 
     if issues:
-        console.print(f"\n[yellow]Found {len(issues)} validation issue(s):[/yellow]")
+        counts = {
+            severity: sum(issue.severity == severity for issue in issues)
+            for severity in ("error", "warning", "info")
+        }
+        headline_color = "red" if counts["error"] else "yellow" if counts["warning"] else "cyan"
+        console.print(
+            f"\n[{headline_color}]Found {len(issues)} validation issue(s):[/{headline_color}]"
+        )
         for issue in issues:
             if issue.severity == "error":
                 color, icon = "red", "✗"
@@ -1124,19 +1578,17 @@ def validate(
             else:
                 color, icon = "cyan", "ℹ"
             console.print(f"  [{color}]{icon} {issue.field_path}[/{color}]")
-            from rich.text import Text
-
             console.print(Text(f"    {issue.message}", style=color))
             if issue.suggestion:
-                # Wrap in Text() so bracketed tokens (e.g. "roles: [web_server]")
-                # are not parsed as Rich markup and dropped.
                 console.print(Text(f"    💡 {issue.suggestion}", style="dim"))
 
         if validator.has_errors():
             console.print("\n[bold red]Validation failed with errors.[/bold red]")
             raise typer.Exit(EXIT_SCHEMA_VALIDATION)
-        else:
+        if counts["warning"]:
             console.print("\n[yellow]Warnings found but scenario is valid.[/yellow]")
+        else:
+            console.print("\n[cyan]Informational findings only; scenario is valid.[/cyan]")
     else:
         console.print("[green]✓[/green] All cross-references valid")
 
@@ -1148,20 +1600,12 @@ def eval_cmd(
     output_dir: Path = typer.Argument(
         ...,
         help="Directory containing generated log files",
-        exists=True,
-        file_okay=False,
-        dir_okay=True,
-        readable=True,
     ),
     scenario_file: Path | None = typer.Option(
         None,
         "--scenario",
         "-s",
         help="Optional authored scenario for comparison; required for legacy bundles.",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
     ),
     output_format: str = typer.Option(
         "text",
@@ -1203,6 +1647,30 @@ def eval_cmd(
     - 2: Schema validation error in scenario
     - 22: Evaluation engine error
     """
+    if output_format not in {"text", "json"}:
+        console.print(
+            f"[bold red]Error:[/bold red] Unsupported report format {output_format!r}; "
+            "choose 'text' or 'json'.",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+    if not output_dir.is_dir() or not os.access(output_dir, os.R_OK):
+        message = f"output directory not found or unreadable: {output_dir}"
+        if output_format == "json":
+            print(json.dumps({"valid": False, "error": message}, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {message}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
+    if scenario_file is not None and (
+        not scenario_file.is_file() or not os.access(scenario_file, os.R_OK)
+    ):
+        message = f"scenario file not found or unreadable: {scenario_file}"
+        if output_format == "json":
+            print(json.dumps({"valid": False, "error": message}, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {message}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
     if real_parsers:
         console.print("[yellow]--real-parsers: real parser backend not yet implemented.[/yellow]")
         return
@@ -1286,7 +1754,7 @@ def eval_cmd(
     except EvidenceForgeError as e:
         status_console.print(f"[bold red]Error:[/bold red] {e}", style="red")
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
-    except Exception as e:
+    except (OSError, UnicodeError, yaml.YAMLError, ValueError) as e:
         status_console.print(
             f"[bold red]Error:[/bold red] Failed to load scenario: {e}",
             style="red",
@@ -1556,12 +2024,17 @@ def install_skills_cmd(
 
 @app.command()
 def info(
-    field: str = typer.Argument(
+    field: str | None = typer.Argument(
         None, help="Dot-path to a specific field (e.g., paths.activity, overlay.exists, personas)"
     ),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON for machine parsing"),
     list_fields_flag: bool = typer.Option(
         False, "--fields", help="List all valid dot-path field names"
+    ),
+    project_root: Path | None = typer.Option(
+        None,
+        "--project-root",
+        help="Explicit project root for .eforge/config and project pack discovery.",
     ),
 ) -> None:
     """Show EvidenceForge installation info: version, config paths, available data.
@@ -1586,26 +2059,44 @@ def info(
         resolve_field,
     )
 
-    try:
-        data = gather_info(field=field)
-    except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] Failed to gather info: {e}", style="red")
+    if project_root is not None and not project_root.is_dir():
+        message = f"project root is not a directory: {project_root}"
+        if json_output:
+            print(json.dumps({"valid": False, "error": message}, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {message}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR)
 
+    try:
+        data = gather_info(field=field, project_root=project_root)
+    except (EvidenceForgeError, OSError, UnicodeError, yaml.YAMLError, ValueError) as e:
+        if json_output:
+            print(
+                json.dumps(
+                    {"valid": False, "error": f"Failed to gather info: {e}"},
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            console.print(f"[bold red]Error:[/bold red] Failed to gather info: {e}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR) from e
+
     if list_fields_flag and field:
-        console.print(
-            "[bold red]Error:[/bold red] Cannot use --fields with a field argument. "
-            "Use 'eforge info --fields' to list fields, or 'eforge info <field>' to get a value.",
-            style="red",
+        message = (
+            "Cannot use --fields with a field argument. Use 'eforge info --fields' "
+            "to list fields, or 'eforge info <field>' to get a value."
         )
+        if json_output:
+            print(json.dumps({"valid": False, "error": message}, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {message}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR)
 
     if list_fields_flag:
         fields = list_fields(data)
         if json_output:
-            import json
-
-            print(json.dumps({name: desc for name, desc in fields}, indent=2))
+            print(json.dumps({name: desc for name, desc in fields}, indent=2, sort_keys=True))
         else:
             max_name = max(len(name) for name, _ in fields)
             for name, desc in fields:
@@ -1616,13 +2107,22 @@ def info(
     elif field:
         value = resolve_field(data, field)
         if value is None:
-            console.print(f"[bold red]Error:[/bold red] Unknown field: {field}", style="red")
+            if json_output:
+                print(
+                    json.dumps(
+                        {"valid": False, "error": f"Unknown field: {field}"},
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                console.print(f"[bold red]Error:[/bold red] Unknown field: {field}", style="red")
             raise typer.Exit(EXIT_INPUT_ERROR)
-        if isinstance(value, list):
+        if json_output:
+            print(json.dumps(value, indent=2, sort_keys=True))
+        elif isinstance(value, list):
             print("\n".join(str(v) for v in value))
         elif isinstance(value, dict):
-            import json
-
             print(json.dumps(value))
         else:
             print(value)
@@ -1636,39 +2136,99 @@ def info(
 @app.command("validate-config")
 def validate_config_cmd(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    project_root: Path | None = typer.Option(
+        None,
+        "--project-root",
+        help="Explicit project root for .eforge/config discovery.",
+    ),
 ) -> None:
     """Validate config files for integrity and cross-reference consistency.
 
-    Runs 27 checks across all config YAML files (activity, personas, formats,
-    evaluation) including any overlay customizations. Reports errors, warnings,
-    and info items.
+    Runs integrity checks across config YAML files (activity, personas, formats,
+    evaluation) including project overlay customizations. Reports errors,
+    warnings, and info items.
 
     Exit codes:
     - 0: All checks passed (may include warnings/info)
     - 2: Errors found
     """
     from evidenceforge.cli.validate_config import validate_config
+    from evidenceforge.composition.compiler import (
+        build_management_effective_config,
+        resolve_management_project_root,
+    )
+    from evidenceforge.config.overlay import overlay_project_root_scope
+    from evidenceforge.config.provider import effective_config_scope
 
     status_console = Console(stderr=True) if json_output else console
     status_console.print("[bold blue]EvidenceForge Config Validator[/bold blue]")
 
-    try:
-        result = validate_config()
-    except Exception as e:
-        status_console.print(f"[bold red]Error:[/bold red] Validation failed: {e}", style="red")
+    if project_root is not None and not project_root.is_dir():
+        message = f"project root is not a directory: {project_root}"
+        if json_output:
+            print(json.dumps({"valid": False, "error": message}, indent=2, sort_keys=True))
+        else:
+            status_console.print(f"[bold red]Error:[/bold red] {message}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR)
+    resolved_project_root = resolve_management_project_root(project_root)
+
+    try:
+        with overlay_project_root_scope(resolved_project_root):
+            result = validate_config(
+                merged_scope_factory=lambda: effective_config_scope(
+                    build_management_effective_config(resolved_project_root),
+                    refresh_legacy_globals=False,
+                )
+            )
+    except (EvidenceForgeError, OSError, UnicodeError, yaml.YAMLError, ValueError) as e:
+        if json_output:
+            print(
+                json.dumps(
+                    {
+                        "valid": False,
+                        "status": "error",
+                        "project_root": str(resolved_project_root),
+                        "error": f"Validation failed: {e}",
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            status_console.print(f"[bold red]Error:[/bold red] Validation failed: {e}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR) from e
 
     if json_output:
-        import json
-
+        severity_counts = {
+            "error": len(result.errors),
+            "warning": len(result.warnings),
+            "info": len(result.infos),
+        }
         output = {
+            "schema_version": "1.0",
+            "valid": not result.errors,
+            "status": "invalid"
+            if result.errors
+            else "valid_with_warnings"
+            if result.warnings
+            else "valid",
+            "project_root": str(resolved_project_root),
             "files_checked": result.files_checked,
+            "severity_counts": severity_counts,
+            "issues": [
+                {
+                    "severity": issue.severity.lower(),
+                    "file": issue.file,
+                    "message": issue.message,
+                }
+                for issue in result.issues
+            ],
             "errors": [{"file": i.file, "message": i.message} for i in result.errors],
             "warnings": [{"file": i.file, "message": i.message} for i in result.warnings],
             "info": [{"file": i.file, "message": i.message} for i in result.infos],
         }
         # JSON mode: only JSON on stdout, exit non-zero on errors
-        print(json.dumps(output, indent=2))
+        print(json.dumps(output, indent=2, sort_keys=True))
         if result.errors:
             raise typer.Exit(EXIT_SCHEMA_VALIDATION)
     else:

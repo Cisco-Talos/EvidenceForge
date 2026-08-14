@@ -443,12 +443,22 @@ def _refresh_legacy_registry_globals() -> None:
 
 
 @contextmanager
-def effective_config_scope(effective_config: Any) -> Iterator[None]:
+def effective_config_scope(
+    effective_config: Any,
+    *,
+    refresh_legacy_globals: bool = True,
+) -> Iterator[None]:
     """Activate one provider with serialized legacy-cache compatibility.
 
     The lock makes old module-global caches safe while they are progressively
     migrated. Concurrent callers cannot leak configuration: each run receives a
     clean cache namespace and the previous process cache state is restored.
+
+    Args:
+        effective_config: Immutable configuration snapshot to activate.
+        refresh_legacy_globals: Refresh imported-by-value DNS registries at the
+            scope boundary. Validation preflight disables this because malformed
+            user configuration must be reported before any derived registry loads.
     """
 
     with _CONFIG_EXECUTION_LOCK:
@@ -456,11 +466,13 @@ def effective_config_scope(effective_config: Any) -> Iterator[None]:
         _clear_runtime_caches()
         token = _CURRENT_EFFECTIVE_CONFIG.set(effective_config)
         try:
-            _refresh_legacy_registry_globals()
+            if refresh_legacy_globals:
+                _refresh_legacy_registry_globals()
             yield
         finally:
             _CURRENT_EFFECTIVE_CONFIG.reset(token)
             _clear_runtime_caches()
-            _refresh_legacy_registry_globals()
+            if refresh_legacy_globals:
+                _refresh_legacy_registry_globals()
             for module, name, value in saved:
                 setattr(module, name, value)
