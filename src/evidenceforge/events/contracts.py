@@ -640,6 +640,7 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
             ),
             emitters=_formats(
                 FormatKind.ECAR,
+                FormatKind.SYSLOG,
                 FormatKind.WINDOWS_EVENT_SECURITY,
                 FormatKind.ZEEK_FILES,
                 FormatKind.ZEEK_SMB_FILES,

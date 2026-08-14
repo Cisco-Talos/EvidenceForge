@@ -135,8 +135,33 @@ def _ecar_remote_auth_transport_properties(event: CanonicalOccurrence) -> dict[s
     }
 
 
+def _is_linux_smb_event(event: CanonicalOccurrence) -> bool:
+    """Return whether eCAR is projecting a session owned by a Samba server."""
+    host = event.dst_host
+    if host is None or host.os_category != "linux":
+        return False
+    auth = event.auth
+    smb = event.smb
+    return bool(
+        (auth is not None and auth.session_kind == "smb")
+        or (smb is not None and (smb.provider == "samba" or smb.server_platform == "linux"))
+    )
+
+
+def _ecar_session_principal(event: CanonicalOccurrence) -> str:
+    """Return the authenticated SMB principal without changing other sessions."""
+    auth = event.auth
+    if auth is None:
+        return ""
+    if _is_linux_smb_event(event):
+        return auth.smb_principal or auth.username
+    return auth.username
+
+
 def _ecar_non_windows_session_type(event: CanonicalOccurrence) -> str:
     """Return an OS-native session label for non-Windows eCAR sessions."""
+    if _is_linux_smb_event(event):
+        return "smb"
     if event.event_type == "ssh_session":
         return "ssh"
     if event.event_type == "failed_logon":
@@ -208,6 +233,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "smb_file_write",
         "smb_file_rename",
         "smb_file_delete",
+        "smb_directory_enumeration",
     }
 
     def can_handle(self, event: CanonicalOccurrence) -> bool:
@@ -224,7 +250,10 @@ class EcarEmitter(HostMultiplexEmitter):
             and event.network.application_layer_only
         ):
             return False
-        if event.event_type.startswith("smb_file_") and event.smb is not None:
+        if (
+            event.event_type.startswith("smb_file_")
+            or event.event_type == "smb_directory_enumeration"
+        ) and event.smb is not None:
             if event.smb.result != "success":
                 return False
         return event.event_type in self._supported_types
@@ -254,6 +283,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "smb_file_write": self._render_smb_file_event,
             "smb_file_rename": self._render_smb_file_event,
             "smb_file_delete": self._render_smb_file_event,
+            "smb_directory_enumeration": self._render_smb_client_file_companion,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(f"EcarEmitter: no render method for {event.event_type}")
@@ -355,6 +385,24 @@ class EcarEmitter(HostMultiplexEmitter):
         """Copy durable source-native session identifiers onto session-owned rows."""
         auth = event.auth
         process = event.process
+        if auth is not None and _is_linux_smb_event(event):
+            auth_session_ref = auth.auth_session_ref
+            if not auth_session_ref and event.smb is not None:
+                auth_session_ref = event.smb.session_id
+            if auth_session_ref:
+                event_data["auth_session_ref"] = auth_session_ref
+                event_data["session_id"] = auth_session_ref
+            if auth.auth_protocol:
+                event_data["auth_protocol"] = auth.auth_protocol
+            if auth.account_scope:
+                event_data["account_scope"] = auth.account_scope
+            if auth.effective_uid is not None:
+                event_data["effective_uid"] = auth.effective_uid
+            if auth.effective_gid is not None:
+                event_data["effective_gid"] = auth.effective_gid
+            if event_data.get("object") == "USER_SESSION":
+                event_data["session_type"] = "smb"
+            return
         logon_id = ""
         if auth is not None:
             logon_id = auth.logon_id
@@ -415,7 +463,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "hostname": self._host_name(host),
             "object": "USER_SESSION",
             "action": "LOGIN",
-            "principal": event.auth.username,
+            "principal": _ecar_session_principal(event),
             "src_ip": _ecar_session_source_ip(event),
             "outcome": "success",
             "_host_fqdn": self._host_fqdn(host),
@@ -432,58 +480,108 @@ class EcarEmitter(HostMultiplexEmitter):
         self._emit_canonical_event(event_data, event)
 
     def _render_smb_client_file_companion(self, event: CanonicalOccurrence) -> None:
-        """Fan out required local copy/move effects from the same SMB occurrence."""
+        """Fan out source-native client FILE views from the same SMB occurrence."""
 
         smb = event.smb
         host = event.src_host
-        if smb is None or host is None or not smb.local_path:
-            return
-        source_is_client = smb.phase == "write" and smb.operation in {"copy", "move"}
-        destination_is_client = smb.phase == "read" and smb.operation in {"copy", "move"}
-        if not source_is_client and not destination_is_client:
+        if smb is None or host is None:
             return
         local_process = event.process
-        timing_rng = random.Random(
-            _stable_seed(
-                f"ecar-smb-client-file:{event.occurrence_id}:{smb.file_id}:{smb.content_version}"
+        local_identity = None
+        state_manager = getattr(self, "_state_manager", None)
+        if state_manager is not None and local_process is not None:
+            local_identity = state_manager.get_process_identity(host.hostname, local_process.pid)
+        if local_identity is None:
+            plan = event.identity_plan
+            actor = (
+                plan.actor if plan is not None and isinstance(plan.actor, ProcessIdentity) else None
             )
+            if (
+                actor is not None
+                and actor.hostname == host.hostname
+                and (local_process is None or actor.pid == local_process.pid)
+            ):
+                local_identity = actor
+        copy_or_move = smb.operation in {"copy", "move"}
+        source_is_client = bool(smb.local_path) and smb.phase == "write" and copy_or_move
+        destination_is_client = bool(smb.local_path) and smb.phase == "read" and copy_or_move
+        mounted_action = {
+            "directory_enumeration": "READ",
+            "read": "READ",
+            "write": "CREATE" if smb.operation == "create" else "WRITE",
+            "rename": "RENAME",
+            "delete": "DELETE",
+        }.get(smb.phase)
+        mounted_operation = bool(
+            not source_is_client
+            and not destination_is_client
+            and (not copy_or_move or smb.phase == "rename")
+            and smb.client_access == "cifs_mount"
+            and host.os_category == "linux"
+            and smb.client_path.startswith("/")
+            and local_process is not None
+            and local_process.pid > 0
+            and mounted_action is not None
         )
-        offset = timedelta(milliseconds=timing_rng.randint(7, 63))
-        local_timestamp = event.timestamp - offset if source_is_client else event.timestamp + offset
-        if source_is_client and event.lifecycle is not None:
-            local_timestamp = max(
-                local_timestamp,
-                event.lifecycle.canonical_start + timedelta(milliseconds=1),
+        if not source_is_client and not destination_is_client and not mounted_operation:
+            return
+        if mounted_operation:
+            local_timestamp = event.timestamp
+            action = mounted_action
+            file_path = smb.client_path
+        else:
+            timing_rng = random.Random(
+                _stable_seed(
+                    f"ecar-smb-client-file:{event.occurrence_id}:"
+                    f"{smb.file_id}:{smb.content_version}"
+                )
             )
+            offset = timedelta(milliseconds=timing_rng.randint(7, 63))
+            local_timestamp = (
+                event.timestamp - offset if source_is_client else event.timestamp + offset
+            )
+            if source_is_client and event.lifecycle is not None:
+                local_timestamp = max(
+                    local_timestamp,
+                    event.lifecycle.canonical_start + timedelta(milliseconds=1),
+                )
+            action = "READ" if source_is_client else "CREATE"
+            file_path = smb.local_path
+        if local_process is not None and local_process.username:
+            local_principal = local_process.username
+        elif local_identity is not None:
+            local_principal = local_identity.principal
+        else:
+            local_principal = ""
         local_event = {
             "timestamp": local_timestamp,
             "hostname": self._host_name(host),
             "object": "FILE",
-            "action": "READ" if source_is_client else "CREATE",
-            "pid": event.network.initiating_pid if event.network is not None else -1,
-            "principal": (
-                local_process.username
-                if local_process is not None and local_process.username
-                else event.auth.username
-                if event.auth
-                else ""
-            ),
-            "file_path": smb.local_path,
+            "action": action,
+            "pid": local_process.pid if local_process is not None else -1,
+            "principal": local_principal,
+            "file_path": file_path,
             "file_object_id": stable_uuid(
                 "smb-client-file",
                 host.hostname,
-                smb.local_path,
+                file_path,
                 smb.file_id,
                 smb.content_version,
             ),
             "content_version": smb.content_version,
             "_host_fqdn": self._host_fqdn(host),
         }
-        self._apply_session_properties(local_event, event)
-        if local_process is not None and local_process.logon_id:
-            local_event["logon_id"] = local_process.logon_id
-        else:
-            local_event.pop("logon_id", None)
+        if action == "RENAME" and smb.previous_client_path:
+            local_event["source_file_path"] = smb.previous_client_path
+        local_logon_id = (
+            local_process.logon_id
+            if local_process is not None and local_process.logon_id
+            else local_identity.logon_id
+            if local_identity is not None
+            else ""
+        )
+        if host.os_category == "windows" and local_logon_id:
+            local_event["logon_id"] = local_logon_id
         self._apply_process_provenance(local_event, local_process)
         self._apply_edr_context(local_event, event)
         for key in (
@@ -495,6 +593,12 @@ class EcarEmitter(HostMultiplexEmitter):
             "tgt_tid",
         ):
             local_event.pop(key, None)
+        if local_identity is None:
+            local_event.pop("actorID", None)
+        else:
+            local_event["actorID"] = local_identity.object_id
+            local_event["pid"] = local_identity.pid
+            self._apply_process_provenance(local_event, local_identity)
         local_event["objectID"] = local_event["file_object_id"]
         self._emit_canonical_event(local_event, event)
         if source_is_client and smb.operation == "move":
@@ -513,7 +617,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "hostname": self._host_name(host),
             "object": "USER_SESSION",
             "action": "LOGOUT",
-            "principal": event.auth.username,
+            "principal": _ecar_session_principal(event),
             "_host_fqdn": self._host_fqdn(host),
         }
         source_ip = _ecar_session_source_ip(event)
@@ -681,13 +785,14 @@ class EcarEmitter(HostMultiplexEmitter):
             "object": "FILE",
             "action": action_map[event.event_type],
             "pid": event.network.responding_pid if event.network is not None else -1,
-            "principal": event.auth.username if event.auth else "",
+            "principal": _ecar_session_principal(event),
             "file_path": smb.server_path if smb is not None else "",
-            "source_file_path": smb.previous_path if smb is not None else "",
             "file_object_id": smb.file_id if smb is not None else "",
             "content_version": smb.content_version if smb is not None else 0,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if smb is not None and smb.previous_server_path:
+            event_data["source_file_path"] = smb.previous_server_path
         self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         state_manager = getattr(self, "_state_manager", None)
@@ -697,6 +802,41 @@ class EcarEmitter(HostMultiplexEmitter):
                 host.hostname,
                 event.network.responding_pid,
             )
+        if local_identity is None and _is_linux_smb_event(event):
+            plan = event.identity_plan
+            target = (
+                plan.target
+                if plan is not None and isinstance(plan.target, ProcessIdentity)
+                else None
+            )
+            if (
+                target is not None
+                and host is not None
+                and target.hostname == host.hostname
+                and (
+                    event.network is None
+                    or event.network.responding_pid <= 0
+                    or target.pid == event.network.responding_pid
+                )
+            ):
+                local_identity = target
+        if _is_linux_smb_event(event):
+            for key in (
+                "source_process_uuid",
+                "source_pid",
+                "source_tid",
+                "source_image_path",
+                "source_principal",
+                "src_pid",
+                "src_tid",
+                "target_process_uuid",
+                "target_pid",
+                "target_tid",
+                "target_image_path",
+                "target_principal",
+                "tgt_tid",
+            ):
+                event_data.pop(key, None)
         if local_identity is None:
             event_data.pop("actorID", None)
         else:
@@ -1281,6 +1421,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "image_path",
         "parent_image_path",
         "file_path",
+        "source_file_path",
         "src_ip",
         "src_port",
         "dst_ip",
@@ -1300,6 +1441,11 @@ class EcarEmitter(HostMultiplexEmitter):
         "session_id",
         "logon_guid",
         "session_type",
+        "auth_session_ref",
+        "auth_protocol",
+        "account_scope",
+        "effective_uid",
+        "effective_gid",
         "session_lifecycle",
         "status_code",
         "sub_status",

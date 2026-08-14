@@ -1170,6 +1170,31 @@ class TestLinuxProcessTreeSeeding:
         rsyslogd = state_manager.get_process(linux_system.hostname, pids["rsyslogd"])
         assert rsyslogd.username == "syslog"
 
+    def test_samba_capability_seeds_profiled_smbd_listener(
+        self, state_manager, linux_system
+    ) -> None:
+        """Only Linux SMB servers should receive the persistent smbd master."""
+        from evidenceforge.generation.engine import GenerationEngine
+
+        engine = object.__new__(GenerationEngine)
+        engine.state_manager = state_manager
+        engine._system_pids = {}
+        host_world = Mock()
+        host_world.supports.return_value = True
+        engine.world_model = Mock(hosts={linux_system.hostname: host_world})
+        engine._system_service_defaults = {linux_system.hostname: ["samba"]}
+
+        pids: dict[str, int] = {}
+        engine._seed_linux_process_tree(linux_system, pids)
+
+        smbd = state_manager.get_process(linux_system.hostname, pids["smbd"])
+        assert smbd is not None
+        assert pids["smbd_master"] == pids["smbd"]
+        assert smbd.parent_pid == pids["systemd"]
+        assert smbd.image == "/usr/sbin/smbd"
+        assert smbd.command_line == "/usr/sbin/smbd --foreground --no-process-group"
+        assert smbd.username == "root"
+
     def test_dbus_runs_as_messagebus(self, state_manager, linux_system):
         """dbus-daemon should run as messagebus user."""
         from evidenceforge.generation.engine import GenerationEngine

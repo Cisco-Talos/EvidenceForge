@@ -334,6 +334,35 @@ class TestSyslogParser:
         records = list(parser.parse_file(GOOD_FIXTURES / "syslog.log"))
         assert all(r.timestamp is not None for r in records)
 
+    def test_parses_samba_full_audit_record(self, tmp_path):
+        """Samba VFS audit lines retain routing, program, PID, and native path fields."""
+
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        log_dir = tmp_path / "SAMBA-01" / "2024"
+        log_dir.mkdir(parents=True)
+        log = log_dir / "syslog.log"
+        log.write_text(
+            "<86>Jan 15 10:15:00 SAMBA-01 smbd_audit[4242]: "
+            "smbd_audit: linux_user|10.30.0.10|Finance|read|success|"
+            "/srv/samba/data/Departments/Finance/Reports/FY26/linux-plan.xlsx\n",
+            encoding="utf-8",
+        )
+
+        records = list(SyslogParser().parse_file(log))
+
+        assert len(records) == 1
+        assert records[0].parse_errors == []
+        assert records[0].fields["hostname"] == "SAMBA-01"
+        assert records[0].fields["app_name"] == "smbd_audit"
+        assert records[0].fields["pid"] == 4242
+        assert records[0].fields["syslog_protocol"] == "rfc3164"
+        assert (
+            records[0]
+            .fields["message"]
+            .endswith("/srv/samba/data/Departments/Finance/Reports/FY26/linux-plan.xlsx")
+        )
+
     def test_long_rfc5424_version_is_parse_error_not_crash(self, tmp_path):
         from evidenceforge.evaluation.parsers.syslog import SyslogParser
 

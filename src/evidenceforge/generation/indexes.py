@@ -381,6 +381,7 @@ class TemporalAllocationIndex:
         self._min_summary_tree: list[float] = [float("inf")] * 2
         self._minus_invariants: dict[int, list[tuple[float, datetime, int]]] = {}
         self._plus_invariants: dict[int, list[tuple[float, datetime, int]]] = {}
+        self._value_counts: dict[int, int] = {}
         self._sequence = 0
 
     def __len__(self) -> int:
@@ -412,6 +413,7 @@ class TemporalAllocationIndex:
         self._min_summary_tree = [float("inf")] * 2
         self._minus_invariants = {}
         self._plus_invariants = {}
+        self._value_counts = {}
         self._sequence = 0
         for event_time, value in retained:
             self.add(event_time, value)
@@ -443,6 +445,12 @@ class TemporalAllocationIndex:
         plus = value + epoch
         self._minus_invariants.setdefault(math.floor(minus), []).append((minus, event_time, value))
         self._plus_invariants.setdefault(math.floor(plus), []).append((plus, event_time, value))
+        self._value_counts[value] = self._value_counts.get(value, 0) + 1
+
+    def contains_value(self, value: int) -> bool:
+        """Return whether an allocation already owns one logical value."""
+
+        return value in self._value_counts
 
     def max_value_at_or_before(self, event_time: datetime) -> int | None:
         """Return the greatest allocated value at or before an event time."""

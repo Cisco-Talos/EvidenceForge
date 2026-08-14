@@ -69,6 +69,14 @@ Each row is a file; columns show what it depends on and what depends on it.
 | **depended on by** | Engine (runtime) | Shapes host/persona/role baseline volume, endpoint noise, Linux/syslog shell activity, firewall deny bursts, IDS/ICMP rates, and encoded PowerShell artifact variation |
 | validated by | `eforge validate-config` | Enforces known rate-family names, ordered positive bounds, core host types, firewall deny burst settings, and artifact variant pools |
 
+### smb_profiles.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | scenario system OS/type/services | Service aliases and system-type eligibility choose compatible client/server profiles after the world model compiles SMB capabilities |
+| depends on | scenario `environment.storage` / `smb_activity` | Scenario data owns topology, mappings, credential identity, selected audit profile, and explicit client-access modes; profiles supply provider defaults and source-native morphology |
+| **depended on by** | SMB storage/action/baseline runtime | Resolves advertised filesystems and Samba audit operations; selects Windows Explorer and Linux direct/mounted typed clients, GVFS background transport texture, transport attribution, and Windows/Samba listener/worker lifecycles |
+| validated by | `eforge validate-config` | Enforces schema version, safe/complete provider and audit mappings, default references, OS/access/path compatibility, operation coverage, native auth/process templates, and listener/worker lifecycle |
+
 ### web_session_profiles.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|

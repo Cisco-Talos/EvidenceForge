@@ -34,9 +34,10 @@ and recipient fields remain authoritative.
 6. [auth_noise.yaml](#auth-noise-auth_noiseyaml)
 7. [endpoint_noise.yaml](#endpoint-noise-endpoint_noiseyaml)
 8. [host_activity_profiles.yaml](#host-activity-profiles-host_activity_profilesyaml)
-9. [observation_profiles.yaml](#observation-profiles-observation_profilesyaml)
-10. [timing_profiles.yaml](#timing_profilesyaml)
-11. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
+9. [smb_profiles.yaml](#smb-client-and-server-profiles-smb_profilesyaml)
+10. [observation_profiles.yaml](#observation-profiles-observation_profilesyaml)
+11. [timing_profiles.yaml](#timing_profilesyaml)
+12. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
 
 ---
 
@@ -431,6 +432,138 @@ Resolved multipliers apply after global intensity defaults and scenario `baselin
 Valid rate families are: `user_activity`, `web`, `dns_interval`, `ntp`, `smb_interval`, `kerberos`, `ldap`, `persona_connections`, `role_network`, `inbound_network`, `windows_service_process`, `windows_registry`, `windows_scheduled_task`, `windows_remote_thread`, `windows_process_access`, `windows_module_load`, `windows_remote_admin`, `windows_service_logon`, `windows_machine_auth`, `dc_kerberos`, `linux_syslog`, `linux_remote_admin`, `linux_shell`, `firewall_deny`, `ids_alert`, and `icmp_monitoring`.
 
 `artifact_variants.powershell_encoded` provides data-driven benign encoded PowerShell payload templates and parameter pools. `firewall_deny` controls ASA deny burst windows, quiet periods, and mostly-zero metadata hash frequency. Run `eforge validate-config` after overlay changes; it rejects unknown rate-family names, missing core host types, inverted ranges, invalid probabilities, and empty artifact pools.
+
+---
+
+## SMB Client and Server Profiles (`smb_profiles.yaml`)
+
+`activity/smb_profiles.yaml` owns reusable provider defaults, Samba audit-operation policy, and
+source-native process/lifecycle morphology for SMB clients and servers. It does not own scenario
+storage topology, share access or selected audit profile, mappings, credential identity, or
+explicit `smb_activity.client_access`; keep those in scenario or organization YAML.
+
+The packaged file uses `schema_version: 1` plus six mapping-valued roots. This excerpt abbreviates
+the required Samba operation map and operation-process coverage:
+
+```yaml
+schema_version: 1
+advertised_filesystem_defaults:
+  windows: {ntfs: NTFS, refs: ReFS}
+  linux: {ext4: NTFS, xfs: NTFS}
+samba_audit:
+  failure_audit_profiles: [standard, high]
+  operations:
+    smb_file_read: {label: read, audit_profiles: [high]}
+    # The packaged map covers every required canonical SMB operation.
+client_defaults:
+  windows: windows_explorer
+  linux: linux_gvfs
+client_profiles:
+  linux_cifs_mount:
+    os_category: linux
+    access_mode: mounted
+    path_style: mounted
+    transport_attribution: kernel
+    service_aliases: [cifs-utils, cifs-client]
+    weight: 40.0
+    system_types: [workstation, server, domain_controller]
+    operation_processes:
+      read:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /usr/bin/head
+        command_line_template: 'head -c 4096 "{client_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+      copy:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /usr/bin/cp
+        command_line_template: 'cp -- "{source_path}" "{destination_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+        operand_mode: transfer
+      # The packaged profile also supplies browse/create/update/move/delete.
+server_defaults:
+  windows: windows_lanmanserver
+  linux: linux_samba
+server_profiles:
+  linux_samba:
+    os_category: linux
+    service_aliases: [samba, smbd, smb-server]
+    listener:
+      key_template: smbd_master
+      image: /usr/sbin/smbd
+      command_line_template: /usr/sbin/smbd --foreground --no-process-group
+      username_template: root
+      lifecycle: service
+    worker:
+      key_template: "smbd_worker:{client_ip}:{username}"
+      image: /usr/sbin/smbd
+      command_line_template: /usr/sbin/smbd --foreground --no-process-group
+      username_template: root
+      lifecycle: transport
+```
+
+`client_defaults` and `server_defaults` must name an existing same-OS profile for both `windows`
+and `linux`. Profile IDs use lowercase letters, digits, `_`, and `-` and begin alphanumerically.
+
+Client fields:
+
+| Field | Contract |
+|---|---|
+| `os_category` | `windows` or `linux`. Process images must be absolute in that OS's syntax. |
+| `access_mode` | `explorer`, `desktop`, `direct`, or `mounted`. Explorer is Windows-only; the others are Linux-only. |
+| `path_style` | `unc`/`mapped` for Windows, `smb_uri` for desktop/direct Linux, or `mounted` for mounted Linux. |
+| `transport_attribution` | `process`, `kernel`, or `none`. Direct access requires `process`; mounted access requires `kernel`. |
+| `service_aliases` | Duplicate-free service markers used for capability/profile eligibility. |
+| `weight` | Finite positive profile-selection weight. |
+| `system_types` | Non-empty, duplicate-free subset of `workstation`, `server`, `domain_controller`. |
+| `auth_options` | Optional `auto`/`kerberos`/`ntlmssp` map of source-native client flags. |
+| `process` | Optional shared process metadata. Explorer and desktop access require a resident process; a direct fallback must be operation-scoped. Mounted access forbids this fallback because mount lifecycle is separate. |
+| `operation_processes` | Per-operation process metadata. Mounted profiles must explicitly cover browse/read/create/update/copy/move/delete; direct and mounted entries use `lifecycle: operation`. Other profiles without `process` also require complete coverage. |
+
+Server profiles declare `os_category`, service aliases, and a `listener` with
+`lifecycle: service`. Linux Samba profiles additionally require a `worker` with
+`lifecycle: transport`; this keeps the long-lived root listener distinct from per-client `smbd`
+workers used for inbound flow and file provenance.
+
+Process metadata contains `key_template`, literal absolute `image`, `command_line_template`,
+`username_template`, and `lifecycle` (`resident`, `operation`, `transport`, or `service`). Operation
+processes may declare `credential_source` and a `remote`, `upload`, `download`, `rename`, or
+`transfer` `operand_mode`. Mounted copy/move profiles use `transfer`, which requires
+`{source_path}` and `{destination_path}`. Templates may use only `server`, `share`, `path`,
+`client_path`, `local_path`, `source_path`, `destination_path`, `username`, `smb_principal`,
+`auth_options`, `operation`, and `client_ip`; field traversal, conversions, and format
+specifications are rejected.
+
+`advertised_filesystem_defaults` maps each supported platform/backing-filesystem pair to a safe
+wire-visible label. `samba_audit` maps every required canonical SMB operation to its source-native
+label and eligible `standard`/`high` profiles; `failure_audit_profiles` independently retains
+failed operations for the selected profiles. `minimal` is lifecycle-only and invalid in both VFS
+profile lists; a list containing `standard` must also contain `high` so the tiers stay monotonic.
+These are renderer/provider defaults, while scenario storage still chooses each share's audit
+profile and may override its advertised filesystem.
+
+Project overlays deep-merge keyed profiles. Override only the required nested fields:
+
+```yaml
+# .eforge/config/activity/smb_profiles.yaml
+client_profiles:
+  linux_cifs_mount:
+    weight: 55.0
+```
+
+List fields extend under this merge family, so add only new unique service aliases/system types;
+profile-list replacement is not supported by a partial SMB overlay. Do not attribute mounted
+operations to `mount.cifs`: it establishes the mount, while later transport remains kernel-owned
+and local endpoint file effects belong to the actual operation process. The merged schema rejects
+a mounted default/fallback process and requires an explicit operation-scoped actor for every
+supported operation. Mounted transfer commands must preserve resolved source/destination path views
+rather than inventing fixed local paths. Keep direct `smbclient` operation-scoped with
+process-owned transport and Explorer resident. GVFS also
+uses a resident profile but remains opaque background TCP/445/process texture; canonical typed
+Linux file activity selects only mounted CIFS or direct `smbclient`. Keep Samba split into a service
+listener plus transport worker. Run `eforge validate-config` after every overlay change; the fully
+merged document is strict-schema validated.
 
 ---
 

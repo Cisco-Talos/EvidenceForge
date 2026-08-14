@@ -42,6 +42,12 @@ from evidenceforge.generation.activity.network_params import (
     external_client_excluded_cidrs,
     load_network_params,
 )
+from evidenceforge.generation.activity.smb_profiles import (
+    render_process as render_smb_process,
+)
+from evidenceforge.generation.activity.smb_profiles import (
+    select_server_profile,
+)
 from evidenceforge.generation.emitters import (
     BashHistoryEmitter,
     CiscoAsaEmitter,
@@ -809,6 +815,18 @@ class EmitterSetupMixin:
         service_defaults = getattr(self, "_system_service_defaults", {})
         services = tuple(service_defaults.get(system.hostname, system.services or ()))
         service_tokens = {svc.lower() for svc in services}
+        world_model = getattr(self, "world_model", None)
+        host_world = getattr(world_model, "hosts", {}).get(system.hostname)
+        if host_world is not None and host_world.supports(HostCapability.SMB_SERVER):
+            server_profile = select_server_profile("linux", services)
+            listener = render_smb_process(server_profile.listener)
+            pids["smbd"] = _c(
+                pids["systemd"],
+                listener.image,
+                listener.command_line,
+                listener.username,
+            )
+            pids["smbd_master"] = pids["smbd"]
         proxy_markers = {"forward_proxy", "squid", "proxy"}
         if roles & proxy_markers or service_tokens & proxy_markers:
             squid_user = "squid" if is_rhel else "proxy"

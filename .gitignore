@@ -62,6 +62,16 @@ checkpoints/
 
 # EvidenceForge project-local config overlay
 .eforge/
+!.eforge/
+.eforge/*
+!.eforge/packs/
+.eforge/packs/*
+!.eforge/packs/organization/
+.eforge/packs/organization/*
+!.eforge/packs/organization/meridian-healthcare-solutions/
+.eforge/packs/organization/meridian-healthcare-solutions/*
+!.eforge/packs/organization/meridian-healthcare-solutions/1.0.0/
+!.eforge/packs/organization/meridian-healthcare-solutions/1.0.0/**
 
 # Ignore any scenarios we might produce
 scenarios/*
@@ -80,6 +90,16 @@ scenarios/llm-injection-demo/*
 !scenarios/llm-injection-demo/scenario.yaml
 !scenarios/llm-injection-demo/scenario-clean.yaml
 !scenarios/llm-injection-demo/README.md
+!scenarios/iteration-test/
+scenarios/iteration-test/*
+!scenarios/iteration-test/scenario.yaml
+!scenarios/iteration-test/email_corpus.yaml
+!scenarios/iteration-test/ENVIRONMENT.md
+!scenarios/iteration-test-1_0/
+scenarios/iteration-test-1_0/*
+!scenarios/iteration-test-1_0/scenario.yaml
+!scenarios/iteration-test-1_0/email_corpus.yaml
+!scenarios/iteration-test-1_0/ENVIRONMENT.md
 
 
 # Scan / analysis tool output

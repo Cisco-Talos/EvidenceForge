@@ -171,6 +171,22 @@ def test_temporal_allocation_index_matches_reference_queries() -> None:
         assert index.min_value_after(cutoff) == (min(future) if future else None)
 
 
+def test_temporal_allocation_index_tracks_owned_values_across_discard() -> None:
+    """Logical allocation ownership must remain exact when the open window advances."""
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    index = TemporalAllocationIndex()
+    index.add(start, 100)
+    index.add(start + timedelta(minutes=1), 200)
+
+    assert index.contains_value(100)
+    assert index.contains_value(200)
+
+    index.discard_before(start + timedelta(seconds=30))
+
+    assert not index.contains_value(100)
+    assert index.contains_value(200)
+
+
 def test_temporal_allocation_index_prefix_summary_survives_splits() -> None:
     """Large histories and later out-of-order inserts keep exact tree summaries."""
     start = datetime(2026, 1, 1, tzinfo=UTC)

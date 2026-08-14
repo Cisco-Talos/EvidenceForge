@@ -57,8 +57,12 @@ exist.
 
 Assign both `roles` and `services` to server and infrastructure systems whenever possible. Roles
 drive inbound and outbound patterns; services help the compiled world model choose realistic
-application, database, SSH, RDP, SMB, and administrative behavior. Use `file_server` on Windows
-file shares so normal SMB traffic targets them rather than only domain controllers.
+application, database, SSH, RDP, SMB, and administrative behavior. Use `file_server` for modeled
+Windows file servers; for Linux Samba servers also declare `samba`, `smbd`, or `smb_server`, or add
+explicit storage topology. Linux systems need an explicit `cifs-utils`, `cifs-client`, or
+`smbclient` marker to participate in baseline file activity; authored `smb_activity` supplies
+explicit client intent. GVFS markers are background process/transport texture only and do not own
+typed file semantics.
 
 ### Log formats and IDS
 
@@ -84,9 +88,10 @@ deferred. Read the exact policy schema before authoring it.
 
 ### SMB storage
 
-Use `environment.storage` when the exercise needs named Windows volumes, drive-root or folder mount
-diversity, explicit shares, effective access, mappings, or authored seed files. Omit it when the
-deterministic file-server and SYSVOL/NETLOGON defaults are enough. Inspect effective storage with:
+Use `environment.storage` when the exercise needs named Windows or Linux volumes, OS-native mount
+diversity, explicit shares, effective access, mappings, audit policy, or authored seed files. Omit
+it when deterministic file-server and Windows SYSVOL/NETLOGON defaults are enough. Inspect
+effective storage with:
 
 ```bash
 eforge validate <scenario> --show-storage
@@ -94,10 +99,13 @@ eforge validate <scenario> --show-storage
 
 Use typed `smb_activity` events for browse, read, create, update, copy, move, and delete semantics.
 A successful generic `connection` to TCP/445 is transport-only and never implies authentication,
-a share, a file, object auditing, or mutation. Authored mappings may use `D:` through `Z:`; `A:` and
-`B:` are reserved, `C:` is local, and an omitted drive is allocated deterministically from `H:`
-through `Z:`. Read the exact storage and `smb_activity` schema before authoring selectors, batches,
-outcomes, encrypted shares, mappings, or external clients.
+a share, a file, object auditing, or mutation. Windows mappings may use `D:` through `Z:` and Linux
+mappings use absolute POSIX mountpoints; omitted locations are allocated per platform. Keep the
+local application actor, SMB credential principal, and server effective identity distinct. Select
+`client_access`, `auth_protocol`, `smb_principal`, and `path_style` only when the exercise needs an
+exact client or identity path; otherwise let `auto` select from compatible `smb_profiles.yaml`
+profiles. Read the exact storage and `smb_activity` schema before authoring selectors, batches,
+outcomes, encrypted shares, audit levels, fixed-credential mappings, or external clients.
 
 ### Red herrings and ambient noise
 

@@ -304,9 +304,14 @@ declared identity are warnings.
 
 ### SMB Storage
 
-`environment.storage` compiles Windows disk-share topology once. Omit it for deterministic
-file-server portfolios plus DC SYSVOL/NETLOGON defaults. Population controls the bounded,
-duration-independent metadata catalog; activity independently controls baseline frequency.
+`environment.storage` compiles SMB2/3 disk-share topology for modeled Windows and Linux servers
+once. Omit it for deterministic file-server portfolios plus Windows DC SYSVOL/NETLOGON defaults.
+Population controls the bounded, duration-independent metadata catalog; activity independently
+controls baseline frequency. A configured Linux storage server uses Samba semantics. Give Linux
+clients that should participate in baseline file activity an SMB client service marker such as
+`cifs-utils`, `cifs-client`, or `smbclient`; Linux hosts do not gain baseline client capability from
+OS identity alone. An authored `smb_activity` explicitly supplies its client intent. GVFS profiles
+are background process/transport texture only and do not own typed file semantics.
 
 ```yaml
 storage:
@@ -331,24 +336,79 @@ storage:
             admin: [Domain Admins]
           seed_files:
             - {ref: forecast, path: 'Reports\FY26\forecast.xlsx', size_bytes: 1843200}
+    - system: FS-LNX-01
+      presets: [collaboration]
+      audit: high
+      default_volume: shared
+      volumes:
+        - {id: shared, mount: /srv/samba/shared, filesystem: ext4, label: SharedData}
+      shares:
+        - id: engineering
+          name: Engineering
+          volume: shared
+          root: Projects
+          preset: collaboration
+          smb_native_filesystem: NTFS
+          access:
+            read: [Engineering-Readers, svc_engineering]
+            modify: [Engineering-Users]
   mappings:
     - id: finance-f
       share: FS-01.finance
       audience: {groups: [Finance-Users], systems: [WS-01]}
       drive: 'F:'
+      credential_mode: per_user
+      lifecycle: persistent
+    - id: engineering-linux
+      share: FS-LNX-01.engineering
+      audience: {groups: [Engineering-Users], systems: [DEV-LNX-01]}
+      mount: /mnt/engineering
+      credential_mode: fixed
+      principal: svc_engineering  # Samba requires a declared directory user/service account
       lifecycle: persistent
 ```
 
 Shares use stable `<system>.<share-id>` references; seed references are scoped to a share.
-Volumes may be drive roots or absolute folder mounts. Supplied volumes are authoritative,
-explicit shares are additive, and generated shares are changed only through
-`share_overrides`. Access is effective access: deny wins, admin implies modify/read, and
-modify implies read. Explicit SMB mappings may use `D:` through `Z:`; `A:` and `B:` are
-reserved and `C:` remains the local system drive. When `drive` is omitted, automatic
-allocation uses only `H:` through `Z:`. Use
+Windows volumes use drive-root or absolute folder mounts with `ntfs` or `refs`; Linux volumes use
+absolute POSIX mounts with `ext4` or `xfs`. Supplied volumes are authoritative, explicit shares are
+additive, and generated shares are changed only through `share_overrides`. Share roots, seed paths,
+and selectors remain canonical SMB-relative paths with `\` separators on either server platform;
+the compiler derives the Windows or POSIX server-local path when it renders endpoint evidence.
+
+`filesystem` is the server's backing filesystem. `smb_native_filesystem` is the safe, optional
+wire-advertised label and is deliberately separate: Samba defaults to advertising `NTFS` even when
+the backing volume is ext4 or XFS, following Samba's version-sensitive
+[`fstype` contract](https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html). The label is
+at most 64 characters and cannot contain control characters or path separators. Access is
+effective access: deny wins, admin implies modify/read, and modify implies read.
+
+Mappings may carry a Windows `drive`, a Linux `mount`, both for a mixed audience, or neither for
+platform-aware allocation. Explicit drives may use `D:` through `Z:`; `A:` and `B:` are reserved
+and `C:` remains the local system drive. Automatic Windows allocation uses `H:` through `Z:`;
+automatic Linux allocation uses `/mnt/<mapping-id>`. `credential_mode: per_user` is the default and
+uses the activity's resolved SMB principal. `credential_mode: fixed` requires `principal`; a
+per-user mapping forbids it. A fixed mapping principal is a credential identity, not proof that the
+initiating process runs as that account.
+For V1 domain-member Samba shares, the resolved credential must be a declared directory user or
+service account; guest, standalone, and host-local built-in identities are rejected. Windows SMB
+retains its existing platform-specific built-in-account rules.
+
+Server `audit` is `minimal`, `standard`, or `high`. It selects eligible source-native evidence,
+not network visibility: on Samba, minimal retains authentication and connection lifecycle,
+standard adds selected VFS operations and failures, and high adds modeled full-audit operations.
+Zeek still depends on a sensor that can observe the SMB transport. Use
 `eforge validate SCENARIO --show-storage` to inspect compiled volumes (including unused
-volumes), share roots and scales, effective access, mappings, and up to three metadata-only
-catalog samples per share.
+volumes), server platform, backing and advertised filesystems, share roots and scales, effective
+access, OS-native mappings, credential metadata, and up to three metadata-only catalog samples per
+share.
+
+Generated `STORAGE_MANIFEST.json` uses `schema_version: 2`. It records volume platform and backing
+filesystem. Each share records `provider`, `platform`, `network_root`, `server_native_root`,
+`backing_filesystem`, `advertised_filesystem`, `case_policy: case_insensitive`, and `audit_profile`.
+Each mapping retains `drive`/`mount` compatibility fields and adds an explicit `presentations` list
+of platform, type, and root, plus credential mode and non-secret principal identity. Resolved
+storyline path views remain separate. The manifest contains non-secret identities and topology,
+never credential secrets or file payloads.
 
 ### Proxy Deployment
 
@@ -465,7 +525,12 @@ The `roles` field declares a system's function in the network. The engine uses r
 - `web_server` — outbound: database queries, LDAP auth, API calls; inbound: HTTPS/HTTP from external clients and internal users. Human inbound traffic is generated as browsing sessions: top-level page views consume the `web` traffic-rate budget, and required assets/API calls fan out from each page load with shared HTTP transaction-depth and file-analysis semantics where applicable.
 - `database` — outbound: replication, updates; inbound: SQL queries from web/app servers
 - `mail_server` — outbound: SMTP relay, LDAP lookups; inbound: SMTP from internet, webmail from users
-- `file_server` — outbound: Kerberos/LDAP auth; inbound: SMB file access from workstations. File-server roles also increase baseline SMB target selection beyond normal DC SYSVOL/GPO traffic.
+- `file_server` — inbound file-service intent. On Windows this selects the native SMB server
+  provider. On Linux the role alone does not invent Samba: add `samba`, `smbd`, or `smb_server`, or
+  configure the host explicitly under `environment.storage.servers`. Eligible file servers increase
+  baseline SMB target selection beyond normal Windows DC SYSVOL/GPO traffic. Linux clients need an
+  explicit `cifs-utils`, `cifs-client`, or `smbclient` marker to join canonical baseline selection;
+  Kerberos/LDAP companions depend on the selected authentication path.
 - `domain_controller` — outbound: inter-DC replication; inbound: Kerberos/LDAP/DNS from all hosts
 - `forward_proxy` — routes outbound HTTP/HTTPS traffic through this system; generates proxy access logs with CONNECT entries for HTTPS and full destination URLs
 - `dns_server` — DNS resolution target
@@ -910,7 +975,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
 | `logoff` | 4634, eCAR LOGOUT | | |
 | `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http/files when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname`, `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent`, `request_body_len`, `request_multipart`, `response_body_len`, `response_multipart`, `ids_alerts` |
-| `smb_activity` | SMB transport/auth/session/tree/file lifecycle; Zeek SMB/files, Windows audit, eCAR | operation-specific share/client location | `purpose`, `batch`, `outcome`, `path_style`, `mapping`, external `client` |
+| `smb_activity` | SMB transport/auth/session/tree/file lifecycle; Zeek SMB/files, platform-eligible Windows or Samba audit, eCAR | operation-specific share/client location | `purpose`, `batch`, `outcome`, `path_style`, `mapping`, `client_access`, `auth_protocol`, `smb_principal`, external `client` |
 | `ssh_session` | canonical SSH connection (Zeek conn) + syslog sshd + EDR/eCAR | | `source_ip`, `ids_alerts` |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip`, `ids_alerts` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
@@ -950,20 +1015,55 @@ transport-only and never infers authentication or file activity from byte counts
   purpose: collection
   source:
     type: share
-    share: FS-01.finance
-    selector: {path_glob: 'Reports/**/*.xlsx', tags_any: [finance]}
-  destination: {type: client, path: 'C:\ProgramData\cache\'}
+    share: FS-LNX-01.engineering
+    selector: {path_glob: 'Projects/**/*.tar.gz'}
+  destination: {type: client, path: /var/tmp/cache/}
   batch: {count: 25, duration: 4m}
   outcome: auto
-  path_style: auto
+  path_style: mounted
+  mapping: engineering-linux
+  client_access: cifs_mount
+  auth_protocol: kerberos
+  smb_principal: svc_engineering
 ```
 
 Operations are `browse`, `read`, `create`, `update`, `copy`, `move`, and
 `delete`. Share locations accept at most one of `file_ref`, relative `path`, or
 `selector`; omission requests deterministic selection. Selectors must resolve once unless a
-batch supplies exactly one of `count`, `fraction`, or `all: true`. External initiators use
-`client: {type: external, ip: ...}`, force UNC presentation, and emit no client-host
-telemetry. Explicit outcomes are assertions and are validated against path and access state.
+batch supplies exactly one of `count`, `fraction`, or `all: true`. A `type: client` source or
+destination accepts an OS-native absolute local path: drive-absolute on Windows or POSIX-absolute
+on Linux. Share-relative paths remain SMB-canonical and use `\` separators.
+
+`client_access` is `auto`, `windows_native`, `cifs_mount`, or `smbclient`. `auto` resolves Windows
+native access or, on Linux, a persistent kernel CIFS mount only when an applicable mapping has a
+POSIX `mount`; otherwise it selects a one-shot `smbclient` process. Installing `cifs-utils` alone
+does not invent a mount. The resident `linux_gvfs` profile is reserved
+for background transport/process texture; it is not selected for canonical typed file activity.
+`mount.cifs` establishes a mount; it is not attributed as the process performing every mounted
+file operation. Mounted CIFS transport is kernel-owned and may have no endpoint PID, while direct
+`smbclient` is operation-scoped. These credential and mount ownership rules follow the upstream
+[`mount.cifs` contract](https://man7.org/linux/man-pages/man8/mount.cifs.8.html).
+`auth_protocol` is `auto`, `kerberos`, or `ntlmssp`.
+In the initial Samba model, `auto` uses directory-backed Kerberos; Windows retains its native
+negotiation path.
+`smb_principal` sets the credential identity independently of the local process actor; when omitted,
+the activity or mapping resolves it through the identity directory. Samba principals must be
+declared directory users or service accounts; its V1 domain-member model rejects guest and local
+built-in identities. Windows retains its platform-specific built-in accounts. An event principal
+that conflicts with a fixed mapping principal is invalid.
+
+Session/tree reuse is transport- and authentication-reference-bound. A newly generated TCP/445
+transport receives a new SMB session; V1 does not model multichannel or durable reconnection.
+
+`path_style` is `auto`, `unc`, `mapped`, or `mounted`. `mapped` requires a compatible Windows
+mapping and renders its drive; `mounted` requires a compatible Linux mapping and renders its POSIX
+mount. `auto` chooses an OS-compatible presentation; direct `smbclient` uses its
+`//server/share/path` command form, while `unc` retains a network share view. External initiators
+use `client: {type: external, ip: ...}`, require `client_access: auto`, cannot select a storage
+mapping or use mapped/mounted presentation, and emit no client-host telemetry. An explicit access
+mode and path presentation must agree: `cifs_mount` accepts `auto` or `mounted`, while `smbclient`
+accepts `auto` or `unc`. Explicit outcomes are assertions and are validated against path, access,
+platform, mapping, and credential state.
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
 

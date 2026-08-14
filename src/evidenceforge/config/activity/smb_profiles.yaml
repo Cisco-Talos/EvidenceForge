@@ -1,0 +1,248 @@
+# smb_profiles.yaml -- Platform-native SMB client and server process metadata.
+#
+# Project overlays may customize individual profiles at:
+#   .eforge/config/activity/smb_profiles.yaml
+#
+# SMB share-relative paths remain protocol-native. path_style describes only
+# the client-side presentation used by the selected access mode.
+
+schema_version: 1
+
+# Wire-visible filesystem labels are provider behavior, not backing-volume names.
+# Samba commonly advertises NTFS over SMB even when the server stores data on
+# ext4 or XFS. Project overlays may replace one platform/filesystem leaf.
+advertised_filesystem_defaults:
+  windows:
+    ntfs: NTFS
+    refs: ReFS
+  linux:
+    ext4: NTFS
+    xfs: NTFS
+
+# Canonical event eligibility and vfs_full_audit operation labels. Minimal is
+# lifecycle-only and must not appear in either VFS profile list. Failures are
+# visible at standard/high even when the successful operation is high-only.
+samba_audit:
+  failure_audit_profiles: [standard, high]
+  operations:
+    smb_directory_enumeration:
+      label: opendir
+      audit_profiles: [standard, high]
+    smb_file_open:
+      label: open
+      audit_profiles: [standard, high]
+    smb_file_read:
+      label: read
+      audit_profiles: [high]
+    smb_file_write:
+      label: write
+      audit_profiles: [high]
+    smb_file_rename:
+      label: rename
+      audit_profiles: [standard, high]
+    smb_file_delete:
+      label: unlink
+      audit_profiles: [standard, high]
+    smb_file_close:
+      label: close
+      audit_profiles: [standard, high]
+
+client_defaults:
+  windows: windows_explorer
+  linux: linux_gvfs
+
+client_profiles:
+  windows_explorer:
+    os_category: windows
+    access_mode: explorer
+    path_style: unc
+    transport_attribution: process
+    service_aliases: [lanmanworkstation]
+    weight: 1.0
+    system_types: [workstation, server, domain_controller]
+    process:
+      key_template: "explorer_smb:{server}:{share}"
+      image: 'C:\Windows\explorer.exe'
+      command_line_template: 'explorer.exe "\\{server}\{share}"'
+      username_template: "{username}"
+      lifecycle: resident
+
+  linux_gvfs:
+    os_category: linux
+    access_mode: desktop
+    path_style: smb_uri
+    transport_attribution: process
+    service_aliases: [gvfs-smb, gvfsd-smb, gvfsd-smb-browse]
+    weight: 60.0
+    system_types: [workstation, server, domain_controller]
+    process:
+      key_template: "gvfs_smb:{server}:{share}"
+      image: /usr/bin/gvfsd-smb-browse
+      command_line_template: 'gvfsd-smb-browse "smb://{server}/{share}"'
+      username_template: "{username}"
+      lifecycle: resident
+
+  linux_smbclient:
+    os_category: linux
+    access_mode: direct
+    path_style: smb_uri
+    transport_attribution: process
+    service_aliases: [smbclient]
+    weight: 20.0
+    system_types: [workstation, server, domain_controller]
+    auth_options:
+      auto: --use-kerberos=desired
+      kerberos: --use-kerberos=required
+      ntlmssp: --use-kerberos=off
+    operation_processes:
+      browse:
+        key_template: "smbclient:{server}:{share}:{operation}"
+        image: /usr/bin/smbclient
+        command_line_template: >-
+          smbclient "//{server}/{share}" -U "{smb_principal}" {auth_options} -c 'ls "{path}"'
+        username_template: "{username}"
+        lifecycle: operation
+        credential_source: smb_principal
+        operand_mode: remote
+      read:
+        key_template: "smbclient:{server}:{share}:{operation}"
+        image: /usr/bin/smbclient
+        command_line_template: >-
+          smbclient "//{server}/{share}" -U "{smb_principal}" {auth_options} -c 'get "{path}" "{local_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+        credential_source: smb_principal
+        operand_mode: download
+      create:
+        key_template: "smbclient:{server}:{share}:{operation}"
+        image: /usr/bin/smbclient
+        command_line_template: >-
+          smbclient "//{server}/{share}" -U "{smb_principal}" {auth_options} -c 'put "{local_path}" "{path}"'
+        username_template: "{username}"
+        lifecycle: operation
+        credential_source: smb_principal
+        operand_mode: upload
+      update:
+        key_template: "smbclient:{server}:{share}:{operation}"
+        image: /usr/bin/smbclient
+        command_line_template: >-
+          smbclient "//{server}/{share}" -U "{smb_principal}" {auth_options} -c 'put "{local_path}" "{path}"'
+        username_template: "{username}"
+        lifecycle: operation
+        credential_source: smb_principal
+        operand_mode: upload
+      copy:
+        key_template: "smbclient:{server}:{share}:{operation}"
+        image: /usr/bin/smbclient
+        command_line_template: >-
+          smbclient "//{server}/{share}" -U "{smb_principal}" {auth_options} -c 'get "{path}" "{local_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+        credential_source: smb_principal
+        operand_mode: download
+      move:
+        key_template: "smbclient:{server}:{share}:{operation}"
+        image: /usr/bin/smbclient
+        command_line_template: >-
+          smbclient "//{server}/{share}" -U "{smb_principal}" {auth_options} -c 'rename "{path}" "{destination_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+        credential_source: smb_principal
+        operand_mode: rename
+      delete:
+        key_template: "smbclient:{server}:{share}:{operation}"
+        image: /usr/bin/smbclient
+        command_line_template: >-
+          smbclient "//{server}/{share}" -U "{smb_principal}" {auth_options} -c 'del "{path}"'
+        username_template: "{username}"
+        lifecycle: operation
+        credential_source: smb_principal
+        operand_mode: remote
+
+  linux_cifs_mount:
+    os_category: linux
+    access_mode: mounted
+    path_style: mounted
+    # mount.cifs establishes a mount; it does not own each later SMB operation.
+    # Leave the transport PID unavailable and use the operation actor below for
+    # endpoint file evidence.
+    transport_attribution: kernel
+    service_aliases: [cifs-utils, cifs-client]
+    weight: 40.0
+    system_types: [workstation, server, domain_controller]
+    operation_processes:
+      browse:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /usr/bin/find
+        command_line_template: 'find "{client_path}" -maxdepth 1 -type f'
+        username_template: "{username}"
+        lifecycle: operation
+      read:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /usr/bin/head
+        command_line_template: 'head -c 4096 "{client_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+      create:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /usr/bin/touch
+        command_line_template: 'touch "{client_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+      update:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /usr/bin/tee
+        command_line_template: 'tee -a "{client_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+      copy:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /usr/bin/cp
+        command_line_template: 'cp -- "{source_path}" "{destination_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+        operand_mode: transfer
+      move:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /usr/bin/mv
+        command_line_template: 'mv -- "{source_path}" "{destination_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+        operand_mode: transfer
+      delete:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /usr/bin/rm
+        command_line_template: 'rm -- "{client_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+
+server_defaults:
+  windows: windows_lanmanserver
+  linux: linux_samba
+
+server_profiles:
+  windows_lanmanserver:
+    os_category: windows
+    service_aliases: [smb, smb-server, lanmanserver]
+    listener:
+      key_template: lanmanserver
+      image: 'C:\Windows\System32\svchost.exe'
+      command_line_template: svchost.exe -k netsvcs -p -s LanmanServer
+      username_template: SYSTEM
+      lifecycle: service
+
+  linux_samba:
+    os_category: linux
+    service_aliases: [samba, smbd, smb-server]
+    listener:
+      key_template: smbd_master
+      image: /usr/sbin/smbd
+      command_line_template: /usr/sbin/smbd --foreground --no-process-group
+      username_template: root
+      lifecycle: service
+    worker:
+      key_template: "smbd_worker:{client_ip}:{username}"
+      image: /usr/sbin/smbd
+      command_line_template: /usr/sbin/smbd --foreground --no-process-group
+      username_template: root
+      lifecycle: transport

@@ -33,11 +33,14 @@ from evidenceforge.generation.engine.baseline import (
     _baseline_success_port_for_target,
     _baseline_success_target_for_guarded_port,
 )
+from evidenceforge.generation.world_model import WorldModel
 from evidenceforge.models.scenario import (
     BaselineActivity,
     Environment,
     OutputSpec,
     Scenario,
+    StorageConfig,
+    StorageServerConfig,
     System,
     TimeWindow,
     User,
@@ -188,6 +191,56 @@ class TestRDPBaselineNoise:
         )
 
         assert effective_target == file_server
+
+    def test_guarded_smb_accepts_explicit_linux_storage_capability(self) -> None:
+        """Storage topology should authorize SMB success without a redundant service label."""
+        client = System(
+            hostname="LINUX-CLIENT",
+            ip="10.10.10.50",
+            os="Ubuntu 24.04",
+            type="workstation",
+            services=["smbclient"],
+        )
+        storage = System(
+            hostname="STORAGE-01",
+            ip="10.10.20.20",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        scenario = _make_scenario([client, storage])
+        scenario.environment.storage = StorageConfig(
+            servers=[StorageServerConfig(system=storage.hostname, presets=["collaboration"])]
+        )
+        world_model = WorldModel(scenario, "corp.com")
+
+        assert _baseline_success_port_for_target(
+            storage,
+            445,
+            "smb",
+            random.Random(9),
+            world_model,
+        ) == (445, "smb")
+
+    def test_guarded_smb_never_selects_the_source_as_its_own_server(self) -> None:
+        """A sole Samba server must not create successful self-directed SMB traffic."""
+        samba = System(
+            hostname="SAMBA-01",
+            ip="10.10.20.20",
+            os="Ubuntu 24.04",
+            type="server",
+            services=["smbd"],
+        )
+
+        assert (
+            _baseline_success_target_for_guarded_port(
+                [samba],
+                samba,
+                samba,
+                445,
+                random.Random(9),
+            )
+            is None
+        )
 
     def test_guarded_profile_smb_skips_without_compatible_receiver(self):
         """Profile SMB should not invent a success target when no receiver exposes SMB."""

@@ -103,3 +103,60 @@ def test_31_day_smb_state_and_external_sorting_remain_bounded(tmp_path: Path) ->
     assert thirty_one_day_seconds <= seven_day_seconds * 7 + 1.0
     with (tmp_path / "thirty-one-days.json").open(encoding="utf-8") as output:
         assert sum(1 for _line in output) == 31 * 24 * 100
+
+
+@pytest.mark.slow
+def test_31_day_mixed_windows_and_samba_state_remains_bounded() -> None:
+    """Parallel Windows and Samba share identities must not collide or grow unbounded."""
+
+    manager = StateManager()
+    started_at = datetime(2024, 1, 1, tzinfo=UTC)
+    working_sets = {
+        server: tuple(
+            CompiledStorageFile(
+                file_id=f"{server.casefold()}-working-file-{index}",
+                share=f"{server}.collaboration",
+                path=f"Projects\\Working\\document-{index:02d}.docx",
+                size_bytes=64_000 + index,
+                mime_type=(
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                ),
+                tags=("working-set", platform),
+            )
+            for index in range(64)
+        )
+        for server, platform in (("FS-WIN-01", "windows"), ("SAMBA-01", "linux"))
+    }
+    max_sessions = 0
+    max_trees = 0
+    for hour in range(31 * 24):
+        timestamp = started_at + timedelta(hours=hour)
+        for server_index, (server, files) in enumerate(working_sets.items(), start=1):
+            session = manager.open_smb_session(
+                client_ip=f"10.0.{server_index}.10",
+                principal="alice",
+                server=server,
+                security_policy="standard",
+                logon_id=f"0x{server_index:02X}{hour:014X}",
+                transport_uid=f"C{server_index}{hour:015d}",
+                started_at=timestamp,
+                reuse=True,
+            )
+            manager.get_or_open_smb_tree(
+                session.session_id,
+                f"{server}.collaboration",
+                timestamp,
+            )
+            manager.touch_smb_file(files[hour % len(files)])
+        summary = manager.get_state_summary()
+        max_sessions = max(max_sessions, summary["smb_sessions"])
+        max_trees = max(max_trees, summary["smb_trees"])
+        manager.sweep_smb_state(timestamp + timedelta(hours=2))
+
+    summary = manager.get_state_summary()
+    assert max_sessions <= 2
+    assert max_trees <= 2
+    assert summary["smb_sessions"] == 0
+    assert summary["smb_trees"] == 0
+    assert summary["smb_handles"] == 0
+    assert summary["smb_mutations"] == sum(len(files) for files in working_sets.values())

@@ -154,14 +154,14 @@ def _print_compiled_storage(storage_world: "StorageWorldModel") -> None:
     """Render author-facing diagnostics for a compiled storage world."""
     console.print("\n[bold]Compiled storage topology[/bold]")
     if not storage_world.volumes:
-        console.print("[dim]No Windows storage volumes or SMB disk shares were compiled.[/dim]")
+        console.print("[dim]No Windows or Linux storage volumes or SMB shares were compiled.[/dim]")
         return
 
     console.print("\n[bold]Volumes[/bold]")
     volumes_table = _storage_table(
         ("Volume", "left"),
         ("Mount", "left"),
-        ("Filesystem", "left"),
+        ("Platform / backing FS", "left"),
         ("Label", "left"),
         ("Shares", "right"),
     )
@@ -175,7 +175,7 @@ def _print_compiled_storage(storage_world: "StorageWorldModel") -> None:
         volumes_table.add_row(
             Text(volume_ref),
             Text(volume.mount),
-            Text(volume.filesystem),
+            Text(f"{volume.platform} / {volume.filesystem}"),
             Text(volume.label),
             str(share_count),
         )
@@ -219,6 +219,23 @@ def _print_compiled_storage(storage_world: "StorageWorldModel") -> None:
             Text(share.encryption),
         )
     console.print(share_policy_table)
+
+    console.print("[bold cyan]SMB filesystem views[/bold cyan]")
+    filesystem_views_table = _storage_table(
+        ("Share", "left"),
+        ("Provider", "left"),
+        ("Backing FS", "left"),
+        ("SMB native FS", "left"),
+    )
+    for share in storage_world.shares:
+        volume = storage_world.volumes_by_ref[f"{share.system}.{share.volume}".casefold()]
+        filesystem_views_table.add_row(
+            Text(share.ref),
+            Text("samba" if volume.platform == "linux" else "windows"),
+            Text(volume.filesystem),
+            Text(share.smb_native_filesystem),
+        )
+    console.print(filesystem_views_table)
 
     console.print("\n[bold]Effective access[/bold]")
     data_access_table = _storage_table(
@@ -288,10 +305,16 @@ def _print_compiled_storage(storage_world: "StorageWorldModel") -> None:
 
     if storage_world.mappings:
         console.print("\n[bold]Mappings[/bold]")
-        mappings_table = _storage_table(
+        mapping_locations_table = _storage_table(
             ("Mapping", "left"),
             ("Share", "left"),
             ("Drive", "left"),
+            ("Mount", "left"),
+        )
+        mapping_policy_table = _storage_table(
+            ("Mapping", "left"),
+            ("Credentials", "left"),
+            ("Principal", "left"),
             ("Lifecycle", "left"),
             ("Effective audience", "left"),
         )
@@ -300,14 +323,21 @@ def _print_compiled_storage(storage_world: "StorageWorldModel") -> None:
             if mapping.systems:
                 systems = ", ".join(sorted(mapping.systems, key=str.casefold))
                 audience = f"{audience} on {systems}"
-            mappings_table.add_row(
+            mapping_locations_table.add_row(
                 Text(mapping.id),
                 Text(mapping.share),
-                Text(mapping.drive),
+                Text(mapping.drive or "-"),
+                Text(mapping.mount or "-"),
+            )
+            mapping_policy_table.add_row(
+                Text(mapping.id),
+                Text(mapping.credential_mode),
+                Text(mapping.principal or "-"),
                 Text(mapping.lifecycle),
                 Text(audience),
             )
-        console.print(mappings_table)
+        console.print(mapping_locations_table)
+        console.print(mapping_policy_table)
 
 
 def _format_capacity(value: int) -> str:
@@ -1023,7 +1053,7 @@ def validate(
         False,
         "--show-storage",
         help=(
-            "Show compiled SMB volumes, share roots/scales/access, mappings, "
+            "Show compiled Windows/Linux SMB volumes, share roots/scales/access, mappings, "
             "and bounded catalog samples."
         ),
     ),

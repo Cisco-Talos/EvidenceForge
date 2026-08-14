@@ -83,6 +83,7 @@ _WINDOWS_WFP_RENDER_KEY = "windows.wfp_connection"
 _REMOTE_TRANSPORT_KEY = tuple[str, str, str, str, int, str, int, str]
 _TRANSACTION_TRANSPORT_KEY = tuple[str, str, str, int, str, int, str]
 _SSH_TRANSPORT_KEY = tuple[str, str, int, str, int, str]
+_SMB_TRANSPORT_KEY = tuple[str, str, int, str, int, str]
 
 
 class SourceTimingPlanner:
@@ -103,6 +104,7 @@ class SourceTimingPlanner:
             _TRANSACTION_TRANSPORT_KEY, datetime
         ] = {}
         self._admitted_ecar_ssh_transports: dict[_SSH_TRANSPORT_KEY, datetime] = {}
+        self._admitted_ecar_smb_transports: dict[_SMB_TRANSPORT_KEY, datetime] = {}
 
     @staticmethod
     def sysmon_envelope_time(
@@ -269,6 +271,27 @@ class SourceTimingPlanner:
                         network.protocol,
                     )
                 ] = timestamp
+
+        if (
+            format_name == "ecar"
+            and event.event_type == "connection"
+            and network is not None
+            and network.protocol.lower() == "tcp"
+            and network.dst_port == 445
+            and event.dst_host is not None
+        ):
+            timestamp = self._latest_ecar_endpoint_flow_time(event)
+            if timestamp is not None:
+                self._admitted_ecar_smb_transports[
+                    self._smb_transport_key(
+                        event.dst_host.hostname,
+                        network.src_ip,
+                        network.src_port,
+                        network.dst_ip,
+                        network.dst_port,
+                        network.protocol,
+                    )
+                ] = timestamp
         if (
             format_name == "ecar"
             and event.event_type == "connection"
@@ -415,6 +438,24 @@ class SourceTimingPlanner:
                             getattr(host, "hostname", ""),
                             getattr(event.auth, "source_ip", ""),
                             getattr(event.auth, "source_port", ""),
+                            canonical_timestamp,
+                        ),
+                    ),
+                )
+        elif event.auth.session_kind == "smb" and getattr(host, "os_category", "") == "linux":
+            smb_anchor = self._smb_transport_anchor(event)
+            if smb_anchor is not None:
+                timestamp = max(
+                    timestamp,
+                    smb_anchor
+                    + sample_timing_delta(
+                        "source.ecar_smb_session_after_accept",
+                        seed_parts=(
+                            "flow_order",
+                            getattr(host, "hostname", ""),
+                            getattr(event.auth, "source_ip", ""),
+                            getattr(event.auth, "source_port", ""),
+                            getattr(event.auth, "auth_session_ref", ""),
                             canonical_timestamp,
                         ),
                     ),
@@ -635,6 +676,24 @@ class SourceTimingPlanner:
             )
         )
 
+    def _smb_transport_anchor(self, event: TimingOccurrence) -> datetime | None:
+        """Return the admitted exact-tuple SMB FLOW time for a Samba session."""
+
+        auth = event.auth
+        host = event.dst_host or event.src_host
+        if auth is None or host is None or not auth.source_ip or auth.source_port <= 0:
+            return None
+        return self._admitted_ecar_smb_transports.get(
+            self._smb_transport_key(
+                host.hostname,
+                auth.source_ip,
+                auth.source_port,
+                host.ip,
+                445,
+                "tcp",
+            )
+        )
+
     @staticmethod
     def _ssh_transport_key(
         target_hostname: str,
@@ -645,6 +704,26 @@ class SourceTimingPlanner:
         protocol: str,
     ) -> _SSH_TRANSPORT_KEY:
         """Return the exact target-view key for one admitted SSH transport."""
+
+        return (
+            target_hostname,
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+            protocol.lower(),
+        )
+
+    @staticmethod
+    def _smb_transport_key(
+        target_hostname: str,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+    ) -> _SMB_TRANSPORT_KEY:
+        """Return the exact target-view key for one admitted SMB transport."""
 
         return (
             target_hostname,

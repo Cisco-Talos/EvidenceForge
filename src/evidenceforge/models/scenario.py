@@ -104,6 +104,39 @@ def _validate_windows_absolute_path(value: str, field_name: str) -> str:
     return normalized
 
 
+def _validate_posix_absolute_path(value: str, field_name: str) -> str:
+    """Validate an absolute POSIX path while preserving a trailing directory marker."""
+
+    if not value.startswith("/"):
+        raise ValueError(f"{field_name} must be an absolute POSIX path")
+    if "\\" in value:
+        raise ValueError(f"{field_name} cannot contain Windows path separators")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError(f"{field_name} cannot contain control characters")
+    if value == "/":
+        return value
+    trailing_separator = value.endswith("/") and value != "/"
+    components = value.split("/")[1:]
+    if trailing_separator:
+        components = components[:-1]
+    if any(not component or component in {".", ".."} for component in components):
+        raise ValueError(f"{field_name} cannot contain empty, '.' or '..' components")
+    normalized = "/" + "/".join(components)
+    if trailing_separator:
+        normalized += "/"
+    return normalized
+
+
+def _validate_platform_absolute_path(value: str, field_name: str) -> str:
+    """Validate either an absolute Windows drive path or an absolute POSIX path."""
+
+    if re.match(r"^[a-zA-Z]:[\\/]", value):
+        return _validate_windows_absolute_path(value, field_name)
+    if value.startswith("/"):
+        return _validate_posix_absolute_path(value, field_name)
+    raise ValueError(f"{field_name} must be an absolute Windows drive or POSIX path")
+
+
 def _validate_hostname(v: str, field_name: str = "hostname") -> str:
     """Validate a bare hostname/FQDN — reject schemes, ports, paths, whitespace."""
     if not v:
@@ -982,7 +1015,7 @@ class SmbShareLocation(BaseModel):
 
 
 class SmbClientLocation(BaseModel):
-    """A local path on the initiating Windows client."""
+    """An OS-native local path on the initiating modeled client."""
 
     type: Literal["client"] = "client"
     path: str | None = None
@@ -992,7 +1025,7 @@ class SmbClientLocation(BaseModel):
     def validate_path(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return _validate_windows_absolute_path(value, "SMB client path")
+        return _validate_platform_absolute_path(value, "SMB client path")
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -1078,9 +1111,22 @@ class SmbActivityEventSpec(_IdsAttachableEventSpec):
     destination: SmbLocation | None = None
     batch: SmbBatchSpec | None = None
     outcome: Literal["auto", "success", "access_denied", "not_found", "sharing_violation"] = "auto"
-    path_style: Literal["auto", "unc", "mapped"] = "auto"
+    path_style: Literal["auto", "unc", "mapped", "mounted"] = "auto"
     mapping: str | None = None
     client: SmbExternalClient | None = None
+    client_access: Literal["auto", "windows_native", "cifs_mount", "smbclient"] = "auto"
+    auth_protocol: Literal["auto", "kerberos", "ntlmssp"] = "auto"
+    smb_principal: str | None = None
+
+    @field_validator("smb_principal")
+    @classmethod
+    def validate_smb_principal(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("SMB principal cannot be empty")
+        return normalized
 
     @model_validator(mode="after")
     def validate_operation_shape(self) -> "SmbActivityEventSpec":
@@ -1113,8 +1159,12 @@ class SmbActivityEventSpec(_IdsAttachableEventSpec):
             raise ValueError("SMB create cannot assert sharing_violation on a missing path")
         if self.outcome == "not_found" and (self.target is None or self.target.path is None):
             raise ValueError("SMB not_found requires an explicit target path")
-        if self.path_style == "mapped" and self.client is not None:
-            raise ValueError("external SMB clients cannot use mapped path presentation")
+        if self.path_style in {"mapped", "mounted"} and self.client is not None:
+            raise ValueError("external SMB clients cannot use mapped or mounted path presentation")
+        if self.client is not None and self.client_access != "auto":
+            raise ValueError("external SMB clients require client_access: auto")
+        if self.client is not None and self.mapping is not None:
+            raise ValueError("external SMB clients cannot use storage mappings")
         if self.mapping is not None and self.path_style == "unc":
             raise ValueError("SMB mapping cannot be combined with path_style: unc")
         return self
@@ -2485,6 +2535,10 @@ class ProxyAuthPolicyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+# Resolve ProxyConfig.auth_policy after its forward-declared model is available.
+ProxyConfig.model_rebuild()
+
+
 class EmailArtifactsConfig(BaseModel):
     """Email artifact emission settings."""
 
@@ -2595,17 +2649,17 @@ class EmailConfig(BaseModel):
 
 
 class StorageVolumeConfig(BaseModel):
-    """One Windows storage volume or folder-mounted volume."""
+    """One OS-native storage volume or folder-mounted volume."""
 
     id: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
     mount: str
-    filesystem: Literal["ntfs", "refs"] = "ntfs"
+    filesystem: Literal["ntfs", "refs", "ext4", "xfs"] = "ntfs"
     label: str | None = None
 
     @field_validator("mount")
     @classmethod
     def validate_mount(cls, value: str) -> str:
-        return _validate_windows_absolute_path(value, "storage volume mount")
+        return _validate_platform_absolute_path(value, "storage volume mount")
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -2656,6 +2710,7 @@ class StorageShareConfig(BaseModel):
     population: Literal["auto", "small", "medium", "large"] | None = None
     activity: Literal["low", "normal", "high"] | None = None
     encryption: Literal["not_required", "required"] = "not_required"
+    smb_native_filesystem: str | None = None
     access: StorageAccessConfig | None = None
     seed_files: list[StorageSeedFileConfig] = Field(default_factory=list)
 
@@ -2670,6 +2725,16 @@ class StorageShareConfig(BaseModel):
     @classmethod
     def normalize_root(cls, value: str) -> str:
         return _normalize_smb_relative_path(value, "storage share root", allow_empty=True)
+
+    @field_validator("smb_native_filesystem")
+    @classmethod
+    def validate_smb_native_filesystem(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized or re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._ -]{0,63}", normalized) is None:
+            raise ValueError("SMB native filesystem must be a nonempty safe label")
+        return normalized
 
     @model_validator(mode="after")
     def validate_seed_files(self) -> "StorageShareConfig":
@@ -2691,8 +2756,14 @@ class StorageShareOverrideConfig(BaseModel):
     population: Literal["auto", "small", "medium", "large"] | None = None
     activity: Literal["low", "normal", "high"] | None = None
     encryption: Literal["not_required", "required"] | None = None
+    smb_native_filesystem: str | None = None
     access: StorageAccessConfig | None = None
     seed_files: list[StorageSeedFileConfig] = Field(default_factory=list)
+
+    @field_validator("smb_native_filesystem")
+    @classmethod
+    def validate_smb_native_filesystem(cls, value: str | None) -> str | None:
+        return StorageShareConfig.validate_smb_native_filesystem(value)
 
     @model_validator(mode="after")
     def require_override(self) -> "StorageShareOverrideConfig":
@@ -2701,6 +2772,7 @@ class StorageShareOverrideConfig(BaseModel):
                 self.population is not None,
                 self.activity is not None,
                 self.encryption is not None,
+                self.smb_native_filesystem is not None,
                 self.access is not None,
                 bool(self.seed_files),
             )
@@ -2712,7 +2784,7 @@ class StorageShareOverrideConfig(BaseModel):
 
 
 class StorageServerConfig(BaseModel):
-    """Storage configuration for one modeled Windows server."""
+    """Storage configuration for one modeled Windows or Linux server."""
 
     system: str
     presets: list[Literal["collaboration", "homes", "software", "backup", "dc_policy"]] | None = (
@@ -2732,7 +2804,12 @@ class StorageServerConfig(BaseModel):
             raise ValueError("storage server volumes cannot be an empty list")
         volumes = self.volumes or []
         volume_ids = [volume.id.casefold() for volume in volumes]
-        mounts = [volume.mount.casefold().rstrip("\\") for volume in volumes]
+        mounts = [
+            volume.mount.casefold().rstrip("\\")
+            if re.match(r"^[a-zA-Z]:\\", volume.mount)
+            else volume.mount.rstrip("/") or "/"
+            for volume in volumes
+        ]
         if len(volume_ids) != len(set(volume_ids)):
             raise ValueError("storage volume IDs must be unique per server")
         if len(mounts) != len(set(mounts)):
@@ -2762,12 +2839,15 @@ class StorageServerConfig(BaseModel):
 
 
 class StorageMappingConfig(BaseModel):
-    """Drive mapping available to an audience of modeled clients."""
+    """OS-native share mapping available to an audience of modeled clients."""
 
     id: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
     share: str
     audience: TrafficAudience = Field(default_factory=TrafficAudience)
     drive: str | None = None
+    mount: str | None = None
+    credential_mode: Literal["per_user", "fixed"] = "per_user"
+    principal: str | None = None
     lifecycle: Literal["persistent", "on_demand"] = "persistent"
 
     @field_validator("drive")
@@ -2776,6 +2856,31 @@ class StorageMappingConfig(BaseModel):
         if value is not None and not re.fullmatch(r"[D-Zd-z]:", value):
             raise ValueError("storage mapping drive must be D: through Z:")
         return value.upper() if value is not None else None
+
+    @field_validator("mount")
+    @classmethod
+    def validate_mount(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_posix_absolute_path(value, "storage mapping mount").rstrip("/") or "/"
+
+    @field_validator("principal")
+    @classmethod
+    def validate_principal(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("storage mapping principal cannot be empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_credentials(self) -> "StorageMappingConfig":
+        if self.credential_mode == "fixed" and self.principal is None:
+            raise ValueError("fixed storage mapping credentials require principal")
+        if self.credential_mode == "per_user" and self.principal is not None:
+            raise ValueError("per_user storage mapping credentials forbid principal")
+        return self
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 

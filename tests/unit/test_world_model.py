@@ -41,6 +41,8 @@ from evidenceforge.models.scenario import (
     Group,
     OutputSpec,
     Scenario,
+    StorageConfig,
+    StorageServerConfig,
     StorylineEvent,
     System,
     TimeWindow,
@@ -155,6 +157,138 @@ def test_dns_client_services_do_not_make_workstations_dns_servers(world_model: W
 
     assert "DC-01" in dns_hostnames
     assert "WKS-02" not in dns_hostnames
+
+
+@pytest.mark.parametrize("service", ["cifs-utils", "smbclient"])
+def test_linux_smb_client_packages_do_not_imply_server_role(service: str) -> None:
+    """Linux client packages must not be mistaken for Samba server services."""
+    scenario = _make_scenario()
+    client = System(
+        hostname="LINUX-CLIENT",
+        ip="10.10.10.61",
+        os="Ubuntu 24.04",
+        type="workstation",
+        services=[service],
+    )
+    scenario.environment.systems = [client]
+
+    model = WorldModel(scenario, "corp.local")
+    host = model.hosts[client.hostname]
+
+    assert host.supports(HostCapability.SMB_CLIENT)
+    assert not host.supports(HostCapability.SMB_SERVER)
+    assert "file_server" not in host.canonical_roles
+
+
+def test_linux_gvfs_is_transport_texture_not_canonical_smb_capability() -> None:
+    """GVFS may own opaque TCP/445 but must not schedule typed SMB activity."""
+    scenario = _make_scenario()
+    client = System(
+        hostname="LINUX-DESKTOP",
+        ip="10.10.10.62",
+        os="Ubuntu 24.04",
+        type="workstation",
+        services=["gvfs-smb"],
+    )
+    scenario.environment.systems = [client]
+
+    model = WorldModel(scenario, "corp.local")
+
+    assert not model.hosts[client.hostname].supports(HostCapability.SMB_CLIENT)
+    assert not model.hosts[client.hostname].supports(HostCapability.SMB_SERVER)
+
+
+@pytest.mark.parametrize("service", ["samba", "smbd", "smb-server"])
+def test_linux_samba_services_imply_server_not_client(service: str) -> None:
+    """Samba daemon labels should declare only the Linux SMB server capability."""
+    scenario = _make_scenario()
+    server = System(
+        hostname="SAMBA-01",
+        ip="10.10.20.61",
+        os="Ubuntu 24.04",
+        type="server",
+        services=[service],
+    )
+    scenario.environment.systems = [server]
+
+    model = WorldModel(scenario, "corp.local")
+    host = model.hosts[server.hostname]
+
+    assert host.supports(HostCapability.SMB_SERVER)
+    assert not host.supports(HostCapability.SMB_CLIENT)
+    assert "file_server" in host.canonical_roles
+
+
+def test_generic_linux_file_server_role_does_not_imply_samba() -> None:
+    """A Linux file-server label alone must not invent a Samba deployment."""
+    scenario = _make_scenario()
+    server = System(
+        hostname="LINUX-FILES-01",
+        ip="10.10.20.63",
+        os="Ubuntu 24.04",
+        type="server",
+        roles=["file_server"],
+        services=["nfs"],
+    )
+    scenario.environment.systems = [server]
+
+    model = WorldModel(scenario, "corp.local")
+
+    assert not model.hosts[server.hostname].supports(HostCapability.SMB_SERVER)
+
+
+def test_generic_linux_smb_label_does_not_choose_client_or_server_capability() -> None:
+    """An ambiguous Linux SMB label must be replaced by an explicit client or server marker."""
+    scenario = _make_scenario()
+    system = System(
+        hostname="LINUX-SMB-01",
+        ip="10.10.20.64",
+        os="Ubuntu 24.04",
+        type="server",
+        services=["smb"],
+    )
+    scenario.environment.systems = [system]
+
+    host = WorldModel(scenario, "corp.local").hosts[system.hostname]
+
+    assert not host.supports(HostCapability.SMB_CLIENT)
+    assert not host.supports(HostCapability.SMB_SERVER)
+
+
+def test_storage_server_reference_implies_smb_server_capability() -> None:
+    """Explicit storage topology should make a Linux host an SMB server."""
+    scenario = _make_scenario()
+    server = System(
+        hostname="STORAGE-01",
+        ip="10.10.20.62",
+        os="Rocky Linux 9",
+        type="server",
+    )
+    scenario.environment.systems = [server]
+    scenario.environment.storage = StorageConfig(
+        servers=[StorageServerConfig(system=server.hostname, presets=["collaboration"])]
+    )
+
+    model = WorldModel(scenario, "corp.local")
+    host = model.hosts[server.hostname]
+
+    assert host.supports(HostCapability.SMB_SERVER)
+    assert "file_server" in host.canonical_roles
+    assert "smb-server" in model.service_defaults_by_host[server.hostname]
+
+
+def test_windows_smb_capability_defaults_are_role_aware() -> None:
+    """Windows clients are universal while server capability follows host type."""
+    scenario = _make_scenario()
+    workstation, server = scenario.environment.systems[0], scenario.environment.systems[2]
+    scenario.environment.systems = [workstation, server]
+
+    model = WorldModel(scenario, "corp.local")
+
+    assert model.hosts[workstation.hostname].supports(HostCapability.SMB_CLIENT)
+    assert not model.hosts[workstation.hostname].supports(HostCapability.SMB_SERVER)
+    assert model.hosts[server.hostname].supports(HostCapability.SMB_CLIENT)
+    assert model.hosts[server.hostname].supports(HostCapability.SMB_SERVER)
 
 
 @pytest.fixture

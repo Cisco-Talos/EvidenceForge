@@ -43,7 +43,8 @@ Determine:
 3. Whether to initialize a blank pack or fork the closest organization sample.
 4. Whether the pack must stand alone or intentionally depends on a named consumer scenario.
 5. Which reusable users, systems, groups, services, network segments, sensors, email topology,
-   storage topology, and baseline activity belong to the organization.
+   storage topology, SMB client/server platforms and services, mapping/credential modes, Samba
+   audit depth, and baseline activity belong to the organization.
 6. Which organization-specific personas, processes, applications, destinations, traffic, or
    storage vocabulary cannot be reused from an industry dependency.
 
@@ -93,6 +94,15 @@ order:
 4. Author the partial or complete `baseline_activity` fragment.
 5. Reconcile users, personas, systems, groups, roles, services, segments, sensors, email routes,
    storage shares/mappings, and catalog references across the effective composed model.
+
+For SMB, use OS-native volume and client paths, keep backing filesystem separate from the
+SMB-advertised label, and keep local actor, SMB principal, and server effective identity distinct.
+Linux servers need a Samba service marker or explicit storage topology; a generic `file_server`
+role is insufficient. Linux clients need explicit `cifs-utils`, `cifs-client`, or `smbclient`
+markers for baseline file activity. GVFS is background
+transport/process texture only and does not prove canonical file semantics. Organization packs may
+own canonical storage/mapping/audit/client-mode fields, but must not embed project-internal
+`smb_profiles.yaml` overrides.
 
 Apply the same generation-effective catalog chain as an industry pack: applications own persona
 audiences, process references, and named destination/service connections; traffic references those
@@ -165,6 +175,10 @@ eforge generate <consumer-scenario.yaml> --output <absolute-temporary-output> \
 Inspect the composition explanation for exact dependencies, origins, replacements, and qualified
 references. Inspect generated records for representative users, systems, applications,
 destinations, cadence, email behavior, and SMB behavior that the pack claims to provide.
+For SMB, also inspect `STORAGE_MANIFEST.json` schema v2 for platform, backing/advertised
+filesystem, drive/mount, credential mode, and resolved path views. Confirm Windows audit appears
+only for Windows servers, Samba syslog only for Linux servers, and any requested Zeek evidence has
+an observing sensor.
 Always pass an absolute temporary `--output`. If the claimed proof requires Zeek, IDS, or firewall
 records, confirm the effective organization has a compatible observing sensor before generation.
 Selecting a format enables its emitter but does not guarantee a file in a short probabilistic run.

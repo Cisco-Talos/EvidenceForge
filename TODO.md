@@ -182,6 +182,12 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   stateful file operations, native Zeek SMB/file projection, and correlated
   Windows/eCAR evidence. Generic connection events remain transport-only. See the
   [SMB redesign worklog](docs/worklog/2026-08-13-smb-redesign.md).
+- [x] **P2** Extend canonical SMB2/3 disk-share activity to explicit Linux clients and Samba
+  servers: mounted CIFS and direct `smbclient` modes, POSIX paths, ext4/XFS backing storage,
+  mixed-platform mapping presentations, distinct actor/credential/effective identities,
+  profile-gated Samba audit evidence, cross-platform Zeek/eCAR projection, and storage manifest
+  schema v2. GVFS remains background transport texture rather than typed file activity. See the
+  [Linux SMB support worklog](docs/worklog/2026-08-14-linux-smb-support.md).
 - [ ] **P3** Add generalized Zeek `kerberos.log` and `ntlm.log` projections across
   applicable authentication protocols, including SMB, with sensor-visibility and
   encryption semantics; do not implement SMB-private authentication emitters.
@@ -200,10 +206,11 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P3** Optionally materialize SMB file artifacts and richer physical/semantic
   lineage from canonical metadata/version state without requiring artifacts for
   standard datasets; evaluate durable recursive directory mutation separately.
-- [ ] **P3** Extend canonical SMB based on scenario demand with selected Linux/Samba,
-  SMB1, DFS, IPC$/named-pipe/print, clustering, leases/oplocks/durable handles,
-  byte-range locks, multichannel/RDMA/QUIC, and advanced dialect/signing/authentication
-  or server-wide encryption controls.
+- [ ] **P3** Extend canonical SMB beyond the completed Windows/Linux SMB2/3 disk-share slice as
+  scenario demand warrants: SMB1, DFS, IPC$/named-pipe/print, clustering,
+  leases/oplocks/durable handles, byte-range locks, multichannel/RDMA/QUIC, KSMBD, SMB POSIX
+  extensions, typed GVFS activity, optional Linux Audit/kernel-CIFS diagnostics, and advanced
+  dialect/signing/authentication or server-wide encryption controls.
 - [ ] **P3** Add FTP control and data-channel protocol support with
   authentication, `RETR`/`STOR`, paths and results, `ftp.log`, and directional
   file analysis.

@@ -3,9 +3,10 @@ name: eforge-config
 license: Copyright (c) 2026 Cisco Systems, Inc. and its affiliates; SPDX-License-Identifier: MIT
 description: >
   Add, modify, or remove EvidenceForge personas, DNS domains, applications, traffic profiles,
-  spawn rules, and other configuration data that controls how eforge generates realistic baseline
-  activity. Use this skill when the user wants to add a persona, add a domain or website, add an
-  application, change browsing intensity, update traffic weights, add bash commands, customize
+  spawn rules, SMB client/server profiles, and other configuration data that controls how eforge
+  generates realistic baseline activity. Use this skill when the user wants to add a persona,
+  add a domain or website, add an application, change browsing intensity, update traffic weights,
+  add bash commands, customize
   proxy URI templates, or validate config file integrity — even if they don't say "config".
   This is for changing the underlying data library, not for creating scenarios (use the scenario
   skill), authoring public Scenario 2.0 packs (use the industry-pack or organization-pack skill),
@@ -92,6 +93,7 @@ with the scenario and evidence references.
 | Modify baseline auth noise | `auth_noise.yaml` | (standalone — stale scheduled-credential accounts and irregular recurrence timing) |
 | Modify endpoint background noise | `endpoint_noise.yaml` | (standalone — scheduled-process timing and DHCP registry emission policy) |
 | Modify host activity distribution | `host_activity_profiles.yaml` | (standalone — host/persona/role rate-family multipliers, firewall deny bursts, and artifact variants) |
+| Modify SMB provider defaults or client/server morphology | `smb_profiles.yaml` | (standalone versioned map — advertised-filesystem defaults, Samba audit operation policy, OS/access/path presentation, auth/process templates and lifecycles, transport attribution, and listener/worker metadata; scenario YAML still owns storage, mapping, identity, audit-profile selection, and client-access intent) |
 | Modify generated identity pools | `email_background.yaml`, `mail_public_identities.yaml`, `external_actor_profiles.yaml`, `suspicious_benign.yaml`, `command_parameter_pools.yaml` | (standalone fallback/background pools — baseline email domains/local-parts, reserved public mail replacement domains, omitted storyline external IPs, suspicious-benign DNS/connection targets, and command URL/host placeholders). Scenario-authored IPs/domains override these pools. |
 | Modify source observation coverage | `observation_profiles.yaml` | Scenario `observation_profile` selects the named profile; generated `OBSERVATION_MANIFEST.json` lets eval account for expected gaps; keep `complete` as the default training profile |
 | Modify causal/source timing | `timing_profiles.yaml` | (standalone — causal prerequisite, source latency, teardown, and Windows/Sysmon collision-spacing knobs) |
@@ -117,6 +119,7 @@ Also read the relevant reference doc for field schemas and conventions:
 | Sysmon filters, EDR pools, CallTrace, ProcessAccess masks, CreateRemoteThread pairs | `references/config-apps-processes.md` (Sysmon sections) |
 | Persona file structure | `references/config-personas.md` |
 | Host activity (bash, systemd, syslog, endpoint noise) | `references/config-host-activity.md` |
+| SMB client/server profiles | `references/config-host-activity.md` |
 | Generated identity pools | `references/config-dns-network.md` and `references/config-host-activity.md` |
 | Timing profiles | `references/config-host-activity.md` |
 | Format definitions | `references/config-formats.md` (read-only reference — not user-customizable) |
@@ -149,6 +152,16 @@ needs to change. Read `references/config-ids.md`, run `eforge validate-config`,
 and start a fresh CLI process after the edit so cached signature data is reloaded.
 
 **Adding an application:** Which OS(es)? Categories? Which personas? Image path? PE metadata? Command templates? Parent process? Children? Network traffic?
+
+**Changing an SMB profile:** First determine whether the user wants scenario intent or reusable
+process morphology. Storage servers/volumes/shares, mappings, credential mode/principal, audit
+level, and `smb_activity.client_access` belong in scenario or organization YAML. Use
+`smb_profiles.yaml` for advertised-filesystem defaults, canonical-to-Samba audit labels and
+eligibility, client/server service aliases, selection weight, path/access profile, transport
+ownership, authentication flags, native process templates, and lifecycles. Preserve kernel
+ownership for mounted CIFS, operation scope for direct `smbclient`, resident scope for Explorer,
+GVFS as opaque background transport/process texture only, and the Samba listener plus
+per-transport worker split.
 
 **Creating a persona:** Role description? Typical activities? Work hours (format: "9am-5pm (lunch 12pm-1pm)")? Risk profile (low/medium/high)? Browsing intensity (light/normal/heavy)? Applications? Custom traffic? Linux user?
 

@@ -38,6 +38,8 @@ from .semantic_validation import (
     packaged_builtin_dns_domains,
     packaged_builtin_dns_tags,
     packaged_builtin_executable_claims,
+    packaged_builtin_persona_ids,
+    packaged_builtin_storage_preset_ids,
     validate_selected_pack_semantics,
 )
 
@@ -556,6 +558,8 @@ def compile_scenario(
                 builtin_dns_tags=packaged_builtin_dns_tags(),
                 builtin_executable_claims=packaged_builtin_executable_claims(),
                 builtin_dns_domains=packaged_builtin_dns_domains(),
+                builtin_persona_ids=packaged_builtin_persona_ids(),
+                builtin_storage_preset_ids=packaged_builtin_storage_preset_ids(),
             )
         catalogs, catalog_origins = _merge_catalogs(selected, organization_index=organization_index)
         for pack in selected:

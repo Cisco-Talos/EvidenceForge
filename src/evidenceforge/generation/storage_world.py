@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.generation.activity.smb_profiles import advertised_filesystem_default
 from evidenceforge.models.scenario import (
     Scenario,
     SmbFileSelector,
@@ -27,6 +28,11 @@ from evidenceforge.models.scenario import (
     System,
 )
 from evidenceforge.utils.rng import _stable_seed
+
+_MappingPresentation = tuple[frozenset[str], frozenset[str], str, str]
+
+_UNSUPPORTED_LINUX_SMB_SERVICES = frozenset({"ksmbd", "ksmbd-server", "samba-ad-dc"})
+_SAMBA_RESERVED_DISK_SHARE_NAMES = frozenset({"c$", "admin$", "sysvol", "netlogon"})
 
 
 @lru_cache(maxsize=1)
@@ -43,10 +49,11 @@ def _load_catalog_config() -> dict[str, Any]:
 
 
 class CompiledStorageVolume(BaseModel):
-    """Resolved Windows volume metadata."""
+    """Resolved OS-native volume metadata."""
 
     id: str
     system: str
+    platform: str = "windows"
     mount: str
     filesystem: str
     label: str
@@ -96,6 +103,7 @@ class CompiledStorageShare(BaseModel):
     population: str
     activity: str
     encryption: str
+    smb_native_filesystem: str
     audit: str
     access: CompiledStorageAccess
     files: tuple[CompiledStorageFile, ...]
@@ -106,13 +114,16 @@ class CompiledStorageShare(BaseModel):
 
 
 class CompiledStorageMapping(BaseModel):
-    """Resolved drive mapping audience."""
+    """Resolved OS-native mapping audience and credential behavior."""
 
     id: str
     share: str
     users: frozenset[str]
     systems: frozenset[str]
-    drive: str
+    drive: str | None = None
+    mount: str | None = None
+    credential_mode: str = "per_user"
+    principal: str | None = None
     lifecycle: str
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -197,11 +208,22 @@ class StorageWorldModel:
         return tuple(result)
 
     def server_local_path(self, share: CompiledStorageShare, relative_path: str) -> str:
-        if len(share.name) == 2 and share.name[1] == "$":
-            return f"{share.name[0].upper()}:\\{relative_path}"
-        if share.name.casefold() == "admin$":
-            return f"C:\\Windows\\{relative_path}"
         volume = self.volumes_by_ref[f"{share.system}.{share.volume}".casefold()]
+        if volume.platform == "windows" and len(share.name) == 2 and share.name[1] == "$":
+            return f"{share.name[0].upper()}:\\{relative_path}"
+        if volume.platform == "windows" and share.name.casefold() == "admin$":
+            return f"C:\\Windows\\{relative_path}"
+        if volume.platform == "linux":
+            components = [
+                volume.mount.rstrip("/") or "/",
+                share.root.replace("\\", "/"),
+                relative_path.replace("\\", "/"),
+            ]
+            root = components[0]
+            suffix = "/".join(component.strip("/") for component in components[1:] if component)
+            if not suffix:
+                return root
+            return f"/{suffix}" if root == "/" else f"{root}/{suffix}"
         components = [volume.mount.rstrip("\\"), share.root, relative_path]
         return "\\".join(component.strip("\\") for component in components if component)
 
@@ -217,16 +239,27 @@ class StorageWorldModel:
     ) -> dict[str, Any]:
         shares: list[dict[str, Any]] = []
         for share in self.shares:
+            volume = self.volumes_by_ref[f"{share.system}.{share.volume}".casefold()]
+            provider = "windows" if volume.platform == "windows" else "samba"
             share_document: dict[str, Any] = {
                 "ref": share.ref,
                 "system": share.system,
                 "name": share.name,
                 "volume": share.volume,
                 "root": share.root,
+                "provider": provider,
+                "platform": volume.platform,
+                "network_root": self.unc_path(share),
+                "server_native_root": self.server_local_path(share, ""),
+                "backing_filesystem": volume.filesystem,
+                "advertised_filesystem": share.smb_native_filesystem,
+                "case_policy": "case_insensitive",
+                "audit_profile": share.audit,
                 "preset": share.preset,
                 "population": share.population,
                 "activity": share.activity,
                 "encryption": share.encryption,
+                "smb_native_filesystem": share.smb_native_filesystem,
                 "audit": share.audit,
                 "file_count": len(share.files),
                 "sample_paths": [file.path for file in share.files[:sample_size]],
@@ -241,11 +274,33 @@ class StorageWorldModel:
                 }
             shares.append(share_document)
 
+        mappings: list[dict[str, Any]] = []
+        for mapping in self.mappings:
+            users = sorted(mapping.users, key=lambda value: (value.casefold(), value))
+            systems = sorted(mapping.systems, key=lambda value: (value.casefold(), value))
+            presentations: list[dict[str, str]] = []
+            if mapping.drive is not None:
+                presentations.append(
+                    {"platform": "windows", "type": "drive", "root": mapping.drive}
+                )
+            if mapping.mount is not None:
+                presentations.append({"platform": "linux", "type": "mount", "root": mapping.mount})
+            mapping_document = mapping.model_dump(mode="json")
+            mapping_document.update(
+                {
+                    "users": users,
+                    "systems": systems,
+                    "audience": {"users": users, "systems": systems},
+                    "presentations": presentations,
+                }
+            )
+            mappings.append(mapping_document)
+
         manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "volumes": [volume.model_dump(mode="json") for volume in self.volumes],
             "shares": shares,
-            "mappings": [mapping.model_dump(mode="json") for mapping in self.mappings],
+            "mappings": mappings,
         }
         if resolved_targets is not None:
             manifest["resolved_storyline_targets"] = resolved_targets
@@ -272,37 +327,52 @@ class _StorageWorldCompiler:
         return "windows" in system.os.casefold()
 
     @staticmethod
+    def _is_linux(system: System) -> bool:
+        os_name = system.os.casefold()
+        return any(name in os_name for name in ("linux", "ubuntu", "debian", "rhel", "centos"))
+
+    @classmethod
+    def _platform(cls, system: System) -> str:
+        if cls._is_windows(system):
+            return "windows"
+        if cls._is_linux(system):
+            return "linux"
+        return "unknown"
+
+    @staticmethod
     def _is_dc(system: System) -> bool:
         roles = {role.casefold().replace("-", "_") for role in system.roles}
         return system.type == "domain_controller" or "domain_controller" in roles
 
-    @staticmethod
-    def _is_file_server(system: System) -> bool:
+    @classmethod
+    def _is_file_server(cls, system: System) -> bool:
         roles = {role.casefold().replace("-", "_") for role in system.roles}
         services = {service.casefold().replace("-", "_") for service in system.services}
         is_domain_controller = system.type == "domain_controller" or "domain_controller" in roles
-        return "file_server" in roles or (
-            not is_domain_controller and bool(services & {"smb", "smb_server", "lanmanserver"})
-        )
+        if cls._is_windows(system):
+            return "file_server" in roles or (
+                not is_domain_controller and bool(services & {"smb", "smb_server", "lanmanserver"})
+            )
+        return bool(services & {"smb_server", "samba", "smbd"})
 
     def _compile(self) -> None:
         explicit = {server.system.casefold(): server for server in self.config.servers}
         unknown = sorted(set(explicit) - set(self.systems))
         if unknown:
             raise ValueError("unknown storage server systems: " + ", ".join(unknown))
-        non_windows = sorted(
+        unsupported = sorted(
             server.system
             for server in self.config.servers
-            if not self._is_windows(self.systems[server.system.casefold()])
+            if self._platform(self.systems[server.system.casefold()]) == "unknown"
         )
-        if non_windows:
-            raise ValueError("storage servers must run Windows: " + ", ".join(non_windows))
+        if unsupported:
+            raise ValueError("storage servers must run Windows or Linux: " + ", ".join(unsupported))
         eligible = [
             system
             for system in self.scenario.environment.systems
-            if self._is_windows(system)
+            if self._platform(system) in {"windows", "linux"}
             and (
-                self._is_dc(system)
+                (self._is_windows(system) and self._is_dc(system))
                 or self._is_file_server(system)
                 or system.hostname.casefold() in explicit
             )
@@ -325,7 +395,7 @@ class _StorageWorldCompiler:
         file_server_count: int,
     ) -> list[str]:
         presets: list[str] = []
-        if self._is_dc(system):
+        if self._is_windows(system) and self._is_dc(system):
             presets.append("dc_policy")
         if self._is_file_server(system):
             if file_server_count <= 1 or index == 0:
@@ -346,60 +416,88 @@ class _StorageWorldCompiler:
         index: int,
         file_server_count: int,
     ) -> None:
+        platform = self._platform(system)
+        self._validate_server_provider(system, platform)
         presets = (
             list(server.presets)
             if server is not None and server.presets is not None
             else self._automatic_presets(system, index=index, file_server_count=file_server_count)
         )
+        if platform == "linux" and "dc_policy" in presets:
+            raise ValueError("Linux storage servers cannot use the dc_policy preset")
         configured_volumes = server.volumes if server is not None else None
         if configured_volumes is None:
-            mount = (
-                "C:\\Windows\\"
-                if presets == ["dc_policy"]
-                else "D:\\"
-                if index % 2 == 0
-                else "C:\\Mounts\\Data\\"
-            )
+            if platform == "linux":
+                mount = "/srv/samba"
+                filesystem = "ext4"
+            else:
+                mount = (
+                    "C:\\Windows\\"
+                    if presets == ["dc_policy"]
+                    else "D:\\"
+                    if index % 2 == 0
+                    else "C:\\Mounts\\Data\\"
+                )
+                filesystem = "ntfs"
             volume_id = "system" if presets == ["dc_policy"] else "data"
             volumes = [
                 CompiledStorageVolume(
                     id=volume_id,
                     system=system.hostname,
+                    platform=platform,
                     mount=mount,
-                    filesystem="ntfs",
+                    filesystem=filesystem,
                     label="System" if volume_id == "system" else "SharedData",
                 )
             ]
         else:
-            volumes = [
-                CompiledStorageVolume(
-                    id=volume.id,
-                    system=system.hostname,
-                    mount=volume.mount,
-                    filesystem=volume.filesystem,
-                    label=volume.label or volume.id,
+            volumes = []
+            allowed_filesystems = {"ntfs", "refs"} if platform == "windows" else {"ext4", "xfs"}
+            for volume in configured_volumes:
+                mount_platform = "linux" if volume.mount.startswith("/") else "windows"
+                if mount_platform != platform:
+                    raise ValueError(
+                        f"storage volume {system.hostname}.{volume.id} mount {volume.mount!r} "
+                        f"does not match {platform} server paths"
+                    )
+                if volume.filesystem not in allowed_filesystems:
+                    allowed = ", ".join(sorted(allowed_filesystems))
+                    raise ValueError(
+                        f"storage volume {system.hostname}.{volume.id} filesystem "
+                        f"{volume.filesystem!r} is invalid for {platform}; use {allowed}"
+                    )
+                volumes.append(
+                    CompiledStorageVolume(
+                        id=volume.id,
+                        system=system.hostname,
+                        platform=platform,
+                        mount=volume.mount,
+                        filesystem=volume.filesystem,
+                        label=volume.label or volume.id,
+                    )
                 )
-                for volume in configured_volumes
-            ]
-        admin_volume = next(
-            (volume for volume in volumes if volume.mount.casefold() == "c:\\"),
-            None,
-        )
-        if admin_volume is None:
-            existing_volume_ids = {volume.id.casefold() for volume in volumes}
-            admin_volume_id = "system"
-            suffix = 2
-            while admin_volume_id.casefold() in existing_volume_ids:
-                admin_volume_id = f"system{suffix}"
-                suffix += 1
-            admin_volume = CompiledStorageVolume(
-                id=admin_volume_id,
-                system=system.hostname,
-                mount="C:\\",
-                filesystem="ntfs",
-                label="System",
+        admin_volume: CompiledStorageVolume | None = None
+        if platform == "windows":
+            admin_volume = next(
+                (volume for volume in volumes if volume.mount.casefold() == "c:\\"),
+                None,
             )
-            volumes.append(admin_volume)
+            if admin_volume is None:
+                existing_volume_ids = {volume.id.casefold() for volume in volumes}
+                admin_volume_id = "system"
+                suffix = 2
+                while admin_volume_id.casefold() in existing_volume_ids:
+                    admin_volume_id = f"system{suffix}"
+                    suffix += 1
+                admin_volume = CompiledStorageVolume(
+                    id=admin_volume_id,
+                    system=system.hostname,
+                    platform=platform,
+                    mount="C:\\",
+                    filesystem="ntfs",
+                    label="System",
+                )
+                volumes.append(admin_volume)
         self.volumes.extend(volumes)
         default_volume = (
             server.default_volume
@@ -412,7 +510,8 @@ class _StorageWorldCompiler:
             for preset in presets
             for share in self._generated_shares(system, preset, default_volume, audit)
         ]
-        generated.extend(self._compatibility_shares(system, admin_volume.id, audit))
+        if admin_volume is not None:
+            generated.extend(self._compatibility_shares(system, admin_volume.id, audit))
         explicit_shares = list(server.shares) if server is not None else []
         known_volume_ids = {volume.id.casefold() for volume in volumes}
         unknown_share_volumes = sorted(
@@ -452,6 +551,9 @@ class _StorageWorldCompiler:
                         "population": override.population or share.population,
                         "activity": override.activity or share.activity,
                         "encryption": override.encryption or share.encryption,
+                        "smb_native_filesystem": (
+                            override.smb_native_filesystem or share.smb_native_filesystem
+                        ),
                         "access": override.access or share.access,
                         "seed_files": [*share.seed_files, *override.seed_files],
                     }
@@ -570,12 +672,13 @@ class _StorageWorldCompiler:
         share: StorageShareConfig,
         audit: str,
     ) -> CompiledStorageShare:
+        self._validate_disk_share_name(system, share)
         ref = f"{system.hostname}.{share.id}"
         population = share.population or self.config.population
         activity = share.activity or self.config.activity
         requested_file_count: int | None = None
         realizable_file_count: int | None = None
-        if share.name.casefold() in {"c$", "admin$"}:
+        if self._is_windows(system) and share.name.casefold() in {"c$", "admin$"}:
             files = ()
         else:
             files, requested_count, realizable_count = self._compile_catalog(
@@ -587,6 +690,19 @@ class _StorageWorldCompiler:
             if requested_count > realizable_count:
                 requested_file_count = requested_count
                 realizable_file_count = realizable_count
+        volume = next(
+            volume
+            for volume in self.volumes
+            if volume.system.casefold() == system.hostname.casefold()
+            and volume.id.casefold() == share.volume.casefold()
+        )
+        if share.smb_native_filesystem is not None:
+            smb_native_filesystem = share.smb_native_filesystem
+        else:
+            smb_native_filesystem = advertised_filesystem_default(
+                volume.platform,
+                volume.filesystem,
+            )
         return CompiledStorageShare(
             ref=ref,
             system=system.hostname,
@@ -597,12 +713,59 @@ class _StorageWorldCompiler:
             population=population,
             activity=activity,
             encryption=share.encryption,
+            smb_native_filesystem=smb_native_filesystem,
             audit=audit,
             access=self._effective_access(share.access),
             files=files,
             requested_file_count=requested_file_count,
             realizable_file_count=realizable_file_count,
         )
+
+    @classmethod
+    def _validate_server_provider(cls, system: System, platform: str) -> None:
+        """Reject Linux SMB server providers and topologies outside the V1 model."""
+
+        if platform != "linux":
+            return
+        normalized_roles = {
+            role.strip().casefold().replace("_", "-").replace(" ", "-") for role in system.roles
+        }
+        normalized_services = {
+            service.strip().casefold().replace("_", "-").replace(" ", "-")
+            for service in system.services
+        }
+        if system.type == "domain_controller" or normalized_roles.intersection(
+            {"dc", "domain-controller", "domaincontroller"}
+        ):
+            raise ValueError(
+                f"Linux storage server {system.hostname!r} cannot be a domain controller; "
+                "V1 supports Samba domain-member file servers only"
+            )
+        unsupported_services = sorted(
+            normalized_services.intersection(_UNSUPPORTED_LINUX_SMB_SERVICES)
+        )
+        if unsupported_services:
+            raise ValueError(
+                f"Linux storage server {system.hostname!r} uses unsupported SMB service "
+                f"{unsupported_services[0]!r}; V1 supports the Samba smbd provider on "
+                "domain-member file servers only"
+            )
+
+    @classmethod
+    def _validate_disk_share_name(cls, system: System, share: StorageShareConfig) -> None:
+        """Reject named-pipe and Samba administrative/DC shares from disk-share storage."""
+
+        normalized_name = share.name.strip().casefold()
+        if normalized_name == "ipc$":
+            raise ValueError(
+                f"storage share {system.hostname}.{share.id} cannot use IPC$; "
+                "V1 supports SMB disk shares only"
+            )
+        if cls._is_linux(system) and normalized_name in _SAMBA_RESERVED_DISK_SHARE_NAMES:
+            raise ValueError(
+                f"Samba storage share {system.hostname}.{share.id} cannot use reserved name "
+                f"{share.name!r}; V1 excludes administrative and Samba AD-DC shares"
+            )
 
     def _compile_catalog(
         self,
@@ -810,23 +973,64 @@ class _StorageWorldCompiler:
         return f"file-{_stable_seed(f'storage-file:{share_ref.casefold()}:{path.casefold()}'):016x}"
 
     def _compile_mappings(self) -> None:
-        used_drives: dict[tuple[str, str, str], str] = {}
+        used_drives: list[_MappingPresentation] = []
+        used_mounts: list[_MappingPresentation] = []
         for mapping in self.config.mappings:
             users = set(mapping.audience.users)
             for group in mapping.audience.groups:
                 users.update(self.group_members.get(group.casefold(), set()))
             systems = set(mapping.audience.systems)
-            drive = mapping.drive or self._automatic_drive(mapping, used_drives)
-            for user in users or {"*"}:
-                for system in systems or {"*"}:
-                    key = (user.casefold(), system.casefold(), drive.casefold())
-                    existing = used_drives.get(key)
-                    if existing is not None and existing.casefold() != mapping.share.casefold():
-                        raise ValueError(
-                            f"storage mapping drive collision for {user}/{system}/{drive}: "
-                            f"{existing} and {mapping.share}"
-                        )
-                    used_drives[key] = mapping.share
+            client_systems = (
+                [
+                    self.systems[system.casefold()]
+                    for system in systems
+                    if system.casefold() in self.systems
+                ]
+                if systems
+                else list(self.systems.values())
+            )
+            platforms = {self._platform(system) for system in client_systems}
+            user_scope = frozenset(user.casefold() for user in users)
+            system_scope = frozenset(system.casefold() for system in systems)
+            drive = mapping.drive
+            if drive is None and "windows" in platforms:
+                drive = self._automatic_drive(
+                    mapping,
+                    users=user_scope,
+                    systems=system_scope,
+                    used=used_drives,
+                )
+            mount = mapping.mount
+            if mount is None and "linux" in platforms:
+                mount = f"/mnt/{mapping.id}"
+            if drive is not None:
+                existing = self._overlapping_presentation_owner(
+                    users=user_scope,
+                    systems=system_scope,
+                    presentation=drive.casefold(),
+                    used=used_drives,
+                    different_from_share=mapping.share,
+                )
+                if existing is not None:
+                    raise ValueError(
+                        f"storage mapping drive collision for overlapping audiences on {drive}: "
+                        f"{existing} and {mapping.share}"
+                    )
+                used_drives.append((user_scope, system_scope, drive.casefold(), mapping.share))
+            if mount is not None:
+                existing = self._overlapping_presentation_owner(
+                    users=user_scope,
+                    systems=system_scope,
+                    presentation=mount,
+                    used=used_mounts,
+                    different_from_share=mapping.share,
+                )
+                if existing is not None:
+                    raise ValueError(
+                        f"storage mapping mount collision for overlapping audiences on {mount}: "
+                        f"{existing} and {mapping.share}"
+                    )
+                used_mounts.append((user_scope, system_scope, mount, mapping.share))
             self.mappings.append(
                 CompiledStorageMapping(
                     id=mapping.id,
@@ -834,27 +1038,74 @@ class _StorageWorldCompiler:
                     users=frozenset(users),
                     systems=frozenset(systems),
                     drive=drive,
+                    mount=mount,
+                    credential_mode=mapping.credential_mode,
+                    principal=mapping.principal,
                     lifecycle=mapping.lifecycle,
                 )
             )
 
-    @staticmethod
+    @classmethod
     def _automatic_drive(
+        cls,
         mapping: StorageMappingConfig,
-        used: dict[tuple[str, str, str], str],
+        *,
+        users: frozenset[str],
+        systems: frozenset[str],
+        used: list[_MappingPresentation],
     ) -> str:
         index = _stable_seed(f"storage-mapping-drive:{mapping.id}") % 19
-        users = set(mapping.audience.users) or {"*"}
-        systems = set(mapping.audience.systems) or {"*"}
         for offset in range(19):
             drive = f"{chr(ord('H') + ((index + offset) % 19))}:"
-            if all(
-                (user.casefold(), system.casefold(), drive.casefold()) not in used
-                for user in users
-                for system in systems
+            if (
+                cls._overlapping_presentation_owner(
+                    users=users,
+                    systems=systems,
+                    presentation=drive.casefold(),
+                    used=used,
+                )
+                is None
             ):
                 return drive
         raise ValueError(f"no free drive letters remain for storage mapping {mapping.id!r}")
+
+    @classmethod
+    def _overlapping_presentation_owner(
+        cls,
+        *,
+        users: frozenset[str],
+        systems: frozenset[str],
+        presentation: str,
+        used: list[_MappingPresentation],
+        different_from_share: str | None = None,
+    ) -> str | None:
+        """Return an existing owner when a presentation's effective audiences overlap."""
+
+        for existing_users, existing_systems, existing_presentation, existing_share in used:
+            if existing_presentation != presentation:
+                continue
+            if different_from_share is not None and (
+                existing_share.casefold() == different_from_share.casefold()
+            ):
+                continue
+            if cls._audiences_overlap(users, systems, existing_users, existing_systems):
+                return existing_share
+        return None
+
+    @staticmethod
+    def _audiences_overlap(
+        left_users: frozenset[str],
+        left_systems: frozenset[str],
+        right_users: frozenset[str],
+        right_systems: frozenset[str],
+    ) -> bool:
+        """Return whether two mapping selectors can apply to the same user and system."""
+
+        users_overlap = not left_users or not right_users or bool(left_users & right_users)
+        systems_overlap = (
+            not left_systems or not right_systems or bool(left_systems & right_systems)
+        )
+        return users_overlap and systems_overlap
 
 
 def write_storage_manifest(

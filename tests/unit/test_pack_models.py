@@ -28,6 +28,8 @@ from evidenceforge.composition.semantic_validation import (
     packaged_builtin_dns_domains,
     packaged_builtin_dns_tags,
     packaged_builtin_executable_claims,
+    packaged_builtin_persona_ids,
+    packaged_builtin_storage_preset_ids,
     validate_selected_pack_semantics,
 )
 from evidenceforge.generation.activity.application_catalog import parameterize_scoped_command
@@ -258,6 +260,8 @@ def _validate_semantics(
     builtin_application_ids: set[str],
     builtin_executable_claims: set[str] | None = None,
     builtin_dns_domains: set[str] | None = None,
+    builtin_persona_ids: set[str] | None = None,
+    builtin_storage_preset_ids: set[str] | None = None,
 ) -> None:
     """Validate a test composition with a small deterministic built-in registry."""
 
@@ -267,6 +271,8 @@ def _validate_semantics(
         builtin_dns_tags={"background", "saas", "web"},
         builtin_executable_claims=builtin_executable_claims or set(),
         builtin_dns_domains=builtin_dns_domains or set(),
+        builtin_persona_ids=builtin_persona_ids or set(),
+        builtin_storage_preset_ids=builtin_storage_preset_ids or set(),
     )
 
 
@@ -709,6 +715,33 @@ def test_partial_organization_fragments_validate_nested_values() -> None:
         )
 
 
+def test_organization_environment_fragment_serializes_explicit_proxy() -> None:
+    """Organization packs can serialize an explicitly deployed forward proxy."""
+
+    fragment = EnvironmentFragment.model_validate(
+        {"environment": {"proxy": {"mode": "explicit", "listener_port": 8080}}}
+    )
+
+    assert fragment.model_dump(mode="json")["environment"]["proxy"] == {
+        "mode": "explicit",
+        "listener_port": 8080,
+        "auth_policy": {
+            "mode": "realistic",
+            "allowlisted_domain_classes": [
+                "windows_update",
+                "windows_trust_list",
+                "software_update",
+                "telemetry",
+                "crl",
+                "ocsp",
+            ],
+            "non_human_principals": False,
+            "machine_account_probability": 0.0,
+            "service_account_probability": 0.0,
+        },
+    }
+
+
 def test_pack_fragment_strictness_does_not_change_canonical_user_behavior() -> None:
     """Pack-only wrappers must not change permissive nested Scenario 1 models."""
 
@@ -743,6 +776,8 @@ def test_packaged_validation_registries_read_packaged_defaults() -> None:
         "linux:basename:google-chrome",
     } <= packaged_builtin_executable_claims()
     assert {"www.google.com", "accounts.google.com"} <= packaged_builtin_dns_domains()
+    assert {"developer", "data_analyst", "sysadmin"} <= packaged_builtin_persona_ids()
+    assert {"collaboration", "department", "backup"} <= (packaged_builtin_storage_preset_ids())
 
 
 def test_packaged_identity_registries_are_safe_with_no_selected_packs() -> None:
@@ -974,6 +1009,74 @@ def test_organization_may_reference_only_exact_pinned_dependency() -> None:
     ]
     with pytest.raises(PackError, match="baseline_activity.*missing export"):
         _validate_semantics([industry, organization], builtin_application_ids={"chrome", "excel"})
+
+
+def test_organization_model_accepts_packaged_builtin_shorthand() -> None:
+    """Organization fragments may use built-in persona and storage preset IDs directly."""
+
+    organization = _Pack(
+        manifest=PackManifest(
+            pack_schema_version="1.0",
+            type="organization",
+            name="example-org",
+            version="1.0.0",
+            description="Example organization",
+        ),
+        catalogs={
+            "persona_catalog": {},
+            "process_catalog": {},
+            "application_catalog": {},
+            "destination_catalog": {},
+            "traffic_catalog": {},
+            "storage_catalog": {},
+        },
+        environment={
+            "users": [
+                {
+                    "username": "developer",
+                    "full_name": "Example Developer",
+                    "email": "developer@example.test",
+                    "persona": "developer",
+                }
+            ],
+            "storage": {
+                "servers": [
+                    {
+                        "system": "FILE-01",
+                        "volumes": [{"id": "data", "mount": "D:\\"}],
+                        "default_volume": "data",
+                        "shares": [
+                            {
+                                "id": "department",
+                                "name": "Department",
+                                "volume": "data",
+                                "preset": "department",
+                            }
+                        ],
+                    }
+                ]
+            },
+        },
+        baseline_activity={
+            "traffic_suppression": [{"audience": {"personas": ["developer"]}, "factor": 0.5}]
+        },
+    )
+
+    _validate_semantics(
+        [organization],
+        builtin_application_ids={"chrome"},
+        builtin_persona_ids={"developer"},
+        builtin_storage_preset_ids={"department"},
+    )
+
+    organization.environment["storage"]["servers"][0]["shares"][0]["preset"] = "missing"
+    with pytest.raises(PackError, match="missing export 'example-org:missing'"):
+        _validate_semantics(
+            [organization],
+            builtin_application_ids={"chrome"},
+            builtin_persona_ids={"developer"},
+            builtin_storage_preset_ids={"department"},
+        )
 
 
 def test_whole_pack_semantics_reject_duplicate_domain_and_executable_claims() -> None:

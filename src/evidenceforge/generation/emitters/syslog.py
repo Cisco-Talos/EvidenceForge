@@ -22,20 +22,24 @@
 
 """Syslog emitter for Linux system logs.
 
-Renders syslog-format entries from SyslogContext on CanonicalOccurrence.
-All syslog message construction is done by ActivityGenerator — the emitter
-just formats the context fields into the syslog template.
+Most rows render an authored :class:`SyslogContext`. Protocol-owned Samba
+occurrences are projected here so their messages stay source-native while the
+canonical SMB/auth contexts retain shared correlation truth.
 """
 
 import json
 import re
 from bisect import bisect_right
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.contexts import HostContext
+from evidenceforge.generation.activity.smb_profiles import (
+    get_samba_audit_operation,
+    samba_audit_enabled,
+)
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.generation.emitters.syslog_family import (
     bounded_syslog_int,
@@ -226,7 +230,7 @@ _RFC5424_LINE_RE = re.compile(
 )
 
 
-def _rfc5424_syslog_sort_key(line: str) -> tuple[str, int, str]:
+def _rfc5424_syslog_sort_key(line: str) -> tuple[Any, int, str]:
     """Sort RFC5424 syslog lines by full timestamp plus lifecycle order."""
     lifecycle_priority = min(
         _ssh_lifecycle_priority(line),
@@ -234,7 +238,11 @@ def _rfc5424_syslog_sort_key(line: str) -> tuple[str, int, str]:
         _dhclient_lifecycle_priority(line),
     )
     match = _RFC5424_TS_RE.match(line)
-    timestamp = match.group("timestamp") if match is not None else ""
+    timestamp = (
+        _parse_rfc5424_timestamp(match.group("timestamp"))
+        if match is not None
+        else coerce_syslog_datetime(datetime.min)
+    )
     return (timestamp, lifecycle_priority, line)
 
 
@@ -251,7 +259,7 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     Default target writes flat per-host RFC5424 files. SOF-ELK target writes
     per-host/year RFC3164 files.
-    Renders any CanonicalOccurrence that carries a SyslogContext on a Linux host.
+    Renders context-authored Linux messages plus source-native Samba projections.
     """
 
     _log_filename = "syslog.log"
@@ -284,15 +292,61 @@ class SyslogEmitter(HostMultiplexEmitter):
         )
 
     def can_handle(self, event: CanonicalOccurrence) -> bool:
-        """Syslog emitter handles any event with SyslogContext on a Linux host."""
+        """Return whether this occurrence has a Linux-native syslog projection."""
+        if self._is_samba_lifecycle_event(event):
+            return True
+        if self._is_samba_audit_event(event):
+            return self._samba_audit_enabled(event)
         return event.syslog is not None and self._linux_host(event) is not None
+
+    @staticmethod
+    def _is_samba_server(event: CanonicalOccurrence) -> bool:
+        """Return whether the occurrence belongs to a modeled Samba server."""
+        host = event.dst_host
+        if host is None or host.os_category != "linux":
+            return False
+        auth = event.auth
+        smb = event.smb
+        return bool(
+            (auth is not None and auth.session_kind == "smb")
+            or (smb is not None and (smb.provider == "samba" or smb.server_platform == "linux"))
+        )
+
+    @classmethod
+    def _is_samba_lifecycle_event(cls, event: CanonicalOccurrence) -> bool:
+        """Return whether one occurrence renders Samba auth/connect lifecycle."""
+        return cls._is_samba_server(event) and event.event_type in {
+            "logon",
+            "smb_tree_connect",
+            "logoff",
+        }
+
+    @classmethod
+    def _is_samba_audit_event(cls, event: CanonicalOccurrence) -> bool:
+        """Return whether one occurrence is eligible for a Samba VFS audit row."""
+        return (
+            cls._is_samba_server(event) and get_samba_audit_operation(event.event_type) is not None
+        )
+
+    @staticmethod
+    def _samba_audit_enabled(event: CanonicalOccurrence) -> bool:
+        """Apply the share's minimal/standard/high source-observation profile."""
+        smb = event.smb
+        return bool(
+            smb is not None and samba_audit_enabled(event.event_type, smb.audit, smb.result)
+        )
 
     @staticmethod
     def _linux_host(event: CanonicalOccurrence) -> "HostContext | None":
         """Return whichever host has os_category == 'linux'."""
         if (
-            event.syslog is not None
-            and event.syslog.app_name == "sshd"
+            (
+                SyslogEmitter._is_samba_server(event)
+                or (
+                    event.syslog is not None
+                    and event.syslog.app_name in {"sshd", "smbd", "smbd_audit"}
+                )
+            )
             and event.dst_host
             and event.dst_host.os_category == "linux"
         ):
@@ -305,6 +359,9 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     def emit(self, event: CanonicalOccurrence) -> None:
         """Render syslog entry from SyslogContext."""
+        if self._is_samba_lifecycle_event(event) or self._is_samba_audit_event(event):
+            self._emit_samba(event)
+            return
         if event.syslog is None:
             raise NotImplementedError(
                 f"SyslogEmitter: event has no SyslogContext (event_type={event.event_type})"
@@ -322,6 +379,156 @@ class SyslogEmitter(HostMultiplexEmitter):
             "_host_fqdn": (host.fqdn or host.hostname) if host else "",
         }
         self.emit_event(event_data)
+
+    @staticmethod
+    def _samba_field(value: Any) -> str:
+        """Return one safe, single-line field for a Samba text record."""
+        return str(value or "-").replace("\r", " ").replace("\n", " ").replace("|", "_")
+
+    @classmethod
+    def _samba_principal(cls, event: CanonicalOccurrence) -> str:
+        """Return the SMB credential principal rather than the client process owner."""
+        auth = event.auth
+        if auth is None:
+            return "-"
+        return cls._samba_field(auth.smb_principal or auth.username)
+
+    @staticmethod
+    def _samba_pid(event: CanonicalOccurrence) -> int | None:
+        """Return a source-owned smbd PID when the canonical transport provides one."""
+        network = event.network
+        if network is None or network.responding_pid <= 0:
+            return None
+        return network.responding_pid
+
+    @staticmethod
+    def _samba_session_key(event: CanonicalOccurrence) -> str:
+        """Return a durable key shared by Samba auth, tree, and disconnect phases."""
+        auth = event.auth
+        smb = event.smb
+        lifecycle = event.lifecycle
+        return (
+            (auth.auth_session_ref if auth is not None else "")
+            or (smb.session_id if smb is not None else "")
+            or (lifecycle.group_id if lifecycle is not None else "")
+            or (auth.logon_id if auth is not None else "")
+        )
+
+    def _samba_session_state(self) -> dict[str, tuple[str, int | None]]:
+        """Return lazily allocated renderer-local share/PID correlation state."""
+        state = getattr(self, "_samba_sessions", None)
+        if state is None:
+            state = {}
+            self._samba_sessions = state
+        return state
+
+    def _emit_samba_row(
+        self,
+        event: CanonicalOccurrence,
+        *,
+        app_name: str,
+        message: str,
+        pid: int | None,
+        severity: int = 6,
+    ) -> None:
+        """Render one destination-host-local Samba row through the syslog family."""
+        host = event.dst_host
+        self.emit_event(
+            {
+                "timestamp": event.timestamp,
+                "hostname": host.hostname if host else "",
+                "app_name": app_name,
+                "pid": pid,
+                "facility": 3,
+                "severity": severity,
+                "message": message,
+                "_host_fqdn": (host.fqdn or host.hostname) if host else "",
+            }
+        )
+
+    def _emit_samba(self, event: CanonicalOccurrence) -> None:
+        """Project canonical SMB lifecycle and VFS operations as Samba text logs."""
+        auth = event.auth
+        smb = event.smb
+        principal = self._samba_principal(event)
+        source_ip = self._samba_field(auth.source_ip if auth is not None else "")
+        session_key = self._samba_session_key(event)
+        sessions = self._samba_session_state()
+
+        if event.event_type == "logon":
+            outcome = "succeeded" if auth is not None and auth.result == "success" else "failed"
+            protocol = self._samba_field(auth.auth_protocol) if auth is not None else "-"
+            protocol_suffix = f" using {protocol}" if protocol != "-" else ""
+            self._emit_samba_row(
+                event,
+                app_name="smbd",
+                pid=None,
+                message=(
+                    f"Authentication for user [{principal}] from [{source_ip}] "
+                    f"{outcome}{protocol_suffix}"
+                ),
+                severity=6 if outcome == "succeeded" else 4,
+            )
+            return
+
+        if event.event_type == "smb_tree_connect" and smb is not None:
+            pid = self._samba_pid(event)
+            if session_key:
+                sessions[session_key] = (smb.share_name, pid)
+            unix_identity = ""
+            if auth is not None and auth.effective_uid is not None:
+                unix_identity = f" (uid={auth.effective_uid}"
+                if auth.effective_gid is not None:
+                    unix_identity += f", gid={auth.effective_gid}"
+                unix_identity += ")"
+            result_suffix = "" if smb.result == "success" else f" failed: {smb.result}"
+            self._emit_samba_row(
+                event,
+                app_name="smbd",
+                pid=pid,
+                message=(
+                    f"connect to service {self._samba_field(smb.share_name)} as user "
+                    f"{principal}{unix_identity}{result_suffix}"
+                ),
+                severity=6 if smb.result == "success" else 4,
+            )
+            return
+
+        if event.event_type == "logoff":
+            share_name = "-"
+            pid = None
+            if session_key and session_key in sessions:
+                share_name, pid = sessions.pop(session_key)
+            self._emit_samba_row(
+                event,
+                app_name="smbd",
+                pid=pid,
+                message=f"closed connection to service {self._samba_field(share_name)}",
+            )
+            return
+
+        if smb is None or not self._samba_audit_enabled(event):
+            return
+        audit_operation = get_samba_audit_operation(event.event_type)
+        if audit_operation is None:
+            return
+        message = "|".join(
+            (
+                principal,
+                source_ip,
+                self._samba_field(smb.share_name),
+                audit_operation.label,
+                self._samba_field(smb.result),
+                self._samba_field(smb.server_path or smb.share_local_path),
+            )
+        )
+        self._emit_samba_row(
+            event,
+            app_name="smbd_audit",
+            pid=self._samba_pid(event),
+            message=f"smbd_audit: {message}",
+            severity=6 if smb.result == "success" else 4,
+        )
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Route syslog event to per-host file."""

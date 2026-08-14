@@ -74,14 +74,20 @@ class TestParserRegistration:
         sensor_dir.mkdir()
         mapping = sensor_dir / "smb_mapping.json"
         files = sensor_dir / "smb_files.json"
-        mapping.write_text('{"ts":1,"uid":"C1","path":"\\\\\\\\FS-01\\\\Shared"}\n')
+        mapping.write_text(
+            '{"ts":1,"uid":"C1","path":"\\\\\\\\SAMBA-01\\\\Finance",'
+            '"service":"Finance","native_file_system":"NTFS"}\n'
+        )
         files.write_text('{"ts":2,"uid":"C1","action":"SMB::FILE_READ","name":"report.docx"}\n')
 
         discovered = discover_log_files(tmp_path)
 
         assert discovered["zeek_smb_mapping"] == [mapping]
         assert discovered["zeek_smb_files"] == [files]
-        assert list(get_parser("zeek_smb_mapping").parse_file(mapping))[0].fields["uid"] == "C1"
+        parsed_mapping = list(get_parser("zeek_smb_mapping").parse_file(mapping))[0].fields
+        assert parsed_mapping["uid"] == "C1"
+        assert parsed_mapping["native_file_system"] == "NTFS"
+        assert parsed_mapping["path"] == r"\\SAMBA-01\Finance"
         assert (
             list(get_parser("zeek_smb_files").parse_file(files))[0].fields["action"]
             == "SMB::FILE_READ"

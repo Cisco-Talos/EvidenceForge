@@ -22,6 +22,10 @@
 
 """Regression tests for bit-perfect generation repeatability."""
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from evidenceforge.generation.engine import GenerationEngine
@@ -36,6 +40,14 @@ def _snapshot_generated_files(root: Path) -> dict[str, bytes]:
         for path in sorted(root.rglob("*"))
         if path.is_file() and path.name not in {"generation.log", "GENERATION_MANIFEST.json"}
     }
+
+
+def _linux_smb_scenario_path() -> Path:
+    return Path(__file__).parent.parent / "fixtures" / "scenarios" / "smb-linux-matrix.yaml"
+
+
+def _windows_smb_scenario_path() -> Path:
+    return Path(__file__).parent.parent / "fixtures" / "scenarios" / "smb-resource-calibration.yaml"
 
 
 def test_minimal_generation_is_bit_perfect_for_identical_inputs(tmp_path: Path) -> None:
@@ -69,6 +81,19 @@ def test_public_seed_is_repeatable_and_changes_generated_evidence(tmp_path: Path
     assert first != _snapshot_generated_files(other_dir)
 
 
+def test_windows_smb_generation_is_bit_perfect_for_identical_inputs(tmp_path: Path) -> None:
+    """Linux SMB planning must not perturb the established Windows-only RNG path."""
+
+    scenario_data = load_yaml(_windows_smb_scenario_path())
+    first_dir = tmp_path / "windows-smb-first"
+    second_dir = tmp_path / "windows-smb-second"
+
+    GenerationEngine(Scenario(**scenario_data), first_dir).generate()
+    GenerationEngine(Scenario(**scenario_data), second_dir).generate()
+
+    assert _snapshot_generated_files(first_dir) == _snapshot_generated_files(second_dir)
+
+
 def test_common_outputs_and_ground_truth_ignore_format_filter(tmp_path: Path) -> None:
     """Selecting fewer renderers must not change canonical planning or shared bytes."""
 
@@ -94,4 +119,124 @@ def test_common_outputs_and_ground_truth_ignore_format_filter(tmp_path: Path) ->
     assert full_common_data == filtered_data
     assert (full_dir / "GROUND_TRUTH.json").read_bytes() == (
         filtered_dir / "GROUND_TRUTH.json"
+    ).read_bytes()
+
+
+def test_linux_smb_generation_ignores_python_hash_seed(tmp_path: Path) -> None:
+    """Cross-platform SMB identities and artifacts must not depend on Python hash order."""
+
+    scenario_path = _linux_smb_scenario_path()
+    script = """
+import sys
+from pathlib import Path
+
+from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.models.scenario import Scenario
+from evidenceforge.utils.files import load_yaml
+
+scenario_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+GenerationEngine(Scenario(**load_yaml(scenario_path)), output_path).generate()
+"""
+    outputs = [tmp_path / "hash-seed-1", tmp_path / "hash-seed-99991"]
+    for seed, output in zip(("1", "99991"), outputs, strict=True):
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(scenario_path), str(output)],
+            cwd=Path(__file__).parents[2],
+            env={**os.environ, "PYTHONHASHSEED": seed},
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    assert _snapshot_generated_files(outputs[0]) == _snapshot_generated_files(outputs[1])
+
+
+def test_storage_manifest_audience_ignores_python_hash_seed(tmp_path: Path) -> None:
+    """Defensive manifest ordering must total-order casefold-equivalent set values."""
+
+    script = """
+import sys
+from pathlib import Path
+
+from evidenceforge.generation.storage_world import (
+    CompiledStorageMapping,
+    StorageWorldModel,
+    write_storage_manifest,
+)
+
+world = StorageWorldModel(
+    volumes=(),
+    shares=(),
+    mappings=(
+        CompiledStorageMapping(
+            id="defensive-order",
+            share="FS-01.shared",
+            users=frozenset({"alice", "Alice", "bob"}),
+            systems=frozenset({"client-01", "CLIENT-01", "CLIENT-02"}),
+            lifecycle="persistent",
+        ),
+    ),
+)
+write_storage_manifest(Path(sys.argv[1]), world)
+"""
+    outputs = [tmp_path / "manifest-seed-1.json", tmp_path / "manifest-seed-99991.json"]
+    for seed, output in zip(("1", "99991"), outputs, strict=True):
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(output)],
+            cwd=Path(__file__).parents[2],
+            env={**os.environ, "PYTHONHASHSEED": seed},
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    assert outputs[0].read_bytes() == outputs[1].read_bytes()
+    mapping = json.loads(outputs[0].read_text(encoding="utf-8"))["mappings"][0]
+    assert mapping["audience"] == {
+        "systems": ["CLIENT-01", "client-01", "CLIENT-02"],
+        "users": ["Alice", "alice", "bob"],
+    }
+
+
+def test_linux_smb_common_outputs_ignore_format_filter(tmp_path: Path) -> None:
+    """Linux/Samba canonical planning must be independent of selected renderers."""
+
+    scenario_data = load_yaml(_linux_smb_scenario_path())
+    full_scenario = Scenario(**scenario_data)
+    filtered_scenario = full_scenario.model_copy(deep=True)
+    filtered_scenario.output.logs = [{"format": "zeek"}, {"format": "syslog"}]
+    full_dir = tmp_path / "linux-smb-full"
+    filtered_dir = tmp_path / "linux-smb-filtered"
+
+    GenerationEngine(full_scenario, full_dir).generate()
+    GenerationEngine(filtered_scenario, filtered_dir).generate()
+
+    filtered_data = {
+        str(path.relative_to(filtered_dir / "data")): path.read_bytes()
+        for path in sorted((filtered_dir / "data").rglob("*"))
+        if path.is_file()
+    }
+    full_common_data = {
+        relative: (full_dir / "data" / relative).read_bytes() for relative in filtered_data
+    }
+    assert full_common_data == filtered_data
+    full_truth = json.loads((full_dir / "GROUND_TRUTH.json").read_text(encoding="utf-8"))
+    filtered_truth = json.loads((filtered_dir / "GROUND_TRUTH.json").read_text(encoding="utf-8"))
+    # Source availability correctly reflects the selected renderers; canonical
+    # storyline identities, operations, paths, UIDs, and FUIDs must not.
+    full_truth.pop("source_evidence_status", None)
+    filtered_truth.pop("source_evidence_status", None)
+    for document in (full_truth, filtered_truth):
+        for event in document["events"]:
+            event.get("attributes", {}).pop("source_status", None)
+        for intent in document.get("intent_reconciliation", {}).get("intents", []):
+            intent.pop("source_status", None)
+    assert full_truth == filtered_truth
+    assert (full_dir / "STORAGE_MANIFEST.json").read_bytes() == (
+        filtered_dir / "STORAGE_MANIFEST.json"
     ).read_bytes()

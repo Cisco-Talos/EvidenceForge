@@ -1754,6 +1754,25 @@ class NetworkTransactionPlanner:
         target_has_ssh = target_system is not None and "ssh" in {
             str(service_name).lower() for service_name in (target_system.services or [])
         }
+        target_has_smb = False
+        if target_system is not None:
+            world_planner = getattr(executor, "_world_planner", None)
+            world_model = getattr(world_planner, "world_model", None)
+            target_world = (
+                world_model.hosts.get(target_system.hostname) if world_model is not None else None
+            )
+            if target_world is not None:
+                from evidenceforge.generation.world_model import HostCapability
+
+                target_has_smb = target_world.supports(HostCapability.SMB_SERVER)
+            else:
+                smb_server_services = {"lanmanserver", "samba", "smb-server", "smbd"}
+                target_has_smb = bool(
+                    {
+                        str(service_name).casefold().replace("_", "-")
+                        for service_name in (target_system.services or [])
+                    }.intersection(smb_server_services)
+                )
         generic_ssh_preauth_pid: int | None = None
         if (
             target_system is not None
@@ -1787,6 +1806,35 @@ class NetworkTransactionPlanner:
             else:
                 executor._remember_ssh_responder_pid(
                     src_ip, src_port, target_system.ip, responding_pid
+                )
+        if (
+            dst_host_ctx is not None
+            and dst_host_ctx.os_category == "linux"
+            and target_system is not None
+            and target_has_smb
+            and proto == "tcp"
+            and dst_port == 445
+            and conn_state == "SF"
+            and service in {"", "smb"}
+        ):
+            if responding_pid <= 0:
+                responding_pid = executor.ensure_linux_smb_responder_process(
+                    target_system=target_system,
+                    time=time,
+                    source_ip=src_ip,
+                    source_port=src_port,
+                    close_time=(
+                        time + generator_module.timedelta(seconds=max(0.0, duration))
+                        if duration is not None
+                        else None
+                    ),
+                )
+            else:
+                executor._remember_smb_responder_pid(
+                    src_ip,
+                    src_port,
+                    target_system.ip,
+                    responding_pid,
                 )
 
         event = _NetworkOccurrenceDraft(

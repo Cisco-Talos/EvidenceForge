@@ -88,6 +88,12 @@ class ActiveSession:
     lifecycle_group_id: str = ""
     parent_lifecycle_group_id: str = ""
     end_plan: SessionEndPlan | None = None
+    auth_protocol: str = ""
+    smb_principal: str = ""
+    account_scope: str = ""
+    auth_session_ref: str = ""
+    effective_uid: int | None = None
+    effective_gid: int | None = None
 
 
 @dataclass
@@ -205,6 +211,12 @@ class SmbSessionState:
     transport_uid: str
     started_at: datetime
     expires_at: datetime
+    auth_session_ref: str = ""
+    auth_protocol: str = ""
+    account_scope: str = ""
+    effective_uid: int | None = None
+    effective_gid: int | None = None
+    client_access: str = ""
     closed_at: datetime | None = None
 
 

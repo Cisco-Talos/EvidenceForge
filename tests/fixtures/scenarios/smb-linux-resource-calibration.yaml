@@ -1,0 +1,177 @@
+version: "1.0"
+name: smb-linux-resource-calibration
+description: "Representative Linux client and Samba server SMB resource calibration workload"
+
+environment:
+  description: "Linux SMB client and Samba file server calibration environment"
+  domain: example.test
+  users:
+    - username: analyst
+      full_name: "Linux Resource Analyst"
+      email: analyst@example.test
+      primary_system: LNX-CLIENT-01
+      enabled: true
+  systems:
+    - hostname: LNX-CLIENT-01
+      ip: 10.40.0.10
+      os: "Ubuntu 24.04"
+      type: workstation
+      roles: [workstation]
+      services: [smb-client, cifs-utils, smbclient, gvfs-smb, dns-client, ntp]
+    - hostname: SAMBA-01
+      ip: 10.40.0.20
+      os: "Ubuntu Server 24.04"
+      type: server
+      roles: [file_server]
+      services: [smb-server, samba, smbd, syslog]
+  network:
+    segments:
+      - name: office
+        cidr: 10.40.0.0/24
+        exposure: internal
+        systems: [LNX-CLIENT-01, SAMBA-01]
+    sensors:
+      - type: network
+        name: core-zeek
+        monitoring_segments: [office]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+  storage:
+    population: large
+    activity: high
+    servers:
+      - system: SAMBA-01
+        presets: []
+        audit: high
+        default_volume: data
+        volumes:
+          - {id: data, mount: /srv/samba/data, filesystem: xfs, label: SambaData}
+          - {id: archive, mount: /srv/samba/archive, filesystem: ext4, label: SambaArchive}
+        shares:
+          - id: team
+            name: Team
+            volume: data
+            root: Departments\Team
+            preset: collaboration
+            population: large
+            activity: high
+            smb_native_filesystem: NTFS
+            access: {read: [analyst], modify: [analyst]}
+          - id: protected
+            name: Protected
+            volume: archive
+            root: Protected
+            preset: department
+            population: medium
+            activity: low
+            encryption: required
+            smb_native_filesystem: NTFS
+            access: {read: [analyst]}
+    mappings:
+      - id: team-mount
+        share: SAMBA-01.team
+        audience: {users: [analyst], systems: [LNX-CLIENT-01]}
+        mount: /mnt/team
+        lifecycle: persistent
+
+time_window:
+  start: "2024-01-15T10:00:00Z"
+  duration: "2h"
+
+baseline_activity:
+  description: "Low non-SMB noise with representative Linux SMB activity"
+  intensity: low
+  variation: low
+
+storyline:
+  - id: single-read
+    time: "+20m"
+    actor: analyst
+    system: LNX-CLIENT-01
+    activity: "Read one team document through the CIFS mount"
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: interactive
+        target: {type: share, share: SAMBA-01.team}
+        outcome: success
+        client_access: cifs_mount
+        path_style: mounted
+        mapping: team-mount
+  - id: batch-read
+    time: "+40m"
+    actor: analyst
+    system: LNX-CLIENT-01
+    activity: "Review a Samba working set"
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: collection
+        target: {type: share, share: SAMBA-01.team}
+        batch: {count: 25, duration: 5m}
+        outcome: success
+        client_access: smbclient
+  - id: batch-update
+    time: "+60m"
+    actor: analyst
+    system: LNX-CLIENT-01
+    activity: "Update a Samba working set with high auditing"
+    events:
+      - type: smb_activity
+        operation: update
+        purpose: interactive
+        target: {type: share, share: SAMBA-01.team}
+        batch: {count: 25, duration: 5m}
+        outcome: success
+        client_access: cifs_mount
+        path_style: mounted
+        mapping: team-mount
+  - id: batch-copy
+    time: "+80m"
+    actor: analyst
+    system: LNX-CLIENT-01
+    activity: "Collect Samba files into a local Linux cache"
+    events:
+      - type: smb_activity
+        operation: copy
+        purpose: collection
+        source: {type: share, share: SAMBA-01.team}
+        destination: {type: client, path: /var/tmp/eforge-smb-cache/}
+        batch: {count: 50, duration: 8m}
+        outcome: success
+        client_access: smbclient
+  - id: batch-delete
+    time: "+100m"
+    actor: analyst
+    system: LNX-CLIENT-01
+    activity: "Delete obsolete Samba documents"
+    events:
+      - type: smb_activity
+        operation: delete
+        purpose: administrative
+        target: {type: share, share: SAMBA-01.team}
+        batch: {count: 20, duration: 4m}
+        outcome: success
+        client_access: smbclient
+  - id: encrypted-read
+    time: "+110m"
+    actor: analyst
+    system: LNX-CLIENT-01
+    activity: "Read from an encrypted Samba share"
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: interactive
+        target: {type: share, share: SAMBA-01.protected}
+        batch: {count: 25, duration: 4m}
+        outcome: success
+        client_access: smbclient
+
+output:
+  logs:
+    - format: zeek
+    - format: ecar
+    - format: syslog
+  destination: "./output"
+  compression: false

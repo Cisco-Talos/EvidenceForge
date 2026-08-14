@@ -118,8 +118,10 @@ Before running generation:
 - Verify the scenario file exists and is valid YAML
 - Read the scenario to understand what will be generated (users, systems, time window, formats)
 - Run `eforge validate <scenario-file>` to catch issues early
-- If SMB storage is present or implied by Windows file-server/DC roles, run
-  `eforge validate <scenario-file> --show-storage` and review the compiled topology
+- If SMB storage is present or implied by Windows file-server/DC roles or Linux Samba roles and
+  services, run `eforge validate <scenario-file> --show-storage`. Review client/server capability,
+  platform-native volume and mapping paths, backing versus SMB-advertised filesystem, credential
+  mode, client access mode, and audit eligibility
 - Review both forecast lines: final output is the durable dataset size, while peak
   working disk also includes temporary Zeek external-sort runs. SMB batch count and
   source-native evidence fan-out affect both estimates; logical SMB file sizes do not.
@@ -168,8 +170,9 @@ scenarios/<scenario-name>/
   GROUND_TRUTH.json      ← generated canonical machine-readable ground-truth document;
                            written for every successful run and used to derive
                            GROUND_TRUTH.md
-  STORAGE_MANIFEST.json  ← compiled storage topology, public refs, corpus summaries,
-                           mappings, and resolved SMB storyline targets
+  STORAGE_MANIFEST.json  ← schema v2 compiled storage topology, server platforms,
+                           backing/advertised filesystems, mappings/credentials,
+                           and resolved SMB storyline targets
   OBSERVATION_MANIFEST.json ← generated source-observation manifest for eval
   OUTPUT_TARGET.txt      ← "default" or "sof-elk"
   data/                  ← generated log files
@@ -222,6 +225,11 @@ After successful generation:
 - Note that `GROUND_TRUTH.json`, `GROUND_TRUTH.md`, `OBSERVATION_MANIFEST.json`, optional `ARTIFACTS_MANIFEST.json`, `OUTPUT_TARGET.txt`, and `data/` were generated under `scenarios/<slug>/`. `GROUND_TRUTH.json` is the canonical machine-readable report; `GROUND_TRUTH.md` is rendered from it. For baseline-only runs, `GROUND_TRUTH.md` explicitly says no malicious events were generated.
 - `ENVIRONMENT.md` (created by `/eforge scenario`) is already in the same directory — no copying needed
 - Email artifact metadata is written to top-level `ARTIFACTS_MANIFEST.json` under `email.messages` when `environment.email.artifacts` enables modeled message metadata; `.eml` files are written under `artifacts/email/` according to artifact mode, and plaintext SMTP MIME parts can also appear in Zeek `files.json`. The manifest is production-facing, records blind-safe `artifact_export_status` / `artifact_export_reason` values for materialized and metadata-only rows, and omits storyline IDs, exercise verdict labels, and local filesystem paths; use `GROUND_TRUTH.json` for scenario correlation.
+- For SMB, inspect `STORAGE_MANIFEST.json` schema v2 and platform-eligible evidence together.
+  Windows servers can emit Windows audit; Samba servers can emit `smbd`/`smbd_audit` syslog;
+  either can emit eCAR when selected, and Zeek still requires sensor visibility. Mounted CIFS may
+  have no transport PID, direct `smbclient` is operation-scoped, and Windows Security must remain
+  absent for Linux servers.
 - Note that the causal expansion engine auto-generates prerequisite events (DNS lookups before connections, auth/session-bundle validation, Kerberos/DC-bundle TGT/TGS evidence before domain logons, Windows-audit-bundle events from command patterns, etc.) — these appear in the logs but are not explicitly listed in the scenario YAML
 - Summarize the output for the user
 

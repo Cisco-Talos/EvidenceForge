@@ -524,6 +524,52 @@ class TestStateManagerInit:
         assert chronological_pids == sorted(chronological_pids)
         assert len(set(chronological_pids)) == len(chronological_pids)
 
+    def test_linux_pid_lane_keeps_headroom_for_dense_late_ssh_bootstrap(self):
+        """The measured 36-position burst fits even at second 29 of its lane."""
+
+        import random
+
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 1, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+        lane_start = datetime(2024, 2, 1, 23, 14, tzinfo=UTC)
+        future_time = lane_start + timedelta(seconds=45)
+        future_pid = sm.allocate_transient_linux_pid("linux01", future_time)
+        burst_times = [
+            lane_start + timedelta(seconds=(29.361347 * ordinal) / 35) for ordinal in range(36)
+        ]
+        random.Random(31).shuffle(burst_times)
+
+        burst_pids = [
+            sm.allocate_transient_linux_pid("linux01", event_time) for event_time in burst_times
+        ]
+
+        assert max(burst_pids) < future_pid
+        assert len(set(burst_pids)) == len(burst_pids)
+
+    def test_linux_pid_reorder_lane_fails_when_bounded_capacity_is_exhausted(self, monkeypatch):
+        """A known later lane must not be crossed to hide excessive earlier churn."""
+
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+        sm.allocate_transient_linux_pid("linux01", boot_time + timedelta(minutes=1))
+
+        monkeypatch.setattr(
+            sm,
+            "_linux_pid_reorder_lane",
+            lambda _system, _epoch, _elapsed: (
+                boot_time,
+                boot_time + timedelta(seconds=30),
+                0,
+                1,
+            ),
+        )
+        sm.allocate_transient_linux_pid("linux01", boot_time)
+
+        with pytest.raises(StateError, match="30-second reorder lane capacity exhausted"):
+            sm.allocate_transient_linux_pid("linux01", boot_time + timedelta(seconds=1))
+
     def test_linux_pids_keep_parent_child_shape_before_future_process(self):
         """Earlier parent/child allocations should fit below known future PIDs."""
         sm = StateManager()
@@ -906,9 +952,19 @@ class TestSmbState:
             principal="alice",
             server="FS-01",
             security_policy="standard",
+            logon_id="0x100",
+            transport_uid="C-first",
+            started_at=start + timedelta(minutes=5),
+            reuse=True,
+        )
+        rebound = sm.open_smb_session(
+            client_ip="10.0.0.5",
+            principal="alice",
+            server="FS-01",
+            security_policy="standard",
             logon_id="0x200",
             transport_uid="C-second",
-            started_at=start + timedelta(minutes=5),
+            started_at=start + timedelta(minutes=6),
             reuse=True,
         )
         tree = sm.get_or_open_smb_tree(
@@ -918,12 +974,58 @@ class TestSmbState:
         )
 
         assert reused.session_id == first.session_id
+        assert rebound.session_id != first.session_id
         assert sm.get_smb_tree(tree.tree_id) == tree
 
         sm.sweep_smb_state(start + timedelta(hours=2))
 
         assert sm.get_smb_tree(tree.tree_id) is None
         assert sm.get_state_summary()["smb_sessions"] == 0
+
+    def test_samba_session_keeps_neutral_auth_identity_and_protocol_affinity(self):
+        """Samba state uses a neutral reference and never conflates distinct auth modes."""
+
+        sm = StateManager()
+        start = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+        kerberos = sm.open_smb_session(
+            client_ip="10.0.0.5",
+            principal="alice",
+            server="SAMBA-01",
+            security_policy="standard",
+            logon_id="0x100",
+            transport_uid="C-kerberos",
+            started_at=start,
+            auth_session_ref="smb-auth-1",
+            auth_protocol="kerberos",
+            account_scope="directory",
+            effective_uid=2401,
+            effective_gid=2401,
+            client_access="cifs_mount",
+            reuse=True,
+        )
+        ntlm = sm.open_smb_session(
+            client_ip="10.0.0.5",
+            principal="alice",
+            server="SAMBA-01",
+            security_policy="standard",
+            logon_id="0x101",
+            transport_uid="C-ntlm",
+            started_at=start + timedelta(seconds=1),
+            auth_session_ref="smb-auth-2",
+            auth_protocol="ntlmssp",
+            account_scope="directory",
+            effective_uid=2401,
+            effective_gid=2401,
+            client_access="smbclient",
+            reuse=True,
+        )
+
+        assert kerberos.session_id != ntlm.session_id
+        assert kerberos.auth_session_ref == "smb-auth-1"
+        assert kerberos.auth_protocol == "kerberos"
+        assert (kerberos.effective_uid, kerberos.effective_gid) == (2401, 2401)
+        sm.close_smb_session(kerberos.session_id, start + timedelta(minutes=1))
+        assert sm.get_smb_session(kerberos.session_id).closed_at == start + timedelta(minutes=1)
 
 
 class TestSessionManagement:

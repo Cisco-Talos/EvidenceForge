@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from string import Formatter
 from typing import Any, ClassVar, Literal, Self
 from urllib.parse import urlparse
 
@@ -1637,6 +1638,528 @@ class ExternalScannerPortProfile(BaseModel, extra="forbid"):
         if not v:
             raise ValueError("ports must not be empty")
         return v
+
+
+# --- SMB Client and Server Profiles ---
+
+
+SmbOperationName = Literal["browse", "read", "create", "update", "copy", "move", "delete"]
+SmbProcessOperandMode = Literal[
+    "none",
+    "remote",
+    "download",
+    "upload",
+    "rename",
+    "transfer",
+]
+SmbAuthOptionName = Literal["auto", "kerberos", "ntlmssp"]
+_SMB_OPERATIONS = frozenset({"browse", "read", "create", "update", "copy", "move", "delete"})
+SmbVfsAuditProfileName = Literal["standard", "high"]
+SmbAuditEventType = Literal[
+    "smb_directory_enumeration",
+    "smb_file_open",
+    "smb_file_read",
+    "smb_file_write",
+    "smb_file_rename",
+    "smb_file_delete",
+    "smb_file_close",
+]
+_SMB_AUDIT_EVENT_TYPES = frozenset(
+    {
+        "smb_directory_enumeration",
+        "smb_file_open",
+        "smb_file_read",
+        "smb_file_write",
+        "smb_file_rename",
+        "smb_file_delete",
+        "smb_file_close",
+    }
+)
+_SMB_TEMPLATE_FIELDS = frozenset(
+    {
+        "server",
+        "share",
+        "path",
+        "client_path",
+        "local_path",
+        "source_path",
+        "destination_path",
+        "username",
+        "smb_principal",
+        "auth_options",
+        "operation",
+        "client_ip",
+    }
+)
+
+
+def _validate_smb_filesystem_label(value: str) -> str:
+    """Normalize one safe SMB wire-advertised filesystem label."""
+
+    normalized = value.strip()
+    if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._ -]{0,63}", normalized) is None:
+        raise ValueError("advertised filesystem labels must be nonempty safe labels")
+    return normalized
+
+
+class SmbAdvertisedFilesystemDefaults(BaseModel, extra="forbid", frozen=True):
+    """Provider defaults mapping backing filesystems to SMB wire labels."""
+
+    windows: dict[Literal["ntfs", "refs"], str]
+    linux: dict[Literal["ext4", "xfs"], str]
+
+    @field_validator("windows", "linux")
+    @classmethod
+    def valid_labels(cls, values: dict[str, str]) -> dict[str, str]:
+        """Normalize every advertised label before it reaches compiler output."""
+
+        return {
+            filesystem: _validate_smb_filesystem_label(label)
+            for filesystem, label in values.items()
+        }
+
+    @model_validator(mode="after")
+    def complete_platform_defaults(self) -> Self:
+        """Require one default for every supported platform/backing pair."""
+
+        if set(self.windows) != {"ntfs", "refs"}:
+            raise ValueError("advertised filesystem windows defaults require ntfs and refs")
+        if set(self.linux) != {"ext4", "xfs"}:
+            raise ValueError("advertised filesystem linux defaults require ext4 and xfs")
+        return self
+
+
+class SmbSambaAuditOperation(BaseModel, extra="forbid", frozen=True):
+    """Source-native Samba label and audit-tier eligibility for one event."""
+
+    label: str
+    audit_profiles: tuple[SmbVfsAuditProfileName, ...]
+
+    @field_validator("label")
+    @classmethod
+    def valid_label(cls, value: str) -> str:
+        """Require a compact vfs_full_audit-style operation token."""
+
+        normalized = value.strip().casefold()
+        if re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", normalized) is None:
+            raise ValueError("Samba audit operation label must be a safe lowercase token")
+        return normalized
+
+    @field_validator("audit_profiles", mode="before")
+    @classmethod
+    def lifecycle_only_minimal(cls, values: object) -> object:
+        """Reject attempts to turn the minimal lifecycle tier into file auditing."""
+
+        if isinstance(values, (list, tuple)) and any(
+            str(value).strip().casefold() == "minimal" for value in values
+        ):
+            raise ValueError(
+                "Samba operation audit_profiles cannot include minimal; minimal is lifecycle-only"
+            )
+        return values
+
+    @field_validator("audit_profiles")
+    @classmethod
+    def unique_audit_profiles(
+        cls,
+        values: tuple[SmbVfsAuditProfileName, ...],
+    ) -> tuple[SmbVfsAuditProfileName, ...]:
+        """Reject duplicate or non-monotonic tier declarations."""
+
+        if len(values) != len(set(values)):
+            raise ValueError("Samba operation audit_profiles must not contain duplicates")
+        if "standard" in values and "high" not in values:
+            raise ValueError(
+                "Samba operation audit_profiles containing standard must also contain high"
+            )
+        return values
+
+
+class SmbSambaAuditConfig(BaseModel, extra="forbid", frozen=True):
+    """Samba VFS audit eligibility and canonical operation labels."""
+
+    failure_audit_profiles: tuple[SmbVfsAuditProfileName, ...]
+    operations: dict[SmbAuditEventType, SmbSambaAuditOperation]
+
+    @field_validator("failure_audit_profiles", mode="before")
+    @classmethod
+    def lifecycle_only_minimal_failures(cls, values: object) -> object:
+        """Reject per-file failure audit configuration in the minimal tier."""
+
+        if isinstance(values, (list, tuple)) and any(
+            str(value).strip().casefold() == "minimal" for value in values
+        ):
+            raise ValueError(
+                "failure_audit_profiles cannot include minimal; minimal is lifecycle-only"
+            )
+        return values
+
+    @field_validator("failure_audit_profiles")
+    @classmethod
+    def unique_failure_profiles(
+        cls,
+        values: tuple[SmbVfsAuditProfileName, ...],
+    ) -> tuple[SmbVfsAuditProfileName, ...]:
+        """Require a duplicate-free, monotonic failure-observation tier set."""
+
+        if len(values) != len(set(values)):
+            raise ValueError("failure_audit_profiles must not contain duplicates")
+        if "standard" in values and "high" not in values:
+            raise ValueError("failure_audit_profiles containing standard must also contain high")
+        return values
+
+    @model_validator(mode="after")
+    def complete_operation_map(self) -> Self:
+        """Keep every canonical Samba audit event mapped explicitly."""
+
+        missing = sorted(_SMB_AUDIT_EVENT_TYPES - set(self.operations))
+        if missing:
+            raise ValueError(f"Samba audit operations are missing canonical events: {missing}")
+        return self
+
+
+def _validate_smb_template(value: str, field_name: str) -> str:
+    """Validate one SMB process template without evaluating it."""
+
+    if not value.strip():
+        raise ValueError(f"{field_name} must not be empty")
+    try:
+        parsed = tuple(Formatter().parse(value))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} has invalid format syntax: {exc}") from exc
+    for _literal, placeholder, format_spec, conversion in parsed:
+        if placeholder is None:
+            continue
+        if placeholder not in _SMB_TEMPLATE_FIELDS:
+            raise ValueError(
+                f"{field_name} uses unsupported placeholder {placeholder!r}; "
+                f"allowed placeholders are {sorted(_SMB_TEMPLATE_FIELDS)}"
+            )
+        if format_spec or conversion:
+            raise ValueError(f"{field_name} placeholders cannot use conversions or format specs")
+    return value
+
+
+class SmbProcessProfile(BaseModel, extra="forbid", frozen=True):
+    """Process metadata for one SMB client or server lifecycle owner."""
+
+    key_template: str
+    image: str
+    command_line_template: str
+    username_template: str
+    lifecycle: Literal["resident", "operation", "transport", "service"]
+    credential_source: Literal["none", "smb_principal"] = "none"
+    operand_mode: SmbProcessOperandMode = "none"
+
+    @field_validator("key_template", "command_line_template", "username_template")
+    @classmethod
+    def valid_template(cls, value: str, info: ValidationInfo) -> str:
+        """Reject empty templates, unsafe field traversal, and unknown placeholders."""
+
+        return _validate_smb_template(value, info.field_name)
+
+    @field_validator("image")
+    @classmethod
+    def image_non_empty(cls, value: str) -> str:
+        """Require a literal image path rather than a generated template."""
+
+        if not value.strip():
+            raise ValueError("image must not be empty")
+        if "{" in value or "}" in value:
+            raise ValueError("image must be a literal path without placeholders")
+        return value
+
+    @model_validator(mode="after")
+    def coherent_identity_and_operands(self) -> Self:
+        """Keep local ownership, remote credentials, and command operands distinct."""
+
+        def placeholders(template: str) -> set[str]:
+            return {
+                placeholder
+                for _literal, placeholder, _format_spec, _conversion in Formatter().parse(template)
+                if placeholder is not None
+            }
+
+        command_fields = placeholders(self.command_line_template)
+        owner_fields = placeholders(self.username_template)
+        if "smb_principal" in owner_fields:
+            raise ValueError("username_template cannot use the remote SMB principal")
+        if self.credential_source == "smb_principal":
+            if "smb_principal" not in command_fields:
+                raise ValueError(
+                    "credential_source=smb_principal requires {smb_principal} in the command"
+                )
+        elif "smb_principal" in command_fields:
+            raise ValueError(
+                "commands using {smb_principal} must declare credential_source=smb_principal"
+            )
+
+        required_fields = {
+            "none": set(),
+            "remote": {"path"},
+            "download": {"path", "local_path"},
+            "upload": {"path", "local_path"},
+            "rename": {"path", "destination_path"},
+            "transfer": {"source_path", "destination_path"},
+        }[self.operand_mode]
+        missing_fields = sorted(required_fields - command_fields)
+        if missing_fields:
+            raise ValueError(
+                f"operand_mode={self.operand_mode} requires command placeholders {missing_fields}"
+            )
+        if self.operand_mode in {"download", "upload"} and "client_path" in command_fields:
+            raise ValueError(
+                f"operand_mode={self.operand_mode} must use {{local_path}}, not {{client_path}}"
+            )
+        return self
+
+
+class SmbClientProfile(BaseModel, extra="forbid", frozen=True):
+    """Platform-native client presentation and process ownership profile."""
+
+    os_category: Literal["windows", "linux"]
+    access_mode: Literal["explorer", "desktop", "direct", "mounted"]
+    path_style: Literal["unc", "mapped", "smb_uri", "mounted"]
+    transport_attribution: Literal["process", "kernel", "none"]
+    service_aliases: tuple[str, ...] = ()
+    weight: float = Field(default=1.0, gt=0.0, allow_inf_nan=False)
+    system_types: tuple[Literal["workstation", "server", "domain_controller"], ...] = (
+        "workstation",
+        "server",
+        "domain_controller",
+    )
+    auth_options: dict[SmbAuthOptionName, str] = Field(default_factory=dict)
+    process: SmbProcessProfile | None = None
+    operation_processes: dict[SmbOperationName, SmbProcessProfile] = Field(default_factory=dict)
+
+    @field_validator("service_aliases")
+    @classmethod
+    def valid_service_aliases(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Normalize non-empty service aliases and reject duplicates."""
+
+        normalized = tuple(value.strip().casefold() for value in values)
+        if any(
+            not value or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", value) for value in normalized
+        ):
+            raise ValueError("service_aliases must contain non-empty service identifiers")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("service_aliases must not contain duplicates")
+        return normalized
+
+    @field_validator("system_types")
+    @classmethod
+    def valid_system_types(
+        cls,
+        values: tuple[Literal["workstation", "server", "domain_controller"], ...],
+    ) -> tuple[Literal["workstation", "server", "domain_controller"], ...]:
+        """Require a non-empty, duplicate-free eligibility set."""
+
+        if not values:
+            raise ValueError("system_types must not be empty")
+        if len(values) != len(set(values)):
+            raise ValueError("system_types must not contain duplicates")
+        return values
+
+    @field_validator("auth_options")
+    @classmethod
+    def valid_auth_options(cls, values: dict[str, str]) -> dict[str, str]:
+        """Require source-native smbclient options without shell control syntax."""
+
+        option_pattern = re.compile(
+            r"--[a-z0-9][a-z0-9-]*(?:=[a-z0-9][a-z0-9._-]*)?"
+            r"(?: --[a-z0-9][a-z0-9-]*(?:=[a-z0-9][a-z0-9._-]*)?)*"
+        )
+        normalized = {name: option.strip() for name, option in values.items()}
+        invalid = sorted(
+            name for name, option in normalized.items() if option_pattern.fullmatch(option) is None
+        )
+        if invalid:
+            raise ValueError(f"auth_options contain unsafe or empty values for {invalid}")
+        return normalized
+
+    @model_validator(mode="after")
+    def coherent_platform_and_ownership(self) -> Self:
+        """Keep access mode, presentation, and process ownership coherent."""
+
+        if self.access_mode == "explorer" and self.os_category != "windows":
+            raise ValueError("explorer access_mode requires os_category=windows")
+        if self.access_mode != "explorer" and self.os_category != "linux":
+            raise ValueError(f"{self.access_mode} access_mode requires os_category=linux")
+        if self.os_category == "windows" and self.path_style not in {"unc", "mapped"}:
+            raise ValueError("Windows SMB clients require unc or mapped path_style")
+        if self.access_mode in {"desktop", "direct"} and self.path_style != "smb_uri":
+            raise ValueError(f"{self.access_mode} access_mode requires path_style=smb_uri")
+        if self.access_mode == "mounted" and self.path_style != "mounted":
+            raise ValueError("mounted access_mode requires path_style=mounted")
+        if self.access_mode == "direct" and self.transport_attribution != "process":
+            raise ValueError("direct access_mode requires transport_attribution=process")
+        if self.access_mode == "mounted" and self.transport_attribution != "kernel":
+            raise ValueError("mounted access_mode requires transport_attribution=kernel")
+
+        missing_operations = sorted(_SMB_OPERATIONS - set(self.operation_processes))
+        if self.access_mode == "mounted" and self.process is not None:
+            raise ValueError(
+                "mounted access_mode cannot declare a default process; mount lifecycle is "
+                "separate from per-operation actors"
+            )
+        if self.access_mode == "mounted" and missing_operations:
+            raise ValueError(
+                "mounted access_mode requires operation_processes for every SMB operation; "
+                f"missing {missing_operations}"
+            )
+        if self.process is None and missing_operations:
+            raise ValueError(
+                "profiles without a default process require operation_processes for every SMB "
+                f"operation; missing {missing_operations}"
+            )
+        if self.access_mode in {"explorer", "desktop"} and (
+            self.process is None or self.process.lifecycle != "resident"
+        ):
+            raise ValueError(f"{self.access_mode} access_mode requires a resident process")
+        if (
+            self.access_mode == "direct"
+            and self.process is not None
+            and self.process.lifecycle != "operation"
+        ):
+            raise ValueError("direct access_mode default process must use lifecycle=operation")
+        if self.access_mode in {"direct", "mounted"} and any(
+            process.lifecycle != "operation" for process in self.operation_processes.values()
+        ):
+            raise ValueError(f"{self.access_mode} operation_processes must use lifecycle=operation")
+        processes = [
+            process
+            for process in (self.process, *self.operation_processes.values())
+            if process is not None
+        ]
+        uses_auth_options = any(
+            "{auth_options}" in process.command_line_template for process in processes
+        )
+        if uses_auth_options and set(self.auth_options) != {"auto", "kerberos", "ntlmssp"}:
+            raise ValueError(
+                "profiles using {auth_options} require auto, kerberos, and ntlmssp mappings"
+            )
+        if self.auth_options and not uses_auth_options:
+            raise ValueError("auth_options require {auth_options} in a process command template")
+        return self
+
+
+class SmbServerProfile(BaseModel, extra="forbid", frozen=True):
+    """Platform-native SMB server listener and optional connection worker."""
+
+    os_category: Literal["windows", "linux"]
+    service_aliases: tuple[str, ...]
+    listener: SmbProcessProfile
+    worker: SmbProcessProfile | None = None
+
+    @field_validator("service_aliases")
+    @classmethod
+    def valid_service_aliases(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Normalize server service aliases and reject duplicates."""
+
+        normalized = tuple(value.strip().casefold() for value in values)
+        if not normalized or any(
+            not value or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", value) for value in normalized
+        ):
+            raise ValueError("service_aliases must contain non-empty service identifiers")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("service_aliases must not contain duplicates")
+        return normalized
+
+    @model_validator(mode="after")
+    def coherent_process_lifecycles(self) -> Self:
+        """Require one durable listener and Linux per-transport workers."""
+
+        if self.listener.lifecycle != "service":
+            raise ValueError("SMB server listener must use lifecycle=service")
+        if self.worker is not None and self.worker.lifecycle != "transport":
+            raise ValueError("SMB server worker must use lifecycle=transport")
+        if self.os_category == "linux" and self.worker is None:
+            raise ValueError("Linux Samba server profiles require a per-transport worker")
+        return self
+
+
+class SmbProfilesConfig(BaseModel, extra="forbid", frozen=True):
+    """Root schema for smb_profiles.yaml."""
+
+    schema_version: Literal[1]
+    advertised_filesystem_defaults: SmbAdvertisedFilesystemDefaults
+    samba_audit: SmbSambaAuditConfig
+    client_defaults: dict[Literal["windows", "linux"], str]
+    client_profiles: dict[str, SmbClientProfile]
+    server_defaults: dict[Literal["windows", "linux"], str]
+    server_profiles: dict[str, SmbServerProfile]
+
+    @model_validator(mode="after")
+    def valid_defaults_and_native_images(self) -> Self:
+        """Validate default references, profile keys, and native executable paths."""
+
+        for profile_group_name, profiles in (
+            ("client_profiles", self.client_profiles),
+            ("server_profiles", self.server_profiles),
+        ):
+            if not profiles:
+                raise ValueError(f"{profile_group_name} must not be empty")
+            invalid_names = sorted(
+                name for name in profiles if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name)
+            )
+            if invalid_names:
+                raise ValueError(f"{profile_group_name} has invalid names: {invalid_names}")
+
+        self._validate_default_references(
+            defaults=self.client_defaults,
+            profiles=self.client_profiles,
+            field_name="client_defaults",
+        )
+        self._validate_default_references(
+            defaults=self.server_defaults,
+            profiles=self.server_profiles,
+            field_name="server_defaults",
+        )
+        for profile in self.client_profiles.values():
+            processes = [
+                process
+                for process in (profile.process, *profile.operation_processes.values())
+                if process is not None
+            ]
+            self._validate_native_images(profile.os_category, processes)
+        for profile in self.server_profiles.values():
+            processes = [process for process in (profile.listener, profile.worker) if process]
+            self._validate_native_images(profile.os_category, processes)
+        return self
+
+    @staticmethod
+    def _validate_default_references(
+        *,
+        defaults: dict[Literal["windows", "linux"], str],
+        profiles: dict[str, SmbClientProfile] | dict[str, SmbServerProfile],
+        field_name: str,
+    ) -> None:
+        missing_platforms = sorted({"windows", "linux"} - set(defaults))
+        if missing_platforms:
+            raise ValueError(f"{field_name} is missing platforms: {missing_platforms}")
+        for os_category, profile_name in defaults.items():
+            profile = profiles.get(profile_name)
+            if profile is None:
+                raise ValueError(f"{field_name}.{os_category} references unknown {profile_name!r}")
+            if profile.os_category != os_category:
+                raise ValueError(
+                    f"{field_name}.{os_category} references {profile_name!r} for "
+                    f"os_category={profile.os_category}"
+                )
+
+    @staticmethod
+    def _validate_native_images(
+        os_category: Literal["windows", "linux"],
+        processes: list[SmbProcessProfile],
+    ) -> None:
+        for process in processes:
+            if os_category == "linux" and not process.image.startswith("/"):
+                raise ValueError(f"Linux SMB process image must be absolute: {process.image!r}")
+            if os_category == "windows" and not re.fullmatch(
+                r"[A-Za-z]:\\.+|\\\\.+",
+                process.image,
+            ):
+                raise ValueError(f"Windows SMB process image must be absolute: {process.image!r}")
 
 
 class WindowsFailedLogonLocalProfile(BaseModel, extra="forbid"):

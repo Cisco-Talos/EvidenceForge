@@ -40,6 +40,7 @@ from evidenceforge.events.contexts import (
     FileTransferContext,
     HttpContext,
     OcspContext,
+    SmbContext,
     SslContext,
     SyslogContext,
     X509Context,
@@ -2636,6 +2637,95 @@ class TestCanHandleDefault:
         )
 
         assert SyslogEmitter._linux_host(event) is dst_host
+
+    def test_samba_syslog_routes_to_target_when_both_hosts_are_linux(self):
+        """Samba application evidence belongs to the server, not the Linux client."""
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        src_host = HostContext(
+            hostname="LNX-CLIENT-01",
+            ip="10.30.0.10",
+            os="Ubuntu 24.04",
+            os_category="linux",
+            system_type="workstation",
+        )
+        dst_host = HostContext(
+            hostname="SAMBA-01",
+            ip="10.30.0.20",
+            os="Ubuntu Server 24.04",
+            os_category="linux",
+            system_type="server",
+        )
+        event = OccurrenceBuilder(
+            timestamp=_make_ts(),
+            event_type="smb_file_read",
+            src_host=src_host,
+            dst_host=dst_host,
+            auth=AuthContext(
+                username="linux_user",
+                session_kind="smb",
+                auth_session_ref="smb-auth-1",
+            ),
+            smb=SmbContext(
+                phase="read",
+                operation="read",
+                purpose="routing test",
+                session_id="smb-session-1",
+                tree_id="tree-1",
+                share_ref="SAMBA-01.finance",
+                share_name="Finance",
+                result="success",
+                server_path="/srv/samba/data/report.xlsx",
+                filesystem="xfs",
+                backing_filesystem="xfs",
+                server_platform="linux",
+                provider="samba",
+                audit="high",
+            ),
+        )
+
+        assert SyslogEmitter._linux_host(event) is dst_host
+
+    def test_windows_security_suppresses_samba_audit(self, tmp_path):
+        """Linux Samba events must not be projected as Windows Security audit."""
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.windows import WindowsEventEmitter
+
+        emitter = WindowsEventEmitter(
+            load_format("windows_event_security"),
+            tmp_path / "windows_event_security.xml",
+            threaded=False,
+        )
+        event = OccurrenceBuilder(
+            timestamp=_make_ts(),
+            event_type="smb_file_read",
+            dst_host=HostContext(
+                hostname="SAMBA-01",
+                ip="10.30.0.20",
+                os="Ubuntu Server 24.04",
+                os_category="linux",
+                system_type="server",
+            ),
+            auth=AuthContext(username="linux_user", session_kind="smb"),
+            smb=SmbContext(
+                phase="read",
+                operation="read",
+                purpose="routing test",
+                session_id="smb-session-1",
+                tree_id="tree-1",
+                share_ref="SAMBA-01.finance",
+                share_name="Finance",
+                result="success",
+                server_path="/srv/samba/data/report.xlsx",
+                filesystem="xfs",
+                backing_filesystem="xfs",
+                server_platform="linux",
+                provider="samba",
+                audit="high",
+            ),
+        )
+
+        assert not emitter.can_handle(event)
 
 
 class TestBuildHostContext:

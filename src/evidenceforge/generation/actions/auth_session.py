@@ -54,6 +54,13 @@ class LogonRequest:
     session_end_plan: SessionEndPlan | None = None
     remote_authentication_plan: RemoteAuthenticationPlan | None = None
     remote_authentication_transport_id: str = ""
+    session_kind: str | None = None
+    auth_protocol: str = ""
+    smb_principal: str = ""
+    account_scope: str = ""
+    auth_session_ref: str = ""
+    effective_uid: int | None = None
+    effective_gid: int | None = None
     source: str = "activity_generator"
 
     @property
@@ -74,7 +81,9 @@ class LogonRequest:
             f"{self.logon_id or ''}:{source_host}:{self.source}"
             f":{self.lifecycle_group_id}:{end_time}"
             f":{self.remote_authentication_plan.stable_id if self.remote_authentication_plan else ''}"
-            f":{self.remote_authentication_transport_id}"
+            f":{self.remote_authentication_transport_id}:{self.session_kind or ''}:"
+            f"{self.auth_protocol}:{self.smb_principal}:{self.account_scope}:"
+            f"{self.auth_session_ref}:{self.effective_uid}:{self.effective_gid}"
         )
         return f"logon-{seed:016x}"
 

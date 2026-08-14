@@ -171,6 +171,30 @@ class TestInstallSkills:
             assert sidecar in evidence_reference
         assert "No SMTP log" not in evidence_reference
 
+    def test_installed_skills_include_cross_platform_smb_contract(self, tmp_path):
+        """Installed guidance retains Linux client, Samba, and manifest-v2 semantics."""
+
+        install_skills(tmp_path)
+        root = tmp_path / "eforge"
+        scenario_reference = (root / "references" / "scenario-reference.md").read_text()
+        evidence_reference = (root / "references" / "evidence-formats.md").read_text()
+        host_config_reference = (root / "references" / "config-host-activity.md").read_text()
+        validation_reference = (root / "references" / "config-validation.md").read_text()
+
+        assert "client_access" in scenario_reference
+        assert "smb_principal" in scenario_reference
+        assert "/mnt/<mapping-id>" in scenario_reference
+        assert "schema_version: 2" in scenario_reference
+        assert "Samba server evidence" in evidence_reference
+        assert "mounted CIFS transport" in evidence_reference
+        assert "smb_profiles.yaml" in host_config_reference
+        assert "linux_cifs_mount" in host_config_reference
+        assert "per-client `smbd`" in host_config_reference
+        assert "source_path" in host_config_reference
+        assert "operand_mode: transfer" in host_config_reference
+        assert "source_path" in validation_reference
+        assert "`transfer` requires" in validation_reference
+
     def test_chatgpt_manifest_covers_every_canonical_command(self):
         """Every canonical top-level command has an explicit ChatGPT install mapping."""
         repository = Path(__file__).parents[2]

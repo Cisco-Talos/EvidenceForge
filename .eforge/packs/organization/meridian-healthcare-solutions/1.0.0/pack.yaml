@@ -1,0 +1,13 @@
+pack_schema_version: "1.0"
+type: organization
+name: meridian-healthcare-solutions
+version: "1.0.0"
+requires_evidenceforge: ">=2.0.0,<3.0.0"
+description: >-
+  Reusable Meridian Healthcare Solutions users, systems, network, email, storage,
+  and baseline activity for healthcare-technology assessment scenarios.
+industry_dependencies:
+  - source: package
+    type: industry
+    name: technology
+    version: "1.0.0"

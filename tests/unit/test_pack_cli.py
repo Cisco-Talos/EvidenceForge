@@ -16,6 +16,7 @@ from evidenceforge.composition.packs import CATALOG_FILES
 
 runner = CliRunner()
 _NORTHSTAR = Path("tests/fixtures/scenarios/northstar-health-pack.yaml").resolve()
+_NORTHSTAR_LINUX = Path("tests/fixtures/scenarios/northstar-health-linux-pack.yaml").resolve()
 
 
 def test_pack_inventory_show_and_validation_have_stable_json() -> None:
@@ -45,6 +46,55 @@ def test_pack_inventory_show_and_validation_have_stable_json() -> None:
     assert validated.exit_code == 0
     assert validation_payload["valid"] is True
     assert validation_payload["dependencies"][0]["name"] == "healthcare"
+
+
+def test_northstar_linux_pack_has_exact_dependency_and_indexed_digest() -> None:
+    """Northstar 1.1 is additive, pinned, and independently digest-verified."""
+
+    validated = runner.invoke(
+        app,
+        ["pack", "validate", "package:organization:northstar-health@1.1.0", "--json"],
+    )
+
+    assert validated.exit_code == 0, validated.stdout
+    payload = json.loads(validated.stdout)
+    assert payload["valid"] is True
+    assert payload["pack"]["version"] == "1.1.0"
+    assert payload["pack"]["digest"] == (
+        "f4be4d55481b9e09e304ef79dabde85e80cc9374f8ba65f29611d6702dbfe52f"
+    )
+    assert payload["dependencies"] == [
+        {
+            "digest": "79a78d1248e203c638c48cf2ff00c5eac4990efa227fc0bbf817dcef7e36d943",
+            "location": "package:industry:healthcare@1.0.0",
+            "name": "healthcare",
+            "source": "package",
+            "type": "industry",
+            "version": "1.0.0",
+        }
+    ]
+
+
+def test_northstar_linux_fixture_resolves_exact_new_pack(tmp_path: Path) -> None:
+    """The Linux SMB consumer selects 1.1 without mutating the 1.0 fixture."""
+
+    result = runner.invoke(
+        app,
+        [
+            "resolve",
+            str(_NORTHSTAR_LINUX),
+            "--output",
+            str(tmp_path / "resolved.yaml"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    selected = json.loads(result.stdout)["selected_packs"]
+    assert [(pack["name"], pack["version"]) for pack in selected] == [
+        ("healthcare", "1.0.0"),
+        ("northstar-health", "1.1.0"),
+    ]
 
 
 def test_pack_init_and_copy_are_complete_and_non_overwriting(tmp_path: Path) -> None:

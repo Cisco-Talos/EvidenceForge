@@ -25,6 +25,7 @@ from evidenceforge.events.contexts import (
     KerberosContext,
     ProcessAccessContext,
     ProcessContext,
+    SmbContext,
 )
 from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import ActionLifecycleContext
@@ -246,6 +247,113 @@ def test_session_closure_follows_same_source_process_termination_with_bounded_ta
     assert planned.source_timing.canonical_timestamp == canonical_end
     assert planned.timestamp > process_source_time
     assert planned.timestamp <= canonical_end + timedelta(seconds=15)
+
+
+def test_samba_session_and_file_follow_admitted_ecar_flow() -> None:
+    """Samba auth and FILE telemetry should follow the exact endpoint FLOW pair."""
+    planner = SourceTimingPlanner()
+    base = _base_time()
+    client = HostContext(
+        hostname="LNX-CLIENT-01",
+        ip="10.30.0.10",
+        os="Ubuntu 24.04",
+        os_category="linux",
+        system_type="workstation",
+    )
+    server = HostContext(
+        hostname="SAMBA-01",
+        ip="10.30.0.20",
+        os="Ubuntu Server 24.04",
+        os_category="linux",
+        system_type="server",
+    )
+    transport = network_plan(
+        src_ip=client.ip,
+        src_port=51515,
+        dst_ip=server.ip,
+        dst_port=445,
+        protocol="tcp",
+        service="smb",
+        zeek_uid="CSambaTiming01",
+        duration=5.0,
+        conn_state="SF",
+        source_visible_start_time=base,
+    )
+    flow_event = OccurrenceBuilder(
+        timestamp=base,
+        event_type="connection",
+        src_host=client,
+        dst_host=server,
+        network=transport,
+    )
+    planner.plan_event(flow_event, "ecar")
+    planner.record_admitted_source_event(flow_event, "ecar")
+
+    auth = AuthContext(
+        username="CORP\\finance-reader",
+        source_ip=client.ip,
+        source_port=51515,
+        session_kind="smb",
+        smb_principal="CORP\\finance-reader",
+        auth_session_ref="smb-auth-1",
+    )
+    lifecycle = ActionLifecycleContext(
+        group_id="smb-lifecycle-1",
+        canonical_start=base,
+        phase="start",
+    )
+    login_event = OccurrenceBuilder(
+        timestamp=base + timedelta(milliseconds=50),
+        event_type="logon",
+        src_host=client,
+        dst_host=server,
+        auth=auth,
+        lifecycle=lifecycle,
+    )
+    planner.plan_event(login_event, "ecar")
+
+    file_event = OccurrenceBuilder(
+        timestamp=base + timedelta(milliseconds=200),
+        event_type="smb_file_read",
+        src_host=client,
+        dst_host=server,
+        auth=auth,
+        network=replace(transport, application_layer_only=True),
+        smb=SmbContext(
+            phase="read",
+            operation="read",
+            purpose="timing test",
+            session_id="smb-session-1",
+            tree_id="tree-1",
+            share_ref="SAMBA-01.finance",
+            share_name="Finance",
+            result="success",
+            server_path="/srv/samba/data/report.xlsx",
+            filesystem="xfs",
+            backing_filesystem="xfs",
+            server_platform="linux",
+            provider="samba",
+        ),
+        lifecycle=replace(lifecycle, phase="dependent"),
+    )
+    planned_file = planner.plan_event(file_event, "ecar")
+
+    logoff_event = OccurrenceBuilder(
+        timestamp=base + timedelta(seconds=3),
+        event_type="logoff",
+        dst_host=server,
+        auth=auth,
+        lifecycle=replace(lifecycle, phase="closure"),
+    )
+    planner.plan_event(logoff_event, "ecar")
+
+    flow_time = max(
+        flow_event.source_timing.finalized_times[ecar_flow_render_key("outbound", client.hostname)],
+        flow_event.source_timing.finalized_times[ecar_flow_render_key("inbound", server.hostname)],
+    )
+    login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
+    logout_time = logoff_event.source_timing.finalized_times[ecar_session_render_key("logout")]
+    assert flow_time < login_time < planned_file.timestamp < logout_time
 
 
 def test_ecar_logout_finalized_time_consumes_bundle_closure_plan() -> None:

@@ -1,5 +1,5 @@
-version: 3
-calibration_label: "SMB-aware empirical working-set model"
+version: 4
+calibration_label: "Cross-platform SMB and Samba empirical working-set model"
 
 memory:
   base_mib: 90
@@ -19,8 +19,13 @@ memory:
   smb_bytes_per_operation_by_format:
     windows_event_security: 22500
     ecar: 4500
+    syslog: 1200
   lower_multiplier: 0.73
-  upper_multiplier: 1.35
+  # The 31-day mixed Linux/Samba full-format holdout peaks at 1.87x the
+  # bounded-state point estimate because Python allocator high-water memory
+  # grows across long emitter runs. A 2.10x ceiling retains 12% measured
+  # headroom without making the expected value duration-dependent.
+  upper_multiplier: 2.10
 
 disk:
   base_mib: 0.1
@@ -36,12 +41,14 @@ disk:
     zeek_smb_mapping: 350
     windows_event_security: 8000
     ecar: 1000
+    syslog: 600
   smb_operation_bytes_by_format:
     zeek_files: 400
     zeek_smb_files: 300
     windows_event_security: 5000
     windows_event_sysmon: 0
     ecar: 750
+    syslog: 550
   formats:
     zeek_conn: {bytes_per_host_second: 8.0, system_scope: all}
     zeek_dns: {bytes_per_host_second: 3.5, system_scope: all}
@@ -49,8 +56,8 @@ disk:
     zeek_ssl: {bytes_per_host_second: 1.5, system_scope: all}
     zeek_smtp: {bytes_per_host_second: 0.6, system_scope: all}
     zeek_files: {bytes_per_host_second: 1.0, system_scope: all}
-    zeek_smb_files: {bytes_per_host_second: 0.8, system_scope: windows}
-    zeek_smb_mapping: {bytes_per_host_second: 0.2, system_scope: windows}
+    zeek_smb_files: {bytes_per_host_second: 0.8, system_scope: all}
+    zeek_smb_mapping: {bytes_per_host_second: 0.2, system_scope: all}
     zeek_x509: {bytes_per_host_second: 1.0, system_scope: all}
     zeek_ocsp: {bytes_per_host_second: 0.2, system_scope: all}
     zeek_dhcp: {bytes_per_host_second: 0.7, system_scope: all}

@@ -201,6 +201,16 @@ relationships:
     position: after
     min_ms: 275
     max_ms: 650
+  source.ecar_smb_session_after_accept:
+    class: source_latency
+    position: after
+    min_ms: 8
+    max_ms: 140
+  smb.cross_server_delete_after_destination:
+    class: causal_prerequisite
+    position: after
+    min_ms: 250
+    max_ms: 1200
   source.ecar_remote_thread:
     class: source_latency
     position: after

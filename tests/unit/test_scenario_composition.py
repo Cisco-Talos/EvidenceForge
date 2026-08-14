@@ -27,7 +27,7 @@ from evidenceforge.config.provider import effective_config_scope
 from evidenceforge.generation.activity.dns_registry import load_dns_registry, pick_domain_and_ip
 from evidenceforge.generation.activity.network import REVERSE_DNS
 from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
-from evidenceforge.generation.storage_world import _load_catalog_config
+from evidenceforge.generation.storage_world import StorageWorldModel, _load_catalog_config
 from evidenceforge.models.exceptions import PackError, SchemaValidationError
 from evidenceforge.utils import load_yaml
 from evidenceforge.utils.assets import load_email_corpus_yaml
@@ -35,6 +35,7 @@ from evidenceforge.utils.assets import load_email_corpus_yaml
 _MINIMAL = Path("tests/fixtures/scenarios/minimal.yaml")
 _FINANCE = Path("tests/fixtures/scenarios/finance-industry-pack.yaml")
 _NORTHSTAR = Path("tests/fixtures/scenarios/northstar-health-pack.yaml")
+_NORTHSTAR_LINUX = Path("tests/fixtures/scenarios/northstar-health-linux-pack.yaml")
 
 
 def _write_yaml(path: Path, data: dict) -> Path:
@@ -109,13 +110,125 @@ def test_organization_pack_brings_exact_industry_and_environment() -> None:
             "healthcare:clinical-shift"
         ]["outbound"]
 
+    with effective_config_scope(compiled.effective_config):
+        world = StorageWorldModel.compile(compiled.scenario)
+    assert all(share.system != "NSH-MAIL-01" for share in world.shares)
+
+
+def test_northstar_linux_pack_compiles_cross_platform_storage() -> None:
+    """Northstar 1.1 adds Samba and dual presentations while retaining Windows SMB."""
+
+    compiled = compile_scenario(_NORTHSTAR_LINUX)
+    with effective_config_scope(compiled.effective_config):
+        world = StorageWorldModel.compile(compiled.scenario)
+
+    assert [(pack.name, pack.version) for pack in compiled.selected_packs] == [
+        ("healthcare", "1.0.0"),
+        ("northstar-health", "1.1.0"),
+    ]
+    assert {user.username for user in compiled.scenario.environment.users} >= {
+        "jordan.lee",
+    }
+    assert {system.hostname for system in compiled.scenario.environment.systems} >= {
+        "NSH-CLIN-LNX-01",
+        "NSH-FILE-01",
+        "NSH-SAMBA-01",
+    }
+    assert all(share.system != "NSH-MAIL-01" for share in world.shares)
+    samba = world.share("NSH-SAMBA-01.clinical_archive")
+    assert samba.preset == "healthcare:clinical-department"
+    assert samba.smb_native_filesystem == "NTFS"
+    assert world.server_local_path(samba, "Policies\\care-plan.docx") == (
+        "/srv/samba/Departments/ClinicalArchive/Policies/care-plan.docx"
+    )
+    mappings = {mapping.id: mapping for mapping in world.mappings}
+    assert (mappings["clinical_ops_drive"].drive, mappings["clinical_ops_drive"].mount) == (
+        "H:",
+        "/mnt/clinical-ops",
+    )
+    assert (
+        mappings["clinical_archive_mapping"].drive,
+        mappings["clinical_archive_mapping"].mount,
+    ) == ("I:", "/mnt/clinical-archive")
+    assert (
+        compiled.provenance["organization_model_origins"][
+            "environment.storage.servers.1.shares.0.preset"
+        ]
+        == "model/environment.yaml"
+    )
+
+
+@pytest.mark.parametrize(
+    ("industry", "preset"),
+    [
+        ("finance", "finance:finance-department"),
+        ("healthcare", "healthcare:clinical-department"),
+        ("technology", "technology:engineering-share"),
+    ],
+)
+def test_industry_storage_presets_compile_unchanged_on_samba(
+    tmp_path: Path,
+    industry: str,
+    preset: str,
+) -> None:
+    """Industry storage vocabulary stays portable; topology remains scenario-owned."""
+
+    raw = load_yaml(_MINIMAL)
+    raw.pop("version", None)
+    raw["scenario_version"] = "2.0"
+    raw["composition"] = {
+        "industries": [{"source": "package", "name": industry, "version": "1.0.0"}]
+    }
+    raw["environment"]["domain"] = "example.test"
+    raw["environment"]["systems"].append(
+        {
+            "hostname": "SAMBA-01",
+            "ip": "10.0.0.20",
+            "os": "Ubuntu Server 24.04",
+            "type": "server",
+            "services": ["samba", "smbd"],
+            "roles": ["smb_server"],
+        }
+    )
+    raw["environment"]["storage"] = {
+        "population": "small",
+        "servers": [
+            {
+                "system": "SAMBA-01",
+                "presets": [],
+                "volumes": [{"id": "data", "mount": "/srv/samba", "filesystem": "ext4"}],
+                "shares": [
+                    {
+                        "id": "portable",
+                        "name": "Portable",
+                        "volume": "data",
+                        "preset": preset,
+                        "population": "small",
+                        "access": {"read": ["test_user"], "modify": ["test_user"]},
+                    }
+                ],
+            }
+        ],
+    }
+    path = _write_yaml(tmp_path / f"{industry}-samba.yaml", raw)
+
+    compiled = compile_scenario(path)
+    with effective_config_scope(compiled.effective_config):
+        world = StorageWorldModel.compile(compiled.scenario)
+
+    share = world.share("SAMBA-01.portable")
+    assert share.preset == preset
+    assert share.files
+    assert world.server_local_path(share, share.files[0].path).startswith("/srv/samba/")
+
 
 def test_all_packaged_samples_have_the_fixed_catalog_contract() -> None:
     """Every shipped pack exposes every canonical catalog, including empty ones."""
 
     packs = PackRepository(Path.cwd()).list()
+    packaged = [pack for pack in packs if pack.source == "package"]
 
-    assert {pack.manifest.name for pack in packs} == {
+    assert {pack.manifest.name for pack in packaged} == {
         "finance",
         "healthcare",
         "technology",

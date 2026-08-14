@@ -3,7 +3,8 @@
     "industry/finance/1.0.0": "aa92013da611dc042437a083c03a22191c298e5f61933194bed49a4eae1625bc",
     "industry/healthcare/1.0.0": "79a78d1248e203c638c48cf2ff00c5eac4990efa227fc0bbf817dcef7e36d943",
     "industry/technology/1.0.0": "30f82b61821e14dd907fc762a6ac7dd5a20f9a298a185d4943b2db913f3451a0",
-    "organization/northstar-health/1.0.0": "cb26ef1eeeb7e9f8a3aafeecf4510d3d1bd62a1e20d425cf1f81c1fde6ce81a0"
+    "organization/northstar-health/1.0.0": "cb26ef1eeeb7e9f8a3aafeecf4510d3d1bd62a1e20d425cf1f81c1fde6ce81a0",
+    "organization/northstar-health/1.1.0": "f4be4d55481b9e09e304ef79dabde85e80cc9374f8ba65f29611d6702dbfe52f"
   },
   "schema_version": "1.0"
 }

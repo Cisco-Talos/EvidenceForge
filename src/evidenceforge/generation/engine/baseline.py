@@ -37,8 +37,9 @@ import random
 import shlex
 import string
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
@@ -115,6 +116,8 @@ from evidenceforge.generation.activity.suspicious_benign import (
 )
 from evidenceforge.generation.activity.windows_auth_realism import group_policy_refresh_config
 from evidenceforge.generation.world_model import (
+    HostCapability,
+    WorldModel,
     host_services_support_database_service,
     normalize_database_service,
 )
@@ -133,10 +136,38 @@ _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY = 0.28
 _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY = 0.18
 _BASELINE_GUARDED_SUCCESS_PORTS = {445, 3389}
 _BASELINE_RDP_SERVICE_ALIASES = {"rdp", "termservice", "terminal-services", "xrdp"}
-_BASELINE_SMB_SERVICE_ALIASES = {"smb", "samba", "smbd", "lanmanserver", "ad-ds"}
+_BASELINE_SMB_SERVICE_ALIASES = {
+    "ad-ds",
+    "lanmanserver",
+    "samba",
+    "smb",
+    "smb-server",
+    "smbd",
+}
 _BASELINE_EMAIL_PROFILE_PORTS = {25, 465, 587, 993, 995}
 _BASELINE_WEBMAIL_PROFILE_TERMS = ("owa", "webmail", "mailbox", "mail client", "email")
 _BASELINE_SUCCESS_FALLBACK_PORTS = (22, 80, 443, 8080, 3306, 5432, 53)
+
+
+@dataclass(frozen=True, slots=True)
+class _BaselineSmbIntent:
+    """One host-independent baseline SMB occurrence planned for an hour."""
+
+    time: datetime
+    sequence: int
+    source_system: System
+    target_ip: str
+    target_system: System | None
+    actor: User | None
+    process_pid: int
+    share_ref: str
+    operation: Literal["browse", "read", "update"]
+    duration: float
+    orig_bytes: int
+    resp_bytes: int
+    emit_dns: bool
+
+
 _BASELINE_INTERACTIVE_STARTUP_WINDOW_SECONDS = 300.0
 _BASELINE_INTERACTIVE_STARTUP_INITIAL_DELAY_SECONDS = (35.0, 95.0)
 _BASELINE_INTERACTIVE_STARTUP_GAP_SECONDS = (12.0, 45.0)
@@ -207,8 +238,15 @@ def _baseline_inventory_tokens(values: list[str] | tuple[str, ...] | None) -> se
     return {value.lower().replace(" ", "-").replace("_", "-") for value in (values or []) if value}
 
 
-def _baseline_guarded_success_port_allowed(target_system: System, port: int) -> bool:
+def _baseline_guarded_success_port_allowed(
+    target_system: System,
+    port: int,
+    world_model: WorldModel | None = None,
+) -> bool:
     """Return whether a generic successful baseline connection may use a guarded port."""
+    host_world = world_model.hosts.get(target_system.hostname) if world_model is not None else None
+    if port == 445 and host_world is not None:
+        return host_world.supports(HostCapability.SMB_SERVER)
     services = _baseline_inventory_tokens(target_system.services)
     if port == 3389:
         if services & _BASELINE_RDP_SERVICE_ALIASES:
@@ -218,9 +256,9 @@ def _baseline_guarded_success_port_allowed(target_system: System, port: int) -> 
             "domain_controller",
         }
     if port == 445:
-        if services & _BASELINE_SMB_SERVICE_ALIASES:
+        if _get_os_category(target_system.os) == "windows":
             return True
-        return _get_os_category(target_system.os) == "windows"
+        return bool(services & {"samba", "smbd", "smb-server"})
     return True
 
 
@@ -245,6 +283,7 @@ def _baseline_success_port_for_target(
     requested_port: int,
     requested_service: str | None,
     rng: random.Random,
+    world_model: WorldModel | None = None,
 ) -> tuple[int, str | None] | None:
     """Return a target-compatible port/service for generic successful baseline traffic.
 
@@ -255,7 +294,7 @@ def _baseline_success_port_for_target(
     """
     if requested_port not in _BASELINE_GUARDED_SUCCESS_PORTS:
         return requested_port, requested_service
-    if _baseline_guarded_success_port_allowed(target_system, requested_port):
+    if _baseline_guarded_success_port_allowed(target_system, requested_port, world_model):
         return requested_port, requested_service
 
     candidates = [
@@ -276,13 +315,20 @@ def _baseline_success_target_for_guarded_port(
     target_system: System | None,
     requested_port: int,
     rng: random.Random,
+    world_model: WorldModel | None = None,
 ) -> System | None:
     """Return a target that can plausibly accept a guarded successful connection."""
     if requested_port not in _BASELINE_GUARDED_SUCCESS_PORTS:
         return target_system
-    if target_system is not None and _baseline_guarded_success_port_allowed(
-        target_system,
-        requested_port,
+    if (
+        target_system is not None
+        and target_system.ip != source_system.ip
+        and target_system.hostname.casefold() != source_system.hostname.casefold()
+        and _baseline_guarded_success_port_allowed(
+            target_system,
+            requested_port,
+            world_model,
+        )
     ):
         return target_system
 
@@ -290,7 +336,8 @@ def _baseline_success_target_for_guarded_port(
         system
         for system in systems
         if system.ip != source_system.ip
-        and _baseline_guarded_success_port_allowed(system, requested_port)
+        and system.hostname.casefold() != source_system.hostname.casefold()
+        and _baseline_guarded_success_port_allowed(system, requested_port, world_model)
     ]
     if not candidates:
         return None
@@ -3341,6 +3388,7 @@ class BaselineMixin:
                 for event_time in event_times:
                     self._generate_user_activity(user, event_time, current_hour, planned_logoffs)
 
+        self._generate_baseline_smb_activity(current_hour)
         self._generate_system_traffic(current_hour, planned_logoffs=planned_logoffs)
         self._generate_baseline_email(current_hour, enabled_users)
         self._generate_traffic_affinities(current_hour, local_dt, planned_logoffs)
@@ -4335,7 +4383,13 @@ class BaselineMixin:
         def _emit_conn(src_sys, dst_sys, port, service=None, proto="tcp", pattern_key=""):
             """Helper: emit a connection with hash-based periodic offset."""
             if proto == "tcp":
-                effective = _baseline_success_port_for_target(dst_sys, port, service, rng)
+                effective = _baseline_success_port_for_target(
+                    dst_sys,
+                    port,
+                    service,
+                    rng,
+                    getattr(self, "world_model", None),
+                )
                 if effective is None:
                     return
                 port, service = effective
@@ -6741,19 +6795,389 @@ class BaselineMixin:
         logger.warning("Internal IP %s not in any defined segment (%s)", ip, context)
 
     def _build_smb_targets(self, system: Any, dc_ips: list[str]) -> tuple[list[str], list[Any]]:
-        """Build weighted SMB targets for Windows client browsing noise."""
-        dc_targets = [ip for ip in dc_ips if ip != system.ip]
-        fs_targets = [
-            s
-            for s in self.scenario.environment.systems
-            if s.ip != system.ip and s.roles and "file_server" in [r.lower() for r in s.roles]
-        ]
+        """Build weighted targets that own the canonical SMB server capability."""
+        world_model = getattr(self, "world_model", None)
+        if isinstance(world_model, WorldModel):
+            smb_servers = world_model.systems_with_capability(
+                HostCapability.SMB_SERVER,
+                distinct_from=system,
+            )
+            smb_server_ips = {candidate.ip for candidate in smb_servers}
+            dc_targets = [ip for ip in dc_ips if ip in smb_server_ips and ip != system.ip]
+            fs_targets = [
+                candidate
+                for candidate in smb_servers
+                if "file_server" in world_model.hosts[candidate.hostname].canonical_roles
+            ]
+            generic_targets = [
+                candidate.ip
+                for candidate in smb_servers
+                if candidate.ip not in dc_targets and candidate not in fs_targets
+            ]
+        else:
+            # Compatibility for direct helper callers that do not construct an
+            # engine WorldModel. Runtime generation always uses the branch above.
+            dc_targets = [ip for ip in dc_ips if ip != system.ip]
+            fs_targets = [
+                candidate
+                for candidate in self.scenario.environment.systems
+                if candidate.ip != system.ip
+                and candidate.roles
+                and "file_server" in [role.lower() for role in candidate.roles]
+                and (
+                    _get_os_category(candidate.os) == "windows"
+                    or bool(
+                        _baseline_inventory_tokens(candidate.services)
+                        & {"samba", "smbd", "smb-server"}
+                    )
+                )
+            ]
+            generic_targets = []
 
-        targets = list(dc_targets)
+        targets = [*dc_targets, *generic_targets]
         for fs in fs_targets:
             weight = 3 if fs.ip not in dc_targets else 2
             targets.extend([fs.ip] * weight)
         return targets, fs_targets
+
+    def _plan_baseline_smb_activity(
+        self,
+        current_hour: datetime,
+    ) -> tuple[_BaselineSmbIntent, ...]:
+        """Plan SMB occurrences independently of source-host traversal order."""
+
+        if not self._uses_linux_smb_prepass():
+            return ()
+
+        dc_ips = self._infra_ips.get("dc", [])
+        if isinstance(dc_ips, str):
+            dc_ips = [dc_ips]
+        hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
+        systems_by_ip = {system.ip: system for system in self.scenario.environment.systems}
+        storage_world = getattr(self.activity_generator, "_storage_world", None)
+        storage_shares = tuple(getattr(storage_world, "shares", ()))
+        intents: list[_BaselineSmbIntent] = []
+        sequence = 0
+
+        for system in self.scenario.environment.systems:
+            source_world = self.world_model.hosts.get(system.hostname)
+            if source_world is None or not source_world.supports(HostCapability.SMB_CLIENT):
+                continue
+            smb_targets, _file_servers = self._build_smb_targets(system, dc_ips)
+            if not smb_targets:
+                continue
+
+            rng = random.Random(
+                _stable_seed(
+                    "baseline_smb:"
+                    f"{getattr(self, 'generation_seed', 0)}:{system.hostname}:"
+                    f"{current_hour.isoformat()}"
+                )
+            )
+            interval_low, interval_high = self._resolve_traffic_rate("smb_interval")
+            interval_low, interval_high = self._scaled_interval_range(
+                system,
+                "smb_interval",
+                interval_low,
+                interval_high,
+            )
+            interval_range = max(1, interval_high - interval_low)
+            interval = interval_low + (_stable_seed(f"smb_iv_{system.hostname}") % interval_range)
+            scheduled_second = _stable_seed(f"smb_ph_{system.hostname}") % interval
+            while scheduled_second < hour_start_sec:
+                scheduled_second += interval
+
+            while scheduled_second < hour_start_sec + 3600:
+                offset = scheduled_second - hour_start_sec + rng.gauss(0, interval * 0.02)
+                offset = max(0.0, min(3599.0, offset))
+                timestamp = current_hour + timedelta(seconds=offset)
+                target_ip = rng.choice(smb_targets)
+                target_system = systems_by_ip.get(target_ip)
+                operation_profile = rng.choices(
+                    ["read", "write", "metadata"],
+                    weights=[55, 30, 15],
+                    k=1,
+                )[0]
+                if target_system is not None and operation_profile == "read":
+                    duration = rng.uniform(2.0, 90.0)
+                    orig_bytes = rng.randint(1_200, 12_000)
+                    resp_bytes = rng.randint(80_000, 5_000_000)
+                elif target_system is not None and operation_profile == "write":
+                    duration = rng.uniform(3.0, 120.0)
+                    orig_bytes = rng.randint(80_000, 4_000_000)
+                    resp_bytes = rng.randint(2_000, 50_000)
+                elif target_system is not None:
+                    duration = rng.uniform(0.2, 5.0)
+                    orig_bytes = rng.randint(800, 8_000)
+                    resp_bytes = rng.randint(1_000, 25_000)
+                else:
+                    duration = rng.uniform(0.1, 2.0)
+                    orig_bytes = rng.randint(200, 2_000)
+                    resp_bytes = rng.randint(500, 5_000)
+
+                actor = None
+                process_pid = -1
+                if target_system is not None:
+                    for session in self.state_manager.get_sessions_on_system(system.hostname):
+                        if session.logon_type not in (2, 10, 11):
+                            continue
+                        actor = next(
+                            (
+                                user
+                                for user in self.scenario.environment.users
+                                if user.username == session.username
+                            ),
+                            None,
+                        )
+                        if actor is not None:
+                            process_pid = session.explorer_pid or -1
+                            break
+
+                server_shares = (
+                    [
+                        share
+                        for share in storage_shares
+                        if target_system is not None
+                        and share.system.casefold() == target_system.hostname.casefold()
+                        and share.files
+                    ]
+                    if target_system is not None
+                    else []
+                )
+                share_ref = ""
+                operation: Literal["browse", "read", "update"] = "browse"
+                if actor is not None and server_shares:
+                    dc_shares = [share for share in server_shares if share.preset == "dc_policy"]
+                    selected_share = rng.choice(dc_shares or server_shares)
+                    if dc_shares and operation_profile == "write":
+                        operation_profile = "read"
+                    share_ref = selected_share.ref
+                    operation = {
+                        "read": "read",
+                        "write": "update",
+                        "metadata": "browse",
+                    }[operation_profile]
+
+                intents.append(
+                    _BaselineSmbIntent(
+                        time=timestamp,
+                        sequence=sequence,
+                        source_system=system,
+                        target_ip=target_ip,
+                        target_system=target_system,
+                        actor=actor if share_ref else None,
+                        process_pid=process_pid if share_ref else -1,
+                        share_ref=share_ref,
+                        operation=operation,
+                        duration=duration,
+                        orig_bytes=orig_bytes,
+                        resp_bytes=resp_bytes,
+                        emit_dns=rng.random() > 0.02,
+                    )
+                )
+                sequence += 1
+                scheduled_second += interval
+
+        return tuple(
+            sorted(
+                intents,
+                key=lambda intent: (
+                    intent.time,
+                    intent.target_ip,
+                    intent.source_system.hostname,
+                    intent.sequence,
+                ),
+            )
+        )
+
+    def _uses_linux_smb_prepass(self) -> bool:
+        """Return whether baseline SMB can target a process-owning Samba host."""
+
+        return any(
+            _get_os_category(system.os) == "linux"
+            and (host := self.world_model.hosts.get(system.hostname)) is not None
+            and host.supports(HostCapability.SMB_SERVER)
+            for system in self.scenario.environment.systems
+        )
+
+    def _generate_baseline_smb_activity(self, current_hour: datetime) -> None:
+        """Execute the hour's planned SMB actions in canonical timestamp order."""
+
+        from evidenceforge.models.scenario import SmbActivityEventSpec, SmbShareLocation
+
+        for intent in self._plan_baseline_smb_activity(current_hour):
+            self.state_manager.set_current_time(intent.time)
+            if intent.actor is not None and intent.share_ref:
+                self.activity_generator.generate_smb_activity(
+                    spec=SmbActivityEventSpec(
+                        type="smb_activity",
+                        operation=intent.operation,
+                        purpose="interactive",
+                        target=SmbShareLocation(type="share", share=intent.share_ref),
+                    ),
+                    actor=intent.actor,
+                    parent_system=intent.source_system,
+                    time=intent.time,
+                    process_pid=intent.process_pid,
+                    process_image=(
+                        r"C:\Windows\explorer.exe"
+                        if intent.process_pid > 0
+                        and _get_os_category(intent.source_system.os) == "windows"
+                        else ""
+                    ),
+                    activity_source="baseline",
+                )
+                continue
+
+            self.activity_generator.generate_connection(
+                src_ip=intent.source_system.ip,
+                dst_ip=intent.target_ip,
+                time=intent.time,
+                dst_port=445,
+                proto="tcp",
+                service="smb",
+                duration=intent.duration,
+                orig_bytes=intent.orig_bytes,
+                resp_bytes=intent.resp_bytes,
+                conn_state="SF",
+                emit_dns=intent.emit_dns,
+                source_system=intent.source_system,
+                pid=-1,
+            )
+
+    def _generate_inline_windows_baseline_smb_activity(
+        self,
+        *,
+        current_hour: datetime,
+        system: System,
+        rng: random.Random,
+        dc_ips: list[str],
+    ) -> None:
+        """Preserve the established Windows-only baseline SMB RNG path."""
+
+        from evidenceforge.models.scenario import SmbActivityEventSpec, SmbShareLocation
+
+        smb_targets, _file_servers = self._build_smb_targets(system, dc_ips)
+        if not smb_targets:
+            return
+        interval_low, interval_high = self._resolve_traffic_rate("smb_interval")
+        interval_low, interval_high = self._scaled_interval_range(
+            system,
+            "smb_interval",
+            interval_low,
+            interval_high,
+        )
+        interval_range = max(1, interval_high - interval_low)
+        interval = interval_low + (_stable_seed(f"smb_iv_{system.hostname}") % interval_range)
+        scheduled_second = _stable_seed(f"smb_ph_{system.hostname}") % interval
+        hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
+        while scheduled_second < hour_start_sec:
+            scheduled_second += interval
+
+        while scheduled_second < hour_start_sec + 3600:
+            offset = scheduled_second - hour_start_sec + rng.gauss(0, interval * 0.02)
+            offset = max(0.0, min(3599.0, offset))
+            timestamp = current_hour + timedelta(seconds=offset)
+            self.state_manager.set_current_time(timestamp)
+            target_ip = rng.choice(smb_targets)
+            target_system = next(
+                (
+                    candidate
+                    for candidate in self.scenario.environment.systems
+                    if candidate.ip == target_ip
+                ),
+                None,
+            )
+            if target_system is not None:
+                operation_profile = rng.choices(
+                    ["read", "write", "metadata"],
+                    weights=[55, 30, 15],
+                    k=1,
+                )[0]
+                if operation_profile == "read":
+                    duration = rng.uniform(2.0, 90.0)
+                    orig_bytes = rng.randint(1_200, 12_000)
+                    resp_bytes = rng.randint(80_000, 5_000_000)
+                elif operation_profile == "write":
+                    duration = rng.uniform(3.0, 120.0)
+                    orig_bytes = rng.randint(80_000, 4_000_000)
+                    resp_bytes = rng.randint(2_000, 50_000)
+                else:
+                    duration = rng.uniform(0.2, 5.0)
+                    orig_bytes = rng.randint(800, 8_000)
+                    resp_bytes = rng.randint(1_000, 25_000)
+            else:
+                duration = rng.uniform(0.1, 2.0)
+                orig_bytes = rng.randint(200, 2_000)
+                resp_bytes = rng.randint(500, 5_000)
+
+            actor = None
+            session = None
+            if target_system is not None:
+                for candidate_session in self.state_manager.get_sessions_on_system(system.hostname):
+                    if candidate_session.logon_type not in (2, 10, 11):
+                        continue
+                    actor = next(
+                        (
+                            user
+                            for user in self.scenario.environment.users
+                            if user.username == candidate_session.username
+                        ),
+                        None,
+                    )
+                    if actor is not None:
+                        session = candidate_session
+                        break
+            server_shares = (
+                [
+                    share
+                    for share in self.activity_generator._storage_world.shares
+                    if share.system.casefold() == target_system.hostname.casefold() and share.files
+                ]
+                if target_system is not None
+                else []
+            )
+            if actor is not None and server_shares:
+                dc_shares = [share for share in server_shares if share.preset == "dc_policy"]
+                share = rng.choice(dc_shares or server_shares)
+                if dc_shares and operation_profile == "write":
+                    operation_profile = "read"
+                operation = {
+                    "read": "read",
+                    "write": "update",
+                    "metadata": "browse",
+                }[operation_profile]
+                self.activity_generator.generate_smb_activity(
+                    spec=SmbActivityEventSpec(
+                        type="smb_activity",
+                        operation=operation,
+                        purpose="interactive",
+                        target=SmbShareLocation(type="share", share=share.ref),
+                    ),
+                    actor=actor,
+                    parent_system=system,
+                    time=timestamp,
+                    process_pid=(session.explorer_pid or -1) if session else -1,
+                    process_image=r"C:\Windows\explorer.exe" if session else "",
+                    activity_source="baseline",
+                )
+            else:
+                self.activity_generator.generate_connection(
+                    src_ip=system.ip,
+                    dst_ip=target_ip,
+                    time=timestamp,
+                    dst_port=445,
+                    proto="tcp",
+                    service="smb",
+                    duration=duration,
+                    orig_bytes=orig_bytes,
+                    resp_bytes=resp_bytes,
+                    conn_state="SF",
+                    emit_dns=rng.random() > 0.02,
+                    source_system=system,
+                    pid=4,
+                )
+            scheduled_second += interval
 
     def _emit_ecar_file_churn(
         self,
@@ -7258,7 +7682,11 @@ class BaselineMixin:
                         )
                     else:
                         if conn["port"] in _BASELINE_GUARDED_SUCCESS_PORTS and not (
-                            _baseline_guarded_success_port_allowed(system, conn["port"])
+                            _baseline_guarded_success_port_allowed(
+                                system,
+                                conn["port"],
+                                getattr(self, "world_model", None),
+                            )
                         ):
                             continue
                         if (
@@ -7413,6 +7841,7 @@ class BaselineMixin:
                         target_system,
                         conn["port"],
                         rng,
+                        getattr(self, "world_model", None),
                     )
                     if guarded_target is None:
                         continue
@@ -7670,6 +8099,7 @@ class BaselineMixin:
                     target_system,
                     conn["port"],
                     allocation_rng,
+                    getattr(self, "world_model", None),
                 )
                 if guarded_target is None:
                     continue
@@ -7908,6 +8338,7 @@ class BaselineMixin:
         from evidenceforge.generation.activity import _get_os_category
 
         rng = _get_rng()
+        linux_smb_prepass = self._uses_linux_smb_prepass()
 
         # Compute scenario-local time for business-hour gating
         if hasattr(self, "_scenario_tz") and self._scenario_tz:
@@ -8096,7 +8527,9 @@ class BaselineMixin:
                 else:
                     dhcp_state["next_renewal"] = pending_next_renewal
 
-            # SMB browsing: Windows workstations to DCs (SYSVOL/GPO) and file servers
+            # Directory-service targets used by the Windows Kerberos/LDAP blocks.
+            # Baseline SMB is planned once per hour before this per-host pass so
+            # target-side Samba workers are not allocated in source-host order.
             dc_ips = self._infra_ips.get("dc", [])
             if isinstance(dc_ips, str):
                 dc_ips = [dc_ips]
@@ -8107,138 +8540,13 @@ class BaselineMixin:
                 dc_ip: dc_hostname for dc_ip, dc_hostname in zip(dc_ips, dc_hostnames, strict=False)
             }
             dc_targets = [ip for ip in dc_ips if ip != system.ip]
-            if "smb-client" in services and os_cat == "windows":
-                # Include DC SYSVOL/GPO traffic and weight file servers higher
-                # when present; file-server environments should still produce
-                # SMB even if no DC role has been inferred.
-                smb_targets, _fs_targets = self._build_smb_targets(system, dc_ips)
-                if smb_targets:
-                    _smb_lo, _smb_hi = self._resolve_traffic_rate("smb_interval")
-                    _smb_lo, _smb_hi = self._scaled_interval_range(
-                        system, "smb_interval", _smb_lo, _smb_hi
-                    )
-                    _smb_range = max(1, _smb_hi - _smb_lo)
-                    smb_interval = _smb_lo + (
-                        _stable_seed(f"smb_iv_{system.hostname}") % _smb_range
-                    )
-                    smb_phase = _stable_seed(f"smb_ph_{system.hostname}") % smb_interval
-                    hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
-                    t = smb_phase
-                    while t < hour_start_sec:
-                        t += smb_interval
-                    while t < hour_start_sec + 3600:
-                        offset = t - hour_start_sec + rng.gauss(0, smb_interval * 0.02)
-                        offset = max(0, min(3599, offset))
-                        ts = current_hour + timedelta(seconds=offset)
-                        self.state_manager.set_current_time(ts)
-                        smb_dst_ip = rng.choice(smb_targets)
-                        smb_dst_sys = next(
-                            (
-                                candidate
-                                for candidate in self.scenario.environment.systems
-                                if candidate.ip == smb_dst_ip
-                            ),
-                            None,
-                        )
-                        if smb_dst_sys:
-                            operation_profile = rng.choices(
-                                ["read", "write", "metadata"],
-                                weights=[55, 30, 15],
-                                k=1,
-                            )[0]
-                            if operation_profile == "read":
-                                duration = rng.uniform(2.0, 90.0)
-                                orig_bytes = rng.randint(1_200, 12_000)
-                                resp_bytes = rng.randint(80_000, 5_000_000)
-                            elif operation_profile == "write":
-                                duration = rng.uniform(3.0, 120.0)
-                                orig_bytes = rng.randint(80_000, 4_000_000)
-                                resp_bytes = rng.randint(2_000, 50_000)
-                            else:
-                                duration = rng.uniform(0.2, 5.0)
-                                orig_bytes = rng.randint(800, 8_000)
-                                resp_bytes = rng.randint(1_000, 25_000)
-                        else:
-                            duration = rng.uniform(0.1, 2.0)
-                            orig_bytes = rng.randint(200, 2_000)
-                            resp_bytes = rng.randint(500, 5_000)
-                        ws_user = None
-                        ws_session = None
-                        if smb_dst_sys:
-                            for sess in self.state_manager.get_sessions_on_system(system.hostname):
-                                if sess.logon_type not in (2, 10, 11):
-                                    continue
-                                ws_user = next(
-                                    (
-                                        user
-                                        for user in self.scenario.environment.users
-                                        if user.username == sess.username
-                                    ),
-                                    None,
-                                )
-                                if ws_user is not None:
-                                    ws_session = sess
-                                    break
-                        server_shares = (
-                            [
-                                share
-                                for share in self.activity_generator._storage_world.shares
-                                if share.system.casefold() == smb_dst_sys.hostname.casefold()
-                                and share.files
-                            ]
-                            if smb_dst_sys is not None
-                            else []
-                        )
-                        if ws_user is not None and server_shares:
-                            from evidenceforge.models.scenario import (
-                                SmbActivityEventSpec,
-                                SmbShareLocation,
-                            )
-
-                            dc_shares = [
-                                candidate
-                                for candidate in server_shares
-                                if candidate.preset == "dc_policy"
-                            ]
-                            share = rng.choice(dc_shares or server_shares)
-                            if dc_shares and operation_profile == "write":
-                                operation_profile = "read"
-                            operation = {
-                                "read": "read",
-                                "write": "update",
-                                "metadata": "browse",
-                            }[operation_profile]
-                            self.activity_generator.generate_smb_activity(
-                                spec=SmbActivityEventSpec(
-                                    type="smb_activity",
-                                    operation=operation,
-                                    purpose="interactive",
-                                    target=SmbShareLocation(type="share", share=share.ref),
-                                ),
-                                actor=ws_user,
-                                parent_system=system,
-                                time=ts,
-                                process_pid=ws_session.explorer_pid if ws_session else -1,
-                                process_image=r"C:\Windows\explorer.exe" if ws_session else "",
-                                reuse_session=True,
-                            )
-                        else:
-                            self.activity_generator.generate_connection(
-                                src_ip=system.ip,
-                                dst_ip=smb_dst_ip,
-                                time=ts,
-                                dst_port=445,
-                                proto="tcp",
-                                service="smb",
-                                duration=duration,
-                                orig_bytes=orig_bytes,
-                                resp_bytes=resp_bytes,
-                                conn_state="SF",
-                                emit_dns=rng.random() > 0.02,
-                                source_system=system,
-                                pid=4,
-                            )
-                        t += smb_interval
+            if not linux_smb_prepass and "smb-client" in services and os_cat == "windows":
+                self._generate_inline_windows_baseline_smb_activity(
+                    current_hour=current_hour,
+                    system=system,
+                    rng=rng,
+                    dc_ips=dc_ips,
+                )
 
             # Kerberos
             if "kerberos-client" in services and os_cat == "windows" and dc_targets:

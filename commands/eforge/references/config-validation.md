@@ -101,6 +101,31 @@ and command URL placeholders that are not HTTP(S) URLs with hosts.
 | 41 | host_activity_profiles.yaml structure | ERROR | Invalid host/persona/role rate-family name, missing core host type, malformed multiplier/bounds range, malformed firewall deny burst settings, or invalid artifact variant pools |
 | 42 | tls_realism.yaml chain metadata | ERROR | Invalid TLS subject-key profile fields or RSA/ECDSA child signature algorithm mismatch |
 | 43 | beacon_profiles.yaml structure | ERROR | Invalid profile name, empty `http_sequence`, non-origin-form URI, invalid HTTP method, malformed weight/status choices, or inverted byte/body ranges |
+| 44 | smb_profiles.yaml structure | ERROR | Schema version is not 1; advertised-filesystem defaults are missing/unsafe; the Samba audit operation map is incomplete; defaults do not resolve to same-OS profiles; client access/path/transport ownership is incompatible; service aliases, weights, or system types are invalid; auth/process templates use unsupported fields or non-native paths; operation coverage/lifecycles are incomplete; or a Linux server lacks its transport worker |
+
+## SMB profile validation
+
+`eforge validate-config` validates the fully merged
+`.eforge/config/activity/smb_profiles.yaml` overlay against the strict versioned schema. The only
+top-level keys are `schema_version`, `advertised_filesystem_defaults`, `samba_audit`,
+`client_defaults`, `client_profiles`, `server_defaults`, and `server_profiles`; unknown overlay
+roots are errors. Scenario storage and `smb_activity` validation is separate.
+
+Advertised-filesystem defaults must cover each supported Windows/Linux backing filesystem with a
+safe wire label. Samba audit policy must cover every required canonical SMB operation with a
+source-native label and valid audit-profile set; both per-operation and failure sets reject the
+lifecycle-only `minimal` tier and require `high` whenever they contain `standard`.
+
+Important ownership checks are intentional: mounted CIFS requires kernel transport attribution,
+direct and mounted operation profiles use operation lifecycles, Explorer/GVFS use resident
+processes, server listeners use service lifecycle, and Linux Samba requires a per-transport worker.
+GVFS remains background transport/process texture and is not a canonical typed SMB file mode.
+Process images must be OS-native absolute paths. Format templates accept only `server`, `share`,
+`path`, `client_path`, `local_path`, `source_path`, `destination_path`, `username`,
+`smb_principal`, `auth_options`, `operation`, and `client_ip` without conversions, field traversal,
+or format specifications. The `remote`, `download`, `upload`, and `rename` operand modes require
+their corresponding wire/local fields; `transfer` requires both `{source_path}` and
+`{destination_path}` for mounted copy/move commands.
 
 ## Scenario Validation: beacon profiles and event spacing
 

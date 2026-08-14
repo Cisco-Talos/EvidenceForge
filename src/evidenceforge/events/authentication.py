@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Immutable canonical Windows remote-authentication types."""
+"""Immutable canonical remote-authentication types."""
 
 from __future__ import annotations
 
@@ -54,6 +54,12 @@ class RemoteAuthenticationPlan:
     transports: tuple[RemoteAuthenticationTransportPlan, ...] = ()
     session_object_id: str = ""
     logon_id: str = ""
+    session_kind: str = ""
+    principal: str = ""
+    account_scope: str = ""
+    auth_session_ref: str = ""
+    effective_uid: int | None = None
+    effective_gid: int | None = None
 
     def __post_init__(self) -> None:
         """Reject ambiguous transport ownership and invalid session outcomes."""
@@ -66,7 +72,9 @@ class RemoteAuthenticationPlan:
         primary_transports = [transport for transport in self.transports if transport.primary]
         if len(primary_transports) > 1:
             raise ValueError("Remote-authentication plans permit at most one primary transport")
-        if self.outcome == "failure" and (self.session_object_id or self.logon_id):
+        if self.outcome == "failure" and (
+            self.session_object_id or self.logon_id or self.auth_session_ref
+        ):
             raise ValueError("Failed remote authentication cannot own a durable session")
 
     @property

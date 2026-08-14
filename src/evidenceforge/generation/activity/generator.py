@@ -46,7 +46,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from urllib.parse import urlsplit
 
 from evidenceforge.events.artifacts_manifest import (
@@ -211,6 +211,16 @@ from evidenceforge.generation.activity.proxy_user_agents import (
     pick_proxy_domain_user_agent,
     pick_proxy_user_agent,
 )
+from evidenceforge.generation.activity.smb_profiles import (
+    client_auth_options,
+    client_process_for_operation,
+    local_smbclient_operand,
+    select_client_profile,
+    select_server_profile,
+)
+from evidenceforge.generation.activity.smb_profiles import (
+    render_process as render_smb_process,
+)
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window as _activity_get_timing_window,
 )
@@ -348,6 +358,19 @@ class _HttpPersistentConnection:
     used_orig: int
     used_resp: int
     last_request_time: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SmbClientProcessPlan:
+    """Separate a local SMB operation actor from its transport attribution."""
+
+    actor_pid: int
+    actor_image: str
+    actor_command_line: str
+    transport_pid: int
+    transport_image: str
+    access_mode: str
+    path_style: str
 
 
 _HTTP_PERSISTENT_REUSE_GUARD = timedelta(milliseconds=900)
@@ -4522,16 +4545,18 @@ class ActivityGenerator:
             if self.state_manager.get_process(key[0], key[3]) is not None
             or next_time >= normalized_cutoff
         }
-        responder_pids = getattr(self, "_ssh_responder_pids", None)
-        if responder_pids is not None:
+        systems_by_ip = getattr(self, "_ip_to_system", {})
+        for responder_attribute in ("_ssh_responder_pids", "_smb_responder_pids"):
+            responder_pids = getattr(self, responder_attribute, None)
+            if responder_pids is None:
+                continue
             retained_responders: dict[str, int] = {}
-            systems_by_ip = getattr(self, "_ip_to_system", {})
             for key, pid in responder_pids.items():
                 target_ip = key.partition("->")[2].partition(":")[0]
                 target_system = systems_by_ip.get(target_ip)
                 if target_system is not None and (target_system.hostname, pid) in active_pids:
                     retained_responders[key] = pid
-            self._ssh_responder_pids = retained_responders
+            setattr(self, responder_attribute, retained_responders)
         pid_aliases = getattr(self, "_ssh_pid_aliases", None)
         if pid_aliases is not None:
             self._ssh_pid_aliases = {
@@ -6207,7 +6232,10 @@ class ActivityGenerator:
         elif service_name in ("kerberos", "ldap") or dst_port in (88, 389):
             candidates = ["lsass", "svchost_netsvcs"]
         elif service_name == "smb" or dst_port == 445:
-            return 4 if os_category == "windows" else pids.get("smbd", -1)
+            # smbd is a destination-side Samba responder, never an outbound
+            # Linux client owner.  Let client/profile resolution distinguish
+            # GVFS, smbclient, and kernel CIFS transports below.
+            return 4 if os_category == "windows" else -1
         elif service_name == "ssh" or dst_port == 22:
             if os_category == "linux":
                 return -1
@@ -6869,6 +6897,182 @@ class ActivityGenerator:
             "smbclient",
         }
 
+    def ensure_smb_client_process(
+        self,
+        *,
+        client_system: System,
+        actor: User,
+        server: str,
+        share: str,
+        path: str,
+        client_path: str,
+        local_path: str = "",
+        source_path: str = "",
+        destination_path: str = "",
+        operation: str,
+        time: datetime,
+        client_access: str = "auto",
+        smb_principal: str | None = None,
+        auth_protocol: str = "",
+        transfer_direction: Literal["download", "upload", "remote"] | None = None,
+        preferred_pid: int = -1,
+        source_visible_by: datetime | None = None,
+    ) -> SmbClientProcessPlan:
+        """Resolve source-native SMB actor and transport ownership.
+
+        A direct ``smbclient`` or desktop GVFS process owns both the operation
+        and socket.  A mounted CIFS operation has a normal user-space actor for
+        endpoint FILE telemetry, while the TCP/445 transport remains kernel
+        attributed (PID ``-1``).  This prevents ``mount.cifs`` from being
+        fabricated as the owner of every later file operation.
+        """
+
+        os_category = _get_os_category(client_system.os)
+        access_mode = {
+            "windows_native": "explorer",
+            "cifs_mount": "mounted",
+            "smbclient": "direct",
+        }.get(client_access)
+        if os_category == "linux" and access_mode is None:
+            service_tokens = {
+                service.casefold().replace("_", "-") for service in (client_system.services or ())
+            }
+            access_mode = (
+                "mounted"
+                if service_tokens.intersection({"cifs-client", "cifs-utils"})
+                else "direct"
+            )
+        profile = select_client_profile(
+            os_category,
+            client_system.services or (),
+            system_type=client_system.type,
+            access_mode=access_mode,
+            scope_key=(
+                f"{client_system.hostname}:{actor.username}:{server}:{share}:"
+                f"{operation}:{time.isoformat()}"
+            ),
+        )
+        process_profile = client_process_for_operation(
+            profile,
+            operation,
+            transfer_direction=transfer_direction,
+        )
+        if process_profile is None:
+            return SmbClientProcessPlan(
+                actor_pid=-1,
+                actor_image="",
+                actor_command_line="",
+                transport_pid=-1,
+                transport_image="",
+                access_mode=profile.access_mode,
+                path_style=profile.path_style,
+            )
+        local_operand = local_path
+        if process_profile.operand_mode in {"download", "upload"}:
+            local_operand = local_smbclient_operand(
+                path,
+                local_path or client_path,
+            )
+        rendered = render_smb_process(
+            process_profile,
+            server=server,
+            share=share,
+            path=path,
+            client_path=client_path,
+            local_path=local_operand,
+            source_path=source_path,
+            destination_path=destination_path,
+            username=actor.username,
+            smb_principal=smb_principal or actor.username,
+            auth_options=client_auth_options(profile, auth_protocol),
+            operation=operation,
+            client_ip=client_system.ip,
+        )
+
+        actor_pid = preferred_pid if preferred_pid > 0 else -1
+        running = (
+            self.state_manager.get_process(client_system.hostname, actor_pid)
+            if actor_pid > 0
+            else None
+        )
+        if running is None:
+            session = self._smb_actor_session(client_system, actor, time)
+            if session is not None:
+                actor_pid, _actor_image = self._ensure_user_connection_owner_process(
+                    source_system=client_system,
+                    time=time,
+                    service="smb",
+                    dst_port=445,
+                    os_category=os_category,
+                    hostname=server,
+                    ssh_attempted_username=None,
+                    source_visible_by=source_visible_by,
+                    owner_spec=(rendered.image, rendered.command_line),
+                    session_info=(actor, session),
+                )
+                running = self.state_manager.get_process(client_system.hostname, actor_pid)
+
+        actor_image = running.image if running is not None else rendered.image
+        actor_command_line = running.command_line if running is not None else rendered.command_line
+        if actor_pid > 0 and rendered.lifecycle == "operation":
+            lifetime = (
+                _windows_foreground_lifetime(actor_image, actor_command_line)
+                if os_category == "windows"
+                else _linux_foreground_lifetime(actor_image, actor_command_line)
+            )
+            if lifetime is not None:
+                lifetime_rng = random.Random(
+                    _stable_seed(
+                        "smb-operation-process-lifetime:"
+                        f"{client_system.hostname}:{actor_pid}:{time.isoformat()}"
+                    )
+                )
+                self._remember_foreground_process_finalizer(
+                    system=client_system,
+                    user=actor,
+                    pid=actor_pid,
+                    process_name=actor_image,
+                    logon_id=(running.logon_id if running is not None else ""),
+                    termination_time=time + timedelta(seconds=lifetime_rng.uniform(*lifetime)),
+                )
+
+        transport_pid = actor_pid if profile.transport_attribution == "process" else -1
+        transport_image = actor_image if transport_pid > 0 else ""
+        return SmbClientProcessPlan(
+            actor_pid=actor_pid,
+            actor_image=actor_image,
+            actor_command_line=actor_command_line,
+            transport_pid=transport_pid,
+            transport_image=transport_image,
+            access_mode=profile.access_mode,
+            path_style=profile.path_style,
+        )
+
+    def _smb_actor_session(
+        self,
+        system: System,
+        actor: User,
+        time: datetime,
+    ) -> ActiveSession | None:
+        """Return the newest local/interactive session that can own SMB work."""
+
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user_at(actor.username, time)
+            if session.system == system.hostname
+            and session.logon_type in {2, 7, 10, 11}
+            and _session_started_by(session, time)
+            and not self._workstation_logon_locked_at(
+                system,
+                actor.username,
+                session.logon_id,
+                time,
+            )
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda session: ensure_utc(session.start_time))
+
     def _ensure_user_connection_owner_process(
         self,
         *,
@@ -6880,9 +7084,46 @@ class ActivityGenerator:
         hostname: str | None,
         ssh_attempted_username: str | None,
         source_visible_by: datetime | None = None,
+        owner_spec: tuple[str, str] | None = None,
+        session_info: tuple[User, Any] | None = None,
     ) -> tuple[int, str | None]:
         """Create or reuse a user process for high-confidence workstation flows."""
-        spec = self._user_connection_owner_spec(
+        session_info = session_info or self._select_explicit_proxy_client_session(
+            source_system,
+            time,
+        )
+        if session_info is None:
+            return -1, None
+        user, session = session_info
+        spec = owner_spec
+        if spec is None and ((service or "").casefold() == "smb" or dst_port == 445):
+            profile = select_client_profile(
+                os_category,
+                source_system.services or (),
+                system_type=source_system.type,
+                scope_key=(
+                    f"generic:{source_system.hostname}:{user.username}:"
+                    f"{hostname or 'internal-host'}:{time.isoformat()}"
+                ),
+            )
+            if profile.transport_attribution != "process":
+                return -1, None
+            process_profile = client_process_for_operation(profile, "browse")
+            if process_profile is not None:
+                rendered = render_smb_process(
+                    process_profile,
+                    server=hostname or "internal-host",
+                    share="shared",
+                    path="",
+                    client_path="/mnt/shared",
+                    username=user.username,
+                    smb_principal=user.username,
+                    auth_options=client_auth_options(profile, "auto"),
+                    operation="browse",
+                    client_ip=source_system.ip,
+                )
+                spec = (rendered.image, rendered.command_line)
+        spec = spec or self._user_connection_owner_spec(
             service=service,
             dst_port=dst_port,
             os_category=os_category,
@@ -6892,10 +7133,6 @@ class ActivityGenerator:
         if spec is None:
             return -1, None
         image, command_line = spec
-        session_info = self._select_explicit_proxy_client_session(source_system, time)
-        if session_info is None:
-            return -1, None
-        user, session = session_info
 
         image_lower = image.lower()
         image_exe = image_lower.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
@@ -9652,6 +9889,13 @@ class ActivityGenerator:
         session_end_plan: SessionEndPlan | None = None,
         remote_authentication_plan: RemoteAuthenticationPlan | None = None,
         remote_authentication_transport_id: str = "",
+        session_kind: str | None = None,
+        auth_protocol: str = "",
+        smb_principal: str = "",
+        account_scope: str = "",
+        auth_session_ref: str = "",
+        effective_uid: int | None = None,
+        effective_gid: int | None = None,
     ) -> str:
         """Generate logon event across all applicable log formats.
 
@@ -9687,6 +9931,13 @@ class ActivityGenerator:
             session_end_plan=session_end_plan,
             remote_authentication_plan=remote_authentication_plan,
             remote_authentication_transport_id=remote_authentication_transport_id,
+            session_kind=session_kind,
+            auth_protocol=auth_protocol,
+            smb_principal=smb_principal,
+            account_scope=account_scope,
+            auth_session_ref=auth_session_ref,
+            effective_uid=effective_uid,
+            effective_gid=effective_gid,
         )
         return LogonActionBundle(self, request).execute()
 
@@ -9817,7 +10068,9 @@ class ActivityGenerator:
                 source_port = _ephemeral_port(_get_rng(), self._os_for_ip(source_ip))
 
         # Linux type-10 remote logons are SSH, not RDP
-        if logon_type == 10 and os_cat == "linux":
+        if request.session_kind:
+            session_kind = request.session_kind
+        elif logon_type == 10 and os_cat == "linux":
             session_kind = "ssh"
         else:
             session_kind = {
@@ -9894,6 +10147,27 @@ class ActivityGenerator:
 
         # Select auth package (semantic data, not format-specific)
         auth_pkg = self._select_auth_package(logon_type)
+        if request.auth_protocol == "kerberos":
+            auth_pkg = {
+                **auth_pkg,
+                "AuthenticationPackageName": "Kerberos",
+                "LogonProcessName": "Kerberos",
+                "LmPackageName": "-",
+            }
+        elif request.auth_protocol == "ntlmssp":
+            auth_pkg = {
+                **auth_pkg,
+                "AuthenticationPackageName": "NTLM",
+                "LogonProcessName": "NtLmSsp",
+                "LmPackageName": "NTLM V2",
+            }
+        resolved_auth_protocol = request.auth_protocol
+        if request.session_kind == "smb" and not resolved_auth_protocol:
+            resolved_auth_protocol = (
+                "ntlmssp"
+                if auth_pkg.get("AuthenticationPackageName", "").casefold() == "ntlm"
+                else "kerberos"
+            )
         requires_logon_guid = auth_pkg.get("LogonGuid") != "{00000000-0000-0000-0000-000000000000}"
 
         # Phase 1: Allocate or resolve IDs from StateManager
@@ -9907,6 +10181,12 @@ class ActivityGenerator:
                 session_kind=session_kind,
                 logon_guid_required=requires_logon_guid,
                 lifecycle_group_id=lifecycle_group_id,
+                auth_protocol=resolved_auth_protocol,
+                smb_principal=request.smb_principal,
+                account_scope=request.account_scope,
+                auth_session_ref=request.auth_session_ref,
+                effective_uid=request.effective_uid,
+                effective_gid=request.effective_gid,
             )
         else:
             existing_session = self.state_manager.get_session(logon_id)
@@ -9922,12 +10202,25 @@ class ActivityGenerator:
                     session_kind=session_kind,
                     logon_guid_required=requires_logon_guid,
                     lifecycle_group_id=lifecycle_group_id,
+                    auth_protocol=resolved_auth_protocol,
+                    smb_principal=request.smb_principal,
+                    account_scope=request.account_scope,
+                    auth_session_ref=request.auth_session_ref,
+                    effective_uid=request.effective_uid,
+                    effective_gid=request.effective_gid,
                 )
             else:
                 self.state_manager.update_session_metadata(
                     logon_id,
                     source_ip=auth_source_ip,
                     source_port=source_port or 0,
+                    session_kind=session_kind,
+                    auth_protocol=resolved_auth_protocol,
+                    smb_principal=request.smb_principal,
+                    account_scope=request.account_scope,
+                    auth_session_ref=request.auth_session_ref,
+                    effective_uid=request.effective_uid,
+                    effective_gid=request.effective_gid,
                 )
             if (
                 existing_session is not None
@@ -10071,6 +10364,13 @@ class ActivityGenerator:
                 reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2E0),
                 process_pid=logon_caller_pid,
                 process_name=logon_caller_process,
+                session_kind=session_kind,
+                auth_protocol=resolved_auth_protocol,
+                smb_principal=request.smb_principal,
+                account_scope=request.account_scope,
+                auth_session_ref=request.auth_session_ref,
+                effective_uid=request.effective_uid,
+                effective_gid=request.effective_gid,
             ),
             remote_auth=remote_authentication_plan,
         )
@@ -11519,13 +11819,24 @@ class ActivityGenerator:
             event_type="logoff",
             dst_host=self._build_host_context(system),
             auth=AuthContext(
-                username=user.username,
+                username=(
+                    session.smb_principal
+                    if session is not None and session.session_kind == "smb"
+                    else user.username
+                ),
                 user_sid=self._get_sid(user.username),
                 logon_id=logon_id,
                 session_id=session_id,
                 logon_type=logon_type,
                 source_ip=session_source_ip,
                 source_port=session_source_port,
+                session_kind=session.session_kind if session is not None else "",
+                auth_protocol=session.auth_protocol if session is not None else "",
+                smb_principal=session.smb_principal if session is not None else "",
+                account_scope=session.account_scope if session is not None else "",
+                auth_session_ref=session.auth_session_ref if session is not None else "",
+                effective_uid=session.effective_uid if session is not None else None,
+                effective_gid=session.effective_gid if session is not None else None,
             ),
             storyline_origin=from_storyline,
             lifecycle=(
@@ -13250,6 +13561,41 @@ class ActivityGenerator:
     def _ssh_responder_tuple_key(source_ip: str, source_port: int, target_ip: str) -> str:
         return f"{source_ip}:{source_port}->{target_ip}:22/tcp"
 
+    @staticmethod
+    def _smb_responder_tuple_key(source_ip: str, source_port: int, target_ip: str) -> str:
+        return f"{source_ip}:{source_port}->{target_ip}:445/tcp"
+
+    def _remember_smb_responder_pid(
+        self,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+        pid: int,
+    ) -> None:
+        """Associate one Samba worker with the accepted SMB transport tuple."""
+
+        if pid <= 0:
+            return
+        if not hasattr(self, "_smb_responder_pids"):
+            self._smb_responder_pids: dict[str, int] = {}
+        self._smb_responder_pids[
+            self._smb_responder_tuple_key(source_ip, source_port, target_ip)
+        ] = pid
+
+    def smb_responder_pid_for_tuple(
+        self,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+    ) -> int | None:
+        """Return the tuple-scoped Samba worker, when one has been resolved."""
+
+        if not hasattr(self, "_smb_responder_pids"):
+            return None
+        return self._smb_responder_pids.get(
+            self._smb_responder_tuple_key(source_ip, source_port, target_ip)
+        )
+
     def _remember_ssh_responder_pid(
         self,
         source_ip: str,
@@ -13355,6 +13701,149 @@ class ActivityGenerator:
         )
         self._remember_ssh_responder_pid(source_ip, source_port, target_system.ip, sshd_pid)
         return sshd_pid
+
+    def ensure_linux_smb_responder_process(
+        self,
+        *,
+        target_system: System,
+        time: datetime,
+        source_ip: str,
+        source_port: int,
+        close_time: datetime | None = None,
+    ) -> int:
+        """Return the destination-side smbd worker that owns one SMB tuple."""
+
+        remembered = self.smb_responder_pid_for_tuple(
+            source_ip,
+            source_port,
+            target_system.ip,
+        )
+        if remembered is not None:
+            running = self.state_manager.get_process(target_system.hostname, remembered)
+            if running is not None:
+                self._plan_linux_smb_worker_end(
+                    target_system,
+                    running,
+                    close_time,
+                )
+                return remembered
+
+        services = tuple(
+            getattr(self, "_system_service_defaults", {}).get(
+                target_system.hostname,
+                target_system.services or (),
+            )
+        )
+        profile = select_server_profile("linux", services)
+        sys_pids = getattr(self, "_system_pids", {}).setdefault(
+            target_system.hostname,
+            {},
+        )
+        master_pid = sys_pids.get("smbd") or sys_pids.get("smbd_master")
+        if (
+            master_pid is None
+            or self.state_manager.get_process(
+                target_system.hostname,
+                master_pid,
+            )
+            is None
+        ):
+            listener = render_smb_process(profile.listener)
+            listener_seed = _stable_seed(
+                f"smbd-listener:{target_system.hostname}:{time.isoformat()}"
+            )
+            listener_time = time - timedelta(
+                seconds=30 + (listener_seed % 271),
+            )
+            scenario_start = getattr(self, "_scenario_start_time", None)
+            if scenario_start is not None:
+                listener_time = max(
+                    listener_time,
+                    ensure_utc(scenario_start) + timedelta(milliseconds=100),
+                )
+            if listener_time >= time:
+                listener_time = time - timedelta(milliseconds=100)
+            master_pid = self.generate_system_process(
+                system=target_system,
+                time=listener_time,
+                process_name=listener.image,
+                command_line=listener.command_line,
+                parent_pid=sys_pids.get("systemd", 1),
+                username=listener.username,
+                emit_linux_syslog=False,
+            )
+            sys_pids["smbd"] = master_pid
+            sys_pids["smbd_master"] = master_pid
+
+        if profile.worker is None:
+            return master_pid
+        worker = render_smb_process(
+            profile.worker,
+            server=target_system.hostname,
+            share="",
+            path="",
+            client_path="",
+            username="root",
+            operation="transport",
+            client_ip=source_ip,
+        )
+        worker_seed = _stable_seed(
+            "smbd-worker:"
+            f"{target_system.hostname}:{source_ip}:{source_port}:"
+            f"{target_system.ip}:{time.isoformat()}"
+        )
+        worker_pid = self.generate_system_process(
+            system=target_system,
+            time=time + timedelta(milliseconds=8 + (worker_seed % 72)),
+            process_name=worker.image,
+            command_line=worker.command_line,
+            parent_pid=master_pid,
+            username=worker.username,
+            emit_linux_syslog=False,
+        )
+        self._remember_smb_responder_pid(
+            source_ip,
+            source_port,
+            target_system.ip,
+            worker_pid,
+        )
+        running_worker = self.state_manager.get_process(target_system.hostname, worker_pid)
+        if running_worker is not None:
+            self._plan_linux_smb_worker_end(
+                target_system,
+                running_worker,
+                close_time,
+            )
+        return worker_pid
+
+    def _plan_linux_smb_worker_end(
+        self,
+        target_system: System,
+        worker: RunningProcess,
+        close_time: datetime | None,
+    ) -> None:
+        """Keep a transport-lived smbd worker through close, then terminate it."""
+
+        if close_time is None:
+            return
+        close_time = ensure_utc(close_time)
+        self._remember_process_connection_hold(
+            system=target_system,
+            pid=worker.pid,
+            close_time=close_time,
+        )
+        end_seed = _stable_seed(
+            f"smbd-worker-end:{target_system.hostname}:{worker.pid}:{close_time.isoformat()}"
+        )
+        termination_time = close_time + timedelta(milliseconds=80 + (end_seed % 1921))
+        self._remember_foreground_process_finalizer(
+            system=target_system,
+            user=self._user_model_for_username(worker.username),
+            pid=worker.pid,
+            process_name=worker.image,
+            logon_id=worker.logon_id or "0x3e7",
+            termination_time=termination_time,
+        )
 
     def _emit_generic_ssh_preauth_failure_syslog(
         self,
@@ -14349,7 +14838,7 @@ class ActivityGenerator:
         time: datetime,
         process_pid: int = -1,
         process_image: str = "",
-        reuse_session: bool = False,
+        activity_source: Literal["storyline", "baseline"] = "storyline",
         files_override: tuple[Any, ...] = (),
     ) -> SmbActivityResult:
         """Generate one bounded canonical SMB2/3 disk-share activity burst."""
@@ -14363,7 +14852,7 @@ class ActivityGenerator:
                 time=time,
                 process_pid=process_pid,
                 process_image=process_image,
-                reuse_session=reuse_session,
+                activity_source=activity_source,
                 files_override=files_override,
             ),
         ).execute()

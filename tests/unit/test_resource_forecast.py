@@ -87,6 +87,18 @@ def _smb_scenario(*, batch_all: bool) -> Scenario:
     return Scenario(**data)
 
 
+def _linux_smb_scenario() -> Scenario:
+    """Return the high-volume Linux client and Samba calibration holdout."""
+
+    fixture = (
+        Path(__file__).parent.parent
+        / "fixtures"
+        / "scenarios"
+        / "smb-linux-resource-calibration.yaml"
+    )
+    return Scenario(**load_yaml(fixture))
+
+
 def _snapshot(*, memory_and_swap: int, disk: int) -> ResourceSnapshot:
     return ResourceSnapshot(
         total_memory_bytes=max(memory_and_swap, _GIB),
@@ -149,7 +161,7 @@ def test_forecast_always_reports_memory_disk_and_calibration() -> None:
     assert forecast.disk.expected_bytes < forecast.disk.upper_bytes
     assert forecast.disk.lower_bytes >= forecast.final_output.lower_bytes
     assert forecast.disk.expected_bytes >= forecast.final_output.expected_bytes
-    assert forecast.calibration_version == 3
+    assert forecast.calibration_version == 4
     assert forecast.pressures == ()
 
 
@@ -187,6 +199,83 @@ def test_smb_batch_operations_increase_final_output_and_peak_disk() -> None:
     assert batch_forecast.final_output.expected_bytes > single_forecast.final_output.expected_bytes
     assert batch_forecast.disk.expected_bytes > single_forecast.disk.expected_bytes
     assert batch_forecast.disk.expected_bytes > batch_forecast.final_output.expected_bytes
+
+
+def test_linux_smb_operations_increase_forecast_and_include_samba_sources() -> None:
+    """Linux SMB activity must contribute operation costs beyond host-rate noise."""
+
+    snapshot = _snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB)
+    scenario = _linux_smb_scenario()
+    without_smb = scenario.model_copy(update={"storyline": []}, deep=True)
+    estimate = estimate_workload(scenario)
+    empty_estimate = estimate_workload(without_smb)
+
+    forecast = build_resource_forecast(
+        scenario,
+        estimate,
+        Path("/forecast-target"),
+        snapshot=snapshot,
+    )
+    empty_forecast = build_resource_forecast(
+        without_smb,
+        empty_estimate,
+        Path("/forecast-target"),
+        snapshot=snapshot,
+    )
+
+    assert estimate.smb_activity_events > empty_estimate.smb_activity_events
+    assert estimate.smb_batch_operations >= 100
+    assert forecast.memory.expected_bytes > empty_forecast.memory.expected_bytes
+    assert forecast.final_output.expected_bytes > empty_forecast.final_output.expected_bytes
+    assert forecast.disk.expected_bytes > empty_forecast.disk.expected_bytes
+
+
+def test_linux_smb_calibration_covers_sensor_and_samba_operation_costs() -> None:
+    """SMB rates must cover Samba hosts and their source-native syslog fan-out."""
+
+    calibration = load_resource_forecast_calibration()
+
+    assert calibration.disk.formats["zeek_smb_files"].system_scope == "all"
+    assert calibration.disk.formats["zeek_smb_mapping"].system_scope == "all"
+    assert calibration.memory.smb_bytes_per_operation_by_format["syslog"] > 0
+    assert calibration.disk.smb_activity_fixed_bytes_by_format["syslog"] > 0
+    assert calibration.disk.smb_operation_bytes_by_format["syslog"] > 0
+
+
+def test_linux_smb_long_duration_forecast_saturates_memory_but_scales_disk() -> None:
+    """Linux/Samba retained state should stay bounded while 31-day output grows."""
+
+    scenario = _linux_smb_scenario()
+    seven_days = scenario.model_copy(
+        update={
+            "time_window": scenario.time_window.model_copy(update={"duration": "7d", "end": None})
+        }
+    )
+    thirty_one_days = scenario.model_copy(
+        update={
+            "time_window": scenario.time_window.model_copy(update={"duration": "31d", "end": None})
+        }
+    )
+    snapshot = _snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB)
+
+    seven_day_forecast = build_resource_forecast(
+        seven_days,
+        estimate_workload(seven_days),
+        Path("/forecast-target"),
+        snapshot=snapshot,
+    )
+    thirty_one_day_forecast = build_resource_forecast(
+        thirty_one_days,
+        estimate_workload(thirty_one_days),
+        Path("/forecast-target"),
+        snapshot=snapshot,
+    )
+
+    assert thirty_one_day_forecast.memory.expected_bytes == seven_day_forecast.memory.expected_bytes
+    assert thirty_one_day_forecast.final_output.expected_bytes > (
+        seven_day_forecast.final_output.expected_bytes
+    )
+    assert thirty_one_day_forecast.disk.expected_bytes > seven_day_forecast.disk.expected_bytes
 
 
 def test_bounded_zeek_memory_forecast_saturates_for_long_duration() -> None:

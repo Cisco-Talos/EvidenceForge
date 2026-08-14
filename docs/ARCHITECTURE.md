@@ -522,10 +522,41 @@ source-local escape hatch.
 
 File-transfer callers supply transfer intent layered on top of a transport path.
 `HttpFileTransferActionBundle` builds HTTP file-analysis metadata from one transfer
-description. `SmbActivityActionBundle` composes the canonical network and Windows
-remote-authentication contracts, then owns SMB sessions, trees, handles, file
-operations, storage mutations, and directional file observations. Generic TCP/445
-connections are transport-only. `StagedArchiveSmbReadActionBundle` delegates the SMB
+description. `SmbActivityActionBundle` composes the canonical network and
+provider-selected authentication contracts, then owns SMB sessions, trees, handles,
+file operations, storage mutations, and directional file observations across Windows
+and Linux. Generic TCP/445 connections are transport-only.
+
+The SMB contract preserves three identities instead of collapsing them: the local application
+actor/process, the SMB credential principal, and the server-side effective identity. Per-user
+mappings resolve a principal through the identity directory; fixed mappings and event-level
+`smb_principal` overrides change the credential identity without rewriting the local process owner.
+Samba authentication may additionally resolve an effective UID/GID without inventing a Windows
+LUID or a Linux PAM login.
+
+Storage owns one canonical SMB-relative object path, then derives independent presentations: UNC,
+Windows drive mapping, Linux mount path, and server-local Windows or POSIX path. The server's
+backing filesystem is also independent from its advertised SMB filesystem; this is required for
+Samba on ext4/XFS that advertises NTFS. `STORAGE_MANIFEST.json` schema v2 exposes those distinctions
+alongside platform-aware mappings and resolved storyline targets.
+
+Client and server lifecycle morphology is data-driven by `config/activity/smb_profiles.yaml`.
+Windows native access keeps its system-owned transport. Linux mounted CIFS keeps application-owned
+local file effects while marking transport as kernel-owned and unavailable for process attribution;
+`mount.cifs` is not the actor for every later operation. Direct `smbclient` is operation-scoped,
+while GVFS remains resident background process/transport texture and does not enter the canonical
+typed SMB file/auth/session lifecycle. Samba uses one listener/service profile plus per-transport
+`smbd` workers, so inbound FLOW and server FILE evidence can reference the active worker. Audit
+policy stays on the server/share contract: minimal emits auth/connection
+lifecycle, standard adds selected VFS operations and failures, and high projects modeled
+full-audit operations through existing syslog. Windows Security output remains Windows-only.
+The version-sensitive behavior follows the upstream
+[`mount.cifs`](https://man7.org/linux/man-pages/man8/mount.cifs.8.html),
+[`smb.conf`](https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html),
+[`vfs_full_audit`](https://www.samba.org/samba/docs/current/man-html/vfs_full_audit.8.html), and
+[Zeek SMB](https://docs.zeek.org/en/lts/logs/smb.html) contracts.
+
+`StagedArchiveSmbReadActionBundle` delegates the SMB
 read that moves a staged archive before exfiltration to that canonical bundle, and
 `ScpReceiverFileActionBundle` emits only
 the receiver-side endpoint file evidence after the SSH bundle owns transport,
@@ -647,8 +678,14 @@ The compiled world-model layer (`src/evidenceforge/generation/world_model.py`) s
 
 - `WorldModel` compiles canonical host capabilities and user placement from scenario fields such as `user.primary_system`, `system.assigned_user`, `system.roles`, and `system.services`
 - Capabilities are typed and compiled once for DHCP servers, DNS resolvers, domain controllers,
-  forward proxies, SSH receivers, and RDP receivers; baseline and storyline consumers do not
-  independently reinterpret roles or services
+  forward proxies, SSH receivers, RDP receivers, SMB clients, and SMB servers; baseline and
+  storyline consumers do not independently reinterpret roles or services
+- Windows systems retain implicit native SMB-client capability, and Windows file servers/DCs
+  retain server capability. Linux Samba service markers or explicit storage topology provide server
+  capability; a generic Linux `file_server` role does not. Canonical Linux file activity requires a
+  CIFS-mount or `smbclient` marker. GVFS
+  markers provide opaque background transport/process texture only. Capability-driven baseline
+  selection connects only an eligible SMB client to an eligible server
 - Distinct-peer requests exclude the requesting host. Missing capability remains explicit:
   optional baseline families skip, authored DHCP intent fails validation, and neither path invents
   a hostname, address, or role

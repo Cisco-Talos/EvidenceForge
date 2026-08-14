@@ -50,6 +50,13 @@ from evidenceforge.models import (
 )
 from evidenceforge.models.exceptions import EvidenceForgeError
 from evidenceforge.models.exceptions import ValidationError as VError
+from evidenceforge.models.scenario import (
+    SmbActivityEventSpec,
+    SmbClientLocation,
+    StorageMappingConfig,
+    StorageShareConfig,
+    StorageVolumeConfig,
+)
 
 
 class TestExceptions:
@@ -1044,3 +1051,96 @@ class TestPeriodicEventJitterDefaults:
 
         spec = BeaconEventSpec(dst_ip="1.2.3.4", interval="5m", count=1, jitter=0.05)
         assert spec.jitter == 0.05
+
+
+class TestCrossPlatformSmbModels:
+    """Validate the public Windows/Linux SMB authoring vocabulary."""
+
+    def test_client_locations_accept_os_native_absolute_paths(self):
+        assert SmbClientLocation(path="C:\\Temp\\report.txt").path == "C:\\Temp\\report.txt"
+        assert SmbClientLocation(path="/var/tmp/report.txt").path == "/var/tmp/report.txt"
+
+        with pytest.raises(ValidationError, match="absolute Windows drive or POSIX path"):
+            SmbClientLocation(path="tmp/report.txt")
+        with pytest.raises(ValidationError, match=r"cannot contain.*'\.\.'"):
+            SmbClientLocation(path="/var/../report.txt")
+
+    @pytest.mark.parametrize(
+        ("mount", "filesystem"),
+        [
+            ("D:\\", "ntfs"),
+            ("C:\\Mounts\\Archive\\", "refs"),
+            ("/srv/samba/data", "ext4"),
+            ("/srv/samba/archive", "xfs"),
+        ],
+    )
+    def test_storage_volumes_accept_supported_mounts_and_filesystems(
+        self, mount: str, filesystem: str
+    ):
+        volume = StorageVolumeConfig(id="data", mount=mount, filesystem=filesystem)
+
+        assert volume.filesystem == filesystem
+
+    def test_mapping_credentials_and_presentations_are_explicit(self):
+        mapping = StorageMappingConfig(
+            id="team-share",
+            share="SAMBA-01.team",
+            drive="P:",
+            mount="/mnt/team/",
+            credential_mode="fixed",
+            principal="svc_smb",
+        )
+
+        assert mapping.drive == "P:"
+        assert mapping.mount == "/mnt/team"
+        assert mapping.principal == "svc_smb"
+
+        with pytest.raises(ValidationError, match="require principal"):
+            StorageMappingConfig(id="team-share", share="SAMBA-01.team", credential_mode="fixed")
+        with pytest.raises(ValidationError, match="forbid principal"):
+            StorageMappingConfig(id="team-share", share="SAMBA-01.team", principal="svc_smb")
+
+    def test_share_native_filesystem_is_normalized_and_safe(self):
+        share = StorageShareConfig(
+            id="team",
+            name="Team",
+            volume="data",
+            smb_native_filesystem=" NTFS ",
+        )
+
+        assert share.smb_native_filesystem == "NTFS"
+        with pytest.raises(ValidationError, match="nonempty safe label"):
+            StorageShareConfig(
+                id="team",
+                name="Team",
+                volume="data",
+                smb_native_filesystem="NTFS/unsafe",
+            )
+
+    def test_smb_activity_defaults_and_linux_modes_are_public(self):
+        default = SmbActivityEventSpec(
+            operation="read",
+            target={"type": "share", "share": "SAMBA-01.team"},
+        )
+        mounted = SmbActivityEventSpec(
+            operation="read",
+            target={"type": "share", "share": "SAMBA-01.team"},
+            path_style="mounted",
+            client_access="cifs_mount",
+            auth_protocol="ntlmssp",
+            smb_principal="analyst",
+        )
+
+        assert (default.client_access, default.auth_protocol, default.path_style) == (
+            "auto",
+            "auto",
+            "auto",
+        )
+        assert mounted.smb_principal == "analyst"
+        with pytest.raises(ValidationError, match="external SMB clients"):
+            SmbActivityEventSpec(
+                operation="read",
+                target={"type": "share", "share": "SAMBA-01.team"},
+                client={"type": "external", "ip": "198.51.100.10"},
+                path_style="mounted",
+            )

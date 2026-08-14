@@ -22,6 +22,7 @@
 
 """Tests for Causality scoring (merged from signal_integrity)."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -148,6 +149,207 @@ def test_smb_trace_matching_uses_canonical_transport_and_file_identities():
         event,
     )
     assert not scorer._smb_record_matches({"uid": "C-OTHER"}, "zeek_conn", event)
+
+
+def test_smb_trace_matching_accepts_samba_syslog_and_posix_endpoint_paths():
+    """Samba-native evidence should match the same canonical share/file identity."""
+
+    scorer = CausalityScorer()
+    scorer._smb_gt = {
+        "samba-read": {
+            "transport_uids": ["C-SAMBA-1"],
+            "operations": [
+                {
+                    "share": "SAMBA-01.finance",
+                    "path": r"Reports\FY26\linux-plan.xlsx",
+                    "fuid": "F-SAMBA-1",
+                }
+            ],
+        }
+    }
+    event = ResolvedEvent(
+        index=0,
+        time=T0,
+        actor="jsmith",
+        system="LNX-CLIENT-01",
+        system_ip="10.0.0.10",
+        activity="Read Samba workbook",
+        details={},
+        event_types=["smb_activity"],
+        storyline_id="samba-read",
+    )
+
+    assert scorer._smb_record_matches(
+        {
+            "object": "FILE",
+            "action": "READ",
+            "hostname": "SAMBA-01",
+            "principal": "jsmith",
+            "file_path": "/srv/samba/data/Departments/Finance/Reports/FY26/linux-plan.xlsx",
+        },
+        "ecar",
+        event,
+    )
+    assert scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd_audit",
+            "message": (
+                "smbd_audit: jsmith|10.0.0.10|Finance|read|success|"
+                "/srv/samba/data/Departments/Finance/Reports/FY26/linux-plan.xlsx"
+            ),
+        },
+        "syslog",
+        event,
+    )
+    assert not scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd_audit",
+            "message": (
+                "smbd_audit: other-user|10.0.0.10|Finance|read|success|"
+                "/srv/samba/data/Departments/Finance/Reports/FY26/other.xlsx"
+            ),
+        },
+        "syslog",
+        event,
+    )
+
+    external_event = replace(event, system="SAMBA-01")
+    assert scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd_audit",
+            "message": (
+                "smbd_audit: jsmith|198.51.100.42|Finance|read|success|"
+                "/srv/samba/data/Departments/Finance/Reports/FY26/linux-plan.xlsx"
+            ),
+        },
+        "syslog",
+        external_event,
+    )
+
+
+def test_smb_trace_matching_accepts_fixed_mapping_principal():
+    """Server-native evidence can use fixed SMB credentials distinct from the local actor."""
+
+    scorer = CausalityScorer()
+    scorer._smb_gt = {
+        "fixed-read": {
+            "transport_uids": ["C-FIXED-1"],
+            "operations": [
+                {
+                    "share": "SAMBA-01.finance",
+                    "path": r"Reports\fixed.xlsx",
+                    "fuid": "F-FIXED-1",
+                }
+            ],
+        }
+    }
+    scorer._smb_mapping_principals = {"finance-fixed": "svc_smb_reader"}
+    event = ResolvedEvent(
+        index=0,
+        time=T0,
+        actor="jsmith",
+        system="LNX-CLIENT-01",
+        system_ip="10.0.0.10",
+        activity="Read through a fixed CIFS credential",
+        details={"mapping": "FINANCE-FIXED"},
+        event_types=["smb_activity"],
+        storyline_id="fixed-read",
+    )
+
+    assert scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd_audit",
+            "message": (
+                "smbd_audit: svc_smb_reader|10.0.0.10|Finance|read|success|"
+                "/srv/samba/data/Reports/fixed.xlsx"
+            ),
+        },
+        "syslog",
+        event,
+    )
+    assert scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd",
+            "message": "connect to service Finance as user svc_smb_reader (uid=20041)",
+        },
+        "syslog",
+        event,
+    )
+    assert not scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd",
+            "message": "connect to service Finance as user jsmith (uid=20041)",
+        },
+        "syslog",
+        event,
+    )
+    assert scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd",
+            "message": "closed connection to service Finance",
+        },
+        "syslog",
+        event,
+    )
+    assert scorer._smb_record_matches(
+        {
+            "object": "FILE",
+            "hostname": "SAMBA-01",
+            "principal": "svc_smb_reader",
+            "file_path": "/srv/samba/data/Reports/fixed.xlsx",
+        },
+        "ecar",
+        event,
+    )
+    assert not scorer._smb_record_matches(
+        {
+            "object": "FILE",
+            "hostname": "SAMBA-01",
+            "principal": "jsmith",
+            "file_path": "/srv/samba/data/Reports/fixed.xlsx",
+        },
+        "ecar",
+        event,
+    )
+    assert not scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd_audit",
+            "message": (
+                "smbd_audit: jsmith|10.0.0.10|Finance|read|success|"
+                "/srv/samba/data/Reports/fixed.xlsx"
+            ),
+        },
+        "syslog",
+        event,
+    )
+    assert scorer._smb_record_matches(
+        {
+            "object": "FILE",
+            "hostname": "LNX-CLIENT-01",
+            "principal": "jsmith",
+            "file_path": "/mnt/finance/Reports/fixed.xlsx",
+        },
+        "ecar",
+        event,
+    )
+    assert not scorer._smb_record_matches(
+        {
+            "object": "FILE",
+            "hostname": "LNX-CLIENT-01",
+            "principal": "svc_smb_reader",
+            "file_path": "/mnt/finance/Reports/fixed.xlsx",
+        },
+        "ecar",
+        event,
+    )
 
 
 class TestProcessParentIntegrity:

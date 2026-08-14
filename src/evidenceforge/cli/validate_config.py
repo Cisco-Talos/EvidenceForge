@@ -571,6 +571,17 @@ def validate_config() -> ValidationResult:
                 "network_sensor_observation",
             },
         },
+        "activity/smb_profiles.yaml": {
+            "dict_fields": {
+                "advertised_filesystem_defaults",
+                "client_defaults",
+                "client_profiles",
+                "samba_audit",
+                "server_defaults",
+                "server_profiles",
+            },
+            "scalar_fields": {"schema_version": int},
+        },
     }
 
     overlay_errors = False
@@ -616,7 +627,10 @@ def validate_config() -> ValidationResult:
 
             # Reject unexpected top-level keys (they will be silently ignored by the engine)
             string_list_fields = file_schema.get("string_list_fields", set())
-            known_keys = set(list_fields.keys()) | dict_fields | set(string_list_fields)
+            scalar_fields = file_schema.get("scalar_fields", {})
+            known_keys = (
+                set(list_fields.keys()) | dict_fields | set(string_list_fields) | set(scalar_fields)
+            )
             if known_keys:
                 for key in data:
                     if key not in known_keys and key != "_replace":
@@ -717,6 +731,19 @@ def validate_config() -> ValidationResult:
                                 )
                                 overlay_errors = True
 
+            # Check explicitly typed scalar fields used by versioned config documents.
+            for field_name, expected_type in scalar_fields.items():
+                if field_name in data and type(data[field_name]) is not expected_type:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a '
+                            f"{expected_type.__name__}, got {type(data[field_name]).__name__}",
+                        )
+                    )
+                    overlay_errors = True
+
     # Validate overlay persona files specifically (one-file-per-persona pattern)
     if overlay_dir:
         overlay_personas_dir = overlay_dir / "personas"
@@ -796,6 +823,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
     from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
     from evidenceforge.generation.activity.site_maps import load_site_maps
+    from evidenceforge.generation.activity.smb_profiles import load_smb_profiles
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
     from evidenceforge.generation.activity.suspicious_benign_config import (
         load_suspicious_benign,
@@ -841,6 +869,16 @@ def validate_config() -> ValidationResult:
     windows_auth_data = load_windows_auth_realism()
     timing_profiles_data = load_timing_profiles()
     web_session_profiles_data = load_web_session_profiles()
+    try:
+        load_smb_profiles()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "smb_profiles.yaml",
+                f"invalid SMB profiles config: {exc}",
+            )
+        )
 
     # Collect file count (package + overlay)
     yaml_files: list[Path] = []

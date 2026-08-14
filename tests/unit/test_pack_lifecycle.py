@@ -815,6 +815,74 @@ def test_organization_loader_qualifies_local_environment_references(tmp_path: Pa
     ]
 
 
+def test_organization_loader_preserves_packaged_builtin_shorthand(tmp_path: Path) -> None:
+    """Built-in persona and storage IDs remain available inside organization models."""
+
+    repository = PackRepository(tmp_path)
+    root = repository.create_skeleton("organization", "builtin-org", "1.0.0")
+    _write_yaml(
+        root / "model/environment.yaml",
+        {
+            "environment": {
+                "users": [
+                    {
+                        "username": "dev.user",
+                        "full_name": "Development User",
+                        "email": "dev.user@builtin-org.example",
+                        "persona": "developer",
+                    }
+                ],
+                "storage": {
+                    "servers": [
+                        {
+                            "system": "FILE-01",
+                            "volumes": [{"id": "data", "mount": "D:\\"}],
+                            "default_volume": "data",
+                            "shares": [
+                                {
+                                    "id": "department",
+                                    "name": "Department",
+                                    "volume": "data",
+                                    "preset": "department",
+                                },
+                                {
+                                    "id": "backup",
+                                    "name": "Backup",
+                                    "volume": "data",
+                                    "preset": "backup",
+                                },
+                            ],
+                        }
+                    ]
+                },
+            }
+        },
+    )
+    _write_yaml(
+        root / "model/baseline_activity.yaml",
+        {
+            "baseline_activity": {
+                "traffic_suppression": [{"audience": {"personas": ["developer"]}, "factor": 0.5}]
+            }
+        },
+    )
+
+    loaded = repository.resolve(
+        PackReference(source="project", name="builtin-org", version="1.0.0"),
+        expected_type="organization",
+    )
+
+    assert loaded.environment["users"][0]["persona"] == "developer"
+    assert [share["preset"] for share in loaded.environment["storage"]["servers"][0]["shares"]] == [
+        "department",
+        "backup",
+    ]
+    assert loaded.baseline_activity["traffic_suppression"][0]["audience"]["personas"] == [
+        "developer"
+    ]
+    assert repository.validate_semantics(loaded) == []
+
+
 def test_copy_reference_rewriter_covers_organization_storage_presets() -> None:
     """The nested SMB preset reference is renamed while adjacent prose is untouched."""
 

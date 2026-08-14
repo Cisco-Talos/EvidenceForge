@@ -56,9 +56,16 @@ def _directory_allocated_bytes(path: Path) -> int:
     if not path.exists():
         return 0
     for candidate in path.rglob("*"):
-        if not candidate.is_file() or candidate.is_symlink():
+        try:
+            is_file = candidate.is_file()
+            is_symlink = candidate.is_symlink()
+            stat = candidate.stat()
+        except OSError:
+            # External-sort runs can be merged and unlinked between directory
+            # enumeration and sampling. The next sample observes the survivor.
             continue
-        stat = candidate.stat()
+        if not is_file or is_symlink:
+            continue
         inode = (stat.st_dev, stat.st_ino)
         if inode in seen_inodes:
             continue
@@ -89,6 +96,7 @@ def _ecar_pid_lifecycle_summary(path: Path) -> dict[str, int]:
     stale_terminations = 0
     linux_wraps = 0
     unexplained_linux_reversals = 0
+    reversal_samples: list[dict[str, Any]] = []
     seen_pids: set[tuple[str, int]] = set()
     for ecar_path in sorted(path.rglob("ecar.json")):
         records: list[dict[str, Any]] = []
@@ -102,7 +110,7 @@ def _ecar_pid_lifecycle_summary(path: Path) -> dict[str, int]:
                     records.append(record)
         records.sort(key=lambda record: (int(record.get("timestamp_ms", 0)), str(record["id"])))
         active: dict[tuple[str, int], str] = {}
-        previous_linux_create: tuple[int, int] | None = None
+        previous_linux_create: dict[str, tuple[int, int, str, str]] = {}
         for record in records:
             key = (str(record.get("hostname") or "-"), int(record["pid"]))
             object_id = str(record.get("objectID") or "")
@@ -110,16 +118,38 @@ def _ecar_pid_lifecycle_summary(path: Path) -> dict[str, int]:
                 creates += 1
                 image_path = str((record.get("properties") or {}).get("image_path") or "")
                 if image_path.startswith("/"):
-                    current_linux_create = (int(record["timestamp_ms"]), int(record["pid"]))
-                    if previous_linux_create is not None:
-                        prior_time, prior_pid = previous_linux_create
-                        current_time, current_pid = current_linux_create
+                    current_linux_create = (
+                        int(record["timestamp_ms"]),
+                        int(record["pid"]),
+                        object_id,
+                        image_path,
+                    )
+                    host_previous = previous_linux_create.get(key[0])
+                    if host_previous is not None:
+                        prior_time, prior_pid, prior_object_id, prior_image = host_previous
+                        current_time, current_pid, _current_object_id, _current_image = (
+                            current_linux_create
+                        )
                         if current_pid <= prior_pid:
                             if prior_pid >= 4_000_000 and 500 <= current_pid <= 200_000:
                                 linux_wraps += 1
                             elif current_time - prior_time > 30_000:
                                 unexplained_linux_reversals += 1
-                    previous_linux_create = current_linux_create
+                                if len(reversal_samples) < 5:
+                                    reversal_samples.append(
+                                        {
+                                            "hostname": key[0],
+                                            "prior_timestamp_ms": prior_time,
+                                            "prior_pid": prior_pid,
+                                            "prior_object_id": prior_object_id,
+                                            "prior_image": prior_image,
+                                            "timestamp_ms": current_time,
+                                            "pid": current_pid,
+                                            "object_id": object_id,
+                                            "image": image_path,
+                                        }
+                                    )
+                    previous_linux_create[key[0]] = current_linux_create
                 if key in active:
                     overlaps += 1
                 if key in seen_pids:
@@ -145,7 +175,10 @@ def _ecar_pid_lifecycle_summary(path: Path) -> dict[str, int]:
         "unexplained_linux_reversals": unexplained_linux_reversals,
     }
     if overlaps or stale_terminations or unexplained_linux_reversals:
-        raise RuntimeError(f"Rendered eCAR PID lifecycle validation failed: {summary}")
+        raise RuntimeError(
+            "Rendered eCAR PID lifecycle validation failed: "
+            f"{summary}; reversal_samples={reversal_samples}"
+        )
     return summary
 
 
@@ -332,6 +365,8 @@ def _measure(
             "output_sha256": _directory_digest(output),
             "pid_lifecycles": pid_lifecycles,
             "workload_estimate": worker_data["workload_estimate"],
+            "calibration_version": forecast["calibration_version"],
+            "calibration_label": forecast["calibration_label"],
             "forecast_memory": forecast["memory"],
             "forecast_final_output": forecast["final_output"],
             "forecast_disk": forecast["disk"],
@@ -380,7 +415,7 @@ def _write_document(
 ) -> None:
     """Persist a resumable calibration checkpoint or print the final document."""
     document = {
-        "schema_version": 3,
+        "schema_version": 4,
         "python": sys.version,
         "platform": sys.platform,
         "measurements": measurements,

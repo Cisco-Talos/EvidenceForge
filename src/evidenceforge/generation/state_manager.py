@@ -69,10 +69,12 @@ _NULL_LOGON_GUID = "{00000000-0000-0000-0000-000000000000}"
 _LINUX_PID_BLOCK_SECONDS = 300
 _LINUX_PID_MIN = 500
 _LINUX_PID_MAX_EXCLUSIVE = 4_194_304
+_LINUX_PID_REORDER_LANE_SECONDS = 30
+_LINUX_PID_REORDER_LANE_WIDTH = 47
+_LINUX_PID_REORDER_LANE_HEADROOM = 11
 _WINDOWS_PID_MIN = 4_000
 _WINDOWS_PID_MAX = 65_532
 _WINDOWS_PID_STEP = 4
-_PID_ALLOCATION_REORDER_WINDOW = timedelta(hours=24)
 _MINUTES_PER_WEEK = 7 * 24 * 60
 _ENDED_IDENTITY_RETENTION = timedelta(hours=48)
 _MAX_RETAINED_PROCESS_IDENTITIES = 500_000
@@ -225,7 +227,7 @@ class StateManager:
         self._ended_processes_by_object_id: ExpiringIndex[str, RunningProcess] = ExpiringIndex()
         self._ended_threads: ExpiringIndex[tuple[str, str, int], RunningThread] = ExpiringIndex()
         self._smb_sessions: dict[str, SmbSessionState] = {}
-        self._smb_session_affinity: dict[tuple[str, str, str, str], str] = {}
+        self._smb_session_affinity: dict[tuple[str, str, str, str, str, str], str] = {}
         self._smb_trees: dict[str, SmbTreeState] = {}
         self._smb_tree_by_session_share: dict[tuple[str, str], str] = {}
         self._smb_handles: dict[str, SmbHandleState] = {}
@@ -453,6 +455,12 @@ class StateManager:
         session_id: int | None = None,
         lifecycle_group_id: str = "",
         parent_lifecycle_group_id: str = "",
+        auth_protocol: str = "",
+        smb_principal: str = "",
+        account_scope: str = "",
+        auth_session_ref: str = "",
+        effective_uid: int | None = None,
+        effective_gid: int | None = None,
     ) -> str:
         """Create a new active session.
 
@@ -525,6 +533,12 @@ class StateManager:
                 lifecycle_group_id=lifecycle_group_id
                 or stable_uuid("session-lifecycle", session_object_id),
                 parent_lifecycle_group_id=parent_lifecycle_group_id,
+                auth_protocol=auth_protocol,
+                smb_principal=smb_principal,
+                account_scope=account_scope,
+                auth_session_ref=auth_session_ref,
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
             )
 
             self.state.active_sessions[logon_id] = session
@@ -721,6 +735,12 @@ class StateManager:
         session_id: int | None = None,
         lifecycle_group_id: str = "",
         parent_lifecycle_group_id: str = "",
+        auth_protocol: str = "",
+        smb_principal: str = "",
+        account_scope: str = "",
+        auth_session_ref: str = "",
+        effective_uid: int | None = None,
+        effective_gid: int | None = None,
     ) -> ActiveSession:
         """Register a pre-existing session in state.
 
@@ -778,6 +798,12 @@ class StateManager:
                 lifecycle_group_id=lifecycle_group_id
                 or stable_uuid("session-lifecycle", session_object_id),
                 parent_lifecycle_group_id=parent_lifecycle_group_id,
+                auth_protocol=auth_protocol,
+                smb_principal=smb_principal,
+                account_scope=account_scope,
+                auth_session_ref=auth_session_ref,
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
             )
             self.state.active_sessions[logon_id] = session
             self._logon_id_aliases.pop(logon_id, None)
@@ -802,6 +828,12 @@ class StateManager:
         session_id: int | None = None,
         lifecycle_group_id: str | None = None,
         parent_lifecycle_group_id: str | None = None,
+        auth_protocol: str | None = None,
+        smb_principal: str | None = None,
+        account_scope: str | None = None,
+        auth_session_ref: str | None = None,
+        effective_uid: int | None = None,
+        effective_gid: int | None = None,
     ) -> bool:
         """Update mutable metadata on an existing session."""
         with self._lock:
@@ -842,6 +874,18 @@ class StateManager:
                 session.lifecycle_group_id = lifecycle_group_id
             if parent_lifecycle_group_id is not None:
                 session.parent_lifecycle_group_id = parent_lifecycle_group_id
+            if auth_protocol is not None:
+                session.auth_protocol = auth_protocol
+            if smb_principal is not None:
+                session.smb_principal = smb_principal
+            if account_scope is not None:
+                session.account_scope = account_scope
+            if auth_session_ref is not None:
+                session.auth_session_ref = auth_session_ref
+            if effective_uid is not None:
+                session.effective_uid = effective_uid
+            if effective_gid is not None:
+                session.effective_gid = effective_gid
             return True
 
     def plan_session_end(self, logon_id: str, plan: SessionEndPlan) -> bool:
@@ -1166,6 +1210,14 @@ class StateManager:
             churn = rng.randint(lower, upper)
             if rng.random() < 0.04:
                 churn += rng.randint(90, 480)
+            # Baseline families can discover process starts out of traversal
+            # order. Reserve two disjoint 30-second logical lanes per minute so
+            # every later lane remains numerically above every earlier lane.
+            # Forty-seven positions gives the measured 36-position dense SSH
+            # bootstrap burst eleven positions of deterministic headroom without materially
+            # changing the workload-shaped churn when it is already larger.
+            lane_floor = 2 * _LINUX_PID_REORDER_LANE_WIDTH
+            churn = max(churn, lane_floor)
             prefix.append(prefix[-1] + churn)
 
         frozen = tuple(prefix)
@@ -1184,6 +1236,31 @@ class StateManager:
         minute_churn = prefix[minute_of_week + 1] - prefix[minute_of_week]
         partial_churn = (second_in_minute * minute_churn) // 60
         return (full_weeks * weekly_churn) + prefix[minute_of_week] + partial_churn
+
+    def _linux_pid_reorder_lane(
+        self,
+        system: str,
+        epoch: datetime,
+        elapsed_seconds: int,
+    ) -> tuple[datetime, datetime, int, int]:
+        """Return time and logical-offset bounds for one 30-second PID lane."""
+
+        lane_start_seconds = (
+            max(0, elapsed_seconds) // _LINUX_PID_REORDER_LANE_SECONDS
+        ) * _LINUX_PID_REORDER_LANE_SECONDS
+        lane_end_seconds = lane_start_seconds + _LINUX_PID_REORDER_LANE_SECONDS
+        lane_start = epoch + timedelta(seconds=lane_start_seconds)
+        lane_end = epoch + timedelta(seconds=lane_end_seconds)
+        logical_start = self._linux_pid_hidden_churn_offset(system, lane_start_seconds)
+        logical_end = self._linux_pid_hidden_churn_offset(system, lane_end_seconds)
+        if logical_end - logical_start < _LINUX_PID_REORDER_LANE_WIDTH:
+            raise StateError(
+                "Linux PID reorder lane is narrower than its configured capacity "
+                f"(host={system}, start={lane_start.isoformat()}, "
+                f"width={logical_end - logical_start}, "
+                f"required={_LINUX_PID_REORDER_LANE_WIDTH})"
+            )
+        return lane_start, lane_end, logical_start, logical_end
 
     def _linux_pid_block_offset(self, system: str, block: int) -> int:
         """Return hidden churn at a coarse block without materializing block history."""
@@ -1372,12 +1449,26 @@ class StateManager:
         epoch = self._linux_pid_epoch(system, current_time)
         elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
         time_offset = self._linux_pid_hidden_churn_offset(system, elapsed_seconds)
+        lane_start, lane_end, lane_start_offset, lane_end_offset = self._linux_pid_reorder_lane(
+            system, epoch, elapsed_seconds
+        )
+        lane_lower_bound = self._pid_counters[system] + lane_start_offset
+        lane_upper_bound = self._pid_counters[system] + lane_end_offset
         ordinal_key = (system, current_time)
         ordinal = self._pid_bucket_offsets.get(ordinal_key, 0)
         gap = max(1, min(5, int(pid_rng.lognormvariate(0.3, 0.8))))
-        self._pid_bucket_offsets[ordinal_key] = ordinal + gap
 
-        logical_position = self._pid_counters[system] + time_offset + ordinal
+        # Keep timestamp-shaped placement inside the lane, but cap the natural
+        # position below its upper edge. A burst discovered at second 29 then
+        # retains the same measured headroom instead of seeing the lane as
+        # already consumed merely because wall-clock time advanced.
+        lane_width = lane_upper_bound - lane_lower_bound
+        natural_offset = min(
+            max(0, time_offset - lane_start_offset),
+            lane_width - _LINUX_PID_REORDER_LANE_HEADROOM - 1,
+        )
+        natural_lane_position = lane_lower_bound + natural_offset
+        logical_position = natural_lane_position + ordinal
         natural_logical_position = logical_position
         allocations = self._linux_pid_allocations.setdefault(
             system,
@@ -1392,53 +1483,74 @@ class StateManager:
         )
         future_logical = allocations.min_value_after(current_time)
         future_record = allocations.first_record_after(current_time)
-        logical_position = max(logical_position, lower_bound + 1)
+        future_lane_record = allocations.first_record_after(lane_end - timedelta(microseconds=1))
+        logical_position = max(logical_position, lower_bound + 1, lane_lower_bound)
         if future_logical is not None and logical_position >= future_logical:
-            logical_position = lower_bound + 1
+            logical_position = max(lower_bound + 1, lane_lower_bound)
         if future_logical is not None and logical_position >= future_logical:
             future_time = future_record[0] if future_record is not None else None
-            if (
-                future_time is not None
-                and future_time - current_time <= _PID_ALLOCATION_REORDER_WINDOW
-            ):
-                # Source planners can visit open-window companions in a different
-                # order than their canonical timestamps. Once the last integer
-                # between them is consumed, retain kernel allocation order. The
-                # rendered-output probe still permits only narrow source-time
-                # reordering and reports wider reversals for scheduler correction.
-                logical_position = (
-                    max(
-                        natural_logical_position,
-                        lower_bound,
-                        future_logical,
-                    )
-                    + 1
-                )
+            if future_time is not None and future_time < lane_end:
+                # The rendered chronology gate permits only this bounded
+                # same-lane traversal reordering. Never escape into a later
+                # lane: that was the source of multi-minute PID reversals.
+                logical_position = max(natural_logical_position, lower_bound, future_logical) + 1
                 future_logical = None
             else:
                 raise StateError(
-                    "Cannot allocate Linux PID between already scheduled process allocations; "
-                    "this indicates an exhausted open scheduling interval "
+                    "Cannot allocate Linux PID inside its bounded 30-second reorder lane; "
                     f"(host={system}, time={current_time.isoformat()}, lower={lower_bound}, "
                     f"candidate={logical_position}, future={future_logical}, "
-                    f"future_time={future_time})."
+                    f"future_time={future_time}, lane_start={lane_start.isoformat()}, "
+                    f"lane_end={lane_end.isoformat()})."
                 )
 
-        occupied = self._reserved_pid_count(system)
-        for _probe in range(occupied + 1):
+        if logical_position >= lane_upper_bound and future_lane_record is not None:
+            raise StateError(
+                "Linux PID 30-second reorder lane capacity exhausted "
+                f"(host={system}, time={current_time.isoformat()}, "
+                f"lane_start={lane_start.isoformat()}, lane_end={lane_end.isoformat()}, "
+                f"capacity={lane_upper_bound - lane_lower_bound})."
+            )
+
+        occupied = self._reserved_pid_count(system) + len(allocations)
+        available_positions = max(0, lane_upper_bound - logical_position)
+        probe_budget = (
+            min(occupied + 1, available_positions)
+            if future_lane_record is not None
+            else occupied + 1
+        )
+        for _probe in range(probe_budget):
             self._pid_candidate_probe_count += 1
             pid = self._normalize_linux_pid(logical_position)
-            if not self._pid_is_reserved(system, pid, current_time, reservation_end):
+            if not allocations.contains_value(logical_position) and not self._pid_is_reserved(
+                system,
+                pid,
+                current_time,
+                reservation_end,
+            ):
                 allocations.add(current_time, logical_position)
+                consumed = logical_position - natural_lane_position
+                self._pid_bucket_offsets[ordinal_key] = max(ordinal + gap, consumed + gap)
                 self._pid_allocation_count += 1
                 return pid, logical_position
             logical_position += 1
+            if logical_position >= lane_upper_bound and future_lane_record is not None:
+                break
             if future_logical is not None and logical_position >= future_logical:
+                future_time = future_record[0] if future_record is not None else None
+                if future_time is not None and future_time < lane_end:
+                    logical_position = future_logical + 1
+                    future_logical = None
+                    continue
                 raise StateError(
-                    "Cannot allocate Linux PID before a future allocation in the open window; "
-                    "the interval contains only reserved PID candidates."
+                    "Cannot allocate Linux PID before a future lane; "
+                    "the current 30-second lane contains only reserved candidates."
                 )
-        raise StateError("Linux PID namespace is fully occupied by active reservations")
+        raise StateError(
+            "Linux PID 30-second reorder lane contains only reserved candidates "
+            f"(host={system}, time={current_time.isoformat()}, "
+            f"lane_start={lane_start.isoformat()}, lane_end={lane_end.isoformat()})."
+        )
 
     def allocate_transient_linux_pid(
         self,
@@ -2662,13 +2774,26 @@ class StateManager:
         logon_id: str,
         transport_uid: str,
         started_at: datetime,
+        auth_session_ref: str = "",
+        auth_protocol: str = "",
+        account_scope: str = "",
+        effective_uid: int | None = None,
+        effective_gid: int | None = None,
+        client_access: str = "",
         idle_timeout: timedelta = timedelta(minutes=15),
         reuse: bool = False,
     ) -> SmbSessionState:
         """Create or reuse one bounded SMB application session."""
 
         started_at = ensure_utc(started_at)
-        key = (client_ip, principal.casefold(), server.casefold(), security_policy)
+        key = (
+            client_ip,
+            principal.casefold(),
+            server.casefold(),
+            security_policy,
+            auth_protocol.casefold(),
+            account_scope.casefold(),
+        )
         with self._lock:
             if reuse:
                 session_id = self._smb_session_affinity.get(key)
@@ -2678,6 +2803,8 @@ class StateManager:
                     and session.closed_at is None
                     and session.expires_at >= started_at
                     and session.started_at + timedelta(hours=1) >= started_at
+                    and session.transport_uid == transport_uid
+                    and session.auth_session_ref == auth_session_ref
                 ):
                     session.expires_at = min(
                         session.started_at + timedelta(hours=1),
@@ -2703,10 +2830,39 @@ class StateManager:
                 transport_uid=transport_uid,
                 started_at=started_at,
                 expires_at=min(started_at + timedelta(hours=1), started_at + idle_timeout),
+                auth_session_ref=auth_session_ref,
+                auth_protocol=auth_protocol,
+                account_scope=account_scope,
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
+                client_access=client_access,
             )
             self._smb_sessions[session_id] = session
             self._smb_session_affinity[key] = session_id
             return session
+
+    def get_smb_session(self, session_id: str) -> SmbSessionState | None:
+        """Return one active SMB session without exposing mutable indexes."""
+
+        with self._lock:
+            return self._smb_sessions.get(session_id)
+
+    def close_smb_session(self, session_id: str, timestamp: datetime) -> None:
+        """Close an SMB session and its active trees and handles."""
+
+        timestamp = ensure_utc(timestamp)
+        with self._lock:
+            session = self._smb_sessions.get(session_id)
+            if session is None:
+                return
+            session.closed_at = timestamp
+            for tree in self._smb_trees.values():
+                if tree.session_id != session_id or tree.closed_at is not None:
+                    continue
+                tree.closed_at = timestamp
+                for handle in self._smb_handles.values():
+                    if handle.tree_id == tree.tree_id and handle.closed_at is None:
+                        handle.closed_at = timestamp
 
     def get_or_open_smb_tree(
         self,
@@ -2934,6 +3090,8 @@ class StateManager:
                     session.principal.casefold(),
                     session.server.casefold(),
                     session.security_policy,
+                    session.auth_protocol.casefold(),
+                    session.account_scope.casefold(),
                 )
                 if self._smb_session_affinity.get(key) == session_id:
                     self._smb_session_affinity.pop(key, None)

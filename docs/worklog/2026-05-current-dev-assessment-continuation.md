@@ -1174,7 +1174,7 @@ or follow-up batch is needed.
   the existing 16 warnings, and the full `uv run pytest --no-cov -q` suite passed
   (`4519 passed, 19 skipped`). Automated eval passed at 97.49445666259291 over
   78191 records. The loop-292 hard probe artifact
-  `scenarios/iteration-test/blind-test/loop-292/post_probe_host_edr_root_causes.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-292/post_probe_host_edr_root_causes.json`
   found 0 Prefetch bad actions, 0 Prefetch process-name mismatches, 0 server-like
   workstation-tool eCAR PROCESS hits, and 0 server-like workstation-tool eCAR FLOW
   hits; Windows 4624 Type 10 and Type 7 subjects now show real user/session
@@ -1224,11 +1224,11 @@ or follow-up batch is needed.
   those cron-correlated rows; and PROCESS/CREATE TID normalization keeps
   `tid == pid`. Focused regression tests passed, generation completed, and the
   automated eval passed at 97.03278661249382 over 79007 records. The hard probe
-  `scenarios/iteration-test/blind-test/loop-295/hard_probe_linux_cron_ecar_identity.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-295/hard_probe_linux_cron_ecar_identity.json`
   found 0 cron nonzero-second rows, 0 syslog/eCAR shell PID mismatches, and 0
   Linux PROCESS/CREATE TID mismatches across 65 cron sysstat rows. The full
   blind panel plus deliberation is saved under
-  `scenarios/iteration-test/blind-test/loop-295/`; initial synthetic-confidence
+  `scenarios/iteration-test-1_0/blind-test/loop-295/`; initial synthetic-confidence
   scores were Threat Hunter 32, Detection Engineer 34, Network Forensics 68,
   and Host/EDR 56. Deliberation prioritized proxy-origin DNS causality as the
   next P0: multiple proxy-origin TLS handshakes precede first visible proxy DNS
@@ -1240,7 +1240,7 @@ or follow-up batch is needed.
   prerequisites before origin egress, and forward-proxy-origin external HTTP/TLS
   connections force visible DNS even when callers suppress client-side DNS.
   Automated eval passed at 96.69940951837162 over 95401 records. The hard probe
-  `scenarios/iteration-test/blind-test/loop-296/hard_probe_proxy_dns_causality.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-296/hard_probe_proxy_dns_causality.json`
   found 0 origin TLS rows without prior proxy DNS evidence across 1118 origin TLS
   rows, and CONNECT-to-origin TLS p50/p90 gaps of 5.25s/10.43s. Blind initial
   synthetic-confidence scores were Threat Hunter 43, Detection Engineer 48,
@@ -1253,13 +1253,13 @@ or follow-up batch is needed.
   now get user-session/terminal/login parents; and HTTP process-network mapping
   was added to data-driven config. Automated eval passed at 96.63103924384974
   over 102592 records. The hard probe
-  `scenarios/iteration-test/blind-test/loop-297/hard_probe_linux_ecar_flow_shell_parentage.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-297/hard_probe_linux_ecar_flow_shell_parentage.json`
   showed bash-owned FLOW rows dropped from 50 to 1 explicit reverse-shell payload
   and local `-bash` direct PID1/systemd parentage dropped to 0. Blind initial
   synthetic-confidence scores were Threat Hunter 34, Detection Engineer 29,
   Network Forensics 67, and Host/EDR 64; deliberation average was 61.5. A
   follow-up probe
-  `scenarios/iteration-test/blind-test/loop-297/hard_probe_zeek_client_first_rstr_byte_direction.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-297/hard_probe_zeek_client_first_rstr_byte_direction.json`
   confirmed the next P0: 42 client-first TCP `RSTR`/`ShAdr` rows with
   `orig_bytes=0`, `resp_bytes>0`, and `missed_bytes=0` across SMB, LDAP, HTTP,
   TLS, PostgreSQL, MySQL, and TDS. The next loop should fix this at the canonical
@@ -1269,7 +1269,7 @@ or follow-up batch is needed.
   `uv run pytest --no-cov -q` (`4553 passed, 19 skipped`).
 
 - Loops 298-307 continued the dev-branch assessment loop and archived all
-  artifacts under `scenarios/iteration-test/blind-test/loop-298/` through
+  artifacts under `scenarios/iteration-test-1_0/blind-test/loop-298/` through
   `loop-307/`. Loop 298 fixed client-first TCP byte/history ordering for Zeek
   reset rows; loop 299 fixed explicit proxy CONNECT origin companions; loop 300
   fixed DNS resolver/proxy cache texture; loop 301 fixed inbound
@@ -1300,7 +1300,7 @@ or follow-up batch is needed.
   96.47478843254147 over 84585 records, and the locked-session hard probe found
   0 violations. The next P0 is source-local session lifecycle ordering:
   loop-310 blind review and
-  `scenarios/iteration-test/blind-test/loop-310/hard_probe_session_lifecycle_ordering.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-310/hard_probe_session_lifecycle_ordering.json`
   found one Windows Security 4634-before-4624 group and one eCAR USER_SESSION
   LOGOUT-before-LOGIN group for short network logons.
 
@@ -1311,7 +1311,7 @@ or follow-up batch is needed.
   84585 records, full local verification passed (`4704 passed, 19 skipped`),
   and hard probes found 0 session lifecycle, locked-session, SSH failed-auth, or
   SSH username violations. Blind review selected proxy-origin DNS causality as
-  the next P0: `scenarios/iteration-test/blind-test/loop-311/hard_probe_proxy_origin_dns_causality.json`
+  the next P0: `scenarios/iteration-test-1_0/blind-test/loop-311/hard_probe_proxy_origin_dns_causality.json`
   found 18 proxy-origin TLS rows whose SNI/IP had no prior visible Zeek A answer.
 
 - Loop 312 partially fixed proxy-origin DNS causality/cache state. Explicit proxy
@@ -1320,7 +1320,7 @@ or follow-up batch is needed.
   cache observations no longer suppress the first visible forced lookup. Automated
   eval passed at 96.5498460793631 over 90768 records, repo-wide Ruff checks passed,
   and full local verification passed (`4707 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-312/hard_probe_proxy_origin_dns_causality.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-312/hard_probe_proxy_origin_dns_causality.json`
   improved from 18 broad no-prior rows to 9 across 1120 proxy-origin TLS rows.
   Blind review no longer prioritized proxy DNS: initial synthetic-confidence
   scores were Threat Hunter 62, Detection Engineer 32, Network Forensics 31, and
@@ -1335,7 +1335,7 @@ or follow-up batch is needed.
   PID/image provenance no longer flips independently from known principal evidence.
   Automated eval passed at 96.31130005616335 over 90768 records, full local
   verification passed (`4708 passed, 19 skipped`), and
-  `scenarios/iteration-test/blind-test/loop-313/hard_probe_ecar_flow_principal_attribution.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-313/hard_probe_ecar_flow_principal_attribution.json`
   found 0 FLOW rows retaining PID/image while omitting principal when the same
   host/PID/image had principal-bearing activity (down from 2865 on pre-fix data).
   Blind scores were Threat Hunter 44, Detection Engineer 43, Network Forensics 18,
@@ -1355,7 +1355,7 @@ or follow-up batch is needed.
   passed at 95.74878158737843 over 95168 records, focused EDR pool tests passed
   (`58 passed`), config validation passed, and full local verification passed
   (`4711 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-314/hard_probe_ecar_group_policy_registry_guid_reuse.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-314/hard_probe_ecar_group_policy_registry_guid_reuse.json`
   checked 293 Group Policy `Extension-List` rows and found 0 invalid GUIDs, 0
   hosts with one unique GUID per row, and a maximum of 5 unique GUIDs per host from
   a configured pool of 6. Blind scores were Threat Hunter 46, Detection Engineer
@@ -1375,7 +1375,7 @@ or follow-up batch is needed.
   overlay checks were extended for the new config section. Automated eval passed at
   96.28554535209074 over 92587 records, focused auth-noise tests passed, config validation
   passed, and full local verification passed (`4714 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-315/hard_probe_service_account_4648_callers.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-315/hard_probe_service_account_4648_callers.json`
   checked 28 service-account 4648 rows and found 0 `services.exe` callers across 6
   distinct caller images. Blind scores were Threat Hunter 37, Detection Engineer 34,
   Network Forensics 43, and Host/EDR 36, average 37.5; deliberation was not triggered.
@@ -1392,7 +1392,7 @@ or follow-up batch is needed.
   CONNECT setup row. Automated eval passed at 96/100 over 92630 records, parseability
   remained 100/100, focused proxy/parser tests passed (`75 passed`), config validation
   passed, and full local verification passed (`4717 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-316/hard_probe_proxy_https_inspection_metadata.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-316/hard_probe_proxy_https_inspection_metadata.json`
   found 1497 inspected HTTPS rows with 0 missing `ssl-inspect`/`bump`, 340 CONNECT setup
   rows with 0 missing `peek`, 0 inspected rows without recent setup, and 0 proxy parse
   errors. Blind scores were Threat Hunter 43, Detection Engineer 44, Network Forensics
@@ -1409,7 +1409,7 @@ or follow-up batch is needed.
   over 92398 records, parseability remained 100/100, focused proxy/baseline tests
   passed (`205 passed, 1 skipped`), and full local verification passed
   (`4723 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-317/hard_probe_proxy_user_agent_stability.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-317/hard_probe_proxy_user_agent_stability.json`
   found 2699 proxy rows, 0 parse errors, 26 source/second groups with multiple
   User-Agents, 2 groups with more than two UA families, and max 3 distinct UA
   families in one source/second. Blind scores were Threat Hunter 38, Detection
@@ -1429,7 +1429,7 @@ or follow-up batch is needed.
   95.95333291230318 over 188044 records, parseability remained 100/100, focused
   lifecycle tests passed (`174 passed`), and full local verification passed
   (`4724 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-318/hard_probe_ecar_ssh_session_lifecycle.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-318/hard_probe_ecar_ssh_session_lifecycle.json`
   found 135 SSH `USER_SESSION` rows with 0 missing LOGIN/LOGOUT `logon_id`, 0 missing
   LOGIN/LOGOUT `session_id`, 0 paired field mismatches, and 0 multi-value identity
   groups; 6 complete identity-bearing LOGOUT rows remained unmatched by in-window
@@ -1450,7 +1450,7 @@ or follow-up batch is needed.
   remained 100/100, focused Linux system-traffic tests passed (`61 passed`), Ruff
   checks passed, and full local verification passed (`4726 passed, 19 skipped`).
   The hard probe
-  `scenarios/iteration-test/blind-test/loop-319/hard_probe_linux_dbus_polkit_companions.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-319/hard_probe_linux_dbus_polkit_companions.json`
   found 51 dbus activation rows, 0 dbus burst groups, 12 polkit action rows with
   process paths, and 0 missing eCAR process companions. Blind scores were Threat
   Hunter 28, Detection Engineer 24, Network Forensics 34, and Host/EDR 28, average
@@ -1469,7 +1469,7 @@ or follow-up batch is needed.
   remained 100/100, focused HTTP/session tests passed (`65 passed` plus targeted
   baseline/proxy tests), Ruff checks passed, and full local verification passed
   (`4728 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-320/hard_probe_proxy_http_transaction_texture.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-320/hard_probe_proxy_http_transaction_texture.json`
   reduced the max exact non-health page-document response-size cluster from 44 to
   4 while preserving static asset reuse. The first blind-panel attempt was
   invalidated after a reviewer accidentally modified generated data; reports were
@@ -1488,7 +1488,7 @@ or follow-up batch is needed.
   FLOW visibility; tuple responder processes are materialized from the same
   deterministic connection-start jitter as the canonical transport. The hard
   probe
-  `scenarios/iteration-test/blind-test/loop-321/hard_probe_ssh_destination_timing.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-321/hard_probe_ssh_destination_timing.json`
   reduced negative eCAR sshd-process-vs-syslog-connection offsets from 68/72
   matched rows to 0/68. Automated eval passed at 96.08943284310241 over 183974
   records, parseability remained 100/100, focused SSH tests passed (`22 passed`),
@@ -1508,7 +1508,7 @@ or follow-up batch is needed.
   parent when it is still a matching `/usr/sbin/sshd` `sshd: <user> [priv]`
   process, instead of always materializing a second near-identical SSH priv
   child. The hard probe
-  `scenarios/iteration-test/blind-test/loop-322/hard_probe_duplicate_ssh_priv_children.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-322/hard_probe_duplicate_ssh_priv_children.json`
   reduced duplicate SSH priv clusters with shell children from 12 to 0. Automated
   eval passed at 96.02516303602455 over 188589 records, parseability remained
   100/100, focused SSH/world-model tests passed, Ruff checks passed, and full
@@ -1527,7 +1527,7 @@ or follow-up batch is needed.
   offsets after the planned session deadline instead of clamping them to logout,
   and proxy username attribution requires an active same-host interactive/RDP/SSH
   session at request time. The hard probe
-  `scenarios/iteration-test/blind-test/loop-323/hard_probe_post_logout_user_activity.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-323/hard_probe_post_logout_user_activity.json`
   reduced authenticated proxy rows after visible logout from 96 to 0 and eCAR
   same-user flow rows from 22 to 2; the remaining two rows are SSH FLOW lifecycle
   texture, not proxy auth. Automated eval passed at 96.21349513015599 over
@@ -1547,7 +1547,7 @@ or follow-up batch is needed.
   service inventory, database profile traffic is filtered to engines actually
   supported by the target host, and seeded DB daemons are protected from stale
   termination. The hard probe
-  `scenarios/iteration-test/blind-test/loop-324/hard_probe_db_listener_ecar_attribution.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-324/hard_probe_db_listener_ecar_attribution.json`
   reduced DB-PROD-01 successful inbound DB eCAR FLOW rows from 539 bare rows
   across ports 1433/3306/5432 to 300 current-data rows on port 3306, with 298
   attributed and 2 bare. Automated eval passed at 95.59008216061706 over 91227
@@ -1561,6 +1561,24 @@ or follow-up batch is needed.
   policy enforcement and denied-path rendering: ASA/Zeek currently show built
   paths that scenario policy says should be denied, and explicit denied direct
   DC-to-C2 attempts are absent.
+
+## 2026-08-14 Scenario composition boundary
+
+The monolithic Scenario 1.0 assessment source and all of its existing generated history moved
+atomically to `scenarios/iteration-test-1_0/`. Its authored `name` and output destination now use
+`iteration-test-1_0` so an archival rerun cannot overwrite the current assessment scenario; the
+historical generated evidence itself was not rewritten.
+
+Future assessment runs use the Scenario 2.0 wrapper at `scenarios/iteration-test/scenario.yaml`.
+It selects exact project organization pack
+`project:organization:meridian-healthcare-solutions@1.0.0`, which pins
+`package:industry:technology@1.0.0`. The organization pack owns reusable Meridian environment and
+baseline configuration. The scenario continues to own the attack narrative, red herrings,
+assessment-only external identities, output selection, and email corpus.
+Pack validation and both scenario validations pass with the pre-existing advisories. The resolved
+environment, baseline, storyline, red herrings, time/output configuration, and embedded corpus are
+identical to the saved pre-migration model. Fixed-seed generation of eCAR, Zeek, and syslog from
+the saved pre-pack resolved artifact and the new wrapper produced byte-identical event artifacts.
 
 ## How to Continue
 

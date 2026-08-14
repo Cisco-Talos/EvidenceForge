@@ -73,7 +73,7 @@ _SERVICE_ROLE_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("exchange", "postfix", "smtp", "dovecot"), "mail_server"),
     (("splunk", "elasticsearch", "logstash", "syslog"), "log_server"),
     (("nfs",), "nfs_server"),
-    (("smb", "cifs", "fileshare"), "file_server"),
+    (("fileshare", "lanmanserver", "samba", "smbd"), "file_server"),
     (("squid", "proxy"), "forward_proxy"),
 )
 
@@ -115,6 +115,19 @@ _DHCP_SERVER_SERVICES = {
 
 _SSH_RECEIVER_SERVICES = {"ssh", "sshd", "openssh-server"}
 _RDP_RECEIVER_SERVICES = {"rdp", "remote-desktop", "remote_desktop", "termservice"}
+_SMB_CLIENT_SERVICES = {
+    "cifs-client",
+    "cifs-utils",
+    "smb-client",
+    "smbclient",
+}
+_SMB_SERVER_SERVICES = {
+    "lanmanserver",
+    "samba",
+    "smb-server",
+    "smbd",
+}
+_SMB_GENERIC_SERVICES = {"cifs", "fileshare", "smb"}
 
 _ADMIN_PERSONAS = {"sysadmin", "help_desk"}
 _LINUX_SSH_ADMIN_PERSONAS = {"sysadmin"}
@@ -237,6 +250,8 @@ class HostCapability(StrEnum):
     FORWARD_PROXY = "forward_proxy"
     RDP_CLIENT = "rdp_client"
     RDP_RECEIVER = "rdp_receiver"
+    SMB_CLIENT = "smb_client"
+    SMB_SERVER = "smb_server"
     SSH_RECEIVER = "ssh_receiver"
 
 
@@ -314,6 +329,9 @@ class WorldModel:
     def __init__(self, scenario: Scenario, ad_domain: str) -> None:
         self.scenario = scenario
         self.ad_domain = ad_domain
+        self._explicit_storage_servers = {
+            server.system.casefold() for server in scenario.environment.storage.servers
+        }
         self.systems_by_hostname: dict[str, System] = {
             system.hostname: system for system in scenario.environment.systems
         }
@@ -339,6 +357,8 @@ class WorldModel:
         self.dhcp_servers = self._collect_capability_systems(HostCapability.DHCP_SERVER)
         self.dns_servers = self._collect_capability_systems(HostCapability.DNS_RESOLVER)
         self.domain_controllers = self._collect_capability_systems(HostCapability.DOMAIN_CONTROLLER)
+        self.smb_clients = self._collect_capability_systems(HostCapability.SMB_CLIENT)
+        self.smb_servers = self._collect_capability_systems(HostCapability.SMB_SERVER)
         self.mail_servers: list[System] = self._collect_role_systems("mail_server")
         self.ntp_ips: list[str] = self._resolve_ntp_ips()
 
@@ -384,6 +404,7 @@ class WorldModel:
             capabilities.add(HostCapability.DHCP_SERVER)
         if os_category == "windows":
             capabilities.add(HostCapability.RDP_CLIENT)
+            capabilities.add(HostCapability.SMB_CLIENT)
         if os_category == "linux" and (
             system.type in ("server", "domain_controller")
             or normalized_services.intersection(_SSH_RECEIVER_SERVICES)
@@ -394,6 +415,30 @@ class WorldModel:
             or normalized_services.intersection(_RDP_RECEIVER_SERVICES)
         ):
             capabilities.add(HostCapability.RDP_RECEIVER)
+
+        has_explicit_smb_client = bool(normalized_services & _SMB_CLIENT_SERVICES)
+        has_explicit_smb_server = bool(normalized_services & _SMB_SERVER_SERVICES)
+        has_generic_smb_service = bool(normalized_services & _SMB_GENERIC_SERVICES)
+        is_file_server = "file_server" in roles
+        is_explicit_storage_server = system.hostname.casefold() in self._explicit_storage_servers
+
+        if has_explicit_smb_client:
+            capabilities.add(HostCapability.SMB_CLIENT)
+        if (
+            has_explicit_smb_server
+            or is_explicit_storage_server
+            or (os_category == "windows" and is_file_server)
+        ):
+            capabilities.add(HostCapability.SMB_SERVER)
+            roles.add("file_server")
+        if has_generic_smb_service:
+            if os_category == "windows" and (
+                system.type in ("server", "domain_controller") or is_file_server
+            ):
+                capabilities.add(HostCapability.SMB_SERVER)
+                roles.add("file_server")
+        if os_category == "windows" and system.type in ("server", "domain_controller"):
+            capabilities.add(HostCapability.SMB_SERVER)
 
         return HostWorld(
             system=system,
@@ -426,6 +471,8 @@ class WorldModel:
             if host.is_server:
                 services.append("smb-server")
             return services
+        if host.supports(HostCapability.SMB_SERVER):
+            return ["dns-client", "ntp-client", "syslog", "smb-server"]
         return ["dns-client", "ntp-client", "syslog"]
 
     def _build_proxy_routes(self) -> dict[str, list[System]]:

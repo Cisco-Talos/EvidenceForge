@@ -50,6 +50,8 @@ from .semantic_validation import (
     packaged_builtin_dns_domains,
     packaged_builtin_dns_tags,
     packaged_builtin_executable_claims,
+    packaged_builtin_persona_ids,
+    packaged_builtin_storage_preset_ids,
     validate_selected_pack_semantics,
 )
 
@@ -558,15 +560,43 @@ def _rewrite_pack_self_references(document: Any, *, old_name: str, new_name: str
     return changed
 
 
-def _qualify_organization_environment_references(environment: dict[str, Any], owner: str) -> None:
-    """Qualify local organization persona and storage references for runtime use."""
+def _qualify_organization_reference(
+    reference: Any,
+    *,
+    owner: str,
+    local_exports: set[str],
+    builtin_ids: set[str],
+) -> Any:
+    """Qualify local shorthand while preserving packaged built-in shorthand."""
+
+    if not isinstance(reference, str) or ":" in reference:
+        return reference
+    local_reference = f"{owner}:{reference}"
+    if local_reference in local_exports or reference not in builtin_ids:
+        return local_reference
+    return reference
+
+
+def _qualify_organization_environment_references(
+    environment: dict[str, Any],
+    owner: str,
+    *,
+    local_persona_exports: set[str],
+    local_storage_exports: set[str],
+    builtin_persona_ids: set[str],
+    builtin_storage_preset_ids: set[str],
+) -> None:
+    """Qualify local organization references without claiming packaged built-ins."""
 
     for user in environment.get("users", []):
         if not isinstance(user, dict):
             continue
-        persona = user.get("persona")
-        if isinstance(persona, str) and ":" not in persona:
-            user["persona"] = f"{owner}:{persona}"
+        user["persona"] = _qualify_organization_reference(
+            user.get("persona"),
+            owner=owner,
+            local_exports=local_persona_exports,
+            builtin_ids=builtin_persona_ids,
+        )
     storage = environment.get("storage")
     if not isinstance(storage, dict):
         return
@@ -576,15 +606,22 @@ def _qualify_organization_environment_references(environment: dict[str, Any], ow
         for share in server.get("shares", []):
             if not isinstance(share, dict):
                 continue
-            preset = share.get("preset")
-            if isinstance(preset, str) and ":" not in preset:
-                share["preset"] = f"{owner}:{preset}"
+            share["preset"] = _qualify_organization_reference(
+                share.get("preset"),
+                owner=owner,
+                local_exports=local_storage_exports,
+                builtin_ids=builtin_storage_preset_ids,
+            )
 
 
 def _qualify_organization_baseline_references(
-    baseline_activity: dict[str, Any], owner: str
+    baseline_activity: dict[str, Any],
+    owner: str,
+    *,
+    local_persona_exports: set[str],
+    builtin_persona_ids: set[str],
 ) -> None:
-    """Qualify local organization persona selectors used by baseline shaping."""
+    """Qualify local organization selectors while preserving built-in personas."""
 
     for collection_name in ("traffic_affinities", "traffic_suppression"):
         for entry in baseline_activity.get(collection_name, []):
@@ -594,9 +631,12 @@ def _qualify_organization_baseline_references(
             personas = audience.get("personas")
             if isinstance(personas, list):
                 audience["personas"] = [
-                    f"{owner}:{persona}"
-                    if isinstance(persona, str) and ":" not in persona
-                    else persona
+                    _qualify_organization_reference(
+                        persona,
+                        owner=owner,
+                        local_exports=local_persona_exports,
+                        builtin_ids=builtin_persona_ids,
+                    )
                     for persona in personas
                 ]
 
@@ -851,6 +891,8 @@ class PackRepository:
             builtin_dns_tags=packaged_builtin_dns_tags(),
             builtin_executable_claims=packaged_builtin_executable_claims(),
             builtin_dns_domains=packaged_builtin_dns_domains(),
+            builtin_persona_ids=packaged_builtin_persona_ids(),
+            builtin_storage_preset_ids=packaged_builtin_storage_preset_ids(),
         )
         return dependencies
 
@@ -1045,8 +1087,21 @@ class PackRepository:
             )
             environment = environment_document.model_dump(mode="json")["environment"]
             baseline_activity = baseline_document.model_dump(mode="json")["baseline_activity"]
-            _qualify_organization_environment_references(environment, manifest.name)
-            _qualify_organization_baseline_references(baseline_activity, manifest.name)
+            builtin_personas = packaged_builtin_persona_ids()
+            _qualify_organization_environment_references(
+                environment,
+                manifest.name,
+                local_persona_exports=set(catalogs["persona_catalog"]),
+                local_storage_exports=set(catalogs["storage_catalog"]),
+                builtin_persona_ids=builtin_personas,
+                builtin_storage_preset_ids=packaged_builtin_storage_preset_ids(),
+            )
+            _qualify_organization_baseline_references(
+                baseline_activity,
+                manifest.name,
+                local_persona_exports=set(catalogs["persona_catalog"]),
+                builtin_persona_ids=builtin_personas,
+            )
             environment_files = {source.path for source in environment_graph.sources}
             baseline_files = {source.path for source in baseline_graph.sources}
             _capture_graph_source_bytes(

@@ -162,7 +162,8 @@ Cover, as needed:
   duration, and business hours.
 - Network segments, sensor/firewall placement, victim log boundary, and required output formats.
 - Email, SMB, browsing, named network identities, traffic volume, observation profile, and stale
-  accounts where relevant.
+  accounts where relevant. For SMB, resolve client/server platforms, Linux service capability,
+  mapping presentation, client access mode, credential identity, and Samba audit depth.
 - Explicit red herrings, expected noise-to-signal ratio, and whether every attack step should be
   observable or some blind spots are intentional.
 
@@ -213,6 +214,12 @@ supplementary Windows audit events unless that evidence is itself part of the at
 
 For authored IDS matches, use `ids_alerts` on the owning typed transport. A tuple does not alert by
 itself, and encrypted traffic is not inspected. Read the exact event and policy schema before use.
+
+For SMB, keep local process identity, SMB principal, and server effective identity separate. Use
+Windows drives only for Windows clients and POSIX mounts/paths for Linux clients and Samba backing
+storage. Mounted CIFS is kernel-owned transport—not a `mount.cifs` process per file operation—and
+direct `smbclient` is operation-scoped. A generic port 445 connection never substitutes for typed
+`smb_activity`.
 
 ### Safety
 
@@ -273,4 +280,6 @@ eforge validate scenarios/<slug>/scenario.yaml \
 
 If the user wants logs immediately, hand off to `/eforge generate` or run
 `eforge generate <scenario-file>`. Explain that generated ground truth, manifests, resolved input,
-and `data/` remain under the same scenario root.
+and `data/` remain under the same scenario root. SMB output includes
+`STORAGE_MANIFEST.json` schema v2 with platform, backing/advertised filesystem, mapping, credential
+mode, and resolved-path metadata.

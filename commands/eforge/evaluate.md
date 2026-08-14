@@ -149,6 +149,11 @@ For each pillar, explain what the score means in practical terms:
 - Co-occurrence Rules: Do field combinations make sense? (Network logons have IP addresses; TLS version matches cipher suite; no body in CONNECT tunnels.)
 - Distribution Fit: Are event-type proportions realistic for each format?
 - Cross-Source Field Agreement: When the same event appears in multiple log sources, do shared fields agree? Uses pivot-key joins plus built-in email, cryptographic, and HTTP-file checks. HTTP `orig_fuids`/`resp_fuids` must join to sensor-local files.log rows with the same connection UID, direction, entity size, MIME type, and any exposed filename. Other checks include Windows 4688 ↔ eCAR PROCESS/CREATE, zeek_conn ↔ Cisco ASA, web/proxy ↔ zeek_http, TLS certificate chains, and SMTP/file/artifact joins. A score below 100 means real field disagreements were found.
+- For SMB review, load `STORAGE_MANIFEST.json` schema v2. Confirm Zeek uses the SMB-advertised
+  filesystem rather than ext4/XFS backing storage, Windows audit is eligible only on Windows
+  servers, Samba `smbd`/`smbd_audit` syslog only on Linux servers, and eCAR paths use the correct
+  Windows or POSIX presentation. Keep application actor, SMB principal, and effective UID/GID
+  distinct; a fixed mapping may intentionally make them differ.
 - HTTP multipart joins every exposed FUID independently, treats filename/MIME vectors as sparse present-value projections, and validates decoded leaf bytes plus envelope overhead against the outer body instead of requiring a child file size to equal it.
 - HTTP Response Coverage: Under complete observation, every transmitted nonempty plaintext/decrypted response entity should have a responder-direction file join, including tiny and error bodies. Body-prohibited responses and opaque HTTPS should not. For non-complete observation, directional loss may coherently truncate or hide the file and remove the matching `resp_*` vector rather than leaving an orphan.
 - User Behavioral Diversity: Do different users behave differently, or are they cookie-cutter clones?
@@ -156,7 +161,7 @@ For each pillar, explain what the score means in practical terms:
 - IDS Correlation Integrity: Do sensor-local Snort rows exactly match canonical counts, ordered digests, origins, and observation totals? This is a 100% hard gate with zero scoring weight.
 
 **Pillar 3: Causality (weight 0.25)**
-- Causal Ordering: Are logon→process→logoff and lock→reauth→unlock sequences correctly ordered? DNS before TCP? Kerberos/DC TGT/TGS before domain logons? NTLM/DC validation and Windows audit/process-access companions after their owning evidence?
+- Causal Ordering: Are logon→process→logoff and lock→reauth→unlock sequences correctly ordered? DNS before TCP? Kerberos/DC TGT/TGS before domain logons? NTLM/DC validation and Windows audit/process-access companions after their owning evidence? For SMB, does transport precede auth/tree/file lifecycle, with Samba worker and audit rows inside the session and close after operations?
 - Storyline Event Presence: Are all expected-visible storyline events visible in at least one log source? For non-`complete` observation profiles with a manifest, source rows marked `dropped`, `filtered`, or `out_of_window` are excluded from this coverage denominator.
 - Indicator Accuracy: Do traces carry the correct IPs, usernames, hostnames from the scenario?
 - Pivot Linkability: Can a hunter pivot along inferred narrative edges built from shared typed indicators such as hosts, IPs, accounts, domains, URLs, files/hashes, and artifact/message IDs? Unrelated interleaved steps are not connected, generic ports/protocols are excluded, and isolated events are reported separately.

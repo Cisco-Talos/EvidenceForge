@@ -107,6 +107,12 @@ class CausalityScorer(DimensionScorer):
         self._spillage_gt = context.spillage_ground_truth or {}
         self._email_gt = context.email_ground_truth or {}
         self._smb_gt: dict[str, dict[str, Any]] = {}
+        storage = scenario.environment.storage
+        self._smb_mapping_principals = {
+            mapping.id.casefold(): mapping.principal
+            for mapping in (storage.mappings if storage is not None else [])
+            if mapping.principal
+        }
         if context.ground_truth is not None:
             for record in context.ground_truth.events:
                 if record.kind != "smb_activity" or not record.storyline_id:
@@ -630,6 +636,8 @@ class CausalityScorer(DimensionScorer):
         )
         if expected_hostname:
             lookup_keys.append(str(expected_hostname).lower())
+        if event_type == "smb_activity":
+            lookup_keys.extend(host.casefold() for host in self._smb_expected_hosts(event))
 
         seen: set[int] = set()
         for hostname_key in lookup_keys:
@@ -1149,7 +1157,11 @@ class CausalityScorer(DimensionScorer):
         if format_name == "windows_event_security":
             if fields.get("EventID") not in {4656, 4658, 4660, 4663, 5140, 5145}:
                 return False
-            if not self._user_matches(fields.get("SubjectUserName"), event.actor):
+            if not self._smb_principal_matches(
+                fields.get("SubjectUserName"),
+                event,
+                server_side=True,
+            ):
                 return False
             candidate_values = (
                 fields.get("RelativeTargetName"),
@@ -1164,9 +1176,18 @@ class CausalityScorer(DimensionScorer):
             )
 
         if format_name == "ecar":
+            hostname = fields.get("hostname")
+            server_side = any(
+                self._host_matches(hostname, expected_host)
+                for expected_host in self._smb_server_hosts(event)
+            )
             return (
                 fields.get("object") == "FILE"
-                and self._user_matches(fields.get("principal"), event.actor)
+                and self._smb_principal_matches(
+                    fields.get("principal"),
+                    event,
+                    server_side=server_side,
+                )
                 and self._smb_path_or_share_matches(
                     (fields.get("file_path"),),
                     relative_paths,
@@ -1174,7 +1195,99 @@ class CausalityScorer(DimensionScorer):
                     share_ids,
                 )
             )
+        if format_name == "syslog":
+            hostname = fields.get("hostname")
+            if not any(
+                self._host_matches(hostname, expected_host)
+                for expected_host in self._smb_server_hosts(event)
+            ):
+                return False
+
+            app_name = str(fields.get("app_name") or "").casefold()
+            message = str(fields.get("message") or "")
+            if app_name == "smbd_audit":
+                audit_fields = self._parse_samba_audit_message(message)
+                if audit_fields is None:
+                    return False
+                principal, _source_ip, share_name, _operation, _result, path = audit_fields
+                if not self._smb_principal_matches(principal, event, server_side=True):
+                    return False
+                if relative_paths:
+                    return self._smb_path_or_share_matches(
+                        (path,),
+                        relative_paths,
+                        basenames,
+                        set(),
+                    )
+                return self._smb_path_or_share_matches(
+                    (share_name,),
+                    set(),
+                    set(),
+                    share_ids,
+                )
+            if app_name == "smbd":
+                normalized_message = message.casefold()
+                share_matches = any(
+                    f"service {share_id}" in normalized_message for share_id in share_ids
+                )
+                lifecycle_principal = self._parse_samba_lifecycle_principal(message)
+                if lifecycle_principal is not None:
+                    principal_matches = self._smb_principal_matches(
+                        lifecycle_principal,
+                        event,
+                        server_side=True,
+                    )
+                    if "connect to service" in normalized_message:
+                        return share_matches and principal_matches
+                    return principal_matches
+                return share_matches and "closed connection to service" in normalized_message
         return False
+
+    def _smb_server_principals(self, event: ResolvedEvent) -> set[str]:
+        """Return the resolved credential identity expected on the SMB server."""
+        explicit = event.details.get("smb_principal")
+        if explicit:
+            return {str(explicit)}
+        mapping_id = str(event.details.get("mapping") or "").casefold()
+        mapped = getattr(self, "_smb_mapping_principals", {}).get(mapping_id)
+        if mapped:
+            return {str(mapped)}
+        return {event.actor}
+
+    def _smb_principal_matches(
+        self,
+        actual: Any,
+        event: ResolvedEvent,
+        *,
+        server_side: bool,
+    ) -> bool:
+        """Match the source-native identity for a client- or server-side record."""
+        principals = self._smb_server_principals(event) if server_side else {event.actor}
+        return any(self._user_matches(actual, principal) for principal in principals)
+
+    @staticmethod
+    def _parse_samba_audit_message(message: str) -> tuple[str, str, str, str, str, str] | None:
+        """Parse the stable Samba text audit contract without creating a new source format."""
+        prefix = "smbd_audit:"
+        payload = message.strip()
+        if payload.casefold().startswith(prefix):
+            payload = payload[len(prefix) :].strip()
+        fields = tuple(part.strip() for part in payload.split("|", maxsplit=5))
+        if len(fields) != 6 or any(not part for part in fields):
+            return None
+        return fields
+
+    @staticmethod
+    def _parse_samba_lifecycle_principal(message: str) -> str | None:
+        """Extract the credential identity from stable Samba lifecycle text."""
+
+        authentication = re.search(r"authentication for user \[([^\]]+)]", message, re.I)
+        if authentication is not None:
+            return authentication.group(1).strip()
+        tree_connect = re.search(r"connect to service \S+ as user ([^\s(]+)", message, re.I)
+        if tree_connect is not None:
+            return tree_connect.group(1).strip()
+        return None
 
     @staticmethod
     def _normalize_smb_path(value: str) -> str:
@@ -2359,7 +2472,20 @@ class CausalityScorer(DimensionScorer):
         else:
             for uf in ["TargetUserName", "SubjectUserName", "principal", "username"]:
                 if uf in f and f[uf]:
-                    if self._is_process_indicator_trace(f):
+                    if "smb_activity" in event.event_types:
+                        server_side = trace.source_format in {
+                            "windows_event_security",
+                            "syslog",
+                        } or any(
+                            self._host_matches(f.get("hostname"), expected_host)
+                            for expected_host in self._smb_server_hosts(event)
+                        )
+                        user_ok = self._smb_principal_matches(
+                            f[uf],
+                            event,
+                            server_side=server_side,
+                        )
+                    elif self._is_process_indicator_trace(f):
                         user_ok = self._user_matches(f[uf], event.actor)
                     else:
                         user_ok = self._username_indicator_matches(f[uf], event)
@@ -2398,7 +2524,11 @@ class CausalityScorer(DimensionScorer):
 
     def _smb_expected_hosts(self, event: ResolvedEvent) -> set[str]:
         """Return legitimate client and server hosts for dual-view SMB evidence."""
-        expected = {event.system}
+        return {event.system, *self._smb_server_hosts(event)}
+
+    def _smb_server_hosts(self, event: ResolvedEvent) -> set[str]:
+        """Return canonical server hosts from the generated SMB operation truth."""
+        expected: set[str] = set()
         ground_truth = self._smb_gt.get(event.storyline_id) or {}
         for operation in ground_truth.get("operations") or []:
             share = str(operation.get("share") or "")
@@ -2952,12 +3082,25 @@ class CausalityScorer(DimensionScorer):
                 event.event_types,
                 event.sub_details,
             )
+            if "smb_activity" in event.event_types:
+                for server_host in sorted(self._smb_server_hosts(event)):
+                    server_local = vis.get_expected_formats(server_host) & {
+                        "windows_event_security",
+                        "syslog",
+                        "ecar",
+                    }
+                    if server_local:
+                        groups.append((f"server_host_local:{server_host}", server_local))
             evt_time = _normalize_ts(event.time)
             evt_bucket = int(evt_time.timestamp()) // 60
 
             lookup_keys: list[str] = [event.system.lower()]
             if event.system_ip:
                 lookup_keys.append(event.system_ip)
+            if "smb_activity" in event.event_types:
+                lookup_keys.extend(
+                    host.casefold() for host in sorted(self._smb_expected_hosts(event))
+                )
             for sd in event.sub_details:
                 for k in ("source_ip", "dst_ip"):
                     val = sd.get(k)

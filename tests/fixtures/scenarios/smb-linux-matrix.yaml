@@ -1,0 +1,241 @@
+version: "1.0"
+name: smb-linux-matrix
+description: "Cross-platform canonical SMB acceptance topology"
+
+environment:
+  description: "Linux and Windows SMB clients with Windows and Samba file servers"
+  domain: example.test
+  users:
+    - username: linux_user
+      full_name: "Linux User"
+      email: linux.user@example.test
+      primary_system: LNX-CLIENT-01
+      enabled: true
+    - username: windows_user
+      full_name: "Windows User"
+      email: windows.user@example.test
+      primary_system: WIN-CLIENT-01
+      enabled: true
+  systems:
+    - hostname: LNX-CLIENT-01
+      ip: 10.30.0.10
+      os: "Ubuntu 24.04"
+      type: workstation
+      roles: [workstation]
+      services: [smb-client, cifs-utils, smbclient, gvfs-smb, dns-client, ntp]
+    - hostname: WIN-CLIENT-01
+      ip: 10.30.0.11
+      os: "Windows 11"
+      type: workstation
+      roles: [workstation]
+      services: [smb-client, kerberos-client, dns-client]
+    - hostname: SAMBA-01
+      ip: 10.30.0.20
+      os: "Ubuntu Server 24.04"
+      type: server
+      roles: [file_server]
+      services: [smb-server, samba, smbd, syslog]
+    - hostname: FS-WIN-01
+      ip: 10.30.0.21
+      os: "Windows Server 2022"
+      type: server
+      roles: [file_server]
+      services: [smb-server]
+  network:
+    segments:
+      - name: office
+        cidr: 10.30.0.0/24
+        exposure: internal
+        systems: [LNX-CLIENT-01, WIN-CLIENT-01, SAMBA-01, FS-WIN-01]
+    sensors:
+      - type: network
+        name: core-zeek
+        monitoring_segments: [office]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+  storage:
+    population: small
+    activity: low
+    servers:
+      - system: SAMBA-01
+        presets: []
+        audit: high
+        default_volume: data
+        volumes:
+          - id: data
+            mount: /srv/samba/data
+            filesystem: xfs
+            label: SambaData
+        shares:
+          - id: finance
+            name: Finance
+            volume: data
+            root: Departments\Finance
+            preset: department
+            population: small
+            activity: low
+            smb_native_filesystem: NTFS
+            access:
+              read: [linux_user, windows_user]
+              modify: [linux_user, windows_user]
+            seed_files:
+              - ref: linux-plan
+                path: Reports\FY26\linux-plan.xlsx
+                size_bytes: 1048576
+                tags: [finance, office]
+      - system: FS-WIN-01
+        presets: []
+        audit: high
+        default_volume: data
+        volumes:
+          - id: data
+            mount: 'D:\'
+            filesystem: ntfs
+            label: WindowsData
+        shares:
+          - id: documents
+            name: Documents
+            volume: data
+            root: Departments\Documents
+            preset: collaboration
+            population: small
+            activity: low
+            access:
+              read: [linux_user, windows_user]
+              modify: [linux_user, windows_user]
+            seed_files:
+              - ref: windows-brief
+                path: Briefs\windows-brief.docx
+                size_bytes: 262144
+                tags: [office]
+    mappings:
+      - id: linux-windows-docs
+        share: FS-WIN-01.documents
+        audience: {users: [linux_user], systems: [LNX-CLIENT-01]}
+        mount: /mnt/windows-documents
+        lifecycle: persistent
+      - id: windows-samba-finance
+        share: SAMBA-01.finance
+        audience: {users: [windows_user], systems: [WIN-CLIENT-01]}
+        drive: 'P:'
+        lifecycle: persistent
+
+time_window:
+  start: "2024-01-15T10:00:00Z"
+  duration: "45m"
+
+baseline_activity:
+  description: "Low background noise around explicit cross-platform SMB activity"
+  intensity: low
+  variation: low
+  traffic_rates:
+    smb_interval: 50000
+
+storyline:
+  - id: linux-to-windows-read
+    time: "+5m"
+    actor: linux_user
+    system: LNX-CLIENT-01
+    activity: "Read a Windows-hosted document through a Linux CIFS mount"
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: interactive
+        target: {type: share, share: FS-WIN-01.documents, file_ref: windows-brief}
+        outcome: success
+        client_access: cifs_mount
+        path_style: mounted
+        mapping: linux-windows-docs
+  - id: windows-to-linux-read
+    time: "+10m"
+    actor: windows_user
+    system: WIN-CLIENT-01
+    activity: "Read a Samba-hosted workbook from a mapped Windows drive"
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: interactive
+        target: {type: share, share: SAMBA-01.finance, file_ref: linux-plan}
+        outcome: success
+        client_access: windows_native
+        auth_protocol: ntlmssp
+        path_style: mapped
+        mapping: windows-samba-finance
+  - id: linux-to-linux-read
+    time: "+15m"
+    actor: linux_user
+    system: LNX-CLIENT-01
+    activity: "Read a Samba-hosted workbook with smbclient"
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: collection
+        target: {type: share, share: SAMBA-01.finance, file_ref: linux-plan}
+        outcome: success
+        client_access: smbclient
+        auth_protocol: ntlmssp
+        path_style: unc
+  - id: windows-to-linux-copy
+    time: "+20m"
+    actor: linux_user
+    system: LNX-CLIENT-01
+    activity: "Copy a Windows-hosted brief into the Samba finance archive"
+    events:
+      - type: smb_activity
+        operation: copy
+        purpose: collection
+        source: {type: share, share: FS-WIN-01.documents, file_ref: windows-brief}
+        destination: {type: share, share: SAMBA-01.finance, path: Archive\windows-brief.docx}
+        outcome: success
+        client_access: smbclient
+        auth_protocol: ntlmssp
+  - id: external-to-linux-read
+    time: "+25m"
+    actor: linux_user
+    system: SAMBA-01
+    activity: "An unmodeled client reads a Samba-hosted workbook"
+    events:
+      - type: smb_activity
+        client: {type: external, ip: 198.51.100.42, hostname: external-client.example.test}
+        operation: read
+        purpose: collection
+        target: {type: share, share: SAMBA-01.finance, file_ref: linux-plan}
+        outcome: success
+  - id: samba-to-windows-copy
+    time: "+30m"
+    actor: linux_user
+    system: LNX-CLIENT-01
+    activity: "Copy a Samba-hosted workbook into the Windows documents archive"
+    events:
+      - type: smb_activity
+        operation: copy
+        purpose: collection
+        source: {type: share, share: SAMBA-01.finance, file_ref: linux-plan}
+        destination: {type: share, share: FS-WIN-01.documents, path: Archive\linux-plan-copy.xlsx}
+        outcome: success
+        client_access: smbclient
+        auth_protocol: ntlmssp
+  - id: samba-to-windows-move
+    time: "+35m"
+    actor: linux_user
+    system: LNX-CLIENT-01
+    activity: "Move a Samba-hosted workbook into the Windows documents archive"
+    events:
+      - type: smb_activity
+        operation: move
+        purpose: collection
+        source: {type: share, share: SAMBA-01.finance, file_ref: linux-plan}
+        destination: {type: share, share: FS-WIN-01.documents, path: Archive\linux-plan-moved.xlsx}
+        outcome: success
+        client_access: smbclient
+        auth_protocol: ntlmssp
+
+output:
+  logs:
+    - format: windows
+    - format: zeek
+    - format: ecar
+    - format: syslog
+  destination: "./output"
+  compression: false

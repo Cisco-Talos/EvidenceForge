@@ -189,7 +189,16 @@ eforge info pack_builtin_dns_tags
 Pack process document terms are scoped to their process profile and do not enter global command
 pools. An industry storage entry supplies vocabulary, not a concrete server/share; a scenario or
 organization selects its qualified preset while owning storage topology, access, population, and
-activity.
+activity. Storage vocabulary stays provider-neutral and contains bounded SMB-relative directory,
+subject, extension, and MIME components—not Windows drives, Linux mounts, backing filesystems,
+Samba audit policy, or client-process profiles.
+
+An organization may own the concrete cross-platform SMB environment: Windows or Linux server
+systems, OS-native volume mounts and backing filesystems, share-advertised filesystem labels,
+access/audit settings, Windows drive or Linux mount mappings, and the services that grant Linux
+baseline client/server capability. It must not copy internal `smb_profiles.yaml` into a pack or
+depend on a project-only profile override. Those profiles are engine/project policy; the public organization
+model selects stable modes such as `cifs_mount` or `smbclient` through canonical scenario fields.
 
 Organization `environment` and `baseline_activity` files are typed partial canonical fragments.
 A reusable organization should normally be self-contained enough for a thin Scenario 2.0 wrapper.
@@ -315,6 +324,12 @@ installed YAML reads, and ambient caches. It is generated and non-editable.
 The generation manifest records runtime/build identity, effective seed/formats/target, permitted
 overrides, selected pack digests, the resolved-file hash, and every bundle-file hash. Existing
 domain sidecars remain; the manifest is the authoritative run identity.
+
+When composed storage is present, `STORAGE_MANIFEST.json` schema v2 is the authoritative compiled
+storage view. It retains pack-qualified presets while separating server platform, backing and
+SMB-advertised filesystems, Windows drive and Linux mount presentations, credential identity, and
+resolved storyline targets. It is metadata-only and does not make a pack responsible for runtime
+credentials or file payloads.
 
 New bundles evaluate without an authored scenario:
 

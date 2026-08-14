@@ -49,6 +49,7 @@ from evidenceforge.events.contexts import (
     ProcessContext,
     RegistryContext,
     RemoteThreadContext,
+    SmbContext,
 )
 from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
 from evidenceforge.events.identity import (
@@ -118,6 +119,7 @@ def _canonical_process_identity(
     image: str = "/usr/bin/service",
     principal: str = "SYSTEM",
     os_category: str = "linux",
+    logon_id: str = "",
 ) -> ProcessIdentity:
     """Build a complete immutable process identity for renderer boundary tests."""
     object_id = f"process-{hostname}-{pid}-{started_at.isoformat()}"
@@ -139,11 +141,119 @@ def _canonical_process_identity(
         image=image,
         command_line=image,
         principal=principal,
-        logon_id="",
+        logon_id=logon_id,
         started_at=started_at,
         lifecycle_group_id=f"lifecycle-{object_id}",
         primary_thread=thread,
     )
+
+
+def _linux_smb_file_occurrence(
+    ts: datetime,
+    *,
+    event_type: str = "smb_file_read",
+    phase: str = "read",
+    operation: str = "read",
+    client_access: str = "cifs_mount",
+    client_path: str = "/mnt/finance/Reports/forecast.xlsx",
+    include_client: bool = True,
+) -> tuple[OccurrenceBuilder, ProcessIdentity | None, ProcessIdentity]:
+    """Build one Linux-client-to-Samba FILE occurrence for projector tests."""
+
+    client_identity = (
+        _canonical_process_identity(
+            "LNX-CLIENT-01",
+            7331,
+            ts - timedelta(minutes=5),
+            image="/usr/bin/python3",
+            principal="linux_user",
+        )
+        if include_client
+        else None
+    )
+    smbd_identity = _canonical_process_identity(
+        "SAMBA-01",
+        4242,
+        ts - timedelta(hours=1),
+        image="/usr/sbin/smbd",
+        principal="root",
+    )
+    client_host = (
+        HostContext(
+            hostname="LNX-CLIENT-01",
+            ip="10.30.0.10",
+            os="Ubuntu 24.04",
+            os_category="linux",
+            system_type="workstation",
+        )
+        if include_client
+        else None
+    )
+    client_process = (
+        ProcessContext(
+            pid=client_identity.pid,
+            parent_pid=client_identity.parent_pid,
+            image=client_identity.image,
+            command_line=client_identity.command_line,
+            username=client_identity.principal,
+            start_time=client_identity.started_at,
+        )
+        if client_identity is not None
+        else None
+    )
+    event = OccurrenceBuilder(
+        timestamp=ts,
+        event_type=event_type,
+        src_host=client_host,
+        dst_host=HostContext(
+            hostname="SAMBA-01",
+            ip="10.30.0.20",
+            os="Ubuntu Server 24.04",
+            os_category="linux",
+            system_type="server",
+        ),
+        auth=AuthContext(
+            username="CORP\\finance-reader",
+            session_kind="smb",
+            smb_principal="CORP\\finance-reader",
+            auth_session_ref="smb-auth-1",
+            effective_uid=20041,
+            effective_gid=20010,
+        ),
+        process=client_process,
+        network=network_plan(
+            src_ip="10.30.0.10",
+            src_port=51515,
+            dst_ip="10.30.0.20",
+            dst_port=445,
+            protocol="tcp",
+            service="smb",
+            initiating_pid=-1,
+            responding_pid=smbd_identity.pid,
+            application_layer_only=True,
+        ),
+        smb=SmbContext(
+            phase=phase,
+            operation=operation,
+            purpose="client projection test",
+            session_id="smb-session-1",
+            tree_id="tree-1",
+            share_ref="SAMBA-01.finance",
+            share_name="Finance",
+            result="success",
+            client_path=client_path,
+            server_path="/srv/samba/data/Reports/forecast.xlsx",
+            file_id="file-1",
+            content_version=2,
+            filesystem="xfs",
+            backing_filesystem="xfs",
+            server_platform="linux",
+            provider="samba",
+            client_access=client_access,
+        ),
+        identity_plan=EventIdentityPlan(actor=client_identity, target=smbd_identity),
+    )
+    return event, client_identity, smbd_identity
 
 
 def test_machine_account_logon_projects_as_user_session_login(emitter, ts):
@@ -420,6 +530,432 @@ class TestPidEmission:
         assert record["properties"]["logon_id"] == "0x123"
         assert record["properties"]["session_type"] == "ssh"
         assert record["properties"]["src_port"] == "55222"
+
+    def test_linux_smb_login_prefers_neutral_auth_session_reference(self, emitter, ts):
+        """Samba eCAR sessions must not leak the engine's Windows-style LUID."""
+        event = OccurrenceBuilder(
+            timestamp=ts,
+            event_type="logon",
+            dst_host=HostContext(
+                hostname="SAMBA-01",
+                ip="10.30.0.20",
+                os="Ubuntu Server 24.04",
+                os_category="linux",
+                system_type="server",
+            ),
+            auth=AuthContext(
+                username="local-actor",
+                logon_id="0xinternal",
+                session_id=17,
+                logon_type=3,
+                source_ip="10.30.0.10",
+                source_port=51515,
+                session_kind="smb",
+                auth_protocol="kerberos",
+                smb_principal="CORP\\finance-reader",
+                account_scope="directory",
+                auth_session_ref="smb-auth-1",
+                effective_uid=20041,
+                effective_gid=20010,
+            ),
+            identity_plan=_identity_plan_from_ids(object_id="session-1"),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        row = emitter.emit_event.call_args[0][0]
+        record = json.loads(emitter._render_event(row))
+        properties = record["properties"]
+        assert record["principal"] == "CORP\\finance-reader"
+        assert properties["session_type"] == "smb"
+        assert properties["auth_session_ref"] == "smb-auth-1"
+        assert properties["session_id"] == "smb-auth-1"
+        assert properties["auth_protocol"] == "kerberos"
+        assert properties["account_scope"] == "directory"
+        assert properties["effective_uid"] == "20041"
+        assert properties["effective_gid"] == "20010"
+        assert "logon_id" not in properties
+        assert "logon_type" not in properties
+        assert "logon_guid" not in properties
+
+    def test_linux_smb_file_rows_use_server_and_client_local_processes(self, emitter, ts):
+        """Samba and mounted-CIFS FILE rows should keep distinct local actors."""
+        client_process = _canonical_process_identity(
+            "LNX-CLIENT-01",
+            7331,
+            ts - timedelta(minutes=5),
+            image="/usr/libexec/gvfsd-smb",
+            principal="linux_user",
+        )
+        smbd_process = _canonical_process_identity(
+            "SAMBA-01",
+            4242,
+            ts - timedelta(hours=1),
+            image="/usr/sbin/smbd",
+            principal="root",
+        )
+        event = OccurrenceBuilder(
+            timestamp=ts,
+            event_type="smb_file_read",
+            src_host=HostContext(
+                hostname="LNX-CLIENT-01",
+                ip="10.30.0.10",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="workstation",
+            ),
+            dst_host=HostContext(
+                hostname="SAMBA-01",
+                ip="10.30.0.20",
+                os="Ubuntu Server 24.04",
+                os_category="linux",
+                system_type="server",
+            ),
+            auth=AuthContext(
+                username="CORP\\finance-reader",
+                session_kind="smb",
+                smb_principal="CORP\\finance-reader",
+                auth_session_ref="smb-auth-1",
+            ),
+            process=ProcessContext(
+                pid=client_process.pid,
+                parent_pid=client_process.parent_pid,
+                image=client_process.image,
+                command_line=client_process.command_line,
+                username=client_process.principal,
+                start_time=client_process.started_at,
+            ),
+            network=network_plan(
+                src_ip="10.30.0.10",
+                src_port=51515,
+                dst_ip="10.30.0.20",
+                dst_port=445,
+                protocol="tcp",
+                service="smb",
+                initiating_pid=-1,
+                responding_pid=smbd_process.pid,
+                application_layer_only=True,
+            ),
+            smb=SmbContext(
+                phase="read",
+                operation="copy",
+                purpose="actor test",
+                session_id="smb-session-1",
+                tree_id="tree-1",
+                share_ref="SAMBA-01.finance",
+                share_name="Finance",
+                result="success",
+                local_path="/home/linux_user/Downloads/forecast.xlsx",
+                server_path="/srv/samba/data/Reports/forecast.xlsx",
+                file_id="file-1",
+                filesystem="xfs",
+                backing_filesystem="xfs",
+                server_platform="linux",
+                provider="samba",
+                client_access="cifs_mount",
+            ),
+            identity_plan=EventIdentityPlan(actor=client_process, target=smbd_process),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        server_row, client_row = [
+            json.loads(emitter._render_event(call.args[0]))
+            for call in emitter.emit_event.call_args_list
+        ]
+        assert server_row["hostname"] == "SAMBA-01"
+        assert server_row["pid"] == smbd_process.pid
+        assert server_row["actorID"] == smbd_process.object_id
+        assert server_row["properties"]["image_path"] == "/usr/sbin/smbd"
+        assert server_row["properties"]["file_path"].startswith("/srv/samba/data/")
+        assert client_row["hostname"] == "LNX-CLIENT-01"
+        assert client_row["pid"] == client_process.pid
+        assert client_row["actorID"] == client_process.object_id
+        assert client_row["principal"] == "linux_user"
+        assert client_row["properties"]["file_path"].startswith("/home/linux_user/")
+        assert "logon_id" not in server_row["properties"]
+        assert "logon_id" not in client_row["properties"]
+
+    def test_windows_client_smb_file_keeps_only_local_actor_logon_id(self, emitter, ts):
+        """A Windows copy companion must not inherit the Samba credential mapping."""
+        event, _, smbd_process = _linux_smb_file_occurrence(
+            ts,
+            event_type="smb_file_read",
+            phase="read",
+            operation="copy",
+            client_access="windows_native",
+            client_path=r"P:\Reports\forecast.xlsx",
+            include_client=False,
+        )
+        assert event.smb is not None
+        client_process = _canonical_process_identity(
+            "WIN-CLIENT-01",
+            8180,
+            ts - timedelta(minutes=5),
+            image=r"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE",
+            principal="windows_user",
+            os_category="windows",
+            logon_id="0x9abc",
+        )
+        event = replace(
+            event,
+            src_host=HostContext(
+                hostname="WIN-CLIENT-01",
+                ip="10.30.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            process=ProcessContext(
+                pid=client_process.pid,
+                parent_pid=client_process.parent_pid,
+                image=client_process.image,
+                command_line=client_process.command_line,
+                username=client_process.principal,
+                logon_id=client_process.logon_id,
+                start_time=client_process.started_at,
+            ),
+            smb=replace(
+                event.smb,
+                local_path=r"C:\Users\windows_user\Downloads\forecast.xlsx",
+            ),
+            identity_plan=EventIdentityPlan(actor=client_process, target=smbd_process),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        server_row, client_row = [
+            json.loads(emitter._render_event(call.args[0]))
+            for call in emitter.emit_event.call_args_list
+        ]
+        server_properties = server_row["properties"]
+        assert server_row["hostname"] == "SAMBA-01"
+        assert server_properties["auth_session_ref"] == "smb-auth-1"
+        assert server_properties["effective_uid"] == "20041"
+        assert server_properties["effective_gid"] == "20010"
+        assert "logon_id" not in server_properties
+
+        client_properties = client_row["properties"]
+        assert client_row["hostname"] == "WIN-CLIENT-01"
+        assert client_row["action"] == "CREATE"
+        assert client_row["actorID"] == client_process.object_id
+        assert client_properties["logon_id"] == "0x9abc"
+        assert "auth_session_ref" not in client_properties
+        assert "session_id" not in client_properties
+        assert "effective_uid" not in client_properties
+        assert "effective_gid" not in client_properties
+
+    def test_smb_client_file_resolves_actor_from_host_process_state(self, emitter, ts):
+        """Client FILE fan-out should survive an occurrence plan without an actor role."""
+        state = StateManager()
+        state.set_current_time(ts - timedelta(minutes=5))
+        client_pid = state.create_process(
+            "LNX-CLIENT-01",
+            parent_pid=0,
+            image="/usr/bin/python3",
+            command_line="/usr/bin/python3 report.py",
+            username="linux_user",
+            integrity_level="User",
+        )
+        client_identity = state.get_process_identity("LNX-CLIENT-01", client_pid)
+        assert client_identity is not None
+        event, _, smbd_process = _linux_smb_file_occurrence(
+            ts,
+            event_type="smb_file_read",
+            phase="read",
+            operation="copy",
+        )
+        assert event.process is not None
+        assert event.smb is not None
+        event = replace(
+            event,
+            process=replace(
+                event.process,
+                pid=client_pid,
+                parent_pid=client_identity.parent_pid,
+                image=client_identity.image,
+                command_line=client_identity.command_line,
+                username=client_identity.principal,
+                start_time=client_identity.started_at,
+            ),
+            smb=replace(
+                event.smb,
+                local_path="/var/tmp/smb-cache/forecast.xlsx",
+            ),
+            identity_plan=EventIdentityPlan(target=smbd_process),
+        )
+        emitter._state_manager = state
+        emitter.emit_event = Mock()
+
+        emitter.emit(event)
+
+        client_row = json.loads(emitter._render_event(emitter.emit_event.call_args_list[1].args[0]))
+        assert client_row["hostname"] == "LNX-CLIENT-01"
+        assert client_row["pid"] == client_pid
+        assert client_row["actorID"] == client_identity.object_id
+        assert client_row["properties"]["image_path"] == "/usr/bin/python3"
+
+    @pytest.mark.parametrize(
+        ("event_type", "phase", "operation", "expected_action"),
+        [
+            ("smb_file_read", "read", "read", "READ"),
+            ("smb_file_write", "write", "create", "CREATE"),
+            ("smb_file_write", "write", "update", "WRITE"),
+            ("smb_file_delete", "delete", "delete", "DELETE"),
+        ],
+    )
+    def test_mounted_cifs_operations_project_actor_owned_posix_client_file(
+        self,
+        emitter,
+        ts,
+        event_type,
+        phase,
+        operation,
+        expected_action,
+    ):
+        """Mounted remote files are locally observable at their POSIX mount path."""
+        event, client_process, smbd_process = _linux_smb_file_occurrence(
+            ts,
+            event_type=event_type,
+            phase=phase,
+            operation=operation,
+        )
+        assert client_process is not None
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        server_row, client_row = [
+            json.loads(emitter._render_event(call.args[0]))
+            for call in emitter.emit_event.call_args_list
+        ]
+        assert server_row["hostname"] == "SAMBA-01"
+        assert server_row["actorID"] == smbd_process.object_id
+        assert server_row["properties"]["auth_session_ref"] == "smb-auth-1"
+        assert server_row["properties"]["effective_uid"] == "20041"
+        assert server_row["properties"]["effective_gid"] == "20010"
+        assert client_row["hostname"] == "LNX-CLIENT-01"
+        assert client_row["action"] == expected_action
+        assert client_row["pid"] == client_process.pid
+        assert client_row["actorID"] == client_process.object_id
+        assert client_row["principal"] == "linux_user"
+        client_properties = client_row["properties"]
+        assert client_properties["file_path"] == "/mnt/finance/Reports/forecast.xlsx"
+        assert client_properties["image_path"] == "/usr/bin/python3"
+        assert client_properties["source_process_uuid"] == client_process.object_id
+        assert "target_process_uuid" not in client_properties
+        assert "auth_session_ref" not in client_properties
+        assert "session_id" not in client_properties
+        assert "effective_uid" not in client_properties
+        assert "effective_gid" not in client_properties
+        assert "logon_id" not in client_properties
+        assert client_row["objectID"] != server_row["objectID"]
+
+    def test_mounted_cifs_browse_projects_client_directory_read_only(self, emitter, ts):
+        """Directory enumeration is visible to the mounted client, not server eCAR."""
+        event, client_process, _ = _linux_smb_file_occurrence(
+            ts,
+            event_type="smb_directory_enumeration",
+            phase="directory_enumeration",
+            operation="browse",
+            client_path="/mnt/finance/Reports/FY26",
+        )
+        assert client_process is not None
+
+        emitter.emit_event = Mock()
+        assert emitter.can_handle(event)
+        emitter.emit(event)
+
+        assert emitter.emit_event.call_count == 1
+        client_row = json.loads(emitter._render_event(emitter.emit_event.call_args.args[0]))
+        assert client_row["hostname"] == "LNX-CLIENT-01"
+        assert client_row["object"] == "FILE"
+        assert client_row["action"] == "READ"
+        assert client_row["pid"] == client_process.pid
+        assert client_row["actorID"] == client_process.object_id
+        properties = client_row["properties"]
+        assert properties["file_path"] == "/mnt/finance/Reports/FY26"
+        assert "auth_session_ref" not in properties
+        assert "effective_uid" not in properties
+        assert "effective_gid" not in properties
+
+    def test_mounted_cifs_rename_uses_distinct_client_and_server_previous_paths(
+        self,
+        emitter,
+        ts,
+    ):
+        """Rename views must retain source-native prior paths on both endpoints."""
+        event, client_process, _ = _linux_smb_file_occurrence(
+            ts,
+            event_type="smb_file_rename",
+            phase="rename",
+            operation="move",
+            client_path="/mnt/finance/Archive/forecast.xlsx",
+        )
+        assert event.smb is not None
+        assert client_process is not None
+        event = replace(
+            event,
+            smb=replace(
+                event.smb,
+                previous_path=r"Reports\FY26\forecast.xlsx",
+                previous_client_path="/mnt/finance/Reports/FY26/forecast.xlsx",
+                previous_server_path="/srv/samba/data/Reports/FY26/forecast.xlsx",
+                server_path="/srv/samba/data/Archive/forecast.xlsx",
+            ),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        server_row, client_row = [
+            json.loads(emitter._render_event(call.args[0]))
+            for call in emitter.emit_event.call_args_list
+        ]
+        assert server_row["hostname"] == "SAMBA-01"
+        assert server_row["action"] == "RENAME"
+        assert server_row["properties"]["source_file_path"] == (
+            "/srv/samba/data/Reports/FY26/forecast.xlsx"
+        )
+        assert client_row["hostname"] == "LNX-CLIENT-01"
+        assert client_row["action"] == "RENAME"
+        assert client_row["actorID"] == client_process.object_id
+        client_properties = client_row["properties"]
+        assert client_properties["file_path"] == "/mnt/finance/Archive/forecast.xlsx"
+        expected_previous_path = "/mnt/finance/Reports/FY26/forecast.xlsx"
+        assert client_properties["source_file_path"] == expected_previous_path
+        assert r"Reports\FY26\forecast.xlsx" not in client_properties.values()
+
+    @pytest.mark.parametrize(
+        ("client_access", "include_client"),
+        [("smbclient", True), ("external", False)],
+    )
+    def test_nonmounted_smb_operations_do_not_fabricate_client_file(
+        self,
+        emitter,
+        ts,
+        client_access,
+        include_client,
+    ):
+        """CLI and unmodeled clients have no client-local mounted-file evidence."""
+        event, _, smbd_process = _linux_smb_file_occurrence(
+            ts,
+            client_access=client_access,
+            client_path="//SAMBA-01/Finance/Reports/forecast.xlsx",
+            include_client=include_client,
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        assert emitter.emit_event.call_count == 1
+        server_row = json.loads(emitter._render_event(emitter.emit_event.call_args.args[0]))
+        assert server_row["hostname"] == "SAMBA-01"
+        assert server_row["actorID"] == smbd_process.object_id
+        assert server_row["properties"]["file_path"] == "/srv/samba/data/Reports/forecast.xlsx"
 
     def test_windows_logout_preserves_session_properties(self, emitter, ts):
         """Logout rows should retain source-native session correlation fields."""

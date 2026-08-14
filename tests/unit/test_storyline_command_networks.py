@@ -1321,6 +1321,7 @@ def _attach_fake_admin_storage(generator: _FakeActivityGenerator, server: System
                 population="small",
                 activity="low",
                 encryption="not_required",
+                smb_native_filesystem="NTFS",
                 audit="standard",
                 access=access,
                 files=(),

@@ -693,7 +693,10 @@ Fields:
 
 An industry storage entry is vocabulary, not a concrete server or share. A scenario or
 organization environment selects it as a qualified storage `preset` while owning server, volume,
-share, access, mapping, population, and activity settings.
+share, access, mapping, population, and activity settings. Keep storage vocabulary
+provider-neutral: directory and subject values are bounded SMB-relative components, not Windows
+drives, Linux mountpoints, backing filesystems, Samba audit policy, or internal client/server
+profiles.
 
 ## Organization model fragments
 
@@ -726,6 +729,13 @@ A self-contained organization should normally provide the users, systems, groups
 topology, sensors, email topology, storage topology, and baseline settings necessary for its stated
 behavior. A Scenario 2.0 wrapper then supplies scenario identity, seed, time, output, and optional
 exercise-specific behavior.
+
+For cross-platform SMB, the organization environment owns concrete Windows or Linux storage
+servers, OS-native volume mounts and backing filesystems, optional SMB-advertised filesystem labels,
+share audit/access policy, Windows drive and/or Linux mount mappings, and Linux client/server service
+markers. Do not place internal `smb_profiles.yaml` data in a pack or rely on a project overlay for a
+portable capability claim. Use canonical scenario modes (`auto`, `windows_native`, `cifs_mount`, or
+`smbclient`) and validate a representative client/server matrix instead.
 
 A deliberately partial organization is valid only with a named representative consumer scenario.
 That consumer must supply the missing effective model and pass resolve, validation, and generation
@@ -1033,8 +1043,10 @@ The standard harness requests host and eCAR records and therefore needs no netwo
 user requests Zeek, IDS, or firewall proof, add compatible topology and a sensor that observes the
 modeled path using the scenario reference; an output format alone does not establish visibility.
 
-For a storage export, add a compatible server, volume, share, access policy, and mapping that uses
-the qualified `preset`; run scenario validation with `--show-storage`.
+For a storage export, add a compatible server, OS-native volume, share, access/audit policy, and
+mapping that uses the qualified `preset`; give Linux clients and Samba servers explicit service
+markers, then run scenario validation with `--show-storage`. Exercise the provider combination the
+pack claims rather than assuming a Windows-only consumer proves Linux portability.
 
 ## Organization consumer harness
 
@@ -1070,6 +1082,11 @@ trying to overwrite a differing authoritative artifact.
 
 Resolve, validate with `--show-storage` when applicable, and generate. Inspect representative user,
 system, application, network, email, and SMB records claimed by the pack.
+
+For SMB consumers, inspect `STORAGE_MANIFEST.json` schema v2 as well as logs. Confirm server
+platform, backing versus SMB-advertised filesystem, drive/mount presentation, credential mode, and
+resolved target paths. Windows Security and Samba syslog are platform-selective; requesting both
+formats does not mean both should render for one server operation.
 
 Generate with an explicit absolute output root and fixed seed:
 

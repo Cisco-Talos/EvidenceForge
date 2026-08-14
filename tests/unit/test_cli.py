@@ -303,6 +303,35 @@ environment:
         assert "healthcare:clinical-department" in result.stdout
         assert "Fatal error" not in result.stdout
 
+    def test_show_storage_renders_linux_platform_mount_and_filesystem_views(self):
+        """Linux storage diagnostics distinguish backing, wire, and client mounts."""
+
+        result = runner.invoke(
+            app,
+            [
+                "validate",
+                "tests/fixtures/scenarios/smb-linux-matrix.yaml",
+                "--show-storage",
+            ],
+            terminal_width=240,
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        for expected in (
+            "SAMBA-01.data",
+            "/srv/samba/data",
+            "linux / xfs",
+            "SMB filesystem views",
+            "Provider",
+            "samba",
+            "SMB native FS",
+            "NTFS",
+            "Mount",
+            "/mnt/windows-documents",
+            "per_user",
+        ):
+            assert expected in result.stdout
+
     def test_large_workload_option_is_hidden_from_public_help(self):
         """The obsolete workload override is not part of the visible CLI contract."""
         for command in ("generate", "validate"):

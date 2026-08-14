@@ -1,0 +1,74 @@
+scenario_version: "2.0"
+composition:
+  organization:
+    source: package
+    name: northstar-health
+    version: "1.1.0"
+name: northstar-health-linux-smb
+description: "Northstar Health cross-platform SMB package acceptance scenario."
+time_window:
+  start: "2026-08-14T13:00:00Z"
+  duration: "1h"
+  warmup: "1h"
+storyline:
+  - id: northstar-windows-to-windows
+    time: "+10m"
+    actor: maya.patel
+    system: NSH-CLIN-01
+    activity: "Maya reads a clinical file from the Windows file server."
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: interactive
+        target: {type: share, share: NSH-FILE-01.clinical_ops}
+        mapping: clinical_ops_drive
+        path_style: mapped
+        client_access: windows_native
+  - id: northstar-linux-to-windows
+    time: "+20m"
+    actor: jordan.lee
+    system: NSH-CLIN-LNX-01
+    activity: "Jordan reads the Windows clinical share through a CIFS mount."
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: interactive
+        target: {type: share, share: NSH-FILE-01.clinical_ops}
+        mapping: clinical_ops_drive
+        path_style: mounted
+        client_access: cifs_mount
+  - id: northstar-windows-to-samba
+    time: "+30m"
+    actor: maya.patel
+    system: NSH-CLIN-01
+    activity: "Maya reads a clinical archive file from Samba."
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: interactive
+        target: {type: share, share: NSH-SAMBA-01.clinical_archive}
+        mapping: clinical_archive_mapping
+        path_style: mapped
+        client_access: windows_native
+        auth_protocol: kerberos
+  - id: northstar-linux-to-samba
+    time: "+40m"
+    actor: jordan.lee
+    system: NSH-CLIN-LNX-01
+    activity: "Jordan accesses the Samba archive directly with smbclient."
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: collection
+        target: {type: share, share: NSH-SAMBA-01.clinical_archive}
+        client_access: smbclient
+        auth_protocol: kerberos
+        path_style: unc
+output:
+  logs:
+    - format: windows
+    - format: zeek
+    - format: ecar
+    - format: syslog
+  destination: ./output
+  compression: false

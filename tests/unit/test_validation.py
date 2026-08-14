@@ -738,6 +738,50 @@ class TestScenarioValidator:
         assert "Duplicate username" in issues[0].message
         assert "testuser" in issues[0].message
 
+    def test_case_variant_usernames_are_duplicates(self):
+        """Logical usernames are unique regardless of authored casing."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(
+                        username="testuser",
+                        full_name="Test User 1",
+                        email="test1@example.com",
+                    ),
+                    User(
+                        username="TestUser",
+                        full_name="Test User 2",
+                        email="test2@example.com",
+                    ),
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(
+                logs=[{"format": "windows"}], destination="./output", compression=False
+            ),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        issue = next(
+            issue for issue in issues if issue.field_path == "environment.users.1.username"
+        )
+        assert issue.severity == "error"
+        assert issue.message == (
+            "Duplicate username 'TestUser' conflicts case-insensitively with 'testuser'"
+        )
+        assert "case-insensitive" in (issue.suggestion or "")
+
     def test_duplicate_hostnames(self):
         """Duplicate hostnames should produce error."""
         scenario = Scenario(
@@ -779,6 +823,50 @@ class TestScenarioValidator:
         assert issues[0].field_path == "environment.systems.1.hostname"
         assert "Duplicate hostname" in issues[0].message
         assert "TEST-01" in issues[0].message
+
+    def test_case_variant_hostnames_are_duplicates(self):
+        """Logical hostnames are unique regardless of authored casing."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
+                systems=[
+                    System(
+                        hostname="TEST-01",
+                        ip="10.0.0.1",
+                        os="Windows 10",
+                        type="workstation",
+                    ),
+                    System(
+                        hostname="test-01",
+                        ip="10.0.0.2",
+                        os="Windows 10",
+                        type="workstation",
+                    ),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(
+                logs=[{"format": "windows"}], destination="./output", compression=False
+            ),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        issue = next(
+            issue for issue in issues if issue.field_path == "environment.systems.1.hostname"
+        )
+        assert issue.severity == "error"
+        assert issue.message == (
+            "Duplicate hostname 'test-01' conflicts case-insensitively with 'TEST-01'"
+        )
+        assert "case-insensitive" in (issue.suggestion or "")
 
     def test_duplicate_ips(self):
         """Duplicate IP addresses should produce error."""

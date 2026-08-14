@@ -45,7 +45,7 @@ Determine:
 5. Which built-in or custom process profiles those personas use.
 6. Which applications connect to which named destination services.
 7. Whether traffic is weighted, periodic, burst-oriented, or a deliberate mixture.
-8. Which bounded SMB directory, subject, and file-type vocabulary is useful.
+8. Which bounded, provider-neutral SMB directory, subject, and file-type vocabulary is useful.
 
 Ask only about choices that materially affect the model. Infer ordinary sector details, then state
 those assumptions before writing.
@@ -80,6 +80,11 @@ Keep every fixed file and root key, even when empty. Work in dependency order:
 5. Define structured weighted, periodic, or burst cadence where the default weekday behavior is
    insufficient.
 6. Add bounded storage vocabulary only when the industry commonly produces shared-file activity.
+
+Industry storage entries must remain portable across Windows and Samba: use bounded relative
+directory/subject/file-type vocabulary only. Do not put drive letters, POSIX mounts, backing or
+advertised filesystem labels, audit policy, credentials, or internal `smb_profiles.yaml` data in an
+industry catalog.
 
 Use local IDs inside the pack; the loader qualifies them as `<pack-name>:<local-id>`. Reference an
 export from another pack only where the contract explicitly permits it. Industry packs cannot
@@ -148,7 +153,8 @@ document is not overwritten when its identity differs.
 Verify from the composition explanation and generated records that the qualified persona, selected
 process, application, exact destination/service, and intended cadence appear. If storage was
 authored, add a scenario-local storage server/share using the qualified preset and validate with
-`--show-storage`.
+`--show-storage`. Use the Windows or Linux/Samba consumer platform the pack claims to support;
+provider-neutral vocabulary should not require different catalog content.
 
 The standard industry harness uses host and eCAR output. If the user needs Zeek, IDS, or firewall
 proof, use the scenario reference to add compatible topology plus a sensor that observes the modeled

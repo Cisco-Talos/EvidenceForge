@@ -3,6 +3,7 @@
 
 """Tests for file server SMB logon event generation."""
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -137,3 +138,88 @@ class TestSmbBrowsingIncludesFileServers:
 
         assert targets.count(dc.ip) == 1
         assert targets.count(fs.ip) == 3
+
+    def test_linux_samba_capability_drives_baseline_target_selection(self) -> None:
+        """Runtime target planning should use capabilities, not Windows-only role checks."""
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+        from evidenceforge.generation.world_model import WorldModel
+        from evidenceforge.models.scenario import (
+            BaselineActivity,
+            Environment,
+            OutputSpec,
+            Scenario,
+            System,
+            TimeWindow,
+            User,
+        )
+
+        client = System(
+            hostname="LINUX-CLIENT",
+            ip="10.10.20.10",
+            os="Ubuntu 24.04",
+            type="workstation",
+            services=["cifs-utils"],
+        )
+        samba = System(
+            hostname="SAMBA-01",
+            ip="10.10.10.5",
+            os="Ubuntu 24.04",
+            type="server",
+            services=["samba"],
+        )
+        web = System(
+            hostname="WEB-01",
+            ip="10.10.10.6",
+            os="Ubuntu 24.04",
+            type="server",
+            services=["nginx"],
+        )
+        scenario = Scenario(
+            name="linux-smb-targets",
+            description="Linux SMB target capability test",
+            environment=Environment(
+                description="Linux SMB environment",
+                users=[User(username="alice", full_name="Alice", email="alice@example.test")],
+                systems=[client, samba, web],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=UTC), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Normal activity",
+                intensity="low",
+                variation="low",
+            ),
+            output=OutputSpec(logs=[{"format": "zeek"}], destination="./out"),
+        )
+        world_model = WorldModel(scenario, "example.test")
+        baseline = SimpleNamespace(scenario=scenario, world_model=world_model)
+
+        targets, file_servers = BaselineMixin._build_smb_targets(baseline, client, [])
+
+        assert targets == [samba.ip, samba.ip, samba.ip]
+        assert file_servers == [samba]
+        assert web.ip not in targets
+
+    def test_windows_only_baseline_smb_prepass_is_rng_neutral(self) -> None:
+        """Windows-only generation must retain the established inline SMB RNG stream."""
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+        from evidenceforge.utils.rng import _get_rng
+
+        windows = SimpleNamespace(
+            hostname="WS-01",
+            ip="10.10.20.10",
+            os="Windows 11",
+        )
+        baseline = SimpleNamespace(
+            scenario=SimpleNamespace(
+                environment=SimpleNamespace(systems=[windows]),
+            ),
+            world_model=SimpleNamespace(hosts={}),
+        )
+        baseline._uses_linux_smb_prepass = BaselineMixin._uses_linux_smb_prepass.__get__(baseline)
+        plan = BaselineMixin._plan_baseline_smb_activity.__get__(baseline)
+        rng = _get_rng()
+        state_before = rng.getstate()
+
+        assert baseline._uses_linux_smb_prepass() is False
+        assert plan(datetime(2024, 1, 1, tzinfo=UTC)) == ()
+        assert rng.getstate() == state_before

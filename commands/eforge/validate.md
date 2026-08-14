@@ -31,23 +31,36 @@ never treat a missing pack repository as a warning for Scenario 1.0 or monolithi
 
 When a scenario uses `environment.storage` or `smb_activity`, also run
 `eforge validate <scenario-file> --show-storage`. Review the compiled volumes,
-mounts, public share references, mappings, access summaries, population/activity
-scales, and bounded corpus samples; these deterministic defaults are part of the
-authoring contract even when `environment.storage` is omitted.
+server platforms, OS-native mounts, backing and SMB-advertised filesystems, public share
+references, mappings/credential modes, access/audit summaries, population/activity scales, and
+bounded corpus samples; these deterministic defaults are part of the authoring contract even when
+`environment.storage` is omitted.
 
 The storage preview is read-only and uses wrapping Rich tables. It includes every
 compiled volume, including volumes that currently host no share. Separate tables show
-volume mount, filesystem, label, and share count; UNC and server-local share roots; resolved
-population, activity, audit, encryption, and catalog counts; effective
+platform, volume mount, backing filesystem, label, and share count; UNC and OS-native server-local
+share roots; resolved SMB-native filesystem, population, activity, audit, encryption, and catalog counts; effective
 read/modify/admin/deny access; per-share path/size and MIME/tag tables with up to
-three metadata-only catalog samples; and each mapping's resolved user/system
-audience. Generated file and directory IDs remain internal. The command does not
-generate logs or write `STORAGE_MANIFEST.json`.
+three metadata-only catalog samples; and each mapping's resolved user/system audience, Windows
+drive, Linux mount, credential mode, and non-secret principal. Generated file and directory IDs
+remain internal. The command does not generate logs or write `STORAGE_MANIFEST.json` schema v2.
+
+Treat platform and identity incompatibilities as authoring errors. Windows servers accept
+drive-absolute NTFS/ReFS volumes; Linux servers accept POSIX-absolute ext4/XFS volumes. `mapped`
+presentation is Windows-only, `mounted` is Linux-only, and either requires a compatible mapping.
+Explicit `cifs_mount` access accepts only `auto`/`mounted` presentation; explicit `smbclient`
+accepts only `auto`/`unc` presentation.
+Linux clients need an explicit CIFS-mount or `smbclient` service marker for baseline client
+capability; an authored `smb_activity` supplies explicit client intent. GVFS is background
+transport texture only. Fixed mappings require a principal; per-user mappings forbid one. External
+clients require `client_access: auto` and cannot select a storage mapping or request mapped/mounted
+paths.
+The local actor, SMB principal, and Samba effective UID/GID are distinct identities.
 
 The resource forecast reports final output separately from peak working disk.
 Peak working disk includes temporary bounded Zeek sort runs. For SMB scenarios,
 confirm that the forecast reflects catalog size, resolved batch operations,
-retained mutations, and the selected Zeek/Windows/eCAR outputs; logical remote
+retained mutations, and the selected Zeek/Windows/Samba syslog/eCAR outputs; logical remote
 file sizes are metadata and do not consume output space unless artifact
 materialization is added in a future version.
 

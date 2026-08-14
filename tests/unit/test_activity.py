@@ -6099,8 +6099,330 @@ class TestActivityGenerator:
         assert dc_proc is not None
         assert file_pid != dc_pid
         assert file_reuse_pid == file_pid
-        assert file_proc.command_line == "gvfsd-smb-browse smb://FILE-SRV-01/shared"
-        assert dc_proc.command_line == "gvfsd-smb-browse smb://DC-01/shared"
+        assert file_proc.command_line == 'gvfsd-smb-browse "smb://FILE-SRV-01/shared"'
+        assert dc_proc.command_line == 'gvfsd-smb-browse "smb://DC-01/shared"'
+
+    def test_cifs_mount_operation_actor_is_not_transport_owner(
+        self, activity_gen, test_user, state_manager
+    ) -> None:
+        """Mounted CIFS uses a local operation actor and kernel-owned transport."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="LT-CIFS-01",
+            ip="10.10.1.60",
+            os="Ubuntu 24.04",
+            type="workstation",
+            assigned_user=test_user.username,
+            services=["cifs-utils"],
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        plan = activity_gen.ensure_smb_client_process(
+            client_system=workstation,
+            actor=test_user,
+            server="SAMBA-01",
+            share="Engineering",
+            path="Reports/Q1.csv",
+            client_path="/mnt/engineering/Reports/Q1.csv",
+            operation="read",
+            time=timestamp,
+        )
+
+        process = state_manager.get_process(workstation.hostname, plan.actor_pid)
+        assert process is not None
+        assert process.image == "/usr/bin/head"
+        assert process.command_line == 'head -c 4096 "/mnt/engineering/Reports/Q1.csv"'
+        assert plan.access_mode == "mounted"
+        assert plan.transport_pid == -1
+        assert plan.transport_image == ""
+
+    @pytest.mark.parametrize(
+        ("operation", "transfer_direction", "source_path", "destination_path", "image"),
+        [
+            (
+                "copy",
+                "download",
+                "/mnt/engineering/Reports/Q1.csv",
+                "/var/tmp/smb-cache/Q1.csv",
+                "/usr/bin/cp",
+            ),
+            (
+                "copy",
+                "upload",
+                "/var/tmp/outgoing/Q1.csv",
+                "/mnt/engineering/Incoming/Q1.csv",
+                "/usr/bin/cp",
+            ),
+            (
+                "move",
+                "upload",
+                "/var/tmp/outgoing/Q1.csv",
+                "/mnt/engineering/Incoming/Q1.csv",
+                "/usr/bin/mv",
+            ),
+            (
+                "move",
+                "remote",
+                "/mnt/engineering/Reports/Q1.csv",
+                "/mnt/engineering/Archive/Q1.csv",
+                "/usr/bin/mv",
+            ),
+        ],
+    )
+    def test_cifs_mount_transfer_uses_resolved_native_operands(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+        operation: str,
+        transfer_direction: str,
+        source_path: str,
+        destination_path: str,
+        image: str,
+    ) -> None:
+        """Mounted transfers retain cp/mv and the authored native endpoints."""
+
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="LT-CIFS-XFER-01",
+            ip="10.10.1.64",
+            os="Ubuntu 24.04",
+            type="workstation",
+            assigned_user=test_user.username,
+            services=["cifs-utils"],
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        plan = activity_gen.ensure_smb_client_process(
+            client_system=workstation,
+            actor=test_user,
+            server="SAMBA-01",
+            share="Engineering",
+            path="Reports/Q1.csv",
+            client_path="/mnt/engineering/Reports/Q1.csv",
+            local_path="/var/tmp/outgoing/Q1.csv",
+            source_path=source_path,
+            destination_path=destination_path,
+            operation=operation,
+            transfer_direction=transfer_direction,
+            time=timestamp,
+        )
+
+        process = state_manager.get_process(workstation.hostname, plan.actor_pid)
+        assert process is not None
+        assert process.image == image
+        assert process.command_line == (
+            f'{image.rsplit("/", 1)[-1]} -- "{source_path}" "{destination_path}"'
+        )
+        assert "/home/" not in process.command_line
+        assert "/usr/bin/touch" not in process.command_line
+        assert plan.transport_pid == -1
+        assert plan.transport_image == ""
+
+    def test_smbclient_operation_process_owns_direct_transport(
+        self, activity_gen, test_user, state_manager
+    ) -> None:
+        """Direct Linux SMB activity uses one bounded smbclient transport owner."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="LT-SMBCLIENT-01",
+            ip="10.10.1.61",
+            os="Ubuntu 24.04",
+            type="workstation",
+            assigned_user=test_user.username,
+            services=["smbclient"],
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        plan = activity_gen.ensure_smb_client_process(
+            client_system=workstation,
+            actor=test_user,
+            server="SAMBA-01",
+            share="Engineering",
+            path="Reports/Q1.csv",
+            client_path="/home/testuser/Q1.csv",
+            operation="update",
+            time=timestamp,
+            smb_principal=r"EXAMPLE\finance-writer",
+            auth_protocol="ntlmssp",
+        )
+
+        process = state_manager.get_process(workstation.hostname, plan.actor_pid)
+        assert process is not None
+        assert process.image == "/usr/bin/smbclient"
+        assert process.username == test_user.username
+        assert 'smbclient "//SAMBA-01/Engineering"' in process.command_line
+        assert '-U "EXAMPLE\\finance-writer"' in process.command_line
+        assert "--use-kerberos=off" in process.command_line
+        assert 'put "/home/testuser/Q1.csv" "Reports/Q1.csv"' in process.command_line
+        assert plan.access_mode == "direct"
+        assert plan.transport_pid == plan.actor_pid
+        assert (
+            activity_gen.foreground_process_termination_time(
+                workstation.hostname,
+                plan.actor_pid,
+            )
+            is not None
+        )
+
+    def test_smbclient_remote_presentation_never_becomes_local_get_operand(
+        self, activity_gen, test_user, state_manager
+    ) -> None:
+        """Direct SMB downloads fall back to a local basename, not a second UNC path."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="LT-SMBCLIENT-02",
+            ip="10.10.1.63",
+            os="Ubuntu 24.04",
+            type="workstation",
+            assigned_user=test_user.username,
+            services=["smbclient"],
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        plan = activity_gen.ensure_smb_client_process(
+            client_system=workstation,
+            actor=test_user,
+            server="SAMBA-01",
+            share="Engineering",
+            path=r"Reports\Q1.csv",
+            client_path="//SAMBA-01/Engineering/Reports/Q1.csv",
+            operation="read",
+            time=timestamp,
+            smb_principal="share-reader",
+            auth_protocol="kerberos",
+        )
+
+        process = state_manager.get_process(workstation.hostname, plan.actor_pid)
+        assert process is not None
+        assert process.username == test_user.username
+        assert '-U "share-reader"' in process.command_line
+        assert "--use-kerberos=required" in process.command_line
+        assert 'get "Reports\\Q1.csv" "Q1.csv"' in process.command_line
+        assert process.command_line.count("//SAMBA-01/Engineering") == 1
+
+    def test_linux_smb_source_pid_never_uses_local_smbd(self, activity_gen, state_manager) -> None:
+        """A Samba listener cannot be inferred as an outbound Linux client."""
+        system = System(
+            hostname="SAMBA-CLIENT-01",
+            ip="10.10.1.62",
+            os="Ubuntu 24.04",
+            type="server",
+            services=["samba", "smbclient"],
+        )
+        state_manager.set_current_time(datetime(2024, 3, 18, 14, 20, tzinfo=UTC))
+        state_manager.register_process(
+            system=system.hostname,
+            pid=1440,
+            parent_pid=0,
+            image="/usr/sbin/smbd",
+            command_line="/usr/sbin/smbd --foreground",
+            username="root",
+            integrity_level="System",
+            os_category="linux",
+        )
+        activity_gen._system_pids = {system.hostname: {"smbd": 1440}}
+
+        assert activity_gen._infer_connection_pid(system, "smb", 445, "tcp") == -1
+
+    def test_linux_samba_responder_is_tuple_scoped_worker(
+        self, activity_gen, state_manager
+    ) -> None:
+        """Successful inbound SMB transports resolve to smbd children, not the master."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        server = System(
+            hostname="SAMBA-01",
+            ip="10.10.2.20",
+            os="Ubuntu 24.04",
+            type="server",
+            services=["samba"],
+        )
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.register_process(
+            system=server.hostname,
+            pid=1,
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd --system",
+            username="root",
+            integrity_level="System",
+            os_category="linux",
+        )
+        activity_gen._system_pids = {server.hostname: {"systemd": 1}}
+        state_manager.set_current_time(timestamp)
+
+        first = activity_gen.ensure_linux_smb_responder_process(
+            target_system=server,
+            time=timestamp,
+            source_ip="10.10.1.60",
+            source_port=51000,
+            close_time=timestamp + timedelta(seconds=30),
+        )
+        reused = activity_gen.ensure_linux_smb_responder_process(
+            target_system=server,
+            time=timestamp + timedelta(seconds=1),
+            source_ip="10.10.1.60",
+            source_port=51000,
+        )
+        second = activity_gen.ensure_linux_smb_responder_process(
+            target_system=server,
+            time=timestamp + timedelta(seconds=2),
+            source_ip="10.10.1.61",
+            source_port=51001,
+        )
+
+        master = activity_gen._system_pids[server.hostname]["smbd"]
+        first_process = state_manager.get_process(server.hostname, first)
+        assert first_process is not None
+        assert first == reused
+        assert first != second
+        assert first != master
+        assert first_process.parent_pid == master
+        assert first_process.image == "/usr/sbin/smbd"
+
+        activity_gen.finalize_foreground_process_lifetimes(timestamp + timedelta(minutes=1))
+
+        assert activity_gen._process_termination_recorded(
+            server.hostname,
+            first,
+            first_process.start_time,
+        )
 
     def test_linux_smb_browse_owner_reuses_resource_when_requests_arrive_out_of_order(
         self, activity_gen, test_user, state_manager
@@ -6160,7 +6482,7 @@ class TestActivityGenerator:
             process
             for process in state_manager.get_processes_on_system(workstation.hostname)
             if process.image == "/usr/bin/gvfsd-smb-browse"
-            and process.command_line == "gvfsd-smb-browse smb://FILE-SRV-01/shared"
+            and process.command_line == 'gvfsd-smb-browse "smb://FILE-SRV-01/shared"'
         ]
         assert earlier_pid == later_pid
         assert len(owners) == 1

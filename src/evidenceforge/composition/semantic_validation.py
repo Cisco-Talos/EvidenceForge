@@ -12,7 +12,7 @@ from typing import Any, Protocol
 import yaml
 from pydantic import ValidationError
 
-from evidenceforge.config import get_activity_directory
+from evidenceforge.config import get_activity_directory, get_personas_directory
 from evidenceforge.config.schemas import ApplicationEntry
 from evidenceforge.models.exceptions import PackError
 from evidenceforge.models.scenario import Persona
@@ -144,6 +144,47 @@ def packaged_builtin_dns_domains() -> set[str]:
         if domain in result:
             raise PackError(f"packaged DNS registry contains duplicate domain {domain!r}")
         result.add(domain)
+    return result
+
+
+def packaged_builtin_persona_ids() -> set[str]:
+    """Return validated stable persona IDs from packaged defaults only."""
+
+    directory = get_personas_directory()
+    result: set[str] = set()
+    for path in sorted(directory.glob("*.yaml")):
+        try:
+            raw_entry = load_yaml_text(path.read_text(encoding="utf-8"), source=str(path))
+        except (OSError, yaml.YAMLError) as exc:
+            raise PackError(f"cannot load packaged validation registry {path}: {exc}") from exc
+        try:
+            entry = Persona.model_validate(raw_entry)
+        except ValidationError as exc:
+            raise PackError(f"invalid packaged persona {path}: {exc}") from exc
+        if entry.name != path.stem:
+            raise PackError(
+                f"packaged persona {path} declares name {entry.name!r}; expected {path.stem!r}"
+            )
+        if entry.name in result:
+            raise PackError(f"packaged persona registry contains duplicate ID {entry.name!r}")
+        result.add(entry.name)
+    return result
+
+
+def packaged_builtin_storage_preset_ids() -> set[str]:
+    """Return validated stable storage preset IDs from packaged defaults only."""
+
+    document = _packaged_yaml_mapping("storage_catalog.yaml")
+    profiles = document.get("profiles")
+    if not isinstance(profiles, dict):
+        raise PackError("packaged storage catalog must define a profiles mapping")
+    result: set[str] = set()
+    for raw_identity, raw_profile in profiles.items():
+        if not isinstance(raw_identity, str) or not raw_identity.strip():
+            raise PackError("packaged storage catalog profile IDs must be non-empty strings")
+        if not isinstance(raw_profile, dict):
+            raise PackError(f"packaged storage catalog profile {raw_identity!r} must be a mapping")
+        result.add(raw_identity)
     return result
 
 
@@ -284,6 +325,25 @@ def _require_reference(
     return qualified
 
 
+def _require_organization_model_reference(
+    reference: str,
+    targets: Mapping[str, Any],
+    builtin_ids: Collection[str],
+    *,
+    pack: SelectedPackForValidation,
+    context: str,
+) -> str:
+    """Resolve an organization-local export or packaged built-in shorthand."""
+
+    if ":" not in reference:
+        local_reference = f"{pack.manifest.name}:{reference}"
+        if local_reference in targets:
+            return local_reference
+        if reference in builtin_ids:
+            return reference
+    return _require_reference(reference, targets, pack=pack, context=context)
+
+
 def _executable_claims(os_name: str, image_path: str) -> set[str]:
     """Return runtime path and basename identities for an executable claim."""
 
@@ -306,6 +366,8 @@ def validate_selected_pack_semantics(
     builtin_dns_tags: Collection[str],
     builtin_executable_claims: Collection[str],
     builtin_dns_domains: Collection[str],
+    builtin_persona_ids: Collection[str],
+    builtin_storage_preset_ids: Collection[str],
 ) -> None:
     """Validate cross-catalog references and collisions for one selected composition.
 
@@ -315,6 +377,8 @@ def validate_selected_pack_semantics(
         builtin_dns_tags: DNS-selection tags from the packaged DNS registry.
         builtin_executable_claims: Immutable executable identities owned by packaged apps.
         builtin_dns_domains: Immutable exact domains owned by the packaged DNS registry.
+        builtin_persona_ids: Stable IDs from the packaged persona registry.
+        builtin_storage_preset_ids: Stable IDs from the packaged storage preset registry.
 
     Raises:
         PackError: A selected pack is semantically incomplete, ambiguous, or violates
@@ -326,6 +390,8 @@ def validate_selected_pack_semantics(
     builtin_tags = set(builtin_dns_tags)
     builtin_executables = {str(claim).lower() for claim in builtin_executable_claims}
     builtin_domains = {str(domain).lower().rstrip(".") for domain in builtin_dns_domains}
+    builtin_personas = set(builtin_persona_ids)
+    builtin_storage_presets = set(builtin_storage_preset_ids)
 
     by_pack: dict[
         int,
@@ -568,9 +634,10 @@ def validate_selected_pack_semantics(
                 if not isinstance(audience_data, Mapping):
                     continue
                 for persona_index, persona in enumerate(audience_data.get("personas", [])):
-                    _require_reference(
+                    _require_organization_model_reference(
                         persona,
                         global_catalogs["persona_catalog"],
+                        builtin_personas,
                         pack=pack,
                         context=(
                             f"{_pack_label(pack)} model.baseline_activity.{collection_name}"
@@ -581,9 +648,10 @@ def validate_selected_pack_semantics(
         for index, user in enumerate(pack.environment.get("users", [])):
             persona = user.persona if hasattr(user, "persona") else user.get("persona")
             if persona is not None:
-                _require_reference(
+                _require_organization_model_reference(
                     persona,
                     global_catalogs["persona_catalog"],
+                    builtin_personas,
                     pack=pack,
                     context=f"{_pack_label(pack)} model.environment.users[{index}].persona",
                 )
@@ -596,9 +664,10 @@ def validate_selected_pack_semantics(
                 for share_index, share in enumerate(server.get("shares", [])):
                     preset = share.get("preset")
                     if preset is not None:
-                        _require_reference(
+                        _require_organization_model_reference(
                             preset,
                             global_catalogs["storage_catalog"],
+                            builtin_storage_presets,
                             pack=pack,
                             context=(
                                 f"{_pack_label(pack)} model.environment.storage.servers"

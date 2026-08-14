@@ -32,6 +32,7 @@ This module provides validation beyond Pydantic's schema validation:
 
 import ipaddress
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
@@ -60,14 +61,16 @@ def _is_ip_literal(value: str | None) -> bool:
 
 
 # Well-known OS built-in accounts that are always valid as storyline actors
-# without needing to be defined in the environment users list.
-BUILTIN_ACCOUNTS = {
-    # Windows
+# without needing to be defined in the environment users list. Keep the
+# platform subsets separate for contracts, such as SMB authentication, where a
+# host-local account from one OS is not a valid built-in identity on another.
+WINDOWS_BUILTIN_ACCOUNTS = {
     "SYSTEM",
     "NT AUTHORITY\\SYSTEM",
     "LOCAL SERVICE",
     "NETWORK SERVICE",
-    # Linux/macOS
+}
+LINUX_BUILTIN_ACCOUNTS = {
     "root",
     "nobody",
     "daemon",
@@ -78,6 +81,7 @@ BUILTIN_ACCOUNTS = {
     "apache",
     "nginx",
 }
+BUILTIN_ACCOUNTS = WINDOWS_BUILTIN_ACCOUNTS | LINUX_BUILTIN_ACCOUNTS
 
 # OS detection patterns (mirrors evaluation/visibility.py)
 _WINDOWS_PATTERNS = ["windows"]
@@ -271,7 +275,7 @@ class ScenarioValidator:
         """Validate compiled storage references, audiences, and SMB selections."""
 
         from evidenceforge.generation.storage_world import StorageWorldModel
-        from evidenceforge.models.scenario import SmbShareLocation
+        from evidenceforge.models.scenario import SmbClientLocation, SmbShareLocation
 
         systems_by_name = {
             system.hostname.casefold(): system for system in self.scenario.environment.systems
@@ -284,18 +288,73 @@ class ScenarioValidator:
                         severity="error",
                         field_path=f"environment.storage.servers.{index}.system",
                         message=f"Unknown storage server system {server.system!r}",
-                        suggestion="Reference an environment system running Windows.",
+                        suggestion="Reference an environment system running Windows or Linux.",
                     )
                 )
-            elif "windows" not in system.os.casefold():
+                continue
+            platform = _get_os_category(system.os)
+            if platform not in {"windows", "linux"}:
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
                         field_path=f"environment.storage.servers.{index}.system",
-                        message=f"Storage server {server.system!r} is not a Windows system",
-                        suggestion="V1 canonical storage supports Windows SMB2/3 disk shares only.",
+                        message=(
+                            f"Storage server {server.system!r} is not a recognized Windows or "
+                            "Linux system"
+                        ),
+                        suggestion="Use a recognized Windows or Linux OS description.",
                     )
                 )
+                continue
+            if platform == "linux" and server.presets and "dc_policy" in server.presets:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.storage.servers.{index}.presets",
+                        message="Linux storage servers cannot use the dc_policy preset",
+                        suggestion="Use a Samba data-share preset such as collaboration or homes.",
+                    )
+                )
+            for volume_index, volume in enumerate(server.volumes or []):
+                volume_path = f"environment.storage.servers.{index}.volumes.{volume_index}"
+                path_matches = (
+                    bool(re.match(r"^[a-zA-Z]:\\", volume.mount))
+                    if platform == "windows"
+                    else volume.mount.startswith("/")
+                )
+                if not path_matches:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"{volume_path}.mount",
+                            message=(
+                                f"Storage volume mount {volume.mount!r} does not match the "
+                                f"{platform} server platform"
+                            ),
+                            suggestion=(
+                                "Use an absolute drive path such as D:\\ for Windows."
+                                if platform == "windows"
+                                else "Use an absolute POSIX path such as /srv/samba/data for Linux."
+                            ),
+                        )
+                    )
+                valid_filesystems = {"ntfs", "refs"} if platform == "windows" else {"ext4", "xfs"}
+                if volume.filesystem not in valid_filesystems:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"{volume_path}.filesystem",
+                            message=(
+                                f"Filesystem {volume.filesystem!r} is not valid for a "
+                                f"{platform} storage server"
+                            ),
+                            suggestion=(
+                                "Use ntfs or refs for Windows."
+                                if platform == "windows"
+                                else "Use ext4 or xfs for Linux."
+                            ),
+                        )
+                    )
         try:
             world = StorageWorldModel.compile(self.scenario)
         except (KeyError, TypeError, ValueError) as exc:
@@ -313,10 +372,23 @@ class ScenarioValidator:
             *(username.casefold() for username in self.usernames),
             *(group.casefold() for group in self.group_names),
             *(account.casefold() for account in self.service_accounts),
+            *(account.casefold() for account in BUILTIN_ACCOUNTS),
             "authenticated users",
             "domain users",
             "domain admins",
             "backup operators",
+        }
+        directory_smb_principals = {
+            *(username.casefold() for username in self.usernames),
+            *(account.casefold() for account in self.service_accounts),
+        }
+        known_smb_principals = {
+            *directory_smb_principals,
+            *(account.casefold() for account in BUILTIN_ACCOUNTS),
+        }
+        windows_smb_principals = {
+            *directory_smb_principals,
+            *(account.casefold() for account in WINDOWS_BUILTIN_ACCOUNTS),
         }
         for server_index, server in enumerate(self.scenario.environment.storage.servers):
             for share_index, share in enumerate(server.shares):
@@ -347,6 +419,93 @@ class ScenarioValidator:
                     )
                 )
             self._validate_storage_audience(index, mapping)
+            if (
+                mapping.principal is not None
+                and mapping.principal.casefold() not in known_smb_principals
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.storage.mappings.{index}.principal",
+                        message=f"Unknown storage mapping principal {mapping.principal!r}",
+                        suggestion="Reference a scenario user, service account, or built-in account.",
+                    )
+                )
+            compiled_share = world.shares_by_ref.get(mapping.share.casefold())
+            compiled_volume = (
+                world.volumes_by_ref.get(
+                    f"{compiled_share.system}.{compiled_share.volume}".casefold()
+                )
+                if compiled_share is not None
+                else None
+            )
+            if (
+                mapping.principal is not None
+                and compiled_volume is not None
+                and compiled_volume.platform == "linux"
+                and mapping.principal.casefold() not in directory_smb_principals
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.storage.mappings.{index}.principal",
+                        message=(
+                            f"Samba mapping principal {mapping.principal!r} is not a declared "
+                            "directory user or service account"
+                        ),
+                        suggestion=(
+                            "Use a declared directory identity; Samba guest and local built-in "
+                            "accounts are outside the supported domain-member model."
+                        ),
+                    )
+                )
+            if (
+                mapping.principal is not None
+                and compiled_volume is not None
+                and compiled_volume.platform == "windows"
+                and mapping.principal.casefold() in known_smb_principals
+                and mapping.principal.casefold() not in windows_smb_principals
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.storage.mappings.{index}.principal",
+                        message=(
+                            f"Windows SMB mapping principal {mapping.principal!r} is not a "
+                            "declared directory identity or Windows built-in account"
+                        ),
+                        suggestion=(
+                            "Declare the credential as a scenario user or service account, or use "
+                            "a Windows built-in identity such as SYSTEM."
+                        ),
+                    )
+                )
+            audience_systems = [
+                systems_by_name[name.casefold()]
+                for name in mapping.audience.systems
+                if name.casefold() in systems_by_name
+            ]
+            if not mapping.audience.systems:
+                audience_systems = list(systems_by_name.values())
+            platforms = {_get_os_category(system.os) for system in audience_systems}
+            if mapping.drive is not None and "windows" not in platforms:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.storage.mappings.{index}.drive",
+                        message="Storage mapping drive has no applicable Windows client",
+                        suggestion="Target a Windows system or use a POSIX mount for Linux clients.",
+                    )
+                )
+            if mapping.mount is not None and "linux" not in platforms:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.storage.mappings.{index}.mount",
+                        message="Storage mapping mount has no applicable Linux client",
+                        suggestion="Target a Linux system or use a drive for Windows clients.",
+                    )
+                )
 
         for section_name, events in (
             ("storyline", self.scenario.storyline or []),
@@ -362,116 +521,146 @@ class ScenarioValidator:
                         for location in (spec.target, spec.source, spec.destination)
                         if isinstance(location, SmbShareLocation)
                     ]
+                    client_locations = [
+                        location
+                        for location in (spec.source, spec.destination)
+                        if isinstance(location, SmbClientLocation)
+                    ]
                     for location in locations:
                         self._validate_smb_location(world, spec, location, path)
-                    if spec.mapping is not None:
-                        mapping = world.mappings_by_id.get(spec.mapping.casefold())
-                        if mapping is None:
+                    if (
+                        spec.smb_principal is not None
+                        and spec.smb_principal.casefold() not in known_smb_principals
+                    ):
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=f"{path}.smb_principal",
+                                message=f"Unknown SMB principal {spec.smb_principal!r}",
+                                suggestion=(
+                                    "Reference a scenario user, service account, or built-in account."
+                                ),
+                            )
+                        )
+                    client_system = (
+                        systems_by_name.get(event.system.casefold())
+                        if spec.client is None
+                        else None
+                    )
+                    client_platform = (
+                        _get_os_category(client_system.os)
+                        if client_system is not None
+                        else "external"
+                    )
+                    if spec.client is None:
+                        if spec.path_style == "mapped" and client_platform != "windows":
                             self.issues.append(
                                 ValidationIssue(
                                     severity="error",
-                                    field_path=f"{path}.mapping",
-                                    message=f"Unknown storage mapping {spec.mapping!r}",
-                                    suggestion="Use a mapping ID from environment.storage.mappings.",
+                                    field_path=f"{path}.path_style",
+                                    message="Mapped SMB presentation is only valid on Windows clients",
+                                    suggestion="Use path_style: mounted or unc for a Linux client.",
                                 )
                             )
-                        elif all(
-                            location.share.casefold() != mapping.share.casefold()
-                            for location in locations
+                        if spec.path_style == "mounted" and client_platform != "linux":
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.path_style",
+                                    message="Mounted SMB presentation is only valid on Linux clients",
+                                    suggestion="Use path_style: mapped or unc for a Windows client.",
+                                )
+                            )
+                        if spec.client_access == "windows_native" and client_platform != "windows":
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.client_access",
+                                    message="windows_native SMB access requires a Windows client",
+                                    suggestion="Use cifs_mount, smbclient, or auto for a Linux client.",
+                                )
+                            )
+                        if (
+                            spec.client_access in {"cifs_mount", "smbclient"}
+                            and client_platform != "linux"
                         ):
                             self.issues.append(
                                 ValidationIssue(
                                     severity="error",
-                                    field_path=f"{path}.mapping",
+                                    field_path=f"{path}.client_access",
                                     message=(
-                                        f"Mapping {spec.mapping!r} does not target any share used "
-                                        "by this SMB activity"
+                                        f"{spec.client_access} SMB access requires a Linux client"
                                     ),
-                                    suggestion="Remove the mapping or select its mapped share.",
+                                    suggestion="Use windows_native or auto for a Windows client.",
                                 )
                             )
-                        elif not self._storage_mapping_applies(
-                            mapping,
-                            actor=event.actor,
-                            system=event.system,
-                        ):
-                            self.issues.append(
-                                ValidationIssue(
-                                    severity="error",
-                                    field_path=f"{path}.mapping",
-                                    message=(
-                                        f"Storage mapping {mapping.id!r} does not apply to "
-                                        f"{event.actor!r} on {event.system!r}"
-                                    ),
-                                    suggestion="Expand its audience or use UNC presentation.",
-                                )
-                            )
-                    elif spec.path_style == "mapped":
-                        applicable = [
-                            mapping
-                            for mapping in world.mappings
-                            if any(
-                                location.share.casefold() == mapping.share.casefold()
-                                for location in locations
-                            )
-                            and self._storage_mapping_applies(
-                                mapping,
-                                actor=event.actor,
-                                system=event.system,
-                            )
-                        ]
-                        if len(applicable) != 1:
+                        if spec.client_access == "smbclient" and spec.path_style == "mounted":
                             self.issues.append(
                                 ValidationIssue(
                                     severity="error",
                                     field_path=f"{path}.path_style",
                                     message=(
-                                        "Mapped SMB presentation must resolve exactly one active "
-                                        f"mapping; found {len(applicable)}"
+                                        "smbclient access cannot use a mounted SMB presentation"
                                     ),
-                                    suggestion="Set mapping explicitly or use path_style: unc/auto.",
+                                    suggestion=(
+                                        "Use path_style: unc/auto for smbclient, or use "
+                                        "client_access: cifs_mount for a mounted path."
+                                    ),
                                 )
                             )
-                    access_results: list[tuple[object, bool]] = []
-                    for location in locations:
-                        share = world.shares_by_ref.get(location.share.casefold())
-                        if share is None:
-                            continue
-                        required_operation = spec.operation
-                        if spec.operation == "copy":
-                            required_operation = "read" if location is spec.source else "update"
-                        allowed = self._storage_actor_has_access(
-                            share,
-                            actor=event.actor,
-                            operation=required_operation,
-                        )
-                        access_results.append((share, allowed))
-                    denied = [share for share, allowed in access_results if not allowed]
-                    if spec.outcome == "success" and denied:
-                        denied_refs = ", ".join(share.ref for share in denied)
-                        self.issues.append(
-                            ValidationIssue(
-                                severity="error",
-                                field_path=f"{path}.outcome",
-                                message=(
-                                    f"SMB success is impossible because {event.actor!r} cannot "
-                                    f"perform the required access on {denied_refs}"
-                                ),
-                                suggestion="Change access, actor, share, or asserted outcome.",
+                        if spec.client_access == "cifs_mount" and spec.path_style not in {
+                            "auto",
+                            "mounted",
+                        }:
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.path_style",
+                                    message=(
+                                        "cifs_mount access requires an automatic or mounted SMB "
+                                        "presentation"
+                                    ),
+                                    suggestion=(
+                                        "Use path_style: mounted/auto, or use client_access: "
+                                        "smbclient for a network share presentation."
+                                    ),
+                                )
                             )
-                        )
-                    if spec.outcome == "access_denied" and access_results and not denied:
-                        self.issues.append(
-                            ValidationIssue(
-                                severity="error",
-                                field_path=f"{path}.outcome",
-                                message=(
-                                    f"SMB access_denied is not credible because {event.actor!r} "
-                                    "can perform every required share access"
-                                ),
-                                suggestion="Choose an inaccessible target or use outcome: auto.",
-                            )
-                        )
+                        for location in client_locations:
+                            if location.path is None:
+                                continue
+                            location_is_posix = location.path.startswith("/")
+                            if client_platform == "windows" and location_is_posix:
+                                self.issues.append(
+                                    ValidationIssue(
+                                        severity="error",
+                                        field_path=path,
+                                        message=(
+                                            f"Client path {location.path!r} is not a Windows path"
+                                        ),
+                                        suggestion="Use an absolute Windows drive path.",
+                                    )
+                                )
+                            if client_platform == "linux" and not location_is_posix:
+                                self.issues.append(
+                                    ValidationIssue(
+                                        severity="error",
+                                        field_path=path,
+                                        message=f"Client path {location.path!r} is not a POSIX path",
+                                        suggestion="Use an absolute POSIX path.",
+                                    )
+                                )
+
+                    self._validate_smb_mapping_and_access(
+                        world=world,
+                        spec=spec,
+                        locations=locations,
+                        actor=event.actor,
+                        system=event.system,
+                        path=path,
+                        windows_smb_principals=windows_smb_principals,
+                        directory_smb_principals=directory_smb_principals,
+                    )
                     if spec.client is not None:
                         share_servers = {
                             world.share(location.share).system.casefold()
@@ -510,9 +699,312 @@ class ScenarioValidator:
                 )
 
     def _storage_mapping_applies(self, mapping: object, *, actor: str, system: str) -> bool:
-        user_match = not mapping.users or actor in mapping.users
-        system_match = not mapping.systems or system in mapping.systems
+        user_match = not mapping.users or actor.casefold() in {
+            user.casefold() for user in mapping.users
+        }
+        system_match = not mapping.systems or system.casefold() in {
+            hostname.casefold() for hostname in mapping.systems
+        }
         return user_match and system_match
+
+    def _applicable_smb_mappings(
+        self,
+        world: object,
+        *,
+        share_ref: str,
+        actor: str,
+        system: str,
+    ) -> list[object]:
+        """Return runtime-ordered mappings for one SMB share leg."""
+
+        return sorted(
+            (
+                mapping
+                for mapping in world.mappings
+                if mapping.share.casefold() == share_ref.casefold()
+                and self._storage_mapping_applies(mapping, actor=actor, system=system)
+            ),
+            key=lambda mapping: mapping.id.casefold(),
+        )
+
+    @staticmethod
+    def _select_smb_leg_mapping(
+        spec: object,
+        *,
+        share_ref: str,
+        authored_mapping: object | None,
+        applicable: list[object],
+    ) -> object | None:
+        """Mirror the runtime's deterministic mapping choice for one share leg."""
+
+        if (
+            authored_mapping is not None
+            and authored_mapping.share.casefold() == share_ref.casefold()
+        ):
+            return authored_mapping
+        if spec.path_style in {"mapped", "mounted"}:
+            return applicable[0] if len(applicable) == 1 else None
+        if spec.path_style == "auto":
+            persistent = [mapping for mapping in applicable if mapping.lifecycle == "persistent"]
+            if persistent:
+                return persistent[0]
+            if len(applicable) == 1:
+                return applicable[0]
+        return None
+
+    @staticmethod
+    def _smb_leg_access_operations(
+        spec: object,
+        location: object,
+    ) -> tuple[str, ...]:
+        """Return the runtime child operations that must be authorized for one leg."""
+
+        if spec.operation == "copy":
+            return ("read",) if location is spec.source else ("update",)
+        if spec.operation != "move":
+            return (spec.operation,)
+
+        source_is_share = getattr(spec.source, "type", None) == "share"
+        destination_is_share = getattr(spec.destination, "type", None) == "share"
+        if source_is_share and destination_is_share:
+            same_share = spec.source.share.casefold() == spec.destination.share.casefold()
+            if same_share:
+                return ("move",)
+            return ("read", "delete") if location is spec.source else ("update",)
+        if source_is_share and location is spec.source:
+            return ("read", "delete")
+        return ("update",)
+
+    def _validate_smb_mapping_and_access(
+        self,
+        *,
+        world: object,
+        spec: object,
+        locations: list[object],
+        actor: str,
+        system: str,
+        path: str,
+        windows_smb_principals: set[str],
+        directory_smb_principals: set[str],
+    ) -> None:
+        """Validate per-share mapping, credential, identity, and ACL feasibility."""
+
+        authored_mapping = None
+        if spec.mapping is not None:
+            mapping = world.mappings_by_id.get(spec.mapping.casefold())
+            if mapping is None:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{path}.mapping",
+                        message=f"Unknown storage mapping {spec.mapping!r}",
+                        suggestion="Use a mapping ID from environment.storage.mappings.",
+                    )
+                )
+            elif all(
+                location.share.casefold() != mapping.share.casefold() for location in locations
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{path}.mapping",
+                        message=(
+                            f"Mapping {spec.mapping!r} does not target any share used "
+                            "by this SMB activity"
+                        ),
+                        suggestion="Remove the mapping or select its mapped share.",
+                    )
+                )
+            elif not self._storage_mapping_applies(mapping, actor=actor, system=system):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{path}.mapping",
+                        message=(
+                            f"Storage mapping {mapping.id!r} does not apply to "
+                            f"{actor!r} on {system!r}"
+                        ),
+                        suggestion="Expand its audience or use UNC presentation.",
+                    )
+                )
+                authored_mapping = mapping
+            else:
+                authored_mapping = mapping
+
+        share_locations: dict[str, list[object]] = {}
+        for location in locations:
+            share_locations.setdefault(location.share.casefold(), []).append(location)
+
+        access_results: list[tuple[object, str, str, bool]] = []
+        for share_key, leg_locations in share_locations.items():
+            share = world.shares_by_ref.get(share_key)
+            if share is None:
+                continue
+            applicable = self._applicable_smb_mappings(
+                world,
+                share_ref=share.ref,
+                actor=actor,
+                system=system,
+            )
+            selected_mapping = self._select_smb_leg_mapping(
+                spec,
+                share_ref=share.ref,
+                authored_mapping=authored_mapping,
+                applicable=applicable,
+            )
+
+            selection_error = False
+            if spec.path_style in {"mapped", "mounted"} and selected_mapping is None:
+                presentation = spec.path_style.capitalize()
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{path}.path_style",
+                        message=(
+                            f"{presentation} SMB presentation for {share.ref} must resolve "
+                            f"exactly one active mapping; found {len(applicable)}"
+                        ),
+                        suggestion="Set mapping explicitly or use path_style: unc/auto.",
+                    )
+                )
+                selection_error = True
+
+            if spec.client_access == "cifs_mount" and (
+                selected_mapping is None or selected_mapping.mount is None
+            ):
+                mounted = [mapping for mapping in applicable if mapping.mount is not None]
+                if not selection_error:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"{path}.client_access",
+                            message=(
+                                "cifs_mount SMB access must resolve exactly one active "
+                                f"Linux mount mapping for {share.ref}; found {len(mounted)}"
+                            ),
+                            suggestion="Set mapping to one mapping with mount, or use smbclient.",
+                        )
+                    )
+
+            if (
+                selected_mapping is not None
+                and spec.path_style == "mapped"
+                and selected_mapping.drive is None
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{path}.mapping",
+                        message=f"Storage mapping {selected_mapping.id!r} has no Windows drive",
+                        suggestion="Configure drive or target a Windows audience for allocation.",
+                    )
+                )
+            if (
+                selected_mapping is not None
+                and (spec.path_style == "mounted" or spec.client_access == "cifs_mount")
+                and selected_mapping.mount is None
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{path}.mapping",
+                        message=f"Storage mapping {selected_mapping.id!r} has no Linux mount",
+                        suggestion="Configure mount or target a Linux audience for allocation.",
+                    )
+                )
+
+            fixed_principal = (
+                selected_mapping.principal
+                if selected_mapping is not None
+                and selected_mapping.credential_mode == "fixed"
+                and selected_mapping.principal is not None
+                else None
+            )
+            if (
+                fixed_principal is not None
+                and spec.smb_principal is not None
+                and spec.smb_principal.casefold() != fixed_principal.casefold()
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{path}.smb_principal",
+                        message=(
+                            f"SMB principal {spec.smb_principal!r} conflicts with fixed "
+                            f"mapping {selected_mapping.id!r} principal {fixed_principal!r} "
+                            f"for {share.ref}"
+                        ),
+                        suggestion="Use the mapping principal or change the mapping to per_user.",
+                    )
+                )
+            access_actor = fixed_principal or spec.smb_principal or actor
+
+            volume = world.volumes_by_ref.get(f"{share.system}.{share.volume}".casefold())
+            platform = volume.platform if volume is not None else "windows"
+            platform_principals = (
+                directory_smb_principals if platform == "linux" else windows_smb_principals
+            )
+            if access_actor.casefold() not in platform_principals:
+                principal_field = "mapping" if fixed_principal is not None else "smb_principal"
+                principal_message = (
+                    f"Samba principal {access_actor!r} for {share.ref} is not a declared "
+                    "directory user or service account"
+                    if platform == "linux"
+                    else (
+                        f"Windows SMB principal {access_actor!r} for {share.ref} is not a "
+                        "supported declared identity"
+                    )
+                )
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{path}.{principal_field}",
+                        message=principal_message,
+                        suggestion=(
+                            "Use a declared directory identity; guest and standalone/local "
+                            "Samba accounts are outside V1."
+                            if platform == "linux"
+                            else "Use a declared user/service account or Windows built-in account."
+                        ),
+                    )
+                )
+
+            required_operations = dict.fromkeys(
+                operation
+                for location in leg_locations
+                for operation in self._smb_leg_access_operations(spec, location)
+            )
+            for required_operation in required_operations:
+                allowed = self._storage_actor_has_access(
+                    share,
+                    actor=access_actor,
+                    operation=required_operation,
+                )
+                access_results.append((share, access_actor, required_operation, allowed))
+
+        denied = [result for result in access_results if not result[3]]
+        if spec.outcome == "success" and denied:
+            denied_refs = ", ".join(
+                f"{share.ref} ({operation} as {principal!r})"
+                for share, principal, operation, _allowed in denied
+            )
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path=f"{path}.outcome",
+                    message=f"SMB success is impossible because access is denied on {denied_refs}",
+                    suggestion="Change access, credential mapping, share, or asserted outcome.",
+                )
+            )
+        if spec.outcome == "access_denied" and access_results and not denied:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path=f"{path}.outcome",
+                    message="SMB access_denied is not credible because every required leg is allowed",
+                    suggestion="Choose an inaccessible target or use outcome: auto.",
+                )
+            )
 
     def _storage_actor_has_access(
         self,
@@ -1263,32 +1755,60 @@ class ScenarioValidator:
     def _validate_uniqueness(self) -> None:
         """Check for duplicate usernames, hostnames, and IPs."""
         # Check duplicate usernames
-        seen_usernames = set()
+        seen_usernames: dict[str, str] = {}
         for idx, user in enumerate(self.scenario.environment.users):
-            if user.username in seen_usernames:
+            folded_username = user.username.casefold()
+            existing_username = seen_usernames.get(folded_username)
+            if existing_username is not None:
+                conflict = (
+                    f"Duplicate username '{user.username}' found"
+                    if existing_username == user.username
+                    else (
+                        f"Duplicate username '{user.username}' conflicts case-insensitively "
+                        f"with '{existing_username}'"
+                    )
+                )
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
                         field_path=f"environment.users.{idx}.username",
-                        message=f"Duplicate username '{user.username}' found",
-                        suggestion="Usernames must be unique across all users",
+                        message=conflict,
+                        suggestion=(
+                            "Usernames are case-insensitive and must be unique across all users; "
+                            "remove or rename one entry"
+                        ),
                     )
                 )
-            seen_usernames.add(user.username)
+            else:
+                seen_usernames[folded_username] = user.username
 
         # Check duplicate hostnames
-        seen_hostnames = set()
+        seen_hostnames: dict[str, str] = {}
         for idx, system in enumerate(self.scenario.environment.systems):
-            if system.hostname in seen_hostnames:
+            folded_hostname = system.hostname.casefold()
+            existing_hostname = seen_hostnames.get(folded_hostname)
+            if existing_hostname is not None:
+                conflict = (
+                    f"Duplicate hostname '{system.hostname}' found"
+                    if existing_hostname == system.hostname
+                    else (
+                        f"Duplicate hostname '{system.hostname}' conflicts case-insensitively "
+                        f"with '{existing_hostname}'"
+                    )
+                )
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
                         field_path=f"environment.systems.{idx}.hostname",
-                        message=f"Duplicate hostname '{system.hostname}' found",
-                        suggestion="Hostnames must be unique across all systems",
+                        message=conflict,
+                        suggestion=(
+                            "Hostnames are case-insensitive and must be unique across all systems; "
+                            "remove or rename one entry"
+                        ),
                     )
                 )
-            seen_hostnames.add(system.hostname)
+            else:
+                seen_hostnames[folded_hostname] = system.hostname
 
         # Check duplicate IPs
         seen_ips = set()
