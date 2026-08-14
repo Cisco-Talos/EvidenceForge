@@ -27,7 +27,7 @@
 # Depends on: dns_registry.yaml (dns_tags must exist as tags on domains),
 #             persona files (persona_traffic keys must match persona names)
 #
-# Full schema: see commands/eforge/references/config-traffic-profiles.md
+# Authoring reference: commands/eforge/references/config-dns-network.md
 
 role_traffic:
 

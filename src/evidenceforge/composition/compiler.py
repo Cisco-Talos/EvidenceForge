@@ -73,6 +73,29 @@ _KEYED_LIST_FIELDS: dict[tuple[str, ...], str] = {
 }
 
 
+class _ScenarioSchemaValidationError(SchemaValidationError):
+    """Classified schema failure with optional process-local authored origins."""
+
+    def __init__(
+        self,
+        message: str,
+        graph: LoadedSourceGraph | None,
+        *,
+        input_kind: str,
+        path_prefix: str | None = None,
+        editable: bool = True,
+    ) -> None:
+        super().__init__(message)
+        self.diagnostic_field_origins = (
+            {".".join(path): source for path, source in graph.origins.items()}
+            if graph is not None
+            else {}
+        )
+        self.diagnostic_input_kind = input_kind
+        self.diagnostic_path_prefix = path_prefix
+        self.diagnostic_editable = editable
+
+
 def resolve_project_root(scenario_path: Path, explicit: Path | None = None) -> Path:
     """Resolve the deterministic project root for a scenario compilation."""
 
@@ -312,6 +335,25 @@ def _load_packaged_defaults() -> dict[str, Any]:
     return defaults
 
 
+def build_management_effective_config(
+    project_root: Path | None = None,
+) -> EffectiveConfig:
+    """Build an isolated configuration snapshot for project-scoped CLI inspection.
+
+    Management commands do not compile a scenario, but their runtime-derived
+    inventories must still observe exactly one explicit project overlay without
+    inheriting module caches from an earlier command in the same process.
+    """
+
+    resolved_project_root = resolve_management_project_root(project_root)
+    return EffectiveConfig(
+        project_root=".",
+        packaged_defaults=_load_packaged_defaults(),
+        project_overlays=_load_project_overlays(resolved_project_root),
+        families=CONFIG_FAMILY_REGISTRY,
+    )
+
+
 def _merge_keyed_list(
     lower: list[Any],
     higher: list[Any],
@@ -495,7 +537,19 @@ def _compile_resolved(
             for pack in document.provenance.get("selected_packs", [])
         )
     except ValidationError as exc:
-        raise SchemaValidationError(f"invalid resolved scenario document: {exc}") from exc
+        raise _ScenarioSchemaValidationError(
+            f"invalid resolved scenario document: {exc}",
+            None,
+            input_kind="resolved",
+            editable=False,
+        ) from exc
+    except SchemaValidationError as exc:
+        raise _ScenarioSchemaValidationError(
+            f"invalid resolved scenario document: {exc}",
+            None,
+            input_kind="resolved",
+            editable=False,
+        ) from exc
     digests = dict(document.digests)
     return CompiledScenario(
         scenario=scenario,
@@ -533,15 +587,22 @@ def compile_scenario(
         try:
             composition = CompositionSpec.model_validate(raw.get("composition") or {})
         except ValidationError as exc:
-            raise SchemaValidationError(f"invalid Scenario 2.0 composition: {exc}") from exc
+            raise _ScenarioSchemaValidationError(
+                f"invalid Scenario 2.0 composition: {exc}",
+                graph,
+                input_kind="scenario-2.0",
+                path_prefix="composition",
+            ) from exc
         authored = {
             key: value
             for key, value in raw.items()
             if key not in {"scenario_version", "composition"}
         }
         if "version" in authored:
-            raise SchemaValidationError(
-                "Scenario 2.0 uses scenario_version: '2.0'; remove the legacy version field"
+            raise _ScenarioSchemaValidationError(
+                "Scenario 2.0 uses scenario_version: '2.0'; remove the legacy version field",
+                graph,
+                input_kind="scenario-2.0",
             )
         ScenarioV2Document(
             scenario_version="2.0",
@@ -595,8 +656,10 @@ def compile_scenario(
     else:
         version = raw.get("version", "1.0")
         if version != "1.0":
-            raise SchemaValidationError(
-                "authored scenario must use version: '1.0' or scenario_version: '2.0'"
+            raise _ScenarioSchemaValidationError(
+                "authored scenario must use version: '1.0' or scenario_version: '2.0'",
+                graph,
+                input_kind="scenario-1.0",
             )
         scenario_data = raw
         authored_kind = "scenario-1.0"
@@ -607,7 +670,11 @@ def compile_scenario(
         if authored_kind == "scenario-1.0":
             ScenarioV1Document(scenario=scenario)
     except ValidationError as exc:
-        raise SchemaValidationError(f"scenario schema validation failed: {exc}") from exc
+        raise _ScenarioSchemaValidationError(
+            f"scenario schema validation failed: {exc}",
+            graph,
+            input_kind=authored_kind,
+        ) from exc
     if generation_seed is not None:
         scenario = scenario.model_copy(update={"generation_seed": generation_seed})
     scenario, embedded_yaml_assets = _embed_scenario_assets(scenario, graph)
@@ -685,6 +752,7 @@ def compile_scenario(
         provenance=provenance,
         digests=digests,
         authored_kind=authored_kind,  # type: ignore[arg-type]
+        diagnostic_field_origins={".".join(path): source for path, source in graph.origins.items()},
     )
 
 

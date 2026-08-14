@@ -40,12 +40,19 @@ The merge logic combines them with package defaults using per-file strategies:
 """
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _OVERLAY_DIR_NAME = ".eforge/config"
+_OVERLAY_PROJECT_ROOT: ContextVar[Path | None] = ContextVar(
+    "evidenceforge_overlay_project_root",
+    default=None,
+)
 _RETIRED_OVERLAYS = {
     "activity/smb_file_transfers.yaml": (
         "This overlay was removed in EvidenceForge 2.0 because generic TCP/445 "
@@ -56,20 +63,35 @@ _RETIRED_OVERLAYS = {
 }
 
 
-def get_overlay_directory() -> Path | None:
+@contextmanager
+def overlay_project_root_scope(project_root: Path) -> Iterator[None]:
+    """Temporarily bind ambient overlay discovery to one explicit project root."""
+
+    token = _OVERLAY_PROJECT_ROOT.set(project_root.resolve())
+    try:
+        yield
+    finally:
+        _OVERLAY_PROJECT_ROOT.reset(token)
+
+
+def get_overlay_directory(project_root: Path | None = None) -> Path | None:
     """Discover the project-local overlay config directory.
 
-    Looks for `.eforge/config/` in the current working directory.
+    Looks for `.eforge/config/` under an explicit or scoped project root. The
+    current working directory remains the compatibility fallback for runtime
+    callers that have not selected a project root.
 
     Returns:
         Path to the overlay directory, or None if it doesn't exist.
     """
     from evidenceforge.config.provider import current_effective_config, uses_ambient_overlay_compat
 
+    scoped_root = project_root or _OVERLAY_PROJECT_ROOT.get()
     effective = current_effective_config()
-    if effective is not None and not uses_ambient_overlay_compat():
+    if scoped_root is None and effective is not None and not uses_ambient_overlay_compat():
         return None
-    overlay = Path.cwd() / _OVERLAY_DIR_NAME
+    selected_root = scoped_root or Path.cwd()
+    overlay = selected_root.resolve() / _OVERLAY_DIR_NAME
     if overlay.is_dir():
         return overlay
     return None

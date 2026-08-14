@@ -19,7 +19,7 @@ _CACHED_ISSUERS: dict[str, Any] | None = None
 
 
 def _merge_tls_issuers(default: dict, overlay: dict) -> dict:
-    """Merge TLS issuers overlay with package defaults (keyed by issuer name)."""
+    """Merge issuers by name and domain overrides by glob pattern."""
     result = dict(default)
     if "issuers" in overlay:
         result["issuers"] = merge_keyed_list(
@@ -27,6 +27,10 @@ def _merge_tls_issuers(default: dict, overlay: dict) -> dict:
             overlay["issuers"],
             key_field="name",
         )
+    if "domain_ca_overrides" in overlay:
+        overrides = dict(default.get("domain_ca_overrides", {}))
+        overrides.update(overlay["domain_ca_overrides"])
+        result["domain_ca_overrides"] = overrides
     return result
 
 

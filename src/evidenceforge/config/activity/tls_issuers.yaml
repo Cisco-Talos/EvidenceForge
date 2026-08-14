@@ -9,7 +9,7 @@
 # Depended on by: generation engine (Zeek x509/SSL certificate generation)
 # Depends on: nothing — standalone
 #
-# Full schema: see commands/eforge/references/config-tls-issuers.md
+# Authoring reference: commands/eforge/references/config-dns-network.md
 
 issuers:
   - name: "CN=R3, O=Let's Encrypt, C=US"

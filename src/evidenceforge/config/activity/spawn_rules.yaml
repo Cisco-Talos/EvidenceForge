@@ -12,7 +12,7 @@
 # Depends on: application_catalog.yaml (child exe names),
 #             system_processes.yaml (system process names)
 #
-# Full schema: see commands/eforge/references/config-spawn-rules.md
+# Authoring reference: commands/eforge/references/config-apps-processes.md
 
 windows:
   explorer.exe:

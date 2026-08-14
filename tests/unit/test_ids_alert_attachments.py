@@ -1198,7 +1198,7 @@ def test_ids_documentation_and_skill_reference_stay_in_parity() -> None:
         PROJECT_ROOT / "docs" / "reference" / "scenario-reference.md",
         PROJECT_ROOT / "commands" / "eforge" / "references" / "scenario-reference.md",
         PROJECT_ROOT / "docs" / "reference" / "EVIDENCE_FORMATS.md",
-        PROJECT_ROOT / "commands" / "eforge" / "references" / "evidence-formats.md",
+        PROJECT_ROOT / "commands" / "eforge" / "references" / "evidence-network-ids.md",
     )
     for path in paths:
         content = path.read_text(encoding="utf-8")

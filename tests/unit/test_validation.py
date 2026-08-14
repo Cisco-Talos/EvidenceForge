@@ -1726,7 +1726,7 @@ class TestNetworkSensorDocumentation:
     def test_docs_and_skills_document_optional_sensors_and_proxy_logs(self):
         scenario_ref = self._read("docs/reference/scenario-reference.md")
         skill_ref = self._read("commands/eforge/references/scenario-reference.md")
-        scenario_skill = self._read("commands/eforge/scenario.md")
+        scenario_environment = self._read("commands/eforge/references/scenario-environment.md")
         validate_skill = self._read("commands/eforge/validate.md")
 
         for text in (scenario_ref, skill_ref):
@@ -1736,8 +1736,11 @@ class TestNetworkSensorDocumentation:
             assert "not by network sensors" in text
             assert "Requesting `cisco_asa` without a firewall" in text
 
-        assert "sensors:                       # Optional" in scenario_skill
-        assert "proxy-only labs that only request `proxy_access`" in scenario_skill
+        assert "`environment.network.sensors` is optional" in scenario_environment
+        assert "Proxy-only labs do not need placeholder Zeek sensors" in scenario_environment
+        assert "`proxy_access` is produced" in scenario_environment
+        assert "not network sensors" in scenario_environment
+        assert "Requesting `cisco_asa`" in scenario_environment
         assert "topology declared without sensors" in validate_skill
         assert "does not need a placeholder Zeek sensor" in validate_skill
 
