@@ -6,6 +6,45 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v2.0.0rc1 (2026-08-14)
+
+This first 2.0 release candidate brings Scenario 2.0 composition, reusable pack authoring, and
+cross-platform SMB2/3 support together on `dev` for release-readiness testing.
+
+**Cross-platform SMB2/3**
+
+- Extended the canonical SMB engine across Linux and Windows clients plus Windows and Samba
+  domain-member servers, with platform-native storage, authentication, process ownership, audit,
+  Zeek/eCAR correlation, manifest-v2 diagnostics, evaluation, and bounded long-run behavior
+  (`cbe9bd24`, `ef99f238`).
+- Added a versioned Northstar Linux/Samba organization-pack extension, mixed-OS fixtures,
+  deterministic integration coverage, resource-calibration v4 artifacts, and synchronized public
+  and skill contracts (`cbe9bd24`).
+
+**Scenario 2.0 and reusable packs**
+
+- Added exact-version industry and organization pack composition with provenance, deterministic
+  catalog qualification, lifecycle tooling, packaged sample packs, and authoring contracts
+  (`e4eb7d0f`, `01fd7e6d`).
+- Extracted the assessment benchmark into
+  `project:organization:meridian-healthcare-solutions@1.0.0`, preserved the monolithic source as
+  `iteration-test-1_0`, and kept `iteration-test` as the behavior-equivalent pack consumer
+  (`cbe9bd24`).
+
+**Agent-skill reliability**
+
+- Added focused pack-authoring workflows and compact, routed EvidenceForge skill references with
+  stronger installer, context-budget, safety, and checkout-CLI contracts (`01fd7e6d`, `d6a25dbd`,
+  `df1f39b6`).
+
+**Release-candidate readiness**
+
+- Locked the packed and inline assessment scenarios to equivalent effective semantics, documented
+  byte-identical current-code generation, and repaired timestamped explicit-credential lookup so
+  authoritative-ended sessions cannot own later process activity (`5e6e7c5e`, `31ac7004`).
+- Added canonical PEP 440 `X.Y.ZrcN` support to the release-version guard and maintainer workflow
+  (`e67f0625`).
+
 ## v1.17.0 (2026-08-13)
 
 This minor release adds bidirectional HTTP file and multipart-body analysis, promotes the
