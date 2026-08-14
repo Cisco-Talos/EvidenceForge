@@ -36,6 +36,9 @@ _MINIMAL = Path("tests/fixtures/scenarios/minimal.yaml")
 _FINANCE = Path("tests/fixtures/scenarios/finance-industry-pack.yaml")
 _NORTHSTAR = Path("tests/fixtures/scenarios/northstar-health-pack.yaml")
 _NORTHSTAR_LINUX = Path("tests/fixtures/scenarios/northstar-health-linux-pack.yaml")
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_ITERATION_ARCHIVE = _PROJECT_ROOT / "scenarios/iteration-test-1_0/scenario.yaml"
+_ITERATION_PACKED = _PROJECT_ROOT / "scenarios/iteration-test/scenario.yaml"
 
 
 def _write_yaml(path: Path, data: dict) -> Path:
@@ -75,6 +78,74 @@ def test_v2_monolithic_matches_v1_runtime_model(tmp_path: Path) -> None:
 
     assert v2_payload == v1_payload
     assert compiled_v2.selected_packs == ()
+
+
+def test_iteration_pack_migration_preserves_assessment_semantics() -> None:
+    """The pack-backed assessment differs only in its intentional wrapper identity."""
+
+    archived = compile_scenario(_ITERATION_ARCHIVE, project_root=_PROJECT_ROOT)
+    packed = compile_scenario(_ITERATION_PACKED, project_root=_PROJECT_ROOT)
+
+    assert packed.scenario.environment == archived.scenario.environment
+    assert packed.scenario.baseline_activity == archived.scenario.baseline_activity
+    assert packed.scenario.storyline == archived.scenario.storyline
+    assert packed.scenario.red_herrings == archived.scenario.red_herrings
+    assert packed.scenario.time_window == archived.scenario.time_window
+    assert packed.scenario.generation_seed == archived.scenario.generation_seed
+    assert packed.scenario.observation_profile == archived.scenario.observation_profile
+    assert packed.scenario.output.logs == archived.scenario.output.logs
+    assert packed.scenario.output.compression == archived.scenario.output.compression
+
+    archived_payload = archived.scenario.model_dump(mode="json")
+    packed_payload = packed.scenario.model_dump(mode="json")
+    for payload in (archived_payload, packed_payload):
+        payload.pop("version")
+        payload.pop("name")
+        payload["output"].pop("destination")
+        assigned_personas = {
+            user["persona"] for user in payload["environment"]["users"] if user["persona"]
+        }
+        payload["personas"] = sorted(
+            (persona for persona in payload["personas"] if persona["name"] in assigned_personas),
+            key=lambda persona: persona["name"],
+        )
+
+    assert packed_payload == archived_payload
+    assert {
+        (pack.source, pack.type, pack.name, pack.version) for pack in packed.selected_packs
+    } == {
+        ("package", "industry", "technology", "1.0.0"),
+        (
+            "project",
+            "organization",
+            "meridian-healthcare-solutions",
+            "1.0.0",
+        ),
+    }
+    assert {pack.location for pack in packed.selected_packs} == {
+        "package:industry:technology@1.0.0",
+        "project:organization:meridian-healthcare-solutions@1.0.0",
+    }
+    assert packed.provenance["organization_model_origins"]["environment.domain"] == (
+        "model/environment.yaml"
+    )
+    assert packed.provenance["organization_model_origins"]["baseline_activity.intensity"] == (
+        "model/baseline_activity.yaml"
+    )
+    assert (
+        packed.provenance["catalog_origins"]["persona_catalog.technology:platform_engineer"]
+        == "technology@1.0.0"
+    )
+
+    archived_personas = {persona.name for persona in archived.scenario.personas}
+    packed_personas = {persona.name for persona in packed.scenario.personas}
+    assigned_personas = {user.persona for user in packed.scenario.environment.users}
+    assert packed_personas - archived_personas == {"technology:platform_engineer"}
+    assert (packed_personas - archived_personas).isdisjoint(assigned_personas)
+    assert all(
+        assigned_personas.isdisjoint(traffic["data"]["audience"])
+        for traffic in packed.effective_config.catalogs["traffic_catalog"].values()
+    )
 
 
 def test_organization_pack_brings_exact_industry_and_environment() -> None:
