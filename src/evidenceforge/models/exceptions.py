@@ -78,6 +78,10 @@ class ScenarioIncludeError(ConfigurationError):
     """
 
 
+class PackError(ConfigurationError):
+    """A scenario pack could not be discovered, validated, or composed."""
+
+
 class FormatDefinitionError(ConfigurationError):
     """Format definition loading or validation failed.
 

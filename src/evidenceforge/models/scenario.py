@@ -2652,14 +2652,7 @@ class StorageShareConfig(BaseModel):
     name: str
     volume: str
     root: str = ""
-    preset: Literal[
-        "collaboration",
-        "homes",
-        "software",
-        "backup",
-        "dc_policy",
-        "department",
-    ] = "collaboration"
+    preset: str = Field(default="collaboration", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9:_-]*$")
     population: Literal["auto", "small", "medium", "large"] | None = None
     activity: Literal["low", "normal", "high"] | None = None
     encryption: Literal["not_required", "required"] = "not_required"

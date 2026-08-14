@@ -26,7 +26,9 @@ This module implements the command-line interface using Typer.
 Provides commands for initialization, log generation, and validation.
 """
 
+import json
 import logging
+import os
 import shutil
 import sys
 import tempfile
@@ -53,20 +55,37 @@ from rich.table import Table
 from rich.text import Text
 
 from evidenceforge import __version__
+from evidenceforge.cli.pack_commands import pack_app
+from evidenceforge.composition import CompiledScenario, compile_scenario, with_runtime_scenario
+from evidenceforge.composition.artifacts import (
+    GENERATION_MANIFEST_FILENAME,
+    RESOLVED_SCENARIO_FILENAME,
+    build_resolved_document,
+    serialize_resolved_document,
+    verify_generation_bundle,
+    write_generation_manifest,
+    write_resolved_scenario,
+)
+from evidenceforge.composition.sidecars import SIDECAR_REGISTRY
 from evidenceforge.generation import GenerationEngine
 from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
 from evidenceforge.generation.workload import estimate_workload
-from evidenceforge.models.exceptions import EvidenceForgeError, ScenarioIncludeError
+from evidenceforge.models.exceptions import (
+    EvidenceForgeError,
+    PackError,
+    ScenarioIncludeError,
+    SchemaValidationError,
+)
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.output_targets import (
     OUTPUT_TARGET_FILENAME,
     normalize_output_target,
     write_output_target_marker,
 )
-from evidenceforge.utils import load_scenario_yaml
 
 if TYPE_CHECKING:
     from evidenceforge.generation.storage_world import StorageWorldModel
+    from evidenceforge.validation.schema import ScenarioValidator, ValidationIssue
 
 
 class AbbreviatedGroup(typer.core.TyperGroup):
@@ -95,11 +114,6 @@ class AbbreviatedGroup(typer.core.TyperGroup):
 # Initialize Typer app and Rich console
 
 
-def _path_exists_or_symlink(path: Path) -> bool:
-    """Return True for existing paths and dangling symlinks."""
-    return path.exists() or path.is_symlink()
-
-
 def _generation_progress(console: Console) -> Progress:
     """Build the long-running generation progress display."""
     return Progress(
@@ -115,14 +129,6 @@ def _generation_progress(console: Console) -> Progress:
     )
 
 
-def _reject_generated_sidecar_symlinks(paths: list[Path]) -> None:
-    """Reject generated sidecar paths that are symlinks, including dangling ones."""
-    symlinks = [path for path in paths if path.is_symlink()]
-    if symlinks:
-        joined = ", ".join(str(path) for path in symlinks)
-        raise PermissionError(f"Refusing to write generated sidecar through symlink: {joined}")
-
-
 app = typer.Typer(
     name="eforge",
     help="EvidenceForge - Generate realistic synthetic security logs for threat hunting training",
@@ -130,6 +136,7 @@ app = typer.Typer(
     cls=AbbreviatedGroup,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
+app.add_typer(pack_app, name="pack")
 console = Console()
 
 _STORAGE_SAMPLE_SIZE = 3
@@ -437,6 +444,27 @@ def _normalize_oob_hosts(oob_host: list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(normalized))
 
 
+def _validate_compiled_scenario(
+    compiled: CompiledScenario,
+    oob_hosts: tuple[str, ...],
+    scenario_root: Path,
+) -> tuple["ScenarioValidator", list["ValidationIssue"]]:
+    """Run cross-reference validation inside the compilation's config scope."""
+
+    from evidenceforge.config.provider import effective_config_scope
+    from evidenceforge.validation import ScenarioValidator
+
+    if not isinstance(compiled, CompiledScenario):
+        raise TypeError("compiled must be a CompiledScenario")
+    with effective_config_scope(compiled.effective_config):
+        validator = ScenarioValidator(
+            compiled.scenario,
+            oob_hosts=oob_hosts,
+            scenario_root=scenario_root,
+        )
+        return validator, validator.validate()
+
+
 @app.command()
 def generate(
     scenario_file: Path = typer.Argument(
@@ -491,6 +519,11 @@ def generate(
         max=2**64 - 1,
         help="Override scenario generation_seed for this deterministic run.",
     ),
+    project_root: Path | None = typer.Option(
+        None,
+        "--project-root",
+        help="Explicit project root for .eforge/config and project pack resolution.",
+    ),
     allow_large_workload: bool = typer.Option(
         False,
         "--allow-large-workload",
@@ -538,13 +571,12 @@ def generate(
     # Load and validate scenario
     try:
         console.print("\n[bold]Loading scenario...[/bold]")
-        scenario_data = load_scenario_yaml(scenario_file)
-        from evidenceforge.utils.personas import merge_builtin_personas
-
-        scenario_data = merge_builtin_personas(scenario_data)
-        scenario = Scenario(**scenario_data)
-        if seed is not None:
-            scenario = scenario.model_copy(update={"generation_seed": seed})
+        compiled = compile_scenario(
+            scenario_file,
+            project_root=project_root,
+            generation_seed=seed,
+        )
+        scenario = compiled.scenario
         console.print(f"[green]✓[/green] Loaded scenario: {scenario.name}")
         console.print(f"  Description: {scenario.description}")
         console.print(f"  Users: {len(scenario.environment.users)}")
@@ -553,15 +585,12 @@ def generate(
             console.print(f"  Storyline events: {len(scenario.storyline)}")
 
         # Cross-reference validation (Phase 1.9)
-        from evidenceforge.validation import ScenarioValidator
-
         console.print("\n[bold]Validating cross-references...[/bold]")
-        validator = ScenarioValidator(
-            scenario,
-            oob_hosts=oob_hosts,
-            scenario_root=scenario_file.parent,
+        validator, issues = _validate_compiled_scenario(
+            compiled,
+            oob_hosts,
+            scenario_file.parent,
         )
-        issues = validator.validate()
 
         if issues:
             console.print(f"\n[yellow]Found {len(issues)} validation issue(s):[/yellow]")
@@ -606,12 +635,19 @@ def generate(
         console.print(f"  • {e}", style="red")
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
 
+    except (PackError, SchemaValidationError) as e:
+        console.print(f"[bold red]Error:[/bold red] Scenario compilation failed: {e}", style="red")
+        raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+
     except ValidationError as e:
         console.print("[bold red]Error:[/bold red] Schema validation failed", style="red")
         console.print("\nValidation errors:")
         for error in e.errors():
             field = " -> ".join(str(loc) for loc in error["loc"])
             console.print(f"  • {field}: {error['msg']}", style="red")
+        raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+    except EvidenceForgeError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}", style="red")
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
 
     except Exception as e:
@@ -659,13 +695,17 @@ def generate(
             raise typer.Exit(EXIT_INPUT_ERROR)
 
         scenario.output.logs = [{"format": fmt} for fmt in sorted(filtered)]
+        compiled = with_runtime_scenario(compiled, scenario)
         console.print(f"[dim]Format filter: generating {sorted(filtered)}[/dim]")
 
-    resource_forecast = _forecast_for_cli(
-        scenario,
-        scenario_root=scenario_dir,
-        destination=ground_truth_dir,
-    )
+    from evidenceforge.config.provider import effective_config_scope
+
+    with effective_config_scope(compiled.effective_config):
+        resource_forecast = _forecast_for_cli(
+            scenario,
+            scenario_root=scenario_dir,
+            destination=ground_truth_dir,
+        )
     if resource_forecast is None:
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
 
@@ -674,48 +714,15 @@ def generate(
 
     # Check for existing generated output (data/ and generated sidecars only).
     # ENVIRONMENT.md is authored by /eforge scenario, not the engine — never touch it.
-    existing = []
-    gt_path = ground_truth_dir / "GROUND_TRUTH.md"
-    # GROUND_TRUTH.json is the canonical machine-readable companion to
-    # GROUND_TRUTH.md, so it participates in overwrite detection, backup/rollback,
-    # and the final listing as part of the matched output set.
-    json_path = ground_truth_dir / GROUND_TRUTH_JSON_FILENAME
-    manifest_path = ground_truth_dir / OBSERVATION_MANIFEST_FILENAME
-    artifacts_manifest_path = ground_truth_dir / ARTIFACTS_MANIFEST_FILENAME
-    collection_profile_path = ground_truth_dir / COLLECTION_PROFILE_FILENAME
-    target_path = ground_truth_dir / OUTPUT_TARGET_FILENAME
     try:
-        _reject_generated_sidecar_symlinks(
-            [
-                gt_path,
-                json_path,
-                manifest_path,
-                artifacts_manifest_path,
-                collection_profile_path,
-                target_path,
-                artifacts_dir,
-            ]
-        )
+        SIDECAR_REGISTRY.reject_symlinks(ground_truth_dir)
     except PermissionError as e:
         console.print(f"[bold red]Error:[/bold red] {e}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR)
-
-    if _path_exists_or_symlink(data_dir):
-        existing.append(f"  data/           ({data_dir})")
-    if _path_exists_or_symlink(gt_path):
-        existing.append(f"  GROUND_TRUTH.md ({gt_path})")
-    if _path_exists_or_symlink(json_path):
-        existing.append(f"  {GROUND_TRUTH_JSON_FILENAME} ({json_path})")
-    if _path_exists_or_symlink(manifest_path):
-        existing.append(f"  {OBSERVATION_MANIFEST_FILENAME} ({manifest_path})")
-    if _path_exists_or_symlink(artifacts_manifest_path):
-        existing.append(f"  {ARTIFACTS_MANIFEST_FILENAME} ({artifacts_manifest_path})")
-    if _path_exists_or_symlink(collection_profile_path):
-        existing.append(f"  {COLLECTION_PROFILE_FILENAME} ({collection_profile_path})")
-    if _path_exists_or_symlink(target_path):
-        existing.append(f"  {OUTPUT_TARGET_FILENAME} ({target_path})")
-    if _path_exists_or_symlink(artifacts_dir):
-        existing.append(f"  artifacts/ ({artifacts_dir})")
+    existing = [
+        f"  {spec.relative_path} ({ground_truth_dir / spec.relative_path})"
+        for spec in SIDECAR_REGISTRY.existing(ground_truth_dir)
+    ]
 
     has_existing = bool(existing)
     if has_existing:
@@ -809,129 +816,36 @@ def generate(
                 generation_seed=seed,
                 allow_large_workload=allow_large_workload,
                 resource_forecast=resource_forecast,
+                compiled_scenario=compiled,
             )
             engine.generate()
             write_output_target_marker(gen_gt_dir, output_target)
+            if not (gen_gt_dir / RESOLVED_SCENARIO_FILENAME).exists():
+                write_resolved_scenario(compiled, gen_gt_dir)
+            write_generation_manifest(
+                compiled,
+                gen_gt_dir,
+                output_target=output_target.value,
+                formats=[
+                    str(log["format"])
+                    for log in scenario.output.logs
+                    if isinstance(log, dict) and "format" in log
+                ],
+                oob_hosts=oob_hosts,
+                overrides={
+                    "formats": formats,
+                    "generation_seed": seed,
+                },
+            )
 
         # Transactional swap: backup old → install new → cleanup backup.
         # If any step fails (including KeyboardInterrupt), old output is
         # restored from backup. data/ and generated sidecars are always kept
         # as a matched set — partial preservation is never valid.
         if staging_dir:
-            staged_gt = gen_gt_dir / "GROUND_TRUTH.md"
-            staged_json = gen_gt_dir / GROUND_TRUTH_JSON_FILENAME
-            staged_manifest = gen_gt_dir / OBSERVATION_MANIFEST_FILENAME
-            staged_artifacts_manifest = gen_gt_dir / ARTIFACTS_MANIFEST_FILENAME
-            staged_collection_profile = gen_gt_dir / COLLECTION_PROFILE_FILENAME
-            staged_target = gen_gt_dir / OUTPUT_TARGET_FILENAME
-            staged_artifacts = gen_artifacts_dir
-            if not gen_data_dir.exists():
-                raise RuntimeError("Staged data/ directory missing after generation")
-            if not staged_gt.exists():
-                raise RuntimeError("Staged GROUND_TRUTH.md missing after generation")
-            if not staged_json.exists():
-                raise RuntimeError(f"Staged {GROUND_TRUTH_JSON_FILENAME} missing after generation")
-            if not staged_manifest.exists():
-                raise RuntimeError(
-                    f"Staged {OBSERVATION_MANIFEST_FILENAME} missing after generation"
-                )
-            if not staged_target.exists():
-                raise RuntimeError(f"Staged {OUTPUT_TARGET_FILENAME} missing after generation")
-
-            # Clean up stale rollback dirs from prior killed runs
-            for stale in ground_truth_dir.glob(".eforge_rollback_*"):
-                logger.warning("Cleaning stale rollback directory: %s", stale)
-                shutil.rmtree(stale, ignore_errors=True)
-
-            rollback_dir = Path(tempfile.mkdtemp(prefix=".eforge_rollback_", dir=ground_truth_dir))
-            swap_succeeded = False
             try:
-                # Step 1: Backup old output
-                if data_dir.exists():
-                    data_dir.rename(rollback_dir / "data")
-                if gt_path.exists():
-                    gt_path.rename(rollback_dir / "GROUND_TRUTH.md")
-                if json_path.exists():
-                    json_path.rename(rollback_dir / GROUND_TRUTH_JSON_FILENAME)
-                if manifest_path.exists():
-                    manifest_path.rename(rollback_dir / OBSERVATION_MANIFEST_FILENAME)
-                if artifacts_manifest_path.exists():
-                    artifacts_manifest_path.rename(rollback_dir / ARTIFACTS_MANIFEST_FILENAME)
-                if collection_profile_path.exists():
-                    collection_profile_path.rename(rollback_dir / COLLECTION_PROFILE_FILENAME)
-                if _path_exists_or_symlink(target_path):
-                    target_path.rename(rollback_dir / OUTPUT_TARGET_FILENAME)
-                if artifacts_dir.exists():
-                    artifacts_dir.rename(rollback_dir / "artifacts")
-
-                # Step 2: Install new output.
-                gen_data_dir.rename(data_dir)
-                staged_gt.rename(gt_path)
-                staged_json.rename(json_path)
-                if staged_manifest.exists():
-                    staged_manifest.rename(manifest_path)
-                if staged_artifacts_manifest.exists():
-                    staged_artifacts_manifest.rename(artifacts_manifest_path)
-                if staged_collection_profile.exists():
-                    staged_collection_profile.rename(collection_profile_path)
-                if staged_target.exists():
-                    staged_target.rename(target_path)
-                if staged_artifacts.exists():
-                    staged_artifacts.rename(artifacts_dir)
-                swap_succeeded = True
-
-            except BaseException:
-                # Rollback: remove partially-installed new output, restore old.
-                # Strip whatever new artifact is currently installed UNCONDITIONALLY
-                # — whether a backup of it exists is irrelevant to whether the new
-                # one must go before restore. (A partial prior state, e.g. data/ but
-                # no GROUND_TRUTH.md, must not leave a new GT.md orphaned over
-                # restored old data/ — that breaks the matched-set invariant.)
-                try:
-                    if data_dir.exists():
-                        shutil.rmtree(data_dir)
-                    if gt_path.exists():
-                        gt_path.unlink()
-                    if json_path.exists():
-                        json_path.unlink()
-                    if manifest_path.exists():
-                        manifest_path.unlink()
-                    if artifacts_manifest_path.exists():
-                        artifacts_manifest_path.unlink()
-                    if collection_profile_path.exists():
-                        collection_profile_path.unlink()
-                    if artifacts_dir.exists():
-                        shutil.rmtree(artifacts_dir)
-                    if _path_exists_or_symlink(target_path):
-                        target_path.unlink()
-                    if (rollback_dir / "data").exists():
-                        (rollback_dir / "data").rename(data_dir)
-                    if (rollback_dir / "GROUND_TRUTH.md").exists():
-                        (rollback_dir / "GROUND_TRUTH.md").rename(gt_path)
-                    rollback_json = rollback_dir / GROUND_TRUTH_JSON_FILENAME
-                    if rollback_json.exists():
-                        rollback_json.rename(json_path)
-                    rollback_manifest = rollback_dir / OBSERVATION_MANIFEST_FILENAME
-                    if rollback_manifest.exists():
-                        rollback_manifest.rename(manifest_path)
-                    rollback_artifacts_manifest = rollback_dir / ARTIFACTS_MANIFEST_FILENAME
-                    if rollback_artifacts_manifest.exists():
-                        rollback_artifacts_manifest.rename(artifacts_manifest_path)
-                    rollback_collection_profile = rollback_dir / COLLECTION_PROFILE_FILENAME
-                    if rollback_collection_profile.exists():
-                        rollback_collection_profile.rename(collection_profile_path)
-                    rollback_artifacts = rollback_dir / "artifacts"
-                    if rollback_artifacts.exists():
-                        rollback_artifacts.rename(artifacts_dir)
-                    rollback_target = rollback_dir / OUTPUT_TARGET_FILENAME
-                    if rollback_target.exists():
-                        rollback_target.rename(target_path)
-                except Exception:
-                    logger.error("Rollback failed — old output may be in: %s", rollback_dir)
-                raise
+                SIDECAR_REGISTRY.replace(staging_dir, ground_truth_dir)
             finally:
-                if swap_succeeded:
-                    shutil.rmtree(rollback_dir, ignore_errors=True)
                 shutil.rmtree(staging_dir, ignore_errors=True)
 
             console.print("[dim]Replaced previous output[/dim]")
@@ -950,6 +864,8 @@ def generate(
                     ARTIFACTS_MANIFEST_FILENAME,
                     COLLECTION_PROFILE_FILENAME,
                     OUTPUT_TARGET_FILENAME,
+                    RESOLVED_SCENARIO_FILENAME,
+                    GENERATION_MANIFEST_FILENAME,
                 }:
                     size = file.stat().st_size
                     size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
@@ -994,6 +910,83 @@ def generate(
         raise typer.Exit(EXIT_GENERATION_ERROR)
 
 
+@app.command("resolve")
+def resolve_cmd(
+    scenario_file: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Authored or authoritative scenario YAML.",
+    ),
+    output: Path = typer.Option(..., "--output", "-o", help="Resolved YAML output file."),
+    json_output: bool = typer.Option(False, "--json", help="Emit stable JSON diagnostics."),
+    explain_composition: bool = typer.Option(
+        False,
+        "--explain-composition",
+        help="Report selected packs, precedence, and catalog field origins.",
+    ),
+    project_root: Path | None = typer.Option(None, "--project-root"),
+    oob_host: list[str] = typer.Option(
+        [],
+        "--oob-host",
+        help="Fresh literal OOB authorization, matching validate/generate semantics.",
+    ),
+) -> None:
+    """Compile a scenario into a self-contained authoritative YAML document."""
+
+    oob_hosts = _normalize_oob_hosts(oob_host)
+    try:
+        compiled = compile_scenario(scenario_file, project_root=project_root)
+        validator, issues = _validate_compiled_scenario(
+            compiled,
+            oob_hosts,
+            scenario_file.parent,
+        )
+        if validator.has_errors():
+            messages = "; ".join(
+                f"{issue.field_path}: {issue.message}"
+                for issue in issues
+                if issue.severity == "error"
+            )
+            raise SchemaValidationError(messages)
+        content = serialize_resolved_document(build_resolved_document(compiled))
+        if output.is_symlink():
+            raise PermissionError(f"refusing to write resolved scenario through symlink: {output}")
+        if output.exists():
+            if output.read_bytes() != content:
+                raise FileExistsError(
+                    f"resolved output already exists with different content: {output}"
+                )
+        else:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            temporary = output.with_name(f".{output.name}.tmp-{os.getpid()}")
+            temporary.write_bytes(content)
+            temporary.replace(output)
+    except (EvidenceForgeError, OSError, ValidationError) as exc:
+        if json_output:
+            print(json.dumps({"valid": False, "error": str(exc)}, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
+        raise typer.Exit(EXIT_SCHEMA_VALIDATION) from exc
+
+    payload = {
+        "valid": True,
+        "output": str(output),
+        "compiled_sha256": compiled.digests.get("compiled_sha256"),
+        "selected_packs": [pack.model_dump(mode="json") for pack in compiled.selected_packs],
+    }
+    if explain_composition:
+        payload["composition"] = compiled.provenance
+    if json_output:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        console.print(f"[green]✓[/green] Wrote authoritative scenario: {output}")
+        if explain_composition:
+            console.print_json(json.dumps(compiled.provenance, sort_keys=True))
+
+
 @app.command()
 def validate(
     scenario_file: Path = typer.Argument(
@@ -1026,6 +1019,11 @@ def validate(
             "and bounded catalog samples."
         ),
     ),
+    project_root: Path | None = typer.Option(
+        None,
+        "--project-root",
+        help="Explicit project root for .eforge/config and project pack resolution.",
+    ),
 ) -> None:
     """Validate a scenario file for schema correctness and cross-reference integrity.
 
@@ -1044,25 +1042,24 @@ def validate(
     # validates identically here (fail fast on a bad value before loading the scenario).
     oob_hosts: tuple[str, ...] = _normalize_oob_hosts(oob_host)
 
-    # Step 1: Load and parse YAML
+    # Step 1: Compile authored or authoritative input.
     try:
-        scenario_data = load_scenario_yaml(scenario_file)
+        compiled = compile_scenario(scenario_file, project_root=project_root)
+        scenario = compiled.scenario
     except ScenarioIncludeError as e:
         console.print("[bold red]Scenario include validation failed:[/bold red]")
+        console.print(f"  [red]✗ {e}[/red]")
+        raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+    except (PackError, SchemaValidationError) as e:
+        console.print("[bold red]Scenario compilation failed:[/bold red]")
         console.print(f"  [red]✗ {e}[/red]")
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] Failed to parse YAML: {e}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR)
 
-    # Step 1.5: Merge pre-built personas
-    from evidenceforge.utils.personas import merge_builtin_personas
-
-    scenario_data = merge_builtin_personas(scenario_data)
-
-    # Step 2: Pydantic schema validation
+    # Step 2: Report the already validated canonical runtime model.
     try:
-        scenario = Scenario(**scenario_data)
         console.print(f"[green]✓[/green] Schema valid: {scenario.name}")
         console.print(f"  Users: {len(scenario.environment.users)}")
         console.print(f"  Systems: {len(scenario.environment.systems)}")
@@ -1083,15 +1080,12 @@ def validate(
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
 
     # Step 3: Cross-reference validation
-    from evidenceforge.validation import ScenarioValidator
-
     console.print("\n[bold]Validating cross-references...[/bold]")
-    validator = ScenarioValidator(
-        scenario,
-        oob_hosts=oob_hosts,
-        scenario_root=scenario_file.parent,
+    validator, issues = _validate_compiled_scenario(
+        compiled,
+        oob_hosts,
+        scenario_file.parent,
     )
-    issues = validator.validate()
 
     if show_storage and not any(
         issue.severity == "error" and issue.field_path.startswith("environment.storage")
@@ -1102,11 +1096,14 @@ def validate(
         storage_world = StorageWorldModel.compile(scenario)
         _print_compiled_storage(storage_world)
 
-    _forecast_for_cli(
-        scenario,
-        scenario_root=scenario_file.parent,
-        destination=scenario_file.parent,
-    )
+    from evidenceforge.config.provider import effective_config_scope
+
+    with effective_config_scope(compiled.effective_config):
+        _forecast_for_cli(
+            scenario,
+            scenario_root=scenario_file.parent,
+            destination=scenario_file.parent,
+        )
 
     if issues:
         console.print(f"\n[yellow]Found {len(issues)} validation issue(s):[/yellow]")
@@ -1147,11 +1144,11 @@ def eval_cmd(
         dir_okay=True,
         readable=True,
     ),
-    scenario_file: Path = typer.Option(
-        ...,
+    scenario_file: Path | None = typer.Option(
+        None,
         "--scenario",
         "-s",
-        help="Path to the scenario YAML used for generation",
+        help="Optional authored scenario for comparison; required for legacy bundles.",
         exists=True,
         file_okay=True,
         dir_okay=False,
@@ -1180,6 +1177,11 @@ def eval_cmd(
         "--allow-large-evaluation",
         help="Trusted override for evaluator corpus byte/file/record-count limits.",
     ),
+    allow_scenario_mismatch: bool = typer.Option(
+        False,
+        "--allow-scenario-mismatch",
+        help="Evaluate the authoritative bundle despite an authored-scenario digest mismatch.",
+    ),
 ) -> None:
     """Evaluate a generated dataset for quality across four pillars.
 
@@ -1203,16 +1205,59 @@ def eval_cmd(
 
     status_console.print("[bold blue]EvidenceForge Data Quality Evaluation[/bold blue]")
     status_console.print(f"Output directory: {output_dir}")
-    status_console.print(f"Scenario: {scenario_file}")
+    if scenario_file is not None:
+        status_console.print(f"Scenario comparison: {scenario_file}")
 
-    # Load and validate scenario
+    evaluation_output_dir = output_dir
     try:
-        scenario_data = load_scenario_yaml(scenario_file)
-        from evidenceforge.utils.personas import merge_builtin_personas
+        if (output_dir / GENERATION_MANIFEST_FILENAME).is_file():
+            bundle_root = output_dir
+        elif (
+            output_dir.name == "data"
+            and (output_dir.parent / GENERATION_MANIFEST_FILENAME).is_file()
+        ):
+            bundle_root = output_dir.parent
+        else:
+            bundle_root = None
 
-        scenario_data = merge_builtin_personas(scenario_data)
-        scenario = Scenario(**scenario_data)
-        status_console.print(f"[green]✓[/green] Loaded scenario: {scenario.name}")
+        if bundle_root is not None:
+            manifest = verify_generation_bundle(bundle_root)
+            bundle_compiled = compile_scenario(bundle_root / RESOLVED_SCENARIO_FILENAME)
+            if manifest.get("compiled_sha256") != bundle_compiled.digests.get("compiled_sha256"):
+                raise SchemaValidationError(
+                    "generation manifest compiled digest does not match resolved scenario"
+                )
+            scenario = bundle_compiled.scenario
+            if output_dir == bundle_root and (bundle_root / "data").is_dir():
+                evaluation_output_dir = bundle_root / "data"
+            status_console.print(f"[green]✓[/green] Verified authoritative bundle: {scenario.name}")
+            if scenario_file is not None:
+                candidate = compile_scenario(
+                    scenario_file,
+                    generation_seed=int(manifest["generation_seed"]),
+                )
+                candidate_scenario = candidate.scenario.model_copy(deep=True)
+                candidate_scenario.output.logs = [
+                    {"format": value} for value in manifest.get("formats", [])
+                ]
+                candidate = with_runtime_scenario(candidate, candidate_scenario)
+                if candidate.digests.get("compiled_sha256") != manifest.get("compiled_sha256"):
+                    if not allow_scenario_mismatch:
+                        raise SchemaValidationError(
+                            "authored scenario does not match the authoritative generation bundle; "
+                            "use --allow-scenario-mismatch to evaluate the bundle anyway"
+                        )
+                    status_console.print(
+                        "[yellow]Authored scenario mismatch accepted; evaluation uses the "
+                        "bundle's resolved scenario.[/yellow]"
+                    )
+        else:
+            if scenario_file is None:
+                raise FileNotFoundError(
+                    "legacy bundle has no authoritative artifacts; pass --scenario"
+                )
+            scenario = compile_scenario(scenario_file).scenario
+            status_console.print(f"[green]✓[/green] Loaded legacy scenario: {scenario.name}")
     except ScenarioIncludeError as e:
         status_console.print(
             "[bold red]Error:[/bold red] Scenario include validation failed",
@@ -1228,6 +1273,9 @@ def eval_cmd(
         for error in e.errors():
             field = " -> ".join(str(loc) for loc in error["loc"])
             status_console.print(f"  • {field}: {error['msg']}", style="red")
+        raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+    except EvidenceForgeError as e:
+        status_console.print(f"[bold red]Error:[/bold red] {e}", style="red")
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
     except Exception as e:
         status_console.print(
@@ -1327,7 +1375,7 @@ def eval_cmd(
                         detail_task = None
 
             engine = EvaluationEngine(
-                output_dir=output_dir,
+                output_dir=evaluation_output_dir,
                 scenario=scenario,
                 verbose=verbose,
                 progress_callback=eval_progress,

@@ -39,6 +39,12 @@ The `eforge info` command has three modes — do not mix them:
 
 When writing to the overlay, files are partial — they contain ONLY the user's new or changed entries. The engine merges them with package defaults automatically. Mirror the package directory structure: `activity/`, `personas/`, etc.
 
+Scenario 2.0 packs are a separate data-driven layer. Use `eforge info pack_roots`, `eforge info
+packs`, and `eforge pack show <ref> --json` to inspect them. Do not place pack files under
+`.eforge/config` or expose internal config filenames through a pack. Use this skill for overlays;
+dedicated pack-construction skills are a follow-on. If the user explicitly asks only for a skeleton
+or editable fork, use `eforge pack init` or `eforge pack copy` and validate the result.
+
 **Rules:**
 - Do NOT use `find`, `ls`, `grep`, or `glob` to locate config files — use `eforge info`
 - Do NOT read or edit files under `.claude/commands/` (those are read-only skill copies)

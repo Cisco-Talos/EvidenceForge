@@ -1,5 +1,23 @@
 # EvidenceForge Architecture
 
+## Scenario compilation and authoritative inputs
+
+Authored Scenario 1.0 and Scenario 2.0 documents compile into a frozen per-run input containing the
+canonical `Scenario`, effective data configuration, embedded YAML assets, pack identities/digests,
+and portable provenance. Scenario 2.0 may remain monolithic or explicitly compose whole industry
+packs or one organization pack. Pack-safe public catalogs are adapted into internal configuration;
+project-only and engine-owned families remain separate.
+
+Generation runs inside the compiled configuration scope. Raw and derived legacy caches are cleared
+and restored under a compatibility lock so sequential and concurrent runs cannot observe another
+run's overlays. Successful bundles contain a generated `RESOLVED_SCENARIO.yaml` and a
+`GENERATION_MANIFEST.json` written last. Resolved loading bypasses includes, repositories, project
+discovery, installed YAML reads, and ambient caches. Pack/include traversal, duplicate YAML keys,
+symlink following, unbounded composition, executable hooks, policy overrides, and pack-granted OOB
+authorization are rejected at the compilation boundary.
+
+See [Scenario 2.0 and composable packs](reference/SCENARIO_PACKS.md) for the public contract.
+
 This document explains how EvidenceForge works — first at a high level for users, then in detail for contributors who want to extend it.
 
 ## Part 1: How It Works

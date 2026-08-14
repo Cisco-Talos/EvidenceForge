@@ -21,6 +21,11 @@ eforge validate scenarios/<slug>/scenario.yaml
 eforge generate scenarios/<slug>/scenario.yaml --verbose --force
 ```
 
+Successful generation writes `RESOLVED_SCENARIO.yaml` and writes
+`GENERATION_MANIFEST.json` last. Keep them with `data/` and the existing sidecars: together they
+form the authoritative, integrity-verifiable bundle. A resolved input is generated/non-editable and
+can reproduce the run without its original includes, packs, project config, or working directory.
+
 Default to `eforge` for all CLI execution. If `eforge` is not found and you are
 in an EvidenceForge source checkout, retry the same command with
 `uv run eforge ...`.

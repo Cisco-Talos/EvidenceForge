@@ -1,0 +1,9 @@
+storage_catalog:
+  engineering-share:
+    description: "Engineering share vocabulary and bounded file subjects."
+    data:
+      directories: ["Builds", "Releases", "Runbooks", "Architecture"]
+      subjects: ["release-manifest", "deployment-plan", "incident-review"]
+      files:
+        - {extension: .zip, mime: application/zip, weight: 4}
+        - {extension: .yaml, mime: application/yaml, weight: 3}

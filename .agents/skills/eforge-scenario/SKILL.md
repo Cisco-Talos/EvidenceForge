@@ -28,6 +28,19 @@ EvidenceForge uses a two-phase approach:
 1. **You** (the skill) help the user design the scenario through conversation
 2. **`eforge generate`** deterministically produces logs from that scenario — no LLM involved, fully deterministic
 
+### Optional Scenario 2.0 composition
+
+Before authoring a large reusable environment, run `eforge pack list --json` and ask whether the
+user wants an available industry or organization pack. Inspect candidates with `eforge pack show
+<ref> --json`. If selected, author `scenario_version: "2.0"` plus the exact `composition`
+reference and use the pack's qualified `<pack-name>:<local-name>` exports. Confirm the result with
+`eforge resolve ... --explain-composition --json` and `eforge validate`.
+
+Packs are optional. Continue to support Scenario 1.0 and monolithic authoring without warnings or
+pack discovery. Do not claim this skill can reliably construct new substantive packs yet; dedicated
+industry/organization pack-authoring skills are a follow-on. `pack init` and `pack copy` may create
+or fork a skeleton only when the user explicitly requests that workflow.
+
 The engine does NOT embellish or fill in details. Whatever you put in the scenario YAML is exactly what drives generation. This means you need to generate realistic, specific technical details: actual command lines, realistic file paths, proper IP addresses, correct process names. Vague or placeholder content produces vague logs.
 
 Your job is to understand what the user wants, ask smart questions to fill gaps,
@@ -61,6 +74,8 @@ scenarios/<slug>/
   GROUND_TRUTH.json          # Created by generation
   OBSERVATION_MANIFEST.json  # Created by generation
   OUTPUT_TARGET.txt          # Created by generation
+  RESOLVED_SCENARIO.yaml     # Authoritative generated input
+  GENERATION_MANIFEST.json   # Authoritative run identity; written last
   data/                      # Created by generation for every output target
 ```
 

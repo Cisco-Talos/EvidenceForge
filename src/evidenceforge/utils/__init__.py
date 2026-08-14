@@ -23,8 +23,11 @@
 """EvidenceForge utility functions."""
 
 from .files import (
+    LoadedScenarioSource,
+    LoadedSourceGraph,
     ScenarioIncludeBudget,
     ensure_directory,
+    load_scenario_source_graph,
     load_scenario_yaml,
     load_yaml,
     resolve_safe_child_path,
@@ -55,6 +58,9 @@ __all__ = [
     # File utilities
     "load_yaml",
     "load_scenario_yaml",
+    "load_scenario_source_graph",
+    "LoadedScenarioSource",
+    "LoadedSourceGraph",
     "ScenarioIncludeBudget",
     "resolve_safe_child_path",
     "write_yaml",

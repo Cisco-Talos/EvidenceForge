@@ -46,7 +46,7 @@ def _per_file_lines(out: Path) -> dict[str, set[str]]:
         for p in out.rglob("*")
         if p.is_file()
         and p.suffix in (".log", ".json")
-        and not p.name.startswith(("GROUND_TRUTH", "OBSERVATION", "OUTPUT"))
+        and not p.name.startswith(("GENERATION_MANIFEST", "GROUND_TRUTH", "OBSERVATION", "OUTPUT"))
     }
 
 

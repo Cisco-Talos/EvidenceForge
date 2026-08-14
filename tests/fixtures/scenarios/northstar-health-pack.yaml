@@ -1,0 +1,20 @@
+scenario_version: "2.0"
+composition:
+  organization:
+    source: package
+    name: northstar-health
+    version: "1.0.0"
+name: northstar-health-baseline
+description: "Northstar Health organization-pack baseline generation example."
+time_window:
+  start: "2026-08-14T14:00:00Z"
+  duration: "1h"
+  warmup: "1h"
+output:
+  logs:
+    - format: windows
+    - format: zeek
+    - format: ecar
+    - format: syslog
+  destination: ./output
+  compression: false

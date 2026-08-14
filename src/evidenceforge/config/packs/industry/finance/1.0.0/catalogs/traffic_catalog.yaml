@@ -1,0 +1,13 @@
+traffic_catalog:
+  settlement-window:
+    description: "Weekday settlement and reporting traffic shape."
+    data:
+      audience: [finance_operations]
+      cadence: weekday-close
+      outbound:
+        - role: _external
+          port: 443
+          service: ssl
+          weight: 20
+          emit_dns: true
+          dns_tags: [finance]

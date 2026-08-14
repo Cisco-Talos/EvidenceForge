@@ -1,0 +1,9 @@
+destination_catalog:
+  payment-network:
+    description: "Synthetic external payment-network destination family."
+    data:
+      tags: [finance, saas]
+      service: ssl
+      endpoints:
+        - domain: payments.finance.example
+          ips: [192.0.2.80]

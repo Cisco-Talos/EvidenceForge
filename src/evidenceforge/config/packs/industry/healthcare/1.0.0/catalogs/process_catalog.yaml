@@ -1,0 +1,6 @@
+process_catalog:
+  clinical-workstation:
+    description: "Clinical workstation process vocabulary."
+    data:
+      process_names: ["chrome.exe", "OUTLOOK.EXE", "AcroRd32.exe"]
+      document_terms: ["care-plan", "schedule", "referral", "discharge"]

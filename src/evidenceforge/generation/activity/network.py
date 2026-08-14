@@ -77,8 +77,9 @@ for _act_type, _tag in _TAG_TO_ACTIVITY.items():
         _ips.extend(_e["ips"])
     EXTERNAL_IPS[_act_type] = list(dict.fromkeys(_ips))  # Deduplicate, preserve order
 
-# CDN ranges and IPv6 map from registry
-_CDN_RANGES = [tuple(r) for r in get_cdn_ranges()]
+# CDN ranges and IPv6 map from registry. Generation reads CDN ranges from the
+# active provider dynamically; this list remains for public inspection compatibility.
+_CDN_RANGES = [tuple(value) for value in get_cdn_ranges()]
 _IPV6_MAP: dict[str, str] = get_ipv6_map()
 
 # AD SRV record templates for domain service discovery
@@ -146,7 +147,8 @@ def _ipv4_to_fake_ipv6(ipv4: str) -> str:
 
 def _generate_random_external_ip(rng) -> str:
     """Generate a random plausible external IP from common cloud/CDN ranges."""
-    prefix = rng.choice(_CDN_RANGES)
+    cdn_ranges = [tuple(value) for value in get_cdn_ranges()]
+    prefix = rng.choice(cdn_ranges)
     return f"{prefix[0]}.{prefix[1]}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
 
 

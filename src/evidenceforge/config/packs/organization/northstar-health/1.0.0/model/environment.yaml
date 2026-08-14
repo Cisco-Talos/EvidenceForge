@@ -1,0 +1,118 @@
+environment:
+  description: "Northstar Health, a fictional regional care provider."
+  timezone:
+    default: America/Chicago
+  domain: northstarhealth.lab
+  users:
+    - username: maya.patel
+      full_name: "Maya Patel"
+      email: maya.patel@northstarhealth.lab
+      persona: healthcare:clinical_coordinator
+      primary_system: NSH-CLIN-01
+      groups: [clinical-operations]
+    - username: daniel.kim
+      full_name: "Daniel Kim"
+      email: daniel.kim@northstarhealth.lab
+      persona: northstar-health:northstar_it
+      primary_system: NSH-IT-01
+      groups: [it-operations]
+  systems:
+    - hostname: NSH-CLIN-01
+      ip: 10.42.10.21
+      os: Windows 11
+      type: workstation
+      assigned_user: maya.patel
+      roles: [workstation]
+    - hostname: NSH-IT-01
+      ip: 10.42.10.31
+      os: Windows 11
+      type: workstation
+      assigned_user: daniel.kim
+      roles: [workstation]
+    - hostname: NSH-DC-01
+      ip: 10.42.20.10
+      os: Windows Server 2022
+      type: domain_controller
+      services: [DNS, Kerberos, LDAP]
+      roles: [domain_controller, dns_server]
+    - hostname: NSH-FILE-01
+      ip: 10.42.20.20
+      os: Windows Server 2022
+      type: server
+      services: [SMB]
+      roles: [file_server]
+    - hostname: NSH-MAIL-01
+      ip: 10.42.20.30
+      os: Linux Ubuntu 24.04
+      type: server
+      services: [Postfix, Dovecot]
+      roles: [mail_server]
+  groups:
+    - name: clinical-operations
+      members: [maya.patel]
+    - name: it-operations
+      members: [daniel.kim]
+  network:
+    segments:
+      - name: clinical_lan
+        cidr: 10.42.10.0/24
+        description: "Clinical and IT workstations"
+        exposure: internal
+        systems: [NSH-CLIN-01, NSH-IT-01]
+      - name: server_lan
+        cidr: 10.42.20.0/24
+        description: "Northstar infrastructure servers"
+        exposure: internal
+        systems: [NSH-DC-01, NSH-FILE-01, NSH-MAIL-01]
+    sensors:
+      - type: network
+        name: northstar-core-span
+        monitoring_segments: [clinical_lan, server_lan]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+  email:
+    accepted_domains: [northstarhealth.lab]
+    mail_servers:
+      - name: primary
+        hostname: mail.northstarhealth.lab
+        system: NSH-MAIL-01
+        platform: generic_smtp
+    default_mailbox_servers: [primary]
+    outbound_routes:
+      - name: default
+        servers: [primary]
+    inbound_route: [primary]
+    background_messages_per_user_per_day: 2.0
+  storage:
+    population: small
+    activity: normal
+    servers:
+      - system: NSH-FILE-01
+        audit: standard
+        volumes:
+          - id: data
+            mount: 'D:\'
+            filesystem: ntfs
+            label: ClinicalData
+        default_volume: data
+        shares:
+          - id: clinical_ops
+            name: ClinicalOps
+            volume: data
+            root: Departments\ClinicalOperations
+            preset: healthcare:clinical-department
+            population: small
+            activity: normal
+            access:
+              read: [clinical-operations, it-operations]
+              modify: [clinical-operations]
+              admin: [it-operations]
+              deny: []
+    mappings:
+      - id: clinical_ops_drive
+        share: NSH-FILE-01.clinical_ops
+        audience:
+          groups: [clinical-operations]
+        drive: "H:"
+        lifecycle: persistent

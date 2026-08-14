@@ -34,6 +34,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from evidenceforge.composition.models import CompiledScenario
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
@@ -97,6 +98,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         allow_large_workload: bool = False,
         workload_limits: WorkloadLimits | None = None,
         resource_forecast: ResourceForecast | None = None,
+        compiled_scenario: CompiledScenario | None = None,
     ):
         """Initialize generation engine.
 
@@ -112,33 +114,41 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 out-of-band testing (off by default). When set, an adversarial payload's
                 {canary} resolves to the first and all are host-allowlisted.
         """
-        from evidenceforge.config.overlay import retired_overlay_errors
-        from evidenceforge.models.exceptions import ConfigurationError
-
-        retired = retired_overlay_errors()
-        if retired:
-            path, message = retired[0]
-            raise ConfigurationError(f"overlay/{path}: {message}")
-
         self.generation_seed = (
             scenario.generation_seed if generation_seed is None else generation_seed
         )
         if not 0 <= self.generation_seed <= MAX_GENERATION_SEED:
             raise ValueError(f"generation_seed must be between 0 and {MAX_GENERATION_SEED}")
         self.scenario = scenario.model_copy(update={"generation_seed": self.generation_seed})
+        from evidenceforge.composition.artifacts import minimal_compiled_scenario
+        from evidenceforge.composition.compiler import with_runtime_scenario
+
+        if compiled_scenario is not None and not isinstance(compiled_scenario, CompiledScenario):
+            raise TypeError("compiled_scenario must be a CompiledScenario")
+        base_compiled = compiled_scenario or minimal_compiled_scenario(self.scenario)
+        self.compiled_scenario = with_runtime_scenario(base_compiled, self.scenario)
         self.output_dir = Path(output_dir)
         self.scenario_root = Path(scenario_root) if scenario_root is not None else Path.cwd()
         self.allow_large_workload = allow_large_workload
-        self.workload_estimate = estimate_workload(
-            self.scenario,
-            scenario_root=self.scenario_root,
-            limits=workload_limits,
-        )
-        self.resource_forecast = resource_forecast or build_resource_forecast(
-            self.scenario,
-            self.workload_estimate,
-            self.output_dir,
-        )
+        from evidenceforge.config.overlay import retired_overlay_errors
+        from evidenceforge.config.provider import effective_config_scope
+        from evidenceforge.models.exceptions import ConfigurationError
+
+        with effective_config_scope(self.compiled_scenario.effective_config):
+            retired = retired_overlay_errors()
+            if retired:
+                path, message = retired[0]
+                raise ConfigurationError(f"overlay/{path}: {message}")
+            self.workload_estimate = estimate_workload(
+                self.scenario,
+                scenario_root=self.scenario_root,
+                limits=workload_limits,
+            )
+            self.resource_forecast = resource_forecast or build_resource_forecast(
+                self.scenario,
+                self.workload_estimate,
+                self.output_dir,
+            )
         self.ground_truth_dir = (
             Path(ground_truth_dir) if ground_truth_dir is not None else self.output_dir
         )
@@ -163,7 +173,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         # Hawkes process state per user for cross-hour continuity
         self._hawkes_states: dict = {}
-
         from evidenceforge.generation.activity.bash_commands import reset_bash_command_memory
 
         reset_bash_command_memory()
@@ -181,9 +190,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
     def generate(self) -> None:
         """Generate one run inside its public deterministic seed namespace."""
 
-        with generation_seed_scope(self.generation_seed):
-            reset_thread_rng()
-            self._generate_scoped()
+        from evidenceforge.config.provider import effective_config_scope
+
+        with effective_config_scope(self.compiled_scenario.effective_config):
+            with generation_seed_scope(self.generation_seed):
+                reset_thread_rng()
+                self._generate_scoped()
 
     def _generate_scoped(self) -> None:
         """Main generation flow.
@@ -272,6 +284,23 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             {"phase": "ground_truth", "description": "Generating ground truth documentation"},
         )
         self._generate_ground_truth()
+        from evidenceforge.composition.artifacts import (
+            write_generation_manifest,
+            write_resolved_scenario,
+        )
+
+        write_resolved_scenario(self.compiled_scenario, self.ground_truth_dir)
+        write_generation_manifest(
+            self.compiled_scenario,
+            self.ground_truth_dir,
+            output_target=self.output_target.value,
+            formats=[
+                str(log["format"])
+                for log in self.scenario.output.logs
+                if isinstance(log, dict) and "format" in log
+            ],
+            oob_hosts=self.oob_hosts,
+        )
         self._report_progress("phase_end", {"phase": "ground_truth"})
 
         logger.info("Generation complete")

@@ -1,0 +1,40 @@
+scenario_version: "2.0"
+composition:
+  industries:
+    - source: package
+      name: finance
+      version: "1.0.0"
+name: finance-industry-baseline
+description: "Direct industry-pack example with a scenario-local environment."
+time_window:
+  start: "2026-08-14T13:00:00Z"
+  duration: "1h"
+  warmup: "1h"
+environment:
+  description: "Fictional finance operations workstation."
+  timezone:
+    default: America/New_York
+  users:
+    - username: jordan.lee
+      full_name: "Jordan Lee"
+      email: jordan.lee@finance.example
+      persona: finance:finance_operations
+      primary_system: FIN-OPS-01
+  systems:
+    - hostname: FIN-OPS-01
+      ip: 10.60.10.21
+      os: Windows 11
+      type: workstation
+      assigned_user: jordan.lee
+      roles: [workstation]
+baseline_activity:
+  description: "Normal finance operations activity."
+  intensity: low
+  variation: medium
+  suspicious_noise: low
+output:
+  logs:
+    - format: windows
+    - format: ecar
+  destination: ./output
+  compression: false

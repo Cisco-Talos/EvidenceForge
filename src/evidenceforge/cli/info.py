@@ -72,6 +72,19 @@ def _collect_formats(formats_dir: Path) -> list[str]:
     return sorted(f.stem for f in formats_dir.glob("*.yaml"))
 
 
+def _collect_packs() -> list[str]:
+    """Collect exact package/project pack references for explicit discovery."""
+
+    from evidenceforge.composition.compiler import resolve_management_project_root
+    from evidenceforge.composition.packs import PackRepository
+
+    repository = PackRepository(resolve_management_project_root())
+    return sorted(
+        f"{pack.source}:{pack.manifest.type}:{pack.manifest.name}@{pack.manifest.version}"
+        for pack in repository.list()
+    )
+
+
 def _collect_dns_tags() -> list[str]:
     """Collect defined valid DNS tags from the registry.
 
@@ -262,11 +275,22 @@ def _gather_lightweight() -> dict[str, Any]:
             "exists": overlay_dir is not None,
             "files": overlay_files,
         },
+        "pack_roots": {
+            "package": str(config_root / "packs"),
+            "project": str(Path.cwd() / ".eforge" / "packs"),
+        },
     }
 
 
 # Fields that can be resolved from lightweight data alone
-_LIGHTWEIGHT_PREFIXES = {"version", "install_type", "config_writable", "paths", "overlay"}
+_LIGHTWEIGHT_PREFIXES = {
+    "version",
+    "install_type",
+    "config_writable",
+    "paths",
+    "overlay",
+    "pack_roots",
+}
 
 
 def gather_info(field: str | None = None) -> dict[str, Any]:
@@ -302,6 +326,7 @@ def gather_info(field: str | None = None) -> dict[str, Any]:
         "beacon_profiles": _collect_beacon_profiles,
         "format_groups": _collect_format_groups,
         "identity_pools": _collect_identity_pools,
+        "packs": _collect_packs,
     }
     for key, collector in inventories.items():
         try:
@@ -320,6 +345,12 @@ def format_human_readable(data: dict[str, Any]) -> str:
     lines.append(f"EvidenceForge v{data['version']}")
     lines.append(f"Install type: {data['install_type']}")
     lines.append(f"Config writable: {'yes' if data['config_writable'] else 'no'}")
+    lines.append("")
+
+    pack_roots = data["pack_roots"]
+    lines.append("Pack roots:")
+    lines.append(f"  Package: {pack_roots['package']}")
+    lines.append(f"  Project: {pack_roots['project']}")
     lines.append("")
 
     # Paths
@@ -390,6 +421,14 @@ def format_human_readable(data: dict[str, Any]) -> str:
     else:
         lines.append(f"  {identity_pools}")
 
+    packs = data["packs"]
+    lines.append("")
+    if isinstance(packs, list):
+        lines.append(f"Available packs ({len(packs)}):")
+        lines.append(_format_list(packs))
+    else:
+        lines.append(f"Available packs: {packs}")
+
     return "\n".join(lines)
 
 
@@ -405,6 +444,9 @@ _FIELD_DESCRIPTIONS: dict[str, str] = {
     "overlay.exists": "Whether a project-local overlay directory exists",
     "overlay.files": "YAML files in the overlay directory",
     "overlay.path": "Path to the overlay directory",
+    "pack_roots.package": "Installed read-only pack repository",
+    "pack_roots.project": "Project-local editable pack repository",
+    "packs": "Exact packaged and project-local pack references",
     "paths.activity": "Activity config directory (dns, traffic, apps, etc.)",
     "paths.config_root": "Root config directory",
     "paths.evaluation": "Evaluation rules directory",

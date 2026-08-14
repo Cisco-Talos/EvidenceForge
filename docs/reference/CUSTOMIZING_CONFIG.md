@@ -2,6 +2,12 @@
 
 EvidenceForge ships with 50+ YAML configuration files that control every aspect of realistic log generation — DNS domains, applications, personas, traffic profiles, spawn rules, and more. You can customize these to match your scenario's environment without modifying the installed package.
 
+Scenario 2.0 industry and organization packs are also data-driven configuration, but they are not
+ordinary `.eforge/config` overlays. Packs use stable public catalogs under `.eforge/packs`, are
+selected explicitly by a scenario, and cannot override engine safety/evaluation/resource policy.
+Use overlays for project-wide internal configuration tuning; use packs for versioned, composable
+scenario context. See [Scenario 2.0 and composable packs](SCENARIO_PACKS.md).
+
 ## The Overlay System
 
 EvidenceForge uses a **project-local overlay** at `.eforge/config/` in your working directory. Overlay files contain only your additions or changes — the engine merges them with package defaults at load time.

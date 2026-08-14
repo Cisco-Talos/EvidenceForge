@@ -1,0 +1,6 @@
+process_catalog:
+  finance-reporting:
+    description: "Finance reporting and reconciliation process vocabulary."
+    data:
+      process_names: ["EXCEL.EXE", "AcroRd32.exe"]
+      document_terms: ["reconciliation", "settlement", "close", "variance"]

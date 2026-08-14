@@ -1,0 +1,13 @@
+traffic_catalog:
+  delivery-pipeline:
+    description: "Build and deployment traffic shape."
+    data:
+      audience: [platform_engineer]
+      cadence: continuous-delivery
+      outbound:
+        - role: _external
+          port: 443
+          service: ssl
+          weight: 20
+          emit_dns: true
+          dns_tags: [dev]

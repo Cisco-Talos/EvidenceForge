@@ -1,0 +1,6 @@
+application_catalog:
+  treasury-portal:
+    description: "Synthetic treasury and cash-position portal profile."
+    data:
+      category: finance
+      protocols: [https]

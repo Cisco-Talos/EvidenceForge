@@ -12,10 +12,10 @@ from functools import lru_cache
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 from evidenceforge.models.scenario import (
     Scenario,
     SmbFileSelector,
@@ -32,8 +32,11 @@ from evidenceforge.utils.rng import _stable_seed
 @lru_cache(maxsize=1)
 def _load_catalog_config() -> dict[str, Any]:
     path = get_activity_directory() / "storage_catalog.yaml"
-    with path.open(encoding="utf-8") as stream:
-        data = yaml.safe_load(stream) or {}
+    data = load_with_overlay(
+        path,
+        "activity/storage_catalog.yaml",
+        deep_merge_dict,
+    )
     if not isinstance(data, dict):
         raise ValueError("storage_catalog.yaml must contain a mapping")
     return data

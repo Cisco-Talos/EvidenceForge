@@ -15,11 +15,16 @@ You are helping the user evaluate the quality of generated synthetic security lo
 
 ## Quick Start
 
-If the user has a generated output directory and scenario file:
+For a new authoritative bundle:
 
 ```bash
-eforge eval scenarios/<slug>/data --scenario scenarios/<slug>/scenario.yaml --verbose
+eforge eval scenarios/<slug> --verbose
 ```
+
+The evaluator verifies the adjacent `GENERATION_MANIFEST.json` and `RESOLVED_SCENARIO.yaml` before
+scoring. `--scenario` is optional comparison input for new bundles and remains required for legacy
+bundles. A comparison digest mismatch fails unless `--allow-scenario-mismatch` is explicit; even
+then, scoring uses the bundle's resolved scenario.
 
 Default to `eforge` for all CLI execution. If `eforge` is not found and you are
 in an EvidenceForge source checkout, retry the same command with
