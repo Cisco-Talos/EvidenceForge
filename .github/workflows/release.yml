@@ -66,8 +66,11 @@ jobs:
                   lock_version = package.get("version")
                   break
 
-          if not re.fullmatch(r"\d+\.\d+\.\d+", pyproject_version):
-              fail(f"pyproject.toml version must be X.Y.Z, got {pyproject_version!r}")
+          if not re.fullmatch(r"\d+\.\d+\.\d+(?:rc\d+)?", pyproject_version):
+              fail(
+                  "pyproject.toml version must be X.Y.Z or X.Y.ZrcN, "
+                  f"got {pyproject_version!r}"
+              )
           if init_version != pyproject_version:
               fail(
                   "src/evidenceforge/__init__.py __version__ "
@@ -153,8 +156,11 @@ jobs:
                   lock_version = package.get("version")
                   break
 
-          if not re.fullmatch(r"\d+\.\d+\.\d+", pyproject_version):
-              fail(f"pyproject.toml version must be X.Y.Z, got {pyproject_version!r}")
+          if not re.fullmatch(r"\d+\.\d+\.\d+(?:rc\d+)?", pyproject_version):
+              fail(
+                  "pyproject.toml version must be X.Y.Z or X.Y.ZrcN, "
+                  f"got {pyproject_version!r}"
+              )
           if init_version != pyproject_version:
               fail(
                   "src/evidenceforge/__init__.py __version__ "

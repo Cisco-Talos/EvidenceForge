@@ -123,9 +123,13 @@ Use `uv` for all dependency management (never `pip`). `pyproject.toml` is the so
 ### Versioning (Semantic Versioning)
 
 The version is declared in three places that must always match:
-- `pyproject.toml` → `version = "X.Y.Z"`
-- `src/evidenceforge/__init__.py` → `__version__ = "X.Y.Z"`
+- `pyproject.toml` → `version = "X.Y.Z"` or the PEP 440 release-candidate form `"X.Y.ZrcN"`
+- `src/evidenceforge/__init__.py` → the same exact version
 - `uv.lock` → updated automatically by `uv sync` after editing `pyproject.toml`
+
+For a release candidate, use Python's canonical PEP 440 spelling (for example,
+`2.0.0rc1`) and the matching tag `v2.0.0rc1`. Do not use `2.0.0-rc1`; build
+tooling normalizes that spelling and would make the three source declarations disagree.
 
 **Bump rules (SemVer):**
 
@@ -147,12 +151,12 @@ chore: bump version to X.Y.Z
 **Release automation:** `.github/workflows/release.yml` enforces release hygiene
 for every PR to `main` and every push to `main`. On PRs targeting `main`, it
 verifies that `pyproject.toml`, `src/evidenceforge/__init__.py`, and `uv.lock`
-all declare the same `X.Y.Z` version, then checks that remote tag `vX.Y.Z` does
+all declare the same `X.Y.Z` or `X.Y.ZrcN` version, then checks that the matching remote tag does
 not already exist. On pushes to `main`, it repeats those checks, creates an
 annotated tag on the merged commit, pushes the tag, and creates the GitHub
 Release entry so it appears under Releases. Remote tags are immutable release
 history; never use `git tag -f`, `git push --force`, or delete/recreate a
-`vX.Y.Z` tag to repair a missed bump. If the tag already exists, bump to the next
+release tag to repair a missed bump. If the tag already exists, bump to the next
 correct SemVer version before merging to `main`.
 
 **Manual release tag guard (fallback only):** if the release workflow is
@@ -186,8 +190,11 @@ for package in lock.get("package", []):
         lock_version = package.get("version")
         break
 
-if not re.fullmatch(r"\d+\.\d+\.\d+", pyproject_version):
-    raise SystemExit(f"pyproject.toml version must be X.Y.Z, got {pyproject_version!r}")
+if not re.fullmatch(r"\d+\.\d+\.\d+(?:rc\d+)?", pyproject_version):
+    raise SystemExit(
+        "pyproject.toml version must be X.Y.Z or X.Y.ZrcN, "
+        f"got {pyproject_version!r}"
+    )
 if init_version != pyproject_version:
     raise SystemExit(
         "src/evidenceforge/__init__.py __version__ "
@@ -242,8 +249,11 @@ for package in lock.get("package", []):
         lock_version = package.get("version")
         break
 
-if not re.fullmatch(r"\d+\.\d+\.\d+", pyproject_version):
-    raise SystemExit(f"pyproject.toml version must be X.Y.Z, got {pyproject_version!r}")
+if not re.fullmatch(r"\d+\.\d+\.\d+(?:rc\d+)?", pyproject_version):
+    raise SystemExit(
+        "pyproject.toml version must be X.Y.Z or X.Y.ZrcN, "
+        f"got {pyproject_version!r}"
+    )
 if init_version != pyproject_version:
     raise SystemExit(
         "src/evidenceforge/__init__.py __version__ "
