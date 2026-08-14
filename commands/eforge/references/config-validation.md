@@ -1,143 +1,63 @@
-# Config Validation Checks Reference
+# Config validation and recovery
 
-> **This reference supports `/eforge config`.** If you are trying to add, modify, or remove config entries, invoke `/eforge config` instead of using this reference directly. This file contains schema details that the config skill reads during execution.
->
-> To discover config file paths, run `eforge info <field>` (e.g., `eforge info paths.activity`). Run `eforge info --fields` to see all available fields.
+`eforge validate-config` validates the complete effective package-plus-project configuration. It is
+not file-scoped, and it is distinct from `eforge validate`, which validates a scenario.
 
-Checks for verifying config file integrity. Run via the config skill's validation operation ("validate config files", "check config", etc.) or automatically after edits (scoped to affected files).
+## Standard workflow
 
-Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activity`, `eforge info overlay.exists`). Run `eforge info --fields` to see all available fields. Use `eforge info --json` if you need everything at once.
+For inspection-only requests, run once and report without modifying files. After every authorized
+mutation, start a fresh process so cached configuration cannot hide the change:
 
-`eforge info identity_pools` summarizes generated identity-pool config files:
-baseline email domains/local-parts (`email_background.yaml`), public mail
-replacement domains (`mail_public_identities.yaml`), omitted storyline external
-IP pools (`external_actor_profiles.yaml`), suspicious-benign DNS/connection
-targets (`suspicious_benign.yaml`), and command URL/host placeholder pools
-(`command_parameter_pools.yaml`).
+```bash
+eforge validate-config --project-root <root> --json
+```
 
-`eforge validate-config` validates these pools after overlays are merged. Common
-blocking errors are empty lists, duplicate domains/hosts/IPs, malformed public
-domains or IP addresses, reserved documentation domains in realism-bound public
-pools, invalid/non-positive weights, malformed suspicious-benign host/IP pairs,
-and command URL placeholders that are not HTTP(S) URLs with hosts.
+Interpret the result as follows:
 
-## YAML Health (run first — blocks all others)
+- `errors`: block use of the changed configuration; repair errors caused by the current change.
+- `warnings`: review for realism or coverage impact; do not rewrite semantics automatically.
+- `info`: optional richness suggestions; never invent content merely to remove them.
 
-| # | Check | Severity | Description |
-|---|-------|----------|-------------|
-| 1 | YAML parse errors | ERROR | File doesn't parse as valid YAML |
-| 2 | Empty files | ERROR | YAML file exists but has no content |
+The command exits successfully with warnings/info and uses a schema-validation exit when errors are
+present. JSON is the machine contract; do not scrape human-formatted text.
 
-## DNS Registry Integrity
+## What validation covers
 
-| # | Check | Severity | Description |
-|---|-------|----------|-------------|
-| 3 | Duplicate domains | ERROR | Same domain listed more than once |
-| 4 | Empty tags | ERROR | Domain entry with missing or empty `tags:` list |
-| 5 | Empty IPs | ERROR | Domain entry with missing or empty `ips:` list |
-| 6 | Invalid tags | WARNING | Tag not in the valid set (web, saas, cdn, email, git, background, windows, linux, internal, storage, dev, social) |
-| 7 | Orphaned proxy templates | WARNING | Domain key in proxy_uri_templates that doesn't exist in dns_registry |
-| 8 | Orphaned OCSP responders | WARNING | OCSP responder host in tls_realism that doesn't exist in dns_registry |
-| 9 | Orphaned site maps | WARNING | Domain key or referenced subresource host in site_maps that doesn't exist in dns_registry |
-| 10 | Invalid proxy template structure | ERROR | proxy_uri_templates entry has empty paths/methods, mismatched content type lists, or invalid referrer_policy |
-| 11 | Browser-like infrastructure proxy templates | WARNING | OCSP/CRL/update domain_class uses browser paths/content types or emits referrers |
-| 12 | Missing proxy templates | INFO | dns_registry domain with `web` or `saas` tag but no proxy_uri_templates entry |
-| 13 | Missing site maps | INFO | dns_registry domain with `web` or `saas` tag but no site_maps entry |
+- Safe YAML parsing, mapping roots, recognized overlay paths, expected top-level keys, duplicate
+  keyed entries, and persona filename/name agreement.
+- Pydantic field types and bounds for supported config families.
+- DNS tags/domains/IPs, proxy/site-map references, application/persona/process relationships, and
+  traffic/service references.
+- Timing/rate/probability ranges, observation-profile source families, auth/TLS/Kerberos coherence,
+  endpoint pools, RSAT tools, web-scan IDS rules, and signature identity/policy.
+- Generated identity pools including `command_parameter_pools.yaml`, email identities, public actor
+  IPs, and suspicious-benign host/IP pairs.
+- Secret/payload family synthesis, poison markers, reserved-host safety, and carrier rendering.
 
-## Traffic Profile Integrity
+Validation is authoritative for acceptance, but it cannot determine whether an invented site route,
+application assignment, process parent, traffic rate, or IDS cadence is semantically correct.
 
-| # | Check | Severity | Description |
-|---|-------|----------|-------------|
-| 12 | Orphaned dns_tags | WARNING | `dns_tags:` value in traffic_profiles, process_network_map, or tls_realism profiles/overrides that no dns_registry domain uses |
-| 13 | Orphaned persona_traffic keys | WARNING | Persona name in `persona_traffic:` with no matching persona file |
-| 14 | Missing required fields | ERROR | Connection entry without `role`, `port`, or `weight` |
+## Repair classes
 
-## Application Catalog Integrity
+1. **Mechanical auto-repair:** syntax/indentation in the affected file, the confirmed overlay
+   directory, or another meaning-preserving correction.
+2. **Directly implied auto-repair plus report:** an exact dependency already selected by the user.
+3. **Semantic decision:** tags, access, parentage, site paths, traffic, timing, missingness, and
+   policy. Ask one focused question.
 
-| # | Check | Severity | Description |
-|---|-------|----------|-------------|
-| 14 | Duplicate app IDs | ERROR | Same `id:` used more than once |
-| 15 | Orphaned persona references | WARNING | Persona name in app `personas:` list with no matching persona file |
-| 16 | Missing image paths | ERROR | App without `image_path` for its declared platform(s) |
-| 17 | Bare filenames | WARNING | `image_path` that isn't fully qualified (no directory separator) |
+Do not auto-create proxy templates, site maps, persona application access, spawn rules, or process
+network mappings. Generic fallbacks and intentionally sparse configuration are valid.
 
-## Process Chain
+## Recovery order
 
-| # | Check | Severity | Description |
-|---|-------|----------|-------------|
-| 18 | Orphaned spawn rule children | WARNING | Exe basename in spawn_rules not in application_catalog or system_processes |
-| 19 | Missing spawn rules | INFO | App in catalog not listed as a child anywhere in spawn_rules |
-| 20 | Orphaned process_network_map | WARNING | Exe name in process_network_map not matching any catalog entry |
+1. Confirm the absolute project root and `eforge info overlay.path --project-root <root>`.
+2. Fix overlay YAML/shape errors first; merged validation stops when an overlay cannot be loaded
+   safely.
+3. Read the packaged default and existing overlay for the reported family.
+4. Confirm that the family's merge mode did not replace a complete section unexpectedly.
+5. Repair only current-change errors, rerun in a fresh process, and preserve unrelated existing
+   diagnostics for the report.
+6. If a supplied scenario depends on the overlay, validate it with the same project root after
+   config validation passes.
 
-## Persona Integrity
-
-| # | Check | Severity | Description |
-|---|-------|----------|-------------|
-| 21 | Filename/name mismatch | ERROR | Persona file where `name:` field doesn't match the filename (without .yaml) |
-| 22 | Missing required fields | ERROR | Persona file missing any of: name, description, typical_activities, work_hours, application_usage, risk_profile, browsing_intensity |
-| 23 | Invalid risk_profile | ERROR | Value not in {low, medium, high} |
-| 24 | Invalid browsing_intensity | ERROR | Value not in {light, normal, heavy} |
-| 25 | Phantom personas | WARNING | Persona name referenced in application_catalog or traffic_profiles but no persona file exists |
-
-## Evaluation Rule Integrity
-
-| # | Check | Severity | Description |
-|---|-------|----------|-------------|
-| 26 | Invalid field references | WARNING | co_occurrence or distribution rule referencing a field name not in the corresponding format definition |
-| 27 | Invalid format references | ERROR | Rules under a format key that doesn't match any format file name |
-| 28 | sysmon_filters.yaml structure | ERROR | Missing required sections (network_connect, image_loaded, etc.) or invalid types |
-| 29 | edr_pools.yaml structure | ERROR | Missing required sections (file_paths_windows, registry_keys_hkcu, etc.) or empty lists |
-| 30 | calltrace_patterns.yaml structure | ERROR | Patterns list empty, or pattern missing `modules`/`offset_ranges` fields |
-| 31 | rsat_tools.yaml structure | ERROR | Tool missing required fields (`id`, `snap_in`, `command_line`, `target_ports`, `weight`), invalid weight, or target_ports missing `port`/`service` |
-| 32 | traffic_rates.yaml structure | ERROR | Missing intensity level (low/medium/high), or level missing required traffic type keys (`user_activity`, `web`, `dns_interval`, `ntp`, `smb_interval`, `kerberos`, `ldap`, `persona_connections`), or values not `[lo, hi]` positive integer pairs with lo ≤ hi |
-| 33 | process_access_patterns.yaml structure | ERROR | Baseline pair missing source/target PID keys, image paths, or positive weighted hex access masks |
-| 34 | create_remote_thread_patterns.yaml structure | ERROR | Baseline pair missing source/target PID keys, image paths, or positive weight |
-| 35 | retired smb_file_transfers.yaml overlay | ERROR | The heuristic overlay was removed in 2.0; delete it and use `environment.storage`/`smb_activity` |
-| 36 | kerberos_realism.yaml structure | ERROR | Invalid Kerberos 4768 pre-auth/ticket/encryption distribution, unsupported hex values, PKINIT without certificate profile, non-PKINIT with certificate fields, excessive no-preauth/PKINIT/RC4 weights, or malformed certificate profile fields |
-| 37 | web_session_profiles.yaml structure | ERROR | Invalid inbound web visitor class, missing User-Agent pool, malformed configured request, or invalid request-count range |
-| 38 | auth_noise.yaml structure | ERROR | Invalid stale scheduled-credential account pool, host-count range, recurrence interval range, jitter range, skip probability, or backoff bounds |
-| 39 | endpoint_noise.yaml structure | ERROR | Invalid Windows scheduled-process timing bounds, skip probability, or DHCP registry emission policy |
-| 40 | observation_profiles.yaml structure | ERROR | Invalid source-family name, missing `complete` profile, invalid missingness probability, or inverted delay/host multiplier range |
-| 41 | host_activity_profiles.yaml structure | ERROR | Invalid host/persona/role rate-family name, missing core host type, malformed multiplier/bounds range, malformed firewall deny burst settings, or invalid artifact variant pools |
-| 42 | tls_realism.yaml chain metadata | ERROR | Invalid TLS subject-key profile fields or RSA/ECDSA child signature algorithm mismatch |
-| 43 | beacon_profiles.yaml structure | ERROR | Invalid profile name, empty `http_sequence`, non-origin-form URI, invalid HTTP method, malformed weight/status choices, or inverted byte/body ranges |
-
-## Scenario Validation: beacon profiles and event spacing
-
-When `eforge validate` checks a scenario:
-- `beacon.profile` must name a profile from merged `beacon_profiles.yaml`
-- `beacon.http_sequence` entries must use valid HTTP methods, origin-form URIs, and integer/range byte fields
-- `event_spacing.mode: explicit_offsets` must provide exactly one offset per child event in the parent storyline or red-herring step
-- `event_spacing.mode: interval` must include `interval`
-
-## IDS signature and attachment validation
-
-When `eforge validate-config` checks `ids_signatures.yaml`:
-
-- required signature identity/rendering fields must be present and numeric fields
-  must be positive integers;
-- `alert_policy` may be `every` or a non-empty object containing
-  `detection_filter`, `event_filter`, or both;
-- filter `track` is `by_src` or `by_dst`; event-filter `type` is `limit`,
-  `threshold`, or `both`; `count` and `seconds` are strict positive integers no
-  larger than 2,147,483,647; unknown keys are errors.
-
-When `eforge validate` checks scenario `ids_alerts`, unknown/duplicate SIDs and
-conflicting effective policies for one SID are errors. Protocol, destination
-port, and direction mismatches are advisory warnings so intentional custom rule
-deployments remain possible. Attachments are accepted only on typed transport
-owners: connections, beacons, SSH/RDP sessions, authored DHCP transactions,
-port/web scans, and DNS query families. Email and non-transport/composite events
-reject the field. See `config-ids.md` for the policy state semantics.
-
-## Scenario Validation: traffic_rates
-
-When `eforge validate` checks a scenario with `baseline_activity.traffic_rates`:
-- Keys must be from: `user_activity`, `web`, `dns_interval`, `ntp`, `smb_interval`, `kerberos`, `ldap`, `persona_connections`
-- Integer values must be > 0
-- List values must be `[lo, hi]` with both positive and lo ≤ hi
-- String values must be `low`, `medium`, or `high` (preset name)
-
-## Output Format
-
-Report grouped by severity, then by file. End with summary: "N errors, N warnings, N info items across N files checked."
+Never weaken engine-owned safety, evaluation, resource, runtime, or OOB policy to silence an error.

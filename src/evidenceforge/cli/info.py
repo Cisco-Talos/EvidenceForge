@@ -32,6 +32,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from evidenceforge import __version__
 from evidenceforge.config import (
     get_activity_directory,
@@ -72,13 +74,12 @@ def _collect_formats(formats_dir: Path) -> list[str]:
     return sorted(f.stem for f in formats_dir.glob("*.yaml"))
 
 
-def _collect_packs() -> list[str]:
+def _collect_packs(project_root: Path) -> list[str]:
     """Collect exact package/project pack references for explicit discovery."""
 
-    from evidenceforge.composition.compiler import resolve_management_project_root
     from evidenceforge.composition.packs import PackRepository
 
-    repository = PackRepository(resolve_management_project_root())
+    repository = PackRepository(project_root)
     return sorted(
         f"{pack.source}:{pack.manifest.type}:{pack.manifest.name}@{pack.manifest.version}"
         for pack in repository.list()
@@ -201,6 +202,44 @@ def _collect_format_groups() -> dict[str, list[str]]:
     return {k: sorted(v) for k, v in FORMAT_GROUPS.items()}
 
 
+def _collect_config_families() -> dict[str, dict[str, str]]:
+    """Expose authoring-grade overlay ownership and merge contracts."""
+
+    from evidenceforge.config.overlay_registry import config_family_inventory
+
+    return config_family_inventory()
+
+
+def _storyline_event_models() -> dict[str, Any]:
+    """Return event-spec models derived from the authoritative runtime union."""
+
+    from typing import get_args
+
+    from evidenceforge.models.scenario import EventSpec
+
+    union = get_args(EventSpec)[0]
+    models: dict[str, Any] = {}
+    for model in get_args(union):
+        event_type = model.model_fields["type"].default
+        models[str(event_type)] = model
+    return dict(sorted(models.items()))
+
+
+def _collect_storyline_event_types() -> list[str]:
+    """Collect authored storyline event type names from the runtime union."""
+
+    return list(_storyline_event_models())
+
+
+def _collect_storyline_event_schema(event_type: str) -> dict[str, Any] | None:
+    """Return one event model's validation JSON Schema, including nested definitions."""
+
+    model = _storyline_event_models().get(event_type)
+    if model is None:
+        return None
+    return model.model_json_schema(mode="validation")
+
+
 def _collect_identity_pools() -> dict[str, Any]:
     """Collect counts and overlay paths for data-driven generated identity pools."""
     from evidenceforge.generation.activity.command_parameter_pools import (
@@ -264,7 +303,7 @@ def _collect_identity_pools() -> dict[str, Any]:
     }
 
 
-def _gather_lightweight() -> dict[str, Any]:
+def _gather_lightweight(project_root: Path) -> dict[str, Any]:
     """Gather lightweight fields that don't require overlay-backed loaders.
 
     These always succeed even if the overlay has broken YAML.
@@ -274,13 +313,14 @@ def _gather_lightweight() -> dict[str, Any]:
 
     from evidenceforge.config.overlay import get_overlay_directory, list_overlay_files
 
-    overlay_dir = get_overlay_directory()
+    overlay_dir = get_overlay_directory(project_root)
     overlay_files = list_overlay_files(overlay_dir) if overlay_dir else []
 
     return {
         "version": __version__,
         "install_type": install_type,
         "config_writable": config_writable,
+        "project_root": str(project_root),
         "paths": {
             "config_root": str(config_root),
             "activity": str(get_activity_directory()),
@@ -289,13 +329,13 @@ def _gather_lightweight() -> dict[str, Any]:
             "evaluation": str(get_evaluation_directory()),
         },
         "overlay": {
-            "path": str(Path.cwd() / ".eforge" / "config"),
+            "path": str(project_root / ".eforge" / "config"),
             "exists": overlay_dir is not None,
             "files": overlay_files,
         },
         "pack_roots": {
             "package": str(config_root / "packs"),
-            "project": str(Path.cwd() / ".eforge" / "packs"),
+            "project": str(project_root / ".eforge" / "packs"),
         },
     }
 
@@ -305,13 +345,14 @@ _LIGHTWEIGHT_PREFIXES = {
     "version",
     "install_type",
     "config_writable",
+    "project_root",
     "paths",
     "overlay",
     "pack_roots",
 }
 
 
-def gather_info(field: str | None = None) -> dict[str, Any]:
+def gather_info(field: str | None = None, project_root: Path | None = None) -> dict[str, Any]:
     """Gather installation info into a single dict.
 
     If ``field`` is provided and it's a lightweight field (version, paths,
@@ -323,7 +364,32 @@ def gather_info(field: str | None = None) -> dict[str, Any]:
     each inventory is loaded with error handling so a single broken
     loader doesn't crash the entire command.
     """
-    data = _gather_lightweight()
+    from evidenceforge.composition.compiler import (
+        build_management_effective_config,
+        resolve_management_project_root,
+    )
+    from evidenceforge.config.overlay import overlay_project_root_scope
+    from evidenceforge.config.provider import effective_config_scope
+    from evidenceforge.models.exceptions import EvidenceForgeError
+
+    resolved_project_root = resolve_management_project_root(project_root)
+    data = _gather_lightweight(resolved_project_root)
+
+    if field and field.startswith("storyline_event_schemas"):
+        parts = field.split(".")
+        schemas: dict[str, Any] = {}
+        if len(parts) == 1:
+            schemas = {
+                event_type: schema
+                for event_type in _collect_storyline_event_types()
+                if (schema := _collect_storyline_event_schema(event_type)) is not None
+            }
+        elif len(parts) == 2:
+            schema = _collect_storyline_event_schema(parts[1])
+            if schema is not None:
+                schemas[parts[1]] = schema
+        data["storyline_event_schemas"] = schemas
+        return data
 
     # If requesting a lightweight field, return early — no loaders needed
     if field:
@@ -346,13 +412,30 @@ def gather_info(field: str | None = None) -> dict[str, Any]:
         "beacon_profiles": _collect_beacon_profiles,
         "format_groups": _collect_format_groups,
         "identity_pools": _collect_identity_pools,
-        "packs": _collect_packs,
+        "packs": lambda: _collect_packs(resolved_project_root),
+        "config_families": _collect_config_families,
+        "storyline_event_types": _collect_storyline_event_types,
     }
-    for key, collector in inventories.items():
-        try:
-            data[key] = collector()
-        except Exception as e:
-            data[key] = f"<error: {e}>"
+    effective_config = build_management_effective_config(resolved_project_root)
+    expected_errors = (
+        EvidenceForgeError,
+        OSError,
+        UnicodeError,
+        yaml.YAMLError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+    )
+    with (
+        overlay_project_root_scope(resolved_project_root),
+        effective_config_scope(effective_config),
+    ):
+        for key, collector in inventories.items():
+            try:
+                data[key] = collector()
+            except expected_errors as e:
+                data[key] = f"<error: {e}>"
 
     return data
 
@@ -365,6 +448,7 @@ def format_human_readable(data: dict[str, Any]) -> str:
     lines.append(f"EvidenceForge v{data['version']}")
     lines.append(f"Install type: {data['install_type']}")
     lines.append(f"Config writable: {'yes' if data['config_writable'] else 'no'}")
+    lines.append(f"Project root: {data['project_root']}")
     lines.append("")
 
     pack_roots = data["pack_roots"]
@@ -459,6 +543,14 @@ def format_human_readable(data: dict[str, Any]) -> str:
     else:
         lines.append(f"Available packs: {packs}")
 
+    event_types = data["storyline_event_types"]
+    lines.append("")
+    if isinstance(event_types, list):
+        lines.append(f"Storyline event types ({len(event_types)}):")
+        lines.append(_format_list(event_types))
+    else:
+        lines.append(f"Storyline event types: {event_types}")
+
     return "\n".join(lines)
 
 
@@ -466,6 +558,7 @@ _FIELD_DESCRIPTIONS: dict[str, str] = {
     "application_ids": "Application IDs in the catalog",
     "beacon_profiles": "Available beacon behavior profile names",
     "config_writable": "Whether package config files are directly editable",
+    "config_families": "Configuration families and their runtime ownership class",
     "dns_tags": "Defined valid DNS tags (from dns_registry.yaml valid_tags section)",
     "format_groups": "Format group names and their expanded formats (for --formats flag)",
     "formats": "Supported log format names",
@@ -487,6 +580,8 @@ _FIELD_DESCRIPTIONS: dict[str, str] = {
     "paths.formats": "Format definitions directory",
     "paths.personas": "Persona definitions directory",
     "personas": "Built-in persona names (package + overlay)",
+    "project_root": "Resolved project root used for overlays and project packs",
+    "storyline_event_types": "Runtime-derived typed storyline event names",
     "system_roles": "Author-facing system role names from role-aware config",
     "version": "EvidenceForge version",
     "web_scan_presets": "Available web scan preset names (nikto, dirb, etc.)",
@@ -502,11 +597,23 @@ def list_fields(data: dict[str, Any], prefix: str = "") -> list[tuple[str, str]]
     fields: list[tuple[str, str]] = []
     for key, value in data.items():
         full_key = f"{prefix}.{key}" if prefix else key
-        if isinstance(value, dict):
+        if full_key == "config_families":
+            fields.append((full_key, _FIELD_DESCRIPTIONS[full_key]))
+        elif isinstance(value, dict):
             fields.extend(list_fields(value, full_key))
         else:
             desc = _FIELD_DESCRIPTIONS.get(full_key, "")
             fields.append((full_key, desc))
+    if not prefix:
+        event_types = data.get("storyline_event_types", [])
+        if isinstance(event_types, list):
+            fields.extend(
+                (
+                    f"storyline_event_schemas.{event_type}",
+                    f"Runtime-derived JSON Schema for the {event_type} event",
+                )
+                for event_type in event_types
+            )
     return sorted(fields)
 
 

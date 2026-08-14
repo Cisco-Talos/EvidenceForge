@@ -541,26 +541,32 @@ class TestDocsSync:
 
     def test_skill_docs_reference_ground_truth_json_and_config(self):
         assert "GROUND_TRUTH.json" in self._read("commands/eforge/generate.md")
-        assert "GROUND_TRUTH.json" in self._read("commands/eforge/evaluate.md")
         assert "ARTIFACTS_MANIFEST.json" in self._read("commands/eforge/generate.md")
-        assert "ARTIFACTS_MANIFEST.json" in self._read("commands/eforge/evaluate.md")
-        assert "secret_families.yaml" in self._read("commands/eforge/config.md")
+        bundle_reference = self._read("commands/eforge/references/generation-bundle-targets.md")
+        assert "GROUND_TRUTH.json" in bundle_reference
+        assert "ARTIFACTS_MANIFEST.json" in bundle_reference
+        assert "secret_families.yaml" in self._read(
+            "commands/eforge/references/config-host-activity.md"
+        )
 
     def test_docs_reference_artifacts_manifest_not_legacy_email_manifest(self):
-        active_docs = [
+        artifact_contract_docs = [
             "docs/reference/EVIDENCE_FORMATS.md",
             "docs/reference/scenario-reference.md",
             "docs/design/email-evidence-design.md",
-            "commands/eforge/scenario.md",
             "commands/eforge/generate.md",
-            "commands/eforge/evaluate.md",
-            "commands/eforge/references/evidence-formats.md",
+            "commands/eforge/references/evidence-web-email.md",
             "commands/eforge/references/scenario-reference.md",
         ]
-        for rel in active_docs:
+        for rel in artifact_contract_docs:
             text = self._read(rel)
             assert "ARTIFACTS_MANIFEST.json" in text
             assert "EMAIL_ARTIFACTS.json" not in text
+
+        # Compact top-level skills may delegate the detailed path contract, but
+        # must never reintroduce the retired manifest name.
+        for rel in ("commands/eforge/scenario.md", "commands/eforge/evaluate.md"):
+            assert "EMAIL_ARTIFACTS.json" not in self._read(rel)
 
     def test_validate_skill_documents_spillage_errors(self):
         # AGENTS.md convention: validate.md must carry error-handling guidance for

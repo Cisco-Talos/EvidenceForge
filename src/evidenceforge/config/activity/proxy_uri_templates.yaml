@@ -10,7 +10,7 @@
 # Depended on by: generation engine (proxy log URI paths)
 # Depends on: dns_registry.yaml (domain keys should exist in registry)
 #
-# Full schema: see commands/eforge/references/config-proxy-uri-templates.md
+# Authoring reference: commands/eforge/references/config-dns-network.md
 
 default_http_policy: https_redirect_public
 

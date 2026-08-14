@@ -16,7 +16,7 @@
 # Depended on by: spawn_rules.yaml (exe basenames), process_network_map.yaml (exe basenames)
 # Depends on: persona files (personas: list must use valid persona names)
 #
-# Full schema: see commands/eforge/references/config-application-catalog.md
+# Authoring reference: commands/eforge/references/config-apps-processes.md
 
 applications:
   # ===== Windows User Apps (process_user_apps) =====

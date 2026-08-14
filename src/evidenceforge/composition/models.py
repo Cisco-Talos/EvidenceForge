@@ -1260,6 +1260,15 @@ class CompiledScenario(BaseModel):
     provenance: dict[str, Any] = Field(default_factory=dict)
     digests: dict[str, str] = Field(default_factory=dict)
     authored_kind: Literal["scenario-1.0", "scenario-2.0", "resolved"]
+    diagnostic_field_origins: dict[str, Path] = Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+        description=(
+            "Process-local declaring files for diagnostics. Excluded from resolved artifacts "
+            "and digests so absolute machine paths never enter authoritative documents."
+        ),
+    )
 
     model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 

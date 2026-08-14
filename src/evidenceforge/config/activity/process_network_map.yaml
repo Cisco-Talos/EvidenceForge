@@ -14,7 +14,7 @@
 # Depended on by: generation engine (process-network correlation)
 # Depends on: application_catalog.yaml (exe basenames should match catalog entries)
 #
-# Full schema: see commands/eforge/references/config-process-network-map.md
+# Authoring reference: commands/eforge/references/config-apps-processes.md
 
 mappings:
   # Browsers → external HTTPS
