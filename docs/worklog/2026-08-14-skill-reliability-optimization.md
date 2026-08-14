@@ -49,7 +49,7 @@ on config, evaluate, generate, validate, and scenario, plus the CLI contracts th
   process success from an acceptance failure.
 - Integrated skill and CLI contract suite: `100 passed`.
 - Full default suite: `5749 passed, 21 skipped` in 7m43s. The first full run caught one missing
-  SOF-ELK trademark marker in a new focused reference; the marker was fixed and the full suite was
+  SOF-ELK® trademark marker in a new focused reference; the marker was fixed and the full suite was
   rerun cleanly.
 - Final quality gates: `uv run ruff check .` passed and
   `uv run ruff format --check .` reported all 507 files formatted.
