@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+from evidenceforge.composition import compile_scenario
+from evidenceforge.config.provider import effective_config_scope
 from evidenceforge.models import (
     BaselineActivity,
     Environment,
@@ -46,7 +48,6 @@ from evidenceforge.models import (
     User,
 )
 from evidenceforge.utils import load_yaml
-from evidenceforge.utils.personas import merge_builtin_personas
 from evidenceforge.validation import ScenarioValidator
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
@@ -56,15 +57,16 @@ def test_all_scenario_fixtures_pass_schema_and_semantic_validation(scenarios_dir
 
     failures: list[str] = []
     for scenario_path in sorted(scenarios_dir.glob("*.yaml")):
-        scenario = Scenario(**merge_builtin_personas(load_yaml(scenario_path)))
-        errors = [
-            issue
-            for issue in ScenarioValidator(
-                scenario,
-                scenario_root=scenario_path.parent,
-            ).validate()
-            if issue.severity == "error"
-        ]
+        compiled = compile_scenario(scenario_path)
+        with effective_config_scope(compiled.effective_config):
+            errors = [
+                issue
+                for issue in ScenarioValidator(
+                    compiled.scenario,
+                    scenario_root=scenario_path.parent,
+                ).validate()
+                if issue.severity == "error"
+            ]
         failures.extend(
             f"{scenario_path.name}: {issue.field_path}: {issue.message}" for issue in errors
         )

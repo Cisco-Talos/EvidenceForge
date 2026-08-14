@@ -23,6 +23,7 @@
 """File I/O utilities for EvidenceForge."""
 
 import copy
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,14 +66,13 @@ class _ScenarioIncludeBudgetState:
     bytes: int = 0
     nodes: int = 0
 
-    def consume(self, path: Path, *, depth: int) -> None:
+    def consume(self, path: Path, *, depth: int, size: int) -> None:
         """Account for one file before reading it and reject budget overflow."""
 
         if depth > self.budget.max_depth:
             raise ScenarioIncludeError(
                 f"Scenario include depth exceeds limit {self.budget.max_depth}: {path}"
             )
-        size = path.stat().st_size
         self.files += 1
         self.bytes += size
         if self.files > self.budget.max_files:
@@ -114,6 +114,25 @@ class _ScenarioIncludeBudgetState:
                 active.remove(node_id)
 
         visit(value)
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedScenarioSource:
+    """One exact YAML source read while expanding a scenario."""
+
+    path: Path
+    content: bytes
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedSourceGraph:
+    """Expanded scenario plus exact sources and declaring-file field origins."""
+
+    root: Path
+    data: dict[str, Any]
+    origins: dict[tuple[str, ...], Path]
+    sources: tuple[LoadedScenarioSource, ...]
 
 
 def load_yaml(path: Path | str) -> dict:
@@ -168,25 +187,78 @@ def load_scenario_yaml(
         ConfigurationError: If YAML is invalid
         ScenarioIncludeError: If include expansion fails
     """
-    scenario_path = Path(path).resolve()
+    return load_scenario_source_graph(path, include_budget=include_budget).data
+
+
+def load_scenario_source_graph(
+    path: Path | str,
+    *,
+    include_budget: ScenarioIncludeBudget | None = None,
+) -> LoadedSourceGraph:
+    """Load an authored scenario once while retaining sources and field origins."""
+
+    scenario_path = Path(os.path.abspath(Path(path)))
     budget_state = _ScenarioIncludeBudgetState(include_budget or ScenarioIncludeBudget())
-    data, _origins = _load_yaml_with_includes(
+    sources: dict[Path, LoadedScenarioSource] = {}
+    root_content = _read_source_bytes(scenario_path)
+    root_data = _load_raw_yaml(scenario_path, root_content)
+    if root_data.get("kind") == "evidenceforge.resolved-scenario":
+        budget_state.consume(scenario_path, depth=1, size=len(root_content))
+        budget_state.consume_nodes(root_data, path=scenario_path)
+        root_source = LoadedScenarioSource(
+            path=scenario_path,
+            content=root_content,
+            sha256=hashlib.sha256(root_content).hexdigest(),
+        )
+        origins: dict[tuple[str, ...], Path] = {}
+        _record_origins(root_data, (), scenario_path, origins)
+        return LoadedSourceGraph(
+            root=scenario_path,
+            data=root_data,
+            origins=origins,
+            sources=(root_source,),
+        )
+    data, origins = _load_yaml_with_includes(
         scenario_path,
         stack=(),
         budget_state=budget_state,
+        sources=sources,
+        preloaded={scenario_path: (root_content, root_data)},
     )
-    return data
+    return LoadedSourceGraph(
+        root=scenario_path,
+        data=data,
+        origins=origins,
+        sources=tuple(sources[path] for path in sorted(sources, key=str)),
+    )
 
 
-def _load_raw_yaml(path: Path) -> dict[str, Any]:
-    """Load YAML from an already-resolved path without expanding includes."""
+def _read_source_bytes(path: Path) -> bytes:
+    """Read one source without following a final-component symlink."""
+
+    if any(component.is_symlink() for component in (path, *path.parents)):
+        raise ScenarioIncludeError(f"Scenario source cannot be a symlink: {path}")
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
-
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     try:
-        from evidenceforge.utils.yaml_loader import load_yaml_file
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ScenarioIncludeError(f"Unable to safely open scenario source {path}: {exc}") from exc
+    with os.fdopen(descriptor, "rb") as source_file:
+        return source_file.read()
 
-        data = load_yaml_file(path)
+
+def _load_raw_yaml(path: Path, content: bytes) -> dict[str, Any]:
+    """Load YAML from an already-resolved path without expanding includes."""
+    try:
+        from evidenceforge.utils.yaml_loader import load_yaml_text
+
+        data = load_yaml_text(content.decode("utf-8"), source=str(path))
+    except UnicodeError as exc:
+        raise ConfigurationError(f"Scenario source is not valid UTF-8: {path}") from exc
     except yaml.YAMLError as e:
         raise ConfigurationError(f"Invalid YAML in {path}: {e}") from e
 
@@ -202,14 +274,25 @@ def _load_yaml_with_includes(
     *,
     stack: tuple[Path, ...],
     budget_state: _ScenarioIncludeBudgetState,
+    sources: dict[Path, LoadedScenarioSource],
+    preloaded: dict[Path, tuple[bytes, dict[str, Any]]] | None = None,
 ) -> tuple[dict[str, Any], dict[tuple[str, ...], Path]]:
     """Load a YAML mapping, recursively expanding its scenario includes."""
     if path in stack:
         chain = " -> ".join(str(p) for p in (*stack, path))
         raise ScenarioIncludeError(f"Circular scenario include detected: {chain}")
 
-    budget_state.consume(path, depth=len(stack) + 1)
-    data = _load_raw_yaml(path)
+    if preloaded is not None and path in preloaded:
+        content, data = preloaded.pop(path)
+    else:
+        content = _read_source_bytes(path)
+        data = _load_raw_yaml(path, content)
+    budget_state.consume(path, depth=len(stack) + 1, size=len(content))
+    sources[path] = LoadedScenarioSource(
+        path=path,
+        content=content,
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
     budget_state.consume_nodes(data, path=path)
     include_entries = _extract_include_entries(data, path)
 
@@ -227,6 +310,8 @@ def _load_yaml_with_includes(
             include_path,
             stack=next_stack,
             budget_state=budget_state,
+            sources=sources,
+            preloaded=preloaded,
         )
         _merge_disjoint_mapping(
             merged,
@@ -294,7 +379,7 @@ def _resolve_include_path(include_entry: str, including_path: Path) -> Path:
     include_path = Path(include_entry)
     if not include_path.is_absolute():
         include_path = including_path.parent / include_path
-    return include_path.resolve()
+    return Path(os.path.abspath(include_path))
 
 
 def _merge_disjoint_mapping(
@@ -349,6 +434,13 @@ def _record_origins(
             return
         for key, child in value.items():
             _record_origins(child, (*path, str(key)), source, origins)
+        return
+    if isinstance(value, list):
+        if not value:
+            origins[path] = source
+            return
+        for index, child in enumerate(value):
+            _record_origins(child, (*path, str(index)), source, origins)
         return
     origins[path] = source
 

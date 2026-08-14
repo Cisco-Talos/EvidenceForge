@@ -22,6 +22,12 @@ Default to `eforge` for all CLI execution. If `eforge` is not found and you are
 in an EvidenceForge source checkout, retry the same command with
 `uv run eforge ...`.
 
+For Scenario 2.0 composition failures, inspect exact references with `eforge pack show <ref>
+--json`, validate individual packs with `eforge pack validate <ref-or-path> --json`, and use
+`eforge resolve <scenario> --output <path> --explain-composition --json` for selected-pack,
+precedence, merge-rule, and portable field-origin diagnostics. Packs are optional; never treat a
+missing pack repository as a warning for Scenario 1.0 or monolithic Scenario 2.0.
+
 When a scenario uses `environment.storage` or `smb_activity`, also run
 `eforge validate <scenario-file> --show-storage`. Review the compiled volumes,
 mounts, public share references, mappings, access summaries, population/activity

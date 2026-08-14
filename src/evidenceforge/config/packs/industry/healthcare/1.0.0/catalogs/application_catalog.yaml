@@ -1,0 +1,6 @@
+application_catalog:
+  clinical-portal:
+    description: "Synthetic browser-based clinical records application."
+    data:
+      category: clinical
+      protocols: [https]

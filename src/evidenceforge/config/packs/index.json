@@ -1,0 +1,9 @@
+{
+  "packs": {
+    "industry/finance/1.0.0": "91405b0c8173ed179135142dac7e9d0d8b4c3208d0ec6fc0e2184341203d0715",
+    "industry/healthcare/1.0.0": "7b824261d5fbdd7a476d5bbb8a919892329916a8558530397479587bb4aa1d82",
+    "industry/technology/1.0.0": "8d309720a72b4509dc3d9af6f59f40106b9b33251abd548cc2292fa1e978d55f",
+    "organization/northstar-health/1.0.0": "63b3a7101db211e4ddfd3be9f5737bdb9c1158e578e5250e07fa19c5868e5e5a"
+  },
+  "schema_version": "1.0"
+}

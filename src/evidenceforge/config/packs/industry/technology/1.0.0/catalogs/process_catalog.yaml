@@ -1,0 +1,6 @@
+process_catalog:
+  engineering-toolchain:
+    description: "Engineering command and build process vocabulary."
+    data:
+      process_names: ["git.exe", "docker.exe", "kubectl.exe", "code.exe"]
+      document_terms: ["build", "deployment", "release", "incident"]

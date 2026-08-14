@@ -10,6 +10,12 @@ This document describes the EvidenceForge scenario file schema, including Phase 
 
 Scenario files are YAML documents that define the environment, users, systems, personas, and storyline for log generation. All fields marked "Phase 2.4+" are optional and backward compatible with Phase 1 scenarios.
 
+Scenario 1.0 remains the compatibility format shown throughout this field reference. Scenario 2.0
+uses `scenario_version: "2.0"` and may optionally select exact industry packs or one organization
+pack through `composition`; without that section it is fully monolithic. See
+[Scenario 2.0 and composable packs](SCENARIO_PACKS.md) for repositories, fixed catalogs,
+qualified references, precedence, CLI workflows, and authoritative generated artifacts.
+
 ## Top-Level Structure
 
 ```yaml

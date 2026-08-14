@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; post-1.0 quality improvements ongoing
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-05-26
+**Last Roadmap Review:** 2026-08-14
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -39,6 +39,12 @@ cross-source lifecycle ownership into action bundles, temporal/source observatio
 contracts, and dual source/destination HostContext support. Detailed branch and
 assessment history belongs in worklogs and changelog entries, not this roadmap.
 
+**Scenario 2.0 and composable packs.** Added optional industry/organization packs,
+immutable per-run effective configuration, exact and provenance-rich composition,
+authoritative resolved scenarios, run manifests, sample packs, and pack/resolve CLI
+workflows. See the
+[scenario composition worklog](docs/worklog/2026-08-14-scenario-pack-composition.md).
+
 ---
 
 ## Quality Roadmap
@@ -48,6 +54,10 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P1** Build dedicated industry/organization pack-authoring skills and integrate them with
+  the scenario skill. Base the workflow on `pack init`, `pack copy`, stable JSON validation, and
+  composition explain/provenance output; test pack-authoring reliability before claiming that the
+  AI authoring-complexity problem is solved.
 - [x] **P1** Complete realism-remediation Batches 0–2: approve the canonical contracts, add the
   behavior-preserving contract foundation, and implement the session/process/authentication
   vertical slice. See the [approved contracts](docs/design/realism-review/contract-proposals.md),
@@ -111,9 +121,6 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] **P2** Revisit proxy access log realism and parser compatibility; consider
   switching `proxy_access.log` from W3C Extended format to Apache/Nginx
   combined-style output with absolute URLs and CONNECT targets.
-- [ ] **P3** Design richer persona, host, and storage story packs, including optional
-  data-only industry-specific SMB share/corpus vocabulary and workflow profiles,
-  after the generic workstation and SMB storage models pass realism assessment.
 - [ ] **P2** Review shared Windows Event XML helper opportunities across
   Security and Sysmon emitters without hiding provider-specific field semantics.
 - [ ] **P2** Add output-target ingest guides covering which generated sources

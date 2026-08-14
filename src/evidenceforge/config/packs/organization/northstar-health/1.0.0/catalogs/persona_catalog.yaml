@@ -1,0 +1,12 @@
+persona_catalog:
+  northstar_it:
+    name: northstar_it
+    description: "Northstar infrastructure administrator supporting clinical operations."
+    typical_activities:
+      - "Administer Windows and Linux servers"
+      - "Review backup and monitoring alerts"
+      - "Support clinical workstation access"
+    work_hours: "8am-6pm (lunch 12pm-1pm)"
+    application_usage: ["PowerShell", "Terminal", "Chrome", "Outlook"]
+    risk_profile: high
+    browsing_intensity: normal

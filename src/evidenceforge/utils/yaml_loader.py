@@ -68,4 +68,10 @@ def load_yaml_text(content: str, *, source: str = "<string>") -> Any:
 def load_yaml_file(path: Path, *, encoding: str = "utf-8") -> Any:
     """Read and parse one YAML file with duplicate-key rejection."""
 
+    from evidenceforge.config.provider import packaged_default_document
+
+    found, document = packaged_default_document(path)
+    if found:
+        return document
+
     return load_yaml_text(path.read_text(encoding=encoding), source=str(path))

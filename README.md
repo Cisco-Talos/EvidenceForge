@@ -57,8 +57,8 @@ uv run eforge generate scenarios/branch-office-example/scenario.yaml -o ./output
 # Validate a scenario file
 uv run eforge validate scenarios/branch-office-example/scenario.yaml
 
-# Evaluate generated data quality
-uv run eforge eval ./output/data --scenario scenarios/branch-office-example/scenario.yaml
+# Evaluate a new authoritative bundle (legacy bundles still need --scenario)
+uv run eforge eval ./output
 ```
 
 ## Agent Skills (Recommended)
@@ -88,7 +88,9 @@ For scripted or non-interactive use:
 |---------|-------------|
 | `eforge generate <scenario.yaml> -o <dir> [--seed N]` | Forecast machine resources, then generate logs; `--seed` overrides the scenario seed |
 | `eforge validate <scenario.yaml>` | Validate schema and cross-references, and always print a machine-aware memory and disk forecast |
-| `eforge eval <output_dir> -s <scenario.yaml> [--allow-large-evaluation]` | Evaluate quality (4 pillars, 22 sub-scores); the trusted override bypasses evaluator corpus limits |
+| `eforge resolve <scenario.yaml> -o <resolved.yaml> [--explain-composition]` | Compile an authoritative, self-contained scenario without generating logs |
+| `eforge pack list\|show\|validate\|init\|copy` | Discover, inspect, validate, or create project-local industry/organization packs |
+| `eforge eval <output_dir> [-s <scenario.yaml>] [--allow-large-evaluation]` | Evaluate quality; new bundles use their adjacent resolved scenario, while legacy bundles require `--scenario` |
 | `eforge info [field]` | Show installation info, config paths, and data inventories. Pass a dot-path field for a specific value (e.g., `eforge info personas`). Use `--fields` to list available fields, `--json` for machine output. |
 | `eforge validate-config` | Validate config files for cross-reference integrity. Use `--json` for machine output. |
 | `eforge install-skills [--agent all\|claude\|chatgpt\|codex] [--global]` | Install project-local or user-wide agent skills; defaults to all agents (`codex` aliases `chatgpt`) |
@@ -117,6 +119,18 @@ The recommended approach is the Claude Code skill:
 ```
 
 For details on the overlay system, manual editing, and cross-file dependencies, see **[Customizing Configuration](docs/reference/CUSTOMIZING_CONFIG.md)**.
+
+## Scenario 2.0 packs
+
+Scenario 2.0 optionally composes exact, whole industry or organization packs from installed data,
+project-local `.eforge/packs`, or an explicit path. Packs have the same six predictable catalogs,
+including required empty catalogs; organization packs can also contribute a concrete environment
+and baseline. Existing Scenario 1.0 files and monolithic Scenario 2.0 files require no packs and do
+not scan for or warn about them.
+
+EvidenceForge ships `finance`, `healthcare`, and `technology` industry examples plus the fictional
+`northstar-health` organization example. Start with `eforge pack list --json`, and see
+[Scenario 2.0 and composable packs](docs/reference/SCENARIO_PACKS.md) for the complete contract.
 
 ## What It Does
 

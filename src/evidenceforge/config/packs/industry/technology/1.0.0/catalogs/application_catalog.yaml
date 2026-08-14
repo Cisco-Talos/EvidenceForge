@@ -1,0 +1,6 @@
+application_catalog:
+  continuous-delivery:
+    description: "Synthetic continuous-delivery application family."
+    data:
+      category: engineering
+      protocols: [https, ssh]

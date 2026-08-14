@@ -64,6 +64,11 @@ def get_overlay_directory() -> Path | None:
     Returns:
         Path to the overlay directory, or None if it doesn't exist.
     """
+    from evidenceforge.config.provider import current_effective_config, uses_ambient_overlay_compat
+
+    effective = current_effective_config()
+    if effective is not None and not uses_ambient_overlay_compat():
+        return None
     overlay = Path.cwd() / _OVERLAY_DIR_NAME
     if overlay.is_dir():
         return overlay
@@ -76,6 +81,11 @@ def list_overlay_files(overlay_dir: Path | None = None) -> list[str]:
     Returns:
         Sorted list of relative paths (e.g., ["activity/dns_registry.yaml"]).
     """
+    from evidenceforge.config.provider import current_effective_config, uses_ambient_overlay_compat
+
+    effective = current_effective_config()
+    if overlay_dir is None and effective is not None and not uses_ambient_overlay_compat():
+        return sorted(effective.project_overlays)
     if overlay_dir is None:
         overlay_dir = get_overlay_directory()
     if overlay_dir is None or not overlay_dir.is_dir():
@@ -88,6 +98,15 @@ def list_overlay_files(overlay_dir: Path | None = None) -> list[str]:
 def retired_overlay_errors(overlay_dir: Path | None = None) -> list[tuple[str, str]]:
     """Return actionable errors for retired overlay paths that would be ignored."""
 
+    from evidenceforge.config.provider import current_effective_config, uses_ambient_overlay_compat
+
+    effective = current_effective_config()
+    if overlay_dir is None and effective is not None and not uses_ambient_overlay_compat():
+        return [
+            (relative_path, message)
+            for relative_path, message in _RETIRED_OVERLAYS.items()
+            if relative_path in effective.project_overlays
+        ]
     if overlay_dir is None:
         overlay_dir = get_overlay_directory()
     if overlay_dir is None:
@@ -119,6 +138,22 @@ def load_with_overlay(
     from evidenceforge.utils.yaml_loader import load_yaml_file
 
     data = load_yaml_file(package_path)
+
+    from evidenceforge.config.provider import (
+        current_effective_config,
+        pack_overlay_document,
+        project_overlay_document,
+        uses_ambient_overlay_compat,
+    )
+
+    if current_effective_config() is not None and not uses_ambient_overlay_compat():
+        pack_overlay = pack_overlay_document(overlay_subpath)
+        if pack_overlay is not None:
+            data = merge_fn(data, pack_overlay)
+        project_overlay = project_overlay_document(overlay_subpath)
+        if project_overlay is not None:
+            data = merge_fn(data, project_overlay)
+        return data
 
     overlay_dir = get_overlay_directory()
     if overlay_dir is None:
