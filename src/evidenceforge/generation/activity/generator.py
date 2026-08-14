@@ -24063,11 +24063,13 @@ class ActivityGenerator:
         if username in canonical_logon_ids:
             return canonical_logon_ids[username]
 
-        sessions = self.state_manager.get_sessions_for_user(username)
+        sessions = (
+            self.state_manager.get_sessions_for_user_at(username, at_time)
+            if at_time is not None
+            else self.state_manager.get_sessions_for_user(username)
+        )
         if sessions:
             host_sessions = [s for s in sessions if s.system == hostname]
-            if at_time is not None:
-                host_sessions = [s for s in host_sessions if _session_started_by(s, at_time)]
             active = max(host_sessions, key=lambda s: s.start_time) if host_sessions else None
             if active:
                 return active.logon_id
@@ -24080,11 +24082,13 @@ class ActivityGenerator:
         at_time: datetime | None = None,
     ) -> str:
         """Look up the visible subject session, including service-account sessions."""
-        sessions = self.state_manager.get_sessions_for_user(username)
+        sessions = (
+            self.state_manager.get_sessions_for_user_at(username, at_time)
+            if at_time is not None
+            else self.state_manager.get_sessions_for_user(username)
+        )
         if sessions:
             host_sessions = [s for s in sessions if s.system == hostname]
-            if at_time is not None:
-                host_sessions = [s for s in host_sessions if _session_started_by(s, at_time)]
             active = max(host_sessions, key=lambda s: s.start_time) if host_sessions else None
             if active:
                 return active.logon_id

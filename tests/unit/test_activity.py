@@ -9131,6 +9131,63 @@ class TestActivityGenerator:
         assert explicit.auth.process_pid != mmc_pid
         assert explicit.auth.process_name.endswith("runas.exe")
 
+    def test_generate_explicit_credentials_ignores_newer_expired_subject_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A materialized 4648 caller must bind a session valid at the event time."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        valid_logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=timestamp - timedelta(hours=2),
+        )
+        expired_logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.0.0.99",
+            start_time=timestamp - timedelta(hours=1),
+        )
+        state_manager.plan_session_end(
+            expired_logon_id,
+            SessionEndPlan(
+                timestamp - timedelta(seconds=30),
+                "explicit_storyline",
+                "expired-rdp-session",
+            ),
+        )
+        state_manager.set_current_time(timestamp - timedelta(seconds=10))
+        explorer_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\explorer.exe",
+            command_line=r"C:\Windows\explorer.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=valid_logon_id,
+        )
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\msra.exe",
+            process_pid=explorer_pid,
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process = next(event for event in emitted if event.event_type == "process_create")
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.subject_logon_id == valid_logon_id
+        assert process.process.logon_id == valid_logon_id
+        assert explicit.auth.process_pid == process.process.pid
+
     def test_generate_explicit_credentials_bootstraps_subject_logon(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
