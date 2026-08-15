@@ -1203,6 +1203,30 @@ or follow-up batch is needed.
   agreement, perfect chronological ordering texture, and eCAR collection-window
   shape. The browser App Paths issue was not repeated in the Host findings.
 
+## 2026-08-14 Major-Version Assessment Reset
+
+- V2 loop 1 intentionally ignored every prior-major-version finding and began with a fresh
+  validate/generate/eval/blind-panel baseline on `scenarios/iteration-test`. Automated evaluation
+  passed at 97.29272962466797 over 77,558 records. Standalone blind synthetic-confidence scores
+  were 29/68/64/93, average 63.5; deliberation triggered on verdict disagreement and converged at
+  86.5. The highest-leverage new-baseline findings are a Type 3 Windows network logon incorrectly
+  bootstrapping an interactive explorer/PowerShell chain before session login, same-stream HTTP
+  transaction-depth reversal mirrored across sensors, same-UID SMB file-open-before-tree-mapping,
+  and repeated 1.2-second TLS duration texture. V2 loop 2 starts with the Windows session-bootstrap
+  family; no pre-v2 finding is eligible for target selection.
+
+- V2 loop 2 family contract — **Windows explicit-credential subject-session ownership**.
+  Owning abstraction: canonical session lookup plus the explicit-credential action bundle.
+  Invariant: a human 4648 caller must use an active Type 2/10/11 interactive session; Type 3
+  network and Type 5 service sessions can never bootstrap or own explorer/GUI caller processes,
+  and all caller processes must be visible after their owning login. Entry paths: baseline
+  persona-driven RunAs/help-desk actions, storyline explicit-credential actions, and direct bundle
+  calls. Consumers: StateManager, Windows Security 4624/4648/4688, Sysmon Event 1, eCAR
+  USER_SESSION/PROCESS, and timing probes. Layer rationale: the subject-session selector owns which
+  token the bundle may use; renderer changes would only hide the invalid canonical relationship.
+  Sibling risk: account-management audit subjects may legitimately use Type 3 and remain out of
+  scope; the regression test covers a non-sample RunAs caller with an active Type 3 sibling.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed

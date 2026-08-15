@@ -9188,6 +9188,45 @@ class TestActivityGenerator:
         assert process.process.logon_id == valid_logon_id
         assert explicit.auth.process_pid == process.process.pid
 
+    def test_generate_explicit_credentials_never_uses_type3_subject_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A Type 3 network token must not own a desktop explicit-credential caller."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        network_logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=3,
+            source_ip="10.0.0.50",
+            start_time=timestamp - timedelta(seconds=1),
+            session_kind="network",
+        )
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            process_pid=0,
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        logon = next(event for event in emitted if event.event_type == "logon")
+        process = next(event for event in emitted if event.event_type == "process_create")
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        session = state_manager.get_session(explicit.auth.subject_logon_id)
+
+        assert explicit.auth.subject_logon_id != network_logon_id
+        assert session is not None
+        assert session.logon_type == 2
+        assert process.auth.logon_id == explicit.auth.subject_logon_id
+        assert logon.auth.logon_id == explicit.auth.subject_logon_id
+        assert logon.timestamp < process.timestamp < explicit.timestamp
+
     def test_generate_explicit_credentials_bootstraps_subject_logon(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

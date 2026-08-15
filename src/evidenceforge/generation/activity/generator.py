@@ -23264,7 +23264,7 @@ class ActivityGenerator:
         time: datetime,
     ) -> str:
         """Return a visible subject session for a Windows 4648 event."""
-        existing = self._get_user_logon_id(user.username, system.hostname, time)
+        existing = self._get_user_interactive_logon_id(user.username, system.hostname, time)
         if existing != "0x0":
             return existing
         if user.username in _SYSTEM_ACCOUNT_LOGON_IDS:
@@ -24074,6 +24074,30 @@ class ActivityGenerator:
             if active:
                 return active.logon_id
         return "0x0"
+
+    def _get_user_interactive_logon_id(
+        self,
+        username: str,
+        hostname: str,
+        at_time: datetime,
+    ) -> str:
+        """Return the newest active interactive Windows session for a human caller.
+
+        Explicit-credential tools are launched in a desktop or remote-interactive
+        token. A Type 3 network authentication can authorize remote resource access,
+        but it cannot own an Explorer process tree or become a 4648 caller session.
+        """
+        sessions = self.state_manager.get_sessions_for_user_at(username, at_time)
+        candidates = [
+            session
+            for session in sessions
+            if session.system == hostname
+            and session.logon_type in {2, 10, 11}
+            and session.session_kind not in {"network", "service"}
+        ]
+        if not candidates:
+            return "0x0"
+        return max(candidates, key=lambda session: ensure_utc(session.start_time)).logon_id
 
     def _get_subject_logon_id(
         self,
