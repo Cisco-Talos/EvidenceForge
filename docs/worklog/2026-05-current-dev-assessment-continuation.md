@@ -1452,8 +1452,19 @@ or follow-up batch is needed.
   visible dwell for each matching session after timestamp normalization, retaining the source clock
   and state-machine ownership while preventing an impossible rendered transition. Five focused
   tests and the definitive full suite pass (`5958 passed, 22 skipped`); all 92 config files and
-  repository-wide Ruff remain clean. A final regeneration, hard probe, evaluation, and blind review
-  remain the next Loop 9 steps.
+  repository-wide Ruff remain clean. Final regeneration produced 90,553 records and passed the
+  hard probe with zero alternating transitions under 30 seconds; Sophia's visible dwell is now 127
+  seconds. Deterministic evaluation passed at `97.18870689794775`. The frozen 86-file corpus hash
+  is `7921245c4cadf65a1767075017901d44d1d7a0ddb65e566f15b6d93cb79d0b24`.
+
+- V2 loop 9 blind review initially scored synthetic-confidence at TH 84, Detection 82, Network 73,
+  and Host 47. Verdict disagreement and the 37-point spread triggered neutral deliberation; revised
+  scores were 86, 85, 79, and 65, averaging 78.75 with a unanimous Synthetic stance. No hard
+  contradiction survived challenge. The strongest positive statistical defect is the exact 1 ms
+  DC Security 4769-to-machine-Type-3-4624 delay in at least 222 lifecycles. Other ranked families
+  were universal one-request inspected proxy tunnels, destination-owner-shaped workstation SMB
+  authentication, and doubled Windows path separators. Loop 10 will own the Windows domain-auth
+  causal/source-timing family.
 
 ## Recent Completed Work Previously Kept in TODO
 
