@@ -824,6 +824,7 @@ class TestProxyActionSemantics:
         assert get_count == 5, f"Expected 5 inspected GET rows, got {get_count}"
         parsed = [_parse_proxy_fields(line) for line in all_lines]
         assert len({fields["tunnel_id"] for fields in parsed}) == 1
+        assert {fields["client_src_port"] for fields in parsed} == {54321}
 
     def test_future_tunnel_state_does_not_suppress_earlier_connect_setup(self):
         """Out-of-order emission should not create inspected rows before setup."""

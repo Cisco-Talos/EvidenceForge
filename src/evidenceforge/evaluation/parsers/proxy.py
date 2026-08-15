@@ -82,6 +82,7 @@ def _parse_proxy_metadata(metadata: str) -> dict[str, str]:
             "tunnel_cs_bytes",
             "tunnel_sc_bytes",
             "tunnel_duration_ms",
+            "client_src_port",
         }:
             try:
                 fields[key] = int(value)

@@ -329,6 +329,9 @@ def _proxy_metadata(event_data: dict[str, Any]) -> str:
     tunnel_id = str(event_data.get("tunnel_id") or "")
     if tunnel_id:
         parts.append(f"tunnel_id={tunnel_id}")
+    client_src_port = event_data.get("client_src_port")
+    if client_src_port not in {None, ""}:
+        parts.append(f"client_src_port={_int_value(client_src_port, 0)}")
     for key in ("tunnel_cs_bytes", "tunnel_sc_bytes", "tunnel_duration_ms"):
         value = event_data.get(key)
         if value not in {None, ""}:
@@ -446,6 +449,7 @@ class ProxyEmitter(HostMultiplexEmitter):
                 "proxy_action": _proxy_action(px, setup=True),
                 "byte_scope": setup["byte_scope"],
                 "tunnel_id": tunnel_id,
+                "client_src_port": getattr(net, "src_port", 0),
                 "_host_fqdn": px.proxy_fqdn,
             }
             self._observed_tunnel_children.append(
@@ -486,6 +490,7 @@ class ProxyEmitter(HostMultiplexEmitter):
             "referrer": px.referrer or None,
             "proxy_action": _proxy_action(px),
             "tunnel_id": tunnel_id,
+            "client_src_port": getattr(net, "src_port", 0) if tunnel_id else None,
             "_host_fqdn": px.proxy_fqdn,
         }
         if str(px.method).upper() == "CONNECT":
@@ -635,6 +640,7 @@ class ProxyEmitter(HostMultiplexEmitter):
         for key in (
             "byte_scope",
             "tunnel_id",
+            "client_src_port",
             "tunnel_cs_bytes",
             "tunnel_sc_bytes",
             "tunnel_duration_ms",
