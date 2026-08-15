@@ -3594,6 +3594,7 @@ class TestActivityGenerator:
             logon_type=3,
             source_ip=source_ip,
             source_port=52595,
+            remote_auth_destination_port=445,
         )
 
         logon_event = next(
@@ -3621,6 +3622,37 @@ class TestActivityGenerator:
         session = state_manager.get_session(logon_event.auth.logon_id)
         assert session is not None
         assert session.parent_lifecycle_group_id == logon_event.remote_auth.stable_id
+
+    def test_generic_remote_type3_does_not_invent_smb_transport(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A Type 3 record needs an owning service before it can claim TCP/445 evidence."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip="10.0.0.50",
+        )
+
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        )
+        network_events = [
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        ]
+        assert logon_event.auth.logon_type == 3
+        assert logon_event.auth.source_port > 0
+        assert logon_event.remote_auth is None
+        assert network_events == []
 
     def test_remote_logon_reuses_existing_exact_transport_without_duplicate_flow(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -3730,6 +3762,7 @@ class TestActivityGenerator:
             logon_type=3,
             source_ip=source_ip,
             source_port=52595,
+            remote_auth_destination_port=445,
         )
 
         logon_event = next(

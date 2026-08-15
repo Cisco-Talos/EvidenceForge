@@ -2268,6 +2268,81 @@ class WindowsGroupPolicyRefreshConfig(BaseModel, extra="forbid"):
         return self
 
 
+class WindowsRemoteAuthDurationProfile(BaseModel, extra="forbid", frozen=True):
+    """One bounded right-skew transport-duration profile."""
+
+    distribution: Literal["lognormal"]
+    median_seconds: float = Field(gt=0.0, le=3600.0)
+    sigma: float = Field(gt=0.0, le=3.0)
+    minimum_seconds: float = Field(ge=0.001, le=3600.0)
+    maximum_seconds: float = Field(gt=0.0, le=3600.0)
+
+    @model_validator(mode="after")
+    def duration_bounds_are_ordered(self) -> Self:
+        """Require the median and clamp to describe one coherent distribution."""
+
+        if self.maximum_seconds < self.minimum_seconds:
+            raise ValueError("maximum_seconds must be >= minimum_seconds")
+        if not self.minimum_seconds <= self.median_seconds <= self.maximum_seconds:
+            raise ValueError("median_seconds must fall within the duration bounds")
+        return self
+
+
+class WindowsRemoteAuthOutcomeProfiles(BaseModel, extra="forbid", frozen=True):
+    """Profile references for successful and failed remote authentication."""
+
+    success: str = Field(min_length=1)
+    failure: str = Field(min_length=1)
+
+
+class WindowsRemoteAuthTransportConfig(BaseModel, extra="forbid", frozen=True):
+    """Source/outcome-aware Windows remote-authentication transport texture."""
+
+    profiles: dict[str, WindowsRemoteAuthDurationProfile]
+    defaults: WindowsRemoteAuthOutcomeProfiles
+    sources: dict[str, WindowsRemoteAuthOutcomeProfiles]
+
+    @model_validator(mode="after")
+    def profile_references_exist(self) -> Self:
+        """Reject empty profile maps and dangling source/default references."""
+
+        if not self.profiles:
+            raise ValueError("remote_auth_transport.profiles must not be empty")
+        references = {
+            self.defaults.success,
+            self.defaults.failure,
+            *(
+                profile_name
+                for source_profiles in self.sources.values()
+                for profile_name in (source_profiles.success, source_profiles.failure)
+            ),
+        }
+        missing = sorted(references - set(self.profiles))
+        if missing:
+            raise ValueError(
+                f"remote_auth_transport references unknown duration profiles: {missing}"
+            )
+        if any(not source.strip() for source in self.sources):
+            raise ValueError("remote_auth_transport source names must not be empty")
+        return self
+
+
+class WindowsAnonymousSmbBaselineConfig(BaseModel, extra="forbid", frozen=True):
+    """Sparse host-scoped cadence for anonymous SMB enumeration noise."""
+
+    hourly_probability: float = Field(ge=0.0, le=1.0)
+    events_per_active_hour_min: int = Field(ge=1, le=10)
+    events_per_active_hour_max: int = Field(ge=1, le=10)
+
+    @model_validator(mode="after")
+    def event_bounds_are_ordered(self) -> Self:
+        """Reject inverted per-hour count bounds."""
+
+        if self.events_per_active_hour_max < self.events_per_active_hour_min:
+            raise ValueError("events_per_active_hour_max must be >= events_per_active_hour_min")
+        return self
+
+
 class WindowsSpecialPrivilegesProfile(BaseModel, extra="forbid"):
     """Source-native 4672 privilege list profile."""
 
@@ -2320,6 +2395,8 @@ class WindowsAuthRealismConfig(BaseModel, extra="forbid"):
 
     workstation_lock: WindowsWorkstationLockConfig
     group_policy_refresh: WindowsGroupPolicyRefreshConfig
+    remote_auth_transport: WindowsRemoteAuthTransportConfig
+    anonymous_smb_baseline: WindowsAnonymousSmbBaselineConfig
     failed_logon: WindowsFailedLogonConfig
     special_privileges: WindowsSpecialPrivilegesConfig
 

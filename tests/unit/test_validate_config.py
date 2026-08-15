@@ -1882,6 +1882,34 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_unknown_remote_auth_duration_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import windows_auth_realism
+
+        real_loader = windows_auth_realism.load_windows_auth_realism
+
+        def load_invalid_windows_auth_realism():
+            data = real_loader()
+            remote_auth = dict(data["remote_auth_transport"])
+            defaults = dict(remote_auth["defaults"])
+            defaults["success"] = "missing-profile"
+            remote_auth["defaults"] = defaults
+            return {**data, "remote_auth_transport": remote_auth}
+
+        monkeypatch.setattr(
+            windows_auth_realism,
+            "load_windows_auth_realism",
+            load_invalid_windows_auth_realism,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "windows_auth_realism.yaml"
+            and "unknown duration profiles" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_empty_failed_auth_validation_path(self, monkeypatch):
         from evidenceforge.generation.activity import windows_auth_realism
 

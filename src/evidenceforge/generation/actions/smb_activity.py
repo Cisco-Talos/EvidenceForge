@@ -281,6 +281,7 @@ class SmbActivityActionBundle:
             emit_network_evidence=False,
             remote_authentication_plan=remote_authentication_plan,
             remote_authentication_transport_id=transaction_id,
+            remote_auth_destination_port=445,
             lifecycle_group_id=self.anchor.stable_id,
             session_kind="smb",
             auth_protocol=auth_protocol,

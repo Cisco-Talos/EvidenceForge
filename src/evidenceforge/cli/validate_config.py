@@ -747,6 +747,8 @@ def validate_config(
             "dict_fields": {
                 "workstation_lock",
                 "group_policy_refresh",
+                "remote_auth_transport",
+                "anonymous_smb_baseline",
                 "failed_logon",
                 "special_privileges",
             },

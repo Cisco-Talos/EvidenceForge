@@ -121,3 +121,59 @@
   seeded NetworkManager, reuse only matching resident service managers, keep pre-window parents
   valid without requiring an in-window CREATE row, retain one-shot worker lifetimes, and avoid
   changing unrelated generic connection-owner or Windows service-singleton behavior.
+
+## Loop 14 outcome
+
+- Commits `120fe082`, `f8135d5c`, `cbdaaab9`, `283c86d1`, `109140fd`, and `fe88555d` implemented
+  typed Postfix/IIS ancestry, session-owned inferred commands, and mode-aware polkit subjects.
+- Full suite: 5,966 passed, 22 skipped; deterministic evaluation remained 97/100 over 81,281
+  records. The service-ownership hard probe found zero visible singleton or ancestry violations.
+- Frozen review corpus SHA-256 remained
+  `0497a417270b2b8ea1db6ac89e58b87f14cc7bb9ffa2781a42c9b4e23129756a` before and after review.
+- Deliberation revised the panel to 55/62/38/43 synthetic-confidence (mean 49.5), with an
+  Inconclusive modal verdict. The completed service family did not recur.
+- Highest-leverage next target: strict Windows Type 9/NewCredentials semantics. Typed remote-auth
+  transport duration remains a prepared follow-on family.
+
+## Loop 15 family contract — typed Windows remote-auth transport texture
+
+- **Owning abstractions:** `WindowsRemoteAuthenticationPlanner` owns the transport interval and
+  payload profile for one remote-authentication occurrence; baseline host-activity planning owns
+  whether anonymous SMB and machine-account CIFS activity exists at all; the calling action owns
+  the destination service selected for a generic Type 3 logon.
+- **Invariant:** successful Windows remote-auth transports use deterministic, source/outcome-aware,
+  right-skew duration profiles rather than one shared uniform cutoff. Anonymous SMB remains sparse,
+  short-lived, unique, and limited to SMB-capable targets. Generic Type 3 logons do not fabricate a
+  TCP/445 transport unless their owning activity explicitly identifies SMB; explicit semantic SMB,
+  machine-account CIFS, failures, probes, and authored network events retain their own contracts.
+- **Entry paths:** generic Windows Type 3 logons, failed remote Type 3 attempts, anonymous network
+  logons, machine-account LDAP/CIFS authentication, semantic SMB activities that bind auth to an
+  existing transport, baseline service/anonymous noise, and raw scanner or connection events.
+- **Consumers:** Zeek/ASA/eCAR transport duration and service distributions, source-port identity,
+  Windows 4624/4625/4634 correlation, remote-auth lifecycle plans, host-activity multipliers, config
+  validation, and rendered duration/cardinality hard probes.
+- **Layer rationale:** the remote-auth planner owns shared canonical transport texture, while
+  baseline planning owns event cadence and service eligibility. Fixing Zeek rows or suppressing
+  eCAR output would leave the canonical uniform sampler and excess anonymous occurrences intact.
+  Conversely, generic Type 3 authentication cannot infer SMB solely from the logon type; the
+  caller must declare the backing service when it has one.
+- **Sibling risks:** failures, probes, anonymous enumeration, and one-shot administrative activity
+  must remain short and newly allocated; semantic SMB must continue using its existing exact
+  transport without a duplicate connection; durations must cover authentication ordering without
+  creating long-lived sessions by implication; configuration overlays must merge and validate;
+  deterministic generation and unrelated RDP/LDAP/Kerberos timing must remain unchanged.
+
+### Loop 15 implementation handoff
+
+- Replaced the shared successful/failed uniform transport-duration sampler with validated,
+  overlay-aware lognormal profiles selected by remote-auth source and outcome. Machine-account
+  success retains a bounded long tail; anonymous and failed attempts remain short.
+- Generic Windows Type 3 logons now require an owning destination port before generating transport
+  evidence. Semantic SMB explicitly declares port 445 and continues binding its existing exact
+  transaction without a duplicate flow.
+- Anonymous SMB baseline noise now uses a scoped deterministic cadence from the Windows auth
+  realism config and only targets world-model hosts with `SMB_SERVER` capability; it no longer
+  inherits the service-logon activity multiplier.
+- Verification: 725 passed, 1 skipped, 1 deselected across the affected unit families and semantic
+  SMB integration suite; `eforge validate-config` reported zero issues across 93 files; repository
+  Ruff check and format check passed. No generation or blind review has yet been run for Loop 15.

@@ -507,6 +507,7 @@ class TestFailedLogonDC:
         ]
         assert network_events
         assert all(event.network.conn_state != "S0" for event in network_events)
+        assert all(0.02 <= event.network.duration <= 1.5 for event in network_events)
         failed_event = next(
             call[0][0]
             for call in mock_emitters["ecar"].emit.call_args_list

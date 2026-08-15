@@ -10052,6 +10052,7 @@ class ActivityGenerator:
         session_end_plan: SessionEndPlan | None = None,
         remote_authentication_plan: RemoteAuthenticationPlan | None = None,
         remote_authentication_transport_id: str = "",
+        remote_auth_destination_port: int | None = None,
         session_kind: str | None = None,
         auth_protocol: str = "",
         smb_principal: str = "",
@@ -10059,6 +10060,7 @@ class ActivityGenerator:
         auth_session_ref: str = "",
         effective_uid: int | None = None,
         effective_gid: int | None = None,
+        source: str = "activity_generator",
     ) -> str:
         """Generate logon event across all applicable log formats.
 
@@ -10094,6 +10096,7 @@ class ActivityGenerator:
             session_end_plan=session_end_plan,
             remote_authentication_plan=remote_authentication_plan,
             remote_authentication_transport_id=remote_authentication_transport_id,
+            remote_auth_destination_port=remote_auth_destination_port,
             session_kind=session_kind,
             auth_protocol=auth_protocol,
             smb_principal=smb_principal,
@@ -10101,6 +10104,7 @@ class ActivityGenerator:
             auth_session_ref=auth_session_ref,
             effective_uid=effective_uid,
             effective_gid=effective_gid,
+            source=source,
         )
         return LogonActionBundle(self, request).execute()
 
@@ -10187,6 +10191,17 @@ class ActivityGenerator:
                 if reusable:
                     existing_interactive.last_activity_time = time
                     return existing_interactive.logon_id
+
+        windows_remote_auth_port: int | None = None
+        if os_cat == "windows" and logon_type == 10:
+            windows_remote_auth_port = 3389
+        elif os_cat == "windows" and logon_type == 3:
+            if request.remote_auth_destination_port is not None:
+                windows_remote_auth_port = request.remote_auth_destination_port
+            elif request.session_kind == "smb" or remote_authentication_transport_id:
+                windows_remote_auth_port = 445
+        if windows_remote_auth_port is not None and not 1 <= windows_remote_auth_port <= 65535:
+            raise ValueError("remote_auth_destination_port must be between 1 and 65535")
         if (
             logon_id is None
             and os_cat == "linux"
@@ -10219,14 +10234,17 @@ class ActivityGenerator:
             if logon_type == 3 and source_ip == system.ip:
                 source_port = 0
             elif os_cat == "windows" and logon_type in (3, 10):
-                source_port = self._allocate_ephemeral_port(
-                    source_ip,
-                    system.ip,
-                    3389 if logon_type == 10 else 445,
-                    "tcp",
-                    time,
-                    self._os_for_ip(source_ip),
-                )
+                if windows_remote_auth_port is not None:
+                    source_port = self._allocate_ephemeral_port(
+                        source_ip,
+                        system.ip,
+                        windows_remote_auth_port,
+                        "tcp",
+                        time,
+                        self._os_for_ip(source_ip),
+                    )
+                else:
+                    source_port = _ephemeral_port(_get_rng(), self._os_for_ip(source_ip))
             else:
                 source_port = _ephemeral_port(_get_rng(), self._os_for_ip(source_ip))
 
@@ -10543,7 +10561,11 @@ class ActivityGenerator:
             and logon_type in {3, 10}
             and auth_source_ip not in {"", "-", system.ip}
         )
-        if is_windows_remote_auth and remote_authentication_plan is None:
+        if (
+            is_windows_remote_auth
+            and remote_authentication_plan is None
+            and windows_remote_auth_port is not None
+        ):
             remote_request = WindowsRemoteAuthenticationRequest(
                 target_system=system,
                 time=time,
@@ -10552,11 +10574,12 @@ class ActivityGenerator:
                 logon_type=logon_type,
                 auth_protocol=auth_pkg.get("AuthenticationPackageName", "Negotiate"),
                 outcome="success",
-                destination_port=3389 if logon_type == 10 else 445,
+                destination_port=windows_remote_auth_port,
                 source_system=source_system or self._ip_to_system.get(auth_source_ip),
                 session_object_id=session_obj_id,
                 logon_id=logon_id,
                 emit_transport=emit_network_evidence,
+                source=request.source,
             )
             planner = WindowsRemoteAuthenticationPlanner(self)
             if emit_network_evidence:
@@ -25983,7 +26006,14 @@ class ActivityGenerator:
         source_system = None
         if candidate_ips:
             source_ip = rng.choice(candidate_ips)
-            source_port = _ephemeral_port(rng, "windows")
+            source_port = self._allocate_ephemeral_port(
+                source_ip,
+                system.ip,
+                445,
+                "tcp",
+                time,
+                self._os_for_ip(source_ip),
+            )
             source_system = getattr(self, "_ip_to_system", {}).get(source_ip)
             workstation_name = source_system.hostname if source_system else "-"
         logon_id = self.state_manager.allocate_logon_id(system.hostname, time)

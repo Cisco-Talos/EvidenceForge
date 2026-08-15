@@ -25,6 +25,7 @@
 import random
 import re
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
@@ -40,6 +41,7 @@ from evidenceforge.generation.activity.linux_interfaces import linux_primary_int
 from evidenceforge.generation.activity.system_processes import load_system_processes
 from evidenceforge.generation.engine.baseline import (
     BaselineMixin,
+    _anonymous_smb_event_offsets,
     _cron_shell_command_line,
     _dc_kerberos_cycle_range,
     _dc_kerberos_tgs_range,
@@ -94,6 +96,46 @@ def test_kernel_uptime_stamp_tracks_event_timestamp_fraction():
     assert first_stamp == "2333187.345076"
     assert second_stamp == "2333187.997014"
     assert float(second_stamp) > float(first_stamp)
+
+
+def test_anonymous_smb_offsets_require_capability_and_use_sparse_own_cadence(monkeypatch):
+    """Anonymous SMB noise is independent of service-logon scaling and target gated."""
+
+    config = SimpleNamespace(
+        hourly_probability=1.0,
+        events_per_active_hour_min=1,
+        events_per_active_hour_max=2,
+    )
+    monkeypatch.setattr(
+        "evidenceforge.generation.engine.baseline.anonymous_smb_baseline_config",
+        lambda: config,
+    )
+    current_hour = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+
+    blocked = _anonymous_smb_event_offsets(
+        current_hour=current_hour,
+        generation_seed=42,
+        hostname="MAIL-01",
+        supports_smb=False,
+    )
+    first = _anonymous_smb_event_offsets(
+        current_hour=current_hour,
+        generation_seed=42,
+        hostname="FILE-01",
+        supports_smb=True,
+    )
+    second = _anonymous_smb_event_offsets(
+        current_hour=current_hour,
+        generation_seed=42,
+        hostname="FILE-01",
+        supports_smb=True,
+    )
+
+    assert blocked == ()
+    assert first == second
+    assert 1 <= len(first) <= 2
+    assert first == tuple(sorted(first))
+    assert all(0 <= offset < 3599 for offset in first)
 
 
 def test_networkmanager_message_timestamp_uses_epoch_time():

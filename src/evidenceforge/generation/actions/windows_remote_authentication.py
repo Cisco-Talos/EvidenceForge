@@ -22,6 +22,9 @@ from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionActionBundle,
     NetworkConnectionRequest,
 )
+from evidenceforge.generation.activity.windows_auth_realism import (
+    sample_remote_auth_transport_duration,
+)
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
 
@@ -194,13 +197,21 @@ class WindowsRemoteAuthenticationPlanner:
         rng = random.Random(seed)
         if request.outcome == "success":
             start_gap_ms = rng.randint(150, 900)
-            duration = rng.uniform(1.5, 45.0)
+            duration = sample_remote_auth_transport_duration(
+                source=request.source,
+                outcome=request.outcome,
+                rng=rng,
+            )
             conn_state = "SF"
             orig_bytes = rng.randint(800, 8000)
             resp_bytes = rng.randint(500, 12000)
         else:
             start_gap_ms = rng.randint(20, 250)
-            duration = rng.uniform(0.02, 1.5)
+            duration = sample_remote_auth_transport_duration(
+                source=request.source,
+                outcome=request.outcome,
+                rng=rng,
+            )
             conn_state = rng.choices(["SF", "RSTR"], weights=[70, 30], k=1)[0]
             orig_bytes = rng.randint(120, 900)
             resp_bytes = rng.randint(0, 500)

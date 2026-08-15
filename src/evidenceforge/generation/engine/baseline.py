@@ -114,7 +114,10 @@ from evidenceforge.generation.activity.suspicious_benign import (
     get_suspicious_event_count,
     pick_suspicious_pattern,
 )
-from evidenceforge.generation.activity.windows_auth_realism import group_policy_refresh_config
+from evidenceforge.generation.activity.windows_auth_realism import (
+    anonymous_smb_baseline_config,
+    group_policy_refresh_config,
+)
 from evidenceforge.generation.world_model import (
     HostCapability,
     WorldModel,
@@ -147,6 +150,32 @@ _BASELINE_SMB_SERVICE_ALIASES = {
 _BASELINE_EMAIL_PROFILE_PORTS = {25, 465, 587, 993, 995}
 _BASELINE_WEBMAIL_PROFILE_TERMS = ("owa", "webmail", "mailbox", "mail client", "email")
 _BASELINE_SUCCESS_FALLBACK_PORTS = (22, 80, 443, 8080, 3306, 5432, 53)
+
+
+def _anonymous_smb_event_offsets(
+    *,
+    current_hour: datetime,
+    generation_seed: int,
+    hostname: str,
+    supports_smb: bool,
+) -> tuple[float, ...]:
+    """Return sparse deterministic offsets for anonymous SMB enumeration."""
+
+    if not supports_smb:
+        return ()
+    config = anonymous_smb_baseline_config()
+    rng = random.Random(
+        _stable_seed(
+            f"baseline_anonymous_smb:{generation_seed}:{hostname}:{current_hour.isoformat()}"
+        )
+    )
+    if rng.random() >= config.hourly_probability:
+        return ()
+    count = rng.randint(
+        config.events_per_active_hour_min,
+        config.events_per_active_hour_max,
+    )
+    return tuple(sorted(rng.uniform(0, 3599) for _ in range(count)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -9472,16 +9501,22 @@ class BaselineMixin:
                     service_account=svc_user,
                 )
 
-            if sys_type_svc in ("server", "domain_controller"):
-                num_anon = self._scaled_randint(rng, system, "windows_service_logon", 1, 3)
-                for _ in range(num_anon):
-                    offset = rng.uniform(0, 3599)
-                    ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
-                    self.activity_generator.generate_anonymous_logon(
-                        system=system,
-                        time=ts,
-                    )
+            world_host = self.world_model.hosts.get(system.hostname)
+            offsets = _anonymous_smb_event_offsets(
+                current_hour=current_hour,
+                generation_seed=getattr(self, "generation_seed", 0),
+                hostname=system.hostname,
+                supports_smb=(
+                    world_host is not None and world_host.supports(HostCapability.SMB_SERVER)
+                ),
+            )
+            for offset in offsets:
+                ts = current_hour + timedelta(seconds=offset)
+                self.state_manager.set_current_time(ts)
+                self.activity_generator.generate_anonymous_logon(
+                    system=system,
+                    time=ts,
+                )
 
         # Machine account ($) authentication to DCs
         dc_ips = self._infra_ips.get("dc", [])
