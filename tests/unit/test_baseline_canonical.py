@@ -381,6 +381,22 @@ def test_pending_workstation_unlock_emits_independent_of_new_lock_path():
     assert args[:4] == (user, system, unlock_time, logon_id)
 
 
+def test_due_pending_unlock_reserves_hour_when_session_is_no_longer_active():
+    """A suppressed deferred transition must not permit a replacement baseline lock."""
+    engine = object.__new__(BaselineMixin)
+    user = User(username="analyst", full_name="Analyst User", email="analyst@example.com")
+    current_hour = datetime(2026, 4, 13, 16, 0, 0, tzinfo=UTC)
+    engine._pending_unlocks = {user.username: (current_hour + timedelta(minutes=5), "0x12345")}
+    engine.state_manager = SimpleNamespace(get_session=Mock(return_value=None))
+    engine._emit_unlock = Mock()
+
+    owned = engine._emit_pending_workstation_unlock(user, current_hour)
+
+    assert owned
+    assert engine._pending_unlocks == {}
+    engine._emit_unlock.assert_not_called()
+
+
 def test_authored_workstation_transition_owns_baseline_hour():
     """Baseline lock scheduling should yield to authored same-session state transitions."""
     engine = object.__new__(BaselineMixin)

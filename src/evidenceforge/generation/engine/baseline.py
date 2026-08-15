@@ -6391,14 +6391,14 @@ class BaselineMixin:
         if not pending_session or not _session_active_at(
             pending_session, unlock_t, current_hour, planned_logoffs
         ):
-            return False
+            return True
 
         system = next(
             (s for s in self.scenario.environment.systems if s.hostname == pending_session.system),
             None,
         )
         if system is None:
-            return False
+            return True
 
         rng = _get_rng()
         self._emit_unlock(user, system, unlock_t, pending_logon_id, rng)

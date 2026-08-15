@@ -1435,10 +1435,13 @@ or follow-up batch is needed.
   an authored workstation lock or unlock, preventing later-dispatched authored transitions from
   being compressed against a baseline future transition by source timing. Existing canonical
   lock/unlock bundles, Type-7 reauthentication, durable LUID/session ID reuse, and human-scale
-  duration sampling remain unchanged. Focused lock-state tests passed, the definitive full suite
-  passed (`5955 passed, 22 skipped`), all 92 config files validated cleanly, and repository-wide
-  Ruff checks passed. Regeneration, evaluation, rendered probing, and blind review remain the next
-  Loop 9 steps.
+  duration sampling remain unchanged. The first regenerated probe removed four of five sub-two-ms
+  transitions and exposed one suppressed deferred unlock that relinquished hour ownership after its
+  active-session check failed; due deferred transitions now reserve the hour even when no source
+  row is emitted. Focused lock-state tests passed, the definitive post-probe full suite passed
+  (`5956 passed, 22 skipped`), all 92 config files validated cleanly, and repository-wide Ruff
+  checks passed. Regeneration, evaluation, rendered probing, and blind review remain the next Loop
+  9 steps.
 
 ## Recent Completed Work Previously Kept in TODO
 
