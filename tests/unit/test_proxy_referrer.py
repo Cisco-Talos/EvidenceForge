@@ -421,13 +421,15 @@ class TestProxyActionSemantics:
         rendered_lines = []
         emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
         emitter.emit(event)
+        emitter.close()
 
         assert len(rendered_lines) == 2
-        fields = _parse_proxy_fields(rendered_lines[0])
+        parsed_lines = [_parse_proxy_fields(line) for line in rendered_lines]
+        fields = next(fields for fields in parsed_lines if fields["method"] == "CONNECT")
         assert fields["method"] == "CONNECT"
         assert fields["url"] == "example.com:443"
         assert fields["protocol"] == "HTTP/1.1"
-        inspected_fields = _parse_proxy_fields(rendered_lines[1])
+        inspected_fields = next(fields for fields in parsed_lines if fields["method"] == "GET")
         assert inspected_fields["method"] == "GET"
         assert inspected_fields["url"] == "https://example.com/page"
         assert fields["proxy_action"] == "tunnel-setup"
@@ -467,6 +469,7 @@ class TestProxyActionSemantics:
         rendered_lines = []
         emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
         emitter.emit(event)
+        emitter.close()
 
         assert len(rendered_lines) == 2
         assert "proxy_action=" not in rendered_lines[0]
@@ -506,11 +509,16 @@ class TestProxyActionSemantics:
                     host="example.com",
                     proxy_fqdn="PROXY-01",
                     status_code=200,
+                    cs_bytes=100 + idx,
+                    sc_bytes=1000 + idx,
+                    time_taken=40 + idx,
                     cache_result="MISS",
                     proxy_action="ssl-inspect",
                 ),
             )
             emitter.emit(event)
+
+        emitter.close()
 
         data_lines = [line for line in rendered_lines if not line.startswith("#")]
         connect_lines = [
@@ -519,6 +527,10 @@ class TestProxyActionSemantics:
         request_lines = [line for line in data_lines if '"GET https://example.com/page-' in line]
         assert len(connect_lines) == 1
         assert len(request_lines) == 5
+        connect_fields = _parse_proxy_fields(connect_lines[0])
+        assert connect_fields["tunnel_cs_bytes"] == sum(100 + idx for idx in range(5))
+        assert connect_fields["tunnel_sc_bytes"] == sum(1000 + idx for idx in range(5))
+        assert connect_fields["tunnel_duration_ms"] >= 20_044
 
     def test_splunk_target_renders_apache_ta_json_without_w3c_header(self, tmp_path):
         from evidenceforge.formats import load_format
@@ -575,9 +587,9 @@ class TestProxyActionSemantics:
         assert connect["proxy_action"] == "tunnel-setup"
         assert connect["ssl_bump_action"] == "peek"
         assert connect["byte_scope"] == "connect-control-message"
-        assert connect["bytes_in"] + connect["tunnel_cs_bytes"] == 12_345
-        assert connect["bytes_out"] + connect["tunnel_sc_bytes"] == 67_890
-        assert connect["tunnel_duration_ms"] == 4_250
+        assert connect["tunnel_cs_bytes"] == inspected["bytes_in"]
+        assert connect["tunnel_sc_bytes"] == inspected["bytes_out"]
+        assert connect["tunnel_duration_ms"] >= inspected["response_time_microseconds"] // 1000
         assert inspected["http_method"] == "GET"
         assert inspected["user"] == r"NORTHSTAR-BRANCH\alice"
         assert inspected["uri_path"] == "/page"
@@ -641,10 +653,12 @@ class TestProxyActionSemantics:
         rendered_lines = []
         emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
         emitter.emit(event)
+        emitter.close()
 
         assert len(rendered_lines) == 2
-        connect_fields = _parse_proxy_fields(rendered_lines[0])
-        inspected_fields = _parse_proxy_fields(rendered_lines[1])
+        parsed_lines = [_parse_proxy_fields(line) for line in rendered_lines]
+        connect_fields = next(fields for fields in parsed_lines if fields["method"] == "CONNECT")
+        inspected_fields = next(fields for fields in parsed_lines if fields["method"] == "GET")
         assert connect_fields["method"] == "CONNECT"
         assert inspected_fields["method"] == "GET"
         assert connect_fields["status_code"] == 200
@@ -654,9 +668,9 @@ class TestProxyActionSemantics:
         assert connect_fields["proxy_action"] == "tunnel-setup"
         assert connect_fields["ssl_bump_action"] == "peek"
         assert connect_fields["byte_scope"] == "connect-control-message"
-        assert connect_fields["cs_bytes"] + connect_fields["tunnel_cs_bytes"] == 8192
-        assert connect_fields["sc_bytes"] + connect_fields["tunnel_sc_bytes"] == 131072
-        assert connect_fields["tunnel_duration_ms"] == 2500
+        assert connect_fields["tunnel_cs_bytes"] == inspected_fields["cs_bytes"]
+        assert connect_fields["tunnel_sc_bytes"] == inspected_fields["sc_bytes"]
+        assert connect_fields["tunnel_duration_ms"] >= 900
         assert inspected_fields["proxy_action"] == "ssl-inspect"
         assert inspected_fields["ssl_bump_action"] == "bump"
 
@@ -697,10 +711,12 @@ class TestProxyActionSemantics:
         rendered_lines = []
         emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
         emitter.emit(event)
+        emitter.close()
 
         assert len(rendered_lines) == 2
-        connect_fields = _parse_proxy_fields(rendered_lines[0])
-        denied_fields = _parse_proxy_fields(rendered_lines[1])
+        parsed_lines = [_parse_proxy_fields(line) for line in rendered_lines]
+        connect_fields = next(fields for fields in parsed_lines if fields["method"] == "CONNECT")
+        denied_fields = next(fields for fields in parsed_lines if fields["method"] == "GET")
         assert connect_fields["method"] == "CONNECT"
         assert connect_fields["status_code"] == 200
         assert denied_fields["method"] == "GET"
@@ -797,6 +813,8 @@ class TestProxyActionSemantics:
             )
             emitter.emit(event)
 
+        emitter.close()
+
         connect_count = sum(1 for line in all_lines if "CONNECT" in line)
         get_count = sum(1 for line in all_lines if '"GET https://example.com/page' in line)
 
@@ -838,6 +856,8 @@ class TestProxyActionSemantics:
             )
             emitter.emit(event)
 
+        emitter.close()
+
         connect_count = sum(1 for line in all_lines if "CONNECT example.com:443" in line)
         assert connect_count == 2
 
@@ -878,6 +898,8 @@ class TestProxyActionSemantics:
             )
             emitter.emit(event)
 
+        emitter.close()
+
         connect_count = sum(1 for line in all_lines if "CONNECT" in line)
         assert connect_count == 2, f"Expected 2 CONNECTs (tunnel expired), got {connect_count}"
 
@@ -917,6 +939,8 @@ class TestProxyActionSemantics:
             emitter.emit(event)
             ts += timedelta(seconds=1)
 
+        emitter.close()
+
         connect_count = sum(1 for line in all_lines if "CONNECT" in line)
         assert connect_count == 3, f"Expected 3 CONNECTs (one per host), got {connect_count}"
 
@@ -955,6 +979,8 @@ class TestProxyActionSemantics:
             )
             emitter.emit(event)
             ts += timedelta(seconds=1)
+
+        emitter.close()
 
         connect_count = sum(1 for line in all_lines if "CONNECT" in line)
         assert connect_count == 2, f"Expected 2 CONNECTs (one per proxy), got {connect_count}"

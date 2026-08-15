@@ -1227,6 +1227,30 @@ or follow-up batch is needed.
   Sibling risk: account-management audit subjects may legitimately use Type 3 and remain out of
   scope; the regression test covers a non-sample RunAs caller with an active Type 3 sibling.
 
+- V2 loop 2 fixed explicit-credential subject-session selection at the canonical session lookup
+  boundary (`a6baf82a`). Human callers now reuse only active Type 2/10/11 interactive sessions; an
+  active Type 3 sibling forces a new Type 2 login before caller-process creation. Focused tests,
+  Ruff, and the full suite passed (`5950 passed, 22 skipped`). The regenerated bundle passed
+  automated eval at 97.39987957570209 over 75,940 records, and the targeted hard probe found no
+  Type 3-owned process chains. The clean 90-file blind panel scored 56/66/86/82 (average 72.5) and
+  passed the before/after aggregate SHA-256 check. Deliberation triggered on verdict disagreement
+  and converged unanimously on Synthetic at 85.75. The prior Type 3 desktop defect did not recur.
+  The next target is the newly discovered explicit-proxy tunnel accumulator defect: 179/275
+  inspected tunnels undercount visible child responses and 245/275 equal child one exactly.
+
+- V2 loop 3 family contract — **explicit-proxy tunnel lifecycle and accounting**. Owning
+  abstraction: the durable explicit-proxy tunnel plus its source-native proxy summary projection.
+  Invariant: every inspected child assigned to a tunnel contributes its client/server byte counts
+  exactly once, CONNECT control bytes remain separately scoped, and a declared tunnel duration and
+  byte total cannot exclude a visible child inside that duration. Entry paths: first inspected
+  HTTPS request, reused same-host tunnel, timeout/new-tunnel replacement, explicit CONNECT, deny or
+  cache terminal, and final generation close. Consumers: proxy access text/Splunk output, client
+  transport accounting, evaluator parsers, and blind arithmetic probes. Layer rationale: the
+  existing projection finalizes an aggregate from the first canonical connection before later
+  children are known; formatting changes alone cannot make that lifecycle total true. Sibling risk:
+  overlapping same-host tunnels, single-child tunnels, denied CONNECTs, and hour-boundary flushes
+  must not merge or prematurely finalize state.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
