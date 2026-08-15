@@ -3650,7 +3650,7 @@ class TestExplicitProxyVisibility:
             dst_port=443,
             proto="tcp",
             service="ssl",
-            duration=1.0,
+            duration=30.0,
             orig_bytes=500,
             resp_bytes=5000,
             source_system=generator._ip_to_system["10.0.1.10"],
@@ -3733,7 +3733,7 @@ class TestExplicitProxyVisibility:
                 dst_port=443,
                 proto="tcp",
                 service="ssl",
-                duration=1.0,
+                duration=60.0,
                 orig_bytes=500,
                 resp_bytes=5000,
                 source_system=generator._ip_to_system["10.0.1.10"],
@@ -3769,7 +3769,7 @@ class TestExplicitProxyVisibility:
             f"https://example.com/api/export/qlattice?page={idx}" for idx in range(2, 13)
         }
 
-    def test_https_request_after_tunnel_timeout_emits_new_transport(self):
+    def test_https_request_after_transport_close_emits_new_transport(self):
         generator, emitters = _generator(
             [
                 NetworkSensor(
@@ -3812,7 +3812,7 @@ class TestExplicitProxyVisibility:
         second_uid = generator.generate_connection(
             src_ip="10.0.1.10",
             dst_ip="93.184.216.34",
-            time=start_time + timedelta(seconds=300),
+            time=start_time + timedelta(seconds=12),
             dst_port=443,
             proto="tcp",
             service="ssl",
@@ -3940,7 +3940,7 @@ class TestExplicitProxyVisibility:
             dst_port=443,
             proto="tcp",
             service="ssl",
-            duration=1.0,
+            duration=15.0,
             orig_bytes=500,
             resp_bytes=5000,
             source_system=generator._ip_to_system["10.0.1.10"],

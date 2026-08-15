@@ -51,6 +51,7 @@ class _PendingTunnelSummary:
     tunnel_cs_bytes: int = 0
     tunnel_sc_bytes: int = 0
     latest_child_end: datetime | None = None
+    transport_duration_ms: int | None = None
 
     def add_child(
         self,
@@ -72,12 +73,13 @@ class _PendingTunnelSummary:
 class _ObservedTunnelChild:
     """One proxy-visible child retained for chronological tunnel grouping."""
 
-    key: tuple[str, str, str, int, str]
+    key: tuple[str, str]
     connect_data: dict[str, Any]
     request_time: datetime
     child_end: datetime
     cs_bytes: int
     sc_bytes: int
+    transport_duration_ms: int | None
 
 
 def _combined_log_value(value: Any) -> str:
@@ -324,6 +326,9 @@ def _proxy_metadata(event_data: dict[str, Any]) -> str:
     byte_scope = str(event_data.get("byte_scope") or "")
     if byte_scope:
         parts.append(f"byte_scope={byte_scope}")
+    tunnel_id = str(event_data.get("tunnel_id") or "")
+    if tunnel_id:
+        parts.append(f"tunnel_id={tunnel_id}")
     for key in ("tunnel_cs_bytes", "tunnel_sc_bytes", "tunnel_duration_ms"):
         value = event_data.get(key)
         if value not in {None, ""}:
@@ -381,7 +386,7 @@ class ProxyEmitter(HostMultiplexEmitter):
         # A CONNECT access row describes the complete tunnel, so keep it pending until
         # timeout/replacement or emitter close instead of freezing child-one accounting.
         self._observed_tunnel_children: list[_ObservedTunnelChild] = []
-        self._pending_tunnels: dict[tuple[str, str, str, int, str], _PendingTunnelSummary] = {}
+        self._pending_tunnels: dict[tuple[str, str], _PendingTunnelSummary] = {}
 
     def _get_writer(self, host_fqdn: str) -> Any:
         """Return a host writer, suppressing text headers for Splunk JSON output."""
@@ -411,14 +416,15 @@ class ProxyEmitter(HostMultiplexEmitter):
         # For HTTPS: retain one CONNECT summary until all visible requests assigned to
         # that canonical tunnel UID have contributed to its byte and duration totals.
         if _is_https_request(px, net) and px.method != "CONNECT":
-            dst_port = net.dst_port if net is not None and net.dst_port else 443
-            user_agent_key = " ".join((px.user_agent or "").lower().split())
+            canonical_uid = str(getattr(net, "zeek_uid", "") or "")
+            fallback_identity = (
+                f"{px.client_ip}:{getattr(net, 'src_port', 0)}:{px.host}:{request_time.isoformat()}"
+            )
+            identity = canonical_uid or fallback_identity
+            tunnel_id = f"PT-{_stable_seed(f'proxy-tunnel:{px.proxy_fqdn}:{identity}'):016x}"
             tunnel_key = (
                 px.proxy_fqdn,
-                px.client_ip,
-                px.host,
-                dst_port,
-                user_agent_key,
+                tunnel_id,
             )
             setup = _connect_setup_fields(px, net, request_time)
             connect_data = {
@@ -439,6 +445,7 @@ class ProxyEmitter(HostMultiplexEmitter):
                 "referrer": None,
                 "proxy_action": _proxy_action(px, setup=True),
                 "byte_scope": setup["byte_scope"],
+                "tunnel_id": tunnel_id,
                 "_host_fqdn": px.proxy_fqdn,
             }
             self._observed_tunnel_children.append(
@@ -450,8 +457,15 @@ class ProxyEmitter(HostMultiplexEmitter):
                     + timedelta(milliseconds=max(0, int(px.time_taken or 0))),
                     cs_bytes=max(0, int(px.cs_bytes or 0)),
                     sc_bytes=max(0, int(px.sc_bytes or 0)),
+                    transport_duration_ms=(
+                        max(0, round(float(net.duration) * 1000))
+                        if net is not None and net.duration is not None
+                        else None
+                    ),
                 )
             )
+        else:
+            tunnel_id = ""
 
         # Emit the actual request
         event_data = {
@@ -471,6 +485,7 @@ class ProxyEmitter(HostMultiplexEmitter):
             "cache_result": px.cache_result,
             "referrer": px.referrer or None,
             "proxy_action": _proxy_action(px),
+            "tunnel_id": tunnel_id,
             "_host_fqdn": px.proxy_fqdn,
         }
         if str(px.method).upper() == "CONNECT":
@@ -485,7 +500,7 @@ class ProxyEmitter(HostMultiplexEmitter):
             )
         self._dispatch(event_data)
 
-    def _finalize_tunnel(self, tunnel_key: tuple[str, str, str, int, str]) -> None:
+    def _finalize_tunnel(self, tunnel_key: tuple[str, str]) -> None:
         """Render one completed CONNECT summary from all observed child requests."""
         pending = self._pending_tunnels.pop(tunnel_key, None)
         if pending is None:
@@ -494,12 +509,14 @@ class ProxyEmitter(HostMultiplexEmitter):
         connect_data["tunnel_cs_bytes"] = pending.tunnel_cs_bytes
         connect_data["tunnel_sc_bytes"] = pending.tunnel_sc_bytes
         latest_child_end = pending.latest_child_end or pending.last_activity_at
-        connect_data["tunnel_duration_ms"] = max(
+        visible_duration_ms = max(
             0,
-            # Combined-log timestamps are second-resolution. Include the final
-            # partial second so every child counted in the byte total is visibly
-            # inside the declared interval after rendering.
             round((latest_child_end - pending.opened_at).total_seconds() * 1000) + 999,
+        )
+        connect_data["tunnel_duration_ms"] = (
+            pending.transport_duration_ms
+            if pending.transport_duration_ms is not None
+            else visible_duration_ms
         )
         self._dispatch(connect_data)
 
@@ -520,8 +537,11 @@ class ProxyEmitter(HostMultiplexEmitter):
                     connect_data=child.connect_data,
                     opened_at=child.connect_data["timestamp"],
                     last_activity_at=child.request_time,
+                    transport_duration_ms=child.transport_duration_ms,
                 )
                 self._pending_tunnels[child.key] = pending
+            elif child.transport_duration_ms is not None:
+                pending.transport_duration_ms = child.transport_duration_ms
             pending.add_child(
                 cs_bytes=child.cs_bytes,
                 sc_bytes=child.sc_bytes,
@@ -612,7 +632,13 @@ class ProxyEmitter(HostMultiplexEmitter):
         content_type = event_data.get("content_type")
         if content_type:
             record["http_content_type"] = str(content_type)
-        for key in ("byte_scope", "tunnel_cs_bytes", "tunnel_sc_bytes", "tunnel_duration_ms"):
+        for key in (
+            "byte_scope",
+            "tunnel_id",
+            "tunnel_cs_bytes",
+            "tunnel_sc_bytes",
+            "tunnel_duration_ms",
+        ):
             value = event_data.get(key)
             if value not in {None, ""}:
                 record[key] = value

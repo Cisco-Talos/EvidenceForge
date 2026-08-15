@@ -802,6 +802,8 @@ class TestProxyActionSemantics:
                     dst_ip="93.184.216.34",
                     dst_port=443,
                     protocol="tcp",
+                    duration=30.0,
+                    zeek_uid="Cproxywithinlifetime",
                 ),
                 proxy=ProxyContext(
                     client_ip="10.0.10.50",
@@ -820,6 +822,8 @@ class TestProxyActionSemantics:
 
         assert connect_count == 1, f"Expected 1 CONNECT, got {connect_count}"
         assert get_count == 5, f"Expected 5 inspected GET rows, got {get_count}"
+        parsed = [_parse_proxy_fields(line) for line in all_lines]
+        assert len({fields["tunnel_id"] for fields in parsed}) == 1
 
     def test_future_tunnel_state_does_not_suppress_earlier_connect_setup(self):
         """Out-of-order emission should not create inspected rows before setup."""

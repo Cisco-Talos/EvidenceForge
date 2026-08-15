@@ -1251,6 +1251,35 @@ or follow-up batch is needed.
   overlapping same-host tunnels, single-child tunnels, denied CONNECTs, and hour-boundary flushes
   must not merge or prematurely finalize state.
 
+- V2 loop 3 fixed the original explicit-proxy visible-child accounting defect at the source-native
+  summary projection (`8726fa4d`). The hard probe found zero undercounts and zero aggregate
+  mismatches across 277 successful inspected tunnels. Focused tests and Ruff passed; the substantive
+  grouping implementation passed the full suite twice (`5950 passed, 22 skipped`). The regenerated
+  bundle passed automated evaluation at 97.3998795496898 over 75,935 records. The clean 90-file
+  blind panel retained SHA-256
+  `05764bd702e0a68ae18754e45832d3e44aff630af66ed9d47b6115650d3ffa5c` and scored
+  74/86/76/92 (average 82.0), with four Synthetic verdicts and no deliberation trigger. The prior
+  proxy-byte undercount did not recur, but the projection introduced a related identity regression:
+  40/515 strict proxy/client joins declared a tunnel more than five seconds longer than the sole
+  corroborated Zeek and ASA client flow because distinct canonical connections could be grouped
+  together. The panel's Type 5 well-known-LUID hard label was rejected as overbroad after checking
+  native Windows built-in-session semantics; it is not a canonical P0.
+
+- V2 loop 4 family contract — **explicit-proxy tunnel-to-transport identity**. Owning abstraction:
+  the durable proxy tunnel identity shared by canonical client transport state and the source-native
+  CONNECT/inspection projection. Invariant: one proxy tunnel summary maps to exactly one canonical
+  client TCP connection; every visible inspected child is assigned exactly once to that tunnel;
+  simultaneous same-host/user-agent tunnels remain distinguishable; and declared duration never
+  exceeds the parent client transport interval except documented source precision. Entry paths:
+  first HTTPS request, reused child, parallel same-host tunnel, idle timeout and replacement,
+  explicit CONNECT, denied/cache terminal, and generation close. Consumers: proxy text and Splunk
+  output, canonical Zeek/ASA/eCAR client transport, proxy parser/evaluator, and blind arithmetic and
+  cross-source probes. Layer rationale: the Loop 3 projection discarded canonical UID identity
+  while reconstructing visible groups; adjusting duration alone would preserve the false merge.
+  Sibling risk: Zeek UID is sensor-local and must not be exposed as a proxy-native ID, source ports
+  may be absent on reused application events, second-resolution proxy timestamps need bounded
+  tolerance, and denied or single-child summaries must retain current semantics.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed

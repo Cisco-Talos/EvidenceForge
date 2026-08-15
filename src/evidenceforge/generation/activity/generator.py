@@ -4337,8 +4337,10 @@ class ActivityGenerator:
         self._proxy_auth_policy = ProxyAuthPolicyConfig()
         self._proxy_service_accounts: list[str] = []
         self._proxy_auth_session_deadlines: dict[tuple[str, str], datetime] = {}
+        from evidenceforge.generation.actions.proxy_transaction import ActiveProxyTunnel
+
         self._explicit_proxy_tunnels: dict[
-            tuple[str, str, str, str, int, str], tuple[datetime, str]
+            tuple[str, str, str, str, int, str], ActiveProxyTunnel
         ] = {}
         self._http_persistent_connections: dict[
             tuple[str, str, int, str, str], _HttpPersistentConnection

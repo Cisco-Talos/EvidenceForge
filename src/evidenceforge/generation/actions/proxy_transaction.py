@@ -106,12 +106,22 @@ class ProxyTransactionRequest:
         return f"proxy-transaction-{seed:016x}"
 
 
+@dataclass(frozen=True, slots=True)
+class ActiveProxyTunnel:
+    """Canonical client transport available for bounded application reuse."""
+
+    last_activity_at: datetime
+    uid: str
+    closes_at: datetime
+    source_port: int
+
+
 class ProxyTransactionExecutor(Protocol):
     """Runtime hooks supplied by the current activity generator."""
 
     state_manager: StateManager
     dispatcher: Any
-    _explicit_proxy_tunnels: dict[tuple[str, str, str, str, int, str], tuple[datetime, str]]
+    _explicit_proxy_tunnels: dict[tuple[str, str, str, str, int, str], ActiveProxyTunnel]
 
     def _build_proxy_context(
         self,
@@ -315,8 +325,7 @@ class ProxyTransactionActionBundle:
         if reuse_safe:
             active_tunnel = executor._explicit_proxy_tunnels.get(tunnel_key)
             if active_tunnel is not None:
-                last_activity, cached_uid = active_tunnel
-                elapsed = (request.time - last_activity).total_seconds()
+                elapsed = (request.time - active_tunnel.last_activity_at).total_seconds()
                 if 0 <= elapsed < generator_utils._EXPLICIT_PROXY_TUNNEL_TIMEOUT_S:
                     from evidenceforge.generation.actions.proxy_phase_planner import (
                         ProxyPhasePlanner,
@@ -327,19 +336,25 @@ class ProxyTransactionActionBundle:
                         proxy_context,
                         request.time,
                     )
-                    proxy_context = replace(
-                        proxy_context,
-                        transaction=reused_transaction,
-                        time_taken=reused_transaction.time_taken_ms,
-                    )
-                    executor._explicit_proxy_tunnels[tunnel_key] = (request.time, cached_uid)
-                    self._dispatch_reused_tunnel_proxy_request(
-                        proxy_context=proxy_context,
-                        proxy_sys=proxy_sys,
-                        cached_uid=cached_uid,
-                        listener_port=listener_port,
-                    )
-                    return cached_uid
+                    if reused_transaction.close_at <= active_tunnel.closes_at:
+                        proxy_context = replace(
+                            proxy_context,
+                            transaction=reused_transaction,
+                            time_taken=reused_transaction.time_taken_ms,
+                        )
+                        executor._explicit_proxy_tunnels[tunnel_key] = ActiveProxyTunnel(
+                            last_activity_at=request.time,
+                            uid=active_tunnel.uid,
+                            closes_at=active_tunnel.closes_at,
+                            source_port=active_tunnel.source_port,
+                        )
+                        self._dispatch_reused_tunnel_proxy_request(
+                            proxy_context=proxy_context,
+                            proxy_sys=proxy_sys,
+                            active_tunnel=active_tunnel,
+                            listener_port=listener_port,
+                        )
+                        return active_tunnel.uid
 
         if (
             proxy_context.host
@@ -549,7 +564,12 @@ class ProxyTransactionActionBundle:
             client_leg_file_transfers + egress_leg_file_transfers
         )
         if request.dst_port == 443 and phase_plan.terminal_outcome == "success":
-            executor._explicit_proxy_tunnels[tunnel_key] = (client_time, client_uid)
+            executor._explicit_proxy_tunnels[tunnel_key] = ActiveProxyTunnel(
+                last_activity_at=client_time,
+                uid=client_uid,
+                closes_at=client_time + timedelta(seconds=client_duration),
+                source_port=src_port,
+            )
         return client_uid
 
     def _dispatch_reused_tunnel_proxy_request(
@@ -557,7 +577,7 @@ class ProxyTransactionActionBundle:
         *,
         proxy_context: ProxyContext,
         proxy_sys: System,
-        cached_uid: str,
+        active_tunnel: ActiveProxyTunnel,
         listener_port: int,
     ) -> None:
         """Dispatch one proxy-visible request on an already-open CONNECT tunnel."""
@@ -578,12 +598,12 @@ class ProxyTransactionActionBundle:
                 started_at=event_time,
                 closed_at=None,
                 src_ip=request.src_ip,
-                src_port=request.src_port or 0,
+                src_port=active_tunnel.source_port,
                 dst_ip=proxy_sys.ip,
                 dst_port=listener_port,
                 protocol="tcp",
                 service="http",
-                zeek_uid=cached_uid,
+                zeek_uid=active_tunnel.uid,
                 conn_id="",
                 duration=None,
                 conn_state="SF",
@@ -598,7 +618,7 @@ class ProxyTransactionActionBundle:
                 group_id=self.anchor.stable_id,
                 canonical_start=event_time,
                 phase="dependent",
-                parent_group_id=cached_uid,
+                parent_group_id=active_tunnel.uid,
             ),
         )
         self.executor.dispatcher.dispatch_builder(reused_event)
