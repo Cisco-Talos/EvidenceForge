@@ -295,3 +295,16 @@
   SMB FLOW actor identity when the client process is not yet source-visible. Repository-wide Ruff
   lint and formatting checks passed. No full scenario generation, evaluation, blind review, or
   commit has been run.
+
+### Loop 17 outcome
+
+- Commit `a487e795`; deterministic evaluation remained 97/100 over 77,125 records and passed all
+  hard acceptance criteria. The rendered hard probe matched 51/51 UserAssist values across
+  Sysmon/eCAR with zero future FILETIMEs and passed every AccentPalette/PIDL/RecentDocs gate.
+- Frozen review corpus SHA-256 remained
+  `768a414a06551e5d90bdd9ab09388a59d3ca2c532129febea63ce08ce3bcff44` before and after review.
+- Initial blind synthetic-confidence was 63/43/28/47. Deliberation excluded post-window and
+  bounded-completeness claims and revised the panel to 47/45/30/47 (mean 42.25), an Inconclusive
+  consensus at 80 confidence.
+- The UserAssist contradiction did not recur. The next highest-leverage valid finding is the
+  cross-host 2.168–2.286-second public-key SSH authentication band, owned by SSH lifecycle timing.
