@@ -112,8 +112,11 @@ class ActiveProxyTunnel:
 
     last_activity_at: datetime
     uid: str
+    tunnel_group_id: str
+    origin_uid: str
     closes_at: datetime
     source_port: int
+    remaining_requests: int
     remaining_cs_bytes: int
     remaining_sc_bytes: int
 
@@ -289,14 +292,36 @@ class ProxyTransactionActionBundle:
         dst_ip = request.dst_ip
         src_port = request.src_port
 
+        planned_request_count = max(
+            1,
+            int(request.http.flow_transaction_count or 1) if request.http is not None else 1,
+        )
+        request_local_orig_bytes = request.orig_bytes
+        request_local_resp_bytes = request.resp_bytes
+        planned_http_orig_bytes = request.orig_bytes
+        planned_http_resp_bytes = request.resp_bytes
+        if request.http is not None and planned_request_count > 1:
+            planned_http_orig_bytes, planned_http_resp_bytes = (
+                generator_utils._http_flow_payload_bytes(request.http)
+            )
+            request_local_http = replace(
+                request.http,
+                flow_request_body_len=request.http.request_body_len,
+                flow_response_body_len=request.http.response_body_len,
+                flow_transaction_count=1,
+            )
+            request_local_orig_bytes, request_local_resp_bytes = (
+                generator_utils._http_flow_payload_bytes(request_local_http)
+            )
+
         proxy_context = request.proxy or executor._build_proxy_context(
             src_ip=request.src_ip,
             dst_ip=dst_ip,
             dst_port=request.dst_port,
             service=request.service,
             duration=request.duration,
-            orig_bytes=request.orig_bytes,
-            resp_bytes=request.resp_bytes,
+            orig_bytes=request_local_orig_bytes,
+            resp_bytes=request_local_resp_bytes,
             hostname=request.hostname,
             source_system=request.source_system,
             proxy_sys=proxy_sys,
@@ -318,6 +343,7 @@ class ProxyTransactionActionBundle:
         reuse_safe = (
             request.dst_port == 443
             and request.http is not None
+            and request.http.trans_depth > 1
             and request.dns is None
             and not any(alert.origin == "built_in" for alert in request.ids_alerts)
             and request.firewall is None
@@ -345,7 +371,8 @@ class ProxyTransactionActionBundle:
                         and child_sc_bytes <= active_tunnel.remaining_sc_bytes
                     )
                     if (
-                        reused_transaction.close_at <= active_tunnel.closes_at
+                        active_tunnel.remaining_requests > 0
+                        and reused_transaction.close_at <= active_tunnel.closes_at
                         and has_payload_capacity
                     ):
                         proxy_context = replace(
@@ -356,8 +383,11 @@ class ProxyTransactionActionBundle:
                         executor._explicit_proxy_tunnels[tunnel_key] = ActiveProxyTunnel(
                             last_activity_at=request.time,
                             uid=active_tunnel.uid,
+                            tunnel_group_id=active_tunnel.tunnel_group_id,
+                            origin_uid=active_tunnel.origin_uid,
                             closes_at=active_tunnel.closes_at,
                             source_port=active_tunnel.source_port,
+                            remaining_requests=active_tunnel.remaining_requests - 1,
                             remaining_cs_bytes=(active_tunnel.remaining_cs_bytes - child_cs_bytes),
                             remaining_sc_bytes=(active_tunnel.remaining_sc_bytes - child_sc_bytes),
                         )
@@ -424,8 +454,10 @@ class ProxyTransactionActionBundle:
             time_taken=phase_plan.time_taken_ms,
         )
         client_http = self._build_client_http(proxy_context)
-        client_orig_bytes = max(1, proxy_context.cs_bytes or request.orig_bytes or 1)
-        client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
+        child_cs_bytes = max(1, int(proxy_context.cs_bytes or 1))
+        child_sc_bytes = max(0, int(proxy_context.sc_bytes or 0))
+        client_orig_bytes = child_cs_bytes
+        client_resp_bytes = child_sc_bytes
         if phase_plan.terminal_outcome == "success" and request.dst_port == 443:
             if proxy_context.method == "CONNECT":
                 framing_rng = random.Random(
@@ -439,10 +471,27 @@ class ProxyTransactionActionBundle:
                 client_resp_bytes += max(request.resp_bytes or 0, framing_rng.randint(900, 4500))
             else:
                 # Inspected HTTPS shares one client/proxy transport. Its ledger
-                # must include the exact CONNECT setup totals rendered by the
-                # proxy emitter, not an independently sampled framing estimate.
-                client_orig_bytes += phase_plan.tunnel_setup_cs_bytes
-                client_resp_bytes += phase_plan.tunnel_setup_sc_bytes
+                # reserves the browser group's aggregate payload while each
+                # proxy row retains request-local byte semantics.
+                aggregate_orig_bytes = max(0, int(planned_http_orig_bytes or 0))
+                aggregate_resp_bytes = max(0, int(planned_http_resp_bytes or 0))
+                future_orig_bytes = max(
+                    0,
+                    aggregate_orig_bytes - max(0, int(request_local_orig_bytes or 0)),
+                )
+                future_resp_bytes = max(
+                    0,
+                    aggregate_resp_bytes - max(0, int(request_local_resp_bytes or 0)),
+                )
+                remaining_count = planned_request_count - 1
+                future_orig_bytes += remaining_count * generator_utils._PROXY_CS_OVERHEAD[1]
+                future_resp_bytes += remaining_count * generator_utils._PROXY_SC_OVERHEAD[1]
+                client_orig_bytes = (
+                    phase_plan.tunnel_setup_cs_bytes + child_cs_bytes + future_orig_bytes
+                )
+                client_resp_bytes = (
+                    phase_plan.tunnel_setup_sc_bytes + child_sc_bytes + future_resp_bytes
+                )
 
         client_duration = phase_plan.client_duration_seconds
         egress_time = phase_plan.origin_connect_at
@@ -542,7 +591,7 @@ class ProxyTransactionActionBundle:
                 parent_action_group_id=self.anchor.stable_id,
             )
 
-        executor.generate_connection(
+        origin_uid = executor.generate_connection(
             src_ip=proxy_sys.ip,
             dst_ip=dst_ip,
             time=egress_time,
@@ -580,8 +629,11 @@ class ProxyTransactionActionBundle:
             executor._explicit_proxy_tunnels[tunnel_key] = ActiveProxyTunnel(
                 last_activity_at=client_time,
                 uid=client_uid,
+                tunnel_group_id=self.anchor.stable_id,
+                origin_uid=origin_uid,
                 closes_at=client_time + timedelta(seconds=client_duration),
                 source_port=src_port,
+                remaining_requests=planned_request_count - 1,
                 remaining_cs_bytes=max(
                     0,
                     client_orig_bytes
@@ -643,7 +695,7 @@ class ProxyTransactionActionBundle:
                 group_id=self.anchor.stable_id,
                 canonical_start=event_time,
                 phase="dependent",
-                parent_group_id=active_tunnel.uid,
+                parent_group_id=active_tunnel.tunnel_group_id,
             ),
         )
         self.executor.dispatcher.dispatch_builder(reused_event)

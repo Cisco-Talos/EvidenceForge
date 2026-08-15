@@ -4,7 +4,6 @@
 """Explicit proxy generation and visibility tests."""
 
 import random
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -3652,8 +3651,8 @@ class TestExplicitProxyVisibility:
             proto="tcp",
             service="ssl",
             duration=30.0,
-            orig_bytes=500,
-            resp_bytes=5000,
+            orig_bytes=1500,
+            resp_bytes=8000,
             source_system=generator._ip_to_system["10.0.1.10"],
             hostname="example.com",
             emit_dns=True,
@@ -3665,6 +3664,9 @@ class TestExplicitProxyVisibility:
                 version="1.1",
                 user_agent="Mozilla/5.0",
                 response_body_len=5000,
+                flow_request_body_len=200,
+                flow_response_body_len=6200,
+                flow_transaction_count=2,
                 status_code=200,
                 status_msg="OK",
             ),
@@ -3673,11 +3675,9 @@ class TestExplicitProxyVisibility:
         proxy_calls_after_first = emitters["proxy_access"].emit.call_count
         ssl_calls_after_first = emitters["zeek_ssl"].emit.call_count
         tunnel_key, active_tunnel = next(iter(generator._explicit_proxy_tunnels.items()))
-        generator._explicit_proxy_tunnels[tunnel_key] = replace(
-            active_tunnel,
-            remaining_cs_bytes=10_000,
-            remaining_sc_bytes=100_000,
-        )
+        assert active_tunnel.remaining_requests == 1
+        assert active_tunnel.remaining_cs_bytes > 0
+        assert active_tunnel.remaining_sc_bytes > 0
         reused_uid = generator.generate_connection(
             src_ip="10.0.1.10",
             dst_ip="93.184.216.34",
@@ -3699,6 +3699,7 @@ class TestExplicitProxyVisibility:
                 version="1.1",
                 user_agent="Mozilla/5.0",
                 response_body_len=1200,
+                trans_depth=2,
                 status_code=200,
                 status_msg="OK",
             ),
@@ -3716,8 +3717,9 @@ class TestExplicitProxyVisibility:
         assert reused_proxy_event.protocol.proxy.url == "https://example.com/app.js"
         assert emitters["zeek_ssl"].emit.call_count == ssl_calls_after_first
         updated_tunnel = generator._explicit_proxy_tunnels[tunnel_key]
-        assert updated_tunnel.remaining_cs_bytes < 10_000
-        assert updated_tunnel.remaining_sc_bytes < 100_000
+        assert updated_tunnel.remaining_requests == 0
+        assert updated_tunnel.remaining_cs_bytes < active_tunnel.remaining_cs_bytes
+        assert updated_tunnel.remaining_sc_bytes < active_tunnel.remaining_sc_bytes
 
     def test_tight_https_requests_open_transports_when_payload_capacity_is_consumed(self):
         generator, emitters = _generator(
