@@ -512,3 +512,21 @@
   TGT/cache state, stable Kerberos negotiation profiles, recurring SCM-owned PowerShell jobs, WMI
   dynamic-RPC lifecycle, TLS negotiation metadata, and target SSH FLOW/syslog ordering remain
   prioritized follow-ups.
+
+### Loop 20 outcome
+
+- Commit `bf544d16`; the full suite passed with 6,016 tests and 22 skips. Evaluation remained
+  96.9929/100 over 78,789 records. The rendered foreground polkit invariant passed all 19/19
+  observable host+PID cases, including CREATE-before-authorization, path/owner identity, shell
+  ancestry, authentication principal, and later termination. Four unmatched PackageKit subjects
+  were resident daemons with no visible in-window CREATE and are boundary-neutral, not causal
+  failures.
+- Frozen corpus SHA-256 remained
+  `22f29eb2b98a19f3232736ab9e0bb7faa44e7050e5e4b987bc2eb106f1f9fda4` before and after review.
+  The 44-point initial panel spread triggered deliberation; revised scores were 76/65/74/71
+  (mean 71.5), unanimous Synthetic at 81.25 average verdict confidence. The repaired polkit
+  future-PID contradiction did not recur.
+- The higher score versus loop 19 reflects newly surfaced independent defects rather than a fix
+  regression. Next priorities are Linux session-ID mutation/logon-ID reuse, client-exclusive DNS
+  millisecond quantization, invariant SMB transfer arithmetic, recurring SCM-owned PowerShell
+  maintenance, and detached PSEXESVC file lifecycle timing.
