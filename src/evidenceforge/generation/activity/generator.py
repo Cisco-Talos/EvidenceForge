@@ -10302,7 +10302,7 @@ class ActivityGenerator:
                             "winlogon.exe",
                             "SYSTEM",
                             "System",
-                            logon_id=logon_id,
+                            logon_id="0x3e7",
                         )
                         self.state_manager.set_current_time(time)
                         session_for_caller.session_winlogon_pid = logon_caller_pid
@@ -10572,7 +10572,7 @@ class ActivityGenerator:
                                 "winlogon.exe",
                                 "SYSTEM",
                                 "System",
-                                logon_id=logon_id,
+                                logon_id="0x3e7",
                             )
                             session.session_winlogon_pid = winlogon_pid
                         explorer_pid = self._create_windows_session_shell_lifecycle(
@@ -11648,6 +11648,19 @@ class ActivityGenerator:
                 logon_id,
                 session.system,
             )
+            # Per-session winlogon is a SYSTEM-token process, so its immutable
+            # process LogonID is 0x3e7 rather than the human session LUID.  The
+            # explicit session pointer owns teardown membership across that
+            # authentication-context boundary.
+            if session.session_winlogon_pid is not None:
+                session_winlogon = self.state_manager.get_process(
+                    session.system,
+                    session.session_winlogon_pid,
+                )
+                if session_winlogon is not None and all(
+                    process.pid != session_winlogon.pid for process in session_processes
+                ):
+                    session_processes.append(session_winlogon)
             deferred_ssh_transport_process = (
                 next(
                     (
@@ -14366,9 +14379,24 @@ class ActivityGenerator:
             process_name = running_proc.image
         process_username = running_proc.username if running_proc is not None else user.username
         process_logon_id = running_proc.logon_id if running_proc is not None else logon_id
-        session_logon_type = self.state_manager.get_session_logon_type(process_logon_id)
-        session_end_time = self.state_manager.get_session_end_time(process_logon_id)
         owning_session = self.state_manager.get_session(process_logon_id)
+        lifecycle_session = self.state_manager.get_session(logon_id)
+        if (
+            lifecycle_session is not None
+            and lifecycle_session.system == system.hostname
+            and lifecycle_session.session_winlogon_pid == pid
+        ):
+            # winlogon keeps its SYSTEM token/LUID while remaining a member of
+            # the interactive terminal session it bootstraps.  Use that
+            # explicit relationship only for terminal-session metadata and
+            # teardown timing, never to rewrite the process authentication ID.
+            owning_session = lifecycle_session
+        session_logon_type = owning_session.logon_type if owning_session is not None else 0
+        session_end_time = (
+            self.state_manager.get_session_end_time(owning_session.logon_id)
+            if owning_session is not None
+            else None
+        )
         if (
             owning_session is not None
             and owning_session.session_kind == "ssh"
@@ -14438,7 +14466,7 @@ class ActivityGenerator:
             "windows.process_exit_after_visible_create",
         )
         self.state_manager.get_process_object_id(system.hostname, pid)
-        process_session_id = self._session_id_for_logon(process_logon_id)
+        process_session_id = owning_session.session_id if owning_session is not None else 0
         event = OccurrenceBuilder(
             timestamp=time,
             event_type="process_terminate",
@@ -28099,7 +28127,7 @@ class ActivityGenerator:
                     "winlogon.exe",
                     "SYSTEM",
                     "System",
-                    logon_id=logon_id,
+                    logon_id="0x3e7",
                 )
                 session.session_winlogon_pid = winlogon_pid
                 session.process_tree_root = winlogon_pid

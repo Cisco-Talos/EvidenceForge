@@ -2094,6 +2094,16 @@ class TestActivityGenerator:
         assert set(by_name) == shell_names
         assert creates["explorer.exe"].timestamp < by_name["userinit.exe"].timestamp
         assert by_name["userinit.exe"].timestamp < logoff_time - timedelta(minutes=50)
+        assert creates["winlogon.exe"].auth is not None
+        assert creates["winlogon.exe"].auth.username == "SYSTEM"
+        assert creates["winlogon.exe"].auth.logon_id == "0x3e7"
+        assert by_name["winlogon.exe"].auth is not None
+        assert by_name["winlogon.exe"].auth.username == "SYSTEM"
+        assert by_name["winlogon.exe"].auth.logon_id == "0x3e7"
+        assert by_name["winlogon.exe"].auth.session_id == creates["winlogon.exe"].auth.session_id
+        assert by_name["winlogon.exe"].process.logon_id == "0x3e7"
+        assert by_name["explorer.exe"].auth is not None
+        assert by_name["explorer.exe"].auth.logon_id == logon_id
         logout_gap = abs(by_name["winlogon.exe"].timestamp - by_name["explorer.exe"].timestamp)
         assert logout_gap != timedelta(milliseconds=50)
 
@@ -2709,6 +2719,17 @@ class TestActivityGenerator:
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         mock_emitters["ecar"] = Mock()
         activity_gen.dispatcher.emitters = mock_emitters
+        state_manager.set_current_time(timestamp - timedelta(minutes=1))
+        smss_pid = state_manager.create_process(
+            test_system.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
+            logon_id="0x3e7",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"smss": smss_pid}}
         state_manager.set_current_time(timestamp)
 
         logon_id = activity_gen.generate_logon(
@@ -2747,6 +2768,33 @@ class TestActivityGenerator:
         session = state_manager.get_session(logon_id)
         assert session is not None
         assert session.source_ready_time == ecar_login_time
+        assert session.session_winlogon_pid is not None
+        winlogon_pid = session.session_winlogon_pid
+        winlogon = state_manager.get_process(test_system.hostname, winlogon_pid)
+        assert winlogon is not None
+        assert winlogon.username == "SYSTEM"
+        assert winlogon.logon_id == "0x3e7"
+
+        activity_gen.generate_logoff(
+            test_user,
+            test_system,
+            timestamp + timedelta(hours=1),
+            logon_id,
+            logon_type=10,
+        )
+
+        winlogon_terminate = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_terminate"
+            and call.args[0].process is not None
+            and call.args[0].process.pid == winlogon_pid
+        )
+        assert winlogon_terminate.auth is not None
+        assert winlogon_terminate.auth.username == "SYSTEM"
+        assert winlogon_terminate.auth.logon_id == "0x3e7"
+        assert winlogon_terminate.auth.session_id == session.session_id
+        assert winlogon_terminate.process.logon_id == "0x3e7"
 
     def test_generate_logon_rdp_preserves_explicit_modeled_source(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
