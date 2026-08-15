@@ -54,3 +54,35 @@
   visible child rows, reuse across user agents/hosts/errors, move requests beyond transport close,
   or create a second client transport for a reused request. Preserve setup-only and one-request
   paths alongside multi-request groups.
+
+## Loop 12 outcome
+
+- Commits `07882541` and `c13b8e41`; full suite `5,959 passed, 22 skipped` before the
+  regeneration-exposed stale-caller follow-up, then focused proxy/session-bound tests passed.
+- Deterministic evaluation remained 97/100 over 78,114 records. The hard probe found 498 inspected
+  tunnels with depths 1–12, 358 multi-request tunnels, and zero setup, port, or capacity failures.
+- The universal one-request proxy finding did not recur. Initial blind synthetic-confidence was
+  63/23/34/87 (average 51.75); deliberation revised it to 68/49/46/72 (average 58.75), a mixed
+  result with a synthetic lean.
+- Next target: decouple cross-host eCAR FLOW observation milliseconds while retaining canonical
+  tuple, actor, interval, and auth ordering. PackageKit singleton/identity and PAT allocation
+  texture follow.
+
+## Loop 13 family contract — endpoint-local eCAR FLOW observation clocks
+
+- **Owning abstraction:** `SourceTimingPlanner` owns finalized source-native timestamps and
+  identity-safety flags for each outbound and inbound eCAR endpoint observation.
+- **Invariant:** paired endpoint FLOW views share canonical tuple/interval truth but render in their
+  own host-clock frame with independent deterministic collection texture. Each finalized time stays
+  inside the corresponding endpoint-clock-translated transport interval; network-sensor clocks do
+  not clamp endpoint telemetry.
+- **Entry paths:** all canonical baseline, storyline, scanner, browser, proxy, SSH, RDP, SMB, and
+  Windows remote-auth connections that route to two modeled endpoints.
+- **Consumers:** per-host eCAR FLOW records, actor PROCESS/CREATE floors, SSH/RDP/SMB/remote-auth
+  FLOW-before-session ordering, source-window admission, and later endpoint lifecycle anchors.
+- **Layer rationale:** canonical network state owns the interval; source timing translates that
+  interval to each endpoint clock. The eCAR emitter must render the finalized plan without applying
+  a second policy in the canonical or Zeek sensor clock frame.
+- **Sibling risks:** preserve actor omission when process visibility is late, exact tuple and
+  direction agreement, deterministic reruns, proxy child phase ordering, and independent Zeek and
+  Windows timing. Do not extend or rewrite the canonical transport merely to create clock texture.

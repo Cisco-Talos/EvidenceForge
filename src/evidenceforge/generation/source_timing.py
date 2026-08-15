@@ -913,6 +913,11 @@ class SourceTimingPlanner:
                 within=(interval_start, not_after) if not_after is not None else None,
             )
             if flow_time is not None:
+                flow_time = self._clamp_ecar_flow_before_close(
+                    flow_time,
+                    interval_start=interval_start,
+                    not_after=not_after,
+                )
                 flow_time = self._paired_ecar_flow_observation_time(
                     event,
                     flow_time,
@@ -922,7 +927,6 @@ class SourceTimingPlanner:
                     not_after=not_after,
                     enabled=paired_endpoint,
                 )
-                flow_time = self._clamp_ecar_flow_before_close(event, flow_time)
                 return flow_time, not_before is None or not_before <= flow_time
 
         if drop_late_process_identity and not_before is not None:
@@ -931,6 +935,11 @@ class SourceTimingPlanner:
                 "source.ecar_flow",
                 seed_parts=seed_parts,
                 within=(interval_start, not_after) if not_after is not None else None,
+            )
+            flow_time = self._clamp_ecar_flow_before_close(
+                flow_time,
+                interval_start=interval_start,
+                not_after=not_after,
             )
             flow_time = self._paired_ecar_flow_observation_time(
                 event,
@@ -941,7 +950,6 @@ class SourceTimingPlanner:
                 not_after=not_after,
                 enabled=paired_endpoint,
             )
-            flow_time = self._clamp_ecar_flow_before_close(event, flow_time)
             return flow_time, not_before <= flow_time
 
         identity_safe = not_before is None or not_after is None or not_before <= not_after
@@ -952,6 +960,11 @@ class SourceTimingPlanner:
             not_before=not_before if identity_safe else None,
             within=(interval_start, not_after) if not_after is not None else None,
         )
+        flow_time = self._clamp_ecar_flow_before_close(
+            flow_time,
+            interval_start=interval_start,
+            not_after=not_after,
+        )
         flow_time = self._paired_ecar_flow_observation_time(
             event,
             flow_time,
@@ -961,32 +974,24 @@ class SourceTimingPlanner:
             not_after=not_after,
             enabled=paired_endpoint,
         )
-        flow_time = self._clamp_ecar_flow_before_close(event, flow_time)
         if identity_safe and not_before is not None and flow_time < not_before:
             identity_safe = False
         return flow_time, identity_safe
 
     @staticmethod
     def _clamp_ecar_flow_before_close(
-        event: TimingOccurrence,
         timestamp: datetime,
+        *,
+        interval_start: datetime,
+        not_after: datetime | None,
     ) -> datetime:
         """Leave room for source-native authentication after an endpoint FLOW."""
 
-        network = event.network
-        if network is None:
+        if not_after is None:
             return timestamp
-        close_candidates = [network.closed_at]
-        close_candidates.extend(
-            observation.observed_close_time for observation in event.network_observations
-        )
-        close_candidates = [candidate for candidate in close_candidates if candidate is not None]
-        if not close_candidates:
-            return timestamp
-        close_deadline = min(close_candidates)
-        duration = max(timedelta(0), close_deadline - network.started_at)
+        duration = max(timedelta(0), not_after - interval_start)
         margin = min(timedelta(milliseconds=100), duration / 3)
-        return min(timestamp, max(network.started_at, close_deadline - margin))
+        return min(timestamp, max(interval_start, not_after - margin))
 
     @staticmethod
     def _paired_ecar_flow_observation_time(
@@ -1007,6 +1012,7 @@ class SourceTimingPlanner:
             return SourceTimingPlanner._unbounded_paired_ecar_flow_time(
                 event,
                 seed_parts=seed_parts,
+                interval_start=interval_start,
                 not_before=not_before,
             )
         short_interval = not_after <= interval_start + timedelta(milliseconds=5)
@@ -1080,6 +1086,7 @@ class SourceTimingPlanner:
         event: TimingOccurrence,
         *,
         seed_parts: tuple[Any, ...],
+        interval_start: datetime,
         not_before: datetime | None,
     ) -> datetime:
         """Return coordinated paired FLOW timing when no close bound exists."""
@@ -1114,7 +1121,7 @@ class SourceTimingPlanner:
             offset_ms = 20 + (offset_seed % 180)
         else:
             offset_ms = 80 + (offset_seed % 420)
-        candidate = event.timestamp + timedelta(milliseconds=base_delay_ms + offset_ms)
+        candidate = interval_start + timedelta(milliseconds=base_delay_ms + offset_ms)
         if not_before is not None and candidate < not_before:
             candidate = not_before + timedelta(milliseconds=6 + (offset_seed % 180))
         return candidate

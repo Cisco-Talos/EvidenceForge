@@ -2467,6 +2467,7 @@ class TestChronologicalOutput:
                 protocol="udp",
                 conn_state="SF",
                 initiating_pid=-1,
+                source_visible_start_time=ts,
             ),
         )
 
@@ -2475,7 +2476,16 @@ class TestChronologicalOutput:
         rendered_ms = [json.loads(emitter._render_event(row))["timestamp_ms"] for row in emitted]
         assert len(rendered_ms) == 2
         assert abs(rendered_ms[0] - rendered_ms[1]) > 5
-        assert all(ts <= row["timestamp"] <= ts + timedelta(milliseconds=1800) for row in emitted)
+        for row in emitted:
+            hostname = str(row["hostname"])
+            host = event.src_host if hostname == event.src_host.hostname else event.dst_host
+            adjustment = SourceTimingPlanner().endpoint_clock_adjustment_for_host(
+                hostname=hostname,
+                os_category=host.os_category,
+                timestamp=ts,
+            )
+            local_start = ts + adjustment
+            assert local_start <= row["timestamp"] <= local_start + timedelta(milliseconds=1800)
 
     def test_actor_linked_flow_renders_after_process_create(self, emitter, monkeypatch, ts):
         """FLOW rows should not reference an actor before its visible PROCESS/CREATE row."""

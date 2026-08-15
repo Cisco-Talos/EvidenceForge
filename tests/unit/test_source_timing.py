@@ -868,6 +868,76 @@ def test_short_paired_ecar_flow_bounds_remain_in_each_endpoint_clock() -> None:
     assert int(outbound.timestamp() * 1000) != int(inbound.timestamp() * 1000)
 
 
+def test_positive_skew_paired_ecar_flow_keeps_endpoint_local_close_bounds() -> None:
+    """Positive host skews must not collapse both FLOW views onto canonical close."""
+
+    source = HostContext(
+        hostname="DC-01",
+        ip="10.0.0.10",
+        fqdn="DC-01.corp.local",
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="server",
+        domain="corp.local",
+        netbios_domain="CORP",
+    )
+    target = HostContext(
+        hostname="FILE-SRV-01",
+        ip="10.0.0.20",
+        fqdn="FILE-SRV-01.corp.local",
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="server",
+        domain="corp.local",
+        netbios_domain="CORP",
+    )
+    start = _base_time()
+    duration = timedelta(milliseconds=200)
+    event = OccurrenceBuilder(
+        timestamp=start,
+        event_type="connection",
+        src_host=source,
+        dst_host=target,
+        network=network_plan(
+            src_ip=source.ip,
+            src_port=49152,
+            dst_ip=target.ip,
+            dst_port=445,
+            protocol="tcp",
+            service="smb",
+            conn_state="SF",
+            duration=duration.total_seconds(),
+            source_visible_start_time=start,
+            source_visible_close_time=start + duration,
+        ),
+    )
+    planner = SourceTimingPlanner(clock_profile_name="enterprise_standard")
+
+    planner.plan_event(event, "ecar")
+
+    endpoint_times = {
+        "outbound": (
+            source,
+            event.source_timing.finalized_times[ecar_flow_render_key("outbound", source.hostname)],
+        ),
+        "inbound": (
+            target,
+            event.source_timing.finalized_times[ecar_flow_render_key("inbound", target.hostname)],
+        ),
+    }
+    for host, timestamp in endpoint_times.values():
+        adjustment = planner.endpoint_clock_adjustment_for_host(
+            hostname=host.hostname,
+            os_category=host.os_category,
+            timestamp=start,
+        )
+        assert adjustment > timedelta(0)
+        assert start + adjustment <= timestamp <= start + duration + adjustment
+
+    rendered_ms = {int(timestamp.timestamp() * 1000) for _, timestamp in endpoint_times.values()}
+    assert len(rendered_ms) == 2
+
+
 def test_network_sensor_timing_is_independent_from_endpoint_clock_profile() -> None:
     """Zeek/network sensor source times do not inherit endpoint host clock skew."""
     seed = ("uid", "query", _base_time())

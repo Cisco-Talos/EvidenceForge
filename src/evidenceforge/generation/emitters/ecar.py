@@ -1078,17 +1078,6 @@ class EcarEmitter(HostMultiplexEmitter):
             ecar_flow_render_key(direction, hostname),
             event.network.started_at,
         )
-        close_candidates = [event.network.closed_at]
-        close_candidates.extend(
-            observation.observed_close_time for observation in event.network_observations
-        )
-        close_candidates = [candidate for candidate in close_candidates if candidate is not None]
-        close_deadline = min(close_candidates) if close_candidates else None
-        if close_deadline is not None and timestamp >= close_deadline:
-            timestamp = max(
-                event.network.started_at,
-                close_deadline - timedelta(milliseconds=1),
-            )
         identity_safe = plan.finalized_flags.get(
             ecar_flow_identity_key(direction, hostname),
             not_before is None or not_before <= timestamp,
