@@ -475,6 +475,34 @@ def test_resolved_document_round_trip_bypasses_removed_pack_sources(tmp_path: Pa
     )
 
 
+def test_resolved_document_renders_multiline_strings_as_literal_blocks(tmp_path: Path) -> None:
+    """Resolved YAML keeps authored line breaks readable without changing their value."""
+
+    description = (
+        "Canonical scenario description that wraps at an authored boundary. It\n"
+        "continues directly on the next physical line without an empty separator,\n"
+        "and retains the final newline.\n"
+    )
+    scenario_document = load_yaml(_MINIMAL)
+    scenario_document["description"] = description
+    scenario_path = _write_yaml(tmp_path / "scenario.yaml", scenario_document)
+    compiled = compile_scenario(scenario_path)
+    document = build_resolved_document(compiled)
+
+    serialized = serialize_resolved_document(document)
+    text = serialized.decode("utf-8")
+    parsed = yaml.safe_load(serialized)
+
+    assert (
+        "  description: |\n"
+        "    Canonical scenario description that wraps at an authored boundary. It\n"
+        "    continues directly on the next physical line without an empty separator,\n"
+        "    and retains the final newline.\n"
+    ) in text
+    assert parsed["scenario"]["description"] == description
+    assert parsed == document.model_dump(mode="json")
+
+
 def test_pack_internal_include_is_semantic_and_digest_tracked(tmp_path: Path) -> None:
     """A contained include is accepted as pack content rather than rejected as an orphan."""
 

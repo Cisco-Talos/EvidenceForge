@@ -37,6 +37,19 @@ class _NoAliasDumper(yaml.SafeDumper):
         return True
 
 
+def _represent_readable_string(
+    dumper: _NoAliasDumper,
+    value: str,
+) -> yaml.ScalarNode:
+    """Render multiline strings literally so physical lines match their value."""
+
+    style = "|" if "\n" in value else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
+
+_NoAliasDumper.add_representer(str, _represent_readable_string)
+
+
 def _canonical_json_bytes(value: Any) -> bytes:
     """Encode a JSON-compatible value canonically for integrity hashing."""
 
