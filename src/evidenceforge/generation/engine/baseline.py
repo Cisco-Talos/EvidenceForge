@@ -2352,8 +2352,14 @@ class BaselineMixin:
                 "/usr/bin/systemctl",
                 "/usr/bin/loginctl",
             ),
-            "org.freedesktop.packagekit.system-update": ("/usr/bin/pkcon",),
-            "org.freedesktop.NetworkManager.settings.modify.system": ("/usr/bin/nmcli",),
+            "org.freedesktop.packagekit.system-update": (
+                "/usr/lib/packagekit/packagekitd",
+                "/usr/bin/pkcon",
+            ),
+            "org.freedesktop.NetworkManager.settings.modify.system": (
+                "/usr/bin/nmcli",
+                "/usr/sbin/NetworkManager",
+            ),
             "org.freedesktop.timedate1.set-timezone": ("/usr/bin/timedatectl",),
         }
 
@@ -2673,6 +2679,8 @@ class BaselineMixin:
         subject_user = rng.choice(
             (entry.get("params") or {}).get("subject_user") or ["root", "admin", "deploy"]
         )
+        if not self._polkit_action_process_is_user_cli(action_process_path):
+            subject_user = "root"
         template = self._polkit_action_message_template(action_id, template)
         process_id = None
         if "action {action_id}" in template:

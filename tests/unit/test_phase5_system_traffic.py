@@ -358,10 +358,12 @@ def test_polkit_action_messages_pair_action_with_source_native_program(linux_sys
             "/usr/bin/loginctl",
         },
         "org.freedesktop.packagekit.system-update": {
+            "/usr/lib/packagekit/packagekitd",
             "/usr/bin/pkcon",
         },
         "org.freedesktop.NetworkManager.settings.modify.system": {
             "/usr/bin/nmcli",
+            "/usr/sbin/NetworkManager",
         },
         "org.freedesktop.timedate1.set-timezone": {
             "/usr/bin/timedatectl",

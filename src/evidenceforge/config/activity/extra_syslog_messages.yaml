@@ -262,6 +262,7 @@ programs:
         - "2000"
       process_path:
         - /usr/bin/systemctl
+        - /usr/lib/packagekit/packagekitd
         - /usr/bin/pkcon
         - /usr/bin/nmcli
         - /usr/bin/timedatectl
@@ -306,6 +307,7 @@ programs:
         - "2000"
       process_path:
         - /usr/bin/systemctl
+        - /usr/lib/packagekit/packagekitd
         - /usr/bin/pkcon
     messages:
       - "Operator of unix-process:{0}:{monotonic_start} successfully authenticated as unix-user:{auth_user} to gain TEMPORARY authorization for action {action_id} for system-bus-name::1.{bus_id} [{process_path}] (owned by unix-user:{subject_user})"
