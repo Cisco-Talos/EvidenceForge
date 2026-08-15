@@ -5825,6 +5825,58 @@ class TestActivityGenerator:
         assert was.parent_pid == 500
         assert was.start_time < worker.start_time
 
+    def test_direct_owa_system_process_uses_profiled_was_parent(self, activity_gen, state_manager):
+        """Direct system-process callers cannot bypass configured service ancestry."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        exchange = System(
+            hostname="MAIL-FIN-01",
+            ip="10.10.2.27",
+            os="Windows Server 2022",
+            type="server",
+            services=["owa", "exchange"],
+            roles=["mail_server"],
+        )
+        state_manager.set_current_time(timestamp - timedelta(hours=1))
+        state_manager.register_process(
+            system=exchange.hostname,
+            pid=4,
+            parent_pid=0,
+            image="System",
+            command_line="",
+            username="SYSTEM",
+            integrity_level="System",
+            os_category="windows",
+        )
+        state_manager.register_process(
+            system=exchange.hostname,
+            pid=500,
+            parent_pid=4,
+            image=r"C:\Windows\System32\services.exe",
+            command_line="services.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            os_category="windows",
+        )
+        activity_gen._system_pids = {exchange.hostname: {"system": 4, "services": 500}}
+
+        pid = activity_gen.generate_system_process(
+            system=exchange,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\inetsrv\w3wp.exe",
+            command_line=(r'C:\Windows\System32\inetsrv\w3wp.exe -ap "MSExchangeOWAAppPool"'),
+            parent_pid=500,
+            username="SYSTEM",
+            emit_linux_syslog=False,
+        )
+
+        worker = state_manager.get_process(exchange.hostname, pid)
+        assert worker is not None
+        assert worker.parent_pid != 500
+        was = state_manager.get_process(exchange.hostname, worker.parent_pid)
+        assert was is not None
+        assert was.image == r"C:\Windows\System32\svchost.exe"
+        assert was.parent_pid == 500
+
     @pytest.mark.parametrize("method", ["http", "https"])
     def test_apt_method_connection_owner_has_frontend_parent(
         self, activity_gen, state_manager, method

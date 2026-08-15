@@ -6743,6 +6743,7 @@ class ActivityGenerator:
                 parent_pid=manager_parent,
                 username=family.manager.username,
                 emit_linux_syslog=False,
+                _profiled_service_bypass=True,
             )
         sys_pids[family.manager.key] = manager_pid
 
@@ -6768,6 +6769,7 @@ class ActivityGenerator:
                 parent_pid=manager_pid,
                 username=worker.username,
                 emit_linux_syslog=False,
+                _profiled_service_bypass=True,
             )
         sys_pids[worker.key] = worker_pid
         return worker_pid
@@ -20784,6 +20786,7 @@ class ActivityGenerator:
         *,
         emit_linux_syslog: bool = True,
         concurrency_group_id: str = "",
+        _profiled_service_bypass: bool = False,
     ) -> int:
         """Generate a system process creation event (no user session required).
 
@@ -20813,6 +20816,23 @@ class ActivityGenerator:
                 process_name,
                 command_line,
             )
+
+        if not _profiled_service_bypass:
+            profiled_worker = matching_service_worker(
+                os_category=_get_os_category(system.os),
+                image=process_name,
+                command_line=command_line,
+                username=username,
+            )
+            if profiled_worker is not None:
+                family_name, worker_name, _family = profiled_worker
+                return self._ensure_profiled_service_worker(
+                    system=system,
+                    worker_time=time,
+                    activity_time=time,
+                    family_name=family_name,
+                    worker_name=worker_name,
+                )
 
         exe_name = ntpath.basename(process_name).lower()
         if (
