@@ -3404,7 +3404,11 @@ class BaselineMixin:
         for user in enabled_users:
             persona = self._get_user_persona(user)
             user_offsets = self._user_time_offsets.get(user.username)
-            self._emit_pending_workstation_unlock(user, current_hour, planned_logoffs)
+            pending_unlock_emitted = self._emit_pending_workstation_unlock(
+                user,
+                current_hour,
+                planned_logoffs,
+            )
 
             # Weekend filtering: skip non-IT personas on weekends
             if is_weekend and persona:
@@ -3429,9 +3433,10 @@ class BaselineMixin:
                 persona_name = user.persona if user.persona else None
                 # Visible workstation locks must be planned before foreground
                 # user activity so activity can be kept outside locked intervals.
-                self._generate_lock_unlock_events(
-                    user, current_hour, local_hour, persona_name, planned_logoffs
-                )
+                if not pending_unlock_emitted:
+                    self._generate_lock_unlock_events(
+                        user, current_hour, local_hour, persona_name, planned_logoffs
+                    )
                 event_times = self._distribute_events_in_hour(
                     current_hour,
                     num_events,
@@ -6370,33 +6375,53 @@ class BaselineMixin:
         user: User,
         current_hour: datetime,
         planned_logoffs: dict[tuple[str, str], float] | None = None,
-    ) -> None:
-        """Emit a deferred workstation unlock when its timestamp falls in this hour."""
+    ) -> bool:
+        """Emit a deferred unlock and report whether it owns this hour's lock state."""
         pending = getattr(self, "_pending_unlocks", {})
         if user.username not in pending:
-            return
+            return False
 
         hour_end = current_hour + timedelta(hours=1)
         unlock_t, pending_logon_id = pending[user.username]
         if unlock_t >= hour_end:
-            return
+            return False
 
         pending.pop(user.username, None)
         pending_session = self.state_manager.get_session(pending_logon_id)
         if not pending_session or not _session_active_at(
             pending_session, unlock_t, current_hour, planned_logoffs
         ):
-            return
+            return False
 
         system = next(
             (s for s in self.scenario.environment.systems if s.hostname == pending_session.system),
             None,
         )
         if system is None:
-            return
+            return False
 
         rng = _get_rng()
         self._emit_unlock(user, system, unlock_t, pending_logon_id, rng)
+        return True
+
+    def _authored_workstation_transition_in_hour(
+        self,
+        user: User,
+        system_hostname: str,
+        current_hour: datetime,
+    ) -> bool:
+        """Return whether authored evidence owns this session's state during the hour."""
+        hour_key = int(current_hour.timestamp())
+        for _event_time, event_idx in getattr(self, "_storyline_by_hour", {}).get(hour_key, []):
+            storyline_event = self.scenario.storyline[event_idx]
+            if storyline_event.actor != user.username or storyline_event.system != system_hostname:
+                continue
+            if any(
+                spec.type in {"workstation_lock", "workstation_unlock"}
+                for spec in storyline_event.events
+            ):
+                return True
+        return False
 
     def _generate_lock_unlock_events(
         self,
@@ -6433,6 +6458,12 @@ class BaselineMixin:
             None,
         )
         if not system or _get_os_category(system.os) != "windows":
+            return
+        if self._authored_workstation_transition_in_hour(
+            user,
+            system.hostname,
+            current_hour,
+        ):
             return
 
         # Per-persona lock frequency

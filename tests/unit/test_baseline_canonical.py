@@ -372,12 +372,30 @@ def test_pending_workstation_unlock_emits_independent_of_new_lock_path():
     engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[system]))
     engine._emit_unlock = Mock()
 
-    engine._emit_pending_workstation_unlock(user, current_hour, planned_logoffs=None)
+    emitted = engine._emit_pending_workstation_unlock(user, current_hour, planned_logoffs=None)
 
+    assert emitted
     assert engine._pending_unlocks == {}
     engine._emit_unlock.assert_called_once()
     args = engine._emit_unlock.call_args.args
     assert args[:4] == (user, system, unlock_time, logon_id)
+
+
+def test_authored_workstation_transition_owns_baseline_hour():
+    """Baseline lock scheduling should yield to authored same-session state transitions."""
+    engine = object.__new__(BaselineMixin)
+    current_hour = datetime(2026, 4, 13, 17, 0, 0, tzinfo=UTC)
+    user = User(username="analyst", full_name="Analyst User", email="analyst@example.com")
+    storyline_event = SimpleNamespace(
+        actor=user.username,
+        system="WS-01",
+        events=[SimpleNamespace(type="workstation_lock")],
+    )
+    engine.scenario = SimpleNamespace(storyline=[storyline_event])
+    engine._storyline_by_hour = {int(current_hour.timestamp()): [(current_hour, 0)]}
+
+    assert engine._authored_workstation_transition_in_hour(user, "WS-01", current_hour)
+    assert not engine._authored_workstation_transition_in_hour(user, "WS-02", current_hour)
 
 
 def test_linux_baseline_session_initiator_creates_pam_session_message():

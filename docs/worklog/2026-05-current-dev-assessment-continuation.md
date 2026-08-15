@@ -1401,6 +1401,45 @@ or follow-up batch is needed.
   config files validated cleanly, and repository-wide Ruff checks passed. Regeneration, evaluation,
   rendered probing, and blind review remain the next Loop 8 steps.
 
+- V2 loop 8 completed at commit `4cd242cd`. Fresh generation produced 89,844 records; automated
+  evaluation scored 96.38912449067922 but narrowly failed acceptance because temporal integrity was
+  84.7826 against the 85.0 hard threshold. The targeted rendered probe reduced successful local
+  logins from 26 to 5, with zero unmodeled/service identities and zero workstation non-owner
+  successes. The frozen 89-file corpus retained SHA-256
+  `53f9b8df1e7971f482285922c50048a0afc421b82e79296f661a83c5dc6d80c2`. Initial blind scores were
+  88/74/72/52 (average 71.5, spread 36); mandatory deliberation revised them to 92/84/80/74
+  (average 82.5), final Synthetic. The prior generic/service local-login pattern did not recur.
+  The confirmed top finding is same-session Windows 4800/4801 state alternation within one to three
+  milliseconds on two hosts.
+
+- V2 loop 9 family contract — **Windows workstation lock-state lifecycle ownership**. Owning
+  abstraction: the canonical interactive-session/workstation-state machine plus causal companion
+  expansion. Invariant: one session has one coherent ordered lock state; Event 4800 transitions an
+  unlocked session to locked, Event 4801 transitions a locked session to unlocked, and neither an
+  authored unlock nor Type-7 reauthentication may recursively fabricate an immediate lock/unlock
+  pair. Repeated transitions require human-scale dwell time except explicitly modeled automation,
+  and Security/eCAR companion identity must retain the durable session LUID without duplicating the
+  state transition. Entry paths: baseline idle lock, explicit lock/unlock storyline events,
+  Type-7 unlock reauthentication, RDP/local interactive session bootstrap, causal supplementary
+  audit expansion, boundary-carried sessions, and source observation delay/drop. Consumers:
+  canonical session state, Windows Security 4800/4801 and 4624 Type 7, eCAR USER_SESSION records,
+  evaluator timing/pivot logic, and endpoint lifecycle probes. Layer rationale: the contradiction
+  is positive same-channel state evidence, so renderer filtering would hide duplicate canonical
+  ownership rather than repair it. Sibling risk: preserve legitimate 4624 Type-7 unlock evidence,
+  correct LUID/object reuse, ordinary multi-minute lock duration, RDP disconnect/reconnect semantics,
+  and source-local observation coherence.
+
+- V2 loop 9 implementation assigns each baseline hour a single lock-state owner. A deferred unlock
+  now reports that it owns the hour so the scheduler cannot emit a chronologically earlier new lock
+  after dispatching it. Baseline lock scheduling also yields when the same user/host/hour contains
+  an authored workstation lock or unlock, preventing later-dispatched authored transitions from
+  being compressed against a baseline future transition by source timing. Existing canonical
+  lock/unlock bundles, Type-7 reauthentication, durable LUID/session ID reuse, and human-scale
+  duration sampling remain unchanged. Focused lock-state tests passed, the definitive full suite
+  passed (`5955 passed, 22 skipped`), all 92 config files validated cleanly, and repository-wide
+  Ruff checks passed. Regeneration, evaluation, rendered probing, and blind review remain the next
+  Loop 9 steps.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
