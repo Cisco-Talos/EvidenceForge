@@ -29374,6 +29374,22 @@ class ActivityGenerator:
                 if chosen_parent in ("bash", "sh", "zsh"):
                     image = f"/bin/{chosen_parent}"
 
+        profiled_worker = matching_service_worker(
+            os_category=os_cat,
+            image=image,
+            command_line=cmd_line,
+            username=user.username,
+        )
+        if profiled_worker is not None:
+            family_name, worker_name, _family = profiled_worker
+            return self._ensure_profiled_service_worker(
+                system=system,
+                worker_time=time,
+                activity_time=time,
+                family_name=family_name,
+                worker_name=worker_name,
+            )
+
         # Timing: parent is created before child
         spawn_delay = config.get("spawn_delay", [0.5, 3.0])
         delay_sec = rng.uniform(spawn_delay[0], spawn_delay[1])
