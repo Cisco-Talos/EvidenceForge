@@ -10,6 +10,38 @@
 # Values are intentionally conservative. Scenario-specific projects can override
 # them with .eforge/config/activity/timing_profiles.yaml.
 
+# SSH authentication work begins only after the required transport/eCAR FLOW
+# visibility floor. Profiles mix fast, ordinary, and slow-tail outcomes, then
+# add deterministic route, receiver-load, credential-backend cache, and key-type
+# costs. This prevents the source-observation floor from collapsing every
+# public-key session into one narrow timing band.
+ssh_authentication:
+  profiles:
+    publickey:
+      fast_probability: 0.22
+      fast_ms: {min: 25, max: 180}
+      typical_ms: {min: 180, max: 1250}
+      tail_probability: 0.12
+      tail_ms: {min: 1250, max: 4800}
+      cache_miss_probability: 0.18
+      cache_miss_ms: {min: 120, max: 1500}
+    password:
+      fast_probability: 0.08
+      fast_ms: {min: 180, max: 550}
+      typical_ms: {min: 550, max: 3600}
+      tail_probability: 0.18
+      tail_ms: {min: 3600, max: 9000}
+      cache_miss_probability: 0.32
+      cache_miss_ms: {min: 250, max: 2800}
+  route_rtt_ms:
+    private: {min: 2, max: 55}
+    public: {min: 25, max: 320}
+  receiver_load_ms: {min: 0, max: 650}
+  public_key_penalty_ms:
+    ED25519: {min: 0, max: 35}
+    ECDSA: {min: 5, max: 75}
+    RSA: {min: 20, max: 240}
+
 relationships:
   network.dns_before_tcp:
     class: causal_prerequisite

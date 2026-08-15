@@ -308,3 +308,59 @@
   consensus at 80 confidence.
 - The UserAssist contradiction did not recur. The next highest-leverage valid finding is the
   cross-host 2.168–2.286-second public-key SSH authentication band, owned by SSH lifecycle timing.
+
+## Loop 18 family contract — typed SSH authentication-phase timing
+
+- **Owning abstraction:** `SshSessionActionBundle` owns the canonical transport-to-authentication
+  lifecycle; the activity timing profile owns the data-driven method, route, key, cache, backend,
+  and receiver-state distributions used to plan that lifecycle.
+- **Invariant:** transport and destination eCAR FLOW evidence remain visible before the accepted
+  authentication event, which remains before PAM session-open and logind session creation. The
+  connection-to-accept phase has deterministic scoped variation appropriate to authentication
+  method and execution context, including a realistic fast path and a non-uniform slow tail;
+  replaying the same SSH action produces the same timestamps.
+- **Entry paths:** baseline organic administration, CI/configuration/backup/SCP traffic, typed
+  storyline SSH and SCP sessions, compatibility Type 10 Linux logons, and direct public generator
+  calls all converge on the same SSH action bundle and timing sampler.
+- **Consumers:** destination syslog `Connection`/`Accepted`/PAM/logind rows, canonical SSH session
+  readiness, eCAR USER_SESSION and FLOW ordering, responder/client process visibility, deferred
+  closure, state-manager session metadata, and rendered cross-source timing probes.
+- **Layer rationale:** the narrow band is produced when the shared eCAR-observation floor dominates
+  the small public-key gap, collapsing otherwise sampled values. The bundle must add the typed
+  authentication work after that required visibility floor; changing only syslog rendering would
+  contradict canonical readiness and sibling eCAR/session evidence.
+- **Sibling risks:** do not move transport or eCAR FLOW behind authentication; do not orphan the
+  destination sshd actor when its source-visible create is delayed; preserve PAM/logind order and
+  close-after-session semantics; avoid global RNG coupling; keep password and public-key
+  distributions distinct; and bound slow-tail samples so short transports extend coherently rather
+  than closing before login.
+
+### Loop 18 implementation handoff
+
+- Added typed, overlay-aware SSH authentication profiles with fast, typical, and slow-tail work,
+  plus deterministic route, receiver-load, credential-cache, and public-key-type factors. The SSH
+  bundle now adds that work after the endpoint-FLOW visibility floor instead of allowing the floor
+  to collapse otherwise sampled public-key sessions into one timing band.
+- Focused timing/SSH/config coverage passed 584 tests with one skip; `eforge validate-config`
+  reported zero issues across 93 files and Ruff/diff checks passed. The full repository suite
+  passed with 6,010 tests and 22 skips. One unrelated SMB acceptance tolerance was aligned with
+  the documented two-second independent endpoint FLOW/FILE source-latency envelope.
+
+### Loop 18 implementation handoff
+
+- Added validated `ssh_authentication` timing profiles for password and public-key fast, typical,
+  and slow-tail paths plus credential-cache misses, private/public route RTT, receiver load, and
+  ED25519/ECDSA/RSA costs. Sampling uses a bundle-scoped stable seed and does not consume the
+  process-global generation RNG.
+- The SSH bundle now adds the sampled authentication work after the eCAR FLOW/collection
+  visibility floor instead of allowing that floor to replace it. All baseline, world-planner,
+  typed-storyline, compatibility-logon, and direct-generator entry paths continue to converge on
+  this one action owner. Existing transport -> connection -> accepted -> PAM -> logind and closure
+  constraints remain authoritative.
+- Focused verification: 192 timing/SSH/config tests passed; 392 broader world-model, baseline,
+  logoff, storyline, source-timing, and dispatcher tests passed with 1 skip. Population tests prove
+  exact replay, a public-key spread exceeding three seconds with both fast and slow-tail samples,
+  method differentiation, and route/key contextual effects. The lifecycle test proves the sampled
+  phase remains additive after the shared FLOW floor. `eforge validate-config` reported zero
+  issues across 93 files; repository Ruff lint and formatting checks passed. No generation, blind
+  review, commit, benchmark scenario edit, or generated-artifact edit was performed.

@@ -122,6 +122,23 @@ class SysmonEnvelopeTiming:
     tail_max_us: int
 
 
+@dataclass(frozen=True, slots=True)
+class SshAuthenticationTiming:
+    """Contextual SSH authentication-phase timing parameters."""
+
+    fast_probability: float
+    fast_min_ms: int
+    fast_max_ms: int
+    typical_min_ms: int
+    typical_max_ms: int
+    tail_probability: float
+    tail_min_ms: int
+    tail_max_ms: int
+    cache_miss_probability: float
+    cache_miss_min_ms: int
+    cache_miss_max_ms: int
+
+
 def load_timing_profiles() -> dict[str, Any]:
     """Load timing profiles, merged with project-local overlay."""
     global _CACHED_DATA
@@ -241,6 +258,162 @@ def sample_packet_timing_delta(key: str, *, seed_parts: tuple[Any, ...] = ()) ->
     seed = "packet_timing_delta:" + key + ":" + ":".join(str(part) for part in seed_parts)
     rng = random.Random(_stable_seed(seed))
     return base_delta + timedelta(microseconds=rng.randint(37, 997))
+
+
+def ssh_authentication_timing(auth_method: str) -> SshAuthenticationTiming:
+    """Return bounded data-driven timing for one SSH authentication method."""
+
+    normalized_method = auth_method.strip().lower()
+    fallback = {
+        "publickey": {
+            "fast_probability": 0.22,
+            "fast_ms": (25, 180),
+            "typical_ms": (180, 1250),
+            "tail_probability": 0.12,
+            "tail_ms": (1250, 4800),
+            "cache_miss_probability": 0.18,
+            "cache_miss_ms": (120, 1500),
+        },
+        "password": {
+            "fast_probability": 0.08,
+            "fast_ms": (180, 550),
+            "typical_ms": (550, 3600),
+            "tail_probability": 0.18,
+            "tail_ms": (3600, 9000),
+            "cache_miss_probability": 0.32,
+            "cache_miss_ms": (250, 2800),
+        },
+    }
+    fallback_profile = fallback.get(normalized_method, fallback["password"])
+    data = load_timing_profiles().get("ssh_authentication", {})
+    if not isinstance(data, dict):
+        data = {}
+    profiles = data.get("profiles", {})
+    if not isinstance(profiles, dict):
+        profiles = {}
+    profile = profiles.get(normalized_method, {})
+    if not isinstance(profile, dict):
+        profile = {}
+
+    fast_min, fast_max = _safe_int_range(
+        profile.get("fast_ms"),
+        fallback_min=fallback_profile["fast_ms"][0],
+        fallback_max=fallback_profile["fast_ms"][1],
+        minimum=1,
+        maximum=60_000,
+    )
+    typical_min, typical_max = _safe_int_range(
+        profile.get("typical_ms"),
+        fallback_min=fallback_profile["typical_ms"][0],
+        fallback_max=fallback_profile["typical_ms"][1],
+        minimum=1,
+        maximum=60_000,
+    )
+    tail_min, tail_max = _safe_int_range(
+        profile.get("tail_ms"),
+        fallback_min=fallback_profile["tail_ms"][0],
+        fallback_max=fallback_profile["tail_ms"][1],
+        minimum=1,
+        maximum=60_000,
+    )
+    cache_min, cache_max = _safe_int_range(
+        profile.get("cache_miss_ms"),
+        fallback_min=fallback_profile["cache_miss_ms"][0],
+        fallback_max=fallback_profile["cache_miss_ms"][1],
+        minimum=0,
+        maximum=60_000,
+    )
+    return SshAuthenticationTiming(
+        fast_probability=_safe_float(
+            profile.get("fast_probability"),
+            fallback_profile["fast_probability"],
+            minimum=0.0,
+            maximum=0.75,
+        ),
+        fast_min_ms=fast_min,
+        fast_max_ms=fast_max,
+        typical_min_ms=typical_min,
+        typical_max_ms=typical_max,
+        tail_probability=_safe_float(
+            profile.get("tail_probability"),
+            fallback_profile["tail_probability"],
+            minimum=0.0,
+            maximum=0.5,
+        ),
+        tail_min_ms=tail_min,
+        tail_max_ms=tail_max,
+        cache_miss_probability=_safe_float(
+            profile.get("cache_miss_probability"),
+            fallback_profile["cache_miss_probability"],
+            minimum=0.0,
+            maximum=1.0,
+        ),
+        cache_miss_min_ms=cache_min,
+        cache_miss_max_ms=cache_max,
+    )
+
+
+def sample_ssh_authentication_phase_ms(
+    auth_method: str,
+    *,
+    public_key_type: str = "",
+    route_class: str = "private",
+    seed_parts: tuple[Any, ...] = (),
+) -> int:
+    """Sample one deterministic SSH auth phase with route, cache, key, and host texture."""
+
+    profile = ssh_authentication_timing(auth_method)
+    seed_text = ":".join(str(part) for part in seed_parts)
+    rng = random.Random(_stable_seed(f"ssh_authentication_phase:{auth_method}:{seed_text}"))
+    selector = rng.random()
+    if selector < profile.tail_probability:
+        phase_ms = rng.randint(profile.tail_min_ms, profile.tail_max_ms)
+    elif selector < profile.tail_probability + profile.fast_probability:
+        phase_ms = rng.randint(profile.fast_min_ms, profile.fast_max_ms)
+    else:
+        mode = profile.typical_min_ms + (profile.typical_max_ms - profile.typical_min_ms) * 0.35
+        phase_ms = round(rng.triangular(profile.typical_min_ms, profile.typical_max_ms, mode))
+
+    if rng.random() < profile.cache_miss_probability:
+        phase_ms += rng.randint(profile.cache_miss_min_ms, profile.cache_miss_max_ms)
+
+    data = load_timing_profiles().get("ssh_authentication", {})
+    if not isinstance(data, dict):
+        data = {}
+    route_profiles = data.get("route_rtt_ms", {})
+    if not isinstance(route_profiles, dict):
+        route_profiles = {}
+    route_min, route_max = _safe_int_range(
+        route_profiles.get(route_class),
+        fallback_min=2 if route_class == "private" else 25,
+        fallback_max=55 if route_class == "private" else 320,
+        minimum=0,
+        maximum=10_000,
+    )
+    host_min, host_max = _safe_int_range(
+        data.get("receiver_load_ms"),
+        fallback_min=0,
+        fallback_max=650,
+        minimum=0,
+        maximum=10_000,
+    )
+    phase_ms += rng.randint(route_min, route_max)
+    phase_ms += round(rng.triangular(host_min, host_max, host_min))
+
+    penalties = data.get("public_key_penalty_ms", {})
+    if not isinstance(penalties, dict):
+        penalties = {}
+    key_type = public_key_type.strip().upper()
+    if key_type:
+        penalty_min, penalty_max = _safe_int_range(
+            penalties.get(key_type),
+            fallback_min=0,
+            fallback_max=0,
+            minimum=0,
+            maximum=10_000,
+        )
+        phase_ms += rng.randint(penalty_min, penalty_max)
+    return max(1, phase_ms)
 
 
 def sysmon_envelope_timing(event_id: int) -> SysmonEnvelopeTiming:

@@ -826,6 +826,7 @@ def validate_config(
         "activity/timing_profiles.yaml": {
             "dict_fields": {
                 "relationships",
+                "ssh_authentication",
                 "endpoint_clock",
                 "windows_startup_modules",
                 "windows_event_time",
@@ -1821,6 +1822,124 @@ def validate_config(
                         f'Relationship "{rel_name}" max_ms must be greater than or equal to min_ms',
                     )
                 )
+
+    ssh_authentication = timing_profiles_data.get("ssh_authentication", {})
+    if not isinstance(ssh_authentication, dict):
+        result.issues.append(
+            Issue("ERROR", "timing_profiles.yaml", "ssh_authentication must be a mapping")
+        )
+    else:
+        ssh_profiles = ssh_authentication.get("profiles")
+        if not isinstance(ssh_profiles, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "ssh_authentication.profiles must be a mapping",
+                )
+            )
+            ssh_profiles = {}
+
+        def validate_ssh_range(path: str, value: object) -> None:
+            if not isinstance(value, dict):
+                result.issues.append(
+                    Issue("ERROR", "timing_profiles.yaml", f"{path} must be a mapping")
+                )
+                return
+            minimum = value.get("min")
+            maximum = value.get("max")
+            for bound_name, bound in (("min", minimum), ("max", maximum)):
+                if not isinstance(bound, int) or isinstance(bound, bool) or bound < 0:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f"{path}.{bound_name} must be a non-negative integer",
+                        )
+                    )
+            if (
+                isinstance(minimum, int)
+                and not isinstance(minimum, bool)
+                and isinstance(maximum, int)
+                and not isinstance(maximum, bool)
+                and maximum < minimum
+            ):
+                result.issues.append(
+                    Issue("ERROR", "timing_profiles.yaml", f"{path}.max must be >= min")
+                )
+
+        for method in ("publickey", "password"):
+            profile = ssh_profiles.get(method)
+            profile_path = f"ssh_authentication.profiles.{method}"
+            if not isinstance(profile, dict):
+                result.issues.append(
+                    Issue("ERROR", "timing_profiles.yaml", f"{profile_path} must be a mapping")
+                )
+                continue
+            probabilities: list[float] = []
+            for probability_name in (
+                "fast_probability",
+                "tail_probability",
+                "cache_miss_probability",
+            ):
+                probability = profile.get(probability_name)
+                if (
+                    not isinstance(probability, int | float)
+                    or isinstance(probability, bool)
+                    or not math.isfinite(float(probability))
+                    or not 0.0 <= float(probability) <= 1.0
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f"{profile_path}.{probability_name} must be finite and between 0 and 1",
+                        )
+                    )
+                else:
+                    probabilities.append(float(probability))
+            if len(probabilities) >= 2 and probabilities[0] + probabilities[1] > 1.0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"{profile_path} fast_probability + tail_probability must be <= 1",
+                    )
+                )
+            for range_name in ("fast_ms", "typical_ms", "tail_ms", "cache_miss_ms"):
+                validate_ssh_range(f"{profile_path}.{range_name}", profile.get(range_name))
+
+        route_profiles = ssh_authentication.get("route_rtt_ms")
+        if not isinstance(route_profiles, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "ssh_authentication.route_rtt_ms must be a mapping",
+                )
+            )
+        else:
+            for route_class in ("private", "public"):
+                validate_ssh_range(
+                    f"ssh_authentication.route_rtt_ms.{route_class}",
+                    route_profiles.get(route_class),
+                )
+        validate_ssh_range(
+            "ssh_authentication.receiver_load_ms",
+            ssh_authentication.get("receiver_load_ms"),
+        )
+        key_penalties = ssh_authentication.get("public_key_penalty_ms")
+        if not isinstance(key_penalties, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "ssh_authentication.public_key_penalty_ms must be a mapping",
+                )
+            )
+        else:
+            for key_type, penalty in key_penalties.items():
+                validate_ssh_range(f"ssh_authentication.public_key_penalty_ms.{key_type}", penalty)
 
     startup_module_timing = timing_profiles_data.get("windows_startup_modules", {})
     if not isinstance(startup_module_timing, dict):

@@ -5,6 +5,7 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from statistics import median
 
 import pytest
 
@@ -16,7 +17,9 @@ from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
     network_sensor_observation_timing,
     reset_timing_profiles_cache,
+    sample_ssh_authentication_phase_ms,
     sample_timing_delta,
+    ssh_authentication_timing,
     startup_module_observation_timing,
     sysmon_envelope_timing,
     windows_collision_spacing_config,
@@ -222,6 +225,75 @@ def test_timing_profiles_load_default_relationship():
     assert endpoint_timing.host_offset_max_ms == 1800
     assert endpoint_timing.host_drift_min_ppm == -8
     assert endpoint_timing.host_drift_max_ppm == 8
+
+
+def test_ssh_authentication_profiles_are_typed_broad_and_deterministic():
+    public_key_profile = ssh_authentication_timing("publickey")
+    password_profile = ssh_authentication_timing("password")
+
+    assert public_key_profile.fast_max_ms < public_key_profile.tail_min_ms
+    assert password_profile.typical_max_ms <= password_profile.tail_min_ms
+
+    public_key_samples = [
+        sample_ssh_authentication_phase_ms(
+            "publickey",
+            public_key_type="ED25519",
+            route_class="private",
+            seed_parts=("linux01", "admin", index),
+        )
+        for index in range(500)
+    ]
+    replay = [
+        sample_ssh_authentication_phase_ms(
+            "publickey",
+            public_key_type="ED25519",
+            route_class="private",
+            seed_parts=("linux01", "admin", index),
+        )
+        for index in range(500)
+    ]
+    password_samples = [
+        sample_ssh_authentication_phase_ms(
+            "password",
+            route_class="private",
+            seed_parts=("linux01", "admin", index),
+        )
+        for index in range(500)
+    ]
+
+    assert replay == public_key_samples
+    assert max(public_key_samples) - min(public_key_samples) > 3000
+    assert sum(sample < 500 for sample in public_key_samples) >= 50
+    assert sum(sample > 2000 for sample in public_key_samples) >= 25
+    assert median(password_samples) > median(public_key_samples)
+
+
+def test_ssh_authentication_context_factors_affect_route_and_key_cost():
+    seeds = [("linux01", "deploy", index) for index in range(100)]
+    private_ed25519 = [
+        sample_ssh_authentication_phase_ms(
+            "publickey",
+            public_key_type="ED25519",
+            route_class="private",
+            seed_parts=seed,
+        )
+        for seed in seeds
+    ]
+    public_rsa = [
+        sample_ssh_authentication_phase_ms(
+            "publickey",
+            public_key_type="RSA",
+            route_class="public",
+            seed_parts=seed,
+        )
+        for seed in seeds
+    ]
+
+    assert (
+        sum(public > private for public, private in zip(public_rsa, private_ed25519, strict=True))
+        >= 80
+    )
+    assert median(public_rsa) > median(private_ed25519)
 
 
 def test_timing_profiles_overlay_overrides_relationship(tmp_path, monkeypatch):

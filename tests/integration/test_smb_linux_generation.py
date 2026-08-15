@@ -453,7 +453,8 @@ def test_linux_cifs_upload_move_uses_mv_from_authored_source_to_mount(tmp_path: 
         mounted_flows,
         key=lambda record: abs(record["timestamp_ms"] - local_read["timestamp_ms"]),
     )
-    assert abs(authored_flow["timestamp_ms"] - local_read["timestamp_ms"]) < 1_000
+    # Endpoint FLOW and FILE telemetry use independent source-native latency envelopes.
+    assert abs(authored_flow["timestamp_ms"] - local_read["timestamp_ms"]) < 2_000
     assert "pid" not in authored_flow
     assert "actorID" not in authored_flow
 

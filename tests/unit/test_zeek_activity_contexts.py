@@ -701,6 +701,73 @@ class TestSslContextPopulation:
 
         assert resolved["accepted"] > EcarEmitter._flow_identity_deadline(event)
 
+    def test_ssh_authentication_phase_remains_additive_after_ecar_flow_floor(self):
+        """Contextual auth work must not collapse behind the shared FLOW visibility floor."""
+
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        user = User(username="deploy", full_name="Deploy User", email="deploy@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            auth_method="publickey",
+            public_key_type="ED25519",
+        )
+        event = OccurrenceBuilder(
+            timestamp=base_time + timedelta(milliseconds=600),
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="linux01",
+                ip="10.0.20.10",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux01.example.org",
+            ),
+            network=network_plan(
+                src_ip="10.0.10.50",
+                src_port=51111,
+                dst_ip="10.0.20.10",
+                dst_port=22,
+                protocol="tcp",
+                duration=60.0,
+            ),
+        )
+        executor = MagicMock()
+        executor._clamp_after_visible_linux_process_create.side_effect = (
+            lambda _system, _pid, requested_time, _relationship_key=("source.ecar_dependent_after_process_create"), **_kwargs: (
+                requested_time
+            )
+        )
+        bundle = SshSessionActionBundle(request=request, executor=executor)
+        common = {
+            "event": event,
+            "responder_pid": 4242,
+            "syslog_seed": ("linux01", "10.0.10.50", 51111, 4242, base_time.isoformat()),
+            "conn_delay_ms": 35,
+            "pam_gap_ms": 45,
+            "logind_gap_ms": 420,
+            "transport_open_time": base_time,
+        }
+
+        fast = bundle._resolve_linux_auth_lifecycle(accepted_gap_ms=100, **common)
+        slow = bundle._resolve_linux_auth_lifecycle(accepted_gap_ms=2100, **common)
+
+        assert slow["accepted"] - fast["accepted"] == timedelta(seconds=2)
+        for resolved in (fast, slow):
+            assert resolved["accepted"] > EcarEmitter._flow_identity_deadline(event)
+            assert resolved["connection"] < resolved["accepted"]
+            assert resolved["accepted"] < resolved["pam"] < resolved["logind"]
+
     def test_ssh_connection_syslog_waits_for_ecar_collection_delay(self):
         """The same sshd PID cannot appear in syslog before its eCAR create row."""
         base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -2722,7 +2789,7 @@ class TestSslContextPopulation:
             <= timedelta(seconds=2)
         )
         assert times[1] > EcarEmitter._flow_identity_deadline(transport_event)
-        assert timedelta(milliseconds=450) <= times[1] - times[0] <= timedelta(milliseconds=3501)
+        assert timedelta(milliseconds=450) <= times[1] - times[0] <= timedelta(seconds=16)
         assert timedelta(milliseconds=45) <= times[2] - times[1] <= timedelta(milliseconds=181)
         assert times[2] - times[0] != timedelta(seconds=1)
         assert len({timestamp.microsecond % 1000 for timestamp in times}) == len(times)

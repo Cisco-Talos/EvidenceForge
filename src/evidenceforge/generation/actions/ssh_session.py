@@ -54,6 +54,7 @@ from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
     sample_packet_timing_delta,
+    sample_ssh_authentication_phase_ms,
     sample_timing_delta,
 )
 from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
@@ -916,10 +917,20 @@ class SshSessionActionBundle:
             return None
 
         conn_delay_ms = state.rng.randint(35, 160)
-        if request.auth_method == "publickey":
-            accepted_gap_ms = state.rng.randint(90, 550)
-        else:
-            accepted_gap_ms = state.rng.randint(450, 3500)
+        route_class = "private" if self._source_system() is not None else "public"
+        accepted_gap_ms = sample_ssh_authentication_phase_ms(
+            request.auth_method,
+            public_key_type=request.public_key_type,
+            route_class=route_class,
+            seed_parts=(
+                state.execution_anchor.stable_id if state.execution_anchor is not None else "",
+                request.source_ip,
+                state.source_port,
+                request.target_system.hostname,
+                request.user.username,
+                request.time.isoformat(),
+            ),
+        )
         pam_gap_ms = state.rng.randint(45, 180)
         logind_gap_ms = state.rng.randint(420, 760)
         sshd_pid = self._resolve_responder_pid(state, conn_delay_ms)
@@ -976,10 +987,11 @@ class SshSessionActionBundle:
             ).total_seconds()
             * 1000
         )
-        auth_ready_delay_ms = max(
-            conn_delay_ms + accepted_gap_ms,
+        visibility_floor_ms = max(
+            conn_delay_ms,
             canonical_offset_ms + flow_window.max_ms + observation_delay_ms + 25,
         )
+        auth_ready_delay_ms = visibility_floor_ms + accepted_gap_ms
         graph = TemporalConstraintGraph()
         graph.add_node("transport_open", transport_open_time)
         preferred_connection_time = _ssh_syslog_time(

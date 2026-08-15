@@ -1189,6 +1189,34 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_ssh_authentication_profile(self, monkeypatch):
+        from copy import deepcopy
+
+        from evidenceforge.generation.activity import timing_profiles
+
+        real_loader = timing_profiles.load_timing_profiles
+
+        def load_invalid_timing_profiles():
+            data = deepcopy(real_loader())
+            data["ssh_authentication"]["profiles"]["publickey"]["tail_probability"] = 1.2
+            data["ssh_authentication"]["route_rtt_ms"]["public"] = {
+                "min": 400,
+                "max": 20,
+            }
+            return data
+
+        monkeypatch.setattr(timing_profiles, "load_timing_profiles", load_invalid_timing_profiles)
+
+        result = validate_config()
+
+        messages = [
+            issue.message
+            for issue in result.issues
+            if issue.severity == "ERROR" and issue.file == "timing_profiles.yaml"
+        ]
+        assert any("publickey.tail_probability" in message for message in messages)
+        assert any("route_rtt_ms.public.max must be >= min" in message for message in messages)
+
     def test_validate_config_rejects_invalid_endpoint_clock_range(self, monkeypatch):
         from evidenceforge.generation.activity import timing_profiles
 
