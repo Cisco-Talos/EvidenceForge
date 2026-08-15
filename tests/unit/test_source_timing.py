@@ -414,7 +414,34 @@ def test_machine_logon_follows_visible_kerberos_service_ticket() -> None:
     planner.record_admitted_source_event(flow_event, "windows_event_security")
     planned_login = planner.plan_event(login_event, "windows_event_security")
 
-    assert planned_login.timestamp > planned_ticket.timestamp
+    assert (
+        timedelta(milliseconds=3)
+        <= planned_login.timestamp - planned_ticket.timestamp
+        <= timedelta(milliseconds=135)
+    )
+
+
+def test_machine_logon_ticket_delays_have_population_variation() -> None:
+    """Machine authentication timing should not expose a fixed causal epsilon."""
+    base = _base_time()
+    delays = {
+        SourceTimingPlanner._machine_logon_after_ticket_delay(
+            replace(
+                _remote_auth_timing_events()[1],
+                auth=replace(
+                    _remote_auth_timing_events()[1].auth,
+                    username=f"WIN-TEST-{index:02d}$",
+                    source_port=54000 + index,
+                ),
+            ),
+            base + timedelta(seconds=index),
+        )
+        for index in range(64)
+    }
+
+    assert len(delays) >= 24
+    assert min(delays) >= timedelta(milliseconds=3)
+    assert max(delays) <= timedelta(milliseconds=135)
 
 
 def test_ecar_identity_plan_preserves_parent_create_dependent_terminate_order(

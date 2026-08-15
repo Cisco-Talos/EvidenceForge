@@ -1466,6 +1466,29 @@ or follow-up batch is needed.
   authentication, and doubled Windows path separators. Loop 10 will own the Windows domain-auth
   causal/source-timing family.
 
+- V2 loop 10 family contract — **Windows machine-authentication ticket-to-logon source timing**.
+  The domain-auth action bundle owns one canonical machine-account lifecycle; the source-timing
+  planner must render an admitted matching 4769 before its Type 3 4624 with a deterministic but
+  population-varied, data-configured source-native delay. Exact 1 ms remains possible only as
+  natural tail texture, never as the fallback for most lifecycles. Entry paths include ambient
+  machine-account authentication, LDAP/CIFS service choice, visible or filtered target-service
+  transport, and direct machine-logon compatibility calls. Preserve principal/source/DC matching,
+  4768-before-4769 ordering, transport-before-auth ordering when visible, session/logoff identity,
+  deterministic replay, and bounded source-local observation. The source-timing planner and timing
+  profile own the fix; emitter-local jitter would fragment shared lifecycle truth. Sibling risk is
+  medium-high because moving 4624 can invert transport, privilege, dependent-process, or logoff
+  evidence, so focused tests must cover bounds, ordering, and distribution diversity.
+
+- V2 loop 10 implementation adds the data-configured
+  `windows.machine_logon_after_service_ticket` source-latency relationship (3–135 ms). When a
+  machine logon has an admitted matching 4769, the source-timing planner samples this delay once
+  from lifecycle identity and applies it as a floor alongside any later visible transport anchor.
+  It no longer exposes the generic 1 ms causal epsilon as the population default. Focused tests
+  preserve ticket/transport ordering and require at least 24 distinct delays across 64 lifecycles.
+  All 92 config files validate cleanly, repository-wide Ruff passes, and the definitive full suite
+  passes (`5959 passed, 22 skipped`). Commit, regeneration, hard probing, evaluation, and blind
+  review remain.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed

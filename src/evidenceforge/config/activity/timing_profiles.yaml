@@ -86,6 +86,11 @@ relationships:
     position: after
     min_ms: 8
     max_ms: 140
+  windows.machine_logon_after_service_ticket:
+    class: source_latency
+    position: after
+    min_ms: 3
+    max_ms: 135
   source.session_dependent_after_login:
     class: source_latency
     position: after

@@ -538,7 +538,10 @@ class SourceTimingPlanner:
                     ticket_time = max(nearby)
         if anchor is None:
             if ticket_time is not None:
-                timestamp = max(event.timestamp, ticket_time + _SOURCE_EPSILON)
+                timestamp = max(
+                    event.timestamp,
+                    ticket_time + self._machine_logon_after_ticket_delay(event, ticket_time),
+                )
                 self._ensure_plan(event).finalized_times["windows.remote_authentication"] = (
                     timestamp
                 )
@@ -554,9 +557,31 @@ class SourceTimingPlanner:
             ),
         )
         if ticket_time is not None:
-            timestamp = max(timestamp, ticket_time + _SOURCE_EPSILON)
+            timestamp = max(
+                timestamp,
+                ticket_time + self._machine_logon_after_ticket_delay(event, ticket_time),
+            )
         self._ensure_plan(event).finalized_times["windows.remote_authentication"] = timestamp
         return replace(event, timestamp=timestamp)
+
+    @staticmethod
+    def _machine_logon_after_ticket_delay(
+        event: TimingOccurrence,
+        ticket_time: datetime,
+    ) -> timedelta:
+        """Return one deterministic source-native delay for a machine auth lifecycle."""
+        remote_auth = event.remote_auth
+        auth = event.auth
+        return sample_timing_delta(
+            "windows.machine_logon_after_service_ticket",
+            seed_parts=(
+                remote_auth.stable_id if remote_auth is not None else "",
+                auth.username if auth is not None else "",
+                auth.source_ip if auth is not None else "",
+                auth.source_port if auth is not None else "",
+                ticket_time,
+            ),
+        )
 
     @staticmethod
     def _kerberos_prerequisite_key(
