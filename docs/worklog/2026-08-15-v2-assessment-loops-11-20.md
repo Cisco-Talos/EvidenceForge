@@ -401,3 +401,47 @@
   (mean 72.5), unanimous Synthetic at 82 confidence.
 - The SSH latency band did not recur. The next P0 is one in-window source-client process/transport
   inversion; deterministic first-answer DNS selection is the broadest distribution artifact.
+
+## Loop 19 family contract — SSH source-client process-before-transport ownership
+
+- **Owning abstractions:** `SshSessionActionBundle` owns one resolved source-client process before
+  it delegates TCP/22 to the canonical network-connection contract; the process-execution bundle
+  owns the canonical start and source-native CREATE deadlines for that client and its shell parent.
+- **Invariant:** a modeled Windows or Linux SSH client starts canonically before its transport and
+  every visible source-native CREATE for that client is no later than the source transport
+  observation it can own. The target connection, accepted-authentication, PAM, and session-open
+  lifecycle remains after transport. If source observation latency cannot satisfy attribution,
+  the FLOW drops actor identity rather than moving transport or authentication later.
+- **Entry paths:** baseline organic administration, CI/configuration/backup/SCP traffic, typed
+  storyline SSH and SCP sessions, compatibility Type 10 Linux logons, direct bundle calls, and
+  both Windows OpenSSH and Linux `ssh`/`scp` source processes.
+- **Consumers:** canonical process state, Windows Security/Sysmon/eCAR PROCESS CREATE, Linux eCAR
+  PROCESS CREATE and bash history, endpoint eCAR FLOW actor identity, Zeek transport identity,
+  target sshd/syslog lifecycle, process termination, and session-boundary admission.
+- **Layer rationale:** the inversion is created when generic human-spacing moves a newly created
+  source client beyond the already-owned transport anchor. The SSH action must request a causal
+  process deadline and the process owner must honor it; emitter rewrites would leave canonical
+  process/socket order contradictory and source projections mutually inconsistent.
+- **Sibling risks:** preserve ordinary human-scale spacing outside causal connection ownership,
+  parent-before-child source timing, deterministic replay, unique per-transport SSH clients,
+  boundary-open sessions, FLOW-before-target-login/PAM ordering, actor omission for genuinely late
+  source visibility, session end bounds, and source client termination after transport close.
+
+### Loop 19 implementation handoff
+
+- Confirmed the inversion at the process owner: a causal Windows SSH client was initially placed
+  before TCP open, but the generic repeated-command and bare-interactive-shell spacing passes could
+  move its canonical start beyond the already-fixed transport anchor. Process requests with an
+  explicit source-visibility deadline now bypass only those optional human-spacing passes; normal
+  one-shot commands retain their existing spacing. The same deadline is propagated to a newly
+  materialized Windows CLI shell so parent and child CREATE projections remain ordered.
+- Focused Windows coverage forces a future repeated-`ssh.exe` spacing reservation and proves the
+  source client still starts and is source-visible before TCP/22, followed by target accepted-auth
+  and PAM open. Linux coverage forces a busy foreground shell and proves the equivalent ordering
+  without moving transport. The world-planner regression now requires the safely visible source
+  client to remain the canonical initiating PID while retaining close-before-termination bounds.
+- Verification: 78 focused SSH/source-timing tests passed; 856 broader activity, SSH, timing,
+  storyline-command, process-lifecycle, world-model, and baseline tests passed with 1 skip.
+  `eforge validate-config` reported zero issues across 93 files. Targeted Ruff lint, format, and
+  diff checks passed. The full repository suite passed with 6,015 tests and 22 skips. No scenario,
+  generated corpus, blind artifact, or commit was changed.

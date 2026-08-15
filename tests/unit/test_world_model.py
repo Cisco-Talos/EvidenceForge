@@ -758,9 +758,20 @@ def test_world_planner_bootstraps_ssh_session(
     connection = state_manager.get_connection_by_zeek_uid(result.network_uid)
     assert connection is not None
     assert connection.close_time is not None
-    # A late endpoint client observation must not move the bundle-owned TCP
-    # transport behind authentication. In that case attribution is omitted.
-    assert connection.initiating_pid == -1
+    # The SSH bundle now owns a causally prior source client. It remains safe to
+    # attribute the transport without moving TCP open behind authentication.
+    assert connection.initiating_pid > 0
+    source_client_events = [
+        event
+        for event in process_events
+        if event.src_host is not None
+        and event.src_host.hostname == systems["WKS-01"].hostname
+        and event.process is not None
+        and event.process.pid == connection.initiating_pid
+    ]
+    assert len(source_client_events) == 1
+    assert source_client_events[0].process.image.lower().endswith(("ssh", "ssh.exe"))
+    assert source_client_events[0].process.start_time < connection.start_time
     source_terminate_events = [
         call.args[0]
         for call in mock_emitters["windows_event_security"].emit.call_args_list

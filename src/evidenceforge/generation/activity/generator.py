@@ -7385,6 +7385,7 @@ class ActivityGenerator:
                 child_time=process_time,
                 candidate_pid=parent_pid,
                 child_command_line=command_line,
+                source_visible_by=source_visible_by,
             )
         elif os_category == "linux":
             parent_pid = (
@@ -7425,6 +7426,7 @@ class ActivityGenerator:
         child_time: datetime,
         candidate_pid: int,
         child_command_line: str,
+        source_visible_by: datetime | None = None,
     ) -> int:
         """Return a visible interactive shell for a user-owned Windows CLI process."""
 
@@ -7504,6 +7506,11 @@ class ActivityGenerator:
             suppress_command_file_effect=True,
             allow_existing_browser_reuse=False,
             allow_browser_launch_spacing=False,
+            source_visible_by=(
+                min(source_visible_by, child_time - timedelta(milliseconds=1))
+                if source_visible_by is not None
+                else None
+            ),
         )
         self._record_user_process(system, user, shell_pid, shell_image)
         return shell_pid
@@ -12905,7 +12912,10 @@ class ActivityGenerator:
             )
             time = explicit_parent.start_time + timedelta(milliseconds=offset_ms)
             self.state_manager.set_current_time(time)
-        if not from_storyline:
+        # A caller-supplied source deadline means this process owns an already
+        # anchored causal occurrence (for example an SSH socket). Optional
+        # human-spacing must not move the canonical start beyond that anchor.
+        if not from_storyline and source_visible_by is None:
             spaced_time = self._space_one_shot_cli_launch(
                 system=system,
                 username=process_username,
@@ -13059,14 +13069,15 @@ class ActivityGenerator:
         if repaired_parent is not None and time <= repaired_parent.start_time:
             time = repaired_parent.start_time + timedelta(milliseconds=50)
         if not from_storyline:
-            spaced_time = self._space_interactive_shell_child_launch(
-                system=system,
-                process_name=process_name,
-                parent_pid=parent_pid,
-                time=time,
-            )
-            if spaced_time != time:
-                time = spaced_time
+            if source_visible_by is None:
+                spaced_time = self._space_interactive_shell_child_launch(
+                    system=system,
+                    process_name=process_name,
+                    parent_pid=parent_pid,
+                    time=time,
+                )
+                if spaced_time != time:
+                    time = spaced_time
             self._remember_one_shot_cli_launch(
                 system=system,
                 username=process_username,

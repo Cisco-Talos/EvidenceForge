@@ -6315,8 +6315,9 @@ class TestActivityGenerator:
             source_user.username: source_user,
             remote_user.username: remote_user,
         }
+        mock_emitters["syslog"] = Mock()
         state_manager.set_current_time(timestamp - timedelta(minutes=10))
-        state_manager.create_session(
+        source_logon_id = state_manager.create_session(
             username=source_user.username,
             system=workstation.hostname,
             logon_type=2,
@@ -6324,6 +6325,9 @@ class TestActivityGenerator:
             session_kind="interactive",
         )
         state_manager.set_current_time(timestamp)
+        activity_gen._last_one_shot_cli_launch_by_exe[
+            (workstation.hostname, source_user.username, source_logon_id, "ssh.exe")
+        ] = timestamp + timedelta(seconds=30)
 
         activity_gen.generate_ssh_session(
             user=remote_user,
@@ -6367,7 +6371,122 @@ class TestActivityGenerator:
             ssh_proc.pid,
         )
         assert source_create_time is not None
+        assert ssh_proc.start_time < connection_event.network.started_at
         assert source_create_time <= connection_event.network.started_at
+
+        ssh_syslog_events = [
+            call.args[0]
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call.args[0].event_type == "syslog"
+            and call.args[0].syslog is not None
+            and call.args[0].syslog.app_name == "sshd"
+        ]
+        accepted = next(
+            event for event in ssh_syslog_events if event.syslog.message.startswith("Accepted ")
+        )
+        pam_open = next(
+            event
+            for event in ssh_syslog_events
+            if "pam_unix(sshd:session): session opened" in event.syslog.message
+        )
+        assert connection_event.network.started_at < accepted.timestamp < pam_open.timestamp
+
+    def test_ssh_session_linux_client_create_precedes_transport_when_shell_is_busy(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """A busy source shell must not move its SSH client behind transport or target auth."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        user = User(
+            username="marcus.chen",
+            full_name="Marcus Chen",
+            email="marcus.chen@example.local",
+        )
+        workstation = System(
+            hostname="LT-MCHEN-01",
+            ip="10.10.1.33",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=user.username,
+        )
+        target = System(
+            hostname="DB-PROD-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["database_server"],
+            services=["ssh"],
+        )
+        activity_gen._ip_to_system = {workstation.ip: workstation, target.ip: target}
+        activity_gen._all_system_ips = [workstation.ip, target.ip]
+        activity_gen._users_by_username = {user.username: user}
+        mock_emitters["syslog"] = Mock()
+        logon_time = timestamp - timedelta(minutes=10)
+        state_manager.set_current_time(logon_time)
+        logon_id = state_manager.create_session(
+            username=user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        shell_pid = activity_gen.ensure_linux_session_shell(
+            user=user,
+            target_system=workstation,
+            logon_id=logon_id,
+            logon_time=logon_time,
+            activity_time=timestamp - timedelta(seconds=30),
+        )
+        assert shell_pid is not None
+        activity_gen._foreground_shell_next_time[
+            (workstation.hostname, user.username, logon_id, shell_pid)
+        ] = timestamp + timedelta(seconds=30)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=timestamp,
+            source_ip=workstation.ip,
+            source_system=workstation,
+            duration=30.0,
+        )
+
+        ssh_processes = [
+            proc
+            for proc in state_manager.get_processes_on_system(workstation.hostname)
+            if proc.image == "/usr/bin/ssh"
+        ]
+        assert ssh_processes
+        ssh_proc = ssh_processes[-1]
+        connection_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 22
+        )
+        source_create_time = activity_gen.process_source_create_time(
+            workstation.hostname,
+            ssh_proc.pid,
+        )
+        assert source_create_time is not None
+        assert ssh_proc.start_time < connection_event.network.started_at
+        assert source_create_time <= connection_event.network.started_at
+
+        ssh_syslog_events = [
+            call.args[0]
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call.args[0].event_type == "syslog"
+            and call.args[0].syslog is not None
+            and call.args[0].syslog.app_name == "sshd"
+        ]
+        accepted = next(
+            event for event in ssh_syslog_events if event.syslog.message.startswith("Accepted ")
+        )
+        pam_open = next(
+            event
+            for event in ssh_syslog_events
+            if "pam_unix(sshd:session): session opened" in event.syslog.message
+        )
+        assert connection_event.network.started_at < accepted.timestamp < pam_open.timestamp
 
     def test_linux_smb_browse_owner_is_scoped_to_command_target(
         self, activity_gen, test_user, state_manager
