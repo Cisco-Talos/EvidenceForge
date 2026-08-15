@@ -1486,8 +1486,21 @@ or follow-up batch is needed.
   It no longer exposes the generic 1 ms causal epsilon as the population default. Focused tests
   preserve ticket/transport ordering and require at least 24 distinct delays across 64 lifecycles.
   All 92 config files validate cleanly, repository-wide Ruff passes, and the definitive full suite
-  passes (`5959 passed, 22 skipped`). Commit, regeneration, hard probing, evaluation, and blind
-  review remain.
+  passes (`5959 passed, 22 skipped`). Commit `7e5914a6` regenerated 90,553 records. The rendered
+  hard probe found zero exact-1-ms pairs, 112 distinct delays, and a 3–135 ms range across 229
+  matched machine lifecycles. Deterministic evaluation passed at `97.18870689794775`; the frozen
+  86-file corpus hash is `b849b331cefb5c6ffb8a0134d542b43f2bc9b5320c87c65e0c0534739d1af87c`.
+
+- V2 loop 10 blind review initially scored synthetic-confidence at TH 76, Detection 78, Network
+  81, and Host 25. Verdict disagreement and the 56-point spread triggered final neutral
+  deliberation. Revised scores were 87, 92, 91, and 83, averaging 88.25 with a unanimous Synthetic
+  stance. The fixed Kerberos point mass did not recur. Three narrower positive contradictions now
+  lead the residual backlog: 8/8 visible `winlogon.exe` terminations combine SYSTEM SID/name with a
+  human LUID; three local-session Linux browser creates use the root master `sshd -D` as direct
+  actor; and 12 Zeek TCP histories require more observed origin packets than `orig_pkts` reports.
+  Universal one-request inspected proxy tunnels remain a pervasive statistical signature, not a
+  hard contradiction. The ten-loop dashboard is stored at
+  `scenarios/iteration-test/blind-test/V2-ASSESSMENT-DASHBOARD.md`.
 
 ## Recent Completed Work Previously Kept in TODO
 
