@@ -48,6 +48,7 @@ from evidenceforge.generation.activity.timing_profiles import (
     sample_timing_delta,
     windows_collision_spacing_config,
 )
+from evidenceforge.generation.activity.windows_auth_realism import min_unlock_gap_seconds
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.generation.emitters.syslog_family import (
@@ -352,6 +353,36 @@ def _shift_windows_lock_lifecycle_after_rendered_clock(
     shift = shift_by_session.pop(key, timedelta(0))
     if shift:
         event["TimeCreated"] = original + shift
+
+
+def _enforce_windows_lock_dwell_after_normalization(
+    event: dict[str, Any],
+    rendered_lock_by_session: dict[tuple[str, str, str], datetime],
+) -> None:
+    """Preserve the minimum visible locked interval at the Security boundary."""
+    event_id = event.get("EventID")
+    if event_id not in {4800, 4801}:
+        return
+    ts = event.get("TimeCreated")
+    if not isinstance(ts, datetime):
+        return
+    computer = str(event.get("Computer", ""))
+    logon_id = str(event.get("TargetLogonId") or "")
+    session_id = str(event.get("SessionId") or "")
+    if not computer or not logon_id:
+        return
+    key = (computer, logon_id, session_id)
+    normalized = ensure_utc(ts)
+    if event_id == 4800:
+        rendered_lock_by_session[key] = normalized
+        return
+
+    lock_time = rendered_lock_by_session.pop(key, None)
+    if lock_time is None:
+        return
+    minimum_unlock = lock_time + timedelta(seconds=min_unlock_gap_seconds())
+    if normalized < minimum_unlock:
+        event["TimeCreated"] = minimum_unlock
 
 
 def _subject_domain(username: str, netbios_domain: str) -> str:
@@ -1809,6 +1840,7 @@ class WindowsEventEmitter(LogEmitter):
         self._last_record_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
         self._lock_lifecycle_shift_by_session: dict[tuple[str, str, str], timedelta] = {}
+        self._rendered_lock_time_by_session: dict[tuple[str, str, str], datetime] = {}
         self._current_storyline_origin: bool = False
         self._emission_context = local()
         self._spool_dir: Path | None = None
@@ -2580,6 +2612,14 @@ class WindowsEventEmitter(LogEmitter):
                 sequence,
                 "windows_time_created",
             )
+            _enforce_windows_lock_dwell_after_normalization(
+                event,
+                self._rendered_lock_time_by_session,
+            )
+            normalized_event_time = event.get("TimeCreated")
+            event_computer = str(event.get("Computer", ""))
+            if isinstance(normalized_event_time, datetime) and event_computer:
+                self._last_time_created_by_computer[event_computer] = normalized_event_time
             computer = sanitize_path_component(event.get("Computer", ""))
             counter_key = computer.split(".")[0] if "." in computer else computer
             sequence_model = self._record_id_sequences.setdefault(

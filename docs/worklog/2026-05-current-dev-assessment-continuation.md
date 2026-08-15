@@ -1446,8 +1446,14 @@ or follow-up batch is needed.
   4800/4801 lifecycle as a unit, preserving its canonical human-scale dwell interval instead of
   independently compressing both records. The new regression and focused state-machine tests pass,
   as do all 92 config files, repository-wide Ruff, and the definitive full suite (`5957 passed, 22
-  skipped`). Regeneration, evaluation, rendered probing, and blind review remain the next Loop 9
-  steps.
+  skipped`). Regeneration then passed deterministic evaluation at `97.18870689794775` over 90,553
+  records, but the hard probe correctly rejected it because the Sophia pair still arrived at the
+  Security boundary pre-compressed to 1 ms. The renderer now also enforces the configured minimum
+  visible dwell for each matching session after timestamp normalization, retaining the source clock
+  and state-machine ownership while preventing an impossible rendered transition. Five focused
+  tests and the definitive full suite pass (`5958 passed, 22 skipped`); all 92 config files and
+  repository-wide Ruff remain clean. A final regeneration, hard probe, evaluation, and blind review
+  remain the next Loop 9 steps.
 
 ## Recent Completed Work Previously Kept in TODO
 

@@ -40,10 +40,12 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.windows_auth_realism import min_unlock_gap_seconds
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.emitters.host_base import sanitize_host_routing_key
 from evidenceforge.generation.emitters.windows import (
     _auth_subject_domain,
+    _enforce_windows_lock_dwell_after_normalization,
     _normalize_windows_time_created,
     _shift_windows_lock_lifecycle_after_rendered_clock,
     _special_privilege_fallback,
@@ -1790,6 +1792,32 @@ class TestWindowsEventEmitter:
         assert lock["TimeCreated"] == rendered_clock + timedelta(milliseconds=1)
         assert unlock["TimeCreated"] - lock["TimeCreated"] == timedelta(minutes=12)
         assert not shift_by_session
+
+    def test_normalized_lock_lifecycle_enforces_minimum_visible_dwell(self):
+        """Pre-compressed source timestamps should not render a millisecond lock cycle."""
+        computer = "WIN-TEST-01.corp.local"
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, 1000, tzinfo=UTC)
+        lock = {
+            "EventID": 4800,
+            "TimeCreated": lock_time,
+            "Computer": computer,
+            "TargetLogonId": "0x4f2a1b",
+            "SessionId": 2,
+        }
+        unlock = {
+            "EventID": 4801,
+            "TimeCreated": lock_time + timedelta(milliseconds=1),
+            "Computer": computer,
+            "TargetLogonId": "0x4f2a1b",
+            "SessionId": 2,
+        }
+        rendered_locks: dict[tuple[str, str, str], datetime] = {}
+
+        _enforce_windows_lock_dwell_after_normalization(lock, rendered_locks)
+        _enforce_windows_lock_dwell_after_normalization(unlock, rendered_locks)
+
+        assert unlock["TimeCreated"] == lock_time + timedelta(seconds=min_unlock_gap_seconds())
+        assert not rendered_locks
 
     def test_kerberos_tgt_shifted_before_visible_service_ticket(self, format_def, temp_output):
         """Rendered DC Security 4768 rows should visibly precede dependent 4769 rows."""
