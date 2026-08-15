@@ -1759,6 +1759,47 @@ class TestActivityGenerator:
         assert sessions[0].start_time < scenario_start
         assert "logon" not in emitted_types
 
+    def test_linux_sudo_reuses_eligible_live_session_across_ttys(self, state_manager, test_user):
+        """Sudo terminal changes should not create duplicate local login sessions."""
+        ecar_emitter = Mock()
+        ecar_emitter.can_handle.return_value = True
+        emitters = {"ecar": ecar_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        activity_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux_server = System(
+            hostname="APP-LINUX-01",
+            ip="10.0.0.42",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux_server.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=activity_time - timedelta(minutes=10),
+            session_kind="interactive",
+        )
+
+        sudo_pid, _child_pid, _, _ = activity_gen.generate_linux_sudo_processes(
+            system=linux_server,
+            sudo_time=activity_time,
+            child_time=activity_time + timedelta(milliseconds=200),
+            sudo_user=test_user.username,
+            tty="pts/4",
+            command="/usr/bin/id",
+            reserve_until=activity_time + timedelta(seconds=2),
+            lifecycle_group_id="sudo-live-session-test",
+        )
+
+        sessions = state_manager.get_sessions_for_user(test_user.username)
+        assert sudo_pid > 0
+        assert [session.logon_id for session in sessions] == [logon_id]
+        assert not any(
+            call.args[0].event_type == "logon" for call in ecar_emitter.emit.call_args_list
+        )
+
     def test_linux_local_logon_with_stale_ssh_kind_gets_logind_companion(
         self, state_manager, test_user
     ):

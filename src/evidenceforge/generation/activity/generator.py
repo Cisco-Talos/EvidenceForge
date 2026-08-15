@@ -25939,6 +25939,20 @@ class ActivityGenerator:
             ):
                 session = candidate
         if session is None:
+            compatible_sessions = [
+                candidate
+                for candidate in self.state_manager.get_sessions_for_user_at(
+                    user.username,
+                    effective_sudo_time,
+                )
+                if candidate.system == system.hostname
+                and candidate.session_kind in {"interactive", "ssh"}
+                and _session_active_for_activity(candidate, effective_sudo_time)
+            ]
+            if compatible_sessions:
+                session = max(compatible_sessions, key=lambda candidate: candidate.start_time)
+                tty_sessions[tty_key] = session.logon_id
+        if session is None:
             session_seed = _stable_seed(
                 "sudo-session-bootstrap:"
                 f"{system.hostname}:{sudo_user}:{assigned_tty}:{sudo_time.date()}"

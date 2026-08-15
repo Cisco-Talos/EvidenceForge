@@ -1365,6 +1365,42 @@ or follow-up batch is needed.
   offsets must remain stable enough for repeated identical call sites; LSASS/access-mask semantics,
   source/target identity, and event ordering must not change.
 
+- V2 loop 7 fixed process-access call-trace host partitioning (`da5a8c48`). Focused tests,
+  config validation, Ruff, and the full suite passed (`5952 passed, 22 skipped`); evaluation passed
+  unchanged at 96.69428408443474 over 90,250 records. The probe found 170 traces across 587
+  PROCESS/OPEN rows, with 72 traces and 383 rows shared across hosts while each host retained 18-45
+  traces. The clean 90-file corpus retained SHA-256
+  `7dea1e677cc6b4a1f9c5fcae5316e526f19aea99ebad903f28908470eae763bf`. Deliberation revised the
+  panel to 40/35/22/65, average 40.50, guarded Real, and downgraded the sole proposed hard
+  contradiction for lack of durable incompatible ownership. The call-trace partition finding did
+  not recur. Next target: Linux local-interactive account eligibility and cadence.
+
+- V2 loop 8 family contract — **Linux local-interactive account eligibility and placement**.
+  Owning abstraction: world-model persona/account eligibility plus the baseline local-session
+  scheduler. Invariant: workstation GDM sessions normally belong to the assigned/named human user;
+  server console sessions use a bounded role-compatible administrative pool; service identities
+  (`svc_*`, backup, deploy, application principals) do not receive successful local graphical
+  sessions unless explicitly authored; and repeated local sessions observe per-host/user cooldowns.
+  Entry paths: persona login, Linux workstation baseline, server console noise, root/admin
+  maintenance, carried-in pre-window sessions, explicit authored logon, SSH/sudo/service activity,
+  and hosts without assigned users. Consumers: WorldModel placement, baseline planner, local-login
+  bundle, PAM/GDM/login syslog, logind, eCAR USER_SESSION/PROCESS, bash history, and process trees.
+  Layer rationale: source-native PAM/eCAR rows correctly render the selected identity, so changing
+  renderers would only hide invalid account placement. Sibling risk: preserve assigned-user
+  activity volume, rare legitimate shared-console/admin use, server-local maintenance, SSH/sudo
+  account diversity, and bounded-window lifecycle behavior.
+
+- V2 loop 8 implementation moved ambient sudo identity selection into the baseline/world-model
+  boundary and compatible-session reuse into the Linux sudo process path. Workstation commands
+  now use the modeled assigned owner; servers prefer a live role-compatible modeled administrator
+  and otherwise select one stable modeled administrator per host/day. Sudo activity on another TTY
+  reuses a live interactive/SSH session for that user instead of creating another local login.
+  Template rendering still consumes its original data-driven choices before canonical eligibility
+  is applied, preserving deterministic sibling output. Focused Linux sudo/baseline and Linux SMB
+  integration tests passed, the definitive full suite passed (`5954 passed, 22 skipped`), all 92
+  config files validated cleanly, and repository-wide Ruff checks passed. Regeneration, evaluation,
+  rendered probing, and blind review remain the next Loop 8 steps.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed

@@ -2151,6 +2151,60 @@ class BaselineMixin:
         host_counts[(system.hostname, command)] = host_counts.get((system.hostname, command), 0) + 1
         return command
 
+    def _linux_baseline_sudo_user(
+        self,
+        system: System,
+        time: datetime,
+    ) -> str:
+        """Return a host-eligible interactive identity for ambient sudo activity.
+
+        Sudo command templates describe terminal activity, so their invoking identity must
+        already be eligible for an interactive session on the host. Workstations use their
+        assigned owner. Servers prefer a modeled administrator who already has a live session,
+        then fall back to one stable administrator for the host/day rather than cycling through
+        service-account names from the source-local message vocabulary.
+        """
+        enabled_users = {
+            user.username: user
+            for user in self.scenario.environment.users
+            if user.enabled and user.persona
+        }
+        assigned_user = (system.assigned_user or "").strip()
+        if system.type == "workstation" and assigned_user in enabled_users:
+            return assigned_user
+
+        live_admins: list[str] = []
+        for session in self.state_manager.get_sessions_on_system_at(system.hostname, time):
+            user = enabled_users.get(session.username)
+            if user is None or session.session_kind not in {"interactive", "ssh"}:
+                continue
+            if hasattr(self, "world_model") and not self.world_model.can_user_ssh_admin(
+                user, system
+            ):
+                continue
+            live_admins.append(user.username)
+        if live_admins:
+            candidates = sorted(set(live_admins))
+            index = _stable_seed(
+                f"linux_sudo_live_actor:{system.hostname}:{ensure_utc(time).isoformat()}"
+            ) % len(candidates)
+            return candidates[index]
+
+        if hasattr(self, "world_model"):
+            admin_users = self.world_model.get_ssh_admin_users(system)
+        else:
+            admin_users = [
+                user
+                for user in enabled_users.values()
+                if (user.persona or "").lower() in {"sysadmin", "help_desk"}
+            ]
+        if admin_users:
+            index = _stable_seed(
+                f"linux_sudo_actor:{system.hostname}:{ensure_utc(time).date().isoformat()}"
+            ) % len(admin_users)
+            return admin_users[index].username
+        return "root"
+
     def _journald_housekeeping_schedule(
         self,
         system: System,
@@ -9890,6 +9944,10 @@ class BaselineMixin:
                             system_services=system.services,
                             values=values,
                         )
+                        configured_user = msg.split(" : ", 1)[0].strip()
+                        eligible_user = self._linux_baseline_sudo_user(system, ts)
+                        if configured_user and eligible_user != configured_user:
+                            msg = msg.replace(configured_user, eligible_user, 1)
                     elif app == "dbus-daemon":
                         msg = render_extra_syslog_message(
                             entry,

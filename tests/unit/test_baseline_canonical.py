@@ -629,6 +629,35 @@ def test_linux_sudo_command_runtime_varies_by_command_family():
     assert quick_runtime > timedelta(milliseconds=300)
 
 
+def test_linux_baseline_sudo_user_uses_workstation_owner():
+    """Ambient workstation sudo must not bootstrap a configured service identity."""
+    owner = User(
+        username="lina.nguyen",
+        full_name="Lina Nguyen",
+        email="lina@example.com",
+        persona="developer",
+    )
+    system = System(
+        hostname="WS-LNGUYEN-01",
+        ip="10.0.0.21",
+        os="Ubuntu 22.04",
+        type="workstation",
+        assigned_user=owner.username,
+    )
+    engine = SimpleNamespace(
+        scenario=SimpleNamespace(environment=SimpleNamespace(users=[owner])),
+        state_manager=Mock(),
+    )
+    engine._linux_baseline_sudo_user = BaselineMixin._linux_baseline_sudo_user.__get__(engine)
+
+    selected = engine._linux_baseline_sudo_user(
+        system,
+        datetime(2024, 3, 18, 12, tzinfo=UTC),
+    )
+
+    assert selected == owner.username
+
+
 def test_linux_transient_syslog_pid_uses_host_pid_allocator():
     """Short-lived PAM/sudo syslog records should use one invocation PID per call."""
     state_manager = Mock()
