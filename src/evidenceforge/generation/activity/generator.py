@@ -9047,6 +9047,16 @@ class ActivityGenerator:
         running = self.state_manager.get_process(source_system.hostname, pid)
         if running is None:
             return None
+        session_end_plan = self.state_manager.process_session_end_plan(
+            source_system.hostname,
+            pid,
+        )
+        if (
+            session_end_plan is not None
+            and session_end_plan.is_authoritative
+            and ensure_utc(time) >= ensure_utc(session_end_plan.canonical_end)
+        ):
+            return None
         candidate_image = running.image or process_image
         if not candidate_image:
             return None

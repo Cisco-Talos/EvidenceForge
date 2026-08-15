@@ -19,6 +19,7 @@ from evidenceforge.events.contexts import (
     ProxyContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.activity.http_multipart import build_http_multipart_context
@@ -1144,6 +1145,134 @@ class TestExplicitProxyVisibility:
         )
         assert client_event.process is not None
         assert client_event.process.start_time < client_event.timestamp
+
+    def test_browser_proxy_rejects_caller_after_authoritative_session_end(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        _user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        explorer = generator.state_manager.get_process(workstation.hostname, explorer_pid)
+        assert explorer is not None
+        request_time = datetime(2024, 1, 15, 10, 6, 0, tzinfo=UTC)
+        generator.state_manager.plan_session_end(
+            explorer.logon_id,
+            SessionEndPlan(
+                canonical_end=request_time - timedelta(minutes=1),
+                authority="explicit_storyline",
+                storyline_event_id="evt-browser-logoff",
+            ),
+        )
+        proxy = generator._ip_to_system["10.0.3.10"]
+
+        caller_image = generator._caller_explicit_proxy_process_image(
+            source_system=workstation,
+            pid=explorer_pid,
+            process_image=explorer.image,
+            time=request_time,
+            proxy_context=ProxyContext(
+                client_ip=workstation.ip,
+                method="GET",
+                url="https://example.com/",
+                host="example.com",
+                status_code=200,
+                user_agent="Mozilla/5.0 Firefox/121.0",
+                proxy_fqdn="PROXY-01.example.org",
+            ),
+            proxy_sys=proxy,
+            dst_port=443,
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/",
+                user_agent="Mozilla/5.0 Firefox/121.0",
+            ),
+        )
+
+        assert caller_image is None
+
+    def test_proxy_drops_actor_when_source_visibility_would_cross_session_end(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        explorer = generator.state_manager.get_process(workstation.hostname, explorer_pid)
+        assert explorer is not None
+        browser_image = r"C:\Program Files\Mozilla Firefox\firefox.exe"
+        browser_pid = generator.state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=explorer_pid,
+            image=browser_image,
+            command_line=f'"{browser_image}" -osint -url https://example.com/',
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=explorer.logon_id,
+        )
+        request_time = datetime(2024, 1, 15, 10, 4, 0, tzinfo=UTC)
+        session_end = request_time + timedelta(minutes=1)
+        generator.state_manager.plan_session_end(
+            explorer.logon_id,
+            SessionEndPlan(
+                canonical_end=session_end,
+                authority="explicit_storyline",
+                storyline_event_id="evt-browser-logoff",
+            ),
+        )
+        generator._clamp_after_visible_process_create = Mock(
+            return_value=session_end + timedelta(seconds=5)
+        )
+
+        generator.generate_connection(
+            src_ip=workstation.ip,
+            dst_ip="93.184.216.34",
+            time=request_time,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=browser_pid,
+            source_system=workstation,
+            hostname="example.com",
+            conn_state="SF",
+            process_image=browser_image,
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/",
+                user_agent="Mozilla/5.0 Firefox/121.0",
+                response_body_len=4000,
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == workstation.ip
+            and call.args[0].network.dst_ip == "10.0.3.10"
+        )
+        assert client_event.process is None
+        assert client_event.network.initiating_pid == -1
 
     def test_proxy_upstream_follows_planned_request_when_client_process_is_source_delayed(
         self,

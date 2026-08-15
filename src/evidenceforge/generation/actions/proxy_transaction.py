@@ -426,6 +426,9 @@ class ProxyTransactionActionBundle:
                     dst_ip = resolve_domain_ip(proxy_context.host, src_host=proxy_sys.hostname)
 
         client_pid, client_process_image = self._resolve_client_process(proxy_context, proxy_sys)
+        suppress_client_pid_inference = request.suppress_source_pid_inference or (
+            request.pid > 0 and client_pid <= 0
+        )
 
         if src_port is None:
             src_port = executor._allocate_ephemeral_port(
@@ -439,12 +442,26 @@ class ProxyTransactionActionBundle:
 
         client_time = request.time
         if client_pid > 0 and request.source_system is not None:
-            client_time = executor._clamp_after_visible_process_create(
+            process_visible_time = executor._clamp_after_visible_process_create(
                 request.source_system,
                 client_pid,
                 client_time,
                 "source.windows_wfp_connection",
             )
+            session_end_plan = executor.state_manager.process_session_end_plan(
+                request.source_system.hostname,
+                client_pid,
+            )
+            if (
+                session_end_plan is not None
+                and session_end_plan.is_authoritative
+                and process_visible_time >= session_end_plan.canonical_end
+            ):
+                client_pid = -1
+                client_process_image = None
+                suppress_client_pid_inference = True
+            else:
+                client_time = process_visible_time
         from evidenceforge.generation.actions.proxy_phase_planner import ProxyPhasePlanner
 
         phase_plan = ProxyPhasePlanner().plan(request, proxy_context, client_time)
@@ -560,7 +577,7 @@ class ProxyTransactionActionBundle:
             proxy_bypass=True,
             preserve_http_outcome=True,
             process_image=client_process_image,
-            suppress_source_pid_inference=request.suppress_source_pid_inference,
+            suppress_source_pid_inference=suppress_client_pid_inference,
             parent_action_group_id=self.anchor.stable_id,
             preserve_start_time=True,
         )
