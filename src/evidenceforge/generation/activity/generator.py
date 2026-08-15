@@ -10632,7 +10632,7 @@ class ActivityGenerator:
         pam_actor = "LOGIN(uid=0)" if pam_service == "login" else "gdm(uid=0)"
         pam_time = logind_time - timedelta(milliseconds=rng.randint(3000, 8000))
         if pam_service == "login":
-            login_start_time = pam_time - timedelta(milliseconds=rng.randint(250, 900))
+            login_start_time = pam_time - timedelta(milliseconds=rng.randint(2500, 4500))
             root_parent_pid = self._linux_local_login_parent_pid(
                 system,
                 login_start_time,

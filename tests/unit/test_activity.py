@@ -1703,6 +1703,7 @@ class TestActivityGenerator:
         assert process_events[0].process.username == "root"
         assert process_events[0].process.logon_id == "0x3e7"
         assert process_events[0].process.parent_pid == agetty_pid
+        assert pam_event.timestamp - process_events[0].timestamp >= timedelta(milliseconds=2500)
         source_create_time = activity_gen.process_source_create_time(
             linux_server.hostname,
             process_events[0].process.pid,
