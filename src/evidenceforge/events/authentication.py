@@ -11,6 +11,23 @@ from typing import Literal
 
 from evidenceforge.events.network import NetworkTuple
 
+WINDOWS_DESKTOP_LOGON_TYPES = frozenset({2, 10, 11})
+WINDOWS_WORKSTATION_LOGON_TYPES = frozenset({2, 11})
+WINDOWS_LOCAL_SOURCE_LOGON_TYPES = frozenset({2, 4, 5, 7, 9, 11})
+
+
+def windows_logon_can_own_desktop(logon_type: int) -> bool:
+    """Return whether a Windows logon type creates a terminal desktop."""
+
+    return logon_type in WINDOWS_DESKTOP_LOGON_TYPES
+
+
+def windows_logon_has_local_source(logon_type: int) -> bool:
+    """Return whether a Windows logon has no remote source endpoint."""
+
+    return logon_type in WINDOWS_LOCAL_SOURCE_LOGON_TYPES
+
+
 RemoteAuthenticationOutcome = Literal["success", "failure"]
 RemoteAuthenticationTransportRole = Literal[
     "target_service",

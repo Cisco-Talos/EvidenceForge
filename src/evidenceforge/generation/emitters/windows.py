@@ -814,6 +814,8 @@ class WindowsEventEmitter(LogEmitter):
             "LmPackageName": auth.lm_package,
             "KeyLength": 128 if auth.lm_package == "NTLM V2" else 0,
             "LogonGuid": auth.logon_guid,
+            "TargetOutboundUserName": auth.outbound_username or "-",
+            "TargetOutboundDomainName": auth.outbound_domain or "-",
             "VirtualAccount": "%%1843",
             "ElevatedToken": "%%1842" if auth.elevated else "%%1843",
         }
@@ -845,7 +847,7 @@ class WindowsEventEmitter(LogEmitter):
         auth: AuthContext,
     ) -> tuple[int, str]:
         """Return EventData ProcessId/ProcessName for source-native 4624 semantics."""
-        if auth.logon_type in {2, 7, 10, 11} and auth.process_pid > 0:
+        if auth.logon_type in {2, 7, 9, 10, 11} and auth.process_pid > 0:
             return (
                 auth.process_pid,
                 auth.process_name or r"C:\Windows\System32\winlogon.exe",

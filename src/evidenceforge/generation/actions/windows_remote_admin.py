@@ -182,6 +182,18 @@ class WindowsRemoteAdminExecutor(Protocol):
         """Generate canonical process-termination evidence."""
         ...
 
+    def generate_logoff(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+        logon_type: int = 2,
+        **kwargs: Any,
+    ) -> None:
+        """Generate canonical session-close evidence."""
+        ...
+
     def _clamp_after_visible_process_create(
         self,
         system: System,
@@ -208,6 +220,20 @@ class WindowsRemoteAdminExecutor(Protocol):
         source_system: System,
     ) -> str:
         """Return source-native 4648 target domain."""
+        ...
+
+    def _emit_new_credentials_logon(
+        self,
+        *,
+        user: User,
+        system: System,
+        time: datetime,
+        caller_logon_id: str,
+        outbound_username: str,
+        outbound_domain: str,
+        lifecycle_group_id: str,
+    ) -> str:
+        """Emit the Type 9 token clone owned by runas /netonly."""
         ...
 
     def _emit_remote_service_control_network_evidence(
@@ -291,6 +317,11 @@ class ExplicitCredentialUseActionBundle:
                 event_time,
                 "source.windows_explicit_credentials_after_process_create",
             )
+        target_domain = self._executor._explicit_credentials_target_domain(
+            self._request.target_username,
+            self._request.target_server,
+            self._request.system,
+        )
         network_source_ip = self._executor._explicit_credentials_source_ip(
             self._request.system,
             self._request.target_server,
@@ -310,11 +341,7 @@ class ExplicitCredentialUseActionBundle:
             auth=AuthContext(
                 username=self._request.target_username,
                 user_sid=self._executor._get_sid(self._request.target_username),
-                target_domain=self._executor._explicit_credentials_target_domain(
-                    self._request.target_username,
-                    self._request.target_server,
-                    self._request.system,
-                ),
+                target_domain=target_domain,
                 subject_sid=subject["sid"],
                 subject_username=subject["username"],
                 subject_domain=subject["domain"],
@@ -329,16 +356,45 @@ class ExplicitCredentialUseActionBundle:
             ),
         )
         self._executor.dispatcher.dispatch_builder(event)
+        running_process = self._executor.state_manager.get_process(
+            self._request.system.hostname,
+            process_pid,
+        )
+        is_runas_netonly = (
+            ntpath.basename(self._request.process_name).casefold() == "runas.exe"
+            and running_process is not None
+            and "/netonly" in running_process.command_line.casefold()
+        )
+        new_credentials_logon_id = ""
+        if is_runas_netonly:
+            new_credentials_logon_id = self._executor._emit_new_credentials_logon(
+                user=subject_user,
+                system=self._request.system,
+                time=event_time + timedelta(milliseconds=1),
+                caller_logon_id=subject_logon_id,
+                outbound_username=self._request.target_username,
+                outbound_domain=target_domain,
+                lifecycle_group_id=self._request.stable_id,
+            )
         if materialized_caller:
             lifetime_ms = 1800 + (_stable_seed(f"{self._request.stable_id}:caller_lifetime") % 5201)
+            termination_time = event_time + timedelta(milliseconds=lifetime_ms)
             self._executor.generate_process_termination(
                 subject_user,
                 self._request.system,
-                event_time + timedelta(milliseconds=lifetime_ms),
+                termination_time,
                 process_pid,
                 self._request.process_name,
                 subject_logon_id,
             )
+            if new_credentials_logon_id:
+                self._executor.generate_logoff(
+                    subject_user,
+                    self._request.system,
+                    termination_time + timedelta(milliseconds=1),
+                    new_credentials_logon_id,
+                    logon_type=9,
+                )
 
     def _resolve_process_pid(
         self,

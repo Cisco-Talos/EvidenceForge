@@ -177,3 +177,61 @@
 - Verification: 725 passed, 1 skipped, 1 deselected across the affected unit families and semantic
   SMB integration suite; `eforge validate-config` reported zero issues across 93 files; repository
   Ruff check and format check passed. No generation or blind review has yet been run for Loop 15.
+
+### Loop 15 outcome
+
+- Commit `ffe07d63`; full suite 5,974 passed, 22 skipped. Deterministic evaluation remained 97/100
+  over 72,899 records with acceptance passed.
+- The remote-auth hard probe passed: core TCP/445 fell from 272 to 127 rows, generic-human Type 3
+  fell to zero, anonymous fell to 10, the machine-account tail exceeded 45 seconds, and semantic
+  SMB retained 10/10 exact parents without tuple, timing, or endpoint-pair regressions.
+- Frozen review corpus SHA-256 remained
+  `0e213c88d0ed45e82af6915efaa0308d0e723326ccf3d882af4cb96c3637da73` before and after review.
+- Deliberation revised the panel to 78/88/76/82 synthetic-confidence (mean 81), unanimously
+  Synthetic. The fixed remote-auth family did not recur.
+- New highest-leverage target: validate and repair native UserAssist payload encoding/timestamps,
+  followed by application-scoped cache/profile identities. The prepared Type 9 family remains
+  Loop 16 because it is a previously adjudicated source-native contradiction already in progress.
+
+## Loop 16 family contract — Windows NewCredentials identity and session ownership
+
+- **Owning abstractions:** the explicit-credential action family owns `runas /netonly` caller,
+  outbound credential, and cloned-token identity; the authentication/session bundle admits only
+  logon intents with enough facts to build a source-native session; shared Windows logon-type
+  predicates own desktop, terminal-session, and local-source capability.
+- **Invariant:** Type 9 clones an existing caller's local identity into a new LUID, carries a
+  distinct outbound credential identity, has no remote source endpoint, and never creates or
+  repairs `winlogon.exe`, `userinit.exe`, or `explorer.exe`. Only Windows Types 2, 10, and 11 are
+  desktop-capable. A typed storyline Type 9 resolves the active/assigned desktop user as its local
+  caller and the event actor as its outbound identity; ambiguous direct Type 9 requests fail fast.
+- **Entry paths:** typed storyline logons and credential sprays, direct `generate_logon` calls,
+  explicit-credential events, materialized `runas.exe /netonly` callers, later process-parent
+  resolution, session-ID allocation, and successful-logon Security/eCAR projection.
+- **Consumers:** canonical `ActiveSession` and `AuthContext`, Windows Security 4624/4648 fields,
+  eCAR USER_SESSION identity/source properties, Security/Sysmon/eCAR process trees, logoff state,
+  validation diagnostics, and rendered NewCredentials correlation probes.
+- **Layer rationale:** caller identity, alternate outbound identity, source locality, and desktop
+  capability are shared semantic truth. The action/session layer must own them before rendering;
+  suppressing Explorer in one process path or rewriting self-IP in one emitter would preserve the
+  contradictory canonical session and allow another entry path to recreate it.
+- **Sibling risks:** preserve desktop bootstrap for Types 2, 10, and 11; preserve network/service
+  parentage for Types 3 and 5; keep Types 4 and 8 non-desktop; keep Type 7 as re-authentication of
+  an existing interactive LUID; retain Windows RDP and Linux SSH bundle ownership for Type 10;
+  and do not turn every 4648 from PsExec, WMI, or scheduled tasks into Type 9.
+
+### Loop 16 implementation handoff
+
+- Added canonical outbound credential and cloned-caller identity, centralized Windows desktop and
+  source predicates, and made Type 9 local, non-terminal, and non-desktop across state and lazy
+  parent resolution.
+- Materialized `runas.exe /netonly` explicit-credential activity now owns correlated 4648 and Type
+  9 evidence; other explicit-credential tools do not. Existing typed Type 9 authoring remains
+  compatible by resolving the host's active/assigned local desktop user as caller and the event
+  actor as outbound identity. The benchmark scenario was not changed.
+- Full suite: 5,997 passed, 22 skipped after correcting baseline's unsupported random Type 9 sample
+  and synchronizing the canonical/public scenario references. Scenario validation passed with the
+  existing 25 warnings; Ruff lint and formatting checks passed.
+- A clean rendered probe found exactly one Type 9 on WS-AJOHNSON with local Aisha, outbound Marcus,
+  `seclogo`/Negotiate, dash source/port, matched Security/eCAR LUIDs, and zero Type-9-owned
+  `winlogon.exe`, `userinit.exe`, or `explorer.exe`. All rendered Type 2/10 siblings retained shell
+  evidence; Type 11 remains covered by the focused state matrix.

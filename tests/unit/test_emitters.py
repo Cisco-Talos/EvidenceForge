@@ -212,6 +212,59 @@ class TestWindowsEventEmitter:
         assert rendered["ProcessName"] == expected_process
         assert rendered["ProcessId"] == f"0x{emitter._system_pids['WIN-TEST-01'][expected_role]:x}"
 
+    def test_type9_logon_renders_new_credentials_fields(self, format_def, temp_output):
+        """4624 Type 9 should render local source and alternate outbound identity."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="WIN-TEST-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WIN-TEST-01.corp.local",
+            netbios_domain="CORP",
+        )
+        event = OccurrenceBuilder(
+            timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+            event_type="logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="alice",
+                user_sid="S-1-5-21-1-2-3-1001",
+                logon_id="0x23456",
+                logon_type=9,
+                auth_package="Negotiate",
+                source_ip="-",
+                source_port=0,
+                logon_process="seclogo",
+                subject_sid="S-1-5-21-1-2-3-1001",
+                subject_username="alice",
+                subject_domain="CORP",
+                subject_logon_id="0x12345",
+                process_pid=1216,
+                process_name=r"C:\Windows\System32\svchost.exe",
+                outbound_username="admin01",
+                outbound_domain="CORP",
+                cloned_from_logon_id="0x12345",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="LogonType">9</Data>' in content
+        assert '<Data Name="TargetUserName">alice</Data>' in content
+        assert '<Data Name="TargetOutboundUserName">admin01</Data>' in content
+        assert '<Data Name="TargetOutboundDomainName">CORP</Data>' in content
+        assert '<Data Name="LogonProcessName">seclogo</Data>' in content
+        assert '<Data Name="AuthenticationPackageName">Negotiate</Data>' in content
+        assert '<Data Name="ProcessId">0x4c0</Data>' in content
+        assert '<Data Name="ProcessName">C:\\Windows\\System32\\svchost.exe</Data>' in content
+        assert '<Data Name="IpAddress">-</Data>' in content
+        assert '<Data Name="IpPort">-</Data>' in content
+
     def test_render_logoff_uses_host_lsass_provider_pid(self, format_def, temp_output):
         """A missing per-event PID must resolve to the host's canonical LSASS PID."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)

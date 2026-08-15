@@ -492,6 +492,46 @@ class TestPidEmission:
         record = json.loads(emitter._render_event(row))
         assert record["properties"]["logon_type"] == "7"
 
+    def test_new_credentials_renders_local_caller_and_outbound_identity(self, emitter, ts):
+        """Type 9 eCAR projection should agree with the local canonical source."""
+        event = OccurrenceBuilder(
+            timestamp=ts,
+            event_type="logon",
+            dst_host=HostContext(
+                hostname="WS-01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            auth=AuthContext(
+                username="alice",
+                logon_id="0x234",
+                logon_type=9,
+                source_ip="-",
+                outbound_username="admin01",
+                outbound_domain="CORP",
+                cloned_from_logon_id="0x123",
+            ),
+            identity_plan=_identity_plan_from_ids(object_id="session-9"),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        row = emitter.emit_event.call_args.args[0]
+        assert row["principal"] == "alice"
+        assert row["src_ip"] == "-"
+        assert row["logon_type"] == 9
+        assert row["outbound_principal"] == "admin01"
+        assert row["outbound_domain"] == "CORP"
+        assert row["cloned_from_logon_id"] == "0x123"
+
+        record = json.loads(emitter._render_event(row))
+        assert record["properties"]["outbound_principal"] == "admin01"
+        assert record["properties"]["outbound_domain"] == "CORP"
+        assert record["properties"]["cloned_from_logon_id"] == "0x123"
+
     def test_linux_ssh_login_renders_session_type_not_windows_logon_type(self, emitter, ts):
         """Linux eCAR sessions should use OS-native session semantics."""
         event = OccurrenceBuilder(

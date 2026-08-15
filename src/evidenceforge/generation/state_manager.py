@@ -32,6 +32,7 @@ import random
 from datetime import datetime, timedelta
 from threading import RLock
 
+from evidenceforge.events.authentication import windows_logon_can_own_desktop
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
@@ -365,7 +366,12 @@ class StateManager:
         session_kind: str,
     ) -> int:
         """Allocate a host-local Windows terminal session ID for interactive sessions."""
-        if logon_type not in {2, 7, 10, 11} or session_kind in {"network", "service", "ssh"}:
+        if not windows_logon_can_own_desktop(logon_type) or session_kind in {
+            "network",
+            "new_credentials",
+            "service",
+            "ssh",
+        }:
             return 0
 
         used_ids = {

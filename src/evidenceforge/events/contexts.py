@@ -95,6 +95,9 @@ class AuthContext:
     process_pid: int = 0  # PID of process using explicit credentials (4648 ProcessId)
     target_server: str = ""  # 4648 TargetServerName (e.g., "fileserver01", "localhost")
     target_domain: str = ""  # 4648 TargetDomainName for target credentials
+    outbound_username: str = ""  # Alternate identity used by Type 9 network access
+    outbound_domain: str = ""  # Domain of the alternate Type 9 network identity
+    cloned_from_logon_id: str = ""  # Caller LUID cloned by a Type 9 session
     process_name: str = ""  # 4648 ProcessName (process using explicit creds)
     workstation_name: str = ""  # Windows WorkstationName for logon/failure events
     session_kind: str = ""  # Platform-neutral semantic kind, for example "smb"

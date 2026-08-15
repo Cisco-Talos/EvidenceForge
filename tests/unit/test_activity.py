@@ -136,6 +136,7 @@ from evidenceforge.generation.activity.tls_realism import (
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import NetworkConfig, NetworkSegment, System, User
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import reset_thread_rng
 from tests.network_factories import network_plan
 
@@ -9417,6 +9418,163 @@ class TestActivityGenerator:
         assert terminated.process.pid == process.process.pid
         assert (
             timedelta(seconds=1) < terminated.timestamp - explicit.timestamp < timedelta(seconds=8)
+        )
+
+    def test_runas_netonly_owns_strict_new_credentials_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """runas /netonly should clone local identity without creating a desktop."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username=r"CORP\admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=0,
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        new_credentials = next(
+            event for event in emitted if event.event_type == "logon" and event.auth.logon_type == 9
+        )
+        session = state_manager.get_session_at(
+            new_credentials.auth.logon_id,
+            new_credentials.timestamp,
+        )
+
+        assert session is not None
+        assert session.username == test_user.username
+        assert session.session_kind == "new_credentials"
+        assert session.session_id == 0
+        assert new_credentials.auth.source_ip == "-"
+        assert new_credentials.auth.subject_username == test_user.username
+        assert new_credentials.auth.subject_logon_id == explicit.auth.subject_logon_id
+        assert new_credentials.auth.username == test_user.username
+        assert new_credentials.auth.outbound_username == "admin01"
+        assert new_credentials.auth.outbound_domain == "CORP"
+        assert new_credentials.auth.process_pid != explicit.auth.process_pid
+        assert new_credentials.auth.process_name.endswith("svchost.exe")
+        assert new_credentials.auth.logon_process == "seclogo"
+        assert new_credentials.auth.auth_package == "Negotiate"
+
+        shell_names = {"winlogon.exe", "userinit.exe", "explorer.exe"}
+        assert not any(
+            event.event_type == "process_create"
+            and event.auth is not None
+            and event.auth.logon_id == new_credentials.auth.logon_id
+            and event.process is not None
+            and event.process.image.rsplit("\\", 1)[-1].casefold() in shell_names
+            for event in (
+                call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+            )
+        )
+        assert any(
+            event.event_type == "logoff"
+            and event.auth.logon_id == new_credentials.auth.logon_id
+            and event.auth.logon_type == 9
+            for event in (
+                call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+            )
+        )
+
+    def test_direct_type9_logon_rejects_missing_new_credentials_facts(
+        self, activity_gen, test_user, test_system
+    ):
+        """The generic logon API must not invent a NewCredentials caller."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with pytest.raises(StateError, match="explicit_credentials event"):
+            activity_gen.generate_logon(
+                test_user,
+                test_system,
+                timestamp,
+                logon_type=9,
+                source_ip=test_system.ip,
+            )
+
+    def test_non_runas_explicit_credentials_do_not_create_type9(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """4648 from other tools must not imply a NewCredentials token clone."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\mmc.exe",
+            process_pid=0,
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert any(event.event_type == "explicit_credentials" for event in emitted)
+        assert all(event.event_type != "logon" or event.auth.logon_type != 9 for event in emitted)
+
+    @pytest.mark.parametrize("logon_type", [4, 7, 8, 9])
+    def test_non_desktop_logon_siblings_never_lazy_bootstrap_shell(
+        self,
+        logon_type,
+        activity_gen,
+        test_user,
+        test_system,
+        state_manager,
+        mock_emitters,
+    ):
+        """Batch, unlock, and NetworkCleartext sessions cannot acquire Explorer lazily."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        if logon_type == 9:
+            state_manager.set_current_time(timestamp)
+            logon_id = state_manager.create_session(
+                username=test_user.username,
+                system=test_system.hostname,
+                logon_type=9,
+                source_ip="-",
+                session_kind="new_credentials",
+            )
+        else:
+            source_ip = "192.0.2.50" if logon_type == 8 else None
+            logon_id = activity_gen.generate_logon(
+                test_user,
+                test_system,
+                timestamp,
+                logon_type=logon_type,
+                source_ip=source_ip,
+            )
+
+        activity_gen.generate_process(
+            user=test_user,
+            system=test_system,
+            time=timestamp + timedelta(seconds=10),
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c whoami",
+        )
+
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.explorer_pid is None
+        shell_names = {"winlogon.exe", "userinit.exe", "explorer.exe"}
+        assert not any(
+            event.event_type == "process_create"
+            and event.auth is not None
+            and event.auth.logon_id == logon_id
+            and event.process is not None
+            and event.process.image.rsplit("\\", 1)[-1].casefold() in shell_names
+            for event in (
+                call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+            )
         )
 
     def test_generate_explicit_credentials_handles_missing_caller_pid(

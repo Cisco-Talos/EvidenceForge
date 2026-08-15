@@ -31,7 +31,8 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
-from evidenceforge.models.scenario import ProcessEventSpec
+from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.scenario import LogonEventSpec, ProcessEventSpec
 
 
 @pytest.fixture
@@ -142,6 +143,111 @@ class TestLogonIdSystemScoping:
         # The process should use system B's LogonID, not system A's
         assert len(captured_logon_ids) == 1
         assert captured_logon_ids[0] == logon_id_b
+
+    def test_storyline_type9_resolves_local_caller_and_outbound_actor(
+        self, state_manager, mock_emitters, system_a
+    ):
+        """Typed Type 9 preserves the local token owner for its child process."""
+        local_user = User(
+            username="local.user",
+            full_name="Local User",
+            email="local.user@example.com",
+            enabled=True,
+        )
+        outbound_user = User(
+            username="domain.admin",
+            full_name="Domain Admin",
+            email="domain.admin@example.com",
+            enabled=True,
+        )
+        system = system_a.model_copy(update={"assigned_user": local_user.username})
+        engine = self._build_engine(
+            state_manager,
+            mock_emitters,
+            [system],
+            [local_user, outbound_user],
+        )
+        engine.world_planner = Mock()
+        engine.scenario.environment.service_accounts = []
+        event_time = datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC)
+        caller_logon_id = state_manager.create_session(
+            username=local_user.username,
+            system=system.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+
+        result = engine._execute_typed_event(
+            spec=LogonEventSpec(logon_type=9, source_ip="10.0.10.1"),
+            actor=outbound_user,
+            system=system,
+            time=event_time,
+            activity="Use alternate network credentials",
+            explicit_types={"logon", "process"},
+        )
+        type9_id = result["logon_id"]
+        type9 = state_manager.get_session(type9_id)
+        assert type9 is not None
+        assert type9.username == local_user.username
+        assert type9.source_ip == "-"
+        assert type9.session_id == 0
+        assert (
+            engine._last_storyline_logon_for_actor_system(
+                outbound_user,
+                system,
+                at_time=event_time + timedelta(seconds=1),
+            )
+            == type9_id
+        )
+
+        process_result = engine._execute_typed_event(
+            spec=ProcessEventSpec(
+                process_name=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+            ),
+            actor=outbound_user,
+            system=system,
+            time=event_time + timedelta(seconds=1),
+            activity="Use alternate network credentials",
+            explicit_types={"logon", "process"},
+        )
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        running_child = state_manager.get_process(system.hostname, process_result["pid"])
+        assert running_child is not None
+        assert running_child.logon_id == type9_id
+        type9_event = next(
+            event for event in emitted if event.event_type == "logon" and event.auth.logon_type == 9
+        )
+        child = next(
+            event
+            for event in emitted
+            if event.event_type == "process_create" and event.process.pid == process_result["pid"]
+        )
+        assert type9_event.auth.cloned_from_logon_id == caller_logon_id
+        assert type9_event.auth.username == local_user.username
+        assert type9_event.auth.outbound_username == outbound_user.username
+        assert child.auth.logon_id == type9_id
+        assert child.auth.username == local_user.username
+        assert running_child.username == local_user.username
+
+    def test_storyline_type9_rejects_missing_local_desktop(
+        self, state_manager, mock_emitters, system_a, attacker
+    ):
+        """Typed Type 9 fails rather than inventing a caller desktop."""
+        engine = self._build_engine(state_manager, mock_emitters, [system_a], [attacker])
+
+        with pytest.raises(StateError, match="requires an active local desktop caller"):
+            engine._execute_typed_event(
+                spec=LogonEventSpec(logon_type=9),
+                actor=attacker,
+                system=system_a,
+                time=datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC),
+                activity="Use alternate network credentials",
+                explicit_types={"logon"},
+            )
 
     def test_process_auto_creates_session_on_new_system(
         self, state_manager, mock_emitters, system_a, system_b, attacker

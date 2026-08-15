@@ -473,6 +473,10 @@ class EcarEmitter(HostMultiplexEmitter):
         event_data.update(_ecar_remote_auth_transport_properties(event))
         if getattr(host, "os_category", "") == "windows":
             event_data["logon_type"] = event.auth.logon_type
+            if event.auth.logon_type == 9:
+                event_data["outbound_principal"] = event.auth.outbound_username
+                event_data["outbound_domain"] = event.auth.outbound_domain
+                event_data["cloned_from_logon_id"] = event.auth.cloned_from_logon_id
         else:
             event_data["session_type"] = _ecar_non_windows_session_type(event)
         self._apply_session_properties(event_data, event)
@@ -1427,6 +1431,9 @@ class EcarEmitter(HostMultiplexEmitter):
         "outcome",
         "logon_id",
         "logon_type",
+        "outbound_principal",
+        "outbound_domain",
+        "cloned_from_logon_id",
         "session_id",
         "logon_guid",
         "session_type",

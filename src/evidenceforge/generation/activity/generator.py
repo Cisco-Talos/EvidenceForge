@@ -52,7 +52,13 @@ from urllib.parse import urlsplit
 from evidenceforge.events.artifacts_manifest import (
     ARTIFACTS_MANIFEST_SCHEMA_VERSION,
 )
-from evidenceforge.events.authentication import RemoteAuthenticationPlan
+from evidenceforge.events.authentication import (
+    WINDOWS_DESKTOP_LOGON_TYPES,
+    WINDOWS_WORKSTATION_LOGON_TYPES,
+    RemoteAuthenticationPlan,
+    windows_logon_can_own_desktop,
+    windows_logon_has_local_source,
+)
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     AuthContext,
@@ -1686,8 +1692,8 @@ _WINDOWS_ELECTRON_CHILD_MARKERS = (
     "--type=",
     "--utility-sub-type=",
 )
-_WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES = frozenset({2, 10, 11})
-_WINDOWS_WORKSTATION_SESSION_LOGON_TYPES = frozenset({2, 11})
+_WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES = WINDOWS_DESKTOP_LOGON_TYPES
+_WINDOWS_WORKSTATION_SESSION_LOGON_TYPES = WINDOWS_WORKSTATION_LOGON_TYPES
 _WINDOWS_REMOTE_SESSION_KINDS = frozenset({"network", "service", "rdp", "ssh"})
 _LINUX_LOCAL_SESSION_LOGON_TYPES = frozenset({2, 11})
 _LINUX_REMOTE_SESSION_KINDS = frozenset({"network", "service", "ssh"})
@@ -10124,6 +10130,12 @@ class ActivityGenerator:
         remote_authentication_plan = request.remote_authentication_plan
         remote_authentication_transport_id = request.remote_authentication_transport_id
 
+        if logon_type == 9:
+            raise StateError(
+                "Generic logon_type 9 cannot supply NewCredentials caller and outbound "
+                "identity; author an explicit_credentials event using runas.exe /netonly"
+            )
+
         self.state_manager.set_current_time(time)
         os_cat = _get_os_category(system.os)
         if logon_type == 10 and os_cat == "linux" and source_ip in (None, "", "-", system.ip):
@@ -10225,7 +10237,11 @@ class ActivityGenerator:
                 if reusable:
                     existing_interactive.last_activity_time = time
                     return existing_interactive.logon_id
-        local_logon = logon_type in (2, 5, 7, 11)
+        local_logon = (
+            windows_logon_has_local_source(logon_type)
+            if os_cat == "windows"
+            else logon_type in (2, 5, 7, 11)
+        )
         dc_source_ip = source_ip or system.ip
         if source_ip is None:
             source_ip = "-" if local_logon else system.ip
@@ -10258,6 +10274,8 @@ class ActivityGenerator:
                 3: "network",
                 4: "batch",
                 5: "service",
+                8: "network_cleartext",
+                9: "new_credentials",
                 10: "rdp",
             }.get(logon_type, "interactive")
 
@@ -10718,7 +10736,11 @@ class ActivityGenerator:
         # source-native session login that owns their LogonID.  The session
         # renderer finalizes that timestamp during dispatch, so publish it as
         # the readiness floor before materializing the shell lifecycle.
-        if os_cat == "windows" and logon_type in (2, 10, 11) and event.lifecycle is not None:
+        if (
+            os_cat == "windows"
+            and windows_logon_can_own_desktop(logon_type)
+            and event.lifecycle is not None
+        ):
             ecar_login_time = self.dispatcher.source_timing_planner.session_start_source_time(
                 "ecar",
                 event.lifecycle.group_id,
@@ -10734,7 +10756,7 @@ class ActivityGenerator:
                 )
 
         # Phase 4: Create per-session explorer.exe for interactive logons
-        if logon_type in (2, 10, 11):
+        if windows_logon_can_own_desktop(logon_type):
             session = self.state_manager.get_session(logon_id)
             if session is not None:
                 os_cat = _get_os_category(system.os)
@@ -22280,9 +22302,7 @@ class ActivityGenerator:
                     logon_type = 2
             elif sys_type in ("server", "domain_controller"):
                 # Servers/DCs: Type 3 (network) dominates
-                logon_type = rng.choices(
-                    [3, 5, 10, 4, 2, 8, 9], weights=[70, 15, 8, 4, 1, 1, 1], k=1
-                )[0]
+                logon_type = rng.choices([3, 5, 10, 4, 2, 8], weights=[70, 15, 8, 4, 2, 1], k=1)[0]
             elif is_service_account:
                 # Service accounts on workstations: network + service logons
                 logon_type = rng.choices([3, 5, 10], weights=[70, 25, 5], k=1)[0]
@@ -22337,7 +22357,7 @@ class ActivityGenerator:
                     logon_type = 2
 
             # Type 3 (network) logons are standalone events, not interactive sessions
-            if logon_type in (3, 4, 5, 8, 9):
+            if logon_type in (3, 4, 5, 8):
                 # Pick a source IP from another system for network logons
                 source_ip = network_source_ip
                 logon_id = self.generate_logon(
@@ -23487,6 +23507,88 @@ class ActivityGenerator:
             ),
         )
         bundle.execute()
+
+    def _emit_new_credentials_logon(
+        self,
+        *,
+        user: User,
+        system: System,
+        time: datetime,
+        caller_logon_id: str,
+        outbound_username: str,
+        outbound_domain: str,
+        lifecycle_group_id: str,
+    ) -> str:
+        """Emit a local Type 9 token clone for a modeled runas /netonly action."""
+
+        if _get_os_category(system.os) != "windows":
+            raise StateError("NewCredentials is only valid on Windows systems")
+        caller_session = self.state_manager.get_session_at(caller_logon_id, time)
+        if (
+            caller_session is None
+            or caller_session.system != system.hostname
+            or caller_session.username != user.username
+            or not windows_logon_can_own_desktop(caller_session.logon_type)
+        ):
+            raise StateError(
+                "NewCredentials requires an active local interactive caller session on "
+                f"{system.hostname}: caller_logon_id={caller_logon_id}"
+            )
+
+        self.state_manager.set_current_time(time)
+        lifecycle_id = f"{lifecycle_group_id}:new_credentials"
+        logon_id = self.state_manager.create_session(
+            username=user.username,
+            system=system.hostname,
+            logon_type=9,
+            source_ip="-",
+            source_port=0,
+            session_kind="new_credentials",
+            lifecycle_group_id=lifecycle_id,
+            parent_lifecycle_group_id=lifecycle_group_id,
+        )
+        session = self.state_manager.get_session(logon_id)
+        session_id = session.session_id if session is not None else 0
+        subject = self._account_subject_fields(user.username, system, caller_logon_id)
+        outbound_account = outbound_username.split("\\")[-1].split("@", 1)[0]
+        event = OccurrenceBuilder(
+            timestamp=time,
+            event_type="logon",
+            dst_host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                full_name=user.full_name,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+                session_id=session_id,
+                logon_type=9,
+                auth_package="Negotiate",
+                source_ip="-",
+                source_port=0,
+                logon_process="seclogo",
+                lm_package="-",
+                logon_guid="{00000000-0000-0000-0000-000000000000}",
+                subject_sid=subject["sid"],
+                subject_username=subject["username"],
+                subject_domain=subject["domain"],
+                subject_logon_id=subject["logon_id"],
+                reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2E0),
+                process_pid=self._get_system_pid(system.hostname, "svchost_local_system", 0x4C0),
+                process_name=r"C:\Windows\System32\svchost.exe",
+                outbound_username=outbound_account,
+                outbound_domain=outbound_domain,
+                cloned_from_logon_id=caller_logon_id,
+                session_kind="new_credentials",
+            ),
+            lifecycle=ActionLifecycleContext(
+                group_id=lifecycle_id,
+                canonical_start=time,
+                phase="start",
+                parent_group_id=lifecycle_group_id,
+            ),
+        )
+        self.dispatcher.dispatch_builder(event)
+        return logon_id
 
     def _coerce_windows_explicit_credentials_subject(
         self,
@@ -27288,7 +27390,7 @@ class ActivityGenerator:
                 "LmPackageName": "-",
                 "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
             }
-        elif logon_type in (3, 4, 5, 8, 9):
+        elif logon_type in (3, 4, 5, 8):
             # Network/batch/service: Kerberos dominates in AD
             roll = rng.random()
             if roll < 0.70:
@@ -27302,6 +27404,13 @@ class ActivityGenerator:
                 "LogonProcessName": "NtLmSsp",
                 "AuthenticationPackageName": "NTLM",
                 "LmPackageName": "NTLM V2",
+                "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
+            }
+        elif logon_type == 9:
+            return {
+                "LogonProcessName": "seclogo",
+                "AuthenticationPackageName": "Negotiate",
+                "LmPackageName": "-",
                 "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
             }
         elif logon_type == 10:
@@ -28377,7 +28486,11 @@ class ActivityGenerator:
             return None
         if session.system != system.hostname or session.username != user.username:
             return None
-        if session.logon_type in {3, 5} or session.session_kind in {"network", "service"}:
+        if not windows_logon_can_own_desktop(session.logon_type) or session.session_kind in {
+            "network",
+            "new_credentials",
+            "service",
+        }:
             return None
         if session.windows_shell_bootstrapped and session.initial_explorer_pid is not None:
             initial_pid = session.initial_explorer_pid
@@ -28550,8 +28663,11 @@ class ActivityGenerator:
                 )
             is_network_logon = active_session and active_session.logon_type == 3
             is_service_logon = active_session and active_session.logon_type == 5
+            is_other_non_desktop_logon = active_session and not windows_logon_can_own_desktop(
+                active_session.logon_type
+            )
 
-            if is_network_logon:
+            if is_network_logon or (is_other_non_desktop_logon and not is_service_logon):
                 # Network logon: parent is services.exe or svchost.exe
                 # (processes arrive via PsExec, WMI, or SMB)
                 # CLI/script processes: check for a running shell as parent first
@@ -28736,7 +28852,10 @@ class ActivityGenerator:
             )
         is_network_logon = active_session and active_session.logon_type == 3
         is_service_logon = active_session and active_session.logon_type == 5
-        if is_network_logon:
+        is_other_non_desktop_logon = active_session and not windows_logon_can_own_desktop(
+            active_session.logon_type
+        )
+        if is_network_logon or (is_other_non_desktop_logon and not is_service_logon):
             if remote_wrapper_pid is not None:
                 return remote_wrapper_pid
             history = self._prune_user_process_history(

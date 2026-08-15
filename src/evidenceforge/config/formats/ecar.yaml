@@ -194,6 +194,21 @@ fields:
     required: false
     description: "Windows-style logon type for USER_SESSION events, string in properties"
 
+  - name: outbound_principal
+    type: string
+    required: false
+    description: "Alternate outbound identity for Windows NewCredentials sessions"
+
+  - name: outbound_domain
+    type: string
+    required: false
+    description: "Domain of the alternate outbound NewCredentials identity"
+
+  - name: cloned_from_logon_id
+    type: string
+    required: false
+    description: "Local caller LUID cloned by a Windows NewCredentials session"
+
   - name: session_id
     type: string
     required: false

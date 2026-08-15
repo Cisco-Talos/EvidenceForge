@@ -1133,6 +1133,32 @@ class TestSessionManagement:
         assert console_session_id != rdp_session_id
         assert sm.get_session_id(network) == 0
 
+    @pytest.mark.parametrize("logon_type", [3, 4, 5, 7, 8, 9])
+    def test_non_desktop_windows_logons_do_not_allocate_terminal_session_ids(self, logon_type):
+        """Only desktop-capable logons own Windows terminal session IDs."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, tzinfo=UTC))
+
+        logon_id = sm.create_session(
+            "jdoe",
+            "WS-01",
+            logon_type,
+            "-" if logon_type in {4, 5, 7, 9} else "192.0.2.10",
+            session_kind="new_credentials" if logon_type == 9 else "logon",
+        )
+
+        assert sm.get_session_id(logon_id) == 0
+
+    @pytest.mark.parametrize("logon_type", [2, 10, 11])
+    def test_desktop_windows_logons_allocate_terminal_session_ids(self, logon_type):
+        """Interactive, RDP, and cached-interactive logons retain desktop IDs."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, tzinfo=UTC))
+
+        logon_id = sm.create_session("jdoe", "WS-01", logon_type, "-")
+
+        assert sm.get_session_id(logon_id) > 0
+
     def test_ssh_sessions_do_not_get_windows_session_ids(self):
         """Linux SSH-style sessions should not consume Windows terminal IDs."""
         sm = StateManager()

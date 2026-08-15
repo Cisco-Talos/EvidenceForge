@@ -1942,6 +1942,40 @@ class StorylineMixin:
                 )
             self._storyline_logoff_to_logon[logoff_id] = logon_id
 
+    def _storyline_new_credentials_caller(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+    ) -> tuple[User, str]:
+        """Resolve a Type 9 local caller without manufacturing a desktop session."""
+
+        caller_session = self.activity_generator._active_interactive_windows_session(system, time)
+        if caller_session is None:
+            assigned_user = getattr(system, "assigned_user", "")
+            raise StateError(
+                "Storyline logon_type 9 requires an active local desktop caller on "
+                f"{system.hostname}; assigned_user={assigned_user or '-'} has no active "
+                "Type 2, 10, or 11 session before the event"
+            )
+        scenario_users = {
+            candidate.username: candidate for candidate in self.scenario.environment.users
+        }
+        caller = scenario_users.get(caller_session.username)
+        if caller is None:
+            raise StateError(
+                "Storyline logon_type 9 resolved local caller "
+                f"{caller_session.username!r} on {system.hostname}, but that caller is not "
+                "declared in environment.users"
+            )
+        if caller.username == actor.username:
+            raise StateError(
+                "Storyline logon_type 9 requires a distinct outbound credential identity; "
+                f"event actor {actor.username!r} is also the active local caller on "
+                f"{system.hostname}"
+            )
+        return caller, caller_session.logon_id
+
     def _last_storyline_logon_for_actor_system(
         self,
         actor: User,
@@ -1963,9 +1997,13 @@ class StorylineMixin:
                 if session.system == system.hostname
             }
         for logon_id in reversed(ordered):
-            if valid_ids is not None and logon_id not in valid_ids:
-                continue
             session = self.state_manager.get_session(logon_id)
+            if (
+                valid_ids is not None
+                and logon_id not in valid_ids
+                and (session is None or session.logon_type != 9)
+            ):
+                continue
             if session is not None and session.system == system.hostname:
                 return logon_id
         return None
@@ -3403,16 +3441,40 @@ class StorylineMixin:
             return "(filtered by sensor placement)"
 
         if spec.type == "logon":
-            source_ip = spec.source_ip or pick_external_actor_ip("logon_source_ips", rng)
             session_end_plan = self._session_end_plan_for_current_start()
-            logon_id = self.activity_generator.generate_logon(
-                user=actor,
-                system=system,
-                time=time,
-                logon_type=spec.logon_type,
-                source_ip=source_ip,
-                session_end_plan=session_end_plan,
-            )
+            if spec.logon_type == 9:
+                caller, caller_logon_id = self._storyline_new_credentials_caller(
+                    actor,
+                    system,
+                    time,
+                )
+                outbound_domain = self.activity_generator._explicit_credentials_target_domain(
+                    actor.username,
+                    system.hostname,
+                    system,
+                )
+                logon_id = self.activity_generator._emit_new_credentials_logon(
+                    user=caller,
+                    system=system,
+                    time=time,
+                    caller_logon_id=caller_logon_id,
+                    outbound_username=actor.username,
+                    outbound_domain=outbound_domain,
+                    lifecycle_group_id=(
+                        f"storyline:{getattr(self, '_current_storyline_spec_id', 'logon')}"
+                    ),
+                )
+                source_ip = "-"
+            else:
+                source_ip = spec.source_ip or pick_external_actor_ip("logon_source_ips", rng)
+                logon_id = self.activity_generator.generate_logon(
+                    user=actor,
+                    system=system,
+                    time=time,
+                    logon_type=spec.logon_type,
+                    source_ip=source_ip,
+                    session_end_plan=session_end_plan,
+                )
             # Protect storyline-created sessions from baseline logoff
             session = self.state_manager.get_session(logon_id)
             if session:
@@ -3595,6 +3657,23 @@ class StorylineMixin:
                 system,
                 time,
             )
+            process_session = self.state_manager.get_session(logon_id)
+            if (
+                os_category == "windows"
+                and process_session is not None
+                and process_session.logon_type == 9
+                and process_session.username != process_actor.username
+            ):
+                local_users = {
+                    candidate.username: candidate for candidate in self.scenario.environment.users
+                }
+                local_process_actor = local_users.get(process_session.username)
+                if local_process_actor is None:
+                    raise StateError(
+                        "NewCredentials process ownership requires declared local caller "
+                        f"{process_session.username!r} on {system.hostname}"
+                    )
+                process_actor = local_process_actor
             process_name = _normalize_storyline_process_image(
                 spec.process_name,
                 os_category,

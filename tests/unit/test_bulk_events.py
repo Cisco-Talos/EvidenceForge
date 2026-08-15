@@ -47,6 +47,8 @@ from evidenceforge.models.scenario import (
     DnsQueryEventSpec,
     DnsTunnelEventSpec,
     ExplicitCredentialsEventSpec,
+    FailedLogonEventSpec,
+    LogonEventSpec,
     NetworkConfig,
     NetworkSegment,
     NetworkSensor,
@@ -1256,6 +1258,25 @@ class TestCredentialSprayEventSpec:
     def test_empty_target_accounts_rejected(self):
         with pytest.raises(ValidationError):
             CredentialSprayEventSpec(target_accounts=[], interval="2s", count=50)
+
+    def test_rejects_new_credentials_logon_type(self):
+        with pytest.raises(ValidationError, match="no remote authentication target"):
+            CredentialSprayEventSpec(
+                target_accounts=["admin"], interval="2s", count=10, logon_type=9
+            )
+
+
+def test_storyline_logon_accepts_new_credentials_for_contextual_resolution() -> None:
+    """Storyline execution supplies Type 9 caller and outbound identity facts."""
+
+    assert LogonEventSpec(logon_type=9).logon_type == 9
+
+
+def test_failed_logon_rejects_new_credentials() -> None:
+    """NewCredentials is not an inbound failed-logon transport."""
+
+    with pytest.raises(ValidationError, match="outbound authentication failure"):
+        FailedLogonEventSpec(logon_type=9)
 
 
 # ── Web Scan Presets Config ───────────────────────────────────────────────

@@ -879,7 +879,11 @@ class ProcessEventSpec(_EventSpecBase):
 
 
 class LogonEventSpec(_EventSpecBase):
-    """Authentication event (generates 4624, 4672, eCAR USER_SESSION/LOGIN)."""
+    """Authentication event (generates 4624, 4672, eCAR USER_SESSION/LOGIN).
+
+    A storyline Type 9 uses the host's active local desktop user as the caller/local
+    token identity and the storyline actor as the outbound credential identity.
+    """
 
     type: Literal["logon"] = "logon"
     logon_type: int = 3
@@ -897,6 +901,18 @@ class FailedLogonEventSpec(_EventSpecBase):
     source_ip: str | None = None
     logon_type: int = 3
     target_username: str | None = None
+
+    @field_validator("logon_type")
+    @classmethod
+    def reject_new_credentials_failure(cls, v: int) -> int:
+        """Reject NewCredentials as an inbound authentication failure."""
+
+        if v == 9:
+            raise ValueError(
+                "failed logon_type 9 is not a remote authentication attempt; "
+                "model the outbound authentication failure instead"
+            )
+        return v
 
 
 class LogoffEventSpec(_EventSpecBase):
@@ -1690,6 +1706,18 @@ class CredentialSprayEventSpec(_PeriodicEventBase):
     logon_type: int = 3
     success: dict[str, Any] | None = None  # {"account": str, "after": int}
 
+    @field_validator("logon_type")
+    @classmethod
+    def reject_new_credentials_spray(cls, v: int) -> int:
+        """Reject NewCredentials as a credential-spray transport."""
+
+        if v == 9:
+            raise ValueError(
+                "credential_spray logon_type 9 has no remote authentication target; "
+                "use a network-capable logon type such as 3 or 10"
+            )
+        return v
+
     @model_validator(mode="after")
     def credential_spray_requires_interval(self) -> "CredentialSprayEventSpec":
         """Credential spray uses interval-based timing."""
@@ -1820,6 +1848,8 @@ class ExplicitCredentialsEventSpec(_EventSpecBase):
 
     Models RunAs, pass-the-hash, service account delegation, and other
     scenarios where credentials are explicitly provided for authentication.
+    A materialized ``runas.exe /netonly`` caller also owns the correlated
+    NewCredentials Type 9 token-clone session.
     """
 
     type: Literal["explicit_credentials"] = "explicit_credentials"
