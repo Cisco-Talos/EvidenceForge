@@ -388,3 +388,16 @@
   17:58 boundary-open regression proves the network transport and endpoint login share one eCAR
   admission decision. Regeneration restored the exact target FLOW and the rendered probe passed all
   20 public-key sessions with zero tuple or actor-before-create mismatches.
+
+### Loop 18 outcome
+
+- Commits `d7fec6d6`, `00026dfa`, and `4a8bdd7d`; final full suite 6,014 passed with
+  22 skips. Evaluation scored 97.39/100 over 77,130 records. The hard probe passed 20/20 public-key
+  sessions with a 2.114-second range, 20 unique timings, exact eCAR FLOW-before-session and syslog
+  lifecycle ordering, and three boundary-open cases.
+- Frozen corpus SHA-256 remained
+  `9480d8c1abe4a8980519c659157142a4a3f7cf67206e5577cdba51c0d0550a1c` before and after review.
+  Deliberation excluded post-window/completeness claims and revised panel scores to 74/66/72/78
+  (mean 72.5), unanimous Synthetic at 82 confidence.
+- The SSH latency band did not recur. The next P0 is one in-window source-client process/transport
+  inversion; deterministic first-answer DNS selection is the broadest distribution artifact.
