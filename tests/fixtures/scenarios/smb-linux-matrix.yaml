@@ -53,6 +53,7 @@ environment:
         monitoring_segments: [office]
         direction: bidirectional
         placement: span
+        capture_profile: well_synced
         log_formats: [zeek]
   storage:
     population: small

@@ -2433,6 +2433,15 @@ class TestBaselineRegistryRealism:
 
         assert datetime.fromisoformat(value).replace(tzinfo=UTC) < event_time
 
+    def test_ambient_registry_uses_occurrence_aware_canonical_materializer(self):
+        """Baseline registry effects must supply time and type before dispatch."""
+        import inspect
+
+        source = inspect.getsource(BaselineMixin)
+        assert "_key, _vname, _details, _value_type = materialize_registry_effect(" in source
+        assert "_template_user,\n                        _reg_ts," in source
+        assert "value_type=_value_type" in source
+
     def test_registry_writer_candidates_preserve_native_ownership(self):
         from evidenceforge.generation.engine.baseline import _registry_writer_candidates
 
@@ -2525,7 +2534,7 @@ class TestBaselineRegistryRealism:
         assert "Windows NT\\\\CurrentVersion\\\\Winlogon" in source
         assert "Services\\\\EventLog\\\\Application" in source
         assert "driverdesc" in source
-        assert "materialize_edr_template_group" in source
+        assert "materialize_registry_effect" in source
 
     def test_ambient_registry_noise_suppresses_dhcp_values_for_static_hosts(self):
         """Static infrastructure should not emit DHCP registry churn as ambient noise."""

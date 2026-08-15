@@ -420,6 +420,7 @@ class RegistryContext:
 
     key: str
     value: str = ""
+    value_type: Literal["string", "dword", "qword", "binary"] = "string"
     action: str = ""  # "create" | "modify" | "delete"
     pid: int = 0
 

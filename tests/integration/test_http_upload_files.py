@@ -78,6 +78,7 @@ def test_curl_raw_42_mib_rar_upload_correlates_http_files_endpoint_and_ground_tr
                         monitoring_segments=["workstations"],
                         direction="bidirectional",
                         placement="span",
+                        capture_profile="well_synced",
                         log_formats=["zeek"],
                     )
                 ],
@@ -248,6 +249,7 @@ def test_curl_multipart_42_mib_rar_upload_uses_leaf_and_envelope_sizes(
                         monitoring_segments=["workstations"],
                         direction="bidirectional",
                         placement="span",
+                        capture_profile="well_synced",
                         log_formats=["zeek"],
                     )
                 ],

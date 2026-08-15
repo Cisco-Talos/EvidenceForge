@@ -1697,7 +1697,9 @@ class SysmonEventEmitter(LogEmitter):
 
         # Event 13 includes the Details field
         if event_id == 13:
-            event_data["Details"] = reg.value or "-"
+            event_data["Details"] = (
+                "Binary Data" if reg.value_type == "binary" else reg.value or "-"
+            )
         event_data["User"] = user
 
         self.emit_event(event_data)

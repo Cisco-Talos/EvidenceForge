@@ -1335,6 +1335,45 @@ class TestModuleEventActorIdentity:
         assert record["properties"]["image_path"] == proc.image
         assert record["properties"]["command_line"] == proc.command_line
 
+    def test_binary_registry_event_retains_canonical_detail(self, emitter, ts):
+        """eCAR retains useful bytes even when Sysmon renders REG_BINARY opaquely."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        emitter.emit_event = Mock()
+
+        emitter._render_registry_event(
+            OccurrenceBuilder(
+                timestamp=ts,
+                event_type="registry_modify",
+                src_host=host,
+                auth=AuthContext(username="jdoe"),
+                process=ProcessContext(
+                    pid=4321,
+                    parent_pid=4,
+                    image=r"C:\Windows\explorer.exe",
+                    command_line="explorer.exe",
+                    username="jdoe",
+                    start_time=ts,
+                ),
+                registry=RegistryContext(
+                    key=r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist",
+                    value="00 01 02 03",
+                    value_type="binary",
+                    action="modify",
+                    pid=4321,
+                ),
+            )
+        )
+
+        row = emitter.emit_event.call_args.args[0]
+        assert row["registry_value"] == "00 01 02 03"
+
 
 class TestRemoteThreadRendering:
     def test_remote_thread_uses_canonical_context_values(self, emitter, ts):

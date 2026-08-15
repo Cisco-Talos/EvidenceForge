@@ -822,6 +822,36 @@ class TestRenderEventRegistry:
         assert "evil.exe" in content
         assert "CurrentVersion\\Run" in content
 
+    def test_binary_value_renders_source_native_opaque_details(self, emitter):
+        event = OccurrenceBuilder(
+            timestamp=datetime(2027, 8, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="registry_modify",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\explorer.exe",
+                command_line="explorer.exe",
+                username="admin",
+            ),
+            registry=RegistryContext(
+                key=(
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+                    r"\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\Count\HRZR_EHACNGU"
+                ),
+                value="00 01 02 03",
+                value_type="binary",
+                action="modify",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert '<Data Name="Details">Binary Data</Data>' in content
+        assert "00 01 02 03" not in content
+
     def test_delete_renders_event12(self, emitter):
         event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),

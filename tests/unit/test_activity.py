@@ -7436,6 +7436,90 @@ class TestActivityGenerator:
         assert registry_events
         assert registry_events[-1].registry.key.startswith("HKLM\\")
 
+    def test_process_registry_uses_occurrence_aware_canonical_materializer(self):
+        """Process-owned registry effects must supply time and type before dispatch."""
+        import inspect
+
+        source = inspect.getsource(ActivityGenerator._execute_process_create_bundle)
+        assert "_key, _vname, _details, _value_type = materialize_registry_effect(" in source
+        assert "_template_user,\n                    _reg_ts," in source
+        assert "value_type=_value_type" in source
+
+    def test_process_userassist_effect_preserves_actor_session_and_time(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A process-side UserAssist effect stays owned by its Explorer session."""
+
+        class RegistryOnlyRandom:
+            def __init__(self):
+                self.random_calls = 0
+
+            def random(self):
+                self.random_calls += 1
+                return 0.1 if self.random_calls == 3 else 0.99
+
+            def choice(self, values):
+                return values[0]
+
+            def choices(self, population, weights=None, k=1):
+                return [population[0]]
+
+            def randint(self, lower, _upper):
+                return lower
+
+            def uniform(self, lower, _upper):
+                return lower
+
+            def getrandbits(self, bits):
+                return (1 << min(bits, 8)) - 1
+
+        timestamp = datetime(2027, 8, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
+        userassist_template = [
+            (
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+                r"\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\Count",
+                "{userassist_value}",
+                "{userassist_binary}",
+            )
+        ]
+
+        with (
+            patch("evidenceforge.generation.activity.generator._get_rng", RegistryOnlyRandom),
+            patch(
+                "evidenceforge.generation.activity.edr_pools.get_registry_keys_hkcu",
+                return_value=userassist_template,
+            ),
+            patch(
+                "evidenceforge.generation.activity.edr_pools.get_registry_keys_hklm",
+                return_value=[],
+            ),
+        ):
+            activity_gen.generate_process(
+                test_user,
+                test_system,
+                timestamp + timedelta(seconds=1),
+                logon_id,
+                r"C:\Windows\explorer.exe",
+                r"C:\Windows\explorer.exe",
+            )
+
+        registry_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "registry_modify"
+        ]
+        assert len(registry_events) == 1
+        event = registry_events[0]
+        assert event.process.image.lower().endswith(r"\explorer.exe")
+        assert event.process.logon_id == event.auth.logon_id == logon_id
+        assert event.registry.value_type == "binary"
+        payload = bytes.fromhex(event.registry.value)
+        filetime = int.from_bytes(payload[60:68], "little")
+        embedded_time = datetime(1601, 1, 1, tzinfo=UTC) + timedelta(microseconds=filetime // 10)
+        assert embedded_time <= event.timestamp
+
     def test_storyline_powershell_does_not_receive_generic_registry_noise(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

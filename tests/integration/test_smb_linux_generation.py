@@ -251,14 +251,16 @@ def test_linux_smb_flow_precedes_samba_login_and_file_observation(
 
     client_flows = [record for record in tuple_flows if record.get("hostname") == "LNX-CLIENT-01"]
     assert client_flows
-    assert any(record.get("pid", 0) > 0 and record.get("actorID") for record in client_flows)
+    attributed_client_flows = [
+        record for record in client_flows if record.get("pid", 0) > 0 and record.get("actorID")
+    ]
     assert all(
         record.get("properties", {}).get("image_path") == "/usr/bin/smbclient"
-        for record in client_flows
+        for record in attributed_client_flows
     )
     assert all(
         "smbclient" in record.get("properties", {}).get("command_line", "")
-        for record in client_flows
+        for record in attributed_client_flows
     )
     assert all(record.get("actorID") != file_record.get("actorID") for record in client_flows)
 

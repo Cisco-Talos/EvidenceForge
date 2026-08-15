@@ -14,7 +14,8 @@ import logging
 import random
 import re
 import shlex
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, Literal
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay
@@ -495,20 +496,92 @@ def _userassist_value_name(rng: random.Random, user: str) -> str:
     return codecs.decode(f"UEME_RUNPATH:{path}", "rot_13")
 
 
-def _userassist_binary_details(rng: random.Random) -> str:
+def _format_binary_details(data: bytes | bytearray) -> str:
+    """Return canonical binary registry data as space-delimited bytes."""
+    return " ".join(f"{byte:02X}" for byte in data)
+
+
+def _userassist_binary_details(rng: random.Random, occurrence_time: datetime) -> str:
     """Return a structured 72-byte Windows 7+ UserAssist value payload."""
     data = bytearray(72)
     run_count = rng.randint(1, 80)
     focus_count = rng.randint(0, run_count)
     focus_milliseconds = focus_count * rng.randint(1_000, 180_000)
-    # Use a plausible collection-era FILETIME while keeping this pool deterministic.
-    unix_seconds = 1_709_251_200 + rng.randint(0, 31 * 24 * 60 * 60)
-    filetime = 116_444_736_000_000_000 + unix_seconds * 10_000_000
+    normalized_time = (
+        occurrence_time.replace(tzinfo=UTC)
+        if occurrence_time.tzinfo is None
+        else occurrence_time.astimezone(UTC)
+    )
+    unix_100ns = int(normalized_time.timestamp()) * 10_000_000
+    unix_100ns += normalized_time.microsecond * 10
+    filetime = 116_444_736_000_000_000 + unix_100ns
     data[4:8] = run_count.to_bytes(4, "little")
     data[8:12] = focus_count.to_bytes(4, "little")
     data[12:16] = focus_milliseconds.to_bytes(4, "little")
     data[60:68] = filetime.to_bytes(8, "little")
-    return " ".join(f"{byte:02X}" for byte in data)
+    return _format_binary_details(data)
+
+
+def _accent_palette_binary_details(rng: random.Random) -> str:
+    """Return an eight-color, 32-byte Explorer AccentPalette value."""
+    base_red = rng.randint(40, 190)
+    base_green = rng.randint(40, 190)
+    base_blue = rng.randint(40, 190)
+    palette = bytearray()
+    for factor in (1.45, 1.28, 1.12, 1.0, 0.86, 0.72, 0.58, 0.44):
+        palette.extend(
+            (
+                min(255, round(base_red * factor)),
+                min(255, round(base_green * factor)),
+                min(255, round(base_blue * factor)),
+                0,
+            )
+        )
+    return _format_binary_details(palette)
+
+
+def _pidl_binary_details(rng: random.Random, user: str) -> str:
+    """Return a bounded ITEMIDLIST-shaped binary value with a terminal null item."""
+    username = user if user and user.upper() != "SYSTEM" else "Default"
+    filename = rng.choice(("report.docx", "budget.xlsx", "briefing.pdf", "notes.txt"))
+    path = rf"C:\Users\{username}\Documents\{filename}"
+    # Each ITEMIDLIST element begins with its total uint16 size. The final zero-size
+    # element terminates the list. The payload remains opaque canonical registry data.
+    item_payload = bytes((0x31, 0x00)) + path.encode("utf-16le") + b"\x00\x00"
+    item_size = len(item_payload) + 2
+    data = item_size.to_bytes(2, "little") + item_payload + b"\x00\x00"
+    return _format_binary_details(data)
+
+
+def _recent_docs_binary_details(rng: random.Random) -> str:
+    """Return an Explorer RecentDocs binary value with a UTF-16 filename."""
+    filename = rng.choice(("report.docx", "budget.xlsx", "briefing.pdf", "notes.txt"))
+    data = filename.encode("utf-16le") + b"\x00\x00"
+    return _format_binary_details(data)
+
+
+def registry_value_type(
+    target: str,
+    value: str,
+) -> Literal["string", "dword", "qword", "binary"]:
+    """Return the canonical registry value type for a materialized effect."""
+    target_lower = target.lower()
+    if value.startswith("DWORD ("):
+        return "dword"
+    if value.startswith("QWORD ("):
+        return "qword"
+    if any(
+        marker in target_lower
+        for marker in (
+            "\\explorer\\userassist\\",
+            "\\explorer\\accent\\accentpalette",
+            "\\comdlg32\\opensavepidlmru\\",
+            "\\comdlg32\\lastvisitedpidlmru\\",
+            "\\explorer\\recentdocs\\",
+        )
+    ):
+        return "binary"
+    return "string"
 
 
 def _stable_registry_guid(host_key: str, identity: str) -> str:
@@ -574,6 +647,7 @@ def materialize_edr_template(
     host_key: str = "",
     host_os: str = "",
     process_name: str = "",
+    occurrence_time: datetime | None = None,
 ) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
@@ -616,7 +690,9 @@ def materialize_edr_template(
         "runmru_command": _runmru_command(rng, user),
         "doc": str(rng.randint(1, 80)),
         "userassist_value": _userassist_value_name(rng, user),
-        "userassist_binary": _userassist_binary_details(rng),
+        "userassist_binary": _userassist_binary_details(
+            rng, occurrence_time or datetime(1970, 1, 1, tzinfo=UTC)
+        ),
         "package": rng.choice(
             [
                 "Package_for_RollupFix",
@@ -633,6 +709,16 @@ def materialize_edr_template(
     def _replace(match: re.Match[str]) -> str:
         nonlocal group_policy_extension_guid
         token = match.group(1)
+        if token == "userassist_binary":
+            if occurrence_time is None:
+                raise ValueError("UserAssist materialization requires occurrence_time")
+            return str(replacements[token])
+        if token == "accent_palette_binary":
+            return _accent_palette_binary_details(rng)
+        if token == "pidl_binary":
+            return _pidl_binary_details(rng, user)
+        if token == "recent_docs_binary":
+            return _recent_docs_binary_details(rng)
         if token == "group_policy_extension_guid":
             if group_policy_extension_guid is None:
                 group_policy_extension_guid = _group_policy_extension_guid(rng, host_key)
@@ -654,6 +740,7 @@ def materialize_edr_template_group(
     dns_server_ip: str = "",
     host_os: str = "",
     process_name: str = "",
+    occurrence_time: datetime | None = None,
 ) -> tuple[str, ...]:
     """Materialize related templates with one shared placeholder context."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
@@ -696,7 +783,9 @@ def materialize_edr_template_group(
         "runmru_command": _runmru_command(rng, user),
         "doc": str(rng.randint(1, 80)),
         "userassist_value": _userassist_value_name(rng, user),
-        "userassist_binary": _userassist_binary_details(rng),
+        "userassist_binary": _userassist_binary_details(
+            rng, occurrence_time or datetime(1970, 1, 1, tzinfo=UTC)
+        ),
         "package": rng.choice(
             [
                 "Package_for_RollupFix",
@@ -713,6 +802,16 @@ def materialize_edr_template_group(
     def _replace(match: re.Match[str]) -> str:
         nonlocal group_policy_extension_guid
         token = match.group(1)
+        if token == "userassist_binary":
+            if occurrence_time is None:
+                raise ValueError("UserAssist materialization requires occurrence_time")
+            return str(replacements[token])
+        if token == "accent_palette_binary":
+            return _accent_palette_binary_details(rng)
+        if token == "pidl_binary":
+            return _pidl_binary_details(rng, user)
+        if token == "recent_docs_binary":
+            return _recent_docs_binary_details(rng)
         if token == "group_policy_extension_guid":
             if group_policy_extension_guid is None:
                 group_policy_extension_guid = _group_policy_extension_guid(rng, host_key)
@@ -728,6 +827,34 @@ def materialize_edr_template_group(
         )
         for template in templates
     )
+
+
+def materialize_registry_effect(
+    templates: tuple[str, str, str],
+    rng: random.Random,
+    user: str,
+    occurrence_time: datetime,
+    *,
+    host_key: str = "",
+    host_ip: str = "",
+    dns_server_ip: str = "",
+    host_os: str = "",
+    process_name: str = "",
+) -> tuple[str, str, str, Literal["string", "dword", "qword", "binary"]]:
+    """Materialize one timestamp-aware canonical registry effect."""
+    key, value_name, value = materialize_edr_template_group(
+        templates,
+        rng,
+        user,
+        host_key=host_key,
+        host_ip=host_ip,
+        dns_server_ip=dns_server_ip,
+        host_os=host_os,
+        process_name=process_name,
+        occurrence_time=occurrence_time,
+    )
+    target = f"{key}\\{value_name}"
+    return key, value_name, value, registry_value_type(target, value)
 
 
 def select_file_side_effect(

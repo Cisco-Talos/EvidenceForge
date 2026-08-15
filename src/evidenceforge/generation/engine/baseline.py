@@ -3028,7 +3028,7 @@ class BaselineMixin:
         from evidenceforge.events.contexts import AuthContext, ProcessContext, RegistryContext
         from evidenceforge.generation.activity.edr_pools import (
             get_registry_keys_hklm,
-            materialize_edr_template_group,
+            materialize_registry_effect,
         )
         from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
 
@@ -3056,10 +3056,11 @@ class BaselineMixin:
         count = min(len(dhcp_entries), rng.randint(1, min(2, len(dhcp_entries))))
         for key_tmpl, value_tmpl, details_tmpl in rng.sample(dhcp_entries, count):
             reg_ts = time + timedelta(milliseconds=rng.randint(45, 900))
-            key, value_name, details = materialize_edr_template_group(
+            key, value_name, details, value_type = materialize_registry_effect(
                 (key_tmpl, value_tmpl, details_tmpl),
                 rng,
                 system.assigned_user or "SYSTEM",
+                reg_ts,
                 host_ip=system.ip,
                 dns_server_ip=dns_server_ip,
                 host_key=system.hostname,
@@ -3112,6 +3113,7 @@ class BaselineMixin:
                     registry=RegistryContext(
                         key=target,
                         value=value,
+                        value_type=value_type,
                         action="modify",
                         pid=reg_pid,
                     ),
@@ -8856,7 +8858,7 @@ class BaselineMixin:
                 from evidenceforge.generation.activity.edr_pools import (
                     get_registry_keys_hkcu,
                     get_registry_keys_hklm,
-                    materialize_edr_template_group,
+                    materialize_registry_effect,
                 )
                 from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
 
@@ -8917,10 +8919,11 @@ class BaselineMixin:
                     ):
                         continue
                     _template_user = system.assigned_user or "SYSTEM"
-                    _key, _vname, _details = materialize_edr_template_group(
+                    _key, _vname, _details, _value_type = materialize_registry_effect(
                         (_key, _vname, _details),
                         rng,
                         _template_user,
+                        _reg_ts,
                         host_ip=system.ip,
                         dns_server_ip=str(
                             (_dhcp_state or {}).get("server_addr")
@@ -8985,7 +8988,11 @@ class BaselineMixin:
                                 start_time=_reg_proc.start_time if _reg_proc is not None else None,
                             ),
                             registry=RegistryContext(
-                                key=_target, value=_details, action=_reg_action, pid=_reg_pid
+                                key=_target,
+                                value=_details,
+                                value_type=_value_type,
+                                action=_reg_action,
+                                pid=_reg_pid,
                             ),
                         )
                     )

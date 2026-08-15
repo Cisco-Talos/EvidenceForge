@@ -235,3 +235,63 @@
   `seclogo`/Negotiate, dash source/port, matched Security/eCAR LUIDs, and zero Type-9-owned
   `winlogon.exe`, `userinit.exe`, or `explorer.exe`. All rendered Type 2/10 siblings retained shell
   evidence; Type 11 remains covered by the focused state matrix.
+
+### Loop 16 outcome
+
+- Commit `52346e69`; deterministic evaluation remained 97/100 over 72,869 records with acceptance
+  passed. The final NewCredentials hard probe passed every identity, source, lifecycle, and desktop
+  sibling gate.
+- Frozen review corpus SHA-256 remained
+  `e6b384ce2ab14341de320253436dacba10476a896eb6480df031353789246d06` before and after review.
+- Initial blind synthetic-confidence was 23/32/31/79. Deliberation revised it to 43/45/35/68
+  (mean 47.75), an Inconclusive consensus. The Type 9 contradiction did not recur.
+- Next targets: the already-started UserAssist native encoding repair, then application-scoped
+  cache identities. Shell/TTY ownership and narrow TLS duration texture follow from this panel.
+
+## Loop 17 family contract — canonical UserAssist and binary registry effects
+
+- **Owning abstractions:** the registry-effect producer owns the occurrence timestamp, process,
+  principal/session, value type, and canonical value bytes before dispatch; shared EDR pool
+  materialization owns source-independent binary structure construction; Sysmon and eCAR remain
+  source-native projections of that one canonical effect.
+- **Invariant:** every modern UserAssist payload is one 72-byte v5 structure whose little-endian
+  FILETIME at offset 60 is nonzero and no later than its owning registry occurrence. Repeated
+  state for one host/user/value never moves its execution time or counters backward. Explorer
+  shell artifacts retain the matching user's live `explorer.exe` and session ownership. Binary
+  registry values never leak `.reg` export syntax into Sysmon; eCAR may retain useful canonical
+  bytes without inventing a second value.
+- **Entry paths:** ambient workstation registry noise and process-owned registry side effects,
+  including overlay-provided UserAssist templates. DHCP-coupled HKLM writes remain outside the
+  UserAssist family but continue using the shared registry-effect representation.
+- **Consumers:** canonical `RegistryContext`, Sysmon Event 13 target/details projection, eCAR
+  REGISTRY values and process provenance, registry-state deduplication, config validation, and
+  rendered payload/ownership hard probes.
+- **Layer rationale:** the defect is created before dispatch when a fixed-calendar UserAssist
+  FILETIME is generated without the occurrence time. An emitter-only rewrite would leave sibling
+  sources contradictory, while a baseline-only repair would miss process-side effects. The shared
+  materialization/registry-effect boundary is the smallest layer that covers every producer.
+- **Sibling risks:** preserve deterministic RNG behavior where practical; do not lose HKU/SID
+  projection, process/session provenance, or useful eCAR detail; do not make historical shell
+  state look like a new application execution; avoid counter regression and duplicate UserAssist
+  weighting; keep `AccentPalette` a 32-byte binary palette and PIDL MRUs binary rather than
+  four-byte strings when those low-risk siblings share the same owner.
+
+### Loop 17 implementation handoff
+
+- Added one occurrence-aware registry-effect materializer used by ambient, DHCP, and process-side
+  producers. Modern UserAssist values remain 72-byte v5 payloads, but their offset-60 FILETIME now
+  comes from the canonical occurrence rather than a fixed March 2024 interval. Process-side
+  coverage confirms Explorer image, principal, and logon ownership are preserved.
+- Added canonical registry value typing. Sysmon renders REG_BINARY Event 13 details opaquely as
+  `Binary Data`, while eCAR retains the shared space-delimited canonical bytes. Removed the
+  duplicate UserAssist pool entry and `.reg`-export strings; AccentPalette is now 32 bytes and
+  PIDL/RecentDocs values use bounded binary shapes.
+- Focused verification: 793 passed and 1 skipped across EDR pools, Sysmon, eCAR, baseline, and
+  activity tests. The rendered projection tests prove opaque Sysmon binary details and retained
+  eCAR bytes; non-March and repeated-time probes prove UserAssist FILETIME ordering. An additional
+  76 canonical-context, EDR-diversity, and source-timing tests passed. `eforge validate-config`
+  reported zero issues across 93 files. The full suite passed with 6,006 tests and 22 skips after
+  making the multipart acceptance sensor explicitly lossless and allowing contract-valid omitted
+  SMB FLOW actor identity when the client process is not yet source-visible. Repository-wide Ruff
+  lint and formatting checks passed. No full scenario generation, evaluation, blind review, or
+  commit has been run.

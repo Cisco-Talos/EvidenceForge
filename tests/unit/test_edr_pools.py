@@ -5,7 +5,10 @@
 
 import random
 import re
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
+
+import pytest
 
 from evidenceforge.generation.activity.edr_pools import (
     _sanitize_edr_pools,
@@ -20,8 +23,10 @@ from evidenceforge.generation.activity.edr_pools import (
     load_edr_pools,
     materialize_edr_template,
     materialize_edr_template_group,
+    materialize_registry_effect,
     normalize_defender_platform_path,
     registry_entries_for_process,
+    registry_value_type,
     select_ambient_file_churn_effect,
     select_command_file_side_effect,
     select_file_side_effect,
@@ -634,6 +639,7 @@ class TestTemplateMaterialization:
     def test_materializes_userassist_runpath_values(self):
         import random
 
+        occurrence_time = datetime(2027, 8, 15, 14, 51, 15, 89067, tzinfo=UTC)
         key, value_name, details = materialize_edr_template_group(
             (
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\Count",
@@ -642,6 +648,7 @@ class TestTemplateMaterialization:
             ),
             random.Random(17),
             "alice.smith",
+            occurrence_time=occurrence_time,
         )
 
         assert "UserAssist" in key
@@ -654,7 +661,61 @@ class TestTemplateMaterialization:
 
         payload = bytes(int(byte, 16) for byte in detail_bytes)
         assert int.from_bytes(payload[4:8], "little") >= 1
-        assert int.from_bytes(payload[60:68], "little") >= 116_444_736_000_000_000
+        filetime = int.from_bytes(payload[60:68], "little")
+        decoded = datetime(1601, 1, 1, tzinfo=UTC) + timedelta(microseconds=filetime // 10)
+        assert decoded == occurrence_time
+
+    def test_userassist_requires_occurrence_time(self):
+        with pytest.raises(ValueError, match="requires occurrence_time"):
+            materialize_edr_template("{userassist_binary}", random.Random(17))
+
+    def test_registry_effect_keeps_userassist_time_monotonic_outside_march(self):
+        template = (
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\Count",
+            "{userassist_value}",
+            "{userassist_binary}",
+        )
+        first_time = datetime(2027, 8, 15, 9, 0, tzinfo=UTC)
+        second_time = first_time + timedelta(hours=3)
+
+        first = materialize_registry_effect(template, random.Random(21), "alice.smith", first_time)
+        second = materialize_registry_effect(
+            template, random.Random(21), "alice.smith", second_time
+        )
+
+        assert first[1] == second[1]
+        assert first[3] == second[3] == "binary"
+        first_bytes = bytes.fromhex(first[2])
+        second_bytes = bytes.fromhex(second[2])
+        first_filetime = int.from_bytes(first_bytes[60:68], "little")
+        second_filetime = int.from_bytes(second_bytes[60:68], "little")
+        assert first_filetime < second_filetime
+
+    def test_binary_registry_siblings_have_native_shapes(self):
+        entries = get_registry_keys_hkcu()
+        assert sum("UserAssist" in key for key, _name, _value in entries) == 1
+        assert not any("hex:" in value.lower() for _key, _name, value in entries)
+
+        occurrence_time = datetime(2027, 8, 15, 9, 0, tzinfo=UTC)
+        accent_template = next(entry for entry in entries if entry[1] == "AccentPalette")
+        _key, _name, accent, accent_type = materialize_registry_effect(
+            accent_template, random.Random(31), "alice.smith", occurrence_time
+        )
+        assert accent_type == "binary"
+        assert len(bytes.fromhex(accent)) == 32
+
+        pidl_template = next(entry for entry in entries if "OpenSavePidlMRU" in entry[0])
+        _key, _name, pidl, pidl_type = materialize_registry_effect(
+            pidl_template, random.Random(32), "alice.smith", occurrence_time
+        )
+        pidl_bytes = bytes.fromhex(pidl)
+        assert pidl_type == "binary"
+        assert int.from_bytes(pidl_bytes[:2], "little") == len(pidl_bytes) - 2
+        assert pidl_bytes[-2:] == b"\x00\x00"
+
+    def test_registry_value_type_preserves_nonbinary_values(self):
+        assert registry_value_type(r"HKLM\Software\Test\Enabled", "DWORD (0x00000001)") == ("dword")
+        assert registry_value_type(r"HKLM\Software\Test\Name", "Example") == "string"
 
     def test_update_orchestrator_task_identity_is_host_stable(self):
         template = (

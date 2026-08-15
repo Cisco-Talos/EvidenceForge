@@ -13387,7 +13387,7 @@ class ActivityGenerator:
             from evidenceforge.generation.activity.edr_pools import (
                 get_registry_keys_hkcu,
                 get_registry_keys_hklm,
-                materialize_edr_template_group,
+                materialize_registry_effect,
                 registry_entries_for_process,
             )
 
@@ -13404,10 +13404,12 @@ class ActivityGenerator:
                     continue
                 _key, _vname, _details = rng.choice(_eligible_registry)
                 _template_user = user.username if user else "SYSTEM"
-                _key, _vname, _details = materialize_edr_template_group(
+                _reg_ts = time + timedelta(milliseconds=rng.randint(120, 950))
+                _key, _vname, _details, _value_type = materialize_registry_effect(
                     (_key, _vname, _details),
                     rng,
                     _template_user,
+                    _reg_ts,
                     host_key=system.hostname,
                     host_ip=system.ip,
                     host_os=system.os,
@@ -13419,7 +13421,7 @@ class ActivityGenerator:
                 reg_action = "modify"
                 self.dispatcher.dispatch_builder(
                     OccurrenceBuilder(
-                        timestamp=time + timedelta(milliseconds=rng.randint(120, 950)),
+                        timestamp=_reg_ts,
                         event_type="registry_modify",
                         src_host=host_ctx,
                         auth=auth_ctx,
@@ -13435,7 +13437,11 @@ class ActivityGenerator:
                             else None,
                         ),
                         registry=RegistryContext(
-                            key=_target, value=_details, action=reg_action, pid=pid
+                            key=_target,
+                            value=_details,
+                            value_type=_value_type,
+                            action=reg_action,
+                            pid=pid,
                         ),
                         storyline_origin=from_storyline,
                     )
