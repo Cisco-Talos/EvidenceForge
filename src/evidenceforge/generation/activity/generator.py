@@ -10653,6 +10653,17 @@ class ActivityGenerator:
                 source_visible_by=pam_time,
             )
             session.process_tree_root = pam_pid
+            pam_time = self._clamp_after_visible_linux_process_create(
+                system,
+                pam_pid,
+                pam_time,
+                relationship_key="source.ecar_dependent_after_process_create",
+                later_source="syslog",
+            )
+            logind_time = max(
+                logind_time,
+                pam_time + timedelta(milliseconds=rng.randint(350, 1100)),
+            )
         else:
             pam_pid = self.state_manager.allocate_transient_linux_pid(
                 system.hostname,

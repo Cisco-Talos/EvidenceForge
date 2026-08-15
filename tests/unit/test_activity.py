@@ -1703,12 +1703,13 @@ class TestActivityGenerator:
         assert process_events[0].process.username == "root"
         assert process_events[0].process.logon_id == "0x3e7"
         assert process_events[0].process.parent_pid == agetty_pid
-        assert (
-            activity_gen.process_source_create_time(
-                linux_server.hostname,
-                process_events[0].process.pid,
-            )
-            <= pam_event.timestamp
+        source_create_time = activity_gen.process_source_create_time(
+            linux_server.hostname,
+            process_events[0].process.pid,
+        )
+        assert source_create_time is not None
+        assert pam_event.timestamp >= source_create_time + (
+            dispatcher.observation_policy.maximum_delay_difference("ecar", "syslog")
         )
         login_process = state_manager.get_process(
             linux_server.hostname,
