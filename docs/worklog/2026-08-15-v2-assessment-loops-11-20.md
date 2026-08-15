@@ -346,7 +346,7 @@
   passed with 6,010 tests and 22 skips. One unrelated SMB acceptance tolerance was aligned with
   the documented two-second independent endpoint FLOW/FILE source-latency envelope.
 
-### Loop 18 implementation handoff
+### Loop 18 generation-regression follow-up
 
 - Added validated `ssh_authentication` timing profiles for password and public-key fast, typical,
   and slow-tail paths plus credential-cache misses, private/public route RTT, receiver load, and
@@ -364,3 +364,16 @@
   phase remains additive after the shared FLOW floor. `eforge validate-config` reported zero
   issues across 93 files; repository Ruff lint and formatting checks passed. No generation, blind
   review, commit, benchmark scenario edit, or generated-artifact edit was performed.
+- Authoritative generation initially exposed two lifecycle interactions. Moving the auth sample to
+  a scoped RNG had removed one historical shared-stream draw and shifted later baseline session/SCP
+  planning; the bundle now consumes that compatibility draw without using it for rendered timing.
+  More fundamentally, a slow authentication phase left the session identity canonically anchored
+  at TCP-open time, so source-visible login plus the full pre-auth interval could push an otherwise
+  valid close beyond the lifecycle tail. The SSH session occurrence and StateManager session now
+  start at the bundle-owned PAM session-open anchor; TCP transport retains its independent earlier
+  start and duration.
+- Added regression coverage for exact shared-RNG budget preservation under password and public-key
+  auth, and for a forced 20-second auth phase under enterprise collection with a session shell and
+  deferred close. The focused SSH/timing/world suite passed 144 tests, repository Ruff and diff
+  checks remained clean, and authoritative iteration-test generation completed all six hours and
+  replaced output successfully. The benchmark scenario itself was not edited.

@@ -768,6 +768,137 @@ class TestSslContextPopulation:
             assert resolved["connection"] < resolved["accepted"]
             assert resolved["accepted"] < resolved["pam"] < resolved["logind"]
 
+    @pytest.mark.parametrize(
+        ("auth_method", "legacy_bounds"),
+        [("publickey", (90, 550)), ("password", (450, 3500))],
+    )
+    def test_ssh_scoped_auth_timing_preserves_shared_rng_budget(
+        self,
+        monkeypatch,
+        auth_method,
+        legacy_bounds,
+    ):
+        """Scoped auth texture must not shift later shared-stream lifecycle planning."""
+
+        seed = 8675309
+        rng = random.Random(seed)
+        reference = random.Random(seed)
+        expected_connection = reference.randint(35, 160)
+        reference.randint(*legacy_bounds)
+        expected_pam = reference.randint(45, 180)
+        expected_logind = reference.randint(420, 760)
+
+        user = User(username="deploy", full_name="Deploy User", email="deploy@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+            source_port=51111,
+            auth_method=auth_method,
+            public_key_type="ED25519" if auth_method == "publickey" else "",
+        )
+        executor = MagicMock()
+        executor._ip_to_system = {}
+        bundle = SshSessionActionBundle(request=request, executor=executor)
+        state = ssh_session_module._SshTransportState(
+            rng=rng,
+            source_port=51111,
+            duration=60.0,
+            close_time=request.time + timedelta(seconds=60),
+            orig_bytes=2000,
+            resp_bytes=5000,
+            network_visible=True,
+            dst_host=HostContext(
+                hostname=target.hostname,
+                ip=target.ip,
+                os=target.os,
+                os_category="linux",
+                system_type="server",
+            ),
+            session_obj_id="session-object",
+        )
+        monkeypatch.setattr(
+            SshSessionActionBundle,
+            "_resolve_responder_pid",
+            lambda _bundle, _state, _connection_delay: 4242,
+        )
+
+        plan = bundle._prepare_linux_auth_plan(state)
+
+        assert plan is not None
+        assert plan.conn_delay_ms == expected_connection
+        assert plan.pam_gap_ms == expected_pam
+        assert plan.logind_gap_ms == expected_logind
+        assert rng.getstate() == reference.getstate()
+
+    def test_ssh_long_auth_phase_anchors_session_lifecycle_at_pam(self, activity_gen, monkeypatch):
+        """A slow auth phase must not shift visible closure beyond the lifecycle tail."""
+
+        gen, events = activity_gen
+        gen.dispatcher.observation_policy = ObservationPolicy("enterprise_standard")
+        monkeypatch.setattr(
+            ssh_session_module,
+            "sample_ssh_authentication_phase_ms",
+            lambda *_args, **_kwargs: 20_000,
+        )
+        user = User(username="deploy", full_name="Deploy User", email="deploy@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            duration=60.0,
+            emit_session_close=True,
+            defer_session_close=True,
+        )
+
+        login_event = next(event for event in events if event.event_type == "ssh_session")
+        pam_event = next(
+            event
+            for event in events
+            if event.syslog is not None
+            and event.syslog.message.startswith("pam_unix(sshd:session): session opened")
+        )
+        assert login_event.auth is not None
+        assert login_event.lifecycle is not None
+        assert login_event.timestamp == pam_event.timestamp
+        assert login_event.lifecycle.canonical_start == pam_event.timestamp
+        session = gen.state_manager.get_session(login_event.auth.logon_id)
+        assert session is not None
+        assert session.start_time == pam_event.timestamp
+
+        gen.ensure_linux_ssh_session_shell(
+            user=user,
+            target_system=target,
+            logon_id=login_event.auth.logon_id,
+            logon_time=base_time,
+            activity_time=pam_event.timestamp + timedelta(seconds=1),
+        )
+        gen.finalize_ssh_session_lifecycles(base_time + timedelta(minutes=2))
+
+        close_event = next(event for event in events if event.event_type == "logoff")
+        assert close_event.lifecycle is not None
+        assert close_event.lifecycle.canonical_start == pam_event.timestamp
+
     def test_ssh_connection_syslog_waits_for_ecar_collection_delay(self):
         """The same sshd PID cannot appear in syslog before its eCAR create row."""
         base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)

@@ -824,7 +824,7 @@ class SshSessionActionBundle:
 
         request = self.request
         return OccurrenceBuilder(
-            timestamp=request.time,
+            timestamp=auth_state.pam_time if auth_state is not None else request.time,
             event_type="ssh_session",
             src_host=state.src_host,
             dst_host=state.dst_host,
@@ -883,6 +883,11 @@ class SshSessionActionBundle:
             logind_gap_ms=plan.logind_gap_ms,
             transport_open_time=state.open_time or request.time,
         )
+        if state.logon_id:
+            executor.state_manager.update_session_metadata(
+                state.logon_id,
+                start_time=resolved_times["pam"],
+            )
         if request.emit_session_close:
             self._extend_transport_close_after(
                 state,
@@ -917,6 +922,15 @@ class SshSessionActionBundle:
             return None
 
         conn_delay_ms = state.rng.randint(35, 160)
+        # Preserve the established shared generation stream while the rendered
+        # authentication phase is sampled from its action-scoped RNG below.
+        # Later baseline/storyline session planning consumes this same stream,
+        # so removing the historical gap draw would shift unrelated lifecycle
+        # anchors and can place dependent SCP work after its owning SSH close.
+        if request.auth_method == "publickey":
+            state.rng.randint(90, 550)
+        else:
+            state.rng.randint(450, 3500)
         route_class = "private" if self._source_system() is not None else "public"
         accepted_gap_ms = sample_ssh_authentication_phase_ms(
             request.auth_method,
