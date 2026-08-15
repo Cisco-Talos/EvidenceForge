@@ -49,3 +49,26 @@
   world-model, eCAR object-graph, and logoff suites. A 221-test Linux/session/SSH selection also
   passed. Ruff check and format check passed for all five modified Python files.
 - Configuration validation was not required because no configuration catalog or schema changed.
+
+### Hard-probe follow-up
+
+The first regenerated probe cleared session-ID mutation and ended-LogonID reuse, but found 23 of
+736 complete Linux process pairs whose CREATE used the root `sshd: user [priv]` token
+(`0x3e7`, no terminal session ID) while TERMINATE used the attached user's SSH LogonID and logind
+session ID. All 23 were tuple-scoped receiver sshd children across APP-INT-01, DB-PROD-01,
+MAIL-CLIN-01, MAIL-EDGE-01, and sibling Linux receivers.
+
+Root cause: `RunningProcess.logon_id` was serving both as the immutable process token identity and
+as mutable session-membership metadata. `assign_process_to_session()` correctly attached the root
+sshd responder so session teardown could find it, but termination rebuilt authentication fields
+from that membership value.
+
+The canonical process state now preserves `token_logon_id` plus the exact published auth session
+ID/logon type separately from mutable teardown membership. The central create-recording path freezes
+that tuple once and rejects replacement; termination projects it while still using membership for
+session close timing and process discovery. This also preserves Windows winlogon's SYSTEM token plus
+terminal-session metadata exactly across CREATE/TERMINATE.
+
+Follow-up verification: the central membership/token invariant, SSH receiver lifecycle, Windows
+interactive winlogon, and RDP sibling tests pass. The broad relevant suite passes with 746 passed
+and 1 skipped.

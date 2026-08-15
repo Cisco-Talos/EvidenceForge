@@ -13501,6 +13501,14 @@ class ActivityGenerator:
         not_after: datetime | None = None,
     ) -> None:
         """Remember the latest rendered source timestamp for a process create."""
+        if event.process is not None and event.auth is not None:
+            self.state_manager.publish_process_auth_identity(
+                hostname,
+                pid,
+                logon_id=event.auth.logon_id,
+                session_id=event.auth.session_id,
+                logon_type=event.auth.logon_type,
+            )
         self._plan_process_source_create_times(event, not_after=not_after)
         source_timing = event.source_timing
         if source_timing is None:
@@ -14648,8 +14656,15 @@ class ActivityGenerator:
         if running_proc is not None:
             process_name = running_proc.image
         process_username = running_proc.username if running_proc is not None else user.username
-        process_logon_id = running_proc.logon_id if running_proc is not None else logon_id
-        owning_session = self.state_manager.get_session(process_logon_id)
+        process_membership_logon_id = (
+            running_proc.logon_id if running_proc is not None else logon_id
+        )
+        process_logon_id = (
+            running_proc.token_logon_id or process_membership_logon_id
+            if running_proc is not None
+            else logon_id
+        )
+        owning_session = self.state_manager.get_session(process_membership_logon_id)
         lifecycle_session = self.state_manager.get_session(logon_id)
         if (
             lifecycle_session is not None
@@ -14661,7 +14676,14 @@ class ActivityGenerator:
             # explicit relationship only for terminal-session metadata and
             # teardown timing, never to rewrite the process authentication ID.
             owning_session = lifecycle_session
-        session_logon_type = owning_session.logon_type if owning_session is not None else 0
+        token_session = self.state_manager.get_session(process_logon_id)
+        session_logon_type = (
+            running_proc.auth_logon_type
+            if running_proc is not None and running_proc.auth_logon_type is not None
+            else token_session.logon_type
+            if token_session is not None
+            else 0
+        )
         session_end_time = (
             self.state_manager.get_session_end_time(owning_session.logon_id)
             if owning_session is not None
@@ -14736,7 +14758,13 @@ class ActivityGenerator:
             "windows.process_exit_after_visible_create",
         )
         self.state_manager.get_process_object_id(system.hostname, pid)
-        process_session_id = owning_session.session_id if owning_session is not None else 0
+        process_session_id = (
+            running_proc.auth_session_id
+            if running_proc is not None and running_proc.auth_session_id is not None
+            else token_session.session_id
+            if token_session is not None
+            else 0
+        )
         event = OccurrenceBuilder(
             timestamp=time,
             event_type="process_terminate",

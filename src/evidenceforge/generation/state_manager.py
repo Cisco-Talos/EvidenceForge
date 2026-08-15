@@ -1692,6 +1692,7 @@ class StateManager:
                 start_time=normalized_start,
                 integrity_level=integrity_level,
                 logon_id=logon_id,
+                token_logon_id=logon_id,
                 ecar_object_id=object_id,
                 lifecycle_group_id=process_lifecycle_group_id,
                 parent_lifecycle_group_id=process_parent_group_id,
@@ -1826,6 +1827,7 @@ class StateManager:
                 start_time=self.state.current_time,
                 integrity_level=integrity_level,
                 logon_id=logon_id,
+                token_logon_id=logon_id,
                 ecar_object_id=ecar_object_id,
                 lifecycle_group_id=process_lifecycle_group_id,
                 parent_lifecycle_group_id=process_parent_group_id,
@@ -2150,6 +2152,9 @@ class StateManager:
         This is used when a tuple-scoped responder must be materialized before
         authentication has finished allocating the session identity. Secondary
         indexes are refreshed so later session closure can find the process.
+        The process token LogonID remains the immutable identity recorded when
+        the process was created; session membership is a lifecycle relationship,
+        not a token replacement.
         """
         with self._lock:
             key = (system, pid)
@@ -2171,6 +2176,41 @@ class StateManager:
                     )
             process.logon_id = resolved_logon_id
             self._running_processes.refresh(key)
+            return True
+
+    def publish_process_auth_identity(
+        self,
+        system: str,
+        pid: int,
+        *,
+        logon_id: str,
+        session_id: int,
+        logon_type: int,
+    ) -> bool:
+        """Freeze the authentication identity rendered for a process lifecycle."""
+        with self._lock:
+            process = self.state.running_processes.get((system, pid))
+            if process is None:
+                return False
+            published = (
+                process.token_logon_id,
+                process.auth_session_id,
+                process.auth_logon_type,
+            )
+            candidate = (logon_id, session_id, logon_type)
+            if process.auth_session_id is not None and published != candidate:
+                raise StateError(
+                    "Cannot replace published process authentication identity for "
+                    f"{system} pid={pid}: {published} -> {candidate}"
+                )
+            if process.token_logon_id and process.token_logon_id != logon_id:
+                raise StateError(
+                    "Process token LogonID disagrees with its create occurrence for "
+                    f"{system} pid={pid}: {process.token_logon_id} -> {logon_id}"
+                )
+            process.token_logon_id = logon_id
+            process.auth_session_id = session_id
+            process.auth_logon_type = logon_type
             return True
 
     def update_session_activity_time(self, logon_id: str, activity_time: datetime) -> bool:

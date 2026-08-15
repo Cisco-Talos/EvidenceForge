@@ -2009,7 +2009,41 @@ class TestProcessManagement:
         )
 
         assert sm.assign_process_to_session("linux01", pid, logon_id)
-        assert [proc.pid for proc in sm.get_processes_for_session(logon_id)] == [pid]
+        assigned = sm.get_processes_for_session(logon_id)
+        assert [proc.pid for proc in assigned] == [pid]
+        assert assigned[0].logon_id == logon_id
+        assert assigned[0].token_logon_id == ""
+
+    def test_published_process_auth_identity_is_immutable_across_session_membership(self):
+        """Session teardown membership cannot replace a process token identity."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(start)
+        logon_id = sm.create_session("deploy", "linux01", 10, "10.0.10.50")
+        pid = sm.create_process(
+            "linux01",
+            0,
+            "/usr/sbin/sshd",
+            "sshd: deploy [priv]",
+            "root",
+            "System",
+            "0x3e7",
+        )
+
+        assert sm.publish_process_auth_identity(
+            "linux01", pid, logon_id="0x3e7", session_id=0, logon_type=0
+        )
+        assert sm.assign_process_to_session("linux01", pid, logon_id)
+        process = sm.get_process("linux01", pid)
+        assert process is not None
+        assert process.logon_id == logon_id
+        assert process.token_logon_id == "0x3e7"
+        assert process.auth_session_id == 0
+
+        with pytest.raises(StateError, match="Cannot replace published process"):
+            sm.publish_process_auth_identity(
+                "linux01", pid, logon_id=logon_id, session_id=77, logon_type=10
+            )
 
     def test_update_session_activity_time_keeps_latest(self):
         """Session activity marker should track the latest dependent event."""

@@ -700,6 +700,7 @@ def test_world_planner_bootstraps_ssh_session(
     assert session.source_ip == systems["WKS-01"].ip
     assert session.source_port > 0
     assert session.transport_pid is not None
+    responder_pid = session.transport_pid
     assert session.session_shell_pid is not None
     assert session.source_ready_time is not None
     assert session.network_close_time is not None
@@ -749,7 +750,9 @@ def test_world_planner_bootstraps_ssh_session(
         and event.process.command_line == f"sshd: {users['alice.admin'].username} [priv]"
     ]
     assert len(sshd_events) == 1
-    assert sshd_events[0].process.pid == session.transport_pid
+    assert sshd_events[0].process.pid == responder_pid
+    assert sshd_events[0].auth.logon_id == "0x3e7"
+    assert sshd_events[0].auth.session_id == 0
     assert bash_events[0].process.parent_image == "/usr/sbin/sshd"
     assert session.transport_pid > 180_000
     assert result.network_uid
@@ -802,6 +805,13 @@ def test_world_planner_bootstraps_ssh_session(
         and call.args[0].process is not None
         and call.args[0].process.pid == session_shell_pid
     )
+    responder_terminate_event = next(
+        call.args[0]
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+        if call.args[0].event_type == "process_terminate"
+        and call.args[0].process is not None
+        and call.args[0].process.pid == responder_pid
+    )
     session_close_event = next(
         call.args[0]
         for call in mock_emitters["windows_event_security"].emit.call_args_list
@@ -810,6 +820,8 @@ def test_world_planner_bootstraps_ssh_session(
         and call.args[0].auth.logon_id == session.logon_id
     )
     assert shell_terminate_event.timestamp < session_close_event.timestamp
+    assert responder_terminate_event.auth.logon_id == sshd_events[0].auth.logon_id
+    assert responder_terminate_event.auth.session_id == sshd_events[0].auth.session_id
 
 
 def test_world_planner_materializes_visible_shell_for_reused_ssh_session(

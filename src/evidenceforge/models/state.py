@@ -125,6 +125,9 @@ class RunningProcess:
     integrity_level: str
     last_activity_time: datetime | None = None
     logon_id: str = ""
+    token_logon_id: str = ""
+    auth_session_id: int | None = None
+    auth_logon_type: int | None = None
     ecar_object_id: str = ""
     story_created: bool = False
     primary_tid: int = -1
