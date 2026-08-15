@@ -114,6 +114,8 @@ class ActiveProxyTunnel:
     uid: str
     closes_at: datetime
     source_port: int
+    remaining_cs_bytes: int
+    remaining_sc_bytes: int
 
 
 class ProxyTransactionExecutor(Protocol):
@@ -336,7 +338,16 @@ class ProxyTransactionActionBundle:
                         proxy_context,
                         request.time,
                     )
-                    if reused_transaction.close_at <= active_tunnel.closes_at:
+                    child_cs_bytes = max(0, int(proxy_context.cs_bytes or 0))
+                    child_sc_bytes = max(0, int(proxy_context.sc_bytes or 0))
+                    has_payload_capacity = (
+                        child_cs_bytes <= active_tunnel.remaining_cs_bytes
+                        and child_sc_bytes <= active_tunnel.remaining_sc_bytes
+                    )
+                    if (
+                        reused_transaction.close_at <= active_tunnel.closes_at
+                        and has_payload_capacity
+                    ):
                         proxy_context = replace(
                             proxy_context,
                             transaction=reused_transaction,
@@ -347,6 +358,8 @@ class ProxyTransactionActionBundle:
                             uid=active_tunnel.uid,
                             closes_at=active_tunnel.closes_at,
                             source_port=active_tunnel.source_port,
+                            remaining_cs_bytes=(active_tunnel.remaining_cs_bytes - child_cs_bytes),
+                            remaining_sc_bytes=(active_tunnel.remaining_sc_bytes - child_sc_bytes),
                         )
                         self._dispatch_reused_tunnel_proxy_request(
                             proxy_context=proxy_context,
@@ -569,6 +582,18 @@ class ProxyTransactionActionBundle:
                 uid=client_uid,
                 closes_at=client_time + timedelta(seconds=client_duration),
                 source_port=src_port,
+                remaining_cs_bytes=max(
+                    0,
+                    client_orig_bytes
+                    - phase_plan.tunnel_setup_cs_bytes
+                    - max(0, int(proxy_context.cs_bytes or 0)),
+                ),
+                remaining_sc_bytes=max(
+                    0,
+                    client_resp_bytes
+                    - phase_plan.tunnel_setup_sc_bytes
+                    - max(0, int(proxy_context.sc_bytes or 0)),
+                ),
             )
         return client_uid
 

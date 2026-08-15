@@ -4,6 +4,7 @@
 """Explicit proxy generation and visibility tests."""
 
 import random
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -3627,7 +3628,7 @@ class TestExplicitProxyVisibility:
         assert egress_events[0].protocol.ssl is not None
         assert egress_events[0].protocol.ssl.established is True
 
-    def test_https_subresources_reuse_active_connect_tunnel(self):
+    def test_https_subresources_reuse_preplanned_payload_capacity(self):
         from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 
         generator, emitters = _generator(
@@ -3671,6 +3672,12 @@ class TestExplicitProxyVisibility:
         pairs_after_first = list(_conn_pairs(emitters))
         proxy_calls_after_first = emitters["proxy_access"].emit.call_count
         ssl_calls_after_first = emitters["zeek_ssl"].emit.call_count
+        tunnel_key, active_tunnel = next(iter(generator._explicit_proxy_tunnels.items()))
+        generator._explicit_proxy_tunnels[tunnel_key] = replace(
+            active_tunnel,
+            remaining_cs_bytes=10_000,
+            remaining_sc_bytes=100_000,
+        )
         reused_uid = generator.generate_connection(
             src_ip="10.0.1.10",
             dst_ip="93.184.216.34",
@@ -3705,11 +3712,14 @@ class TestExplicitProxyVisibility:
         assert emitters["proxy_access"].emit.call_count == proxy_calls_after_first + 1
         reused_proxy_event = emitters["proxy_access"].emit.call_args.args[0]
         assert reused_proxy_event.network.application_layer_only is True
-        assert reused_proxy_event.network.zeek_uid == first_uid
+        assert reused_proxy_event.network.zeek_uid == reused_uid
         assert reused_proxy_event.protocol.proxy.url == "https://example.com/app.js"
         assert emitters["zeek_ssl"].emit.call_count == ssl_calls_after_first
+        updated_tunnel = generator._explicit_proxy_tunnels[tunnel_key]
+        assert updated_tunnel.remaining_cs_bytes < 10_000
+        assert updated_tunnel.remaining_sc_bytes < 100_000
 
-    def test_tight_successful_https_requests_each_emit_proxy_request_on_reused_tunnel(self):
+    def test_tight_https_requests_open_transports_when_payload_capacity_is_consumed(self):
         generator, emitters = _generator(
             [
                 NetworkSensor(
@@ -3722,8 +3732,7 @@ class TestExplicitProxyVisibility:
             ]
         )
         start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-        first_uid = ""
-        pairs_after_first: list[tuple[str, str, int]] = []
+        seen_uids: set[str] = set()
 
         for idx in range(12):
             uid = generator.generate_connection(
@@ -3751,23 +3760,16 @@ class TestExplicitProxyVisibility:
                     status_msg="OK",
                 ),
             )
-            if idx == 0:
-                first_uid = uid
-                pairs_after_first = list(_conn_pairs(emitters))
-            else:
-                assert uid == first_uid
-                assert _conn_pairs(emitters) == pairs_after_first
+            seen_uids.add(uid)
 
         assert emitters["proxy_access"].emit.call_count == 12
+        assert len(seen_uids) == 12
         app_layer_proxy_events = [
             call.args[0]
             for call in emitters["proxy_access"].emit.call_args_list
             if call.args[0].network.application_layer_only
         ]
-        assert len(app_layer_proxy_events) == 11
-        assert {event.protocol.proxy.url for event in app_layer_proxy_events} == {
-            f"https://example.com/api/export/qlattice?page={idx}" for idx in range(2, 13)
-        }
+        assert app_layer_proxy_events == []
 
     def test_https_request_after_transport_close_emits_new_transport(self):
         generator, emitters = _generator(
@@ -3989,7 +3991,7 @@ class TestExplicitProxyVisibility:
                 status_msg="OK",
             ),
         )
-        assert emitters["snort_alert"].emit.call_count == 2
+        assert emitters["snort_alert"].emit.call_count == 4
 
     def test_denied_request_stops_before_origin_side_sources(self):
         generator, emitters = _generator(
