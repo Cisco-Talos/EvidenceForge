@@ -446,6 +446,55 @@
   diff checks passed. The full repository suite passed with 6,015 tests and 22 skips. No scenario,
   generated corpus, blind artifact, or commit was changed.
 
+## Loop 20 family contract — polkit authorization process identity and visibility
+
+- **Owning abstractions:** the baseline polkit action family owns one authorization occurrence,
+  including its subject process, invoking principal, authentication principal, outcome, and
+  authorization timestamp; the canonical process-execution bundle owns source-visible CREATE
+  timing for that already-resolved process identity.
+- **Invariant:** an in-window polkit authorization row may reference a modeled PID only after that
+  PID's eCAR PROCESS/CREATE is visible on the same host clock. Foreground CLI subjects retain the
+  selected invoking principal and a same-principal visible shell parent; resident PackageKit and
+  NetworkManager subjects remain root-owned singletons. Successful authorization authenticates as
+  root while reporting the canonical subject owner; explicitly failed reboot authorization does
+  not fabricate a successful privilege transition or a mismatched initiator.
+- **Entry paths:** workstation and server extra-syslog polkit entries, foreground `systemctl`,
+  `loginctl`, `pkcon`, `nmcli`, and `timedatectl` clients, resident `packagekitd` and
+  `NetworkManager` subjects, registered/unregistered desktop-agent messages, and boundary-start
+  fallback PID allocation.
+- **Consumers:** canonical `RunningProcess` ownership and parentage, eCAR PROCESS/CREATE and
+  PROCESS/TERMINATE rows, polkit `unix-process:PID:start-time` subjects, authentication/owner text,
+  bash/session ancestry, and source-observation timing.
+- **Layer rationale:** the contradiction is created when the polkit family emits a dependent
+  syslog occurrence without telling the process bundle that CREATE must be source-visible first,
+  while independently sampled template principals can disagree with the chosen subject. The
+  authorization owner must pass one resolved context into process construction and rendering;
+  emitter timestamp or string rewrites would leave canonical ownership and sibling evidence
+  inconsistent.
+- **Sibling risks:** preserve source-native collection latency outside dependent ordering, process
+  parent-before-child visibility, daemon singleton reuse, short foreground lifetimes, explicit
+  failed-reboot semantics, desktop-agent session/bus texture, scenario-boundary admission,
+  deterministic RNG use, and non-polkit process spacing.
+
+### Loop 20 implementation handoff
+
+- Added one immutable polkit authorization plan that resolves action, subject process, invoking
+  owner, authentication principal, and outcome together. Foreground CLI processes now consume the
+  same subject owner rendered in polkit text; successful elevation authenticates as root, while
+  explicitly failed reboot attempts retain the invoking subject instead of sampling an unrelated
+  principal. Resident PackageKit/NetworkManager subjects remain root-owned.
+- Propagated the polkit dependency deadline through the visible Linux shell and CLI process. Loose
+  user shells without a modeled logon now start before their child rather than being synthesized
+  after the requested activity. Source-timing identity finalization reuses the process bundle's
+  already-constrained eCAR CREATE observation instead of replacing it with an unconstrained
+  sample.
+- The rendered invariant test proves same-principal shell ancestry and
+  `shell CREATE < CLI CREATE <= polkit timestamp`; sibling tests cover daemon reuse, successful
+  versus failed authentication identity, unsuccessful reboot semantics, and desktop-agent
+  behavior. Focused polkit coverage passed 9 tests; broader activity, source-timing, baseline, and
+  system-traffic coverage passed 668 tests with 1 skip. Targeted Ruff lint, format, and diff checks
+  passed. No config, scenario, generated corpus, blind artifact, or commit was changed.
+
 ### Loop 19 outcome
 
 - Commit `640c6f82`; evaluation remained 97.3908/100 over 77,150 records. The rendered source-side

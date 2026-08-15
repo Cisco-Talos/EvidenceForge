@@ -20040,6 +20040,7 @@ class ActivityGenerator:
         activity_time: datetime,
         logon_id: str = "",
         logon_time: datetime | None = None,
+        source_visible_by: datetime | None = None,
     ) -> int | None:
         """Create or return a source-visible Linux shell parent for loose user work."""
         activity_time = ensure_utc(activity_time)
@@ -20078,12 +20079,17 @@ class ActivityGenerator:
         ):
             parent_pid = self._linux_anchor_pid(target_system, activity_time)
 
-        base_time = ensure_utc(logon_time) if logon_time is not None else activity_time
         shell_seed = _stable_seed(
             "linux_visible_shell_parent:"
             f"{target_system.hostname}:{user.username}:{logon_id}:{activity_time.isoformat()}"
         )
-        shell_time = base_time + timedelta(milliseconds=160 + (shell_seed % 1100))
+        readiness_gap = timedelta(milliseconds=2000 + (shell_seed % 5000))
+        base_time = ensure_utc(logon_time) if logon_time is not None else None
+        shell_time = (
+            base_time + timedelta(milliseconds=160 + (shell_seed % 1100))
+            if base_time is not None
+            else activity_time - readiness_gap
+        )
         scenario_start = getattr(self, "_scenario_start_time", None)
         if scenario_start is not None:
             scenario_start = ensure_utc(scenario_start)
@@ -20095,9 +20101,8 @@ class ActivityGenerator:
             scenario_floor = scenario_start + timedelta(milliseconds=350 + (shell_seed % 2200))
             pre_command_gap = timedelta(seconds=3 + (shell_seed % 60))
             shell_time = max(scenario_floor, activity_time - pre_command_gap)
-        readiness_gap = timedelta(milliseconds=2000 + (shell_seed % 5000))
         latest_shell_time = activity_time - readiness_gap
-        if shell_time > latest_shell_time and latest_shell_time > base_time:
+        if shell_time > latest_shell_time and (base_time is None or latest_shell_time > base_time):
             shell_time = latest_shell_time
 
         return self.generate_process(
@@ -20109,6 +20114,7 @@ class ActivityGenerator:
             command_line="-bash",
             parent_pid=parent_pid,
             suppress_command_file_effect=True,
+            source_visible_by=source_visible_by,
         )
 
     def generate_bash_command(

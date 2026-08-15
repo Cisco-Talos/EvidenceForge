@@ -197,6 +197,17 @@ class _BaselineSmbIntent:
     emit_dns: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _PolkitAuthorizationPlan:
+    """Canonical subject and outcome for one polkit authorization occurrence."""
+
+    action_id: str
+    process_path: str
+    subject_user: str
+    authentication_user: str
+    template: str
+
+
 _BASELINE_INTERACTIVE_STARTUP_WINDOW_SECONDS = 300.0
 _BASELINE_INTERACTIVE_STARTUP_INITIAL_DELAY_SECONDS = (35.0, 95.0)
 _BASELINE_INTERACTIVE_STARTUP_GAP_SECONDS = (12.0, 45.0)
@@ -2545,6 +2556,34 @@ class BaselineMixin:
             "for system-bus-name::1.{bus_id} [{process_path}] (owned by unix-user:{subject_user})"
         )
 
+    def _plan_polkit_authorization(
+        self,
+        entry: dict[str, Any],
+        rng: random.Random,
+        system: Any,
+        template: str,
+    ) -> _PolkitAuthorizationPlan:
+        """Resolve one coherent polkit subject, authentication identity, and outcome."""
+        action_id, process_path = self._polkit_action_profile_for_system(entry, rng, system)
+        subject_user = str(
+            rng.choice(
+                (entry.get("params") or {}).get("subject_user") or ["root", "admin", "deploy"]
+            )
+        )
+        if not self._polkit_action_process_is_user_cli(process_path):
+            subject_user = "root"
+        resolved_template = self._polkit_action_message_template(action_id, template)
+        authentication_user = (
+            "root" if "successfully authenticated" in resolved_template else subject_user
+        )
+        return _PolkitAuthorizationPlan(
+            action_id=action_id,
+            process_path=process_path,
+            subject_user=subject_user,
+            authentication_user=authentication_user,
+            template=resolved_template,
+        )
+
     @staticmethod
     def _polkit_action_process_is_user_cli(process_path: str) -> bool:
         """Return whether a polkit companion process is a foreground CLI client."""
@@ -2633,6 +2672,7 @@ class BaselineMixin:
                     user=user,
                     target_system=system,
                     activity_time=process_time,
+                    source_visible_by=timestamp,
                 )
             if visible_parent is not None:
                 parent_pid = visible_parent
@@ -2646,6 +2686,7 @@ class BaselineMixin:
                     command_line=command_line,
                     parent_pid=parent_pid,
                     suppress_command_file_effect=True,
+                    source_visible_by=timestamp,
                 )
                 self._schedule_foreground_process_termination(
                     user=user,
@@ -2700,25 +2741,15 @@ class BaselineMixin:
             if template.startswith("Registered"):
                 host_agents.append(agent)
 
-        action_id, action_process_path = self._polkit_action_profile_for_system(
-            entry,
-            rng,
-            system,
-        )
-        subject_user = rng.choice(
-            (entry.get("params") or {}).get("subject_user") or ["root", "admin", "deploy"]
-        )
-        if not self._polkit_action_process_is_user_cli(action_process_path):
-            subject_user = "root"
-        template = self._polkit_action_message_template(action_id, template)
+        authorization = self._plan_polkit_authorization(entry, rng, system, template)
         process_id = None
-        if "action {action_id}" in template:
+        if "action {action_id}" in authorization.template:
             process_id = self._materialize_polkit_action_process(
                 system=system,
                 timestamp=timestamp,
-                action_id=action_id,
-                process_path=action_process_path,
-                subject_user=str(subject_user),
+                action_id=authorization.action_id,
+                process_path=authorization.process_path,
+                subject_user=authorization.subject_user,
                 rng=rng,
                 sys_pids=sys_pids,
             )
@@ -2727,17 +2758,20 @@ class BaselineMixin:
                 hostname, timestamp, os_category=_get_os_category(system.os)
             )
         values = {
-            "action_id": action_id,
+            "action_id": authorization.action_id,
+            "auth_user": authorization.authentication_user,
             "bus_id": agent["bus_id"],
             "monotonic_start": self._polkit_process_start_ticks(hostname, process_id, timestamp),
-            "process_path": action_process_path
-            if "action {action_id}" in template
+            "process_path": authorization.process_path
+            if "action {action_id}" in authorization.template
             else agent["process_path"],
-            "subject_user": str(subject_user),
+            "subject_user": authorization.subject_user,
         }
-        positional = agent["session_id"] if "unix-session:{0}" in template else process_id
+        positional = (
+            agent["session_id"] if "unix-session:{0}" in authorization.template else process_id
+        )
         return render_extra_syslog_message(
-            {**entry, "messages": [template]},
+            {**entry, "messages": [authorization.template]},
             rng,
             positional_value=positional,
             system_services=system.services,

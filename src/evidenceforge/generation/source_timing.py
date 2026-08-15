@@ -1496,6 +1496,20 @@ class SourceTimingPlanner:
                 cached = not_before
                 self._ecar_process_create_times[identity.object_id] = cached
             return cached
+        if event.source_timing is not None:
+            # Process bundles can pre-plan a hard dependency deadline before
+            # identity finalization. Reuse that constrained observation instead
+            # of sampling an unconstrained replacement for the same identity.
+            planned_key = self._cache_key(
+                "source.ecar_process_create",
+                (identity.hostname, identity.pid, identity.started_at),
+            )
+            cached = event.source_timing.source_times.get(planned_key)
+            if cached is not None:
+                if not_before is not None and cached < not_before:
+                    cached = not_before
+                self._ecar_process_create_times[identity.object_id] = cached
+                return cached
         anchor = self.initialize_event(
             replace(
                 event,

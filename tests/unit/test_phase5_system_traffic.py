@@ -495,6 +495,49 @@ def test_polkit_action_messages_materialize_companion_process(linux_system, stat
     assert call["parent_pid"] == 3131
     assert call["user"].username == "deploy"
     assert call["time"] < timestamp
+    assert call["source_visible_by"] == timestamp
+    assert (
+        engine.activity_generator.ensure_linux_visible_shell_parent.call_args.kwargs[
+            "source_visible_by"
+        ]
+        == timestamp
+    )
+
+
+def test_polkit_authorization_plan_keeps_subject_and_authentication_coherent(
+    linux_system, state_manager
+):
+    """Polkit owner and authentication identities come from one authorization plan."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    engine._polkit_action_profile_for_system = lambda _entry, _rng, _system: (
+        "org.freedesktop.systemd1.manage-units",
+        "/usr/bin/systemctl",
+    )
+    entry = {"params": {"subject_user": ["deploy"]}}
+
+    success = engine._plan_polkit_authorization(
+        entry,
+        random.Random(43),
+        linux_system,
+        "Operator successfully authenticated for action {action_id}",
+    )
+    assert success.subject_user == "deploy"
+    assert success.authentication_user == "root"
+
+    engine._polkit_action_profile_for_system = lambda _entry, _rng, _system: (
+        "org.freedesktop.login1.reboot",
+        "/usr/bin/systemctl",
+    )
+    failure = engine._plan_polkit_authorization(
+        entry,
+        random.Random(47),
+        linux_system,
+        "Operator successfully authenticated for action {action_id}",
+    )
+    assert failure.subject_user == "deploy"
+    assert failure.authentication_user == "deploy"
+    assert "failed to authenticate" in failure.template
 
 
 def test_polkit_resident_networkmanager_reuses_root_daemon_without_duplicate(
@@ -582,11 +625,32 @@ def test_polkit_cli_companion_process_uses_visible_user_shell(
         and event.process is not None
         and event.process.pid == pid
     )
+    shell_create_event = next(
+        event
+        for event in emitted_events
+        if event.event_type == "process_create"
+        and event.process is not None
+        and event.process.pid == create_event.process.parent_pid
+    )
 
     assert pid is not None
+    assert shell_create_event.source_timing is not None
+    assert create_event.source_timing is not None
+    shell_ecar_create_time = next(
+        source_time
+        for key, source_time in shell_create_event.source_timing.source_times.items()
+        if key.startswith("source.ecar_process_create|")
+    )
+    process_ecar_create_time = next(
+        source_time
+        for key, source_time in create_event.source_timing.source_times.items()
+        if key.startswith("source.ecar_process_create|")
+    )
     assert create_event.auth.username == "deploy"
     assert create_event.process.parent_image == "/bin/bash"
     assert create_event.process.parent_pid != 1
+    assert shell_create_event.auth.username == "deploy"
+    assert shell_ecar_create_time < process_ecar_create_time <= timestamp
     assert terminate_event.timestamp > create_event.timestamp
 
 
