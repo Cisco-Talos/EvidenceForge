@@ -10377,6 +10377,11 @@ class ActivityGenerator:
         requires_logon_guid = auth_pkg.get("LogonGuid") != "{00000000-0000-0000-0000-000000000000}"
 
         # Phase 1: Allocate or resolve IDs from StateManager
+        local_linux_session = (
+            os_cat == "linux"
+            and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
+            and session_kind not in _LINUX_REMOTE_SESSION_KINDS
+        )
         if logon_id is None:
             logon_id = self.state_manager.create_session(
                 username=user.username,
@@ -10393,6 +10398,7 @@ class ActivityGenerator:
                 auth_session_ref=request.auth_session_ref,
                 effective_uid=request.effective_uid,
                 effective_gid=request.effective_gid,
+                session_id=0 if local_linux_session else None,
             )
         else:
             existing_session = self.state_manager.get_session(logon_id)
@@ -10414,6 +10420,7 @@ class ActivityGenerator:
                     auth_session_ref=request.auth_session_ref,
                     effective_uid=request.effective_uid,
                     effective_gid=request.effective_gid,
+                    session_id=0 if local_linux_session else None,
                 )
             else:
                 self.state_manager.update_session_metadata(
@@ -10435,6 +10442,9 @@ class ActivityGenerator:
             ):
                 time = existing_session.start_time
                 self.state_manager.set_current_time(time)
+
+        if local_linux_session:
+            self._ensure_linux_local_session_id(user, system, time, logon_id)
 
         if request.session_end_plan is not None:
             self.state_manager.plan_session_end(logon_id, request.session_end_plan)
@@ -10829,13 +10839,8 @@ class ActivityGenerator:
             _stable_seed(f"linux_local_logon_syslog:{system.hostname}:{user.username}:{logon_id}")
         )
         logind_time = time - timedelta(milliseconds=rng.randint(20, 80))
-        session_id = self.state_manager.next_linux_logind_session_id(
-            system.hostname,
-            rng,
-            logind_time,
-        )
+        session_id = self._ensure_linux_local_session_id(user, system, time, logon_id)
         self._linux_local_logind_session_ids[logon_id] = session_id
-        self.state_manager.update_session_metadata(logon_id, session_id=session_id)
         system_type = (system.type or "workstation").lower()
         pam_service = (
             "login"
@@ -10920,6 +10925,32 @@ class ActivityGenerator:
         )
 
         self._linux_local_logon_syslog_sessions.add(logon_id)
+
+    def _ensure_linux_local_session_id(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+    ) -> int:
+        """Allocate a local Linux logind identity before publishing session members."""
+        session = self.state_manager.get_session(logon_id)
+        if session is None:
+            raise StateError(f"Cannot allocate Linux session ID for unknown LogonID {logon_id}")
+        if session.session_id > 0:
+            return session.session_id
+
+        rng = random.Random(
+            _stable_seed(f"linux_local_logon_syslog:{system.hostname}:{user.username}:{logon_id}")
+        )
+        logind_time = ensure_utc(time) - timedelta(milliseconds=rng.randint(20, 80))
+        session_id = self.state_manager.next_linux_logind_session_id(
+            system.hostname,
+            rng,
+            logind_time,
+        )
+        self.state_manager.update_session_metadata(logon_id, session_id=session_id)
+        return session_id
 
     def _emit_dc_ntlm_for_logon(
         self,
@@ -26401,7 +26432,7 @@ class ActivityGenerator:
             )
             scenario_start = getattr(self, "_scenario_start_time", None)
             scenario_start = ensure_utc(scenario_start) if scenario_start is not None else None
-            logon_id = f"0x{session_seed & 0x0FFFFFFF:x}"
+            logon_id = self.state_manager.allocate_logon_id(system.hostname, session_time)
             if scenario_start is not None and session_time < scenario_start:
                 self.state_manager.register_session(
                     logon_id=logon_id,
@@ -26412,7 +26443,9 @@ class ActivityGenerator:
                     start_time=session_time,
                     session_kind="interactive",
                     lifecycle_group_id=lifecycle_group_id,
+                    session_id=0,
                 )
+                self._ensure_linux_local_session_id(user, system, session_time, logon_id)
             else:
                 logon_id = self.generate_logon(
                     user=user,

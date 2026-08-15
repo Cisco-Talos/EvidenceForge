@@ -755,9 +755,17 @@ class StateManager:
         through ``create_session()``.
         """
         with self._lock:
-            existing = self.state.active_sessions.get(logon_id)
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            existing = self.state.active_sessions.get(logon_id) or self.state.active_sessions.get(
+                resolved_logon_id
+            )
             if existing is not None:
                 return existing
+            if logon_id in self._ended_sessions or resolved_logon_id in self._ended_sessions:
+                raise StateError(
+                    "Cannot register a new session with ended LogonID "
+                    f"{logon_id}; allocate a fresh canonical LogonID"
+                )
             self._mark_logon_id_used(logon_id)
 
             windows_session_id = (
@@ -875,6 +883,11 @@ class StateManager:
                     )
                 session.logon_guid = logon_guid
             if session_id is not None:
+                if session.session_id not in {0, session_id}:
+                    raise StateError(
+                        "Cannot replace published session ID for "
+                        f"{logon_id}: {session.session_id} -> {session_id}"
+                    )
                 session.session_id = session_id
             if lifecycle_group_id is not None:
                 session.lifecycle_group_id = lifecycle_group_id

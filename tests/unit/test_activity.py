@@ -1758,7 +1758,56 @@ class TestActivityGenerator:
         assert child_pid is not None
         assert len(sessions) == 1
         assert sessions[0].start_time < scenario_start
+        assert sessions[0].session_id > 0
         assert "logon" not in emitted_types
+
+    def test_linux_sudo_bootstrap_allocates_fresh_identity_after_completed_session(
+        self, state_manager, test_user
+    ):
+        """A reused TTY must not resurrect the prior completed session's LogonID."""
+        ecar_emitter = Mock()
+        ecar_emitter.can_handle.return_value = True
+        emitters = {"ecar": ecar_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        scenario_start = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        activity_gen._scenario_start_time = scenario_start
+        activity_gen._scenario_end_time = scenario_start + timedelta(hours=6)
+        linux_server = System(
+            hostname="APP-LINUX-01",
+            ip="10.0.0.42",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+
+        activity_gen.generate_linux_sudo_processes(
+            system=linux_server,
+            sudo_time=scenario_start + timedelta(seconds=30),
+            child_time=scenario_start + timedelta(seconds=30, milliseconds=200),
+            sudo_user=test_user.username,
+            tty="pts/1",
+            command="/usr/bin/id",
+            reserve_until=scenario_start + timedelta(seconds=32),
+            lifecycle_group_id="sudo-first",
+        )
+        first = state_manager.get_sessions_for_user(test_user.username)[0]
+        assert state_manager.end_session(first.logon_id, scenario_start + timedelta(minutes=1))
+
+        activity_gen.generate_linux_sudo_processes(
+            system=linux_server,
+            sudo_time=scenario_start + timedelta(minutes=5),
+            child_time=scenario_start + timedelta(minutes=5, milliseconds=200),
+            sudo_user=test_user.username,
+            tty="pts/1",
+            command="/usr/bin/hostname",
+            reserve_until=scenario_start + timedelta(minutes=5, seconds=2),
+            lifecycle_group_id="sudo-second",
+        )
+        second = state_manager.get_sessions_for_user(test_user.username)[0]
+
+        assert second.logon_id != first.logon_id
+        assert second.ecar_object_id != first.ecar_object_id
+        assert second.session_id != first.session_id
 
     def test_linux_sudo_reuses_eligible_live_session_across_ttys(self, state_manager, test_user):
         """Sudo terminal changes should not create duplicate local login sessions."""

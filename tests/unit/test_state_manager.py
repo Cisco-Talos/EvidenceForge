@@ -1463,6 +1463,54 @@ class TestSessionManagement:
 
         assert int("0x123456", 16) in sm._used_logon_ids
 
+    def test_register_session_rejects_reuse_of_ended_logon_id(self):
+        """One canonical LogonID cannot identify two complete session lifecycles."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.register_session(
+            logon_id="0x123456",
+            username="alice",
+            system="LNX-01",
+            logon_type=2,
+            source_ip="-",
+            start_time=start,
+            session_kind="interactive",
+            session_id=41,
+        )
+        assert sm.end_session("0x123456", start + timedelta(minutes=5))
+
+        with pytest.raises(StateError, match="ended LogonID"):
+            sm.register_session(
+                logon_id="0x123456",
+                username="alice",
+                system="LNX-01",
+                logon_type=2,
+                source_ip="-",
+                start_time=start + timedelta(minutes=10),
+                session_kind="interactive",
+                session_id=42,
+            )
+
+    def test_session_id_can_be_assigned_once_but_not_replaced(self):
+        """Bundle-owned assignment may fill zero but published identity is immutable."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        session = sm.register_session(
+            logon_id="0x123456",
+            username="alice",
+            system="LNX-01",
+            logon_type=10,
+            source_ip="192.0.2.10",
+            start_time=start,
+            session_kind="ssh",
+            session_id=0,
+        )
+
+        assert sm.update_session_metadata(session.logon_id, session_id=41)
+        assert sm.update_session_metadata(session.logon_id, session_id=41)
+        with pytest.raises(StateError, match="Cannot replace published session ID"):
+            sm.update_session_metadata(session.logon_id, session_id=42)
+
     def test_create_session_requires_current_time(self):
         """Test that creating session fails if current_time not set."""
         sm = StateManager()

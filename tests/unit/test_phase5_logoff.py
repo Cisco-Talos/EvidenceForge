@@ -423,6 +423,59 @@ class TestLogoffLinux:
         event = mock_emitters["ecar"].emit.call_args[0][0]
         assert event.event_type == "logoff"
 
+    @pytest.mark.parametrize("system_type", ["workstation", "server"])
+    def test_local_process_lifecycle_keeps_canonical_session_identity(
+        self,
+        activity_gen,
+        test_user,
+        linux_system,
+        timestamp,
+        state_manager,
+        mock_emitters,
+        system_type,
+    ):
+        """GDM and console process endpoints retain their owning logind identity."""
+        linux_system = linux_system.model_copy(update={"type": system_type})
+        logon_id = activity_gen.generate_logon(test_user, linux_system, timestamp)
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.session_id > 0
+        expected_session_id = session.session_id
+        mock_emitters["ecar"].reset_mock()
+
+        pid = activity_gen.generate_process(
+            test_user,
+            linux_system,
+            timestamp + timedelta(seconds=10),
+            logon_id,
+            "/usr/bin/id",
+            "id",
+            parent_pid=0,
+            from_storyline=True,
+        )
+        activity_gen.generate_process_termination(
+            test_user,
+            linux_system,
+            timestamp + timedelta(seconds=12),
+            pid,
+            "/usr/bin/id",
+            logon_id,
+            from_storyline=True,
+        )
+
+        lifecycle = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type in {"process_create", "process_terminate"}
+            and call.args[0].process.pid == pid
+        ]
+        assert [event.event_type for event in lifecycle] == [
+            "process_create",
+            "process_terminate",
+        ]
+        assert {event.auth.logon_id for event in lifecycle} == {logon_id}
+        assert {event.auth.session_id for event in lifecycle} == {expected_session_id}
+
     def test_ssh_logoff_waits_for_transport_close(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
     ):
