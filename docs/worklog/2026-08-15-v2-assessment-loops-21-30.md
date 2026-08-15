@@ -72,3 +72,71 @@ terminal-session metadata exactly across CREATE/TERMINATE.
 Follow-up verification: the central membership/token invariant, SSH receiver lifecycle, Windows
 interactive winlogon, and RDP sibling tests pass. The broad relevant suite passes with 746 passed
 and 1 skipped.
+
+### Loop 21 outcome
+
+- Commits `7842607c` and `c9cba448`; final full suite 6,022 passed with 22 skips. Evaluation scored
+  96.4475/100 over 74,261 records. The accepted rendered probe passed 736/736 complete Linux
+  process pairs and 27/27 complete session pairs with zero identity/session mutations, zero ended
+  LogonID reuse, and exact SSH syslog lifecycle joins.
+- The first candidate corpus was rejected before blind review after its hard probe exposed 23 root
+  sshd token/session mutations. The owning state split was fixed, the full suite and generation
+  were repeated, and a completely fresh panel reviewed only the corrected corpus.
+- Frozen corpus SHA-256 remained
+  `54c8a1016104f92f1ca3666a24015e4a1bc23c98e18f7920157cea9b018f36e5` before and after review.
+  Standalone scores were 68/36/32/86 (mean 55.5); verdict disagreement and a 54-point spread
+  triggered deliberation, which revised the mean to 75.25 and consensus to Synthetic.
+- The repaired Linux session/process identity contradictions did not recur. Next priorities are
+  native MRU/PIDL encoding, Linux command construction, network timing/throughput quantization,
+  and the detached PSEXESVC file lifecycle.
+
+## Loop 22 — Windows MRU and PIDL registry artifacts
+
+### Family contract (before implementation)
+
+- **Accepted findings:** Loop 21 exposed extension-specific `RecentDocs` and `OpenSavePidlMRU`
+  values whose filenames disagree with their registry subkeys in seven of nine inspected examples,
+  plus `OpenSavePidlMRU` and `LastVisitedPidlMRU` data that are decorated UTF-16 paths rather than
+  credible serialized Windows shell item-ID lists. These are repeated visible source-native
+  contradictions across five workstations, not boundary-censoring or completeness findings.
+- **Owning layer and classification:** the shared Windows registry-artifact encoder/serializer owns
+  native registry value bytes and extension-subkey binding. This is a `family_level` source-native
+  serialization fix: canonical file/path truth remains upstream, while the encoder must express it
+  in the native binary family consumed by registry forensic tools.
+- **Entry paths:** baseline shell/Office activity that creates `RecentDocs`, `OpenSavePidlMRU`,
+  `LastVisitedPidlMRU`, and `UserAssist` registry artifacts; any storyline or direct registry path
+  that delegates to the same artifact helpers; and multi-user/multi-host baseline generation.
+- **Consumers:** eCAR registry projection, rendered registry value-data bytes, native-aware forensic
+  decoders, blind-review probes, and focused generator/emitter tests.
+- **Invariant:** an extension-specific MRU subkey is derived from and agrees with the actual bound
+  filename extension. PIDL-family values contain a structurally valid, terminating shell
+  item-ID-list whose decoded leaf/path identity agrees with the canonical artifact, rather than a
+  magic prefix plus plain UTF-16 text. Family-specific framing remains distinct: UserAssist ROT13
+  and execution metadata, RecentDocs value shape, OpenSave PIDLs, and LastVisited PIDLs must not be
+  collapsed into one encoding.
+- **Sibling risks:** preserve UserAssist, non-extension RecentDocs ordering/MRUListEx, and
+  LastVisited application/path semantics. This loop does not claim full fidelity for every possible
+  Windows Shell Item class; it targets a native-decodable filesystem PIDL subset with strict size,
+  terminator, and extension-binding checks across multiple hosts and sibling families.
+
+### Implementation handoff
+
+- The group-scoped registry materializer now chooses one configured artifact filename and derives
+  extension-specific `OpenSavePidlMRU`/`RecentDocs` contents from that same identity. The filename
+  pool moved to `edr_pools.yaml`; the loader rejects malformed overlays and `validate-config`
+  rejects paths, extensionless identities, and case-insensitive duplicates.
+- The shared PIDL serializer now emits a terminating sequence of native SHITEMID frames: the My
+  Computer namespace root, a drive-volume item, and separate directory/file items. OpenSave values
+  begin directly with the item-ID list; LastVisited values retain their distinct UTF-16 application
+  prefix and bind that executable to the selected file type. The old one-item decorated UTF-16 full
+  path is no longer emitted.
+- **Materializer hard probe:** 12/12 extension-specific artifacts across three synthetic host
+  contexts decoded successfully and matched their `.docx`/`.pdf` subkeys. OpenSave and LastVisited
+  samples both passed generic SHITEMID length/termination decoding, native root/volume/file class
+  checks, and leaf recovery; zero OpenSave values contained the former UTF-16 full-path signature.
+  UserAssist FILETIME/ROT13, AccentPalette, wildcard OpenSave, and RecentDocs sibling checks remain
+  green.
+- Verification: 164 focused EDR/config tests passed; 377 passed and 1 skipped across EDR pools,
+  baseline canonical generation, Sysmon, and eCAR source projection; 4 activity-level registry and
+  UserAssist tests passed. `eforge validate-config` passed 93 files with zero issues. Ruff check,
+  Ruff format check, and `git diff --check` passed.

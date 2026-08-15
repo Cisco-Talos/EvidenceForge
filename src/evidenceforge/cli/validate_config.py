@@ -180,6 +180,44 @@ def _validate_edr_file_path_pools(result: ValidationResult, edr_pools_data: dict
                 )
 
 
+def _validate_registry_mru_filenames(
+    result: ValidationResult, edr_pools_data: dict[str, Any]
+) -> None:
+    """Validate filename-only identities consumed by Windows shell MRU encoders."""
+    filenames = edr_pools_data.get("registry_mru_filenames", [])
+    if not isinstance(filenames, list):
+        return
+    seen: set[str] = set()
+    for filename in filenames:
+        if not isinstance(filename, str):
+            continue
+        normalized = filename.strip().lower()
+        if (
+            not normalized
+            or normalized in {".", ".."}
+            or "\\" in normalized
+            or "/" in normalized
+            or "." not in normalized
+            or normalized.endswith(".")
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "edr_pools.yaml (registry_mru_filenames)",
+                    f"MRU artifact identity must be a filename with an extension, got {filename!r}",
+                )
+            )
+        elif normalized in seen:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "edr_pools.yaml (registry_mru_filenames)",
+                    f"duplicate MRU artifact filename {filename!r}",
+                )
+            )
+        seen.add(normalized)
+
+
 def _validate_proxy_phase_profiles(result: ValidationResult, data: dict[str, Any]) -> None:
     """Reject proxy-phase values that the runtime would otherwise replace with fallbacks."""
 
@@ -3429,6 +3467,7 @@ def validate_config(
     edr_pools_data = load_edr_pools()
     if edr_pools_data:
         _validate_edr_file_path_pools(result, edr_pools_data)
+        _validate_registry_mru_filenames(result, edr_pools_data)
         _SCHEMA_CHECKS.append(
             (
                 edr_pools_data.get("file_side_effect_profiles", []),

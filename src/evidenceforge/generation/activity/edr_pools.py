@@ -14,6 +14,7 @@ import logging
 import random
 import re
 import shlex
+import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -33,6 +34,16 @@ _DEFAULT_RUNMRU_COMMANDS = (
     "cmd.exe /c ipconfig",
     "powershell.exe -NoExit Get-ChildItem",
     "notepad.exe",
+)
+_DEFAULT_REGISTRY_MRU_FILENAMES = (
+    "report.docx",
+    "meeting-notes.docx",
+    "budget.xlsx",
+    "forecast.xlsx",
+    "briefing.pdf",
+    "invoice.pdf",
+    "notes.txt",
+    "readme.txt",
 )
 _DEFAULT_GROUP_POLICY_EXTENSION_GUIDS = (
     "35378EAC-683F-11D2-A89A-00C04FBBCFA2",
@@ -202,6 +213,7 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
         "file_paths_linux": _is_valid_string_list,
         "dll_pool": _is_valid_string_list,
         "runmru_commands": _is_valid_string_list,
+        "registry_mru_filenames": _is_valid_string_list,
         "registry_keys_hkcu": _is_valid_registry_pool,
         "registry_keys_hklm": _is_valid_registry_pool,
         "installed_software_products": _is_valid_installed_software_products,
@@ -540,22 +552,93 @@ def _accent_palette_binary_details(rng: random.Random) -> str:
     return _format_binary_details(palette)
 
 
-def _pidl_binary_details(rng: random.Random, user: str) -> str:
-    """Return a bounded ITEMIDLIST-shaped binary value with a terminal null item."""
-    username = user if user and user.upper() != "SYSTEM" else "Default"
-    filename = rng.choice(("report.docx", "budget.xlsx", "briefing.pdf", "notes.txt"))
-    path = rf"C:\Users\{username}\Documents\{filename}"
-    # Each ITEMIDLIST element begins with its total uint16 size. The final zero-size
-    # element terminates the list. The payload remains opaque canonical registry data.
-    item_payload = bytes((0x31, 0x00)) + path.encode("utf-16le") + b"\x00\x00"
-    item_size = len(item_payload) + 2
-    data = item_size.to_bytes(2, "little") + item_payload + b"\x00\x00"
-    return _format_binary_details(data)
+def _registry_artifact_extension(template_context: str) -> str | None:
+    """Return an extension imposed by an extension-specific shell-history subkey."""
+    match = re.search(r"\\opensavepidlmru\\([^\\\n]+)", template_context, re.IGNORECASE)
+    if match is not None and match.group(1) != "*":
+        return match.group(1).removeprefix(".").lower()
+    match = re.search(r"\\recentdocs\\\.([^\\\n]+)", template_context, re.IGNORECASE)
+    return match.group(1).lower() if match is not None else None
 
 
-def _recent_docs_binary_details(rng: random.Random) -> str:
+def _registry_mru_filename(rng: random.Random, extension: str | None) -> str:
+    """Choose one configured MRU filename, respecting an extension-specific subkey."""
+    configured = load_edr_pools().get("registry_mru_filenames", _DEFAULT_REGISTRY_MRU_FILENAMES)
+    filenames = [str(filename) for filename in configured]
+    if extension is not None:
+        matching = [
+            filename
+            for filename in filenames
+            if filename.rsplit(".", 1)[-1].lower() == extension.lower()
+        ]
+        if matching:
+            return str(rng.choice(matching))
+        return f"document.{extension}"
+    return str(rng.choice(filenames))
+
+
+def _shell_item(payload: bytes) -> bytes:
+    """Frame one opaque SHITEMID payload with its native little-endian byte count."""
+    return (len(payload) + 2).to_bytes(2, "little") + payload
+
+
+def _filesystem_shell_item(name: str, *, directory: bool) -> bytes:
+    """Return a bounded filesystem SHITEMID with an ANSI primary name."""
+    item_type = 0x31 if directory else 0x32
+    attributes = 0x10 if directory else 0x20
+    payload = (
+        bytes((item_type, 0x00))
+        + (0 if directory else 4096).to_bytes(4, "little")
+        + b"\x00\x00\x00\x00"
+        + attributes.to_bytes(2, "little")
+        + name.encode("windows-1252", errors="replace")
+        + b"\x00"
+    )
+    if len(payload) % 2:
+        payload += b"\x00"
+    return _shell_item(payload)
+
+
+def _filesystem_pidl(path: str) -> bytes:
+    """Serialize a filesystem path as a terminating shell item-ID list."""
+    normalized = path.replace("/", "\\")
+    components = [component for component in normalized.split("\\") if component]
+    if not components or not components[0].endswith(":"):
+        raise ValueError(f"PIDL filesystem path must be drive rooted, got {path!r}")
+
+    computer_guid = uuid.UUID("20d04fe0-3aea-1069-a2d8-08002b30309d")
+    root = _shell_item(b"\x1f\x50" + computer_guid.bytes_le)
+    # A volume shell item uses the 0x2f class, an ANSI drive root, and the
+    # reserved tail present in classic Windows filesystem PIDLs.
+    drive = _shell_item(b"\x2f" + f"{components[0]}\\".encode("ascii") + b"\x00" + bytes(18))
+    descendants = b"".join(
+        _filesystem_shell_item(component, directory=index < len(components) - 1)
+        for index, component in enumerate(components[1:], start=1)
+    )
+    return root + drive + descendants + b"\x00\x00"
+
+
+def _pidl_binary_details(path: str, *, last_visited_application: str | None = None) -> str:
+    """Return source-native OpenSave or LastVisited PIDL-family registry bytes."""
+    pidl = _filesystem_pidl(path)
+    if last_visited_application is not None:
+        pidl = last_visited_application.encode("utf-16le") + b"\x00\x00" + pidl
+    return _format_binary_details(pidl)
+
+
+def _last_visited_application(filename: str) -> str:
+    """Return the executable identity associated with a LastVisited shell artifact."""
+    extension = filename.rsplit(".", 1)[-1].lower()
+    return {
+        "docx": "WINWORD.EXE",
+        "xlsx": "EXCEL.EXE",
+        "pdf": "AcroRd32.exe",
+        "txt": "NOTEPAD.EXE",
+    }.get(extension, "explorer.exe")
+
+
+def _recent_docs_binary_details(filename: str) -> str:
     """Return an Explorer RecentDocs binary value with a UTF-16 filename."""
-    filename = rng.choice(("report.docx", "budget.xlsx", "briefing.pdf", "notes.txt"))
     data = filename.encode("utf-16le") + b"\x00\x00"
     return _format_binary_details(data)
 
@@ -653,6 +736,11 @@ def materialize_edr_template(
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
     installed_product = _installed_software_product(rng)
     template_lower = template.lower()
+    registry_filename = (
+        _registry_mru_filename(rng, _registry_artifact_extension(template))
+        if "{pidl_binary}" in template_lower or "{recent_docs_binary}" in template_lower
+        else None
+    )
     if "windows defender\\platform" in template_lower:
         version = defender_platform_version(host_key)
     elif "google\\chrome\\application" in template_lower:
@@ -716,9 +804,18 @@ def materialize_edr_template(
         if token == "accent_palette_binary":
             return _accent_palette_binary_details(rng)
         if token == "pidl_binary":
-            return _pidl_binary_details(rng, user)
+            assert registry_filename is not None
+            username = user if user and user.upper() != "SYSTEM" else "Default"
+            path = rf"C:\Users\{username}\Documents\{registry_filename}"
+            application = (
+                _last_visited_application(registry_filename)
+                if "\\lastvisitedpidlmru" in template_lower
+                else None
+            )
+            return _pidl_binary_details(path, last_visited_application=application)
         if token == "recent_docs_binary":
-            return _recent_docs_binary_details(rng)
+            assert registry_filename is not None
+            return _recent_docs_binary_details(registry_filename)
         if token == "group_policy_extension_guid":
             if group_policy_extension_guid is None:
                 group_policy_extension_guid = _group_policy_extension_guid(rng, host_key)
@@ -746,6 +843,11 @@ def materialize_edr_template_group(
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
     installed_product = _installed_software_product(rng)
     combined_lower = "\n".join(templates).lower()
+    registry_filename = (
+        _registry_mru_filename(rng, _registry_artifact_extension("\n".join(templates)))
+        if "{pidl_binary}" in combined_lower or "{recent_docs_binary}" in combined_lower
+        else None
+    )
     if "windows defender\\platform" in combined_lower:
         version = defender_platform_version(host_key)
     elif "google\\chrome\\application" in combined_lower:
@@ -809,9 +911,18 @@ def materialize_edr_template_group(
         if token == "accent_palette_binary":
             return _accent_palette_binary_details(rng)
         if token == "pidl_binary":
-            return _pidl_binary_details(rng, user)
+            assert registry_filename is not None
+            username = user if user and user.upper() != "SYSTEM" else "Default"
+            path = rf"C:\Users\{username}\Documents\{registry_filename}"
+            application = (
+                _last_visited_application(registry_filename)
+                if "\\lastvisitedpidlmru" in combined_lower
+                else None
+            )
+            return _pidl_binary_details(path, last_visited_application=application)
         if token == "recent_docs_binary":
-            return _recent_docs_binary_details(rng)
+            assert registry_filename is not None
+            return _recent_docs_binary_details(registry_filename)
         if token == "group_policy_extension_guid":
             if group_policy_extension_guid is None:
                 group_policy_extension_guid = _group_policy_extension_guid(rng, host_key)

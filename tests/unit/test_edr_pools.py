@@ -44,6 +44,7 @@ class TestLoadEdrPools:
         assert "registry_keys_hklm" in pools
         assert "dll_pool" in pools
         assert "runmru_commands" in pools
+        assert "registry_mru_filenames" in pools
         assert "installed_software_products" in pools
         assert "group_policy_extension_guids" in pools
 
@@ -56,6 +57,7 @@ class TestLoadEdrPools:
             "registry_keys_hklm",
             "dll_pool",
             "runmru_commands",
+            "registry_mru_filenames",
             "file_side_effect_profiles",
             "installed_software_products",
             "group_policy_extension_guids",
@@ -710,8 +712,96 @@ class TestTemplateMaterialization:
         )
         pidl_bytes = bytes.fromhex(pidl)
         assert pidl_type == "binary"
-        assert int.from_bytes(pidl_bytes[:2], "little") == len(pidl_bytes) - 2
-        assert pidl_bytes[-2:] == b"\x00\x00"
+        items, end_offset = self._decode_item_id_list(pidl_bytes)
+        assert end_offset == len(pidl_bytes)
+        assert items[0].startswith(b"\x1f\x50")
+        assert items[1].startswith(b"\x2fC:\\")
+        assert items[-1][0] == 0x32
+
+    @staticmethod
+    def _decode_item_id_list(data: bytes, offset: int = 0) -> tuple[list[bytes], int]:
+        """Decode generic SHITEMID framing without relying on generator internals."""
+        items: list[bytes] = []
+        while True:
+            assert offset + 2 <= len(data)
+            item_size = int.from_bytes(data[offset : offset + 2], "little")
+            offset += 2
+            if item_size == 0:
+                return items, offset
+            assert item_size >= 3
+            payload_end = offset + item_size - 2
+            assert payload_end <= len(data)
+            items.append(data[offset:payload_end])
+            offset = payload_end
+
+    @staticmethod
+    def _filesystem_item_name(payload: bytes) -> str:
+        assert payload[0] in {0x31, 0x32}
+        return payload[12:].split(b"\x00", 1)[0].decode("windows-1252")
+
+    def test_extension_specific_mru_artifacts_bind_key_and_filename_across_hosts(self):
+        entries = [
+            entry
+            for entry in get_registry_keys_hkcu()
+            if "OpenSavePidlMRU" in entry[0] or "RecentDocs" in entry[0]
+        ]
+        extension_entries = [entry for entry in entries if not entry[0].endswith(r"\*")]
+        observed_hosts: set[str] = set()
+
+        for host_index, host_key in enumerate(("WS-ALPHA-01", "WS-BRAVO-01", "WS-CHARLIE-01")):
+            for entry_index, template in enumerate(extension_entries):
+                key, _name, details, value_type = materialize_registry_effect(
+                    template,
+                    random.Random(100 * host_index + entry_index),
+                    "alice.smith",
+                    datetime(2027, 8, 15, 9, 0, tzinfo=UTC),
+                    host_key=host_key,
+                )
+                expected_extension = key.rsplit("\\", 1)[-1].removeprefix(".").lower()
+                data = bytes.fromhex(details)
+                if "RecentDocs" in key:
+                    leaf_name = data.decode("utf-16le").rstrip("\x00")
+                else:
+                    items, end_offset = self._decode_item_id_list(data)
+                    assert end_offset == len(data)
+                    leaf_name = self._filesystem_item_name(items[-1])
+                assert leaf_name.rsplit(".", 1)[-1].lower() == expected_extension
+                assert value_type == "binary"
+                observed_hosts.add(host_key)
+
+        assert len(observed_hosts) == 3
+
+    def test_pidl_families_use_native_item_lists_and_distinct_last_visited_framing(self):
+        entries = get_registry_keys_hkcu()
+        open_save = next(entry for entry in entries if entry[0].endswith(r"OpenSavePidlMRU\pdf"))
+        last_visited = next(entry for entry in entries if "LastVisitedPidlMRU" in entry[0])
+        occurrence_time = datetime(2027, 8, 15, 9, 0, tzinfo=UTC)
+
+        _key, _name, open_details, _type = materialize_registry_effect(
+            open_save, random.Random(41), "alice.smith", occurrence_time
+        )
+        open_data = bytes.fromhex(open_details)
+        open_items, open_end = self._decode_item_id_list(open_data)
+
+        _key, _name, last_details, _type = materialize_registry_effect(
+            last_visited, random.Random(42), "alice.smith", occurrence_time
+        )
+        last_data = bytes.fromhex(last_details)
+        application_end = next(
+            index
+            for index in range(0, len(last_data) - 1, 2)
+            if last_data[index : index + 2] == b"\x00\x00"
+        )
+        application = last_data[:application_end].decode("utf-16le")
+        last_items, last_end = self._decode_item_id_list(last_data, application_end + 2)
+
+        assert open_end == len(open_data)
+        assert last_end == len(last_data)
+        assert application.lower().endswith(".exe")
+        assert [item[0] for item in open_items[:2]] == [0x1F, 0x2F]
+        assert [item[0] for item in last_items[:2]] == [0x1F, 0x2F]
+        assert self._filesystem_item_name(open_items[-1]).endswith(".pdf")
+        assert b"C\x00:\x00\\\x00U\x00s\x00e\x00r\x00s\x00" not in open_data
 
     def test_registry_value_type_preserves_nonbinary_values(self):
         assert registry_value_type(r"HKLM\Software\Test\Enabled", "DWORD (0x00000001)") == ("dword")

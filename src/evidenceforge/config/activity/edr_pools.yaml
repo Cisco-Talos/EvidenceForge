@@ -371,6 +371,18 @@ runmru_commands:
   - "explorer.exe \\\\FILE-SRV-01\\Shared"
   - "cmd.exe /k cd C:\\Users\\{user}\\Downloads"
 
+# Filenames used by RecentDocs and ComDlg32 MRU artifacts. Extension-specific
+# subkeys select only matching entries; overlays may extend the lived-in corpus.
+registry_mru_filenames:
+  - "report.docx"
+  - "meeting-notes.docx"
+  - "budget.xlsx"
+  - "forecast.xlsx"
+  - "briefing.pdf"
+  - "invoice.pdf"
+  - "notes.txt"
+  - "readme.txt"
+
 registry_keys_hkcu:
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "{runmru_name}", "{runmru_command}"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", "HideFileExt", "DWORD (0x00000001)"]

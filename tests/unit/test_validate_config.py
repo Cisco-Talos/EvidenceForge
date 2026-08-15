@@ -1391,6 +1391,35 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_registry_mru_filenames(self, monkeypatch):
+        from evidenceforge.generation.activity import edr_pools
+
+        real_loader = edr_pools.load_edr_pools
+
+        def load_invalid_edr_pools():
+            return {
+                **real_loader(),
+                "registry_mru_filenames": [
+                    r"C:\Users\alice\Documents\report.docx",
+                    "briefing.pdf",
+                    "BRIEFING.PDF",
+                    "extensionless",
+                ],
+            }
+
+        monkeypatch.setattr(edr_pools, "load_edr_pools", load_invalid_edr_pools)
+
+        result = validate_config()
+        errors = [
+            issue
+            for issue in result.issues
+            if issue.severity == "ERROR" and issue.file == "edr_pools.yaml (registry_mru_filenames)"
+        ]
+
+        assert len(errors) == 3
+        assert any("filename with an extension" in issue.message for issue in errors)
+        assert any("duplicate" in issue.message for issue in errors)
+
     def test_validate_config_rejects_invalid_windows_collision_spacing(self, monkeypatch):
         from evidenceforge.generation.activity import timing_profiles
 
