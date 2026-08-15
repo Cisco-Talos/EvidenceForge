@@ -186,3 +186,52 @@ class TestProcessAccessCallTraceOwnership:
         assert access is not None
         assert access.call_trace
         assert "wbemcomn.dll" in access.call_trace or "combase.dll" in access.call_trace
+
+    def test_compatible_hosts_share_semantic_call_site_trace(self):
+        source = r"C:\Windows\System32\services.exe"
+        seed_parts = (r"C:\ProgramData\Microsoft\Windows Defender\MsMpEng.exe", "0x1010")
+
+        trace_a = render_call_trace_for_source(
+            source,
+            "WS-A",
+            platform="Windows 11 23H2",
+            seed_parts=seed_parts,
+        )
+        trace_b = render_call_trace_for_source(
+            source,
+            "WS-B",
+            platform="Windows 11 23H2",
+            seed_parts=seed_parts,
+        )
+
+        assert trace_a == trace_b
+
+    def test_call_site_and_build_cohorts_vary_offsets(self):
+        source = r"C:\Windows\System32\services.exe"
+        defender_site = (
+            r"C:\ProgramData\Microsoft\Windows Defender\MsMpEng.exe",
+            "0x1010",
+        )
+        lsass_site = (r"C:\Windows\System32\lsass.exe", "0x1fffff")
+
+        workstation_trace = render_call_trace_for_source(
+            source,
+            "WS-A",
+            platform="Windows 11 23H2",
+            seed_parts=defender_site,
+        )
+        other_site_trace = render_call_trace_for_source(
+            source,
+            "WS-A",
+            platform="Windows 11 23H2",
+            seed_parts=lsass_site,
+        )
+        server_trace = render_call_trace_for_source(
+            source,
+            "SRV-A",
+            platform="Windows Server 2022",
+            seed_parts=defender_site,
+        )
+
+        assert workstation_trace != other_site_trace
+        assert workstation_trace != server_trace

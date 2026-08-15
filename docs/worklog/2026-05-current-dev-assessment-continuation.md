@@ -1339,6 +1339,32 @@ or follow-up batch is needed.
   bounded-window sessions may legitimately lack one edge; getty/display-manager processes need
   data-driven OS/role defaults.
 
+- V2 loop 6 fixed Linux local-login lifecycle ownership and rendered ordering in three commits
+  (`0ca725c7`, `80579d55`, `3546655e`). The definitive full suite passed (`5950 passed, 22
+  skipped`), Ruff/config validation passed, and automated evaluation passed at
+  96.69428408443474 over 90,250 records. The rendered probe found 22/22 visible matching eCAR
+  `/bin/login` creates before PAM by 0.66-4.53 seconds, all root-owned under `/sbin/agetty`, with
+  system logon identity and later shell children; four absent eCAR rows match configured source
+  loss. The clean 90-file corpus retained SHA-256
+  `ceb0a9db94ef542050243aaca342db5a43fefbfe69d757a7493dd268bb57099b`. Deliberation revised the
+  panel to 60/70/62/78, average 67.50, likely Synthetic, with no hard contradictions. The prior
+  Linux inversion and PID-1 ancestry defect did not recur. The next target is fleet call-trace
+  partitioning: 587 PROCESS/OPEN rows use 66 traces, with every trace confined to one host.
+
+- V2 loop 7 family contract — **process-access call-site and build identity texture**. Owning
+  abstraction: canonical process-access metadata selection shared by eCAR PROCESS/OPEN and Sysmon
+  Event 10. Invariant: call traces are selected from OS/build, source executable, target executable,
+  access intent, and call-site families; compatible hosts may share common traces, repeated calls on
+  one host may vary across legitimate call sites, and the same canonical access occurrence remains
+  identical across eCAR and Sysmon. Entry paths: baseline service inspection, Defender/security
+  tooling, browser/application access, authored credential-access behavior, remote-thread/process
+  access, repeated bursts, and host build variation. Consumers: ProcessAccessContext, eCAR
+  PROCESS/OPEN, Sysmon Event 10, evaluator parsers, and blind distribution probes. Layer rationale:
+  both endpoint sources agree on the current metadata, so renderer-local randomization would break
+  parity while preserving the host-partition fingerprint. Sibling risk: real build-specific module
+  offsets must remain stable enough for repeated identical call sites; LSASS/access-mask semantics,
+  source/target identity, and event ordering must not change.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed

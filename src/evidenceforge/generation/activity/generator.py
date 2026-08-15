@@ -25190,7 +25190,8 @@ class ActivityGenerator:
         call_trace = render_call_trace_for_source(
             source_image,
             system.hostname,
-            seed_parts=(source_pid, target_pid, time.isoformat(), granted_access),
+            platform=system.os,
+            seed_parts=(target_image, granted_access),
         )
         event = OccurrenceBuilder(
             timestamp=time,
