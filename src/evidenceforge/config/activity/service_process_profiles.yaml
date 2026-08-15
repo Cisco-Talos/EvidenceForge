@@ -1,0 +1,43 @@
+# Resident service managers and the workers they create.
+#
+# These profiles are intentionally limited to process families whose workers
+# must share one source-native manager across multiple generation entry paths.
+
+families:
+  postfix:
+    os_category: linux
+    manager:
+      key: postfix_master
+      image: /usr/lib/postfix/sbin/master
+      command_line: /usr/lib/postfix/sbin/master -w
+      username: root
+      parent_key: systemd
+    workers:
+      smtpd:
+        key: postfix_smtpd
+        image: /usr/lib/postfix/sbin/smtpd
+        command_line: smtpd -n smtp -t inet -u
+        username: postfix
+        parent_key: manager
+      smtp:
+        key: postfix_smtp
+        image: /usr/lib/postfix/sbin/smtp
+        command_line: /usr/lib/postfix/sbin/smtp -t unix -u -c
+        username: postfix
+        parent_key: manager
+
+  iis:
+    os_category: windows
+    manager:
+      key: iis_was
+      image: 'C:\Windows\System32\svchost.exe'
+      command_line: svchost.exe -k iissvcs -p -s WAS
+      username: SYSTEM
+      parent_key: services
+    workers:
+      owa:
+        key: iis_owa_worker
+        image: 'C:\Windows\System32\inetsrv\w3wp.exe'
+        command_line: 'C:\Windows\System32\inetsrv\w3wp.exe -ap "MSExchangeOWAAppPool"'
+        username: SYSTEM
+        parent_key: manager

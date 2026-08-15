@@ -2352,14 +2352,8 @@ class BaselineMixin:
                 "/usr/bin/systemctl",
                 "/usr/bin/loginctl",
             ),
-            "org.freedesktop.packagekit.system-update": (
-                "/usr/lib/packagekit/packagekitd",
-                "/usr/bin/pkcon",
-            ),
-            "org.freedesktop.NetworkManager.settings.modify.system": (
-                "/usr/bin/nmcli",
-                "/usr/sbin/NetworkManager",
-            ),
+            "org.freedesktop.packagekit.system-update": ("/usr/bin/pkcon",),
+            "org.freedesktop.NetworkManager.settings.modify.system": ("/usr/bin/nmcli",),
             "org.freedesktop.timedate1.set-timezone": ("/usr/bin/timedatectl",),
         }
 
@@ -2558,6 +2552,36 @@ class BaselineMixin:
             rng,
             system,
         )
+        if _get_os_category(system.os) == "linux" and not self._polkit_action_process_is_user_cli(
+            process_path
+        ):
+            daemon_key = {
+                "/usr/sbin/NetworkManager": "networkmanager",
+                "/usr/lib/packagekit/packagekitd": "packagekitd",
+            }.get(process_path)
+            candidate_pid = (sys_pids or {}).get(daemon_key or "")
+            candidate = (
+                self.state_manager.get_process(system.hostname, candidate_pid)
+                if candidate_pid is not None
+                else None
+            )
+            if (
+                candidate is not None
+                and candidate.image == process_path
+                and candidate.username == "root"
+                and candidate.start_time <= process_time
+            ):
+                return candidate.pid
+            candidates = [
+                process
+                for process in self.state_manager.get_processes_on_system(system.hostname)
+                if process.image == process_path
+                and process.username == "root"
+                and process.start_time <= process_time
+            ]
+            if candidates:
+                return max(candidates, key=lambda process: process.start_time).pid
+            return None
         username = subject_user if subject_user else "root"
         if _get_os_category(system.os) == "linux" and self._polkit_action_process_is_user_cli(
             process_path

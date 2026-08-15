@@ -86,3 +86,38 @@
 - **Sibling risks:** preserve actor omission when process visibility is late, exact tuple and
   direction agreement, deterministic reruns, proxy child phase ordering, and independent Zeek and
   Windows timing. Do not extend or rewrite the canonical transport merely to create clock texture.
+### Loop 13 outcome
+
+- Fixed endpoint-local eCAR FLOW clock handling in `SourceTimingPlanner` and removed the emitter's second canonical/sensor-clock clamp.
+- Verification: 5,962 tests passed, 22 skipped; Ruff checks passed; deterministic evaluation 97/100 over 78,114 records.
+- Hard probe: exact-ms endpoint collisions fell to 8/5,520 unambiguous pairs (0.145%), with 2,223 distinct signed deltas.
+- Frozen review corpus SHA-256 remained `1e8b1bd7499f285d36ca5fa8aa0e4a20e7f00ac158ded9c266c5aa81be2307c6` before and after blind review.
+- Neutral deliberation revised the panel to 61/55/68/64 synthetic-confidence (mean 62), consensus Inconclusive leaning synthetic.
+- The endpoint clock-collapse finding did not recur. Next target: canonical host process ownership and service-principal selection; durable SMB transport reuse remains the following strategic target.
+
+## Loop 14 family contract — source-native host process ownership
+
+- **Owning abstractions:** the polkit action family owns the authorizing subject process;
+  typed resident-manager/worker service profiles own Postfix and IIS ancestry; the Linux shell
+  command bundle owns inferred interactive command children.
+- **Invariant:** foreground polkit clients retain the selected interactive principal and visible
+  shell parent, resident daemons retain their service principal and singleton identity, Postfix
+  SMTP workers descend from one root-owned Postfix master, IIS OWA workers descend from one
+  WAS-hosting service process, and every process inferred from interactive bash history descends
+  from that exact session shell. One executable path never determines ownership without its
+  execution mode.
+- **Entry paths:** baseline polkit action messages, PackageKit and NetworkManager authorization
+  subjects, inbound/submission/outbound email process attribution, generic mail-server LDAP
+  connection ownership, Exchange OWA access, and inferred Linux shell commands including
+  service-named diagnostics such as `nginx -t`.
+- **Consumers:** canonical `RunningProcess` parent/principal state, eCAR PROCESS CREATE and FLOW
+  attribution, polkit syslog PID/owner text, Postfix syslog PIDs, and source-timing parent-before-
+  child constraints.
+- **Layer rationale:** polkit, service workers, and interactive commands carry different intent
+  even when they share an executable name. The action family must supply that intent before the
+  canonical process is created; emitter rewrites or a global executable-to-parent table would
+  make daemon `nginx` and interactive `nginx -t` mutually contradictory.
+- **Sibling risks:** preserve root/systemd ownership for true Linux daemons, do not duplicate the
+  seeded NetworkManager, reuse only matching resident service managers, keep pre-window parents
+  valid without requiring an in-window CREATE row, retain one-shot worker lifetimes, and avoid
+  changing unrelated generic connection-owner or Windows service-singleton behavior.

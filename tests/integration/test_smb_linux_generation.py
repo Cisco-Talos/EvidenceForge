@@ -447,7 +447,13 @@ def test_linux_cifs_upload_move_uses_mv_from_authored_source_to_mount(tmp_path: 
         and int(record.get("properties", {}).get("dst_port", 0)) == 445
     ]
     assert mounted_flows
-    assert all("pid" not in record and "actorID" not in record for record in mounted_flows)
+    authored_flow = min(
+        mounted_flows,
+        key=lambda record: abs(record["timestamp_ms"] - local_read["timestamp_ms"]),
+    )
+    assert abs(authored_flow["timestamp_ms"] - local_read["timestamp_ms"]) < 1_000
+    assert "pid" not in authored_flow
+    assert "actorID" not in authored_flow
 
 
 def test_linux_cifs_mount_rename_uses_mounted_previous_and_current_paths(tmp_path: Path) -> None:

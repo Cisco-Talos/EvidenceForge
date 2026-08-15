@@ -256,6 +256,12 @@ _FAMILIES = (
         "SMB client processes, Samba daemon identity, wire filesystems, and audit profiles.",
     ),
     _family(
+        "activity/service_process_profiles.yaml",
+        "deep-mapping",
+        "config-apps-processes.md",
+        "Resident service manager and worker process ancestry profiles.",
+    ),
+    _family(
         "activity/spawn_rules.yaml",
         "deep-mapping",
         "config-apps-processes.md",

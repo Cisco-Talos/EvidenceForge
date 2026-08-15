@@ -358,12 +358,10 @@ def test_polkit_action_messages_pair_action_with_source_native_program(linux_sys
             "/usr/bin/loginctl",
         },
         "org.freedesktop.packagekit.system-update": {
-            "/usr/lib/packagekit/packagekitd",
             "/usr/bin/pkcon",
         },
         "org.freedesktop.NetworkManager.settings.modify.system": {
             "/usr/bin/nmcli",
-            "/usr/sbin/NetworkManager",
         },
         "org.freedesktop.timedate1.set-timezone": {
             "/usr/bin/timedatectl",
@@ -422,10 +420,16 @@ def test_polkit_action_messages_materialize_companion_process(linux_system, stat
     engine.state_manager = state_manager
     engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
     engine.activity_generator = Mock()
-    engine.activity_generator.generate_system_process.return_value = 4242
+    engine.activity_generator.generate_process.return_value = 4242
+    engine.activity_generator.ensure_linux_visible_shell_parent.return_value = 3131
+    engine.activity_generator._user_model_for_username.return_value = User(
+        username="deploy",
+        full_name="Deploy User",
+        email="deploy@example.com",
+    )
     engine._polkit_action_profile = lambda _entry, _rng: (
         "org.freedesktop.packagekit.system-update",
-        "/usr/lib/packagekit/packagekitd",
+        "/usr/bin/pkcon",
     )
     entry = next(item for item in load_extra_syslog_messages() if item["app"] == "polkitd")
     template = next(message for message in entry["messages"] if "action {action_id}" in message)
@@ -441,11 +445,52 @@ def test_polkit_action_messages_materialize_companion_process(linux_system, stat
     )
 
     assert "unix-process:4242:" in message
-    call = engine.activity_generator.generate_system_process.call_args.kwargs
+    call = engine.activity_generator.generate_process.call_args.kwargs
     assert call["system"] is linux_system
     assert call["process_name"] in message
-    assert call["emit_linux_syslog"] is False
+    assert call["parent_pid"] == 3131
+    assert call["user"].username == "deploy"
     assert call["time"] < timestamp
+
+
+def test_polkit_resident_networkmanager_reuses_root_daemon_without_duplicate(
+    linux_system, state_manager, mock_emitters
+):
+    """A defensive daemon subject must reuse the seeded root process, never a user duplicate."""
+    from evidenceforge.generation.engine import GenerationEngine
+
+    engine = object.__new__(GenerationEngine)
+    engine.state_manager = state_manager
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine._system_pids = {}
+
+    pids: dict[str, int] = {}
+    engine._seed_linux_process_tree(linux_system, pids)
+    engine._system_pids[linux_system.hostname] = pids
+    activity_generator = ActivityGenerator(state_manager, mock_emitters)
+    activity_generator._system_pids = engine._system_pids
+    engine.activity_generator = activity_generator
+
+    pid = engine._materialize_polkit_action_process(
+        system=linux_system,
+        timestamp=datetime(2024, 3, 18, 12, 5, 0, tzinfo=UTC),
+        action_id="org.freedesktop.NetworkManager.settings.modify.system",
+        process_path="/usr/sbin/NetworkManager",
+        subject_user="deploy",
+        rng=random.Random(37),
+        sys_pids=pids,
+    )
+
+    assert pid == pids["networkmanager"]
+    daemon = state_manager.get_process(linux_system.hostname, pid)
+    assert daemon is not None
+    assert daemon.username == "root"
+    assert daemon.parent_pid == pids["systemd"]
+    assert not any(
+        call.args[0].process is not None
+        and call.args[0].process.image == "/usr/sbin/NetworkManager"
+        for call in mock_emitters["ecar"].emit.call_args_list
+    )
 
 
 def test_polkit_cli_companion_process_uses_visible_user_shell(

@@ -843,6 +843,9 @@ def validate_config(
             },
             "scalar_fields": {"schema_version": int},
         },
+        "activity/service_process_profiles.yaml": {
+            "dict_fields": {"families"},
+        },
         "activity/kerberos_realism.yaml": {
             "dict_fields": {
                 "tgt_success",

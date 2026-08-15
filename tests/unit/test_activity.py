@@ -5712,6 +5712,119 @@ class TestActivityGenerator:
             timestamp,
         )
 
+    def test_postfix_workers_share_root_owned_master_across_entry_paths(
+        self, activity_gen, state_manager
+    ):
+        """SMTP flow owners from email and generic LDAP paths share one Postfix master."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        mail = System(
+            hostname="MAIL-EDGE-01",
+            ip="10.10.2.25",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["smtp", "postfix"],
+            roles=["mail_server"],
+        )
+        state_manager.set_current_time(timestamp - timedelta(hours=1))
+        state_manager.register_process(
+            system=mail.hostname,
+            pid=1,
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd --system",
+            username="root",
+            integrity_level="System",
+            os_category="linux",
+        )
+        activity_gen._system_pids = {mail.hostname: {"systemd": 1}}
+
+        generic_pid, _ = activity_gen._ensure_system_connection_owner_process(
+            source_system=mail,
+            time=timestamp,
+            key="postfix",
+            image="/usr/lib/postfix/sbin/smtpd",
+            command_line="smtpd -n smtp -t inet -u",
+            username="postfix",
+        )
+        smtpd_pid = activity_gen._ensure_email_server_process(
+            mail,
+            time=timestamp + timedelta(minutes=1),
+            port=25,
+        )
+        smtp_pid = activity_gen._ensure_email_mta_outbound_process(
+            mail,
+            time=timestamp + timedelta(minutes=2),
+        )
+
+        smtpd = state_manager.get_process(mail.hostname, smtpd_pid)
+        smtp = state_manager.get_process(mail.hostname, smtp_pid)
+        assert smtpd is not None
+        assert smtp is not None
+        assert generic_pid == smtpd_pid
+        assert smtpd.parent_pid == smtp.parent_pid
+        master = state_manager.get_process(mail.hostname, smtpd.parent_pid)
+        assert master is not None
+        assert master.image == "/usr/lib/postfix/sbin/master"
+        assert master.username == "root"
+        assert master.parent_pid == 1
+        assert master.start_time < min(smtpd.start_time, smtp.start_time)
+
+    def test_owa_worker_descends_from_reused_was_service_host(self, activity_gen, state_manager):
+        """Exchange OWA workers are children of WAS, never direct children of services.exe."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        exchange = System(
+            hostname="MAIL-FIN-01",
+            ip="10.10.2.27",
+            os="Windows Server 2022",
+            type="server",
+            services=["owa", "exchange"],
+            roles=["mail_server"],
+        )
+        state_manager.set_current_time(timestamp - timedelta(hours=1))
+        state_manager.register_process(
+            system=exchange.hostname,
+            pid=4,
+            parent_pid=0,
+            image="System",
+            command_line="",
+            username="SYSTEM",
+            integrity_level="System",
+            os_category="windows",
+        )
+        state_manager.register_process(
+            system=exchange.hostname,
+            pid=500,
+            parent_pid=4,
+            image=r"C:\Windows\System32\services.exe",
+            command_line="services.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            os_category="windows",
+        )
+        activity_gen._system_pids = {exchange.hostname: {"system": 4, "services": 500}}
+
+        first_pid = activity_gen._ensure_email_server_process(
+            exchange,
+            time=timestamp,
+            port=443,
+        )
+        second_pid = activity_gen._ensure_email_server_process(
+            exchange,
+            time=timestamp + timedelta(minutes=5),
+            port=443,
+        )
+
+        assert second_pid == first_pid
+        worker = state_manager.get_process(exchange.hostname, first_pid)
+        assert worker is not None
+        assert worker.parent_pid != 500
+        was = state_manager.get_process(exchange.hostname, worker.parent_pid)
+        assert was is not None
+        assert was.image == r"C:\Windows\System32\svchost.exe"
+        assert was.command_line == "svchost.exe -k iissvcs -p -s WAS"
+        assert was.parent_pid == 500
+        assert was.start_time < worker.start_time
+
     @pytest.mark.parametrize("method", ["http", "https"])
     def test_apt_method_connection_owner_has_frontend_parent(
         self, activity_gen, state_manager, method
@@ -12928,6 +13041,78 @@ class TestActivityGenerator:
 
         for command, processes in expected.items():
             assert generator_module._linux_command_processes_from_shell(command) == processes
+
+    def test_interactive_nginx_check_uses_exact_session_shell_parent(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """An interactive nginx diagnostic remains shell-owned while daemon startup does not."""
+        command_time = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        linux = System(
+            hostname="WEB-EXT-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["nginx", "ssh"],
+            roles=["web_server"],
+        )
+        state_manager.set_current_time(command_time - timedelta(hours=1))
+        state_manager.register_process(
+            system=linux.hostname,
+            pid=1,
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd --system",
+            username="root",
+            integrity_level="System",
+            os_category="linux",
+        )
+        session = state_manager.register_session(
+            logon_id="0xabc123",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.10.1.50",
+            start_time=command_time - timedelta(minutes=10),
+            session_kind="ssh",
+        )
+        state_manager.set_current_time(command_time - timedelta(minutes=9))
+        shell_pid = state_manager.create_process(
+            linux.hostname,
+            1,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            session.logon_id,
+        )
+        session.session_shell_pid = shell_pid
+        activity_gen._system_pids = {linux.hostname: {"systemd": 1}}
+
+        activity_gen.generate_bash_command(test_user, linux, command_time, "nginx -t")
+        daemon_pid = activity_gen.generate_system_process(
+            system=linux,
+            time=command_time + timedelta(minutes=1),
+            process_name="/usr/sbin/nginx",
+            command_line="/usr/sbin/nginx -g 'daemon off;'",
+            parent_pid=1,
+            username="root",
+            emit_linux_syslog=False,
+        )
+
+        events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].process is not None and call.args[0].process.image == "/usr/sbin/nginx"
+        ]
+        interactive = next(event for event in events if event.process.command_line == "nginx -t")
+        daemon = state_manager.get_process(linux.hostname, daemon_pid)
+        assert interactive.auth.username == test_user.username
+        assert interactive.process.logon_id == session.logon_id
+        assert interactive.process.parent_pid == shell_pid
+        assert interactive.process.parent_image == "/bin/bash"
+        assert daemon is not None
+        assert daemon.username == "root"
+        assert daemon.parent_pid == 1
 
     def test_backgrounded_long_running_shell_command_keeps_ampersand_out_of_process_argv(self):
         """Background markers belong to shell history, not child process argv."""

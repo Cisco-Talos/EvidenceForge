@@ -211,6 +211,12 @@ from evidenceforge.generation.activity.proxy_user_agents import (
     pick_proxy_domain_user_agent,
     pick_proxy_user_agent,
 )
+from evidenceforge.generation.activity.service_process_profiles import (
+    ServiceProcessFamily,
+    ServiceProcessSpec,
+    matching_service_worker,
+    service_process_family,
+)
 from evidenceforge.generation.activity.smb_profiles import (
     client_auth_options,
     client_process_for_operation,
@@ -6551,26 +6557,33 @@ class ActivityGenerator:
                 f"{source_system.hostname}:{key}:{image}:{username}:{time.isoformat()}"
             )
         )
-        pid = self._active_matching_process_pid(
-            source_system=source_system,
-            time=time,
-            key=key,
+        profiled_worker = matching_service_worker(
+            os_category=_get_os_category(source_system.os),
             image=image,
-            username=username,
             command_line=command_line,
+            username=username,
         )
-        if pid > 0:
-            self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
-            self._remember_system_connection_owner_finalizer(
+        if profiled_worker is None:
+            pid = self._active_matching_process_pid(
                 source_system=source_system,
                 time=time,
-                pid=pid,
+                key=key,
                 image=image,
-                command_line=command_line,
                 username=username,
-                rng=process_rng,
+                command_line=command_line,
             )
-            return pid, image
+            if pid > 0:
+                self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
+                self._remember_system_connection_owner_finalizer(
+                    source_system=source_system,
+                    time=time,
+                    pid=pid,
+                    image=image,
+                    command_line=command_line,
+                    username=username,
+                    rng=process_rng,
+                )
+                return pid, image
 
         if self._connection_owner_is_one_shot_network_client(image, command_line):
             lead_seconds = process_rng.uniform(0.12, 3.5)
@@ -6586,6 +6599,24 @@ class ActivityGenerator:
                 process_time = visible_start
         if process_time >= time:
             process_time = time - timedelta(milliseconds=120)
+
+        if profiled_worker is not None:
+            family_name, worker_name, _family = profiled_worker
+            pid = self._ensure_profiled_service_worker(
+                system=source_system,
+                worker_time=process_time,
+                activity_time=time,
+                family_name=family_name,
+                worker_name=worker_name,
+            )
+            if pid > 0:
+                self.state_manager.update_process_activity_time(
+                    source_system.hostname,
+                    pid,
+                    time,
+                )
+                self.state_manager.set_current_time(time)
+                return pid, image
 
         if _get_os_category(source_system.os) == "windows":
             parent_pid = self._windows_system_parent_fallback(source_system, process_time)
@@ -6623,6 +6654,123 @@ class ActivityGenerator:
             return pid, running.image if running is not None else image
         self.state_manager.set_current_time(time)
         return -1, None
+
+    def _active_profiled_service_process(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        spec: ServiceProcessSpec,
+        parent_pid: int,
+    ) -> int | None:
+        """Return one exact active service manager or worker process."""
+
+        candidates = [
+            process
+            for process in self.state_manager.get_processes_on_system(system.hostname)
+            if process.image.replace("/", "\\").casefold()
+            == spec.image.replace("/", "\\").casefold()
+            and process.command_line == spec.command_line
+            and process.username.casefold() == spec.username.casefold()
+            and process.parent_pid == parent_pid
+            and process.start_time <= time
+            and self._is_pid_active_at(system, process.pid, time)
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda process: process.start_time).pid
+
+    def _profiled_service_manager_parent_pid(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        family: ServiceProcessFamily,
+    ) -> int:
+        """Resolve the configured service-control parent for one resident manager."""
+
+        sys_pids = getattr(self, "_system_pids", {}).setdefault(system.hostname, {})
+        configured = sys_pids.get(family.manager.parent_key)
+        if configured and self._is_pid_active_at(system, configured, time):
+            return configured
+        if family.os_category == "windows":
+            return self._windows_system_parent_fallback(system, time)
+        return self._linux_system_parent_fallback(system, time)
+
+    def _ensure_profiled_service_worker(
+        self,
+        *,
+        system: System,
+        worker_time: datetime,
+        activity_time: datetime,
+        family_name: str,
+        worker_name: str,
+    ) -> int:
+        """Create or reuse one worker beneath its exact resident service manager."""
+
+        family = service_process_family(family_name)
+        if family.os_category != _get_os_category(system.os):
+            raise ValueError(f"service family {family_name!r} does not support {system.os!r}")
+        try:
+            worker = family.workers[worker_name]
+        except KeyError as exc:
+            raise KeyError(
+                f"unknown worker {worker_name!r} for service family {family_name!r}"
+            ) from exc
+
+        sys_pids = getattr(self, "_system_pids", {}).setdefault(system.hostname, {})
+        manager_parent = self._profiled_service_manager_parent_pid(
+            system=system,
+            time=activity_time,
+            family=family,
+        )
+        manager_pid = self._active_profiled_service_process(
+            system=system,
+            time=activity_time,
+            spec=family.manager,
+            parent_pid=manager_parent,
+        )
+        if manager_pid is None:
+            manager_seed = _stable_seed(
+                f"service_process_manager:{system.hostname}:{family_name}:{worker_time.isoformat()}"
+            )
+            manager_time = worker_time - timedelta(seconds=30 + (manager_seed % 271))
+            manager_pid = self.generate_system_process(
+                system=system,
+                time=manager_time,
+                process_name=family.manager.image,
+                command_line=family.manager.command_line,
+                parent_pid=manager_parent,
+                username=family.manager.username,
+                emit_linux_syslog=False,
+            )
+        sys_pids[family.manager.key] = manager_pid
+
+        worker_pid = self._active_profiled_service_process(
+            system=system,
+            time=activity_time,
+            spec=worker,
+            parent_pid=manager_pid,
+        )
+        if worker_pid is None:
+            manager_process = self.state_manager.get_process(system.hostname, manager_pid)
+            if manager_process is not None:
+                earliest_worker_time = manager_process.start_time + timedelta(milliseconds=1)
+                if earliest_worker_time < activity_time:
+                    worker_time = max(worker_time, earliest_worker_time)
+                else:
+                    worker_time = activity_time
+            worker_pid = self.generate_system_process(
+                system=system,
+                time=worker_time,
+                process_name=worker.image,
+                command_line=worker.command_line,
+                parent_pid=manager_pid,
+                username=worker.username,
+                emit_linux_syslog=False,
+            )
+        sys_pids[worker.key] = worker_pid
+        return worker_pid
 
     def _remember_system_connection_owner_finalizer(
         self,
@@ -15432,6 +15580,34 @@ class ActivityGenerator:
     ) -> int:
         """Create or reuse a local mail service process for flow ownership."""
         image = self._email_server_process_image(system, port=port)
+        os_category = _get_os_category(system.os)
+        profiled_worker: tuple[str, str] | None = None
+        if os_category == "linux" and port not in {443, 993}:
+            profiled_worker = ("postfix", "smtpd")
+        elif os_category == "windows" and port == 443:
+            profiled_worker = ("iis", "owa")
+        if profiled_worker is not None:
+            process_time = time - timedelta(
+                seconds=random.Random(
+                    _stable_seed(
+                        f"email_server_process:{system.hostname}:{image}:{time.isoformat()}"
+                    )
+                ).uniform(30.0, 900.0)
+            )
+            if process_time >= time:
+                process_time = time - timedelta(milliseconds=100)
+            pid = self._ensure_profiled_service_worker(
+                system=system,
+                worker_time=process_time,
+                activity_time=time,
+                family_name=profiled_worker[0],
+                worker_name=profiled_worker[1],
+            )
+            if pid > 0:
+                self.state_manager.update_process_activity_time(system.hostname, pid, time)
+                self.state_manager.set_current_time(time)
+            return pid
+
         image_lower = image.lower()
         running_candidates = [
             proc
@@ -15446,7 +15622,6 @@ class ActivityGenerator:
             self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
             return proc.pid
 
-        os_category = _get_os_category(system.os)
         sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
         if os_category == "windows":
             username = "SYSTEM"
@@ -15491,6 +15666,27 @@ class ActivityGenerator:
         image = self._email_mta_outbound_process_image(system)
         if image == self._email_server_process_image(system, port=25):
             return self._ensure_email_server_process(system, time=time, port=25)
+
+        if _get_os_category(system.os) == "linux":
+            rng = random.Random(
+                _stable_seed(
+                    f"email_mta_outbound_process:{system.hostname}:{image}:{time.isoformat()}"
+                )
+            )
+            process_time = time - timedelta(milliseconds=rng.randint(180, 850))
+            if process_time >= time:
+                process_time = time - timedelta(milliseconds=50)
+            pid = self._ensure_profiled_service_worker(
+                system=system,
+                worker_time=process_time,
+                activity_time=time,
+                family_name="postfix",
+                worker_name="smtp",
+            )
+            if pid > 0:
+                self.state_manager.update_process_activity_time(system.hostname, pid, time)
+                self.state_manager.set_current_time(time)
+            return pid
 
         image_lower = image.lower()
         running_candidates = [
@@ -20091,6 +20287,17 @@ class ActivityGenerator:
         if not sessions:
             return
         session = max(sessions, key=lambda candidate: candidate.start_time)
+        parent_pid = session.session_shell_pid
+        if parent_pid is None or not self._is_pid_active_at(system, parent_pid, time):
+            parent_pid = self.ensure_linux_session_shell(
+                user=user,
+                target_system=system,
+                logon_id=session.logon_id,
+                logon_time=session.start_time,
+                activity_time=time,
+            )
+        if parent_pid is None:
+            return
 
         rng = random.Random(
             _stable_seed(
@@ -20107,7 +20314,6 @@ class ActivityGenerator:
             command,
         )
         for index, (image, process_command_line) in enumerate(processes):
-            parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
             if base_process_time is None:
                 base_process_time = self._reserve_foreground_shell_time(
                     system=system,

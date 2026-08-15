@@ -70,6 +70,14 @@ Deep-merges `scheduled_tasks`, `system_services`, `system_binaries`, `common_loa
 `process_loaded_modules`. Use this file for OS/service processes, not user applications. Preserve
 source-native image paths, parent symbols, host-role eligibility, rarity, cooldown, and lifecycle.
 
+### `service_process_profiles.yaml`
+
+Deep-merges `families`. Each family defines one resident OS-native service manager and named workers
+that must reuse that manager across generation entry paths. Manager and worker entries require a
+stable `key`, source-native `image`, `command_line`, `username`, and `parent_key`; worker
+`parent_key` values must be `manager`. Use this family only for durable master/worker ancestry such
+as Postfix or IIS, not for interactive invocations of the same executable.
+
 ### ProcessAccess and CreateRemoteThread
 
 - `process_access_patterns.yaml`: `baseline_pairs` append; each pair owns plausible source/target
