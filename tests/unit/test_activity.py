@@ -5877,6 +5877,21 @@ class TestActivityGenerator:
         assert was.image == r"C:\Windows\System32\svchost.exe"
         assert was.parent_pid == 500
 
+        process_bundle_pid = activity_gen.generate_process(
+            user=User(
+                username="SYSTEM",
+                full_name="Local System",
+                email="system@example.test",
+            ),
+            system=exchange,
+            time=timestamp + timedelta(minutes=1),
+            logon_id="0x3e7",
+            process_name=r"C:\Windows\System32\inetsrv\w3wp.exe",
+            command_line=(r'C:\Windows\System32\inetsrv\w3wp.exe -ap "MSExchangeOWAAppPool"'),
+            parent_pid=500,
+        )
+        assert process_bundle_pid == pid
+
     @pytest.mark.parametrize("method", ["http", "https"])
     def test_apt_method_connection_owner_has_frontend_parent(
         self, activity_gen, state_manager, method

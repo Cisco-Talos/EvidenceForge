@@ -12714,6 +12714,22 @@ class ActivityGenerator:
         concurrency_group_id = request.concurrency_group_id
         source_visible_by = request.source_visible_by
 
+        profiled_worker = matching_service_worker(
+            os_category=_get_os_category(system.os),
+            image=process_name,
+            command_line=command_line,
+            username=user.username,
+        )
+        if profiled_worker is not None:
+            family_name, worker_name, _family = profiled_worker
+            return self._ensure_profiled_service_worker(
+                system=system,
+                worker_time=time,
+                activity_time=time,
+                family_name=family_name,
+                worker_name=worker_name,
+            )
+
         self.state_manager.set_current_time(time)
         session_end_plan = self.state_manager.get_session_end_plan(logon_id)
         if (
