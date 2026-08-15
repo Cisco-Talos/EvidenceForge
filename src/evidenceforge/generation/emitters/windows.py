@@ -312,6 +312,48 @@ def _normalize_windows_time_created(
     event["TimeCreated"] = normalized
 
 
+def _shift_windows_lock_lifecycle_after_rendered_clock(
+    event: dict[str, Any],
+    last_by_computer: dict[str, datetime],
+    shift_by_session: dict[tuple[str, str, str], timedelta],
+) -> None:
+    """Shift a clamped workstation lock lifecycle without compressing its dwell time.
+
+    Windows rows are flushed incrementally, so an earlier batch can contain a
+    long-lived process termination later than a lock lifecycle generated in the
+    next batch. Move the matching 4800/4801 pair together when that happens;
+    normalizing each row independently would collapse a human-scale locked
+    interval into adjacent milliseconds.
+    """
+    event_id = event.get("EventID")
+    if event_id not in {4800, 4801}:
+        return
+    ts = event.get("TimeCreated")
+    if not isinstance(ts, datetime):
+        return
+    computer = str(event.get("Computer", ""))
+    logon_id = str(event.get("TargetLogonId") or "")
+    session_id = str(event.get("SessionId") or "")
+    if not computer or not logon_id:
+        return
+    key = (computer, logon_id, session_id)
+    original = ensure_utc(ts)
+
+    if event_id == 4800:
+        previous = last_by_computer.get(computer)
+        shift = timedelta(0)
+        if previous is not None and original <= previous:
+            shifted = previous + timedelta(milliseconds=1)
+            shift = shifted - original
+            event["TimeCreated"] = shifted
+        shift_by_session[key] = shift
+        return
+
+    shift = shift_by_session.pop(key, timedelta(0))
+    if shift:
+        event["TimeCreated"] = original + shift
+
+
 def _subject_domain(username: str, netbios_domain: str) -> str:
     """Return the correct domain for SubjectDomainName / TargetDomainName.
 
@@ -1766,6 +1808,7 @@ class WindowsEventEmitter(LogEmitter):
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._last_record_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
+        self._lock_lifecycle_shift_by_session: dict[tuple[str, str, str], timedelta] = {}
         self._current_storyline_origin: bool = False
         self._emission_context = local()
         self._spool_dir: Path | None = None
@@ -2525,6 +2568,11 @@ class WindowsEventEmitter(LogEmitter):
 
         # Assign per-computer EventRecordIDs in sorted order
         for sequence, event in enumerate(events):
+            _shift_windows_lock_lifecycle_after_rendered_clock(
+                event,
+                self._last_time_created_by_computer,
+                self._lock_lifecycle_shift_by_session,
+            )
             _normalize_windows_time_created(
                 event,
                 self._last_time_created_by_computer,

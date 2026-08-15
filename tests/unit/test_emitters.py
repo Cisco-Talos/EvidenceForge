@@ -45,6 +45,7 @@ from evidenceforge.generation.emitters.host_base import sanitize_host_routing_ke
 from evidenceforge.generation.emitters.windows import (
     _auth_subject_domain,
     _normalize_windows_time_created,
+    _shift_windows_lock_lifecycle_after_rendered_clock,
     _special_privilege_fallback,
     _windows_pid_hex,
 )
@@ -1757,6 +1758,38 @@ class TestWindowsEventEmitter:
         gaps = [rendered_times[i] - rendered_times[i - 1] for i in range(1, len(rendered_times))]
         assert max(gaps[:24]) < timedelta(milliseconds=1)
         assert min(gaps[25:]) >= timedelta(seconds=1)
+
+    def test_clamped_lock_lifecycle_preserves_canonical_dwell_time(self):
+        """A prior rendered clock should shift 4800/4801 together, not compress them."""
+        computer = "WIN-TEST-01.corp.local"
+        canonical_lock = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        canonical_unlock = canonical_lock + timedelta(minutes=12)
+        rendered_clock = canonical_lock + timedelta(minutes=20)
+        last_by_computer = {computer: rendered_clock}
+        shift_by_session: dict[tuple[str, str, str], timedelta] = {}
+        lock = {
+            "EventID": 4800,
+            "TimeCreated": canonical_lock,
+            "Computer": computer,
+            "TargetLogonId": "0x4f2a1b",
+            "SessionId": 2,
+        }
+        unlock = {
+            "EventID": 4801,
+            "TimeCreated": canonical_unlock,
+            "Computer": computer,
+            "TargetLogonId": "0x4f2a1b",
+            "SessionId": 2,
+        }
+
+        _shift_windows_lock_lifecycle_after_rendered_clock(lock, last_by_computer, shift_by_session)
+        _shift_windows_lock_lifecycle_after_rendered_clock(
+            unlock, last_by_computer, shift_by_session
+        )
+
+        assert lock["TimeCreated"] == rendered_clock + timedelta(milliseconds=1)
+        assert unlock["TimeCreated"] - lock["TimeCreated"] == timedelta(minutes=12)
+        assert not shift_by_session
 
     def test_kerberos_tgt_shifted_before_visible_service_ticket(self, format_def, temp_output):
         """Rendered DC Security 4768 rows should visibly precede dependent 4769 rows."""

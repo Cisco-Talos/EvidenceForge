@@ -1440,8 +1440,14 @@ or follow-up batch is needed.
   active-session check failed; due deferred transitions now reserve the hour even when no source
   row is emitted. Focused lock-state tests passed, the definitive post-probe full suite passed
   (`5956 passed, 22 skipped`), all 92 config files validated cleanly, and repository-wide Ruff
-  checks passed. Regeneration, evaluation, rendered probing, and blind review remain the next Loop
-  9 steps.
+  checks passed. A second regeneration left one 1 ms pair on `WS-SMARTINEZ-01`; direct record
+  tracing showed an earlier flush's long-lived `ssh.exe` termination had advanced the rendered
+  host clock beyond both canonical transitions. Windows source timing now shifts a clamped
+  4800/4801 lifecycle as a unit, preserving its canonical human-scale dwell interval instead of
+  independently compressing both records. The new regression and focused state-machine tests pass,
+  as do all 92 config files, repository-wide Ruff, and the definitive full suite (`5957 passed, 22
+  skipped`). Regeneration, evaluation, rendered probing, and blind review remain the next Loop 9
+  steps.
 
 ## Recent Completed Work Previously Kept in TODO
 
