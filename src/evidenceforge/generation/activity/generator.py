@@ -10632,17 +10632,25 @@ class ActivityGenerator:
         pam_actor = "LOGIN(uid=0)" if pam_service == "login" else "gdm(uid=0)"
         pam_time = logind_time - timedelta(milliseconds=rng.randint(3000, 8000))
         if pam_service == "login":
-            root_parent_pid = self._linux_anchor_pid(system, pam_time)
+            login_start_time = pam_time - timedelta(milliseconds=rng.randint(250, 900))
+            root_parent_pid = self._linux_local_login_parent_pid(
+                system,
+                login_start_time,
+                seed=_stable_seed(
+                    f"linux_local_login_parent:{system.hostname}:{user.username}:{logon_id}"
+                ),
+            )
             pam_pid = self.generate_process(
-                user=user,
+                user=self._user_model_for_username("root"),
                 system=system,
-                time=pam_time,
-                logon_id=logon_id,
+                time=login_start_time,
+                logon_id="0x3e7",
                 process_name="/bin/login",
                 command_line=f"login -- {user.username}",
                 parent_pid=root_parent_pid,
                 suppress_command_file_effect=True,
                 lifecycle_group_id=session.lifecycle_group_id,
+                source_visible_by=pam_time,
             )
             session.process_tree_root = pam_pid
         else:
@@ -27424,6 +27432,32 @@ class ActivityGenerator:
         sys_pids["systemd"] = pid
         return pid
 
+    def _linux_local_login_parent_pid(
+        self,
+        system: System,
+        time: datetime,
+        *,
+        seed: int,
+    ) -> int:
+        """Return a live getty parent for a terminal login, with init as fallback."""
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        candidate_pids = [
+            pid
+            for key in ("agetty1", "agetty2")
+            if (pid := sys_pids.get(key)) is not None and self._is_pid_active_at(system, pid, time)
+        ]
+        if not candidate_pids:
+            candidate_pids = [
+                process.pid
+                for process in self.state_manager.get_processes_on_system(system.hostname)
+                if process.image in {"/sbin/agetty", "/usr/sbin/agetty"}
+                and self._is_pid_active_at(system, process.pid, time)
+            ]
+        if candidate_pids:
+            ordered_pids = sorted(set(candidate_pids))
+            return ordered_pids[seed % len(ordered_pids)]
+        return self._linux_anchor_pid(system, time)
+
     def _active_session_shell_pid(
         self,
         system: System,
@@ -27586,8 +27620,14 @@ class ActivityGenerator:
                     and parent_proc.command_line.startswith("sshd: ")
                     and parent_proc.command_line.endswith(" [priv]")
                 )
+                is_linux_login_priv_parent = (
+                    parent_username == "root"
+                    and parent_exe == "login"
+                    and parent_proc.command_line.startswith("login -- ")
+                )
                 if (
                     not is_linux_ssh_priv_parent
+                    and not is_linux_login_priv_parent
                     and parent_username not in _SYSTEM_ACCOUNTS
                     and not parent_username.endswith("$")
                 ):

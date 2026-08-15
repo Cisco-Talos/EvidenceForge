@@ -1280,6 +1280,65 @@ or follow-up batch is needed.
   may be absent on reused application events, second-resolution proxy timestamps need bounded
   tolerance, and denied or single-child summaries must retain current semantics.
 
+- V2 loop 4 fixed explicit-proxy tunnel-to-transport identity in two commits (`91a78286`,
+  `d0636f24`). Reuse now requires the planned child response to finish before the canonical client
+  transport closes; source-port identity is retained across reused events; proxy CONNECT and
+  inspection rows share a proxy-native tunnel ID plus client source port; and declared tunnel
+  duration comes from the parent transport. Focused tests, config validation, Ruff, and two full
+  suites passed (`5950 passed, 22 skipped`). The definitive bundle passed automated evaluation at
+  96.68474179062726 over 80,556 records. Its hard probe found 574 tunnel identities, 1,588 children,
+  zero summary/byte/identity/duration mismatches, and three source-observation gaps. The clean
+  89-file panel retained SHA-256
+  `a84450f9eba61adef013e2cd131683ec3230bd7a19c0aba85ef5310086ca1dea` and scored
+  88/69/74/99 (average 82.5), unanimously Synthetic with no deliberation trigger. The prior
+  duration/identity regression did not recur. Network review exposed the next ledger boundary:
+  438/573 joined inspected tunnels have less Zeek payload than their assigned proxy children
+  because the immutable parent transport accounted only for the first request.
+
+- V2 loop 5 family contract — **explicit-proxy client-tunnel payload capacity**. Owning
+  abstraction: the canonical client transport ledger plus its durable active-tunnel reuse state.
+  Invariant: CONNECT setup plus every assigned child byte must fit within the single parent
+  transport's directional payload ledger; a live tunnel without sufficient remaining capacity is
+  not reusable; every admitted child consumes capacity exactly once; and rendered Zeek/ASA/eCAR
+  and proxy views remain layer-compatible. Entry paths: first inspected request, reused request,
+  parallel same-host tunnel, large response/download, upload, cache/deny terminal, idle timeout,
+  transport close, and source-observation loss. Consumers: proxy action bundle/cache, canonical
+  NetworkTrafficLedger, proxy summary/children, Zeek conn, ASA, eCAR FLOW, and cross-source probes.
+  Layer rationale: proxy summary arithmetic is already exact; changing its totals would hide child
+  evidence. The defect is reuse admission against an immutable parent ledger. Sibling risk:
+  disabling all reuse is physically safe but reduces realistic multi-request tunnels; any retained
+  reuse must be backed by preplanned spare capacity or a finalize-before-render bundle rather than
+  invented post-render bytes.
+
+- V2 loop 5 fixed explicit-proxy client-tunnel payload capacity (`ff80bbdc`). Active tunnel state
+  now records remaining directional capacity; each reused child must fit and consumes its capacity
+  exactly once, while ordinary fully consumed connections open a new transport. Focused tests,
+  Ruff, and the full suite passed (`5950 passed, 22 skipped`). The regenerated bundle passed
+  automated evaluation at 96.48945883523132 over 97,583 records. Its hard probe found 1,403
+  inspected tunnels, zero material parent byte undercounts, zero proxy aggregate/identity/duration
+  mismatches, 149 small capture-texture differences, and three source-observation gaps. The clean
+  89-file panel retained SHA-256
+  `de853765a7c0acdc60c595e6541ce77edfc4f417b0f3a3de8bdac5e6d5400fc1` and initially scored
+  68/28/13/84 (average 48.25). Verdict disagreement and a 71-point spread triggered deliberation,
+  which confirmed the prior capacity defect absent and revised to 72/47/34/76 (average 57.25),
+  Inconclusive leaning Synthetic. The next P0 is Linux local-login chronology: 24/24 matched PIDs
+  across seven hosts emit PAM/logind evidence 3.9-9.3 seconds before their eCAR process create.
+
+- V2 loop 6 family contract — **Linux local-login process and authentication lifecycle**. Owning
+  abstraction: the local interactive session action bundle coordinating terminal/getty process,
+  `/bin/login`, PAM, logind, shell, and eCAR process/session evidence. Invariant: the canonical
+  login process and its source-visible creation precede every PAM/logind row naming its PID; the
+  login process has role-compatible terminal/getty/display-manager ancestry rather than universal
+  PID-1 parentage; shell readiness follows PAM/session open; and close/termination order remains
+  lifecycle-compatible. Entry paths: baseline local console login, GDM login, server console noise,
+  user workstation session, pre-window process, right-boundary session, and source-observation
+  delay/drop. Consumers: canonical process/session state, Linux syslog PAM/logind, eCAR
+  PROCESS/USER_SESSION, bash history, and timing probes. Layer rationale: syslog and eCAR agree on
+  PID but source timing is inverted, so neither renderer should rewrite timestamps independently.
+  Sibling risk: SSH and sudo PAM paths already have good ordering and must remain unchanged;
+  bounded-window sessions may legitimately lack one edge; getty/display-manager processes need
+  data-driven OS/role defaults.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed

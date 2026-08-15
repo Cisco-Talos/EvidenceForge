@@ -1632,6 +1632,31 @@ class TestActivityGenerator:
         )
         logon_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
         logon_id = "0x12345"
+        state_manager.set_current_time(logon_time - timedelta(hours=1))
+        systemd_pid = state_manager.create_process(
+            linux_server.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+            logon_id="0x3e7",
+        )
+        agetty_pid = state_manager.create_process(
+            linux_server.hostname,
+            systemd_pid,
+            "/sbin/agetty",
+            "/sbin/agetty --noclear tty1 linux",
+            "root",
+            "System",
+            logon_id="0x3e7",
+        )
+        activity_gen._system_pids = {
+            linux_server.hostname: {
+                "systemd": systemd_pid,
+                "agetty1": agetty_pid,
+            }
+        }
 
         first_id = activity_gen.generate_logon(
             test_user,
@@ -1675,6 +1700,24 @@ class TestActivityGenerator:
         assert len(login_events) == 1
         assert len(process_events) == 1
         assert pam_event.syslog.pid == process_events[0].process.pid
+        assert process_events[0].process.username == "root"
+        assert process_events[0].process.logon_id == "0x3e7"
+        assert process_events[0].process.parent_pid == agetty_pid
+        assert (
+            activity_gen.process_source_create_time(
+                linux_server.hostname,
+                process_events[0].process.pid,
+            )
+            <= pam_event.timestamp
+        )
+        login_process = state_manager.get_process(
+            linux_server.hostname,
+            process_events[0].process.pid,
+        )
+        shell_process = state_manager.get_process(linux_server.hostname, shell_pid)
+        assert login_process is not None
+        assert shell_process is not None
+        assert shell_process.parent_pid == login_process.pid
 
     def test_linux_sudo_bootstrap_before_window_is_registered_without_login_event(
         self, state_manager, test_user
