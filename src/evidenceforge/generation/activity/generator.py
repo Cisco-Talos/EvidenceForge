@@ -6744,6 +6744,7 @@ class ActivityGenerator:
                 username=family.manager.username,
                 emit_linux_syslog=False,
                 _profiled_service_bypass=True,
+                _skip_singleton_reuse=True,
             )
         sys_pids[family.manager.key] = manager_pid
 
@@ -20803,6 +20804,7 @@ class ActivityGenerator:
         emit_linux_syslog: bool = True,
         concurrency_group_id: str = "",
         _profiled_service_bypass: bool = False,
+        _skip_singleton_reuse: bool = False,
     ) -> int:
         """Generate a system process creation event (no user session required).
 
@@ -20878,13 +20880,15 @@ class ActivityGenerator:
                 allow_existing_browser_reuse=False,
             )
 
-        singleton_service_pid = self._existing_windows_singleton_service_pid(
-            system=system,
-            process_name=process_name,
-            time=time,
-            username=username,
-            command_line=command_line,
-        )
+        singleton_service_pid = None
+        if not _skip_singleton_reuse:
+            singleton_service_pid = self._existing_windows_singleton_service_pid(
+                system=system,
+                process_name=process_name,
+                time=time,
+                username=username,
+                command_line=command_line,
+            )
         if singleton_service_pid is not None:
             return singleton_service_pid
 
