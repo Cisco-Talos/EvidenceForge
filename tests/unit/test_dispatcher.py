@@ -1530,6 +1530,72 @@ class TestObservationProfiles:
         )
         assert policy.decide("ecar", transport).delay == policy.decide("ecar", login).delay
 
+    def test_boundary_open_ecar_ssh_transport_and_login_share_observation_fate(self, monkeypatch):
+        """A boundary-open SSH login cannot survive without its target inbound FLOW."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "ecar": {
+                        "missingness": 0.5,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("ecar_boundary_ssh_tuple_test")
+        target = HostContext(
+            hostname="DB-PROD-01",
+            ip="10.10.4.10",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        opened_at = _make_ts().replace(hour=17, minute=58, second=30)
+        transport = OccurrenceBuilder(
+            timestamp=opened_at,
+            event_type="connection",
+            dst_host=target,
+            network=network_plan(
+                src_ip="10.10.1.31",
+                src_port=64161,
+                dst_ip=target.ip,
+                dst_port=22,
+                protocol="tcp",
+                zeek_uid="CboundarySsh123",
+                duration=120.0,
+            ),
+            lifecycle=ActionLifecycleContext(
+                group_id="network-transport-boundary-ssh",
+                canonical_start=opened_at,
+                phase="start",
+                parent_group_id="ssh-session-boundary",
+            ),
+        )
+        login = OccurrenceBuilder(
+            timestamp=opened_at + timedelta(seconds=6),
+            event_type="ssh_session",
+            dst_host=target,
+            auth=AuthContext(
+                username="marcus.chen",
+                source_ip="10.10.1.31",
+                source_port=64161,
+                logon_id="0x118b6497",
+                logon_type=10,
+            ),
+        )
+
+        transport_decision = policy.decide("ecar", transport)
+        login_decision = policy.decide("ecar", login)
+
+        assert policy._coherent_group_key("ecar", transport).startswith("remote-session:22:")
+        assert transport_decision == login_decision
+
     def test_ecar_rdp_transport_and_session_observation_are_tuple_coherent(self, monkeypatch):
         """Target eCAR RDP FLOW and Type 10 USER_SESSION rows should share observation fate."""
         monkeypatch.setattr(

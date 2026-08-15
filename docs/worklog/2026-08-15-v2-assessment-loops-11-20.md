@@ -377,3 +377,14 @@
   deferred close. The focused SSH/timing/world suite passed 144 tests, repository Ruff and diff
   checks remained clean, and authoritative iteration-test generation completed all six hours and
   replaced output successfully. The benchmark scenario itself was not edited.
+
+### Loop 18 rendered-probe observation follow-up
+
+- The first rendered hard probe found one boundary-open SSH USER_SESSION whose exact target inbound
+  eCAR FLOW was missing. The observation policy's generic network lifecycle key took precedence
+  over its existing remote-session tuple key, so transport and login could receive independent
+  eCAR missingness decisions.
+- Remote SSH/RDP tuple coherence now precedes generic per-occurrence lifecycle grouping. A focused
+  17:58 boundary-open regression proves the network transport and endpoint login share one eCAR
+  admission decision. Regeneration restored the exact target FLOW and the rendered probe passed all
+  20 public-key sessions with zero tuple or actor-before-create mismatches.

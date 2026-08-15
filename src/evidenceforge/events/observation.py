@@ -328,12 +328,17 @@ class ObservationPolicy:
     def _coherent_group_key(self, source: str, event: CanonicalOccurrence) -> str:
         if source == "ecar" and event.process and event.process.concurrency_group_id:
             return f"process-group:{event.process.concurrency_group_id}"
-        if event.lifecycle is not None:
-            return f"action-lifecycle:{event.lifecycle.group_id}"
         if source == "ecar":
             remote_session_group = self._ecar_remote_session_group_key(event)
             if remote_session_group:
+                # The network contract gives the transport its own lifecycle group,
+                # while SSH/RDP authentication is a distinct canonical occurrence.
+                # Tuple coherence must therefore take precedence over the generic
+                # per-occurrence lifecycle key or observation missingness can orphan
+                # a visible endpoint login from its required inbound FLOW.
                 return remote_session_group
+        if event.lifecycle is not None:
+            return f"action-lifecycle:{event.lifecycle.group_id}"
         if (
             source == "ecar"
             and event.storyline_cluster_id
