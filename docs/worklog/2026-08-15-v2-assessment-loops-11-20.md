@@ -445,3 +445,21 @@
   `eforge validate-config` reported zero issues across 93 files. Targeted Ruff lint, format, and
   diff checks passed. The full repository suite passed with 6,015 tests and 22 skips. No scenario,
   generated corpus, blind artifact, or commit was changed.
+
+### Loop 19 outcome
+
+- Commit `640c6f82`; evaluation remained 97.3908/100 over 77,150 records. The rendered source-side
+  SSH contract passed: all 27 attributed FLOW rows had exact same-host client CREATE evidence at or
+  before the FLOW, with zero PID/image/command/Sysmon mismatches and zero later matching client
+  creates. Two permitted actor omissions remained.
+- The broader SSH probe exposed a separate target-side timing issue: 2/29 target eCAR FLOW rows
+  followed their receiver syslog Connection line by 438–709 ms. Transport/client termination and
+  target-session closure checks otherwise passed, with five boundary-open closures excluded.
+- Frozen corpus SHA-256 remained
+  `556224e2a34f45e9dfe7b6743c65bbe3b2feaa26573121eaf67b4becd53e082c` before and after review.
+  The 37-point initial panel spread triggered deliberation; revised scores were 70/74/58/72
+  (mean 68.5), unanimous Synthetic. The fixed source-client inversion did not recur.
+- The next P0 is the repeated same-host polkit future-PID contradiction. Durable machine-account
+  TGT/cache state, stable Kerberos negotiation profiles, recurring SCM-owned PowerShell jobs, WMI
+  dynamic-RPC lifecycle, TLS negotiation metadata, and target SSH FLOW/syslog ordering remain
+  prioritized follow-ups.
