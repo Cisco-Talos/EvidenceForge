@@ -14120,7 +14120,7 @@ class ActivityGenerator:
         command_line = request.command_line
         command_lower = command_line.lower()
         image_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if image_lower != "nmap" and " nmap " not in f" {command_lower} ":
+        if image_lower not in {"nmap", "nmap.exe"} and " nmap " not in f" {command_lower} ":
             return
         planning_profile = nmap_command_probe_config()
         plan = NmapCommandProbePlanner(planning_profile).plan(
@@ -14130,6 +14130,14 @@ class ActivityGenerator:
         if plan is None:
             return
 
+        # The process and its connections are separate canonical occurrences, while eCAR
+        # independently delays their source observations. Anchor the entire scanner family after
+        # the exact process instance's visible CREATE once, then retain the plan's dense relative
+        # offsets for discovery and connect siblings. Without this action-owned bridge, short
+        # failed probes have no admissible FLOW interval after CREATE and render as actorless rows
+        # that still reveal the owning scan by tuple and adjacency.
+        probe_anchor = self._nmap_probe_anchor_after_visible_process_create(request)
+
         rng = random.Random(
             _stable_seed(f"nmap_effects:{system.hostname}:{pid}:{command_line}:{time.isoformat()}")
         )
@@ -14138,6 +14146,7 @@ class ActivityGenerator:
                 request=request,
                 targets=plan.targets,
                 rng=rng,
+                probe_anchor=probe_anchor,
                 window_seconds=(
                     planning_profile.discovery_window_seconds_min,
                     planning_profile.discovery_window_seconds_max,
@@ -14170,7 +14179,7 @@ class ActivityGenerator:
             self.generate_connection(
                 src_ip=system.ip,
                 dst_ip=target.ip,
-                time=time + offset,
+                time=probe_anchor + offset,
                 dst_port=port,
                 proto="tcp",
                 service=service,
@@ -14186,12 +14195,35 @@ class ActivityGenerator:
                 suppress_application_side_effects=True,
             )
 
+    def _nmap_probe_anchor_after_visible_process_create(
+        self,
+        request: NmapCommandProbeRequest,
+    ) -> datetime:
+        """Return one source-ready anchor shared by all probes from an nmap process."""
+
+        visible_create_time = self.process_source_create_time(
+            request.system.hostname,
+            request.pid,
+        )
+        if visible_create_time is None:
+            return request.time
+        readiness_time = visible_create_time + sample_timing_delta(
+            "source.ecar_dependent_after_process_create",
+            seed_parts=(
+                "nmap-probe-ready",
+                request.stable_id,
+                visible_create_time,
+            ),
+        )
+        return max(request.time, readiness_time)
+
     def _emit_nmap_discovery_probes(
         self,
         *,
         request: NmapCommandProbeRequest,
         targets: tuple[NmapCommandProbeTarget, ...],
         rng: random.Random,
+        probe_anchor: datetime,
         window_seconds: tuple[float, float],
     ) -> None:
         """Emit bounded process-owned ICMP discovery attempts."""
@@ -14208,7 +14240,7 @@ class ActivityGenerator:
             self.generate_connection(
                 src_ip=request.system.ip,
                 dst_ip=target.ip,
-                time=request.time + offset,
+                time=probe_anchor + offset,
                 dst_port=0,
                 proto="icmp",
                 service="icmp",

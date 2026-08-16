@@ -139,6 +139,10 @@ from evidenceforge.generation.activity.tls_realism import (
 )
 from evidenceforge.generation.identity import IdentityDirectory, WindowsAccount
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+from evidenceforge.generation.source_timing import (
+    ecar_flow_identity_key,
+    ecar_flow_render_key,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import NetworkConfig, NetworkSegment, System, User
 from evidenceforge.models.exceptions import StateError
@@ -3413,6 +3417,8 @@ class TestActivityGenerator:
             target_a.ip: target_a,
             target_b.ip: target_b,
         }
+        mock_emitters["ecar"] = Mock()
+        activity_gen.dispatcher.emitters = mock_emitters
         state_manager.set_current_time(timestamp)
         probe_requests = []
         original_generate_connection = activity_gen.generate_connection
@@ -3442,6 +3448,9 @@ class TestActivityGenerator:
             and call.args[0].network.initiating_pid == pid
         ]
         assert probe_requests
+        visible_create = activity_gen.process_source_create_time(source.hostname, pid)
+        assert visible_create is not None
+        assert min(request["time"] for request in probe_requests) > visible_create
         observed_targets = {request["dst_ip"] for request in probe_requests}
         assert {target_a.ip, target_b.ip} < observed_targets
         silent_targets = observed_targets - {target_a.ip, target_b.ip}
@@ -3450,9 +3459,9 @@ class TestActivityGenerator:
             str(address) for address in ipaddress.ip_network("10.10.2.0/24").hosts()
         } - {target_a.ip, target_b.ip}
         assert len(probe_requests) == 1270
-        assert max(request["time"] for request in probe_requests) - timestamp <= timedelta(
-            seconds=12.01
-        )
+        assert max(request["time"] for request in probe_requests) - min(
+            request["time"] for request in probe_requests
+        ) <= timedelta(seconds=12.01)
         assert all(
             request["conn_state"] == "S0" and request["resp_bytes"] == 0
             for request in probe_requests
@@ -3489,6 +3498,23 @@ class TestActivityGenerator:
         )
         process_key = activity_gen._process_instance_key(source.hostname, pid)
         assert activity_gen._process_connection_hold_until[process_key] >= max_scan_close
+        ecar_scan_events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.src_ip == source.ip
+            and call.args[0].network.initiating_pid == pid
+        ]
+        assert len(ecar_scan_events) == len(probe_requests)
+        assert all(
+            event.source_timing.finalized_times[ecar_flow_render_key("outbound", source.hostname)]
+            > visible_create
+            for event in ecar_scan_events
+        )
+        assert all(
+            event.source_timing.finalized_flags[ecar_flow_identity_key("outbound", source.hostname)]
+            for event in ecar_scan_events
+        )
 
     def test_nmap_command_probe_bundle_anchor_is_stable(self, test_user):
         """Nmap command probe bundles should expose deterministic anchors."""
@@ -3591,6 +3617,8 @@ class TestActivityGenerator:
         source = System(hostname="SCAN-01", ip="10.10.3.10", os="Ubuntu 22.04", type="server")
         target = System(hostname="APP-01", ip="10.10.2.30", os="Ubuntu 22.04", type="server")
         activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        mock_emitters["ecar"] = Mock()
+        activity_gen.dispatcher.emitters = mock_emitters
         state_manager.set_current_time(timestamp)
         requests: list[dict] = []
         original_generate_connection = activity_gen.generate_connection
@@ -3612,6 +3640,9 @@ class TestActivityGenerator:
         )
 
         assert requests
+        visible_create = activity_gen.process_source_create_time(source.hostname, pid)
+        assert visible_create is not None
+        assert min(request["time"] for request in requests) > visible_create
         assert all(request["proto"] == "icmp" and request["pid"] == pid for request in requests)
         modeled = [request for request in requests if request["dst_ip"] == target.ip]
         silent = [request for request in requests if request["dst_ip"] != target.ip]
@@ -3643,6 +3674,90 @@ class TestActivityGenerator:
         assert process is not None
         assert process.last_activity_time is not None
         assert process.last_activity_time >= max_close
+        ecar_scan_events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.protocol == "icmp"
+            and call.args[0].network.initiating_pid == pid
+        ]
+        assert len(ecar_scan_events) == len(requests)
+        assert all(
+            event.source_timing.finalized_times[ecar_flow_render_key("outbound", source.hostname)]
+            > visible_create
+            for event in ecar_scan_events
+        )
+        assert all(
+            event.source_timing.finalized_flags[ecar_flow_identity_key("outbound", source.hostname)]
+            for event in ecar_scan_events
+        )
+
+    def test_windows_nmap_probe_uses_same_source_ready_contract(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+    ):
+        """Windows nmap command effects should obey the shared eCAR CREATE floor."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(
+            hostname="WS-SCAN-01",
+            ip="10.10.1.55",
+            os="Windows 11",
+            type="workstation",
+        )
+        target = System(
+            hostname="APP-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["apache2"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        mock_emitters["ecar"] = Mock()
+        activity_gen.dispatcher.emitters = mock_emitters
+        state_manager.set_current_time(timestamp)
+        probe_requests: list[dict] = []
+        original_generate_connection = activity_gen.generate_connection
+
+        def capture_probe_connection(**kwargs):
+            if kwargs.get("process_image", "").lower().endswith("nmap.exe"):
+                probe_requests.append(dict(kwargs))
+            return original_generate_connection(**kwargs)
+
+        monkeypatch.setattr(activity_gen, "generate_connection", capture_probe_connection)
+        pid = activity_gen.generate_process(
+            user=test_user,
+            system=source,
+            time=timestamp,
+            logon_id="0x123",
+            process_name=r"C:\Program Files\Nmap\nmap.exe",
+            command_line=r'"C:\Program Files\Nmap\nmap.exe" -sT -p 80 10.10.2.30',
+            parent_pid=0,
+        )
+
+        visible_create = activity_gen.process_source_create_time(source.hostname, pid)
+        assert visible_create is not None
+        assert len(probe_requests) == 1
+        assert probe_requests[0]["time"] > visible_create
+        ecar_flow = next(
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.initiating_pid == pid
+        )
+        assert (
+            ecar_flow.source_timing.finalized_times[
+                ecar_flow_render_key("outbound", source.hostname)
+            ]
+            > visible_create
+        )
+        assert ecar_flow.source_timing.finalized_flags[
+            ecar_flow_identity_key("outbound", source.hostname)
+        ]
 
     def test_nmap_explicit_ip_does_not_invent_neighbor_targets(self, test_user):
         """An explicit IP operand should remain exact rather than sampling its implicit /32."""
