@@ -410,3 +410,81 @@ and 1 skipped.
 - Verification: 7 exact payload/exclusion/preexisting/same-cluster/follow-on tests passed. The
   broader service, process, observation, lifecycle, Sysmon, Windows, and eCAR regression set passed
   364 tests. Repository-targeted Ruff check, Ruff format check, and `git diff --check` passed.
+
+## Loop 26 — Linux pipeline-stage timing texture
+
+### Family contract (before implementation)
+
+- **Accepted finding and classification:** the Loop 25 Host review measured 41 of 42 qualifying
+  Linux pipeline-stage pairs at exactly 35 ms, across eight hosts and unrelated commands; panel
+  deliberation accepted this as its strongest dataset-wide synthetic fingerprint. This is a
+  `sibling_defect` in the Linux shell-process family: Loop 24 made true pipeline peers concurrently
+  admissible, but their canonical start offsets still use one fixed constant.
+- **Owning abstraction and layer:** the Linux shell-command action family's pipeline timing planner
+  owns the ordered start schedule for every stage in one shell-owned action. `ActivityGenerator`
+  adapts both action-bundle bash-history telemetry and the legacy/application-catalog path into that
+  shared plan. Source observation and eCAR render already-correct canonical stage timestamps and
+  must not add renderer-local jitter to conceal a bad action schedule.
+- **Invariant:** stage zero retains the admitted shell-action anchor. Each later stage starts after
+  its predecessor by a deterministic, scoped, positive, sub-millisecond-capable sample from a
+  bounded non-uniform distribution whose scale responds to host load. All stages retain the same
+  pipeline concurrency group and parent shell, so valid pipeline overlap remains possible while
+  stage order, process lifetime ordering, session/network deadlines, and source visibility remain
+  causal.
+- **Entry paths:** `LinuxShellCommandActionBundle` through
+  `_maybe_emit_bash_process_telemetry`; baseline, storyline, world-planned, and noise callers of
+  `generate_bash_command`; and Linux application/catalog process generation through
+  `_linux_catalog_processes_from_shell_command`. Typed storyline process events that disable
+  inferred process telemetry and single-process commands remain unchanged.
+- **Consumers:** canonical `RunningProcess` start/lifecycle state, foreground reservations and
+  finalizers, eCAR process create/terminate projection, process-owned network/file effects, bash
+  history correlation, strict rendered pipeline probes, and focused activity/action-bundle tests.
+- **Sibling risks and verification:** preserve deterministic regeneration, positive ordered gaps,
+  same-group concurrency, parent-shell identity, bounded command/session deadlines, and single-stage
+  anchors. Cover both direct shell-action and catalog adapters, prove repeatability and host/load
+  sensitivity, and use a strict-window rendered probe that groups Linux eCAR children by host,
+  shell PID, and concurrency group; it must report gap histograms/concentration and fail any return
+  of a fleet-wide exact-millisecond mode rather than checking only the original 35 ms value.
+
+### Implementation handoff
+
+- `plan_linux_pipeline_stage_times` now owns the canonical stage schedule for one shell action.
+  Stage zero keeps the admitted action anchor; later stages use deterministic scoped triangular
+  samples at microsecond resolution from the data-driven 6–115 ms timing window. The distribution
+  mode moves with the host's active-process count, while positive cumulative gaps preserve stage
+  ordering and shared pipeline concurrency.
+- Both inferred-process adapters now consume the same complete plan before creating any stage:
+  `LinuxShellCommandActionBundle` bash-history telemetry and the legacy/application-catalog
+  baseline path. Parent PID, logon/session ownership, concurrency group, foreground finalization,
+  process effects, observation grouping, and renderer behavior are unchanged.
+- Focused verification passed 3 planner/direct/catalog tests. The broader shell, process-lifetime,
+  bash-noise, Linux-workstation, and world-model suite passed 546 tests; timing-profile and config-
+  validator tests passed 101. `eforge validate-config` passed 93 files with zero issues, and
+  repository-wide Ruff check/format plus `git diff --check` passed.
+- **Rendered hard probe:** within `[2024-03-18T12:00:00Z, 2024-03-18T18:00:00Z)`, parse Linux eCAR
+  process creates, identify direct children of a concrete `bash`/`sh`/`zsh`, and group stages by
+  host, shell PID, and the shared concurrency/action cohort. For ordered stage pairs, report exact
+  microsecond and rounded-millisecond gaps, host/command coverage, modal count/share, distinct gap
+  count, bounds, and inversions. Fail on any non-positive gap, parent/group mismatch, or dominant
+  fleet-wide exact-millisecond mode; separately confirm at least one concurrently alive pipeline so
+  the fix has not serialized valid stages.
+
+### Operator-aware sibling correction
+
+- Independent review found that the existing shell-stage scanner split `||`, `&&`, and `;` through
+  the same API used for true `|` pipelines, while `_contains_unquoted_shell_pipe` accepted either
+  character of `||`. The corrected parser must retain source-native multi-command inference but
+  expose the unquoted operator between stages. Only contiguous stages joined by a single unquoted
+  `|` may share a pipeline concurrency cohort and the pipeline-stage timing plan; control/sequential
+  operators start a separately admitted foreground cohort. Quoted and escaped pipes remain literal
+  argv content and never create a second stage.
+- The scanner now returns each stage with its exact preceding unquoted operator. Process inference
+  preserves the prior flat compatibility view, while both generation adapters consume cohorts that
+  join only single-`|` neighbors. `||`, `&&`, `;`, and `|&` start new cohorts with distinct
+  concurrency IDs; quoted and escaped pipes remain within one argv. Direct shell actions admit the
+  next cohort only after the prior cohort's actual bounded termination, and the catalog adapter
+  reserves through each prior executable's maximum bounded lifetime before admitting its successor.
+- Focused parser/planner/generation coverage passed 14 cases, including a mixed
+  `pipeline && command` lifecycle whose control-stage create follows both pipeline terminations.
+  The broader shell, process-lifetime, bash-noise, Linux-workstation, and world-model suite passed
+  554 tests. Repository-wide Ruff check/format and `git diff --check` passed.

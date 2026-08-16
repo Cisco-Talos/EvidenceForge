@@ -193,6 +193,7 @@ from evidenceforge.generation.actions import (
     WorkstationUnlockRequest,
     file_transfer_hashes,
     http_response_parent_duration_floor,
+    plan_linux_pipeline_stage_times,
 )
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
@@ -3463,6 +3464,50 @@ def _linux_catalog_processes_from_shell_command(
     return processes or [(process_name, command_line)]
 
 
+def _linux_catalog_process_groups_from_shell_command(
+    process_name: str,
+    command_line: str,
+    *,
+    username: str = "",
+) -> list[list[tuple[str, str]]]:
+    """Return operator-aware process cohorts for a catalog shell command."""
+    groups = _linux_command_process_groups_from_shell(command_line, username=username)
+    return groups or [[(process_name, command_line)]]
+
+
+def _linux_command_process_groups_from_shell(
+    command: str,
+    *,
+    max_processes: int | None = _LINUX_SHELL_MAX_INFERRED_PROCESSES,
+    max_stages: int = _LINUX_SHELL_MAX_INFER_STAGES,
+    username: str = "",
+) -> list[list[tuple[str, str]]]:
+    """Infer process cohorts, grouping only stages connected by a true shell pipe."""
+    if max_processes is not None and max_processes <= 0:
+        return []
+
+    groups: list[list[tuple[str, str]]] = []
+    current_group: list[tuple[str, str]] = []
+    process_count = 0
+    for stage, preceding_operator in _iter_linux_shell_stages(command, max_stages=max_stages):
+        if preceding_operator != "|" and current_group:
+            groups.append(current_group)
+            current_group = []
+        if username:
+            process = _linux_command_process_from_stage(stage, username=username)
+        else:
+            process = _linux_command_process_from_stage(stage)
+        if process is None:
+            continue
+        current_group.append(process)
+        process_count += 1
+        if max_processes is not None and process_count >= max_processes:
+            break
+    if current_group:
+        groups.append(current_group)
+    return groups
+
+
 def _linux_command_processes_from_shell(
     command: str,
     *,
@@ -3471,21 +3516,16 @@ def _linux_command_processes_from_shell(
     username: str = "",
 ) -> list[tuple[str, str]]:
     """Infer bounded source-native process argv entries from a Linux shell command."""
-    if max_processes is not None and max_processes <= 0:
-        return []
-
-    processes: list[tuple[str, str]] = []
-    for stage in _iter_linux_pipeline_stages(command, max_stages=max_stages):
-        if username:
-            process = _linux_command_process_from_stage(stage, username=username)
-        else:
-            process = _linux_command_process_from_stage(stage)
-        if process is None:
-            continue
-        processes.append(process)
-        if max_processes is not None and len(processes) >= max_processes:
-            break
-    return processes
+    return [
+        process
+        for group in _linux_command_process_groups_from_shell(
+            command,
+            max_processes=max_processes,
+            max_stages=max_stages,
+            username=username,
+        )
+        for process in group
+    ]
 
 
 def _split_linux_pipeline(
@@ -3496,31 +3536,23 @@ def _split_linux_pipeline(
 
 
 def _contains_unquoted_shell_pipe(command: str) -> bool:
-    """Return whether a shell command contains an unquoted pipe operator."""
-    quote: str | None = None
-    escaped = False
-    scan_limit = min(len(command), _LINUX_SHELL_MAX_SCAN_CHARS)
-    for char in command[:scan_limit]:
-        if escaped:
-            escaped = False
-            continue
-        if char == "\\" and quote != "'":
-            escaped = True
-            continue
-        if quote:
-            if char == quote:
-                quote = None
-            continue
-        if char in {"'", '"'}:
-            quote = char
-            continue
-        if char == "|":
-            return True
-    return False
+    """Return whether a command contains a true unquoted single-pipe operator."""
+    return any(
+        preceding_operator == "|"
+        for _stage, preceding_operator in _iter_linux_shell_stages(
+            command, max_stages=_LINUX_SHELL_MAX_INFER_STAGES
+        )
+    )
 
 
 def _iter_linux_pipeline_stages(command: str, *, max_stages: int) -> Iterator[str]:
     """Yield bounded unquoted pipeline/control stages from a Linux shell command."""
+    for stage, _preceding_operator in _iter_linux_shell_stages(command, max_stages=max_stages):
+        yield stage
+
+
+def _iter_linux_shell_stages(command: str, *, max_stages: int) -> Iterator[tuple[str, str | None]]:
+    """Yield bounded shell stages with their preceding unquoted control operator."""
     if max_stages <= 0:
         return
 
@@ -3530,6 +3562,7 @@ def _iter_linux_pipeline_stages(command: str, *, max_stages: int) -> Iterator[st
     escaped = False
     yielded = 0
     index = 0
+    preceding_operator: str | None = None
     scan_limit = min(len(command), _LINUX_SHELL_MAX_SCAN_CHARS)
 
     def append_current(char: str) -> None:
@@ -3575,17 +3608,18 @@ def _iter_linux_pipeline_stages(command: str, *, max_stages: int) -> Iterator[st
             append_current(char)
             index += 1
             continue
-        separator_width = 0
-        if char in {"|", ";"}:
-            separator_width = 2 if command[index : index + 2] == "||" else 1
-        elif command[index : index + 2] == "&&":
-            separator_width = 2
-        if separator_width:
+        operator = ""
+        if command[index : index + 2] in {"||", "&&", "|&"}:
+            operator = command[index : index + 2]
+        elif char in {"|", ";"}:
+            operator = char
+        if operator:
             stage = finish_stage()
             if stage is not None:
                 yielded += 1
-                yield stage
-            index += separator_width
+                yield stage, preceding_operator
+            preceding_operator = operator
+            index += len(operator)
             continue
         append_current(char)
         index += 1
@@ -3593,7 +3627,7 @@ def _iter_linux_pipeline_stages(command: str, *, max_stages: int) -> Iterator[st
     if yielded < max_stages:
         stage = finish_stage()
         if stage is not None:
-            yield stage
+            yield stage, preceding_operator
 
 
 def _linux_command_process_from_stage(
@@ -20768,12 +20802,12 @@ class ActivityGenerator:
         """Emit process telemetry for interactive Linux shell commands when state supports it."""
         if _get_os_category(system.os) != "linux":
             return
-        processes = _linux_command_processes_from_shell(
+        process_groups = _linux_command_process_groups_from_shell(
             command,
             max_processes=_LINUX_SHELL_MAX_INFERRED_PROCESSES,
             username=user.username,
         )
-        if not processes:
+        if not process_groups:
             return
 
         sessions = [
@@ -20803,75 +20837,95 @@ class ActivityGenerator:
             )
         )
 
-        shell_release_times: list[tuple[int, datetime, str]] = []
-        base_process_time: datetime | None = None
-        concurrency_group_id = self._bash_history_process_group_id(
+        action_group_id = self._bash_history_process_group_id(
             user,
             system,
             time,
             command,
         )
-        for index, (image, process_command_line) in enumerate(processes):
-            if base_process_time is None:
-                base_process_time = self._reserve_foreground_shell_time(
-                    system=system,
-                    username=user.username,
-                    logon_id=session.logon_id,
-                    parent_pid=parent_pid,
-                    requested_time=time + timedelta(milliseconds=rng.randint(20, 180)),
-                    seed_text=command,
-                    concurrency_group_id=concurrency_group_id,
-                )
-            process_time = base_process_time + timedelta(milliseconds=index * 35)
-            if not self._is_within_scenario_window(process_time):
-                continue
-            network_close_time = getattr(session, "network_close_time", None)
-            if network_close_time is not None:
-                if network_close_time.tzinfo is None:
-                    network_close_time = network_close_time.replace(tzinfo=UTC)
-                else:
-                    network_close_time = network_close_time.astimezone(UTC)
-                if process_time >= network_close_time - timedelta(milliseconds=750):
-                    continue
-            pid = self.generate_process(
-                user=user,
-                system=system,
-                time=process_time,
-                logon_id=session.logon_id,
-                process_name=image,
-                command_line=process_command_line,
-                parent_pid=parent_pid,
-                suppress_command_file_effect=True,
-                concurrency_group_id=concurrency_group_id,
+        requested_group_time = time + timedelta(milliseconds=rng.randint(20, 180))
+        for group_index, process_group in enumerate(process_groups):
+            group_release_times: list[tuple[datetime, str]] = []
+            concurrency_group_id = (
+                action_group_id
+                if len(process_groups) == 1
+                else f"{action_group_id}:command:{group_index}"
             )
-            running_proc = self.state_manager.get_process(system.hostname, pid)
-            actual_process_start = (
-                running_proc.start_time if running_proc is not None else process_time
-            )
-            self._record_user_process(system, user, pid, image)
-            lifetime = _linux_foreground_lifetime(image, process_command_line)
-            if lifetime is not None:
-                termination_time = self._generate_bounded_foreground_process_termination(
-                    user=user,
-                    system=system,
-                    start_time=actual_process_start,
-                    pid=pid,
-                    process_name=image,
-                    logon_id=session.logon_id,
-                    lifetime=lifetime,
-                    rng=rng,
-                )
-                shell_release_times.append((parent_pid, termination_time, process_command_line))
-        for parent_pid, termination_time, process_command_line in shell_release_times:
-            self._remember_foreground_shell_available(
+            base_process_time = self._reserve_foreground_shell_time(
                 system=system,
                 username=user.username,
                 logon_id=session.logon_id,
                 parent_pid=parent_pid,
-                termination_time=termination_time,
-                seed_text=process_command_line,
+                requested_time=requested_group_time,
+                seed_text=f"{command}:command:{group_index}",
                 concurrency_group_id=concurrency_group_id,
             )
+            stage_times = plan_linux_pipeline_stage_times(
+                base_process_time,
+                stage_count=len(process_group),
+                scope_parts=(
+                    system.hostname,
+                    user.username,
+                    session.logon_id,
+                    concurrency_group_id,
+                ),
+                active_process_count=len(
+                    self.state_manager.get_processes_on_system(system.hostname)
+                ),
+            )
+            for (image, process_command_line), process_time in zip(
+                process_group, stage_times, strict=True
+            ):
+                if not self._is_within_scenario_window(process_time):
+                    continue
+                network_close_time = getattr(session, "network_close_time", None)
+                if network_close_time is not None:
+                    if network_close_time.tzinfo is None:
+                        network_close_time = network_close_time.replace(tzinfo=UTC)
+                    else:
+                        network_close_time = network_close_time.astimezone(UTC)
+                    if process_time >= network_close_time - timedelta(milliseconds=750):
+                        continue
+                pid = self.generate_process(
+                    user=user,
+                    system=system,
+                    time=process_time,
+                    logon_id=session.logon_id,
+                    process_name=image,
+                    command_line=process_command_line,
+                    parent_pid=parent_pid,
+                    suppress_command_file_effect=True,
+                    concurrency_group_id=concurrency_group_id,
+                )
+                running_proc = self.state_manager.get_process(system.hostname, pid)
+                actual_process_start = (
+                    running_proc.start_time if running_proc is not None else process_time
+                )
+                self._record_user_process(system, user, pid, image)
+                lifetime = _linux_foreground_lifetime(image, process_command_line)
+                if lifetime is not None:
+                    termination_time = self._generate_bounded_foreground_process_termination(
+                        user=user,
+                        system=system,
+                        start_time=actual_process_start,
+                        pid=pid,
+                        process_name=image,
+                        logon_id=session.logon_id,
+                        lifetime=lifetime,
+                        rng=rng,
+                    )
+                    group_release_times.append((termination_time, process_command_line))
+            for termination_time, process_command_line in group_release_times:
+                self._remember_foreground_shell_available(
+                    system=system,
+                    username=user.username,
+                    logon_id=session.logon_id,
+                    parent_pid=parent_pid,
+                    termination_time=termination_time,
+                    seed_text=process_command_line,
+                    concurrency_group_id=concurrency_group_id,
+                )
+            requested_group_time = base_process_time
 
     def _prepare_bash_process_session(
         self,
@@ -23016,7 +23070,7 @@ class ActivityGenerator:
                     )
                     process_time = time
                     shell_command_line = command_line
-                    source_processes = [(process_name, command_line)]
+                    source_process_groups = [[(process_name, command_line)]]
                     if os_category == "linux":
                         shell_command_line = _background_linux_shell_command_if_needed(command_line)
                         process_time = self._schedule_bash_history_time(
@@ -23026,12 +23080,12 @@ class ActivityGenerator:
                             process_time
                         ):
                             return
-                        source_processes = _linux_catalog_processes_from_shell_command(
+                        source_process_groups = _linux_catalog_process_groups_from_shell_command(
                             process_name,
                             shell_command_line,
                             username=user.username,
                         )
-                        process_name, command_line = source_processes[0]
+                        process_name, command_line = source_process_groups[0][0]
                     parent_pid = self._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
@@ -23045,53 +23099,87 @@ class ActivityGenerator:
                         if os_category == "linux"
                         else ""
                     )
-                    if os_category == "linux":
-                        process_time = self._reserve_foreground_shell_time(
-                            system=system,
-                            username=user.username,
-                            logon_id=logon_id,
-                            parent_pid=parent_pid,
-                            requested_time=process_time,
-                            seed_text=shell_command_line,
-                            concurrency_group_id=bash_history_group_id,
-                        )
-                        if not self._is_within_scenario_window(process_time):
-                            return
                     pid = -1
                     created_processes: list[tuple[int, str, str, datetime]] = []
-                    for process_index, (
-                        source_process_name,
-                        source_command_line,
-                    ) in enumerate(source_processes):
-                        source_process_time = process_time + timedelta(
-                            milliseconds=process_index * 35
+                    requested_group_time = process_time
+                    for group_index, source_process_group in enumerate(source_process_groups):
+                        concurrency_group_id = (
+                            bash_history_group_id
+                            if len(source_process_groups) == 1
+                            else f"{bash_history_group_id}:command:{group_index}"
                         )
-                        if not self._is_within_scenario_window(source_process_time):
-                            continue
-                        source_pid = self.generate_process(
-                            user,
-                            system,
-                            source_process_time,
-                            logon_id,
+                        group_process_time = requested_group_time
+                        if os_category == "linux":
+                            group_process_time = self._reserve_foreground_shell_time(
+                                system=system,
+                                username=user.username,
+                                logon_id=logon_id,
+                                parent_pid=parent_pid,
+                                requested_time=requested_group_time,
+                                seed_text=f"{shell_command_line}:command:{group_index}",
+                                concurrency_group_id=concurrency_group_id,
+                            )
+                        stage_times = plan_linux_pipeline_stage_times(
+                            group_process_time,
+                            stage_count=len(source_process_group),
+                            scope_parts=(
+                                system.hostname,
+                                user.username,
+                                logon_id,
+                                concurrency_group_id,
+                            ),
+                            active_process_count=len(
+                                self.state_manager.get_processes_on_system(system.hostname)
+                            ),
+                        )
+                        for (
                             source_process_name,
                             source_command_line,
-                            parent_pid=parent_pid,
-                            concurrency_group_id=bash_history_group_id,
-                        )
-                        if pid < 0:
-                            pid = source_pid
-                            process_name = source_process_name
-                            command_line = source_command_line
-                            process_time = source_process_time
-                        created_processes.append(
-                            (
-                                source_pid,
+                        ), source_process_time in zip(
+                            source_process_group, stage_times, strict=True
+                        ):
+                            if not self._is_within_scenario_window(source_process_time):
+                                continue
+                            source_pid = self.generate_process(
+                                user,
+                                system,
+                                source_process_time,
+                                logon_id,
                                 source_process_name,
                                 source_command_line,
-                                source_process_time,
+                                parent_pid=parent_pid,
+                                concurrency_group_id=concurrency_group_id,
                             )
-                        )
-                        self._record_user_process(system, user, source_pid, source_process_name)
+                            if pid < 0:
+                                pid = source_pid
+                                process_name = source_process_name
+                                command_line = source_command_line
+                                process_time = source_process_time
+                            created_processes.append(
+                                (
+                                    source_pid,
+                                    source_process_name,
+                                    source_command_line,
+                                    source_process_time,
+                                )
+                            )
+                            self._record_user_process(system, user, source_pid, source_process_name)
+                            if os_category == "linux":
+                                lifetime = _linux_foreground_lifetime(
+                                    source_process_name, source_command_line
+                                )
+                                if lifetime is not None:
+                                    self._remember_foreground_shell_available(
+                                        system=system,
+                                        username=user.username,
+                                        logon_id=logon_id,
+                                        parent_pid=parent_pid,
+                                        termination_time=source_process_time
+                                        + timedelta(seconds=lifetime[1]),
+                                        seed_text=source_command_line,
+                                        concurrency_group_id=concurrency_group_id,
+                                    )
+                        requested_group_time = group_process_time
                     if not created_processes:
                         return
                     if active_session:
@@ -23208,6 +23296,11 @@ class ActivityGenerator:
                                 if running_proc is not None
                                 else source_process_time
                             )
+                            process_group_id = (
+                                running_proc.concurrency_group_id
+                                if running_proc is not None
+                                else bash_history_group_id
+                            )
                             termination_time = (
                                 self._generate_bounded_foreground_process_termination(
                                     user=user,
@@ -23227,7 +23320,7 @@ class ActivityGenerator:
                                 parent_pid=parent_pid,
                                 termination_time=termination_time,
                                 seed_text=source_command_line,
-                                concurrency_group_id=bash_history_group_id,
+                                concurrency_group_id=process_group_id,
                             )
 
             # Legacy PROCESS_TEMPLATES only for process_system (not user apps/code/build/query)

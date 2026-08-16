@@ -43,6 +43,11 @@ ssh_authentication:
     RSA: {min: 20, max: 240}
 
 relationships:
+  linux.pipeline_stage_start:
+    class: burst_fanout
+    position: after
+    min_ms: 6
+    max_ms: 115
   network.dns_before_tcp:
     class: causal_prerequisite
     position: before

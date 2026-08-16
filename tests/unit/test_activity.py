@@ -107,6 +107,7 @@ from evidenceforge.generation.actions import (
     WorkstationLockResult,
     WorkstationUnlockActionBundle,
     WorkstationUnlockRequest,
+    plan_linux_pipeline_stage_times,
 )
 from evidenceforge.generation.activity import (
     BASELINE_PATTERNS,
@@ -13558,6 +13559,105 @@ class TestActivityGenerator:
             ("/usr/bin/wc", "wc -l"),
         ]
 
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            ("cat /tmp/a | grep x", True),
+            ("cat /tmp/a || grep x", False),
+            ("cat /tmp/a |& grep x", False),
+            ("cat /tmp/a && grep x", False),
+            ("cat /tmp/a ; grep x", False),
+            ("printf 'a|b'", False),
+            (r"printf a\|b", False),
+        ],
+    )
+    def test_contains_unquoted_shell_pipe_requires_true_single_pipe(self, command, expected):
+        """Only an unquoted, unescaped single pipe denotes concurrent pipeline stages."""
+        assert generator_module._contains_unquoted_shell_pipe(command) is expected
+
+    def test_linux_shell_process_groups_separate_control_operators(self):
+        """Control operators split foreground cohorts while a true pipeline stays grouped."""
+        groups = generator_module._linux_command_process_groups_from_shell(
+            "cat /tmp/a | grep x && sha256sum /tmp/a || cut -c1-8 ; wc -l",
+            max_processes=None,
+        )
+
+        assert groups == [
+            [("/usr/bin/cat", "cat /tmp/a"), ("/usr/bin/grep", "grep x")],
+            [("/usr/bin/sha256sum", "sha256sum /tmp/a")],
+            [("/usr/bin/cut", "cut -c1-8")],
+            [("/usr/bin/wc", "wc -l")],
+        ]
+
+    def test_generate_bash_command_serializes_control_after_pipeline(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """A sequential/control stage is admitted after, not inside, a pipeline cohort."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-OPERATORS-01",
+            ip="10.0.0.4",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        session = state_manager.register_session(
+            logon_id="0xoperators",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=20),
+        )
+        state_manager.set_current_time(command_time - timedelta(seconds=10))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            session.logon_id,
+        )
+        session.session_shell_pid = bash_pid
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "cat /tmp/a | grep x && sha256sum /tmp/a",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        creates = {
+            event.process.command_line: event
+            for event in events
+            if event.event_type == "process_create" and event.process is not None
+        }
+        terminations = {
+            event.process.pid: event
+            for event in events
+            if event.event_type == "process_terminate" and event.process is not None
+        }
+        cat = creates["cat /tmp/a"]
+        grep = creates["grep x"]
+        sha256sum = creates["sha256sum /tmp/a"]
+        assert cat.process.concurrency_group_id == grep.process.concurrency_group_id
+        assert sha256sum.process.concurrency_group_id != cat.process.concurrency_group_id
+        assert cat.timestamp < grep.timestamp
+        assert sha256sum.timestamp > terminations[cat.process.pid].timestamp
+        assert sha256sum.timestamp > terminations[grep.process.pid].timestamp
+
     def test_linux_shell_redirection_removed_from_process_argv(self):
         """Redirection targets belong to the shell/file effect, not process argv."""
         process = generator_module._linux_command_process_from_shell(
@@ -13909,6 +14009,148 @@ class TestActivityGenerator:
         assert "cat /etc/shadow" in command_lines
         assert "head -5" in command_lines
         assert all("|" not in command for command in command_lines)
+        pipeline_events = [
+            event
+            for event in process_events
+            if event.process.command_line in {"cat /etc/shadow", "head -5"}
+        ]
+        assert len(pipeline_events) == 2
+        assert pipeline_events[0].process.parent_pid == pipeline_events[1].process.parent_pid
+        assert (
+            pipeline_events[0].process.concurrency_group_id
+            == pipeline_events[1].process.concurrency_group_id
+        )
+        gap = pipeline_events[1].timestamp - pipeline_events[0].timestamp
+        assert timedelta(milliseconds=6) <= gap <= timedelta(milliseconds=115)
+
+    def test_linux_pipeline_stage_planner_is_deterministic_varied_and_load_sensitive(self):
+        """Pipeline stages use scoped continuous texture instead of one fixed gap."""
+        base = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first = plan_linux_pipeline_stage_times(
+            base,
+            stage_count=4,
+            scope_parts=("LNX-01", "alice", "0xabc", "pipeline-a"),
+            active_process_count=8,
+        )
+        repeated = plan_linux_pipeline_stage_times(
+            base,
+            stage_count=4,
+            scope_parts=("LNX-01", "alice", "0xabc", "pipeline-a"),
+            active_process_count=8,
+        )
+
+        assert first == repeated
+        assert first[0] == base
+        assert all(first[index] < first[index + 1] for index in range(len(first) - 1))
+
+        gaps = []
+        for index in range(128):
+            stage_times = plan_linux_pipeline_stage_times(
+                base,
+                stage_count=2,
+                scope_parts=(f"LNX-{index:03d}", "alice", "0xabc", f"pipeline-{index}"),
+                active_process_count=index % 32,
+            )
+            gaps.append(stage_times[1] - stage_times[0])
+
+        assert min(gaps) >= timedelta(milliseconds=6)
+        assert max(gaps) <= timedelta(milliseconds=115)
+        assert len(set(gaps)) > 110
+        rounded_ms = [round(gap.total_seconds() * 1_000) for gap in gaps]
+        assert max(rounded_ms.count(value) for value in set(rounded_ms)) < 8
+
+        idle = plan_linux_pipeline_stage_times(
+            base,
+            stage_count=2,
+            scope_parts=("LNX-LOAD", "alice", "0xabc", "pipeline-load"),
+            active_process_count=0,
+        )
+        busy = plan_linux_pipeline_stage_times(
+            base,
+            stage_count=2,
+            scope_parts=("LNX-LOAD", "alice", "0xabc", "pipeline-load"),
+            active_process_count=96,
+        )
+        assert busy[1] - busy[0] > idle[1] - idle[0]
+
+    def test_linux_catalog_pipeline_uses_shared_stage_planner(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+    ):
+        """Legacy catalog generation adapts into the action-owned stage schedule."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-CATALOG-01",
+            ip="10.0.0.3",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        session = state_manager.register_session(
+            logon_id="0xcatalog",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip=linux.ip,
+            start_time=command_time - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(command_time - timedelta(minutes=4))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            session.logon_id,
+        )
+        session.session_shell_pid = bash_pid
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.application_catalog.pick_app_and_command",
+            lambda *_args, **_kwargs: (
+                "/usr/bin/sha256sum",
+                "sha256sum /tmp/rpt.sql.gz | cut -c1-16",
+            ),
+        )
+
+        activity_gen.execute_baseline_activity(
+            test_user,
+            linux,
+            command_time,
+            "process_code",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        pipeline_events = [
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line in {"sha256sum /tmp/rpt.sql.gz", "cut -c1-16"}
+        ]
+        assert len(pipeline_events) == 2
+        assert pipeline_events[0].process.parent_pid == bash_pid
+        assert pipeline_events[1].process.parent_pid == bash_pid
+        assert (
+            pipeline_events[0].process.concurrency_group_id
+            == pipeline_events[1].process.concurrency_group_id
+        )
+        gap = pipeline_events[1].timestamp - pipeline_events[0].timestamp
+        assert timedelta(milliseconds=6) <= gap <= timedelta(milliseconds=115)
 
     def test_parameterize_command_uses_scenario_internal_domain(self, activity_gen, test_user):
         """Internal URL placeholders should not leak default corp.local vocabulary."""

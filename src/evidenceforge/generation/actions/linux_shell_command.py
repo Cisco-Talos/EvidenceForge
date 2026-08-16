@@ -25,15 +25,60 @@
 from __future__ import annotations
 
 import logging
+import math
+import random
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Protocol
+from datetime import datetime, timedelta
+from typing import Any, Protocol
 
 from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
+
+
+def plan_linux_pipeline_stage_times(
+    base_time: datetime,
+    *,
+    stage_count: int,
+    scope_parts: tuple[Any, ...],
+    active_process_count: int,
+) -> tuple[datetime, ...]:
+    """Plan ordered, deterministic start times for one Linux shell pipeline.
+
+    The action anchor remains stage zero. Later stages use a bounded triangular
+    distribution at microsecond resolution. Its mode shifts with the number of
+    active processes on the host, approximating scheduler/run-queue pressure
+    without making stage admission depend on renderer-local timing.
+    """
+
+    if stage_count <= 0:
+        return ()
+
+    window = get_timing_window(
+        "linux.pipeline_stage_start",
+        default_min_ms=6,
+        default_max_ms=115,
+        default_position="after",
+        default_class="burst_fanout",
+    )
+    minimum_us = max(1, window.min_ms * 1_000)
+    maximum_us = max(minimum_us, window.max_ms * 1_000)
+    pressure = min(1.0, max(0, active_process_count) / 96.0)
+    mode_fraction = 0.20 + (0.42 * math.sqrt(pressure))
+    mode_us = minimum_us + round((maximum_us - minimum_us) * mode_fraction)
+    seed_text = ":".join(str(part) for part in scope_parts)
+    rng = random.Random(_stable_seed(f"linux_pipeline_stage_times:{seed_text}"))
+
+    planned = [base_time]
+    cursor = base_time
+    for _stage_index in range(1, stage_count):
+        gap_us = round(rng.triangular(minimum_us, maximum_us, mode_us))
+        cursor += timedelta(microseconds=max(1, gap_us))
+        planned.append(cursor)
+    return tuple(planned)
 
 
 @dataclass(frozen=True, slots=True)
