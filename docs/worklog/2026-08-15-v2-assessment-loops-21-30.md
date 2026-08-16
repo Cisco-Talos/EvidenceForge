@@ -326,3 +326,72 @@ and 1 skipped.
   deliberation was required. The repaired shell-overlap family did not recur. The next highest
   priority is the cross-source PSEXESVC file lifecycle inversion, followed by the inventory-shaped
   `/24` scan, proxy DNS millisecond quantization, bounded eCAR delay, and scheduled-task ownership.
+
+## Loop 25 — Windows remote-service payload lifecycle
+
+### Family contract (before implementation)
+
+- **Accepted finding and classification:** the Loop 24 Detection and Host reviews independently
+  found one complete in-window PsExec transaction on `DC-01` whose Security 4697 service install,
+  Security/Sysmon/eCAR `PSEXESVC.exe` execution, child command, and termination all precede the only
+  retained Sysmon/eCAR `FILE/CREATE` for `C:\Windows\PSEXESVC.exe` by almost 59 minutes. This is a
+  repeated cross-source `hard_contradiction` and a `sibling_defect`: the bundle already constructs a
+  pre-install payload event, but the payload, service, service process, and closure do not share one
+  canonical action lifecycle for coherent source observation.
+- **Owning layer:** `WindowsServiceInstallActionBundle` owns the remote-service payload prerequisite
+  and service-install occurrence. The storyline remote-service adapter must propagate that same
+  lifecycle identity into an explicitly authored or lazily materialized service process and its
+  termination. Security, Sysmon, and eCAR remain projections of the shared lifecycle and must not
+  repair the inversion independently.
+- **Invariant:** for a modeled non-preexisting Windows service binary, the canonical payload create
+  is the lifecycle start and precedes service installation and every service-process start. All
+  phases share one stable action group, so a source's observation decision cannot retain the
+  service/process lifecycle while independently dropping its modeled payload prerequisite. A later
+  unrelated create/overwrite may exist only as a separate action and must not become the apparent
+  prerequisite for the earlier execution.
+- **Entry paths:** direct `ActivityGenerator.generate_service_installed`; typed storyline and red-
+  herring `service_installed`; causal `sc.exe create` expansion; same-cluster explicit
+  `PSEXESVC.exe`/`HealthMonitorSvc.exe` process events; and later service-backed command materialized
+  through `_ensure_storyline_service_process_for_beacon` or
+  `_storyline_service_context_for_process`.
+- **Consumers:** canonical lifecycle/occurrence identity, source-observation grouping and source
+  timing, Security 4697/4688/4689, Sysmon 1/5/11, eCAR SERVICE/PROCESS/FILE, process state, and
+  storyline service-parent selection.
+- **Sibling risks:** preserve preexisting System32/Program Files service binaries without fabricated
+  drops; preserve HealthMonitorSvc and generic `sc.exe create` behavior; keep SMB/RPC control
+  evidence and service start-type/account semantics; do not merge distinct later service installs
+  on the same host; and keep process/termination identity stable when a service owns follow-on
+  commands.
+- **Verification and rendered hard probe:** focused tests must prove the payload and service share
+  one lifecycle, same-cluster and later materialized service processes reuse it, and observation
+  missingness is coherent for the payload/service/process family while a preexisting service path
+  remains drop-free. The strict `[12:00,18:00)` rendered probe will normalize service image paths,
+  join Security 4697, Security/Sysmon/eCAR process starts and stops, and Sysmon/eCAR file creates by
+  host/path/action group, then fail any transaction whose visible nonpreexisting service image is
+  installed or executed before its retained payload create; it will report every unmatched or
+  inverted phase and separately count pre-window/censored and preexisting-binary exemptions.
+
+### Implementation handoff
+
+- `WindowsServiceInstallActionBundle` now marks a nonpreexisting service payload create as the
+  lifecycle start and the service install as its dependent, using one stable group. A preexisting
+  System32, SysWOW64, or Program Files image instead starts at the service-install occurrence and
+  still produces no fabricated file drop. The target-side ADMIN$ payload write is attributed to
+  kernel `System` PID 4 rather than `services.exe`; the service manager owns installation and launch,
+  not the preceding remote file write.
+- The activity adapter accepts an explicit lifecycle owner. Storyline and red-herring service
+  installs derive that owner from the stable cluster/host/service identity, retain it in installed-
+  service state, and pass it to same-cluster service processes, lazily materialized service
+  processes, follow-on command children, and their state-owned terminations. This covers direct,
+  causal, explicit, and delayed service-backed entry paths without changing emitters.
+- The action lifecycle is now the observation-coherence key for Security, Sysmon, and eCAR. Within
+  each source family, payload/service/process phases therefore share drop and delay sampling rather
+  than allowing the prerequisite file event to disappear independently while the service execution
+  remains visible.
+- The central process-execution bundle excludes `PSEXESVC.exe` and `HealthMonitorSvc.exe` from
+  generic `ensure_file_event` synthesis on every caller path. Their payload creation is owned only
+  by the remote-service bundle, preventing a later detached process call from emitting a second,
+  apparently post-execution drop.
+- Verification: 7 exact payload/exclusion/preexisting/same-cluster/follow-on tests passed. The
+  broader service, process, observation, lifecycle, Sysmon, Windows, and eCAR regression set passed
+  364 tests. Repository-targeted Ruff check, Ruff format check, and `git diff --check` passed.

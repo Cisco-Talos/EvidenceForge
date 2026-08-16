@@ -38,6 +38,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions import (
     AccountChangedActionBundle,
     AccountChangedRequest,
@@ -7279,10 +7280,23 @@ class TestActivityGenerator:
         )
         assert file_event.timestamp > process_event.timestamp
 
-    def test_service_payload_file_event_precedes_service_process_create(
-        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    @pytest.mark.parametrize(
+        "service_image",
+        [
+            r"C:\Windows\PSEXESVC.exe",
+            r"C:\Windows\HealthMonitorSvc.exe",
+        ],
+    )
+    def test_bundle_owned_service_payload_excludes_generic_process_file_create(
+        self,
+        activity_gen,
+        test_user,
+        test_system,
+        state_manager,
+        mock_emitters,
+        service_image,
     ):
-        """Dropped service binaries should be written before the service process starts."""
+        """Generic process generation must not duplicate bundle-owned service payloads."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -7291,8 +7305,8 @@ class TestActivityGenerator:
             test_system,
             timestamp,
             "0x12345",
-            r"C:\Windows\PSEXESVC.exe",
-            r"C:\Windows\PSEXESVC.exe",
+            service_image,
+            service_image,
             ensure_file_event=True,
         )
 
@@ -7300,17 +7314,15 @@ class TestActivityGenerator:
             call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
         process_event = next(event for event in events if event.event_type == "process_create")
-        file_event = next(
+        matching_file_events = [
             event
             for event in events
             if event.event_type == "file_create"
             and event.file is not None
-            and event.file.path == r"C:\Windows\PSEXESVC.exe"
-        )
-        assert file_event.timestamp < process_event.timestamp
-        assert file_event.process.pid == process_event.process.parent_pid
-        assert file_event.file.pid == process_event.process.parent_pid
-        assert file_event.process.pid != process_event.process.pid
+            and event.file.path.casefold() == service_image.casefold()
+        ]
+        assert process_event.process.image.casefold() == service_image.casefold()
+        assert matching_file_events == []
 
     def test_service_payload_file_event_precedes_service_install(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -7340,6 +7352,56 @@ class TestActivityGenerator:
             and event.file.path == r"C:\Windows\PSEXESVC.exe"
         )
         assert file_event.timestamp < service_event.timestamp
+        assert file_event.process.pid == 4
+        assert file_event.process.parent_pid == 0
+        assert file_event.process.image == "System"
+        assert file_event.process.command_line == "System"
+        assert file_event.file.pid == 4
+        assert file_event.lifecycle is not None
+        assert service_event.lifecycle is not None
+        assert file_event.lifecycle.group_id == service_event.lifecycle.group_id
+        assert file_event.lifecycle.phase == "start"
+        assert service_event.lifecycle.phase == "dependent"
+        assert file_event.lifecycle.canonical_start == file_event.timestamp
+        assert service_event.lifecycle.canonical_start == file_event.timestamp
+        policy = ObservationPolicy("messy_collection")
+        for format_name in ("windows_event_sysmon", "ecar"):
+            assert policy.decide(format_name, file_event) == policy.decide(
+                format_name,
+                service_event,
+            )
+
+    def test_preexisting_service_binary_starts_lifecycle_without_payload_file(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Preinstalled service images should not acquire a fabricated drop prerequisite."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_service_installed(
+            test_user,
+            test_system,
+            timestamp,
+            service_name="DeviceSyncSvc",
+            service_file_name=r"C:\Windows\System32\DeviceSyncSvc.exe",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        service_event = next(event for event in events if event.event_type == "service_installed")
+        matching_files = [
+            event
+            for event in events
+            if event.event_type == "file_create"
+            and event.file is not None
+            and event.file.path.casefold() == r"C:\Windows\System32\DeviceSyncSvc.exe".casefold()
+        ]
+
+        assert matching_files == []
+        assert service_event.lifecycle is not None
+        assert service_event.lifecycle.phase == "start"
+        assert service_event.lifecycle.canonical_start == timestamp
 
     def test_windows_service_install_bundle_anchor_is_stable(self, test_user, test_system):
         """Identical service-install bundle requests should have stable action anchors."""

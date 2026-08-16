@@ -38,6 +38,7 @@ from evidenceforge.events.contexts import (
     ServiceContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.state_manager import StateManager
@@ -96,6 +97,7 @@ class WindowsServiceInstallRequest:
     service_type: str = "0x10"
     service_start_type: str = "3"
     service_account: str = "LocalSystem"
+    lifecycle_group_id: str = ""
     source: str = "activity_generator"
 
     @property
@@ -109,6 +111,12 @@ class WindowsServiceInstallRequest:
             f"{self.service_start_type}:{self.service_account}:{self.source}"
         )
         return f"windows-service-install-{seed:016x}"
+
+    @property
+    def effective_lifecycle_group_id(self) -> str:
+        """Return the shared lifecycle owner for all remote-service phases."""
+
+        return self.lifecycle_group_id or self.stable_id
 
 
 class WindowsRemoteAdminExecutor(Protocol):
@@ -485,7 +493,8 @@ class WindowsServiceInstallActionBundle:
             self._request.system,
             self._request.time,
         )
-        self._emit_payload_file_create()
+        payload_time = self._emit_payload_file_create()
+        lifecycle_start = payload_time or self._request.time
         reporting_pid = self._executor._get_system_pid(
             self._request.system.hostname,
             "lsass",
@@ -515,16 +524,26 @@ class WindowsServiceInstallActionBundle:
                 service_start_type=self._request.service_start_type,
                 service_account=self._request.service_account,
             ),
+            lifecycle=ActionLifecycleContext(
+                group_id=self._request.effective_lifecycle_group_id,
+                canonical_start=lifecycle_start,
+                phase="dependent" if payload_time is not None else "start",
+            ),
         )
         self._executor.dispatcher.dispatch_builder(event)
 
-    def _emit_payload_file_create(self) -> None:
+    def _expanded_service_path(self) -> str:
+        """Return the service image path with SystemRoot expanded."""
+
+        service_path = self._request.service_file_name.replace("%SystemRoot%", r"C:\Windows")
+        return service_path.replace("%systemroot%", r"C:\Windows")
+
+    def _emit_payload_file_create(self) -> datetime | None:
         """Emit dropped service binary evidence when the service path is not preexisting."""
 
         if _get_os_category(self._request.system.os) != "windows":
-            return
-        service_path = self._request.service_file_name.replace("%SystemRoot%", r"C:\Windows")
-        service_path = service_path.replace("%systemroot%", r"C:\Windows")
+            return None
+        service_path = self._expanded_service_path()
         service_path_lower = service_path.lower().replace("/", "\\")
         is_preexisting_binary = (
             service_path_lower.startswith("c:\\windows\\system32\\")
@@ -533,11 +552,11 @@ class WindowsServiceInstallActionBundle:
             or service_path_lower.startswith("c:\\program files (x86)\\")
         )
         if is_preexisting_binary:
-            return
-        services_pid = self._executor._get_system_pid(
+            return None
+        system_pid = 4
+        self._executor.state_manager.get_process_object_id(
             self._request.system.hostname,
-            "services",
-            0x2BC,
+            system_pid,
         )
         file_time = self._request.time - timedelta(milliseconds=250)
         self._executor.dispatcher.dispatch_builder(
@@ -547,17 +566,19 @@ class WindowsServiceInstallActionBundle:
                 src_host=self._executor._build_host_context(self._request.system),
                 auth=AuthContext(username="SYSTEM"),
                 process=ProcessContext(
-                    pid=services_pid,
-                    parent_pid=self._executor._get_system_pid(
-                        self._request.system.hostname,
-                        "wininit",
-                        0x1F4,
-                    ),
-                    image=r"C:\Windows\System32\services.exe",
-                    command_line=r"C:\Windows\System32\services.exe",
+                    pid=system_pid,
+                    parent_pid=0,
+                    image="System",
+                    command_line="System",
                     username="SYSTEM",
                     logon_id="0x3e7",
                 ),
-                file=FileContext(path=service_path, action="create", pid=services_pid),
+                file=FileContext(path=service_path, action="create", pid=system_pid),
+                lifecycle=ActionLifecycleContext(
+                    group_id=self._request.effective_lifecycle_group_id,
+                    canonical_start=file_time,
+                    phase="start",
+                ),
             )
         )
+        return file_time

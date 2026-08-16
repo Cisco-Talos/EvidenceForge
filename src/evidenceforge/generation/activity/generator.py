@@ -13554,7 +13554,11 @@ class ActivityGenerator:
         # Guaranteed FILE/CREATE for the process image when requested (storyline processes).
         # Skip for pre-existing binaries in System32/SysWOW64/Program Files — Event 11
         # should only fire for genuinely new files written to disk (malware drops, downloads).
-        if ensure_file_event:
+        bundle_owned_service_payload = _exe_lower in {
+            "psexesvc.exe",
+            "healthmonitorsvc.exe",
+        }
+        if ensure_file_event and not bundle_owned_service_payload:
             _lower = process_name.lower()
             _win_path = _lower.replace("/", "\\")
             _is_windows_system_binary = (
@@ -13584,29 +13588,6 @@ class ActivityGenerator:
                 file_process_start_time = (
                     running_proc.start_time if running_proc is not None else None
                 )
-                if _exe_lower in {"psexesvc.exe", "healthmonitorsvc.exe"}:
-                    file_create_time = time - timedelta(milliseconds=180)
-                    parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
-                    if parent_proc is not None and parent_proc.start_time < file_create_time:
-                        file_process_pid = parent_proc.pid
-                        file_process_parent_pid = parent_proc.parent_pid
-                        file_process_image = parent_proc.image
-                        file_process_command_line = parent_proc.command_line
-                        file_process_username = parent_proc.username
-                        file_process_logon_id = parent_proc.logon_id
-                        file_process_start_time = parent_proc.start_time
-                    elif parent_pid in {4, 0}:
-                        file_process_pid = 4
-                        file_process_parent_pid = 0
-                        file_process_image = "System"
-                        file_process_command_line = "System"
-                        file_process_username = "SYSTEM"
-                        file_process_logon_id = "0x3e7"
-                        file_process_start_time = None
-                        self.state_manager.get_process_object_id(
-                            system.hostname,
-                            4,
-                        )
                 self.dispatcher.dispatch_builder(
                     OccurrenceBuilder(
                         timestamp=file_create_time,
@@ -25090,6 +25071,7 @@ class ActivityGenerator:
         service_type: str = "0x10",
         service_start_type: str = "3",
         service_account: str = "LocalSystem",
+        lifecycle_group_id: str = "",
     ) -> None:
         """Generate service installed event (4697) on target system."""
         bundle = WindowsServiceInstallActionBundle(
@@ -25103,6 +25085,7 @@ class ActivityGenerator:
                 service_type=service_type,
                 service_start_type=service_start_type,
                 service_account=service_account,
+                lifecycle_group_id=lifecycle_group_id,
             ),
         )
         bundle.execute()

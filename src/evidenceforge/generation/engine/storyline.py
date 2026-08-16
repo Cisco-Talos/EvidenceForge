@@ -1460,6 +1460,7 @@ class StorylineMixin:
         service_file_name: str,
         service_account: str,
         time: datetime,
+        lifecycle_group_id: str = "",
     ) -> None:
         """Remember installed storyline services for later service-backed beacons."""
         if not service_file_name:
@@ -1471,7 +1472,29 @@ class StorylineMixin:
             "service_file_name": service_file_name,
             "service_account": service_account,
             "installed_at": time,
+            "lifecycle_group_id": lifecycle_group_id
+            or self._storyline_remote_service_lifecycle_id(system, service_name),
         }
+
+    def _storyline_remote_service_lifecycle_id(
+        self,
+        system: System,
+        service_name: str,
+    ) -> str:
+        """Return the stable canonical lifecycle for one authored service action."""
+
+        dispatcher = getattr(self, "dispatcher", None)
+        cluster_id = getattr(dispatcher, "storyline_cluster_id", "") or getattr(
+            self,
+            "_current_storyline_spec_id",
+            "",
+        )
+        return stable_uuid(
+            "storyline-windows-remote-service",
+            cluster_id,
+            system.hostname,
+            service_name.casefold(),
+        )
 
     @staticmethod
     def _normalize_storyline_service_file_name(service_file_name: str) -> str:
@@ -1507,7 +1530,7 @@ class StorylineMixin:
         system: System,
         time: datetime,
         process_name: str,
-    ) -> tuple[User, str, int] | None:
+    ) -> tuple[User, str, int, str] | None:
         """Return service identity/logon/parent PID for recent service-backed commands."""
         if _get_os_category(system.os) != "windows":
             return None
@@ -1564,7 +1587,12 @@ class StorylineMixin:
         )
         if service_pid <= 0:
             return None
-        return service_user, "0x3e7", service_pid
+        return (
+            service_user,
+            "0x3e7",
+            service_pid,
+            str(service.get("lifecycle_group_id") or ""),
+        )
 
     def _linux_native_service_user_for_storyline_actor(
         self,
@@ -1880,6 +1908,7 @@ class StorylineMixin:
             ensure_file_event=False,
             from_storyline=True,
             suppress_command_file_effect=True,
+            lifecycle_group_id=str(service.get("lifecycle_group_id") or ""),
         )
         self.activity_generator._record_user_process(system, actor, pid, service_file_name)
         self._record_last_storyline_process(system, pid, service_file_name)
@@ -3730,6 +3759,7 @@ class StorylineMixin:
                 system=system,
                 parent_ref=getattr(spec, "parent_ref", None),
             )
+            service_lifecycle_group_id = ""
             if explicit_parent is not None:
                 parent_pid, _parent_image = explicit_parent
             else:
@@ -3740,7 +3770,12 @@ class StorylineMixin:
                     process_name=process_name,
                 )
                 if service_context is not None:
-                    process_actor, process_logon_id, parent_pid = service_context
+                    (
+                        process_actor,
+                        process_logon_id,
+                        parent_pid,
+                        service_lifecycle_group_id,
+                    ) = service_context
                 else:
                     parent_pid = self.activity_generator._resolve_parent(
                         system,
@@ -3787,6 +3822,55 @@ class StorylineMixin:
                 "psexesvc.exe",
                 "healthmonitorsvc.exe",
             }
+            if service_backed_process and not service_lifecycle_group_id:
+                matching_service_spec = next(
+                    (
+                        candidate
+                        for candidate in future_specs
+                        if getattr(candidate, "type", "") == "service_installed"
+                        and self._normalize_storyline_service_file_name(
+                            str(getattr(candidate, "service_file_name", "") or "")
+                        )
+                        .rsplit("\\", 1)[-1]
+                        .casefold()
+                        == exe_name
+                    ),
+                    None,
+                )
+                if matching_service_spec is not None:
+                    service_name = str(
+                        getattr(matching_service_spec, "service_name", "") or exe_name
+                    )
+                else:
+                    service_name = exe_name.removesuffix(".exe")
+                service_lifecycle_group_id = self._storyline_remote_service_lifecycle_id(
+                    system,
+                    service_name,
+                )
+            if not service_lifecycle_group_id and exe_name in {
+                "psexesvc.exe",
+                "healthmonitorsvc.exe",
+            }:
+                recent_service = getattr(self, "_last_storyline_service_by_system", {}).get(
+                    system.hostname,
+                    {},
+                )
+                installed_image = self._normalize_storyline_service_file_name(
+                    str(recent_service.get("service_file_name") or "")
+                )
+                installed_at = recent_service.get("installed_at")
+                if (
+                    installed_image.rsplit("\\", 1)[-1].casefold() == exe_name
+                    and isinstance(installed_at, datetime)
+                    and installed_at <= time
+                    and time - installed_at
+                    <= (
+                        timedelta(minutes=2)
+                        if exe_name == "psexesvc.exe"
+                        else timedelta(minutes=30)
+                    )
+                ):
+                    service_lifecycle_group_id = str(recent_service.get("lifecycle_group_id") or "")
             pid = self.activity_generator.generate_process(
                 user=process_actor,
                 system=system,
@@ -3798,6 +3882,7 @@ class StorylineMixin:
                 ensure_file_event=not service_backed_process,
                 from_storyline=True,
                 suppress_command_file_effect=output_file is not None,
+                lifecycle_group_id=service_lifecycle_group_id,
             )
             self.activity_generator._record_user_process(system, process_actor, pid, process_name)
             self._record_last_storyline_process(system, pid, process_name, process_command_line)
@@ -5006,6 +5091,10 @@ class StorylineMixin:
                 event_time=time,
                 rng=rng,
             )
+            service_lifecycle_group_id = self._storyline_remote_service_lifecycle_id(
+                system,
+                spec.service_name,
+            )
             self.activity_generator.generate_service_installed(
                 user=actor,
                 system=system,
@@ -5017,6 +5106,7 @@ class StorylineMixin:
                     spec.service_name,
                 ),
                 service_account=spec.service_account,
+                lifecycle_group_id=service_lifecycle_group_id,
             )
             self._record_storyline_service_install(
                 system=system,
@@ -5024,6 +5114,7 @@ class StorylineMixin:
                 service_file_name=spec.service_file_name,
                 service_account=spec.service_account,
                 time=effect_time,
+                lifecycle_group_id=service_lifecycle_group_id,
             )
             malicious_event["service_name"] = spec.service_name
             if spec.service_file_name:
