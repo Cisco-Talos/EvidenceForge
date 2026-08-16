@@ -312,3 +312,17 @@ and 1 skipped.
   provenance while keeping the owning shell reserved until the extended termination. The exact
   copy/upload-move/rename regressions passed, as did all 30 Linux SMB integration tests, 53 process
   lifetime tests, and 197 related SMB/eCAR tests.
+
+### Loop 24 outcome
+
+- Final verification passed the complete suite: 6,038 passed and 22 skipped; repository-wide Ruff
+  check and format check passed. The final correction is commit `eef7523a`.
+- The regenerated corpus passed the strict rendered foreground probe: 335 non-exempt commands,
+  145 exact shell groups, 333 visible parent-create checks, 190 successor checks, and zero
+  violations. Pipelines, detached GUI work, and follow-mode commands remained explicit exemptions.
+- Automated evaluation scored 96.7054 over 73,361 records. The frozen review-data digest is
+  `b3fd699a5aa0b61fb9821158d74831a6f2c5bf9b2429c8fca473bcf33231e4de`.
+- The fresh panel was unanimous Synthetic with standalone scores 68/72/72/74 (average 71.5), so no
+  deliberation was required. The repaired shell-overlap family did not recur. The next highest
+  priority is the cross-source PSEXESVC file lifecycle inversion, followed by the inventory-shaped
+  `/24` scan, proxy DNS millisecond quantization, bounded eCAR delay, and scheduled-task ownership.
