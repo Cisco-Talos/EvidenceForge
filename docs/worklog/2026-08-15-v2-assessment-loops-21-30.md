@@ -356,6 +356,21 @@ and 1 skipped.
   The fixed spacing did not recur. Loop 27 will address the repeated direct-SCM PowerShell
   maintenance family, which three reviewers independently prioritized.
 
+### Loop 27 outcome
+
+- Commit `6e6e03f0` replaces account × host × hour trials with stable compatible owners and cadence,
+  validates all symbolic parents, and materializes demand-scoped native scheduler ancestry without
+  perturbing unrelated process allocation.
+- The full suite passed with 6,059 tests and 22 skips after repairing the singleton exact-pack
+  sibling regression; Ruff and config validation passed. The rendered probe found three complete
+  scheduled PowerShell lifecycles, zero direct SCM parent edges, host-distinct task GUIDs, sparse
+  placement, multi-hour jittered recurrence, and correct resident-agent ownership.
+- Automated evaluation scored 97.6467 over 79,449 records. Frozen review-data digest:
+  `2b76fe8d18af216d293d28bc2831fd54558e04db901ce37cd7755a09ca38c24e`.
+- Standalone scores were 64/42/52/72 (average 57.5); deliberation reconciled to Synthetic at 65.75.
+  The fixed scheduler family did not recur. Loop 28 will address the P0 SearchIndexer service-token
+  and singleton-lifecycle contradiction.
+
 ## Loop 25 — Windows remote-service payload lifecycle
 
 ### Family contract (before implementation)
