@@ -148,6 +148,25 @@ _BASELINE_SMB_SERVICE_ALIASES = {
     "smbd",
 }
 _BASELINE_EMAIL_PROFILE_PORTS = {25, 465, 587, 993, 995}
+
+
+def _require_seeded_windows_parent(
+    sys_pids: dict[str, int],
+    parent_key: str,
+    *,
+    family: str,
+) -> int:
+    """Resolve a configured Windows parent symbol without fabricating ancestry."""
+    parent_pid = sys_pids.get(parent_key)
+    if parent_pid is None:
+        available = ", ".join(sorted(sys_pids))
+        raise ValueError(
+            f"Unknown Windows parent symbol {parent_key!r} for {family}; "
+            f"available seeded symbols: {available}"
+        )
+    return parent_pid
+
+
 _BASELINE_WEBMAIL_PROFILE_TERMS = ("owa", "webmail", "mailbox", "mail client", "email")
 _BASELINE_SUCCESS_FALLBACK_PORTS = (22, 80, 443, 8080, 3306, 5432, 53)
 
@@ -1859,6 +1878,108 @@ class BaselineMixin:
 
         return username.lower() not in self._storyline_account_lifecycle()
 
+    def _service_account_delegation_owner_hostnames(
+        self,
+        svc_name: str,
+        systems: list[System],
+        config: dict[str, Any],
+    ) -> set[str]:
+        """Return the stable Windows hosts that own one account's automation."""
+        caller = self._stable_service_account_delegation_choice(svc_name)
+        allowed_types = {
+            str(value).lower().replace("-", "_") for value in caller.get("system_types", [])
+        }
+        eligible = sorted(
+            (
+                system
+                for system in systems
+                if _get_os_category(system.os) == "windows"
+                and (
+                    not allowed_types
+                    or str(getattr(system, "type", None) or "workstation").lower().replace("-", "_")
+                    in allowed_types
+                )
+            ),
+            key=lambda system: system.hostname,
+        )
+        if not eligible:
+            return set()
+
+        count_min = max(1, int(config.get("owner_host_count_min", 1)))
+        count_max = max(count_min, int(config.get("owner_host_count_max", 2)))
+        deployment = str(getattr(self.scenario.environment, "domain", None) or self.scenario.name)
+        placement_rng = random.Random(
+            _stable_seed(f"service_account_owner:{deployment}:{svc_name.lower()}")
+        )
+        count = min(len(eligible), placement_rng.randint(count_min, count_max))
+        return {system.hostname for system in placement_rng.sample(eligible, count)}
+
+    def _stable_service_account_delegation_choice(self, svc_name: str) -> dict[str, Any]:
+        """Return one deployment-stable caller identity for a service account."""
+        choices = getattr(self, "_service_account_delegation_choices", None)
+        if choices is None:
+            choices = {}
+            self._service_account_delegation_choices = choices
+        account_key = svc_name.lower()
+        cached = choices.get(account_key)
+        if cached is not None:
+            return cached
+
+        scenario = getattr(self, "scenario", None)
+        deployment = str(
+            getattr(getattr(scenario, "environment", None), "domain", None)
+            or getattr(scenario, "name", "default")
+        )
+        caller_rng = random.Random(
+            _stable_seed(f"service_account_caller:{deployment}:{account_key}")
+        )
+        choice = self._pick_service_account_delegation_process(svc_name, caller_rng)
+        choices[account_key] = choice
+        return choice
+
+    def _service_account_delegation_time_for_hour(
+        self,
+        *,
+        current_hour: datetime,
+        svc_name: str,
+        hostname: str,
+        config: dict[str, Any],
+    ) -> datetime | None:
+        """Return a stable non-hourly automation occurrence in this hour, if any."""
+        start = ensure_utc(self.start_time)
+        hour_start = ensure_utc(current_hour)
+        hour_end = hour_start + timedelta(hours=1)
+        interval_min = max(60.0, float(config.get("interval_minutes_min", 150.0)))
+        interval_max = max(interval_min, float(config.get("interval_minutes_max", 330.0)))
+        first_min = max(0.0, float(config.get("first_occurrence_seconds_min", 300.0)))
+        first_max = max(first_min, float(config.get("first_occurrence_seconds_max", 7200.0)))
+        jitter_min = float(config.get("jitter_seconds_min", -240.0))
+        jitter_max = max(jitter_min, float(config.get("jitter_seconds_max", 540.0)))
+
+        schedule_rng = random.Random(
+            _stable_seed(
+                f"service_account_schedule:{self.scenario.name}:{svc_name.lower()}:{hostname}"
+            )
+        )
+        interval_seconds = schedule_rng.uniform(interval_min, interval_max) * 60.0
+        first_seconds = schedule_rng.uniform(first_min, min(first_max, interval_seconds))
+        elapsed_end = (hour_end - start).total_seconds()
+        max_sequence = max(0, math.ceil((elapsed_end - first_seconds) / interval_seconds) + 1)
+        for sequence in range(max_sequence):
+            base_seconds = first_seconds + sequence * interval_seconds
+            jitter_rng = random.Random(
+                _stable_seed(
+                    f"service_account_jitter:{self.scenario.name}:{svc_name.lower()}:"
+                    f"{hostname}:{sequence}"
+                )
+            )
+            event_time = start + timedelta(
+                seconds=base_seconds + jitter_rng.uniform(jitter_min, jitter_max)
+            )
+            if hour_start <= event_time < hour_end:
+                return event_time
+        return None
+
     def _pick_service_account_delegation_process(
         self,
         svc_name: str,
@@ -1884,9 +2005,10 @@ class BaselineMixin:
             if not isinstance(profile, dict):
                 continue
             terms = [str(term).lower() for term in profile.get("account_terms", [])]
+            specific_terms = [term for term in terms if term != "svc"]
             if "svc" in terms:
                 fallback_profiles.append(profile)
-            if any(term and term in account for term in terms):
+            if any(term and term in account for term in specific_terms):
                 matching_profiles.append(profile)
 
         candidates = (
@@ -1960,6 +2082,7 @@ class BaselineMixin:
             "image": image,
             "command_line": command_line,
             "parent_key": parent_key,
+            "system_types": list(choice.get("system_types") or []),
             "weight": max(1, int(choice.get("weight", 1))),
         }
 
@@ -1972,7 +2095,10 @@ class BaselineMixin:
         rng: random.Random,
     ) -> tuple[str, int]:
         """Return a live caller process for benign service-account delegation."""
-        choice = self._pick_service_account_delegation_process(svc_name, rng, system)
+        stable_choices = getattr(self, "_service_account_delegation_choices", {})
+        choice = stable_choices.get(svc_name.lower())
+        if choice is None:
+            choice = self._pick_service_account_delegation_process(svc_name, rng, system)
         image = choice["image"]
         normalized_image = image.replace("/", "\\").lower()
         command_line = str(choice.get("command_line") or image)
@@ -1995,7 +2121,11 @@ class BaselineMixin:
             return image, proc.pid
 
         parent_key = str(choice.get("parent_key") or "services")
-        parent_pid = sys_pids.get(parent_key, sys_pids.get("services", sys_pids.get("wininit", 4)))
+        parent_pid = _require_seeded_windows_parent(
+            sys_pids,
+            parent_key,
+            family="service_account_delegation",
+        )
         process_time = time - timedelta(seconds=rng.uniform(5.0, 90.0))
         scenario_start = getattr(self, "start_time", None)
         if scenario_start is not None and process_time < scenario_start:
@@ -8871,8 +9001,10 @@ class BaselineMixin:
                         system,
                         str(self.scenario.environment.domain),
                     )
-                    svc_parent = sys_pids.get(
-                        svc_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
+                    svc_parent = _require_seeded_windows_parent(
+                        sys_pids,
+                        svc_parent_key,
+                        family="system_services",
                     )
                     svc_pid = self.activity_generator.generate_system_process(
                         system=system,
@@ -9077,8 +9209,10 @@ class BaselineMixin:
                     if selected_task is None:
                         continue
                     task_image, task_cmd, task_parent_key = selected_task
-                    parent_pid = sys_pids.get(
-                        task_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
+                    parent_pid = _require_seeded_windows_parent(
+                        sys_pids,
+                        task_parent_key,
+                        family="scheduled_tasks",
                     )
                     task_pid = self.activity_generator.generate_system_process(
                         system=system,
@@ -9108,37 +9242,55 @@ class BaselineMixin:
             # Service account delegation: svc accounts auth to remote servers
             if os_cat == "windows" and self.scenario.environment.service_accounts:
                 delegation_config = service_account_delegation_config()
-                delegation_probability = float(delegation_config.get("hourly_probability", 0.3))
                 all_systems = self.scenario.environment.systems
                 servers = [s for s in all_systems if s.type in ("server", "domain_controller")]
                 for svc_name in self.scenario.environment.service_accounts:
                     if not self._service_account_eligible_for_baseline_noise(svc_name):
                         continue
-                    if rng.random() < delegation_probability:
-                        target_sys = rng.choice(servers) if servers else None
-                        if target_sys and target_sys.hostname != system.hostname:
-                            svc_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
-                            if not self._service_account_available_at(svc_name, svc_ts):
-                                continue
-                            self.state_manager.set_current_time(svc_ts)
-                            caller_image, caller_pid = (
-                                self._ensure_service_account_delegation_process(
-                                    system=system,
-                                    svc_name=svc_name,
-                                    time=svc_ts,
-                                    sys_pids=sys_pids,
-                                    rng=rng,
-                                )
-                            )
-                            self.activity_generator.generate_explicit_credentials(
-                                user=_SYSTEM_USER,
-                                system=system,
-                                time=svc_ts,
-                                target_username=svc_name,
-                                target_server=target_sys.hostname,
-                                process_name=caller_image,
-                                process_pid=caller_pid,
-                            )
+                    owner_hostnames = self._service_account_delegation_owner_hostnames(
+                        svc_name,
+                        all_systems,
+                        delegation_config,
+                    )
+                    if system.hostname not in owner_hostnames:
+                        continue
+                    svc_ts = self._service_account_delegation_time_for_hour(
+                        current_hour=current_hour,
+                        svc_name=svc_name,
+                        hostname=system.hostname,
+                        config=delegation_config,
+                    )
+                    if svc_ts is None or not self._service_account_available_at(svc_name, svc_ts):
+                        continue
+                    occurrence_rng = random.Random(
+                        _stable_seed(
+                            f"service_account_occurrence:{self.scenario.name}:"
+                            f"{svc_name.lower()}:{system.hostname}:{svc_ts.isoformat()}"
+                        )
+                    )
+                    target_candidates = [
+                        target for target in servers if target.hostname != system.hostname
+                    ]
+                    if not target_candidates:
+                        continue
+                    target_sys = occurrence_rng.choice(target_candidates)
+                    self.state_manager.set_current_time(svc_ts)
+                    caller_image, caller_pid = self._ensure_service_account_delegation_process(
+                        system=system,
+                        svc_name=svc_name,
+                        time=svc_ts,
+                        sys_pids=sys_pids,
+                        rng=occurrence_rng,
+                    )
+                    self.activity_generator.generate_explicit_credentials(
+                        user=_SYSTEM_USER,
+                        system=system,
+                        time=svc_ts,
+                        target_username=svc_name,
+                        target_server=target_sys.hostname,
+                        process_name=caller_image,
+                        process_pid=caller_pid,
+                    )
 
             # Group Policy client refresh: host-scoped 90-minute-style schedule.
             # Automatic refreshes usually stay inside gpsvc; only a minority

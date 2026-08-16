@@ -502,3 +502,77 @@ and 1 skipped.
   `pipeline && command` lifecycle whose control-stage create follows both pipeline terminations.
   The broader shell, process-lifetime, bash-noise, Linux-workstation, and world-model suite passed
   554 tests. Repository-wide Ruff check/format and `git diff --check` passed.
+
+## Loop 27 — Scheduler-owned Windows maintenance automation
+
+### Family contract (before implementation)
+
+- **Accepted finding and classification:** the Loop 26 Threat Hunter, Detection Engineer, and
+  Host/EDR reviews independently found 22–23 direct `services.exe` to `powershell.exe` process
+  creations across eight Windows hosts. Three generic script identities recur densely across a DC,
+  mail server, and workstations. This is a `family_level` baseline execution-mechanism and
+  distribution-state defect, not an emitter formatting issue.
+- **Owning abstraction and layer:** service-account delegation baseline planning owns which stable
+  host runs a recurring automation job, its durable cadence, and its configured caller mechanism.
+  The seeded Windows scheduler process tree owns the concrete scheduler parent identity. Canonical
+  process generation owns parent/token/lifetime correlation; Security, Sysmon, and eCAR only render
+  that shared truth.
+- **Invariant:** recurring maintenance for one service account is assigned deterministically to a
+  small stable set of eligible Windows owner hosts for the scenario, then fires on a stable,
+  non-hourly interval with scoped jitter. Scheduler-configured PowerShell must be parented by the
+  seeded Task Scheduler execution chain, while resident service/management-agent processes remain
+  SCM-owned. An unknown configured parent symbol is an authoring error and must fail before any
+  child process is fabricated under `services.exe`.
+- **Entry paths:** all `service_account_delegation` caller profiles (backup, monitoring,
+  deployment, reporting, and generic service tasks); one-shot PowerShell and OpsAgent jobs;
+  resident management/backup agents; Windows scheduled/background process catalog entries that use
+  the same symbolic seeded-parent namespace; and package/project configuration overlays.
+- **Consumers:** canonical `RunningProcess` parent and token state, 4648 delegation evidence,
+  Security 4688, Sysmon Event 1, eCAR process lifecycle, source-local observation grouping,
+  process termination, config validation, and strict rendered process-tree/cadence probes.
+- **Sibling risks and verification:** preserve role filtering, compatibility-group deployment
+  selection, reuse of genuinely resident agents, fresh bounded one-shot lifecycles, target-server
+  selection, and deterministic regeneration. Focused tests must prove stable owner placement,
+  multi-hour cadence, scheduler parentage, and fail-fast unknown symbols. The rendered probe will
+  group PowerShell maintenance by normalized command, host, parent image, and occurrence time;
+  it must reject direct SCM parentage, fleet-wide placement, or an hourly Cartesian recurrence.
+
+### Implementation handoff
+
+- `service_account_delegation` now assigns each durable account to one or two deterministic Windows
+  owner hosts, then schedules it on a scoped 150–330 minute interval with per-occurrence jitter.
+  Event-local RNG owns caller and remote-target selection, so traversal order no longer turns the
+  family into independent account-by-host-by-hour trials.
+- The seeded Windows process tree now includes the Schedule service host and its `taskeng.exe`
+  execution engine. Existing PowerShell profiles that already declared `parent_key: taskeng`
+  therefore retain their intended scheduler ancestry instead of silently falling back to SCM.
+  Resident backup, monitoring, deployment, and agent binaries remain under their configured
+  service parents.
+- Configured Windows parent symbols now resolve through one fail-fast boundary for scheduled tasks,
+  recurring system services, and service-account delegation. `validate-config` rejects unknown
+  parent symbols across both process catalogs, preventing project overlays from reintroducing a
+  hidden `services.exe` fallback.
+- Focused and broad relevant verification passed 325 tests with one skip across service-account
+  lifecycle, Windows boot/process trees, baseline canonical generation, process stability, and
+  configuration validation. `eforge validate-config` passed all 93 files. Repository-wide Ruff
+  check/format and `git diff --check` passed.
+
+### Independent-review sibling correction
+
+- Account matching now treats the generic `account_terms: [svc]` profile strictly as fallback;
+  account-specific backup, monitoring, deployment, and reporting profiles cannot be diluted by the
+  generic pool. One deployment/account-stable caller choice is cached before owner placement, and
+  the caller's `system_types` constrain the eligible stable owner-host set. Repeated occurrences
+  therefore keep one execution mechanism rather than resampling parent grammar each time.
+- Scheduler seeding now gives each host a deterministic distinct Task Scheduler GUID. Both
+  `taskeng.exe` and the seeded `taskhostw.exe` are children of the dedicated Schedule service host,
+  not direct SCM children or children of an unrelated generic netsvcs instance. Focused regression
+  coverage proves specific-profile precedence, caller stability across regeneration, role-eligible
+  placement, scheduler sibling ancestry, and cross-host GUID diversity.
+- Full-suite reconciliation found that unconditionally adding scheduler processes perturbed the
+  ordinary Windows process-allocation stream and caused a pre-existing exact-pack singleton
+  regression to lose one of two cadence-bound application flows. The Schedule identity now aliases
+  the modeled shared netsvcs service host, while `taskeng.exe` is seeded only when service-account
+  automation or a configured taskeng-owned task requires it. This preserves scheduler ancestry and
+  host-scoped task identity without changing unrelated scenarios' process allocation; the exact
+  singleton pack regression again retains one process and both scheduled flows.

@@ -1555,8 +1555,29 @@ class ServiceAccountDelegationProfileConfig(BaseModel, extra="forbid"):
 class ServiceAccountDelegationConfig(BaseModel, extra="forbid"):
     """Service-account explicit-credential baseline profile."""
 
-    hourly_probability: float = Field(ge=0.0, le=0.95)
+    hourly_probability: float | None = Field(default=None, ge=0.0, le=0.95)
+    owner_host_count_min: int = Field(default=1, ge=1)
+    owner_host_count_max: int = Field(default=2, ge=1)
+    interval_minutes_min: float = Field(default=150.0, gt=0)
+    interval_minutes_max: float = Field(default=330.0, gt=0)
+    first_occurrence_seconds_min: float = Field(default=300.0, ge=0)
+    first_occurrence_seconds_max: float = Field(default=7200.0, ge=0)
+    jitter_seconds_min: float = Field(default=-240.0)
+    jitter_seconds_max: float = Field(default=540.0)
     caller_profiles: list[ServiceAccountDelegationProfileConfig] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def ranges_are_ordered(self) -> Self:
+        """Reject inverted owner, interval, phase, or jitter bounds."""
+        if self.owner_host_count_max < self.owner_host_count_min:
+            raise ValueError("owner_host_count_max must be >= owner_host_count_min")
+        if self.interval_minutes_max < self.interval_minutes_min:
+            raise ValueError("interval_minutes_max must be >= interval_minutes_min")
+        if self.first_occurrence_seconds_max < self.first_occurrence_seconds_min:
+            raise ValueError("first_occurrence_seconds_max must be >= first_occurrence_seconds_min")
+        if self.jitter_seconds_max < self.jitter_seconds_min:
+            raise ValueError("jitter_seconds_max must be >= jitter_seconds_min")
+        return self
 
 
 class AuthNoiseConfig(BaseModel, extra="forbid"):

@@ -1230,6 +1230,45 @@ class TestWindowsProcessTreeSeeding:
         assert proc is not None
         assert proc.parent_pid == pids["services"]
 
+    def test_scheduler_children_have_native_parentage_and_host_scoped_identity(
+        self, state_manager, win_system
+    ):
+        """Task engines share Schedule ownership but not a fleet-wide task GUID."""
+        from evidenceforge.generation.engine import GenerationEngine
+
+        first_engine = object.__new__(GenerationEngine)
+        first_engine.state_manager = state_manager
+        first_engine._system_pids = {}
+        first_engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(service_accounts=["svc_backup"])
+        )
+        first_pids: dict[str, int] = {}
+        first_engine._seed_windows_process_tree(win_system, first_pids)
+
+        taskeng = state_manager.get_process(win_system.hostname, first_pids["taskeng"])
+        taskhostw = state_manager.get_process(win_system.hostname, first_pids["taskhostw"])
+        assert taskeng is not None
+        assert taskhostw is not None
+        assert taskeng.parent_pid == first_pids["svchost_schedule"]
+        assert taskhostw.parent_pid == first_pids["svchost_schedule"]
+        assert re.fullmatch(r"taskeng\.exe \{[0-9A-F-]{36}\}", taskeng.command_line)
+
+        other_state = StateManager()
+        other_state.set_current_time(datetime(2024, 3, 15, 8, 0, tzinfo=UTC))
+        other_system = win_system.model_copy(update={"hostname": "WKS-02", "ip": "10.0.10.2"})
+        second_engine = object.__new__(GenerationEngine)
+        second_engine.state_manager = other_state
+        second_engine._system_pids = {}
+        second_engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(service_accounts=["svc_backup"])
+        )
+        second_pids: dict[str, int] = {}
+        second_engine._seed_windows_process_tree(other_system, second_pids)
+        other_taskeng = other_state.get_process(other_system.hostname, second_pids["taskeng"])
+
+        assert other_taskeng is not None
+        assert other_taskeng.command_line != taskeng.command_line
+
     def test_lsass_is_child_of_wininit(self, state_manager, win_system):
         """lsass.exe should be child of wininit.exe (not services.exe)."""
         from evidenceforge.generation.engine import GenerationEngine

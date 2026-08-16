@@ -33,6 +33,7 @@ Contains the EmitterSetupMixin with methods for:
 
 import logging
 import random
+import uuid
 from datetime import datetime, timedelta
 
 from evidenceforge.formats import load_format
@@ -662,6 +663,34 @@ class EmitterSetupMixin:
         for name, cmdline, user in svchost_groups:
             pids[name] = _c(pids["services"], r"C:\Windows\System32\svchost.exe", cmdline, user)
 
+        # The Schedule service is part of the shared netsvcs host on this modeled
+        # Windows profile. Keep a semantic alias rather than inventing another
+        # svchost instance and perturbing unrelated process-allocation streams.
+        pids["svchost_schedule"] = pids["svchost_netsvcs"]
+
+        from evidenceforge.generation.activity.system_processes import (
+            get_scheduled_task_entries,
+        )
+
+        environment = getattr(getattr(self, "scenario", None), "environment", None)
+        requires_taskeng = bool(getattr(environment, "service_accounts", [])) or any(
+            str(entry.get("parent") or "") == "taskeng"
+            for entry in get_scheduled_task_entries(system)
+        )
+        if requires_taskeng:
+            task_identity = uuid.UUID(
+                int=(
+                    (_stable_seed(f"task_scheduler_guid_hi:{hn}") << 64)
+                    | _stable_seed(f"task_scheduler_guid_lo:{hn}")
+                )
+            )
+            pids["taskeng"] = _c(
+                pids["svchost_schedule"],
+                r"C:\Windows\System32\taskeng.exe",
+                f"taskeng.exe {{{str(task_identity).upper()}}}",
+                "SYSTEM",
+            )
+
         if (system.type or "").lower() == "domain_controller":
             pids["dns"] = _c(pids["services"], r"C:\Windows\System32\dns.exe", "dns.exe", "SYSTEM")
 
@@ -708,7 +737,10 @@ class EmitterSetupMixin:
             "SYSTEM",
         )
         pids["taskhostw"] = _c(
-            pids["services"], r"C:\Windows\System32\taskhostw.exe", "taskhostw.exe", "SYSTEM"
+            pids["svchost_schedule"],
+            r"C:\Windows\System32\taskhostw.exe",
+            "taskhostw.exe",
+            "SYSTEM",
         )
 
         pids["csrss_s1"] = _c(pids["smss"], r"C:\Windows\System32\csrss.exe", "csrss.exe", "SYSTEM")

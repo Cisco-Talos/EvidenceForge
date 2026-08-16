@@ -57,6 +57,20 @@ WINDOWS_BOOT_ONLY_PROCESS_EXES = frozenset(
         "winlogon.exe",
     }
 )
+WINDOWS_SEEDED_PARENT_SYMBOLS = frozenset(
+    {
+        "csrss_s0",
+        "search_indexer",
+        "services",
+        "svchost_dcom",
+        "svchost_local_system",
+        "svchost_netsvcs",
+        "svchost_schedule",
+        "svchost_wusvcs",
+        "taskeng",
+        "taskhostw",
+    }
+)
 RECURRING_SYSLOG_STARTUP_PATTERNS = frozenset(
     {
         "started daemon",
@@ -3935,6 +3949,45 @@ def validate_config(
     err = validate_entry(auth_noise_data, AuthNoiseConfig, "auth_noise.yaml")
     if err:
         result.issues.append(Issue("ERROR", "auth_noise.yaml", err))
+
+    configured_parent_symbols: list[tuple[str, str]] = []
+    for task in sys_proc_data.get("scheduled_tasks", []):
+        if isinstance(task, dict):
+            configured_parent_symbols.append(
+                ("system_processes.yaml (scheduled_tasks)", str(task.get("parent") or ""))
+            )
+    for role, entries in sys_proc_data.get("system_services", {}).items():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict):
+                configured_parent_symbols.append(
+                    (
+                        f"system_processes.yaml (system_services.{role})",
+                        str(entry.get("parent") or ""),
+                    )
+                )
+    delegation = auth_noise_data.get("service_account_delegation", {})
+    for profile in delegation.get("caller_profiles", []):
+        if not isinstance(profile, dict):
+            continue
+        for process in profile.get("processes", []):
+            if isinstance(process, dict):
+                configured_parent_symbols.append(
+                    (
+                        "auth_noise.yaml (service_account_delegation)",
+                        str(process.get("parent_key") or "services"),
+                    )
+                )
+    for source, parent_symbol in configured_parent_symbols:
+        if parent_symbol not in WINDOWS_SEEDED_PARENT_SYMBOLS:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    source,
+                    f"unknown seeded Windows parent symbol {parent_symbol!r}",
+                )
+            )
 
     if isinstance(proxy_ua_data.get("domain_overrides"), dict):
         _SCHEMA_CHECKS.append(
