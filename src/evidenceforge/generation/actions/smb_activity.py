@@ -227,6 +227,12 @@ class SmbActivityActionBundle:
         transport_plan = self.executor.dispatcher.network_plan_for(transport_uid)
         if transport_plan is None:
             raise ValueError(f"SMB transport {transport_uid!r} was not published for composition")
+        if client_system is not None and process_plan is not None and process_plan.actor_pid > 0:
+            self.executor._remember_process_dependent_hold(
+                system=client_system,
+                pid=process_plan.actor_pid,
+                required_until=transport_plan.closed_at,
+            )
         if process is None and client_system is not None and transport_plan.initiating_pid > 0:
             process = self._process_context(
                 client_system,

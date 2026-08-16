@@ -602,6 +602,50 @@ def test_linux_process_termination_retains_observation_concurrency_group() -> No
     assert termination.process.concurrency_group_id == "bash-history:ss-summary"
 
 
+def test_direct_linux_process_creation_claims_provisional_foreground_lifetime() -> None:
+    """Loose GDM process paths reserve and close their slot without caller bookkeeping."""
+    generator, state, system, user, logon_id, shell_pid, events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    first_pid = generator.generate_process(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name="/usr/bin/docker",
+        command_line="docker images",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+    )
+    provisional_end = generator.foreground_process_termination_time(system.hostname, first_pid)
+    assert provisional_end is not None
+
+    second_pid = generator.generate_process(
+        user=user,
+        system=system,
+        time=start + timedelta(milliseconds=75),
+        logon_id=logon_id,
+        process_name="/usr/bin/git",
+        command_line="git diff --stat",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+    )
+    second = state.get_process(system.hostname, second_pid)
+    assert second is not None
+    assert second.start_time > provisional_end
+
+    generator.finalize_foreground_process_lifetimes(start + timedelta(minutes=5))
+    first_termination = next(
+        event.timestamp
+        for event in events
+        if getattr(event, "event_type", "") == "process_terminate"
+        and event.process is not None
+        and event.process.pid == first_pid
+    )
+    assert first_termination < second.start_time
+
+
 def test_linux_sudo_companions_share_shell_foreground_slot_across_ttys() -> None:
     """Loose sudo/admin companions cannot bypass serialization by selecting another TTY."""
     generator, _state, system, user, logon_id, shell_pid, events = _linux_interactive_shell(
@@ -897,6 +941,57 @@ def test_finalize_foreground_process_lifetimes_preserves_commands_beyond_window(
         pid,
         start,
     )
+
+
+def test_dependent_hold_extends_registered_foreground_finalizer() -> None:
+    """Action-bundle effects retain their foreground actor through the final dependent."""
+    start = datetime(2024, 3, 18, 17, 59, 58, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start)
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    system = System(
+        hostname="LNX-CLIENT-01",
+        ip="10.10.2.30",
+        os="Ubuntu 22.04",
+        type="workstation",
+    )
+    user = User(
+        username="marcus.chen",
+        full_name="Marcus Chen",
+        email="marcus.chen@example.local",
+    )
+    pid = state.create_process(
+        system=system.hostname,
+        parent_pid=0,
+        image="/usr/bin/cp",
+        command_line='cp -- "/mnt/shared/report.xlsx" "/var/tmp/report.xlsx"',
+        username=user.username,
+        integrity_level="Medium",
+        logon_id="0x1234",
+    )
+    initial_termination = start + timedelta(seconds=1)
+    required_until = start + timedelta(seconds=10)
+    generator._remember_foreground_process_finalizer(
+        system=system,
+        user=user,
+        pid=pid,
+        process_name="/usr/bin/cp",
+        logon_id="0x1234",
+        termination_time=initial_termination,
+    )
+
+    generator._remember_process_dependent_hold(
+        system=system,
+        pid=pid,
+        required_until=required_until,
+    )
+
+    assert generator.foreground_process_termination_time(system.hostname, pid) > required_until
+    generator.finalize_foreground_process_lifetimes(required_until)
+    assert state.get_process(system.hostname, pid) is not None
+    generator.finalize_foreground_process_lifetimes(start + timedelta(minutes=1))
+    assert state.get_process(system.hostname, pid) is None
 
 
 def test_process_watermark_drops_pid_scoped_state_before_reuse() -> None:

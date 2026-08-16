@@ -4616,9 +4616,23 @@ class ActivityGenerator:
         close_time: datetime | None,
     ) -> None:
         """Keep process lifecycle compatible with a process-owned transport interval."""
-        if pid <= 0 or close_time is None:
+        self._remember_process_dependent_hold(
+            system=system,
+            pid=pid,
+            required_until=close_time,
+        )
+
+    def _remember_process_dependent_hold(
+        self,
+        *,
+        system: System,
+        pid: int,
+        required_until: datetime | None,
+    ) -> None:
+        """Keep a process alive through a canonical dependent event interval."""
+        if pid <= 0 or required_until is None:
             return
-        close_time = ensure_utc(close_time)
+        close_time = ensure_utc(required_until)
         end_plan = self.state_manager.process_session_end_plan(system.hostname, pid)
         if end_plan is not None and end_plan.is_authoritative:
             deadline = ensure_utc(end_plan.canonical_end)
@@ -4670,6 +4684,21 @@ class ActivityGenerator:
                 seed_text=running.command_line,
                 concurrency_group_id=running.concurrency_group_id,
             )
+        finalizer = self._foreground_process_finalizers.get(key)
+        if finalizer is not None and ensure_utc(finalizer[4]) <= close_time:
+            held_termination = self._held_process_termination_time(
+                system=system,
+                pid=pid,
+                requested_time=finalizer[4],
+            )
+            self._remember_foreground_process_finalizer(
+                system=system,
+                user=self._user_model_for_username(finalizer[1]),
+                pid=pid,
+                process_name=finalizer[2],
+                logon_id=finalizer[3],
+                termination_time=held_termination,
+            )
 
     def _held_process_termination_time(
         self,
@@ -4708,12 +4737,17 @@ class ActivityGenerator:
     ) -> None:
         """Track a bounded foreground process until its terminate event is observed."""
         key = self._process_instance_key(system.hostname, pid)
+        termination_time = self._held_process_termination_time(
+            system=system,
+            pid=pid,
+            requested_time=ensure_utc(termination_time),
+        )
         self._foreground_process_finalizers[key] = (
             system,
             user.username,
             process_name,
             logon_id,
-            ensure_utc(termination_time),
+            termination_time,
         )
         running = self.state_manager.get_process(system.hostname, pid)
         if (
@@ -9006,9 +9040,12 @@ class ActivityGenerator:
             f"{command_line}:{process_time.isoformat()}"
         )
         session_floor = ensure_utc(session.start_time) + timedelta(milliseconds=100)
+        # A newly materialized terminal needs up to 6.999 seconds before its
+        # first child can launch.  Start the sibling far enough ahead that the
+        # readiness floor cannot consume the anchored transport deadline.
         shell_time = max(
             session_floor,
-            process_time - timedelta(milliseconds=1200 + (shell_seed % 4801)),
+            process_time - timedelta(milliseconds=7200 + (shell_seed % 4801)),
         )
         if shell_time >= process_time:
             shell_time = process_time - timedelta(milliseconds=100)
@@ -13363,6 +13400,47 @@ class ActivityGenerator:
             session = self.state_manager.get_session(running_proc.logon_id)
             if session is not None:
                 session.last_activity_time = time
+        if (
+            running_proc is not None
+            and _get_os_category(system.os) == "linux"
+            and _linux_shell_process_reserves_foreground(process_name, command_line)
+            and self._foreground_shell_key(
+                system=system,
+                username=running_proc.username,
+                logon_id=running_proc.logon_id,
+                parent_pid=running_proc.parent_pid,
+            )
+            is not None
+        ):
+            provisional_lifetime = _linux_foreground_lifetime(process_name, command_line)
+            if provisional_lifetime is not None:
+                provisional_rng = random.Random(
+                    _stable_seed(
+                        "canonical-linux-foreground-lifetime:"
+                        f"{system.hostname}:{pid}:{running_proc.start_time.isoformat()}:"
+                        f"{command_line}"
+                    )
+                )
+                provisional_termination = ensure_utc(running_proc.start_time) + timedelta(
+                    seconds=provisional_rng.uniform(*provisional_lifetime)
+                )
+                session_deadline = self.state_manager.get_session_end_time(running_proc.logon_id)
+                if session_deadline is not None:
+                    provisional_termination = min(
+                        provisional_termination,
+                        ensure_utc(session_deadline) - timedelta(milliseconds=25),
+                    )
+                self._remember_foreground_process_finalizer(
+                    system=system,
+                    user=user,
+                    pid=pid,
+                    process_name=process_name,
+                    logon_id=running_proc.logon_id,
+                    termination_time=max(
+                        provisional_termination,
+                        ensure_utc(running_proc.start_time) + timedelta(milliseconds=25),
+                    ),
+                )
         if (
             running_proc is not None
             and _get_os_category(system.os) == "linux"

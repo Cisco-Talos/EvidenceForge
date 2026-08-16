@@ -291,3 +291,24 @@ and 1 skipped.
   grouped foreground create while independently dropping its bounded termination. Regression tests
   cover a long-held GDM command followed by an anchored SSH client on a sibling shell and coherent
   create/terminate observation grouping.
+- **Second rendered-probe correction:** the next corpus reduced the family to five GDM-shell
+  contradictions, all loose developer commands (`npm`, `docker`, and `git`) followed by another
+  baseline/polkit command. Canonical process creation previously reserved only admission; bounded
+  completion was registered later by selected callers. That left a re-entrant gap while command
+  network effects were materialized and left a few loose entry paths without any finalizer.
+  Every bounded foreground child now claims a deterministic provisional lifetime and finalizer
+  immediately after state allocation, before dispatch or command/network side effects. Explicit
+  caller termination and process-owned transport holds may extend that claim, while deduplication
+  keeps one termination. A direct GDM regression creates `docker images` followed 75 ms later by
+  `git diff --stat`, proves the second start moves after the provisional end, and proves finalization
+  renders the first termination before the successor.
+- **Full-suite SMB correction:** the provisional reservation exposed a transport-anchored sibling
+  shell whose startup-readiness floor could consume the entire SMB deadline. Mounted CIFS copy and
+  move then fell back to the session's `systemd --user` process instead of materializing `cp`/`mv`.
+  Sibling shells now start early enough to satisfy the canonical readiness ceiling. The shared
+  process-hold contract also extends any already-registered foreground finalizer through dependent
+  action-bundle effects; the SMB bundle holds its user-space actor through the transport/operation
+  close even when CIFS transport attribution remains kernel-owned. This preserves `cp`/`mv` FILE
+  provenance while keeping the owning shell reserved until the extended termination. The exact
+  copy/upload-move/rename regressions passed, as did all 30 Linux SMB integration tests, 53 process
+  lifetime tests, and 197 related SMB/eCAR tests.
