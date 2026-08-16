@@ -57,7 +57,3 @@ The validator **fails** if any `ml_only` event with high ML score is labeled
 Aegis Decision Fabric consumes this envelope for composite confidence, gated
 remediation, and FP/TP feedback packs:
 <https://github.com/AAH20/aegis-decision-fabric>
-
-Secure Firewall + Splunk environments that want this plane under contract
-(Continuous Trust / paid pilot — not unpaid R&D):
-<https://a2zsoc.com/consultation>
