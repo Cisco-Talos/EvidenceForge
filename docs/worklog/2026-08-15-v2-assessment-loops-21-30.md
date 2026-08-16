@@ -279,3 +279,15 @@ and 1 skipped.
   overlap duration, and exemption counts. Add targeted assertions that the former DB sudo burst
   and workstation `git`/`cargo`/`kubectl` sequence contain zero unexplained overlaps, while at
   least one real pipeline remains concurrently visible.
+- **Rendered-probe correction:** the first corrected corpus still failed with 16 contradictions
+  (10 complete overlaps and 6 visible creates that appeared unbounded before a successor),
+  concentrated in the workstation GDM shell with three SSH-shell cases. Two missed contracts were
+  responsible. Transport-anchored Linux client processes used `source_visible_by` to bypass normal
+  admission and parent repair then returned them to the busy primary shell. They now select an
+  available same-session shell and materialize a sibling terminal/SSH-channel shell when the
+  transport deadline cannot fit the primary shell's reservation; the valid explicit sibling shell
+  parent is preserved through canonical parent sanitation. Separately, process termination events
+  now retain the create's `concurrency_group_id`, so source observation missingness cannot show a
+  grouped foreground create while independently dropping its bounded termination. Regression tests
+  cover a long-held GDM command followed by an anchored SSH client on a sibling shell and coherent
+  create/terminate observation grouping.

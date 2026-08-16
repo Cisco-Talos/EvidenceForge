@@ -7474,6 +7474,20 @@ class ActivityGenerator:
                 child_command_line=command_line,
                 source_visible_by=source_visible_by,
             )
+        elif os_category == "linux" and not resident_resource_owner:
+            prepared_owner = self._prepare_linux_foreground_connection_owner(
+                system=source_system,
+                user=user,
+                session=session,
+                process_time=process_time,
+                activity_time=time,
+                process_name=image,
+                command_line=command_line,
+                source_visible_by=source_visible_by,
+            )
+            if prepared_owner is None:
+                return -1, None
+            parent_pid, process_time = prepared_owner
         elif os_category == "linux":
             parent_pid = (
                 self._linux_non_shell_session_parent_pid(
@@ -8928,6 +8942,103 @@ class ActivityGenerator:
             if parent_pid is not None:
                 return parent_pid
         return None
+
+    def _prepare_linux_foreground_connection_owner(
+        self,
+        *,
+        system: System,
+        user: User,
+        session: ActiveSession,
+        process_time: datetime,
+        activity_time: datetime,
+        process_name: str,
+        command_line: str,
+        source_visible_by: datetime | None = None,
+    ) -> tuple[int, datetime] | None:
+        """Choose an available shell for an anchored Linux foreground client.
+
+        Connection owners must already be visible when their transport opens, so a
+        busy shell cannot simply move the command past that anchor.  Interactive
+        terminals and SSH connections can own more than one shell/channel; create a
+        sibling shell when every existing shell is reserved by foreground work.
+        """
+        process_time = ensure_utc(process_time)
+        deadline = ensure_utc(source_visible_by or activity_time)
+        if not _linux_shell_process_reserves_foreground(process_name, command_line):
+            parent_pid = self._linux_non_shell_session_parent_pid(
+                system=system,
+                time=process_time,
+                logon_id=session.logon_id,
+            )
+            return (parent_pid, process_time) if parent_pid is not None else None
+
+        shell_candidates = [
+            process
+            for process in self.state_manager.get_processes_on_system(system.hostname)
+            if process.username == user.username
+            and process.logon_id == session.logon_id
+            and process.image.rsplit("/", 1)[-1].lower() in {"bash", "sh", "zsh"}
+            and self._is_pid_active_at(system, process.pid, process_time)
+        ]
+        shell_candidates.sort(key=lambda process: process.start_time, reverse=True)
+        for shell in shell_candidates:
+            reserved_time = self._reserve_foreground_shell_time(
+                system=system,
+                username=user.username,
+                logon_id=session.logon_id,
+                parent_pid=shell.pid,
+                requested_time=process_time,
+                seed_text=command_line,
+            )
+            if reserved_time < deadline:
+                return shell.pid, reserved_time
+
+        non_shell_parent = self._linux_non_shell_session_parent_pid(
+            system=system,
+            time=process_time,
+            logon_id=session.logon_id,
+        )
+        if non_shell_parent is None:
+            return None
+        shell_seed = _stable_seed(
+            "linux-anchored-foreground-shell:"
+            f"{system.hostname}:{user.username}:{session.logon_id}:"
+            f"{command_line}:{process_time.isoformat()}"
+        )
+        session_floor = ensure_utc(session.start_time) + timedelta(milliseconds=100)
+        shell_time = max(
+            session_floor,
+            process_time - timedelta(milliseconds=1200 + (shell_seed % 4801)),
+        )
+        if shell_time >= process_time:
+            shell_time = process_time - timedelta(milliseconds=100)
+        if shell_time <= ensure_utc(session.start_time):
+            return None
+        shell_pid = self.generate_process(
+            user=user,
+            system=system,
+            time=shell_time,
+            logon_id=session.logon_id,
+            process_name="/bin/bash",
+            command_line="-bash",
+            parent_pid=non_shell_parent,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+            lifecycle_group_id=session.lifecycle_group_id,
+            source_visible_by=min(deadline, process_time - timedelta(milliseconds=1)),
+        )
+        reserved_time = self._reserve_foreground_shell_time(
+            system=system,
+            username=user.username,
+            logon_id=session.logon_id,
+            parent_pid=shell_pid,
+            requested_time=process_time,
+            seed_text=command_line,
+        )
+        if reserved_time >= deadline:
+            return None
+        return shell_pid, reserved_time
 
     def _ensure_browser_http_client_process(
         self,
@@ -14519,16 +14630,19 @@ class ActivityGenerator:
         if parent_pid is None:
             parent_pid = self._linux_anchor_pid(source_system, process_time)
 
-        process_time = self._reserve_foreground_shell_time(
+        prepared_owner = self._prepare_linux_foreground_connection_owner(
             system=source_system,
-            username=user.username,
-            logon_id=session.logon_id,
-            parent_pid=parent_pid,
-            requested_time=process_time,
-            seed_text=command_line,
+            user=user,
+            session=session,
+            process_time=process_time,
+            activity_time=requested_time,
+            process_name=image,
+            command_line=command_line,
+            source_visible_by=requested_time,
         )
-        if process_time >= requested_time:
-            process_time = requested_time - timedelta(milliseconds=800)
+        if prepared_owner is None:
+            return None
+        parent_pid, process_time = prepared_owner
         if not _session_active_for_activity(session, process_time, margin_seconds=0.5):
             return None
 
@@ -14930,6 +15044,9 @@ class ActivityGenerator:
                 username=process_username,
                 logon_id=process_logon_id,
                 start_time=running_proc.start_time if running_proc is not None else None,
+                concurrency_group_id=(
+                    running_proc.concurrency_group_id if running_proc is not None else ""
+                ),
             ),
             storyline_origin=from_storyline,
         )
@@ -29438,6 +29555,13 @@ class ActivityGenerator:
         ):
             parent_exe = parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
             if parent_exe in {"bash", "sh", "zsh"}:
+                if parent_proc.username == process_username and (
+                    not logon_id or parent_proc.logon_id == logon_id
+                ):
+                    # The caller may have deliberately selected a second
+                    # terminal/channel shell because the session's primary shell
+                    # is occupied. Preserve that concrete valid parent.
+                    return parent_pid
                 session = self.state_manager.get_session(logon_id)
                 if session is not None:
                     session_shell_pid = self.ensure_linux_session_shell(

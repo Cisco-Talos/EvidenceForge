@@ -519,6 +519,89 @@ def test_linux_unbounded_foreground_child_reserves_until_session_boundary() -> N
     assert reserved > session_end
 
 
+def test_anchored_linux_client_uses_sibling_shell_when_foreground_is_busy() -> None:
+    """A transport-anchored client cannot bypass or rewind a busy GDM shell."""
+    generator, state, system, user, logon_id, shell_pid, _events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    first_pid = generator.generate_process(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name="/usr/bin/npm",
+        command_line="npm run test",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+    )
+    generator._remember_process_connection_hold(
+        system=system,
+        pid=first_pid,
+        close_time=start + timedelta(minutes=30),
+    )
+    target = System(
+        hostname="APP-01",
+        ip="10.10.2.40",
+        os="Ubuntu 22.04",
+        type="server",
+    )
+
+    result = generator.ensure_linux_ssh_client_process(
+        user=user,
+        source_system=system,
+        target_system=target,
+        time=start + timedelta(minutes=5),
+        process_image="/usr/bin/ssh",
+        source_port=50222,
+    )
+
+    assert result is not None
+    second = state.get_process(system.hostname, result[0])
+    assert second is not None
+    assert second.parent_pid != shell_pid
+    sibling_shell = state.get_process(system.hostname, second.parent_pid)
+    assert sibling_shell is not None
+    assert sibling_shell.image == "/bin/bash"
+    assert sibling_shell.logon_id == logon_id
+
+
+def test_linux_process_termination_retains_observation_concurrency_group() -> None:
+    """eCAR missingness must keep one process create/terminate lifecycle together."""
+    generator, _state, system, user, logon_id, shell_pid, events = _linux_interactive_shell(
+        session_kind="ssh"
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    pid = generator.generate_process(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name="/usr/bin/ss",
+        command_line="ss -s",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+        concurrency_group_id="bash-history:ss-summary",
+    )
+    generator.generate_process_termination(
+        user=user,
+        system=system,
+        time=start + timedelta(seconds=2),
+        pid=pid,
+        process_name="/usr/bin/ss",
+        logon_id=logon_id,
+    )
+
+    termination = next(
+        event
+        for event in events
+        if getattr(event, "event_type", "") == "process_terminate"
+        and event.process is not None
+        and event.process.pid == pid
+    )
+    assert termination.process.concurrency_group_id == "bash-history:ss-summary"
+
+
 def test_linux_sudo_companions_share_shell_foreground_slot_across_ttys() -> None:
     """Loose sudo/admin companions cannot bypass serialization by selecting another TTY."""
     generator, _state, system, user, logon_id, shell_pid, events = _linux_interactive_shell(
