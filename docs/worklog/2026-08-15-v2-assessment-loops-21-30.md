@@ -371,6 +371,19 @@ and 1 skipped.
   The fixed scheduler family did not recur. Loop 28 will address the P0 SearchIndexer service-token
   and singleton-lifecycle contradiction.
 
+### Loop 28 outcome
+
+- Commit `387d3e62` classifies canonical System32 SearchIndexer as a protected boot-seeded singleton
+  with SYSTEM/0x3e7 identity while retaining SearchProtocolHost/SearchFilterHost worker families.
+- The full suite and Ruff passed. The strict probe found one stable SearchIndexer on each of nine
+  Windows hosts, zero overlaps/restarts/identity violations, and 54 helper creates aligned across
+  eCAR, Sysmon, and Security.
+- Automated evaluation scored 97.3877 over 78,902 records. Frozen review-data digest:
+  `46becc15b64ed72dac8eb7b93367fbdaf3b574829e73455ef36387017c216163`.
+- Standalone scores were 69/48/66/67 (average 62.5); deliberation converged on Synthetic at 68.25.
+  SearchIndexer did not recur. Loop 29 will repair the P0 Kerberos pre-authentication contract;
+  Loop 30 is expected to take the failed-SSH privilege-process lifecycle gap.
+
 ## Loop 25 — Windows remote-service payload lifecycle
 
 ### Family contract (before implementation)
