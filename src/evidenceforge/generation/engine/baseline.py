@@ -2676,6 +2676,28 @@ class BaselineMixin:
                 )
             if visible_parent is not None:
                 parent_pid = visible_parent
+            reserve_foreground = getattr(
+                activity_generator,
+                "reserve_linux_foreground_process_start",
+                None,
+            )
+            if callable(reserve_foreground):
+                reserved_process_time: object = reserve_foreground(
+                    system=system,
+                    username=user.username,
+                    logon_id="",
+                    parent_pid=parent_pid,
+                    requested_time=process_time,
+                    process_name=process_path,
+                    command_line=command_line,
+                )
+                # Compatibility adapters and test doubles may expose arbitrary
+                # callable attributes. Only consume this optional extension when
+                # it returns the concrete timestamp promised by the generator.
+                if isinstance(reserved_process_time, datetime):
+                    process_time = reserved_process_time
+                    if process_time >= timestamp:
+                        return None
             try:
                 pid = activity_generator.generate_process(
                     user=user,

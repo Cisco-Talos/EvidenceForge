@@ -2000,6 +2000,29 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
     return (1.0, 8.0)
 
 
+def _linux_shell_process_reserves_foreground(process_name: str, command_line: str) -> bool:
+    """Return whether a shell child owns its interactive shell's foreground slot."""
+    normalized = f" {command_line.strip().lower()} "
+    if not command_line.strip():
+        return False
+    if command_line.rstrip().endswith("&") or " nohup " in normalized:
+        return False
+    if any(pattern in normalized for pattern in (" tail -f ", " watch ", " --follow ")):
+        return False
+    if any(
+        marker in normalized
+        for marker in (
+            " tmux new-session -d ",
+            " tmux new -d ",
+            " screen -d -m ",
+            " setsid ",
+        )
+    ):
+        return False
+    exe_name = process_name.rsplit("/", 1)[-1].lower()
+    return exe_name not in {"code", "codium", "gnome-terminal", "konsole", "xterm"}
+
+
 _LINUX_ONE_SHOT_NETWORK_EXES: set[str] = {
     "apt",
     "apt-get",
@@ -4416,6 +4439,7 @@ class ActivityGenerator:
             tuple[datetime, Any, Any, OccurrenceBuilder, Any]
         ] = []
         self._foreground_shell_next_time: dict[tuple[str, str, str, int], datetime] = {}
+        self._foreground_shell_release_groups: dict[tuple[str, str, str, int], str] = {}
         self._foreground_process_finalizers: ExpiringIndex[
             tuple[str, int, datetime | None], tuple[System, str, str, str, datetime]
         ] = ExpiringIndex(deadline=lambda finalizer: finalizer[4].timestamp())
@@ -4559,6 +4583,11 @@ class ActivityGenerator:
             if self.state_manager.get_process(key[0], key[3]) is not None
             or next_time >= normalized_cutoff
         }
+        self._foreground_shell_release_groups = {
+            key: group_id
+            for key, group_id in self._foreground_shell_release_groups.items()
+            if key in self._foreground_shell_next_time
+        }
         systems_by_ip = getattr(self, "_ip_to_system", {})
         for responder_attribute in ("_ssh_responder_pids", "_smb_responder_pids"):
             responder_pids = getattr(self, responder_attribute, None)
@@ -4617,6 +4646,30 @@ class ActivityGenerator:
         running = self.state_manager.get_process(system.hostname, pid)
         if running is not None and running.logon_id:
             self.state_manager.update_session_activity_time(running.logon_id, close_time)
+        if (
+            running is not None
+            and _get_os_category(system.os) == "linux"
+            and _linux_shell_process_reserves_foreground(
+                running.image,
+                running.command_line,
+            )
+            and self._foreground_shell_key(
+                system=system,
+                username=running.username,
+                logon_id=running.logon_id,
+                parent_pid=running.parent_pid,
+            )
+            is not None
+        ):
+            self._remember_foreground_shell_available(
+                system=system,
+                username=running.username,
+                logon_id=running.logon_id,
+                parent_pid=running.parent_pid,
+                termination_time=close_time,
+                seed_text=running.command_line,
+                concurrency_group_id=running.concurrency_group_id,
+            )
 
     def _held_process_termination_time(
         self,
@@ -4662,6 +4715,31 @@ class ActivityGenerator:
             logon_id,
             ensure_utc(termination_time),
         )
+        running = self.state_manager.get_process(system.hostname, pid)
+        if (
+            running is not None
+            and _get_os_category(system.os) == "linux"
+            and _linux_shell_process_reserves_foreground(
+                running.image,
+                running.command_line,
+            )
+            and self._foreground_shell_key(
+                system=system,
+                username=running.username,
+                logon_id=running.logon_id,
+                parent_pid=running.parent_pid,
+            )
+            is not None
+        ):
+            self._remember_foreground_shell_available(
+                system=system,
+                username=running.username,
+                logon_id=running.logon_id,
+                parent_pid=running.parent_pid,
+                termination_time=termination_time,
+                seed_text=running.command_line,
+                concurrency_group_id=running.concurrency_group_id,
+            )
 
     def foreground_process_termination_time(self, hostname: str, pid: int) -> datetime | None:
         """Return the canonical bounded-process deadline, when one is registered."""
@@ -4835,6 +4913,7 @@ class ActivityGenerator:
         parent_pid: int,
         requested_time: datetime,
         seed_text: str,
+        concurrency_group_id: str = "",
     ) -> datetime:
         """Delay a new foreground command until the same interactive shell is free."""
         key = self._foreground_shell_key(
@@ -4860,6 +4939,11 @@ class ActivityGenerator:
         next_time = self._foreground_shell_next_time.get(key)
         if next_time is None or requested_time >= next_time:
             return requested_time
+        if (
+            concurrency_group_id
+            and self._foreground_shell_release_groups.get(key) == concurrency_group_id
+        ):
+            return requested_time
         rng = random.Random(
             _stable_seed(
                 f"foreground_shell_gap:{system.hostname}:{username}:{logon_id}:"
@@ -4877,6 +4961,7 @@ class ActivityGenerator:
         parent_pid: int,
         termination_time: datetime,
         seed_text: str,
+        concurrency_group_id: str = "",
     ) -> None:
         """Remember when an interactive Linux shell can plausibly accept more input."""
         rng = random.Random(
@@ -4908,6 +4993,8 @@ class ActivityGenerator:
             release_time,
             self._foreground_shell_next_time.get(key, release_time),
         )
+        if self._foreground_shell_next_time[key] == release_time:
+            self._foreground_shell_release_groups[key] = concurrency_group_id
 
     def reserve_linux_foreground_process_start(
         self,
@@ -13099,6 +13186,31 @@ class ActivityGenerator:
         repaired_parent = self.state_manager.get_process(system.hostname, parent_pid)
         if repaired_parent is not None and time <= repaired_parent.start_time:
             time = repaired_parent.start_time + timedelta(milliseconds=50)
+        if (
+            _get_os_category(system.os) == "linux"
+            and source_visible_by is None
+            and _linux_shell_process_reserves_foreground(process_name, command_line)
+            and _linux_foreground_lifetime(process_name, command_line) is not None
+        ):
+            time = self._reserve_foreground_shell_time(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                parent_pid=parent_pid,
+                requested_time=ensure_utc(time),
+                seed_text=command_line,
+                concurrency_group_id=concurrency_group_id,
+            )
+            if (
+                session_end_plan is not None
+                and session_end_plan.is_authoritative
+                and time >= ensure_utc(session_end_plan.canonical_end)
+            ):
+                raise StateError(
+                    "Foreground process cannot begin after its owning shell session ends: "
+                    f"{system.hostname} logon_id={process_logon_id} "
+                    f"time={time.isoformat()}"
+                )
         if not from_storyline:
             if source_visible_by is None:
                 spaced_time = self._space_interactive_shell_child_launch(
@@ -13131,6 +13243,7 @@ class ActivityGenerator:
             integrity_level=_integrity,
             logon_id=process_logon_id,
             lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
+            concurrency_group_id=concurrency_group_id,
         )
 
         # Phase 2: Build OccurrenceBuilder
@@ -13139,6 +13252,39 @@ class ActivityGenerator:
             session = self.state_manager.get_session(running_proc.logon_id)
             if session is not None:
                 session.last_activity_time = time
+        if (
+            running_proc is not None
+            and _get_os_category(system.os) == "linux"
+            and _linux_shell_process_reserves_foreground(process_name, command_line)
+            and _linux_foreground_lifetime(process_name, command_line) is None
+            and self._foreground_shell_key(
+                system=system,
+                username=running_proc.username,
+                logon_id=running_proc.logon_id,
+                parent_pid=running_proc.parent_pid,
+            )
+            is not None
+        ):
+            owning_session = self.state_manager.get_session(running_proc.logon_id)
+            shell_deadline = (
+                self.state_manager.get_session_end_time(running_proc.logon_id)
+                if running_proc.logon_id
+                else None
+            )
+            if shell_deadline is None and owning_session is not None:
+                shell_deadline = owning_session.network_close_time
+            if shell_deadline is None:
+                shell_deadline = getattr(self, "_scenario_end_time", None)
+            if shell_deadline is not None:
+                self._remember_foreground_shell_available(
+                    system=system,
+                    username=running_proc.username,
+                    logon_id=running_proc.logon_id,
+                    parent_pid=running_proc.parent_pid,
+                    termination_time=ensure_utc(shell_deadline),
+                    seed_text=running_proc.command_line,
+                    concurrency_group_id=running_proc.concurrency_group_id,
+                )
         self.state_manager.get_process_object_id(system.hostname, pid)
         self.state_manager.get_process_object_id(system.hostname, parent_pid)
         process_session_id = self._session_id_for_logon(process_logon_id)
@@ -14789,6 +14935,36 @@ class ActivityGenerator:
         )
 
         self._record_process_source_terminate_time(system.hostname, pid, event)
+        if (
+            running_proc is not None
+            and _get_os_category(system.os) == "linux"
+            and _linux_shell_process_reserves_foreground(
+                running_proc.image,
+                running_proc.command_line,
+            )
+            and self._foreground_shell_key(
+                system=system,
+                username=running_proc.username,
+                logon_id=running_proc.logon_id,
+                parent_pid=running_proc.parent_pid,
+            )
+            is not None
+        ):
+            visible_termination = self.process_source_terminate_time(system.hostname, pid)
+            self._remember_foreground_shell_available(
+                system=system,
+                username=running_proc.username,
+                logon_id=running_proc.logon_id,
+                parent_pid=running_proc.parent_pid,
+                termination_time=max(
+                    ensure_utc(event.timestamp),
+                    ensure_utc(visible_termination)
+                    if visible_termination is not None
+                    else ensure_utc(event.timestamp),
+                ),
+                seed_text=running_proc.command_line,
+                concurrency_group_id=running_proc.concurrency_group_id,
+            )
         self.dispatcher.dispatch_builder(event)
         termination_start_time = event.process.start_time if event.process is not None else None
         termination_key = (system.hostname, pid, termination_start_time)
@@ -20468,6 +20644,7 @@ class ActivityGenerator:
                     parent_pid=parent_pid,
                     requested_time=time + timedelta(milliseconds=rng.randint(20, 180)),
                     seed_text=command,
+                    concurrency_group_id=concurrency_group_id,
                 )
             process_time = base_process_time + timedelta(milliseconds=index * 35)
             if not self._is_within_scenario_window(process_time):
@@ -20517,6 +20694,7 @@ class ActivityGenerator:
                 parent_pid=parent_pid,
                 termination_time=termination_time,
                 seed_text=process_command_line,
+                concurrency_group_id=concurrency_group_id,
             )
 
     def _prepare_bash_process_session(
@@ -22681,17 +22859,6 @@ class ActivityGenerator:
                     parent_pid = self._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
-                    if os_category == "linux":
-                        process_time = self._reserve_foreground_shell_time(
-                            system=system,
-                            username=user.username,
-                            logon_id=logon_id,
-                            parent_pid=parent_pid,
-                            requested_time=process_time,
-                            seed_text=shell_command_line,
-                        )
-                        if not self._is_within_scenario_window(process_time):
-                            return
                     bash_history_group_id = (
                         self._bash_history_process_group_id(
                             user,
@@ -22702,6 +22869,18 @@ class ActivityGenerator:
                         if os_category == "linux"
                         else ""
                     )
+                    if os_category == "linux":
+                        process_time = self._reserve_foreground_shell_time(
+                            system=system,
+                            username=user.username,
+                            logon_id=logon_id,
+                            parent_pid=parent_pid,
+                            requested_time=process_time,
+                            seed_text=shell_command_line,
+                            concurrency_group_id=bash_history_group_id,
+                        )
+                        if not self._is_within_scenario_window(process_time):
+                            return
                     pid = -1
                     created_processes: list[tuple[int, str, str, datetime]] = []
                     for process_index, (
@@ -22872,6 +23051,7 @@ class ActivityGenerator:
                                 parent_pid=parent_pid,
                                 termination_time=termination_time,
                                 seed_text=source_command_line,
+                                concurrency_group_id=bash_history_group_id,
                             )
 
             # Legacy PROCESS_TEMPLATES only for process_system (not user apps/code/build/query)
@@ -26499,6 +26679,21 @@ class ActivityGenerator:
         )
         if shell_pid is None:
             return 0, None, timing_shift, assigned_tty
+        reserved_sudo_time = self.reserve_linux_foreground_process_start(
+            system=system,
+            username=user.username,
+            logon_id=session.logon_id,
+            parent_pid=shell_pid,
+            requested_time=effective_sudo_time,
+            process_name="/usr/bin/sudo",
+            command_line=f"sudo {command}",
+        )
+        shell_shift = reserved_sudo_time - effective_sudo_time
+        effective_sudo_time = reserved_sudo_time
+        child_time += shell_shift
+        reserve_until += shell_shift
+        timing_shift += shell_shift
+        tty_available[tty_key] = reserve_until
         sudo_pid = self.generate_process(
             user=user,
             system=system,

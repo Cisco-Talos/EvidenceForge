@@ -15,6 +15,7 @@ from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import (
     _linux_foreground_lifetime,
+    _linux_shell_process_reserves_foreground,
     _session_active_for_activity,
     _windows_foreground_lifetime,
 )
@@ -40,6 +41,64 @@ def _process(image: str, command_line: str, start_time: datetime) -> RunningProc
         start_time=start_time,
         integrity_level="Medium",
     )
+
+
+def _linux_interactive_shell(
+    *,
+    session_kind: str,
+) -> tuple[ActivityGenerator, StateManager, System, User, str, int, list[object]]:
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start - timedelta(minutes=5))
+    events = []
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    original_dispatch = dispatcher.dispatch
+
+    def capture(event):
+        events.append(event)
+        original_dispatch(event)
+
+    dispatcher.dispatch = capture
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.local")
+    system = System(
+        hostname="LNX-01",
+        ip="10.10.2.30",
+        os="Ubuntu 22.04",
+        type="server" if session_kind == "ssh" else "workstation",
+        assigned_user=None if session_kind == "ssh" else user.username,
+    )
+    root_image = "/usr/sbin/sshd" if session_kind == "ssh" else "/usr/libexec/gnome-terminal-server"
+    root_pid = state.create_process(
+        system.hostname,
+        0,
+        root_image,
+        root_image,
+        "root" if session_kind == "ssh" else user.username,
+        "System" if session_kind == "ssh" else "Medium",
+    )
+    logon_id = state.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=10 if session_kind == "ssh" else 2,
+        source_ip="10.10.1.20" if session_kind == "ssh" else "-",
+        start_time=start - timedelta(minutes=4),
+        session_kind=session_kind,
+    )
+    state.set_current_time(start - timedelta(minutes=3))
+    shell_pid = state.create_process(
+        system.hostname,
+        root_pid,
+        "/bin/bash",
+        "-bash",
+        user.username,
+        "Medium",
+        logon_id=logon_id,
+    )
+    session = state.get_session(logon_id)
+    assert session is not None
+    session.session_shell_pid = shell_pid
+    return generator, state, system, user, logon_id, shell_pid, events
 
 
 def test_sqlcmd_select_query_has_bounded_foreground_lifetime() -> None:
@@ -305,6 +364,216 @@ def test_linux_io_commands_have_source_visible_lifetimes(
 
     assert lifetime is not None
     assert lifetime[0] >= minimum
+
+
+@pytest.mark.parametrize("session_kind", ["ssh", "interactive"])
+def test_linux_shell_serializes_unrelated_foreground_children(session_kind: str) -> None:
+    """SSH and local/GDM shells reject overlapping unrelated foreground jobs."""
+    generator, _state, system, user, logon_id, shell_pid, events = _linux_interactive_shell(
+        session_kind=session_kind
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    first_pid = generator.generate_process(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name="/usr/bin/git",
+        command_line="git status",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+        concurrency_group_id="foreground:first",
+    )
+    generator.generate_process_termination(
+        user=user,
+        system=system,
+        time=start + timedelta(seconds=20),
+        pid=first_pid,
+        process_name="/usr/bin/git",
+        logon_id=logon_id,
+    )
+    generator.generate_process(
+        user=user,
+        system=system,
+        time=start + timedelta(seconds=1),
+        logon_id=logon_id,
+        process_name="/usr/bin/kubectl",
+        command_line="kubectl get nodes -o wide",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+        concurrency_group_id="foreground:second",
+    )
+
+    creates = {
+        event.process.command_line: event.timestamp
+        for event in events
+        if getattr(event, "event_type", "") == "process_create"
+        and getattr(event, "process", None) is not None
+    }
+    first_termination = next(
+        event.timestamp
+        for event in events
+        if getattr(event, "event_type", "") == "process_terminate"
+        and event.process is not None
+        and event.process.pid == first_pid
+    )
+    assert creates["kubectl get nodes -o wide"] > first_termination
+
+
+def test_linux_shell_allows_pipeline_and_background_concurrency() -> None:
+    """True pipeline peers and explicit background jobs do not serialize as unrelated work."""
+    generator, _state, system, user, logon_id, shell_pid, events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    pipeline_group = "bash-history:pipeline"
+    grep_pid = generator.generate_process(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name="/usr/bin/grep",
+        command_line="grep ERROR /var/log/syslog",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+        concurrency_group_id=pipeline_group,
+    )
+    generator.generate_process_termination(
+        user=user,
+        system=system,
+        time=start + timedelta(seconds=8),
+        pid=grep_pid,
+        process_name="/usr/bin/grep",
+        logon_id=logon_id,
+    )
+    generator.generate_process(
+        user=user,
+        system=system,
+        time=start + timedelta(milliseconds=35),
+        logon_id=logon_id,
+        process_name="/usr/bin/head",
+        command_line="head -20",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+        concurrency_group_id=pipeline_group,
+    )
+    generator.generate_process(
+        user=user,
+        system=system,
+        time=start + timedelta(seconds=10),
+        logon_id=logon_id,
+        process_name="/usr/bin/tail",
+        command_line="tail -f /var/log/syslog &",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+        concurrency_group_id="background:tail",
+    )
+
+    creates = {
+        event.process.command_line: event.timestamp
+        for event in events
+        if getattr(event, "event_type", "") == "process_create"
+        and getattr(event, "process", None) is not None
+    }
+    assert creates["head -20"] < start + timedelta(seconds=1)
+    assert creates["tail -f /var/log/syslog &"] == start + timedelta(seconds=10)
+    assert _linux_shell_process_reserves_foreground("/usr/bin/grep", "grep ERROR")
+    assert not _linux_shell_process_reserves_foreground(
+        "/usr/bin/tail", "tail -f /var/log/syslog &"
+    )
+    assert not _linux_shell_process_reserves_foreground(
+        "/usr/bin/code", "code --no-sandbox /srv/app"
+    )
+
+
+def test_linux_unbounded_foreground_child_reserves_until_session_boundary() -> None:
+    """A hung or interactive foreground child blocks siblings through session teardown."""
+    generator, state, system, user, logon_id, shell_pid, _events = _linux_interactive_shell(
+        session_kind="ssh"
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    session_end = start + timedelta(minutes=12)
+    state.update_session_metadata(logon_id, network_close_time=session_end)
+    generator.generate_process(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name="/usr/bin/smbclient",
+        command_line="smbclient //FILE-SRV/Shared",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+        concurrency_group_id="foreground:interactive-smbclient",
+    )
+
+    reserved = generator.reserve_linux_foreground_process_start(
+        system=system,
+        username=user.username,
+        logon_id=logon_id,
+        parent_pid=shell_pid,
+        requested_time=start + timedelta(seconds=30),
+        process_name="/usr/bin/hostname",
+        command_line="hostname -f",
+    )
+
+    assert reserved > session_end
+
+
+def test_linux_sudo_companions_share_shell_foreground_slot_across_ttys() -> None:
+    """Loose sudo/admin companions cannot bypass serialization by selecting another TTY."""
+    generator, _state, system, user, logon_id, shell_pid, events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    first_sudo, first_child, _, _ = generator.generate_linux_sudo_processes(
+        system=system,
+        sudo_time=start,
+        child_time=start + timedelta(milliseconds=200),
+        sudo_user=user.username,
+        tty="pts/1",
+        command="/usr/bin/journalctl -u sshd -n 40",
+        reserve_until=start + timedelta(seconds=10),
+        lifecycle_group_id="sudo:first",
+    )
+    assert first_child is not None
+    generator.terminate_linux_sudo_process(
+        system=system,
+        time=start + timedelta(seconds=9),
+        pid=first_child,
+    )
+    generator.terminate_linux_sudo_process(
+        system=system,
+        time=start + timedelta(seconds=10),
+        pid=first_sudo,
+    )
+    second_sudo, _second_child, _, _ = generator.generate_linux_sudo_processes(
+        system=system,
+        sudo_time=start + timedelta(milliseconds=100),
+        child_time=start + timedelta(milliseconds=300),
+        sudo_user=user.username,
+        tty="pts/2",
+        command="/usr/sbin/iptables -L -n -v",
+        reserve_until=start + timedelta(seconds=6),
+        lifecycle_group_id="sudo:second",
+    )
+
+    creates = {
+        event.process.pid: event.timestamp
+        for event in events
+        if getattr(event, "event_type", "") == "process_create"
+        and getattr(event, "process", None) is not None
+    }
+    first_termination = next(
+        event.timestamp
+        for event in events
+        if getattr(event, "event_type", "") == "process_terminate"
+        and event.process is not None
+        and event.process.pid == first_sudo
+    )
+    assert creates[first_sudo] < first_termination < creates[second_sudo]
+    assert creates[first_sudo] >= start
+    assert creates[second_sudo] > start + timedelta(seconds=10)
+    assert shell_pid > 0 and logon_id
 
 
 def test_ssh_session_activity_stops_before_transport_close() -> None:

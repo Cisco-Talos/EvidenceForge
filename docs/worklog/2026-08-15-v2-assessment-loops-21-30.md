@@ -203,3 +203,79 @@ and 1 skipped.
 - Verification: 71 focused timing/config/update tests passed. The broader SMB/storage/source-
   timing/network-observation suite passed 228 tests. `eforge validate-config` passed 93 files with
   zero issues; Ruff check/format and `git diff --check` passed.
+
+### Loop 23 outcome
+
+- Commit `f4b549ec`; full suite 6,029 passed with 22 skips. Evaluation scored 96.8268/100 over
+  71,618 records. The rendered probe passed all 8 transfers and 10 mappings, with 8/8 distinct
+  rounded rates, a 2.222 max/min rate ratio, exact post-update FUID/size agreement, and no 2.5s
+  duration floor.
+- Frozen corpus SHA-256 remained
+  `0ab041b1ef720f8449259e71d3c0d3cb1c4cb31243d1bea36c841d3c6fae0256` before and after review.
+  Standalone scores were 68/32/46/89 (mean 58.75); required deliberation revised the mean to 70.0.
+- The SMB finding did not recur. The next P0 is overlapping non-backgrounded foreground commands
+  under one Linux shell; PSEXESVC delivery timing, inventory-shaped scan expansion, endpoint actor
+  omission, and role-insensitive baseline palettes remain follow-ups.
+
+## Loop 24 — Linux interactive foreground-job serialization
+
+### Family contract (before implementation)
+
+- **Accepted finding and classification:** the Loop 23 Host review found repeated visible
+  `hard_contradiction` evidence where one Linux interactive shell launched unrelated foreground
+  commands before earlier children terminated. This is a `new_family` process-lifecycle defect,
+  including both nearly simultaneous polkit/admin commands and long-lived developer commands such
+  as `git`, `cargo`, and `kubectl` followed by later siblings.
+- **Owning layer:** the Linux shell-command action/process scheduling layer owns foreground-job
+  admission and canonical process lifetime. `ActivityGenerator` owns the shared shell reservation
+  and completion state used by bash-history, baseline catalog, storyline, SSH, local console/GDM,
+  and loose user-CLI companion paths. eCAR and other endpoint emitters only project that truth.
+- **Invariant:** for one concrete interactive shell PID, unrelated non-backgrounded foreground
+  child intervals must never overlap. True stages of the same explicit pipeline may overlap;
+  commands explicitly backgrounded with shell syntax, terminal-multiplexer launches, detached GUI
+  clients, and service/daemon helpers do not reserve the foreground slot. A bounded or hung/long
+  foreground child blocks later unrelated children through its canonical/source-visible completion
+  or owning session boundary.
+- **Entry paths:** direct `LinuxShellCommandActionBundle` process inference; application-catalog and
+  legacy baseline process activity; typed storyline process events; SSH source clients; SSH/local
+  console/GDM session shells; polkit/user-CLI companions; explicit pipelines and compound commands.
+  Raw system/service processes whose parent is not an interactive shell are intentionally outside
+  the foreground-job contract.
+- **Consumers:** canonical `RunningProcess` state and process create/terminate occurrences, eCAR
+  process lifecycle, bash history, Linux session teardown, process-owned network attribution, and
+  the rendered no-overlap hard probe.
+- **Layer rationale:** only shared shell scheduling can prevent sibling callers from creating the
+  contradiction. Changing eCAR timestamps would conceal incorrect canonical lifecycles, while
+  patching the two observed commands or one baseline caller would leave the other entry paths open.
+- **Sibling risks and verification:** preserve legitimate same-pipeline concurrency and explicit
+  background/detached work; cover SSH and local/GDM ownership, loose polkit-style CLI creation,
+  long/hung foreground siblings, and session-bound behavior. The rendered probe must group eCAR
+  process intervals by host and shell PID, reject overlapping unrelated foreground children wholly
+  visible in-window, and separately report pipeline/background/detached exemptions.
+
+### Implementation handoff
+
+- `ActivityGenerator` now enforces foreground admission after canonical Linux parent repair, so
+  every bounded process whose real parent is an interactive `bash`/`sh`/`zsh` observes the shared
+  shell reservation even when its caller omitted explicit scheduling. Canonical `RunningProcess`
+  state retains the pipeline concurrency-group identity through termination.
+- Process finalizers, process-owned transport holds, unbounded foreground session boundaries, and
+  source-visible termination observations all advance the same shell release watermark. Repeated
+  caller bookkeeping remains idempotent. Same-group pipeline stages may overlap; explicit `&`,
+  `nohup`, detached `tmux`/`screen`/`setsid`, terminal-follow commands, and detached GUI terminals
+  and editors do not occupy the foreground slot.
+- Linux sudo generation now reserves the concrete session shell before creating `sudo` and shifts
+  its elevated child, PAM runtime, TTY reservation, and returned timing delta together. Loose
+  polkit CLI companions use the same public reservation and are omitted when no pre-authorization
+  slot remains, rather than being rendered after their authorization evidence.
+- Focused shell/process tests passed 481/481. Broader state, sudo, bash-history, baseline,
+  storyline, SSH/world-model, eCAR, and process-family validation passed 1,057 tests with one
+  skip across the two broad runs. Ruff check, Ruff format check, and `git diff --check` passed.
+- **Rendered hard-probe design:** inside the strict review window, index eCAR `PROCESS/CREATE` and
+  `PROCESS/TERMINATE` by `(host, objectID)`, then group complete child intervals by parent shell
+  `(host, ppid)` after proving that parent is `bash`/`sh`/`zsh`. Classify explicit background,
+  detached/multiplexer, and same-command pipeline cohorts separately. Fail when two complete,
+  unrelated foreground intervals overlap; report host, shell PID, both commands, interval bounds,
+  overlap duration, and exemption counts. Add targeted assertions that the former DB sudo burst
+  and workstation `git`/`cargo`/`kubectl` sequence contain zero unexplained overlaps, while at
+  least one real pipeline remains concurrently visible.

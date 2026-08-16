@@ -496,6 +496,7 @@ def test_polkit_action_messages_materialize_companion_process(linux_system, stat
     assert call["user"].username == "deploy"
     assert call["time"] < timestamp
     assert call["source_visible_by"] == timestamp
+    assert engine.activity_generator.reserve_linux_foreground_process_start.called
     assert (
         engine.activity_generator.ensure_linux_visible_shell_parent.call_args.kwargs[
             "source_visible_by"

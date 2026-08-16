@@ -1734,6 +1734,7 @@ class StateManager:
         logon_id: str = "",
         lifecycle_group_id: str = "",
         parent_lifecycle_group_id: str = "",
+        concurrency_group_id: str = "",
     ) -> int:
         """Create a new running process.
 
@@ -1831,6 +1832,7 @@ class StateManager:
                 ecar_object_id=ecar_object_id,
                 lifecycle_group_id=process_lifecycle_group_id,
                 parent_lifecycle_group_id=process_parent_group_id,
+                concurrency_group_id=concurrency_group_id,
                 pid_logical_position=pid_logical_position,
             )
 

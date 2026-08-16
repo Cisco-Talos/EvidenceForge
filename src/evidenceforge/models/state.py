@@ -133,6 +133,7 @@ class RunningProcess:
     primary_tid: int = -1
     lifecycle_group_id: str = ""
     parent_lifecycle_group_id: str = ""
+    concurrency_group_id: str = ""
     pid_logical_position: int = -1
     end_time: datetime | None = None
 
