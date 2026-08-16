@@ -10,7 +10,12 @@ from pydantic import ValidationError
 
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.workload import WorkloadLimits, estimate_workload
-from evidenceforge.models.scenario import BeaconEventSpec, Scenario
+from evidenceforge.models.scenario import (
+    BeaconEventSpec,
+    ProcessEventSpec,
+    Scenario,
+    StorylineEvent,
+)
 from evidenceforge.utils.files import load_yaml
 from evidenceforge.validation import ScenarioValidator
 
@@ -78,3 +83,34 @@ def test_periodic_rate_must_be_finite() -> None:
 
     with pytest.raises(ValidationError, match="rate must be finite"):
         BeaconEventSpec(dst_ip="198.51.100.10", rate=float("inf"), count=1)
+
+
+def test_workload_estimate_counts_full_small_cidr_nmap_expansion() -> None:
+    """A five-port /24 process command must reserve all 1,270 canonical probes."""
+
+    base = _minimal_scenario()
+    scenario = base.model_copy(
+        update={
+            "storyline": [
+                StorylineEvent(
+                    id="scan",
+                    time="+10m",
+                    actor="test_user",
+                    system="TEST-01",
+                    activity="Inventory scan",
+                    events=[
+                        ProcessEventSpec(
+                            process_name="nmap",
+                            command_line="nmap -sT -p 22,80,443,445,3306 10.10.2.0/24",
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    estimate = estimate_workload(scenario)
+
+    assert estimate.explicit_occurrences == 254 * 5
+    assert estimate.canonical_occurrences >= estimate.explicit_occurrences * 8
+    assert estimate.limit_violations == ()

@@ -22,6 +22,7 @@
 
 """Unit tests for activity generation."""
 
+import ipaddress
 import random
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -81,6 +82,7 @@ from evidenceforge.generation.actions import (
     NetworkConnectionActionBundle,
     NetworkConnectionRequest,
     NmapCommandProbeActionBundle,
+    NmapCommandProbePlanner,
     NmapCommandProbeRequest,
     NtlmValidationActionBundle,
     NtlmValidationRequest,
@@ -3440,7 +3442,27 @@ class TestActivityGenerator:
             and call.args[0].network.initiating_pid == pid
         ]
         assert probe_requests
-        assert {request["dst_ip"] for request in probe_requests} == {target_a.ip, target_b.ip}
+        observed_targets = {request["dst_ip"] for request in probe_requests}
+        assert {target_a.ip, target_b.ip} < observed_targets
+        silent_targets = observed_targets - {target_a.ip, target_b.ip}
+        assert len(observed_targets) == 254
+        assert silent_targets == {
+            str(address) for address in ipaddress.ip_network("10.10.2.0/24").hosts()
+        } - {target_a.ip, target_b.ip}
+        assert len(probe_requests) == 1270
+        assert max(request["time"] for request in probe_requests) - timestamp <= timedelta(
+            seconds=12.01
+        )
+        assert all(
+            request["conn_state"] == "S0" and request["resp_bytes"] == 0
+            for request in probe_requests
+            if request["dst_ip"] in silent_targets
+        )
+        assert all(
+            {request["dst_port"] for request in probe_requests if request["dst_ip"] == target}
+            == {22, 80, 443, 445, 3306}
+            for target in observed_targets
+        )
         assert {request["dst_port"] for request in probe_requests} >= {22, 80, 443, 445, 3306}
         assert {request.get("service") for request in probe_requests if request.get("service")} >= {
             "ssh",
@@ -3453,7 +3475,7 @@ class TestActivityGenerator:
             request["suppress_application_side_effects"] is True for request in probe_requests
         )
         assert scan_events
-        assert {event.network.dst_ip for event in scan_events} == {target_a.ip, target_b.ip}
+        assert {target_a.ip, target_b.ip} <= {event.network.dst_ip for event in scan_events}
         assert {event.network.dst_port for event in scan_events} >= {22, 80, 443, 445}
         assert len({event.network.conn_state for event in scan_events}) > 1
         assert any(event.network.conn_state in {"S0", "REJ"} for event in scan_events)
@@ -3462,6 +3484,11 @@ class TestActivityGenerator:
         assert all(event.protocol.leaf_certificate is None for event in scan_events)
         assert all(event.protocol.ocsp is None for event in scan_events)
         assert all(event.protocol.primary_file_transfer is None for event in scan_events)
+        max_scan_close = max(
+            event.network.closed_at for event in scan_events if event.network.closed_at is not None
+        )
+        process_key = activity_gen._process_instance_key(source.hostname, pid)
+        assert activity_gen._process_connection_hold_until[process_key] >= max_scan_close
 
     def test_nmap_command_probe_bundle_anchor_is_stable(self, test_user):
         """Nmap command probe bundles should expose deterministic anchors."""
@@ -3510,21 +3537,142 @@ class TestActivityGenerator:
 
         executor._execute_nmap_command_probe_bundle.assert_called_once_with(request)
 
-    def test_resolve_nmap_targets_limits_fallback_cidr_expansion(self, activity_gen):
-        """CIDR fallback expansion should cap to eight hosts without materializing whole ranges."""
+    def test_nmap_planner_bounds_broad_cidr_and_retains_silent_targets(self, test_user):
+        """Broad CIDRs should be bounded while retaining unmodeled address-space probes."""
         source = System(
             hostname="WEB-01",
             ip="10.10.3.10",
             os="Ubuntu 22.04",
             type="server",
         )
-        activity_gen._ip_to_system = {source.ip: source}
+        request = NmapCommandProbeRequest(
+            user=test_user,
+            system=source,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            pid=4242,
+            process_name="/usr/bin/nmap",
+            command_line="nmap -p 80 1.0.0.0/8",
+        )
+        profile = SimpleNamespace(
+            full_cidr_max_hosts=256,
+            max_expanded_targets=256,
+            large_cidr_connect_targets=20,
+            large_cidr_discovery_targets=24,
+            large_cidr_unmodeled_targets=12,
+            max_ports=12,
+            connect_window_seconds_min=6.0,
+            connect_window_seconds_max=12.0,
+            discovery_window_seconds_min=2.0,
+            discovery_window_seconds_max=5.0,
+        )
 
-        targets = activity_gen._resolve_nmap_targets("nmap -p 80 1.0.0.0/8", source)
+        plan = NmapCommandProbePlanner(profile).plan(request, {source.ip: source})
 
-        assert len(targets) == 8
-        assert targets[0] == "1.0.0.1"
-        assert targets[-1] == "1.0.0.8"
+        assert plan is not None
+        assert len(plan.targets) == profile.large_cidr_connect_targets
+        assert len(plan.targets) <= profile.max_expanded_targets
+        assert all(not target.modeled for target in plan.targets)
+        assert len({target.ip for target in plan.targets}) == len(plan.targets)
+        second_octets = {int(target.ip.split(".")[1]) for target in plan.targets}
+        assert min(second_octets) < 20
+        assert max(second_octets) > 230
+
+    def test_nmap_ping_scan_emits_modeled_replies_and_silent_attempts(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+    ):
+        """Nmap -sn should emit bounded process-owned ICMP discovery evidence."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(hostname="SCAN-01", ip="10.10.3.10", os="Ubuntu 22.04", type="server")
+        target = System(hostname="APP-01", ip="10.10.2.30", os="Ubuntu 22.04", type="server")
+        activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        state_manager.set_current_time(timestamp)
+        requests: list[dict] = []
+        original_generate_connection = activity_gen.generate_connection
+
+        def capture_probe_connection(**kwargs):
+            if kwargs.get("process_image") == "/usr/bin/nmap":
+                requests.append(dict(kwargs))
+            return original_generate_connection(**kwargs)
+
+        monkeypatch.setattr(activity_gen, "generate_connection", capture_probe_connection)
+        pid = activity_gen.generate_process(
+            user=test_user,
+            system=source,
+            time=timestamp,
+            logon_id="0x123",
+            process_name="/usr/bin/nmap",
+            command_line="nmap -sn 10.10.2.0/24",
+            parent_pid=0,
+        )
+
+        assert requests
+        assert all(request["proto"] == "icmp" and request["pid"] == pid for request in requests)
+        modeled = [request for request in requests if request["dst_ip"] == target.ip]
+        silent = [request for request in requests if request["dst_ip"] != target.ip]
+        assert len(modeled) == 1
+        assert modeled[0]["resp_bytes"] == modeled[0]["orig_bytes"]
+        assert len(requests) == 254
+        assert len(silent) == 253
+        assert all(request["resp_bytes"] == 0 for request in silent)
+        rendered = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.protocol == "icmp"
+            and call.args[0].network.initiating_pid == pid
+        ]
+        assert len(rendered) == len(requests)
+        modeled_rendered = [event for event in rendered if event.network.dst_ip == target.ip]
+        silent_rendered = [event for event in rendered if event.network.dst_ip != target.ip]
+        assert modeled_rendered[0].network.orig_pkts == 1
+        assert modeled_rendered[0].network.resp_pkts == 1
+        assert all(event.network.orig_pkts == 1 for event in silent_rendered)
+        assert all(event.network.resp_pkts == 0 for event in silent_rendered)
+        max_close = max(
+            event.network.closed_at for event in rendered if event.network.closed_at is not None
+        )
+        process_key = activity_gen._process_instance_key(source.hostname, pid)
+        assert activity_gen._process_connection_hold_until[process_key] >= max_close
+        process = state_manager.get_process(source.hostname, pid)
+        assert process is not None
+        assert process.last_activity_time is not None
+        assert process.last_activity_time >= max_close
+
+    def test_nmap_explicit_ip_does_not_invent_neighbor_targets(self, test_user):
+        """An explicit IP operand should remain exact rather than sampling its implicit /32."""
+
+        source = System(hostname="SCAN-01", ip="10.10.3.10", os="Ubuntu 22.04", type="server")
+        request = NmapCommandProbeRequest(
+            user=test_user,
+            system=source,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            pid=4242,
+            process_name="/usr/bin/nmap",
+            command_line="nmap -p 443 10.10.2.30",
+        )
+        profile = SimpleNamespace(
+            full_cidr_max_hosts=256,
+            max_expanded_targets=256,
+            large_cidr_connect_targets=20,
+            large_cidr_discovery_targets=24,
+            large_cidr_unmodeled_targets=12,
+            max_ports=12,
+            connect_window_seconds_min=6.0,
+            connect_window_seconds_max=12.0,
+            discovery_window_seconds_min=2.0,
+            discovery_window_seconds_max=5.0,
+        )
+
+        plan = NmapCommandProbePlanner(profile).plan(request, {})
+
+        assert plan is not None
+        assert [target.ip for target in plan.targets] == ["10.10.2.30"]
 
     def test_generate_logon_network_allows_custom_ip(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

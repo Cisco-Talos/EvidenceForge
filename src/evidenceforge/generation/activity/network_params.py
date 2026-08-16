@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import extend_list, load_with_overlay, merge_keyed_list
-from evidenceforge.config.schemas import DnsTunnelRttConfig
+from evidenceforge.config.schemas import DnsTunnelRttConfig, NmapCommandProbeConfig
 from evidenceforge.utils.rng import _stable_seed
 
 _CACHED_DATA: dict[str, Any] | None = None
@@ -128,6 +128,11 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
             overlay["linux_smb_connection_owners"],
             "role",
         )
+    if isinstance(overlay.get("nmap_command_probe"), dict):
+        result["nmap_command_probe"] = {
+            **default.get("nmap_command_probe", {}),
+            **overlay["nmap_command_probe"],
+        }
     if isinstance(overlay.get("dns_tunnel_rcode_weights"), dict):
         result["dns_tunnel_rcode_weights"] = dict(overlay["dns_tunnel_rcode_weights"])
     if isinstance(overlay.get("proxy_connect_status_messages"), dict):
@@ -160,6 +165,12 @@ def public_ntp_servers() -> list[dict[str, Any]]:
     """Return configured public NTP server profiles."""
     servers = load_network_params().get("public_ntp_servers", [])
     return [server for server in servers if isinstance(server, dict)]
+
+
+def nmap_command_probe_config() -> NmapCommandProbeConfig:
+    """Return validated bounded planning settings for nmap process effects."""
+
+    return NmapCommandProbeConfig.model_validate(load_network_params().get("nmap_command_probe"))
 
 
 def public_ntp_ips() -> list[str]:

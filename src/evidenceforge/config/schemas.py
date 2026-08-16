@@ -1662,6 +1662,46 @@ class ExternalScannerPortProfile(BaseModel, extra="forbid"):
         return v
 
 
+class NmapCommandProbeConfig(BaseModel, extra="forbid", frozen=True):
+    """Bounded address-space planning for process-owned nmap commands."""
+
+    full_cidr_max_hosts: int = Field(ge=1, le=1024)
+    max_expanded_targets: int = Field(ge=1, le=1024)
+    large_cidr_connect_targets: int = Field(ge=1, le=128)
+    large_cidr_discovery_targets: int = Field(ge=1, le=128)
+    large_cidr_unmodeled_targets: int = Field(ge=1, le=64)
+    max_ports: int = Field(ge=1, le=32)
+    connect_window_seconds_min: float = Field(gt=0.0, le=60.0)
+    connect_window_seconds_max: float = Field(gt=0.0, le=60.0)
+    discovery_window_seconds_min: float = Field(gt=0.0, le=60.0)
+    discovery_window_seconds_max: float = Field(gt=0.0, le=60.0)
+
+    @model_validator(mode="after")
+    def planning_bounds_are_coherent(self) -> Self:
+        """Reject target and timing bounds that cannot satisfy the planner contract."""
+
+        if self.max_expanded_targets < self.full_cidr_max_hosts:
+            raise ValueError("max_expanded_targets must be >= full_cidr_max_hosts")
+        if (
+            max(
+                self.large_cidr_connect_targets,
+                self.large_cidr_discovery_targets,
+            )
+            > self.max_expanded_targets
+        ):
+            raise ValueError("large CIDR target caps must fit max_expanded_targets")
+        if self.large_cidr_unmodeled_targets > min(
+            self.large_cidr_connect_targets,
+            self.large_cidr_discovery_targets,
+        ):
+            raise ValueError("large_cidr_unmodeled_targets must fit both large CIDR caps")
+        if self.connect_window_seconds_max < self.connect_window_seconds_min:
+            raise ValueError("connect_window_seconds_max must be >= connect_window_seconds_min")
+        if self.discovery_window_seconds_max < self.discovery_window_seconds_min:
+            raise ValueError("discovery_window_seconds_max must be >= discovery_window_seconds_min")
+        return self
+
+
 # --- SMB Client and Server Profiles ---
 
 

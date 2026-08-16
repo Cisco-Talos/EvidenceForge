@@ -2695,6 +2695,12 @@ class NetworkTransactionPlanner:
             if event.network.duration is not None
             else None
         )
+        if pid > 0 and resolved_source_system is not None:
+            executor._remember_process_connection_hold(
+                system=resolved_source_system,
+                pid=pid,
+                close_time=event.network.source_visible_close_time,
+            )
         executor.state_manager.update_connection_interval(
             event.network.conn_id,
             event.network.source_visible_start_time,

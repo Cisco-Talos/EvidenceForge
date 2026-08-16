@@ -198,6 +198,19 @@ def estimate_workload(
                 target_ips = getattr(spec, "target_ips", []) or []
                 target_count = len(target_ips) or int(getattr(spec, "target_count", 0) or 0)
                 occurrences = target_count * len(getattr(spec, "ports", []) or [])
+            elif getattr(spec, "type", "") == "process":
+                from evidenceforge.generation.actions.scanner_probe import (
+                    estimate_nmap_command_probe_occurrences,
+                )
+                from evidenceforge.generation.activity.network_params import (
+                    nmap_command_probe_config,
+                )
+
+                probe_occurrences = estimate_nmap_command_probe_occurrences(
+                    str(getattr(spec, "command_line", "") or ""),
+                    nmap_command_probe_config(),
+                )
+                occurrences = max(1, probe_occurrences)
             elif getattr(spec, "type", "") == "smb_activity" and storage_world is not None:
                 location = spec.target or spec.source
                 if isinstance(location, SmbShareLocation):

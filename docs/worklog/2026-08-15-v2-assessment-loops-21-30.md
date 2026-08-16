@@ -740,3 +740,114 @@ and 1 skipped.
   closure-tail bound is unchanged. The focused busy-shell/SSH-close regression passes, and the
   broader process, sudo, source-timing, dispatcher, eCAR, activity, and baseline suite passes 855
   tests with one skip. Repository-wide Ruff check/format and `git diff --check` pass.
+
+## Loop 30 — Remote-WMI chronology finding validation
+
+### Finding disposition (before implementation)
+
+- **Classification:** `false_positive_or_unproven`; no implementation was made. The Loop 29
+  Threat Hunter report treated WS-AJOHNSON-01 MMC PID 7008 and its later DCOM traffic as the
+  apparent initiator of DC-01's earlier account-creation command. A strict action-identity join
+  disproves that ownership assumption.
+- DC-01's `16:15:28Z` command is PROCESS object
+  `1daa6cd0-05b8-4e03-bdea-2969676805a8`, parented by the durable target-local WmiPrvSE object
+  `4453d681-312b-4457-bfc1-92dd8d519cde` as NETWORK SERVICE. The dependent `net.exe` process and
+  subsequent account effects remain within that target-local process chain.
+- WS-AJOHNSON-01's `16:15:52Z` MMC is PROCESS object
+  `e262703a-95e9-4580-b302-92681e2d4de0`, command line
+  `mmc.exe gpmc.msc`, user `aisha.johnson`. Its port-135 FLOW at `16:15:56Z` carries that MMC
+  object as `actorID`; it shares no process, session, source port, lifecycle, or action identity
+  with the DC command. The same workstation emits independent `dsa.msc`, `gpmc.msc`,
+  `dnsmgmt.msc`, and `dhcpmgmt.msc` MMC/DCOM transactions throughout the window, confirming that
+  this row belongs to the recurring administrative-console baseline family rather than the
+  account-creation chain.
+- The lack of a rendered source-side owner for the target-local WmiPrvSE command may be evaluated
+  separately as a coverage or authoring-contract question, but unrelated later MMC activity is
+  not evidence of impossible chronology. Moving either action to satisfy that false join would
+  corrupt two valid independent lifecycles and risk regressions in ordinary RPC/authentication,
+  target process ordering, and the already-correct PsExec sibling.
+- **Rendered-probe design:** for every alleged remote-administration inversion, require a durable
+  join before comparing time: source process UUID, exact transport tuple/source port, target
+  network logon identity, and shared lifecycle/action group where available. Report temporally
+  nearby but unjoined MMC/DCOM activity as an independent candidate, never as the initiator. This
+  sample fails the ownership join and therefore contributes zero chronology violations.
+
+## Loop 30 — CIDR-scoped nmap discovery and probe planning
+
+### Family contract (before implementation)
+
+- **Accepted finding and classification:** after rejecting the unjoined WMI chronology claim, the
+  next validated Loop 29 finding is a `new_family` scanner `distribution_texture` and
+  `contract_gap`: `nmap -sn 10.10.2.0/24` emits no discovery evidence, while the following
+  five-port connect scan expands to exactly the six modeled hosts and no silent address-space
+  targets.
+- **Owning abstraction and layer:** `NmapCommandProbeActionBundle` and its canonical address-space
+  planner own interpretation of explicit IP/CIDR targets, scan mode, bounded target sampling, and
+  which targets are modeled responders versus unallocated/silent probes. The canonical network
+  connection bundle continues to own tuple allocation, sensor visibility, packet accounting,
+  endpoint process attribution, and source-native projection.
+- **Invariant:** an explicit CIDR must never collapse to only the scenario host inventory. Small
+  CIDRs at or below the configured usable-host threshold expand to every usable address (`/24`
+  means 254 targets), while larger CIDRs use a deterministic stratified cap that preserves broad
+  address-space coverage without materializing the range. TCP probes against unmodeled addresses
+  are silent S0 attempts; `-sn`/legacy `-sP` emits process-owned ICMP discovery attempts, with
+  modeled targets answering and unmodeled targets remaining silent. Explicit single-IP commands
+  remain exact and no target may equal the scanner source.
+- **Entry paths:** process-command effects from storyline and baseline Linux nmap processes;
+  explicit IPv4/IPv6 literals; CIDR arguments with or without modeled members; TCP connect/default
+  port probes; and ping-only discovery commands. Typed `port_scan`, scheduled scanner overlap, web
+  scans, and external perimeter noise remain sibling bundles outside this command-specific plan.
+- **Consumers:** canonical network connections and process holds; Zeek/eCAR/firewall visibility;
+  packet/byte accounting; source timing; rendered scan-shape probes; and the deterministic
+  assessment corpus.
+- **Sibling risks and verification:** cap large-CIDR targets and authored ports so broad ranges
+  cannot explode output, while the workload estimator accounts for deliberate full expansion of
+  bounded small CIDRs. Preserve every authored port within the configured cap, target
+  service/open-port inference for modeled hosts, stable RNG scoping, concurrent rather than serial
+  probe timing, application-side-effect suppression, and process lifetime through the latest
+  canonical transport close. Focused tests must prove `/24` plans contain exactly 254 usable
+  targets and 1,270 attempts for five ports, `-sn` emits 254 ICMP attempts with mixed
+  response/silence, explicit IPs do not gain invented neighbors, huge CIDRs stay stratified and
+  bounded, and canonical output retains the nmap PID with coherent ICMP/TCP accounting.
+
+### Implementation handoff
+
+- `NmapCommandProbePlanner` now parses the process command once into a canonical discovery/port
+  mode and deterministic address-space plan. CIDRs with at most 256 usable hosts expand fully, so
+  the assessment `/24` yields all 254 usable addresses. Larger IPv4/IPv6 ranges use deterministic
+  arithmetic stratification without materializing their host iterators; explicit IP literals stay
+  exact.
+- The bounds moved to validated `network_params.yaml` configuration: full expansion through 256
+  usable hosts, an overall 256-target ceiling, stratified large-range caps of 20 TCP or 24
+  discovery targets with 12 unmodeled slots, and 12 authored ports. Project overlays may adjust
+  individual fields while inheriting the remaining defaults, and `eforge validate-config`
+  rejects inverted timing or impossible target bounds.
+- Connect scans still route every target/port pair through the canonical network-connection
+  action. Modeled hosts retain inventory-aware `SF`/`REJ`/`S0` behavior; unmodeled addresses are
+  request-only `S0` probes with zero responder bytes. `-sn` and legacy `-sP` now emit bounded
+  process-owned ICMP attempts: modeled addresses have echo replies, while unmodeled addresses have
+  one request and no response. Probe starts are densely distributed inside configurable concurrent
+  windows (6-12 seconds for TCP and 2-5 seconds for discovery), rather than serially extending the
+  scan by one delay per attempt. Network visibility, tuple identity, endpoint PID, observation,
+  and packet accounting remain owned downstream by the network bundle.
+- The workload estimator recognizes nmap process commands and charges their planned probe
+  cardinality before generation; the assessment `/24` five-port command therefore contributes
+  exactly 1,270 explicit occurrences. The network transaction boundary refreshes process holds
+  after final duration/timing reconciliation, keeping the initiating process alive through the
+  maximum canonical source-visible close without comparing unrelated sensor clock domains.
+- Focused verification passed all six nmap tests, including exact 254-target `/24` TCP and
+  discovery expansion, exact 1,270 five-port attempts, canonical ICMP packet accounting,
+  explicit-IP exactness, deterministic stratified broad-CIDR bounds, concurrent timing, lifecycle
+  bracketing, and action-bundle delegation/identity. Workload and configuration tests passed 13
+  additional checks. The broader activity, network visibility, dispatcher, Zeek/eCAR projection,
+  process-lifecycle, source-timing, workload, and configuration suite passed 1,098 tests. Config
+  validation passed all 93 files; repository-wide Ruff check/format and `git diff --check` passed.
+- **Rendered hard-probe design:** within `[12:00,18:00)`, identify the `nmap -sn` and subsequent
+  connect-scan PIDs on WEB-EXT-01, then join Zeek/eCAR connections by source host and initiating
+  PID. Require discovery to contain only ICMP, at least one modeled reply and at least one silent
+  unmodeled request, with coherent 1/1 versus 1/0 packet accounting, and require exactly 254
+  discovery attempts for the `/24`. Require the TCP phase to retain every authored port across
+  all 254 usable targets and render exactly 1,270 connections, with every unmodeled attempt `S0`
+  and zero response bytes. Both phases must remain inside their configured concurrent windows,
+  bracket their latest canonical transport close with the nmap process lifetime, and have zero
+  HTTP/TLS/file side effects.

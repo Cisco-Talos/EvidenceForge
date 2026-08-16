@@ -31,7 +31,6 @@ import base64
 import hashlib
 import io
 import ipaddress
-import itertools
 import logging
 import math
 import ntpath
@@ -153,7 +152,9 @@ from evidenceforge.generation.actions import (
     NetworkConnectionActionBundle,
     NetworkConnectionRequest,
     NmapCommandProbeActionBundle,
+    NmapCommandProbePlanner,
     NmapCommandProbeRequest,
+    NmapCommandProbeTarget,
     NtlmValidationActionBundle,
     NtlmValidationRequest,
     OcspTransactionActionBundle,
@@ -207,6 +208,7 @@ from evidenceforge.generation.activity.mail_public_identities import (
 )
 from evidenceforge.generation.activity.network_params import (
     linux_smb_connection_owner,
+    nmap_command_probe_config,
     public_dns_resolver_ips,
 )
 from evidenceforge.generation.activity.proxy_uri import (
@@ -622,20 +624,6 @@ _WINDOWS_SINGLETON_SYSTEM_PROCESSES = {
     "lsass.exe": "lsass",
     "searchindexer.exe": "search_indexer",
 }
-
-
-def _extract_nmap_ports(command_line: str) -> list[int]:
-    """Extract an nmap ``-p`` port list from a command line."""
-    tokens = command_line.replace(",", " ").split()
-    ports: list[int] = []
-    for idx, token in enumerate(tokens):
-        if token == "-p" and idx + 1 < len(tokens):
-            ports.extend(_parse_port_tokens(tokens[idx + 1 : idx + 13]))
-            break
-        if token.startswith("-p") and len(token) > 2:
-            ports.extend(_parse_port_tokens([token[2:]]))
-            break
-    return list(dict.fromkeys(port for port in ports if 0 < port <= 65535))
 
 
 def _extract_http_url_from_command(command_line: str) -> str | None:
@@ -1540,26 +1528,6 @@ def _is_local_database_instance_target(target: str) -> bool:
     if normalized.startswith("(localdb)\\") or "mssqllocaldb" in normalized:
         return True
     return False
-
-
-def _parse_port_tokens(tokens: list[str]) -> list[int]:
-    """Parse nmap port tokens until the next option or target token."""
-    ports: list[int] = []
-    for token in tokens:
-        stripped = token.strip("'\"")
-        if stripped.startswith("-") or "/" in stripped:
-            break
-        for value in stripped.split(","):
-            if "-" in value:
-                start_text, end_text = value.split("-", 1)
-                if start_text.isdigit() and end_text.isdigit():
-                    start = int(start_text)
-                    end = min(int(end_text), start + 20)
-                    ports.extend(range(start, end + 1))
-                continue
-            if value.isdigit():
-                ports.append(int(value))
-    return ports
 
 
 def _service_for_port(port: int) -> str | None:
@@ -14154,31 +14122,54 @@ class ActivityGenerator:
         image_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         if image_lower != "nmap" and " nmap " not in f" {command_lower} ":
             return
-        ports = _extract_nmap_ports(command_line)
-        if not ports:
-            return
-        targets = self._resolve_nmap_targets(command_line, system)
-        if not targets:
+        planning_profile = nmap_command_probe_config()
+        plan = NmapCommandProbePlanner(planning_profile).plan(
+            request,
+            getattr(self, "_ip_to_system", {}),
+        )
+        if plan is None:
             return
 
         rng = random.Random(
             _stable_seed(f"nmap_effects:{system.hostname}:{pid}:{command_line}:{time.isoformat()}")
         )
-        probe_pairs = [(target_ip, port) for target_ip in targets[:32] for port in ports[:12]]
-        rng.shuffle(probe_pairs)
-        elapsed_ms = rng.randint(120, 260)
-        for target_ip, port in probe_pairs:
-            target_system = self._ip_to_system.get(target_ip)
-            conn_state, service, duration, orig_bytes, resp_bytes = _nmap_probe_profile(
-                port,
-                target_system,
-                rng,
+        if plan.discovery:
+            self._emit_nmap_discovery_probes(
+                request=request,
+                targets=plan.targets,
+                rng=rng,
+                window_seconds=(
+                    planning_profile.discovery_window_seconds_min,
+                    planning_profile.discovery_window_seconds_max,
+                ),
             )
-            offset = timedelta(milliseconds=elapsed_ms)
-            elapsed_ms += rng.randint(35, 260) + int(rng.expovariate(1.0 / 90.0))
+            return
+
+        probe_pairs = [(target, port) for target in plan.targets for port in plan.ports]
+        rng.shuffle(probe_pairs)
+        offsets = self._nmap_concurrent_probe_offsets(
+            count=len(probe_pairs),
+            minimum_window_seconds=planning_profile.connect_window_seconds_min,
+            maximum_window_seconds=planning_profile.connect_window_seconds_max,
+            rng=rng,
+        )
+        for (target, port), offset in zip(probe_pairs, offsets, strict=True):
+            target_system = self._ip_to_system.get(target.ip) if target.modeled else None
+            if target.modeled:
+                conn_state, service, duration, orig_bytes, resp_bytes = _nmap_probe_profile(
+                    port,
+                    target_system,
+                    rng,
+                )
+            else:
+                conn_state = "S0"
+                service = ""
+                duration = rng.uniform(1.5, 6.0)
+                orig_bytes = rng.randint(0, 64)
+                resp_bytes = 0
             self.generate_connection(
                 src_ip=system.ip,
-                dst_ip=target_ip,
+                dst_ip=target.ip,
                 time=time + offset,
                 dst_port=port,
                 proto="tcp",
@@ -14195,32 +14186,69 @@ class ActivityGenerator:
                 suppress_application_side_effects=True,
             )
 
-    def _resolve_nmap_targets(self, command_line: str, system: System) -> list[str]:
-        """Resolve nmap CIDR/IP arguments to visible scenario hosts when possible."""
-        tokens = command_line.replace(",", " ").split()
-        candidates: list[str] = []
-        for token in tokens:
-            stripped = token.strip("'\"")
-            try:
-                network = ipaddress.ip_network(stripped, strict=False)
-            except ValueError:
-                try:
-                    ipaddress.ip_address(stripped)
-                except ValueError:
-                    continue
-                candidates.append(stripped)
-                continue
-            ip_map = getattr(self, "_ip_to_system", {})
-            in_scenario = [
-                ip
-                for ip in sorted(ip_map)
-                if ip != system.ip and ipaddress.ip_address(ip) in network
-            ]
-            if in_scenario:
-                candidates.extend(in_scenario)
-            else:
-                candidates.extend(str(host) for host in itertools.islice(network.hosts(), 8))
-        return list(dict.fromkeys(candidates))
+    def _emit_nmap_discovery_probes(
+        self,
+        *,
+        request: NmapCommandProbeRequest,
+        targets: tuple[NmapCommandProbeTarget, ...],
+        rng: random.Random,
+        window_seconds: tuple[float, float],
+    ) -> None:
+        """Emit bounded process-owned ICMP discovery attempts."""
+
+        offsets = self._nmap_concurrent_probe_offsets(
+            count=len(targets),
+            minimum_window_seconds=window_seconds[0],
+            maximum_window_seconds=window_seconds[1],
+            rng=rng,
+        )
+        for target, offset in zip(targets, offsets, strict=True):
+            payload_bytes = rng.choice((56, 64, 84))
+            responded = bool(target.modeled)
+            self.generate_connection(
+                src_ip=request.system.ip,
+                dst_ip=target.ip,
+                time=request.time + offset,
+                dst_port=0,
+                proto="icmp",
+                service="icmp",
+                duration=(rng.uniform(0.001, 0.08) if responded else rng.uniform(0.8, 2.5)),
+                orig_bytes=payload_bytes,
+                resp_bytes=payload_bytes if responded else 0,
+                emit_dns=False,
+                pid=request.pid,
+                source_system=request.system,
+                proxy_bypass=True,
+                process_image=request.process_name,
+                suppress_application_side_effects=True,
+            )
+
+    @staticmethod
+    def _nmap_concurrent_probe_offsets(
+        *,
+        count: int,
+        minimum_window_seconds: float,
+        maximum_window_seconds: float,
+        rng: random.Random,
+    ) -> list[timedelta]:
+        """Return dense monotonic offsets for a concurrent scanner workload."""
+
+        if count <= 0:
+            return []
+        window_us = max(
+            count + 1,
+            int(rng.uniform(minimum_window_seconds, maximum_window_seconds) * 1_000_000),
+        )
+        sampled = sorted(
+            max(80_000, int(rng.betavariate(1.35, 1.8) * window_us)) for _ in range(count)
+        )
+        offsets: list[timedelta] = []
+        previous = 79_999
+        for value in sampled:
+            current = max(previous + 1, value)
+            offsets.append(timedelta(microseconds=current))
+            previous = current
+        return offsets
 
     def _clamp_time_after_process_start(
         self, system: System, pid: int, time: datetime, *, offset_ms: int = 100

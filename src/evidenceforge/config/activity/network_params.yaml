@@ -100,6 +100,20 @@ linux_smb_connection_owners:
     command_line: /opt/meridian/bin/content-publisher --share smb://{target}/WebContent
     username: www-data
 
+# Process-owned nmap commands fully expand bounded small CIDRs and use
+# stratified silent-address sampling for larger ranges.
+nmap_command_probe:
+  full_cidr_max_hosts: 256
+  max_expanded_targets: 256
+  large_cidr_connect_targets: 20
+  large_cidr_discovery_targets: 24
+  large_cidr_unmodeled_targets: 12
+  max_ports: 12
+  connect_window_seconds_min: 6.0
+  connect_window_seconds_max: 12.0
+  discovery_window_seconds_min: 2.0
+  discovery_window_seconds_max: 5.0
+
 public_ntp_servers:
   - name: "time-a-g.nist.gov"
     ip: "129.6.15.28"

@@ -1665,6 +1665,33 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_inverted_nmap_timing_bounds(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "nmap_command_probe": {
+                    **data["nmap_command_probe"],
+                    "connect_window_seconds_min": 12.0,
+                    "connect_window_seconds_max": 8.0,
+                },
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (nmap_command_probe)"
+            and "connect_window_seconds_max" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_overflowing_dns_tunnel_ttl_weight_total(self, monkeypatch):
         from evidenceforge.generation.activity import network_params
 

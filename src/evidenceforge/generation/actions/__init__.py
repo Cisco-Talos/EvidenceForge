@@ -137,13 +137,17 @@ from evidenceforge.generation.actions.rdp_session import (
 )
 from evidenceforge.generation.actions.scanner_probe import (
     NmapCommandProbeActionBundle,
+    NmapCommandProbePlan,
+    NmapCommandProbePlanner,
     NmapCommandProbeRequest,
+    NmapCommandProbeTarget,
     PortScanActionBundle,
     PortScanRequest,
     ScheduledScanOverlapActionBundle,
     ScheduledScanOverlapRequest,
     WebScanActionBundle,
     WebScanRequest,
+    estimate_nmap_command_probe_occurrences,
 )
 from evidenceforge.generation.actions.smb_activity import (
     SmbActivityActionBundle,
@@ -282,6 +286,12 @@ __all__ = [
     "ProcessAccessRequest",
     "ProcessTerminationActionBundle",
     "ProcessTerminationRequest",
+    "NmapCommandProbeActionBundle",
+    "NmapCommandProbePlan",
+    "NmapCommandProbePlanner",
+    "NmapCommandProbeRequest",
+    "NmapCommandProbeTarget",
+    "estimate_nmap_command_probe_occurrences",
     "PortScanActionBundle",
     "PortScanRequest",
     "ProxyTransactionActionBundle",

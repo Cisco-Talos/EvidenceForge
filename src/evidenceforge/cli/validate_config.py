@@ -787,6 +787,7 @@ def validate_config(
             "dict_fields": {
                 "dns_tunnel_rtt",
                 "dns_tunnel_rcode_weights",
+                "nmap_command_probe",
                 "proxy_connect_status_messages",
             },
             "string_list_fields": {
@@ -3271,6 +3272,7 @@ def validate_config(
         KerberosRealismConfig,
         LoadedModuleEntry,
         MailPublicIdentitiesConfig,
+        NmapCommandProbeConfig,
         ObservationProfilesConfig,
         OuiEntry,
         PersonaEntry,
@@ -3706,6 +3708,13 @@ def validate_config(
         )
         if err:
             result.issues.append(Issue("ERROR", "network_params.yaml (dns_tunnel_rtt)", err))
+        err = validate_entry(
+            net_params.get("nmap_command_probe", {}),
+            NmapCommandProbeConfig,
+            "network_params.yaml (nmap_command_probe)",
+        )
+        if err:
+            result.issues.append(Issue("ERROR", "network_params.yaml (nmap_command_probe)", err))
         templates = net_params.get("dns_tunnel_response_templates", [])
         if not isinstance(templates, list) or not templates:
             result.issues.append(
