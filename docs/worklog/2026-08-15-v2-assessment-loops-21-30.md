@@ -342,6 +342,20 @@ and 1 skipped.
   counterevidence. Loop 26 will address the highest-ranked remaining signature: near-universal
   exact 35 ms Linux pipeline-stage spacing.
 
+### Loop 26 outcome
+
+- Commit `31d9f272` replaces both hardcoded pipeline offsets with one scoped, data-driven timing
+  plan and makes operator parsing semantic: only a true unquoted single `|` shares concurrent
+  pipeline identity; control operators are admitted as separate foreground cohorts.
+- The full suite passed with 6,052 tests and 22 skips; Ruff check and format check passed. The
+  rendered probe passed 38 adjacent pairs across eight hosts with 30 distinct gaps, 2.63% exact-35
+  share, 7.89% modal share, complete pipeline overlap, and zero partial cohorts.
+- Automated evaluation scored 96.2755 over 72,386 records. Frozen review-data digest:
+  `8b0a71f9d4b21774ee647c846dd8c4f8c25164d24fe7b23c5638e736115a9f46`.
+- The fresh panel was unanimously Synthetic at 68/68/64/73 (average 68.25), with no deliberation.
+  The fixed spacing did not recur. Loop 27 will address the repeated direct-SCM PowerShell
+  maintenance family, which three reviewers independently prioritized.
+
 ## Loop 25 — Windows remote-service payload lifecycle
 
 ### Family contract (before implementation)
