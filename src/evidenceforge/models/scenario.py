@@ -363,17 +363,21 @@ class IdentityConfig(BaseModel):
 
     windows_default_scope: Literal["auto", "domain", "local"] = Field(default="auto")
     linux_default_scope: Literal["directory", "local"] = Field(default="directory")
+    windows_account_control: dict[str, set[Literal["DONT_REQUIRE_PREAUTH"]]] = Field(
+        default_factory=dict,
+        description=(
+            "Explicit Windows account-control flags keyed by user, machine, or service principal"
+        ),
+    )
     users: dict[str, UserIdentityOverride] = Field(default_factory=dict)
 
-    @field_validator("users")
+    @field_validator("users", "windows_account_control")
     @classmethod
-    def override_usernames_are_simple(
-        cls, v: dict[str, UserIdentityOverride]
-    ) -> dict[str, UserIdentityOverride]:
-        """Reject identity override keys that cannot be logical usernames."""
+    def override_account_names_are_simple(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """Reject identity/account-control keys that cannot be simple principals."""
         invalid = sorted(name for name in v if not re.match(r"^[a-zA-Z0-9._$-]+$", name))
         if invalid:
-            raise ValueError(f"invalid identity override usernames: {', '.join(invalid)}")
+            raise ValueError(f"invalid identity override account names: {', '.join(invalid)}")
         return v
 
 
@@ -3069,6 +3073,22 @@ class Environment(BaseModel):
         if unknown:
             raise ValueError(
                 "environment.identity.users contains unknown scenario users: " + ", ".join(unknown)
+            )
+
+        known_windows_accounts = {
+            *(name.casefold() for name in user_names),
+            *(name.casefold() for name in self.service_accounts),
+            *(f"{system.hostname}$".casefold() for system in self.systems),
+        }
+        unknown_account_control = sorted(
+            name
+            for name in self.identity.windows_account_control
+            if name.casefold() not in known_windows_accounts
+        )
+        if unknown_account_control:
+            raise ValueError(
+                "environment.identity.windows_account_control contains unknown Windows accounts: "
+                + ", ".join(unknown_account_control)
             )
 
         explicit_sids: dict[str, str] = {}

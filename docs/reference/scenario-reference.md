@@ -241,6 +241,8 @@ environment:
   identity:
     windows_default_scope: auto      # auto | domain | local
     linux_default_scope: directory   # directory | local
+    windows_account_control:         # Explicit user/machine/service account state
+      legacy.asrep: [DONT_REQUIRE_PREAUTH]
     users:
       aisha.johnson:
         windows:
@@ -259,6 +261,11 @@ placement are intentionally separate: a directory-backed Linux account can exist
 across Linux hosts, while local interactive activity is still placed by the world
 model using assigned users, primary systems, host roles, and plausible admin
 behavior.
+
+`windows_account_control` accepts modeled user, machine (for example `WS-01$`),
+or service principals. `DONT_REQUIRE_PREAUTH` is intentionally explicit: only an
+account carrying that flag may receive a successful Kerberos 4768 with
+`PreAuthType=0`; all ordinary accounts require pre-authentication by default.
 
 ### Users
 

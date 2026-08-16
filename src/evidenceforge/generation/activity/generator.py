@@ -5962,6 +5962,14 @@ class ActivityGenerator:
         principal = username.strip().rsplit("\\", 1)[-1].split("@", 1)[0]
         return principal.upper()
 
+    def _kerberos_account_allows_no_preauth(self, username: str) -> bool:
+        """Return whether canonical identity state explicitly disables Kerberos pre-auth."""
+        directory = self.identity_directory
+        return directory is not None and directory.windows_account_has_control(
+            username,
+            "DONT_REQUIRE_PREAUTH",
+        )
+
     @staticmethod
     def _kerberos_tgt_cache_key(
         username: str,
@@ -23732,7 +23740,11 @@ class ActivityGenerator:
         rng = _get_rng()
         from evidenceforge.generation.activity.kerberos_realism import pick_tgt_success_fields
 
-        tgt_fields = pick_tgt_success_fields(rng, domain.lower())
+        tgt_fields = pick_tgt_success_fields(
+            rng,
+            domain.lower(),
+            allow_no_preauth=self._kerberos_account_allows_no_preauth(username),
+        )
         source_port = self._reserve_kerberos_source_port(
             source_ip,
             dc_hostname,
@@ -24948,7 +24960,7 @@ class ActivityGenerator:
         rng = _get_rng()
         from evidenceforge.generation.activity.kerberos_realism import pick_tgt_failure_fields
 
-        failure_fields = pick_tgt_failure_fields(rng)
+        failure_fields = pick_tgt_failure_fields(rng, status)
         dc_host = self._build_dc_host_context(dc_hostname)
         reporting_pid = self._get_system_pid(dc_hostname, "lsass", 0x2E0)
         has_source_ip = source_ip not in {"", "-"}

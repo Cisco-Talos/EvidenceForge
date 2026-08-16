@@ -176,6 +176,71 @@ def test_host_local_linux_accounts_can_differ_per_host() -> None:
     ) != directory.linux_uid_for_user("ops.user", host="LINUX-02")
 
 
+def test_explicit_dont_require_preauth_state_resolves_for_user_and_machine() -> None:
+    """Windows account-control state belongs to resolved user and machine principals."""
+    scenario = _scenario(
+        Environment(
+            description="explicit Kerberos account state",
+            domain="corp.example.com",
+            identity={
+                "windows_account_control": {
+                    "legacy.user": ["DONT_REQUIRE_PREAUTH"],
+                    "LEGACY-WS$": ["DONT_REQUIRE_PREAUTH"],
+                }
+            },
+            users=[
+                User(username="legacy.user", full_name="Legacy", email="legacy@corp.example.com")
+            ],
+            systems=[
+                System(
+                    hostname="DC-01",
+                    ip="10.0.0.10",
+                    os="Windows Server",
+                    type="domain_controller",
+                ),
+                System(
+                    hostname="LEGACY-WS",
+                    ip="10.0.0.20",
+                    os="Windows 11",
+                    type="workstation",
+                    assigned_user="legacy.user",
+                ),
+            ],
+        )
+    )
+
+    directory = IdentityDirectory.from_scenario(scenario)
+
+    assert directory.windows_account_has_control("legacy.user", "DONT_REQUIRE_PREAUTH")
+    assert directory.windows_account_has_control(
+        "LEGACY-WS$@CORP.EXAMPLE.COM", "DONT_REQUIRE_PREAUTH"
+    )
+    assert not directory.windows_account_has_control("DC-01$", "DONT_REQUIRE_PREAUTH")
+
+
+def test_unknown_windows_account_control_principal_is_rejected() -> None:
+    """Account-control policy cannot silently create an unmodeled domain principal."""
+    with pytest.raises(ValidationError, match="unknown Windows accounts: missing.user"):
+        Environment(
+            description="bad account state",
+            domain="corp.example.com",
+            identity={
+                "windows_account_control": {
+                    "missing.user": ["DONT_REQUIRE_PREAUTH"],
+                }
+            },
+            users=[User(username="known.user", full_name="Known", email="known@corp.example.com")],
+            systems=[
+                System(
+                    hostname="DC-01",
+                    ip="10.0.0.10",
+                    os="Windows Server",
+                    type="domain_controller",
+                )
+            ],
+        )
+
+
 def test_duplicate_identity_overrides_are_rejected() -> None:
     """Explicit UID and SID overrides must be unique within their namespaces."""
     with pytest.raises(ValidationError, match="Linux UID overrides must be unique"):

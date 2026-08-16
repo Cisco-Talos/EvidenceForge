@@ -135,6 +135,7 @@ from evidenceforge.generation.activity.tls_realism import (
     certificate_analyzer_delay_ms,
     certificate_file_size,
 )
+from evidenceforge.generation.identity import IdentityDirectory, WindowsAccount
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import NetworkConfig, NetworkSegment, System, User
@@ -8068,6 +8069,136 @@ class TestActivityGenerator:
         assert event.event_type == "kerberos_preauth_failed"
         assert event.kerberos.source_ip == "-"
         assert event.kerberos.source_port == 0
+
+    def test_kerberos_preauth_failed_status_0x18_never_emits_type_zero(
+        self, activity_gen, test_user, state_manager, mock_emitters, monkeypatch
+    ):
+        """A rendered bad-password 4771 must identify the failed pre-auth mechanism."""
+        from evidenceforge.generation.activity import kerberos_realism
+
+        monkeypatch.setattr(
+            kerberos_realism,
+            "load_kerberos_realism",
+            lambda: {
+                "tgt_failure": {
+                    "pre_auth_types": {
+                        "none": {"value": 0, "weight": 100},
+                        "encrypted": {"value": 2, "weight": 1},
+                    },
+                    "ticket_options": {"default": {"value": "0x40810010", "weight": 1}},
+                }
+            },
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_kerberos_preauth_failed(
+            test_user.username,
+            "10.0.0.20",
+            "DC-01",
+            timestamp,
+            status="0x18",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.kerberos.ticket_status == "0x18"
+        assert event.kerberos.pre_auth_type == 2
+
+    def test_kerberos_tgt_type_zero_requires_canonical_account_control(
+        self, activity_gen, state_manager, mock_emitters, monkeypatch
+    ):
+        """Successful 4768 type zero is gated by explicit identity-directory state."""
+        from evidenceforge.generation.activity import kerberos_realism
+
+        monkeypatch.setattr(
+            kerberos_realism,
+            "load_kerberos_realism",
+            lambda: {
+                "tgt_success": {
+                    "pre_auth_types": {
+                        "none": {
+                            "value": 0,
+                            "weight": 1,
+                            "certificate_required": False,
+                        }
+                    },
+                    "ticket_options": {"default": {"value": "0x40810010", "weight": 1}},
+                    "encryption_types": {"aes256": {"value": "0x12", "weight": 1}},
+                },
+                "certificate_profiles": {},
+            },
+        )
+        activity_gen.identity_directory = IdentityDirectory(
+            windows_domain="corp.example.com",
+            domain_sid_base="S-1-5-21-1-2-3",
+            has_windows_domain=True,
+            windows_accounts={
+                ("legacy.user", "*"): WindowsAccount(
+                    logical_name="legacy.user",
+                    account_name="legacy.user",
+                    sid="S-1-5-21-1-2-3-1001",
+                    scope="domain",
+                    domain="corp.example.com",
+                    account_control=frozenset({"DONT_REQUIRE_PREAUTH"}),
+                ),
+                ("ordinary-ws$", "*"): WindowsAccount(
+                    logical_name="ORDINARY-WS$",
+                    account_name="ORDINARY-WS$",
+                    sid="S-1-5-21-1-2-3-1002",
+                    scope="machine",
+                    domain="corp.example.com",
+                ),
+                ("legacy-ws$", "*"): WindowsAccount(
+                    logical_name="LEGACY-WS$",
+                    account_name="LEGACY-WS$",
+                    sid="S-1-5-21-1-2-3-1003",
+                    scope="machine",
+                    domain="corp.example.com",
+                    account_control=frozenset({"DONT_REQUIRE_PREAUTH"}),
+                ),
+                ("ordinary.user", "*"): WindowsAccount(
+                    logical_name="ordinary.user",
+                    account_name="ordinary.user",
+                    sid="S-1-5-21-1-2-3-1004",
+                    scope="domain",
+                    domain="corp.example.com",
+                ),
+            },
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        principals = (
+            ("ORDINARY-WS$", "10.0.0.20"),
+            ("ordinary.user", "10.0.0.21"),
+            ("legacy.user@CORP.EXAMPLE.COM", "10.0.0.22"),
+            ("LEGACY-WS$@CORP.EXAMPLE.COM", "10.0.0.23"),
+        )
+        for offset, (principal, source_ip) in enumerate(principals):
+            activity_gen.generate_kerberos_tgt(
+                username=principal,
+                source_ip=source_ip,
+                dc_hostname="DC-01",
+                time=timestamp + timedelta(seconds=offset),
+            )
+
+        events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "kerberos_tgt"
+        ]
+        type_zero_principals = {
+            event.kerberos.target_username for event in events if event.kerberos.pre_auth_type == 0
+        }
+        assert type_zero_principals == {
+            "legacy.user@CORP.EXAMPLE.COM",
+            "LEGACY-WS$@CORP.EXAMPLE.COM",
+        }
+        assert all(
+            event.kerberos.pre_auth_type == 2
+            for event in events
+            if event.kerberos.target_username in {"ORDINARY-WS$", "ordinary.user"}
+        )
 
     def test_kerberos_preauth_failed_can_emit_matching_dc_flow(
         self, activity_gen, test_user, state_manager, mock_emitters

@@ -660,3 +660,55 @@ and 1 skipped.
   `services.exe`. Separately inventory SearchProtocolHost/SearchFilterHost rows to prove they remain
   distinct children rather than being incorrectly reused as the indexer. Report zero in-window
   indexer creates as a valid pre-window singleton, not a completeness defect.
+
+## Loop 29 — Kerberos pre-authentication status and account policy
+
+### Family contract (before implementation)
+
+- **Accepted finding and classification:** the Loop 28 Detection review found a visible Security
+  4771 with `Status=0x18` (`KDC_ERR_PREAUTH_FAILED`) but `PreAuthType=0`, plus six successful 4768
+  TGT requests with `PreAuthType=0` for ordinary machine accounts. Deliberation retained this as
+  the clearest `P0` `hard_contradiction` and a repeated
+  `environment_or_collection_plausibility` defect. This is a `family_level` canonical Kerberos
+  authentication/account-state defect, not a Windows XML emitter defect.
+- **Owning abstraction and layer:** the shared Kerberos realism selector owns status-compatible
+  pre-authentication fields, while the canonical identity directory owns explicit Windows account
+  control state. The TGT and pre-auth-failure action bundles must combine those truths before
+  constructing `KerberosContext`; renderers only project the resulting event.
+- **Invariant:** a failed 4771 with `Status=0x18` identifies a supplied failed mechanism and may not
+  use `PreAuthType=0`; under the supported password-failure family it uses encrypted timestamp
+  type 2. A successful 4768 may use `PreAuthType=0` only when its resolved domain account explicitly
+  owns the `DONT_REQUIRE_PREAUTH` account-control flag. Missing identity state, ordinary users,
+  machine accounts, and service accounts require pre-authentication by default.
+- **Entry paths:** direct and cached-gated `generate_kerberos_tgt()` calls; member-host logon causal
+  expansion; visible newly-created account exchanges; baseline machine-account cycles; automatic
+  Kerberos/88 connection audit companions; active-user and stale-account 4771 generation; and
+  failed-logon validation paths that add DC-side 4771 evidence.
+- **Consumers:** canonical `KerberosContext`, Security 4768/4771 projection, TGT cache state,
+  Kerberos connection/audit correlation, detections for bad-password failures and AS-REP-roastable
+  principals, configuration validation, and rendered dataset probes.
+- **Sibling risks and verification:** preserve PKINIT type 15 plus certificate fields, ticket and
+  encryption distributions, source-port/transport reuse, DC timing, and non-`0x18` failure
+  profiles. Record-level tests must prove status/type compatibility and positive/negative explicit
+  account-policy gating for users and machine accounts. The strict rendered probe will parse every
+  4768/4771 in `[12:00,18:00)`, reject `4771 Status=0x18 + PreAuthType=0`, and reject successful
+  4768 type 0 unless the reviewed account is present in an independently exported explicit
+  `DONT_REQUIRE_PREAUTH` allowlist; it will report user and machine-account populations separately.
+
+### Implementation handoff
+
+- Scenario identity state now supports a validated `windows_account_control` map for modeled user,
+  machine, and service principals. `IdentityDirectory` attaches those flags to the resolved frozen
+  Windows account, normalizes SAM/UPN principal forms for lookup, and rejects flags for unknown
+  accounts. The default is an empty flag set for every account, including all ordinary machine
+  accounts in the iteration scenario.
+- The shared 4768 picker excludes type-0 profiles unless the canonical identity directory confirms
+  `DONT_REQUIRE_PREAUTH`; PKINIT and encrypted-timestamp profiles retain their prior weighting and
+  certificate semantics. The 4771 picker now receives the actual status and filters type 0 for
+  `0x18`, falling back safely to encrypted timestamp type 2 even if an overlay supplies only an
+  incompatible no-preauth profile.
+- Record and dataset-level tests cover `0x18` failures, ordinary and explicitly exempt users,
+  ordinary and explicitly exempt machine accounts, UPN normalization, and unknown-account policy
+  rejection. Broad Kerberos, identity, causal, baseline, source-projection, and config verification
+  passed 947 tests with one skip; `eforge validate-config` passed all 93 files. Repository-wide
+  Ruff check/format and `git diff --check` passed.
