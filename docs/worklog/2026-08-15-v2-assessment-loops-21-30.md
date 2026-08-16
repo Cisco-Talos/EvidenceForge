@@ -591,3 +591,59 @@ and 1 skipped.
   automation or a configured taskeng-owned task requires it. This preserves scheduler ancestry and
   host-scoped task identity without changing unrelated scenarios' process allocation; the exact
   singleton pack regression again retains one process and both scheduled flows.
+
+## Loop 28 — Windows Search service identity and singleton lifecycle
+
+### Family contract (before implementation)
+
+- **Accepted finding and classification:** the Loop 27 Host/EDR review found four visibly
+  overlapping `SearchIndexer.exe /Embedding` roots on one workstation, all parented by
+  `services.exe` but carrying an interactive user's medium-integrity token. Deliberation retained
+  this as the panel's highest-confidence `P0` `hard_contradiction`. This is a `family_level`
+  Windows service-role identity and lifecycle defect, not an emitter issue.
+- **Owning abstraction and layer:** the boot-seeded Windows process/service plan owns the one
+  durable WSearch indexer root and its SCM ancestry. Canonical process admission owns reuse of that
+  seeded host singleton and service-token identity across regular user-noise, system-service,
+  scheduled/background, and direct process entry paths. Security, Sysmon, and eCAR only project
+  the shared canonical process.
+- **Invariant:** each modeled Windows host has at most one active canonical
+  `C:\\Windows\\System32\\SearchIndexer.exe` service root. Requests for that exact service image
+  reuse the boot-seeded `search_indexer` PID, remain parented by the seeded `services.exe`, and
+  preserve the `SYSTEM` token (`0x3e7`) and System integrity. Interactive-session identity remains
+  available to Search UI/worker families, but must never be assigned to the indexer service root.
+- **Entry paths:** legacy Windows `process_system` baseline selection; independent configured
+  `system_services`; `generate_process()` callers using either a user or built-in account;
+  `generate_system_process()` callers; spawn-rule parent repair; seeded SearchProtocolHost and
+  SearchFilterHost siblings; and stale-process cleanup.
+- **Consumers:** canonical `RunningProcess` identity and lifetime, Security 4688/4689, Sysmon
+  Events 1/5, eCAR PROCESS CREATE/TERMINATE and dependent ownership, Search helper parentage, and
+  strict rendered singleton/token probes.
+- **Sibling risks and verification:** do not collapse `SearchProtocolHost.exe`,
+  `SearchFilterHost.exe`, `SearchHost.exe`, or shell/UI processes into the service singleton; do
+  not broaden basename-only reuse to an alternate path; and do not terminate the boot-seeded
+  indexer when a transient caller requests cleanup. Focused tests must exercise both regular and
+  system process APIs, repeated/out-of-order requests, exact-path rejection, canonical parent and
+  token state, zero duplicate create/terminate events, and unchanged Search helper ancestry.
+
+### Implementation handoff
+
+- The canonical Windows singleton registries now classify the System32 Search indexer as both the
+  seeded `search_indexer` role and a host-scoped service singleton. The interactive-user process
+  classification no longer includes `SearchIndexer.exe`; exact canonical-path fallback creation is
+  forced to `SYSTEM`/`0x3e7`/System integrity. Alternate-path basename collisions do not alias the
+  WSearch singleton.
+- Boot seeding publishes the indexer's immutable SYSTEM token LogonID into `RunningProcess` state.
+  Both `generate_process()` and `generate_system_process()` therefore reuse one SCM-owned PID, even
+  when the request arrives from user baseline noise or supplies an unrelated parent. The protected
+  seeded-PID boundary makes transient cleanup idempotent instead of emitting a false termination.
+  SearchProtocolHost/SearchFilterHost ancestry remains a separate child family.
+- Focused Windows process/service/pool verification passed 168 tests. Broader baseline canonical,
+  process lifetime/termination, eCAR projection, and Windows record-ID verification passed 296
+  tests with one skip. Ruff check/format and `git diff --check` passed.
+- **Rendered hard-probe design:** within strict `[12:00,18:00)`, parse Sysmon Event 1/5 and eCAR
+  PROCESS CREATE/TERMINATE for the exact System32 `SearchIndexer.exe` image. Join by host plus
+  ProcessGuid/object ID, construct visible live intervals, and fail on overlapping roots, any
+  non-SYSTEM principal, LogonID other than `0x3e7`, non-System integrity, or a parent other than
+  `services.exe`. Separately inventory SearchProtocolHost/SearchFilterHost rows to prove they remain
+  distinct children rather than being incorrectly reused as the indexer. Report zero in-window
+  indexer creates as a valid pre-window singleton, not a completeness defect.

@@ -206,6 +206,105 @@ class TestWindowsProcessTreeRealism:
         assert child_proc is not None
         assert child_proc.parent_pid == dns_pid
 
+    def test_search_indexer_user_noise_reuses_seeded_system_singleton(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """User-noise requests must reuse the SCM-owned Windows Search service root."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        timestamp = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        logon_id = ag.generate_logon(user, win_system, timestamp)
+        mock_emitters["ecar"].emit.reset_mock()
+
+        first_pid = ag.generate_process(
+            user=user,
+            system=win_system,
+            time=timestamp + timedelta(minutes=5),
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\SearchIndexer.exe",
+            command_line=r"C:\Windows\System32\SearchIndexer.exe /Embedding",
+            parent_pid=pids["services"],
+        )
+        second_pid = ag.generate_process(
+            user=user,
+            system=win_system,
+            time=timestamp + timedelta(minutes=3),
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\SearchIndexer.exe",
+            command_line=r"C:\Windows\System32\SearchIndexer.exe /Embedding",
+            parent_pid=pids["explorer"],
+        )
+
+        assert first_pid == second_pid == pids["search_indexer"]
+        indexers = [
+            process
+            for process in state_manager.get_processes_on_system(win_system.hostname)
+            if process.image.lower().endswith(r"\searchindexer.exe")
+        ]
+        assert len(indexers) == 1
+        assert indexers[0].parent_pid == pids["services"]
+        assert indexers[0].username == "SYSTEM"
+        assert indexers[0].logon_id == "0x3e7"
+        assert indexers[0].integrity_level == "System"
+        duplicate_creates = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process is not None
+            and call.args[0].process.image.lower().endswith(r"\searchindexer.exe")
+        ]
+        assert duplicate_creates == []
+
+    def test_search_indexer_system_noise_reuses_and_preserves_seeded_singleton(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """System-service requests and cleanup must not duplicate or reap WSearch."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        timestamp = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        mock_emitters["ecar"].emit.reset_mock()
+
+        reused_pid = ag.generate_system_process(
+            system=win_system,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\SearchIndexer.exe",
+            command_line=r"C:\Windows\System32\SearchIndexer.exe /Embedding",
+            parent_pid=pids["services"],
+            username="SYSTEM",
+        )
+        ag.generate_system_process_termination(
+            system=win_system,
+            time=timestamp + timedelta(minutes=30),
+            pid=reused_pid,
+            process_name=r"C:\Windows\System32\SearchIndexer.exe",
+            parent_pid=pids["services"],
+            username="SYSTEM",
+        )
+
+        assert reused_pid == pids["search_indexer"]
+        assert state_manager.get_process(win_system.hostname, reused_pid) is not None
+        lifecycle_events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type in {"system_process_create", "process_terminate"}
+            and call.args[0].process is not None
+            and call.args[0].process.image.lower().endswith(r"\searchindexer.exe")
+        ]
+        assert lifecycle_events == []
+
+    def test_search_indexer_singleton_reuse_rejects_alternate_path(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """A basename collision outside System32 must not alias the WSearch service."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+
+        assert (
+            ag._existing_windows_singleton_pid(
+                win_system,
+                r"C:\Temp\SearchIndexer.exe",
+                datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            )
+            is None
+        )
+
     def test_program_files_singleton_service_reuses_active_agent(
         self, state_manager, mock_emitters, win_system
     ):

@@ -398,6 +398,7 @@ _WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
         "dfsr.exe",
         "ismserv.exe",
         "msdtc.exe",
+        "searchindexer.exe",
     }
 )
 _WINDOWS_SINGLETON_SERVICE_PATHS = {
@@ -619,6 +620,7 @@ _WINDOWS_SINGLETON_SYSTEM_PROCESSES = {
     "wininit.exe": "wininit",
     "services.exe": "services",
     "lsass.exe": "lsass",
+    "searchindexer.exe": "search_indexer",
 }
 
 
@@ -1635,7 +1637,6 @@ _WINDOWS_USER_SESSION_PROCESSES = {
     "searchhost.exe",
     "searchprotocolhost.exe",
     "searchfilterhost.exe",
-    "searchindexer.exe",
     "runtimebroker.exe",
     "textinputhost.exe",
     "startmenuexperiencehost.exe",
@@ -1845,7 +1846,10 @@ def _windows_service_process_account(process_name: str, command_line: str) -> st
     """Return the built-in service identity for service-hosted Windows processes."""
     exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
     command = command_line.lower()
-    if exe_name in {"psexesvc.exe", "healthmonitorsvc.exe"}:
+    normalized_path = ntpath.normpath(process_name.replace("/", "\\")).lower()
+    if exe_name in {"psexesvc.exe", "healthmonitorsvc.exe"} or normalized_path == (
+        r"c:\windows\system32\searchindexer.exe"
+    ):
         return "SYSTEM"
     if exe_name != "svchost.exe":
         return None

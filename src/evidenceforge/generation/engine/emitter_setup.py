@@ -622,10 +622,18 @@ class EmitterSetupMixin:
             boot_elapsed += boot_rng.uniform(0.08, 2.75)
             sm.set_current_time(boot_base + timedelta(seconds=boot_elapsed))
 
-        def _c(parent, image, cmd, user):
+        def _c(parent: int, image: str, cmd: str, user: str, logon_id: str = "") -> int:
             _advance_boot_clock()
             image = normalize_defender_platform_path(image, hn)
-            return sm.create_process(hn, parent, image, cmd, user, "System")
+            return sm.create_process(
+                hn,
+                parent,
+                image,
+                cmd,
+                user,
+                "System",
+                logon_id=logon_id,
+            )
 
         # PID 4 is always the Windows System process. Keep the fixed native PID
         # while registering it through the same canonical identity boundary.
@@ -705,6 +713,7 @@ class EmitterSetupMixin:
             r"C:\Windows\System32\SearchIndexer.exe",
             "SearchIndexer.exe",
             "SYSTEM",
+            "0x3e7",
         )
         pids["wmiprvse"] = _c(
             pids["svchost_dcom"],
