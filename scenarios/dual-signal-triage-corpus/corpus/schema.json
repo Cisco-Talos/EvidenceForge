@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Cisco-Talos/EvidenceForge/scenarios/dual-signal-triage-corpus/corpus/schema.json",
+  "title": "EvidenceForge dual-signal triage corpus",
+  "description": "Labeled SnortML-style (GID 411), classic signature, and Splunk-notable triage events. ML probability must never be equated to a signature true positive.",
+  "type": "object",
+  "required": ["version", "never_equate_ml_to_signature", "events"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "never_equate_ml_to_signature": {
+      "type": "boolean",
+      "const": true
+    },
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/labeled_event"
+      }
+    }
+  },
+  "$defs": {
+    "labeled_event": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "case",
+        "signal_class",
+        "label_disposition",
+        "tier_hint",
+        "msg"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "case": {
+          "type": "string",
+          "enum": [
+            "signature_only_high",
+            "snortml_gid411_high_ml_only",
+            "signature_plus_ml_corroboration",
+            "snortml_low",
+            "splunk_notable_high_risk",
+            "splunk_notable_low"
+          ]
+        },
+        "signal_class": {
+          "type": "string",
+          "enum": [
+            "signature_only",
+            "ml_only",
+            "signature_plus_ml",
+            "splunk_notable"
+          ]
+        },
+        "label_disposition": {
+          "type": "string",
+          "enum": [
+            "fix_now",
+            "escalate",
+            "accept",
+            "suppress_fp",
+            "triage_t1",
+            "triage_t2"
+          ],
+          "description": "Ground-truth automation disposition. ML-only high must never be fix_now or auto_contain."
+        },
+        "tier_hint": {
+          "type": "string",
+          "enum": ["T1", "T2", "T3"]
+        },
+        "msg": {
+          "type": "string"
+        },
+        "gid": {
+          "type": ["integer", "null"]
+        },
+        "sid": {
+          "type": ["string", "null"]
+        },
+        "ml_score": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "severity": {
+          "type": ["string", "null"],
+          "enum": ["low", "medium", "high", "critical", null]
+        },
+        "urgency": {
+          "type": ["string", "null"],
+          "enum": ["informational", "low", "medium", "high", "critical", null]
+        },
+        "risk_score": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "search_name": {
+          "type": ["string", "null"]
+        },
+        "rule_id": {
+          "type": ["string", "null"]
+        },
+        "src_addr": {
+          "type": ["string", "null"]
+        },
+        "dst_addr": {
+          "type": ["string", "null"]
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -77,6 +77,13 @@ scenarios/llm-injection-demo/*
 !scenarios/llm-injection-demo/scenario.yaml
 !scenarios/llm-injection-demo/scenario-clean.yaml
 !scenarios/llm-injection-demo/README.md
+!scenarios/dual-signal-triage-corpus/
+scenarios/dual-signal-triage-corpus/*
+!scenarios/dual-signal-triage-corpus/README.md
+!scenarios/dual-signal-triage-corpus/corpus/
+scenarios/dual-signal-triage-corpus/corpus/*
+!scenarios/dual-signal-triage-corpus/corpus/labeled_events.json
+!scenarios/dual-signal-triage-corpus/corpus/schema.json
 
 
 # Scan / analysis tool output
