@@ -384,6 +384,20 @@ and 1 skipped.
   SearchIndexer did not recur. Loop 29 will repair the P0 Kerberos pre-authentication contract;
   Loop 30 is expected to take the failed-SSH privilege-process lifecycle gap.
 
+### Loop 29 outcome
+
+- Commit `af3edef1` adds validated Windows account-control flags and enforces status/policy-aware
+  Kerberos pre-authentication. Commit `c8cb60cb` closes the generation-exposed sibling gap where
+  foreground serialization could move sudo work beyond an SSH session close.
+- The full suite, documentation-contract tests, Ruff, and generation passed. The strict probe parsed
+  524 Kerberos records with zero illegal success type-0 records and all five `0x18` failures at
+  pre-auth type 2.
+- Automated evaluation scored 97.4828 over 77,522 records. Frozen review-data digest:
+  `76f24ab8c2f471b0893de7214b8e1b503ab772127439cf9d2ae2d5da3c371910`.
+- Standalone scores were 72/38/48/67 (average 56.25); deliberation revised to likely synthetic at
+  63.0. Kerberos did not recur. Loop 30 will validate and repair the ranked P0 remote-WMI chronology;
+  the failed-SSH lifecycle remains queued for the extended Loop 31–40 run.
+
 ## Loop 25 — Windows remote-service payload lifecycle
 
 ### Family contract (before implementation)
