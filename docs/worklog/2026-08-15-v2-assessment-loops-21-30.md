@@ -140,3 +140,66 @@ and 1 skipped.
   baseline canonical generation, Sysmon, and eCAR source projection; 4 activity-level registry and
   UserAssist tests passed. `eforge validate-config` passed 93 files with zero issues. Ruff check,
   Ruff format check, and `git diff --check` passed.
+
+### Loop 22 outcome
+
+- Commit `e432bd27`; full suite 6,025 passed with 22 skips. Evaluation scored 96.8280/100 over
+  71,618 records. The rendered probe passed all native PIDL, extension-key, LastVisited,
+  UserAssist, and RecentDocs checks with zero legacy decorated-path signatures.
+- Frozen corpus SHA-256 remained
+  `3f18346483a37eed2eb6ed6f5e7efa1f4962f519cb00dd5f6097030b200eb1f8` before and after review.
+  Standalone scores were 67/66/62/97 (mean 73.0); the 35-point spread triggered deliberation.
+- The Host review's WFP direction claim was independently disproven: all 6,008 rows use the native
+  mapping correctly. Corrected deliberation gives that false positive zero weight and revises the
+  panel to 76/80/72/78 (mean 76.5). The MRU/PIDL findings did not recur.
+- Next accepted priorities are family-specific duration/throughput floors, detached PSEXESVC
+  delivery timing, bounded eCAR process-observation latency, and SMB endpoint actor projection.
+
+## Loop 23 — SMB transfer timing and mutable file identity
+
+### Family contract (before implementation)
+
+- **Accepted finding:** the Loop 22 frozen corpus exposed successful SMB sessions with materially
+  different byte volumes closing at the same 2.5-second floor and tightly repeated mapping/file
+  offsets. Source inspection also found that every SMB `FileTransferContext` used the fixed
+  `size / 25,000,000` duration, while an `update` constructed its WRITE transfer context and FUID
+  from the old size/content version before mutating canonical SMB file state.
+- **Owning layer and classification:** `SmbActivityActionBundle` owns SMB operation timing within
+  its canonical transport budget and must construct file-transfer identity from the final
+  operation state. This is a `family_level` canonical bundle fix; Zeek, eCAR, Windows, and Samba
+  renderers remain source-native projections and must not invent replacement timing or identity.
+- **Entry paths:** Windows Explorer reads/creates/updates, Linux `smbclient` and CIFS-mounted
+  operations, batch activity, and the read/write legs of client/share and cross-share copy/move.
+- **Invariant:** each successful read/write samples deterministic session-scoped lognormal wire
+  throughput plus bounded setup and operation jitter from a dedicated stable RNG. Its transfer
+  duration and action/close timestamps stay inside the owning connection interval. An update
+  mutates state before deriving WRITE size, content version, and FUID, so rendered bytes and
+  ground truth identify the same post-update version exactly.
+- **Sibling and observation semantics:** preserve Windows and Linux process/auth ownership,
+  copy/move leg ordering, file handle closure, transport byte accounting, and coherent source-level
+  observation loss. Missing rendered siblings remain a shared observation decision rather than a
+  second timing sample. Authored batch duration remains the connection budget and cannot be
+  overrun by sampled operation timing.
+- **Verification contract:** focused tests cover exact Windows update size/version/FUID identity,
+  deterministic rate diversity without a fixed 25 MB/s signature, Linux projection siblings,
+  helper bounds/config validation, and child-within-parent ordering for every retained source view.
+
+### Implementation handoff
+
+- `SmbActivityActionBundle` now plans each operation with a dedicated stable RNG scoped by the
+  canonical SMB action, operation index, and file identity. Wire rates use the validated
+  lognormal profile in `smb_profiles.yaml`; tree setup, per-operation setup/jitter, close delay,
+  purpose dwell, and transport tail are also data-driven. The former 2.5-second connection floor
+  and fixed 25 MB/s file duration are gone.
+- Operation cursors advance by the exact planned open-to-close span, with the transport budget
+  reserving worst-case auth/tree setup. Explicitly authored short batch durations deterministically
+  scale their session/operation spans so children remain inside the parent connection rather than
+  silently extending it.
+- SMB `update` now mutates canonical state before constructing its WRITE context. Transport byte
+  accounting, Zeek SMB size, Zeek `files` size, ground truth, and the version-derived canonical
+  FUID therefore all use the same post-update bytes/content version. Client-to-share move uploads
+  retain payload-bearing timing; cross-share copy/move and Linux/Windows siblings remain on their
+  existing canonical paths.
+- Verification: 71 focused timing/config/update tests passed. The broader SMB/storage/source-
+  timing/network-observation suite passed 228 tests. `eforge validate-config` passed 93 files with
+  zero issues; Ruff check/format and `git diff --check` passed.

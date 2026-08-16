@@ -10,6 +10,8 @@ import pytest
 from pydantic import ValidationError
 
 from evidenceforge.generation.actions.smb_activity import SmbActivityActionBundle
+from evidenceforge.generation.activity.smb_profiles import load_smb_profiles
+from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils import load_yaml
 from evidenceforge.validation import ScenarioValidator
@@ -28,6 +30,99 @@ def _validation_errors(data: dict) -> list[ValidationIssue]:
         for issue in ScenarioValidator(Scenario(**data)).validate()
         if issue.severity == "error"
     ]
+
+
+def _timing_bundle(
+    *, operation: str = "read", duration: str | None = None
+) -> SmbActivityActionBundle:
+    bundle = object.__new__(SmbActivityActionBundle)
+    bundle.anchor = SimpleNamespace(stable_id="smb-timing-test-session")
+    bundle.request = SimpleNamespace(
+        spec=SimpleNamespace(
+            operation=operation,
+            purpose="interactive",
+            batch=SimpleNamespace(duration=duration) if duration is not None else None,
+            source=None,
+            destination=None,
+        )
+    )
+    bundle.executor = SimpleNamespace(
+        state_manager=SimpleNamespace(smb_file_size=lambda file: file.size_bytes)
+    )
+    bundle._operation_time_scale = 1.0
+    bundle._session_setup_scale = 1.0
+    return bundle
+
+
+def test_smb_operation_rates_are_deterministic_and_diverse() -> None:
+    bundle = _timing_bundle()
+    files = tuple(
+        CompiledStorageFile(
+            file_id=f"timing-file-{index}",
+            share="FS-01.finance",
+            path=f"Reports\\sample-{index}.dat",
+            size_bytes=25_000_000,
+            mime_type="application/octet-stream",
+        )
+        for index in range(32)
+    )
+    first = [
+        bundle._operation_timing(file, index, size_bytes=file.size_bytes)
+        for index, file in enumerate(files)
+    ]
+    second = [
+        bundle._operation_timing(file, index, size_bytes=file.size_bytes)
+        for index, file in enumerate(files)
+    ]
+    rates = [
+        file.size_bytes / timing.transfer_seconds for file, timing in zip(files, first, strict=True)
+    ]
+    config = load_smb_profiles().transfer_timing
+
+    assert first == second
+    assert len({round(rate, 3) for rate in rates}) == len(rates)
+    assert len({round(timing.transfer_seconds, 6) for timing in first}) > 24
+    assert all(
+        config.throughput_min_bytes_per_second <= rate <= config.throughput_max_bytes_per_second
+        for rate in rates
+    )
+    assert not all(abs(rate - 25_000_000) < 1 for rate in rates)
+
+
+def test_smb_file_transfer_fuid_is_bound_to_final_content_version() -> None:
+    bundle = _timing_bundle(operation="update")
+    before = CompiledStorageFile(
+        file_id="mutable-file",
+        version=1,
+        share="FS-01.finance",
+        path="Reports\\mutable.xlsx",
+        size_bytes=100,
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    after = before.model_copy(update={"version": 2, "size_bytes": 115})
+
+    assert bundle._file_transfer_fuid(after, "write") == bundle._file_transfer_fuid(after, "write")
+    assert bundle._file_transfer_fuid(after, "write") != bundle._file_transfer_fuid(before, "write")
+
+
+def test_authored_smb_duration_scales_operations_inside_transport_budget() -> None:
+    bundle = _timing_bundle(duration="250ms")
+    files = (
+        CompiledStorageFile(
+            file_id="large-authored-transfer",
+            share="FS-01.finance",
+            path="Reports\\large.dat",
+            size_bytes=2_000_000_000,
+            mime_type="application/octet-stream",
+        ),
+    )
+
+    duration = bundle._duration(files)
+    timing = bundle._operation_timing(files[0], 0, size_bytes=files[0].size_bytes)
+    occupied = 0.096 + 0.088 + bundle._session_setup_seconds() + timing.total_seconds
+
+    assert duration == pytest.approx(0.25)
+    assert occupied < duration
 
 
 @pytest.mark.parametrize(

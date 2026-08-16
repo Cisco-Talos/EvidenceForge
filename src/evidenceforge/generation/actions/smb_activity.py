@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 import ntpath
 import posixpath
 import random
@@ -27,6 +28,7 @@ from evidenceforge.events.contexts import (
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.network import NetworkTransactionPlan, NetworkTuple
 from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.activity.smb_profiles import load_smb_profiles
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.storage_world import (
     CompiledStorageFile,
@@ -68,6 +70,27 @@ class SmbActivityResult:
     transport_uids: tuple[str, ...]
     operations: tuple[dict[str, Any], ...]
     completed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _SmbOperationTiming:
+    """One deterministic operation's bounded wire and lifecycle timing."""
+
+    setup_seconds: float
+    jitter_seconds: float
+    transfer_seconds: float
+    close_delay_seconds: float
+
+    @property
+    def total_seconds(self) -> float:
+        """Return the complete open-to-close budget for the operation."""
+
+        return (
+            self.setup_seconds
+            + self.jitter_seconds
+            + self.transfer_seconds
+            + self.close_delay_seconds
+        )
 
 
 class SmbActivityActionBundle:
@@ -361,15 +384,21 @@ class SmbActivityActionBundle:
         )
 
         operation_truth: list[dict[str, Any]] = []
-        operation_start = auth_time + timedelta(milliseconds=self.rng.randint(75, 240))
-        usable_window = max(
-            0.1, duration - (operation_start - self.request.time).total_seconds() - 0.2
+        operation_start = (
+            auth_time
+            + timedelta(milliseconds=tree_delay_ms)
+            + timedelta(seconds=self._session_setup_seconds())
         )
-        spacing = max(0.015, usable_window / max(1, len(selected)))
+        operation_cursor = operation_start
         for index, file in enumerate(selected):
-            operation_time = operation_start + timedelta(seconds=index * spacing)
+            planned_timing = self._operation_timing(
+                file,
+                index,
+                size_bytes=self._planned_transfer_size(file, index),
+            )
             truth = self._execute_file_operation(
                 file=file,
+                operation_index=index,
                 share=share,
                 tree_id=tree.tree_id,
                 network=net,
@@ -377,9 +406,10 @@ class SmbActivityActionBundle:
                 client=client_system,
                 auth=auth,
                 process=process,
-                timestamp=operation_time,
+                timestamp=operation_cursor,
             )
             operation_truth.append(truth)
+            operation_cursor += timedelta(seconds=planned_timing.total_seconds)
 
         close_time = self.transport_start + timedelta(seconds=max(0.2, duration - 0.02))
         self.executor.generate_logoff(
@@ -664,6 +694,7 @@ class SmbActivityActionBundle:
         self,
         *,
         file: CompiledStorageFile,
+        operation_index: int,
         share: CompiledStorageShare,
         tree_id: str,
         network: NetworkTransactionPlan,
@@ -784,33 +815,13 @@ class SmbActivityActionBundle:
             "delete": "smb_file_delete",
         }[action]
         phase = phase_type.removeprefix("smb_file_").removeprefix("smb_")
-        file_transfer = None
-        if phase in {"read", "write"} and result == "success":
-            file_transfer = FileTransferContext(
-                fuid=generate_stable_zeek_uid(
-                    "F",
-                    (
-                        f"{self.anchor.stable_id}:{state.file_id}:{state.version}:"
-                        f"{phase}:{'orig' if phase == 'write' else 'resp'}"
-                    ),
-                ),
-                source="SMB",
-                filename=path,
-                analyzers=("MIME",),
-                mime_type=state.mime_type,
-                duration=max(0.001, state.size_bytes / 25_000_000),
-                local_orig=client is not None,
-                is_orig=phase == "write",
-                seen_bytes=state.size_bytes,
-                total_bytes=state.size_bytes,
-            )
         previous_path = ""
         previous_client_path = ""
         previous_server_path = ""
         if action == "update":
             state = self.executor.state_manager.update_smb_file(
                 state.file_id,
-                size_bytes=max(1, int(state.size_bytes * self.rng.uniform(0.92, 1.15))),
+                size_bytes=self._updated_size(state, operation_index),
             )
             common["content_version"] = state.version
             common["size_bytes"] = state.size_bytes
@@ -838,12 +849,26 @@ class SmbActivityActionBundle:
             common["content_version"] = state.version
         elif action == "delete":
             self.executor.state_manager.delete_smb_file(state.file_id)
-        phase_rng = random.Random(
-            _stable_seed(
-                f"smb-phase:{self.anchor.stable_id}:{state.file_id}:{timestamp.isoformat()}"
-            )
+        timing = self._operation_timing(
+            state,
+            operation_index,
+            size_bytes=state.size_bytes,
         )
-        action_time = timestamp + timedelta(milliseconds=phase_rng.randint(4, 68))
+        file_transfer = None
+        if phase in {"read", "write"} and result == "success":
+            file_transfer = FileTransferContext(
+                fuid=self._file_transfer_fuid(state, phase),
+                source="SMB",
+                filename=state.path,
+                analyzers=("MIME",),
+                mime_type=state.mime_type,
+                duration=timing.transfer_seconds,
+                local_orig=client is not None,
+                is_orig=phase == "write",
+                seen_bytes=state.size_bytes,
+                total_bytes=state.size_bytes,
+            )
+        action_time = timestamp + timedelta(seconds=timing.setup_seconds + timing.jitter_seconds)
         self._emit_phase(
             event_type=phase_type,
             timestamp=action_time,
@@ -861,7 +886,9 @@ class SmbActivityActionBundle:
             ),
             file_transfer=file_transfer,
         )
-        close_time = action_time + timedelta(milliseconds=phase_rng.randint(8, 135))
+        close_time = action_time + timedelta(
+            seconds=timing.transfer_seconds + timing.close_delay_seconds
+        )
         if handle is not None:
             self.executor.state_manager.close_smb_handle(handle.handle_id, close_time)
         if conflict_handle is not None:
@@ -892,6 +919,17 @@ class SmbActivityActionBundle:
             "outcome": result,
             "fuid": file_transfer.fuid if file_transfer is not None else None,
         }
+
+    def _file_transfer_fuid(self, file: CompiledStorageFile, phase: str) -> str:
+        """Derive file identity from the operation's final canonical version."""
+
+        return generate_stable_zeek_uid(
+            "F",
+            (
+                f"{self.anchor.stable_id}:{file.file_id}:{file.version}:"
+                f"{phase}:{'orig' if phase == 'write' else 'resp'}"
+            ),
+        )
 
     def _emit_phase(
         self,
@@ -1252,22 +1290,115 @@ class SmbActivityActionBundle:
     def _duration(self, files: tuple[CompiledStorageFile, ...]) -> float:
         authored = self.request.spec.batch.duration if self.request.spec.batch else None
         if authored is not None:
-            return max(0.25, parse_duration(authored).total_seconds())
-        total_bytes = sum(self.executor.state_manager.smb_file_size(file) for file in files)
-        throughput = self.rng.uniform(6_000_000, 85_000_000)
-        transfer_time = total_bytes / throughput
-        setup = self.rng.uniform(0.32, 1.35)
-        per_file = len(files) * self.rng.uniform(0.035, 0.22)
-        dwell = {
-            "interactive": self.rng.uniform(0.35, 4.5),
-            "administrative": self.rng.uniform(0.15, 1.6),
-            "software": self.rng.uniform(0.12, 1.2),
-            "backup": self.rng.uniform(0.05, 0.5),
-            "collection": self.rng.uniform(0.08, 0.9),
-            "ransomware": self.rng.uniform(0.02, 0.25),
-            "auto": self.rng.uniform(0.2, 2.5),
-        }[self.request.spec.purpose]
-        return max(2.5, min(120.0, setup + per_file + transfer_time + dwell))
+            duration = max(0.25, parse_duration(authored).total_seconds())
+            self._operation_time_scale = 1.0
+            self._session_setup_scale = 1.0
+            unscaled = sum(
+                self._operation_timing(
+                    file,
+                    index,
+                    size_bytes=self._planned_transfer_size(file, index),
+                ).total_seconds
+                for index, file in enumerate(files)
+            )
+            config = load_smb_profiles().transfer_timing
+            session_setup = self._raw_session_setup_seconds()
+            fixed = 0.096 + 0.088 + config.transport_tail_seconds
+            usable = max(0.001, duration - fixed)
+            scale = min(1.0, usable / max(0.001, session_setup + unscaled))
+            self._operation_time_scale = scale
+            self._session_setup_scale = scale
+            return duration
+        self._operation_time_scale = 1.0
+        self._session_setup_scale = 1.0
+        timing_config = load_smb_profiles().transfer_timing
+        operation_seconds = sum(
+            self._operation_timing(
+                file,
+                index,
+                size_bytes=self._planned_transfer_size(file, index),
+            ).total_seconds
+            for index, file in enumerate(files)
+        )
+        dwell = timing_config.purpose_dwell_seconds[self.request.spec.purpose]
+        dwell_rng = self._timing_rng("session-dwell")
+        # The transport budget covers the largest possible auth/tree delay used
+        # by this bundle, plus the exact sampled operation spans and a tail.
+        duration = (
+            0.096
+            + 0.088
+            + self._session_setup_seconds()
+            + operation_seconds
+            + dwell_rng.uniform(*dwell)
+            + timing_config.transport_tail_seconds
+        )
+        return duration
+
+    def _timing_rng(self, scope: str) -> random.Random:
+        """Return a dedicated stable RNG for one SMB session timing scope."""
+
+        return random.Random(_stable_seed(f"smb-timing:{self.anchor.stable_id}:{scope}"))
+
+    def _session_setup_seconds(self) -> float:
+        """Sample the deterministic tree-to-first-operation setup delay."""
+
+        return self._raw_session_setup_seconds() * getattr(self, "_session_setup_scale", 1.0)
+
+    def _raw_session_setup_seconds(self) -> float:
+        """Return the unscaled deterministic session setup delay."""
+
+        bounds = load_smb_profiles().transfer_timing.session_setup_seconds
+        return self._timing_rng("session-setup").uniform(*bounds)
+
+    def _updated_size(self, file: CompiledStorageFile, operation_index: int) -> int:
+        """Return the canonical post-update size without consuming shared RNG state."""
+
+        current_size = self.executor.state_manager.smb_file_size(file)
+        rng = self._timing_rng(f"update-size:{operation_index}:{file.file_id}")
+        return max(1, int(current_size * rng.uniform(0.92, 1.15)))
+
+    def _planned_transfer_size(self, file: CompiledStorageFile, operation_index: int) -> int:
+        """Return the size that the operation will put on the wire."""
+
+        if self.request.spec.operation == "update":
+            return self._updated_size(file, operation_index)
+        return self.executor.state_manager.smb_file_size(file)
+
+    def _operation_timing(
+        self,
+        file: CompiledStorageFile,
+        operation_index: int,
+        *,
+        size_bytes: int,
+    ) -> _SmbOperationTiming:
+        """Sample one bounded operation span using a stable session-scoped RNG."""
+
+        config = load_smb_profiles().transfer_timing
+        rng = self._timing_rng(f"operation:{operation_index}:{file.file_id}")
+        throughput = min(
+            config.throughput_max_bytes_per_second,
+            max(
+                config.throughput_min_bytes_per_second,
+                rng.lognormvariate(
+                    math.log(config.throughput_median_bytes_per_second),
+                    config.throughput_sigma,
+                ),
+            ),
+        )
+        operation = self.request.spec.operation
+        carries_payload = operation in {"read", "create", "update", "copy"} or (
+            operation == "move"
+            and not isinstance(self.request.spec.source, SmbShareLocation)
+            and isinstance(self.request.spec.destination, SmbShareLocation)
+        )
+        transfer_seconds = max(0.000_001, size_bytes / throughput) if carries_payload else 0.0
+        scale = getattr(self, "_operation_time_scale", 1.0)
+        return _SmbOperationTiming(
+            setup_seconds=rng.uniform(*config.operation_setup_seconds) * scale,
+            jitter_seconds=rng.uniform(*config.operation_jitter_seconds) * scale,
+            transfer_seconds=transfer_seconds * scale,
+            close_delay_seconds=rng.uniform(*config.close_delay_seconds) * scale,
+        )
 
     def _idle_timeout(self) -> timedelta:
         seconds = {
@@ -1283,7 +1414,9 @@ class SmbActivityActionBundle:
 
     def _transport_bytes(self, files: tuple[CompiledStorageFile, ...], *, write: bool) -> int:
         operation = self.request.spec.operation
-        data_bytes = sum(self.executor.state_manager.smb_file_size(file) for file in files)
+        data_bytes = sum(
+            self._planned_transfer_size(file, index) for index, file in enumerate(files)
+        )
         source_is_share = isinstance(self.request.spec.source, SmbShareLocation)
         destination_is_share = isinstance(self.request.spec.destination, SmbShareLocation)
         if write:

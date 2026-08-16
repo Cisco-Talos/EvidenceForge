@@ -1035,6 +1035,26 @@ def test_linux_to_samba_exercises_remaining_vfs_operations(
         record.get("hostname") == "SAMBA-01" and record.get("app_name") == "smbd_audit"
         for record in _syslog_records(tmp_path)
     )
+    if operation == "update":
+        zeek_write = next(
+            record
+            for record in _json_records(tmp_path, "smb_files.json")
+            if record.get("action") == "SMB::FILE_WRITE"
+        )
+        zeek_file = next(
+            record
+            for record in _json_records(tmp_path, "files.json")
+            if record.get("fuid") == zeek_write["fuid"]
+        )
+        assert truth["operations"][0]["content_version"] == 2
+        assert zeek_write["size"] == truth["operations"][0]["size_bytes"]
+        assert zeek_file["total_bytes"] == truth["operations"][0]["size_bytes"]
+        assert any(
+            record.get("hostname") == "SAMBA-01"
+            and record.get("object") == "FILE"
+            and record.get("action") == "WRITE"
+            for record in _json_records(tmp_path, "ecar.json")
+        )
     if operation == "move":
         rename = next(
             record

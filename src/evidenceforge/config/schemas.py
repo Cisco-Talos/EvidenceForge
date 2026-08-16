@@ -13,6 +13,7 @@ All models use extra="forbid" so misspelled fields are caught as errors.
 from __future__ import annotations
 
 import ipaddress
+import math
 import re
 from string import Formatter
 from typing import Any, ClassVar, Literal, Self
@@ -1644,6 +1645,15 @@ class ExternalScannerPortProfile(BaseModel, extra="forbid"):
 
 
 SmbOperationName = Literal["browse", "read", "create", "update", "copy", "move", "delete"]
+SmbPurposeName = Literal[
+    "interactive",
+    "administrative",
+    "software",
+    "backup",
+    "collection",
+    "ransomware",
+    "auto",
+]
 SmbProcessOperandMode = Literal[
     "none",
     "remote",
@@ -1654,6 +1664,9 @@ SmbProcessOperandMode = Literal[
 ]
 SmbAuthOptionName = Literal["auto", "kerberos", "ntlmssp"]
 _SMB_OPERATIONS = frozenset({"browse", "read", "create", "update", "copy", "move", "delete"})
+_SMB_PURPOSES = frozenset(
+    {"interactive", "administrative", "software", "backup", "collection", "ransomware", "auto"}
+)
 SmbVfsAuditProfileName = Literal["standard", "high"]
 SmbAuditEventType = Literal[
     "smb_directory_enumeration",
@@ -2078,11 +2091,78 @@ class SmbServerProfile(BaseModel, extra="forbid", frozen=True):
         return self
 
 
+class SmbTransferTimingConfig(BaseModel, extra="forbid", frozen=True):
+    """Bounded wire-rate and operation timing texture for canonical SMB activity."""
+
+    throughput_median_bytes_per_second: float = Field(gt=0.0, allow_inf_nan=False)
+    throughput_sigma: float = Field(gt=0.0, le=2.0, allow_inf_nan=False)
+    throughput_min_bytes_per_second: float = Field(gt=0.0, allow_inf_nan=False)
+    throughput_max_bytes_per_second: float = Field(gt=0.0, allow_inf_nan=False)
+    session_setup_seconds: tuple[float, float]
+    operation_setup_seconds: tuple[float, float]
+    operation_jitter_seconds: tuple[float, float]
+    close_delay_seconds: tuple[float, float]
+    purpose_dwell_seconds: dict[SmbPurposeName, tuple[float, float]]
+    transport_tail_seconds: float = Field(gt=0.0, allow_inf_nan=False)
+
+    @field_validator(
+        "session_setup_seconds",
+        "operation_setup_seconds",
+        "operation_jitter_seconds",
+        "close_delay_seconds",
+    )
+    @classmethod
+    def valid_range(cls, values: tuple[float, float], info: ValidationInfo) -> tuple[float, float]:
+        """Require finite, nonnegative, increasing timing ranges."""
+
+        if len(values) != 2:
+            raise ValueError(f"{info.field_name} must contain exactly [minimum, maximum]")
+        minimum, maximum = values
+        if not math.isfinite(minimum) or not math.isfinite(maximum):
+            raise ValueError(f"{info.field_name} values must be finite")
+        if minimum < 0 or maximum <= minimum:
+            raise ValueError(f"{info.field_name} must have 0 <= minimum < maximum, got {values!r}")
+        return values
+
+    @model_validator(mode="after")
+    def coherent_bounds(self) -> Self:
+        """Keep throughput and total-duration clamps internally coherent."""
+
+        if self.throughput_max_bytes_per_second <= self.throughput_min_bytes_per_second:
+            raise ValueError(
+                "throughput_max_bytes_per_second must exceed throughput_min_bytes_per_second"
+            )
+        if not (
+            self.throughput_min_bytes_per_second
+            <= self.throughput_median_bytes_per_second
+            <= self.throughput_max_bytes_per_second
+        ):
+            raise ValueError("throughput median must fall within the configured bounds")
+        missing = sorted(_SMB_PURPOSES - set(self.purpose_dwell_seconds))
+        if missing:
+            raise ValueError(f"purpose_dwell_seconds is missing SMB purposes: {missing}")
+        for purpose, values in self.purpose_dwell_seconds.items():
+            if len(values) != 2:
+                raise ValueError(f"purpose_dwell_seconds.{purpose} must contain [minimum, maximum]")
+            minimum, maximum = values
+            if (
+                not math.isfinite(minimum)
+                or not math.isfinite(maximum)
+                or minimum < 0
+                or maximum <= minimum
+            ):
+                raise ValueError(
+                    f"purpose_dwell_seconds.{purpose} must have 0 <= minimum < maximum"
+                )
+        return self
+
+
 class SmbProfilesConfig(BaseModel, extra="forbid", frozen=True):
     """Root schema for smb_profiles.yaml."""
 
     schema_version: Literal[1]
     advertised_filesystem_defaults: SmbAdvertisedFilesystemDefaults
+    transfer_timing: SmbTransferTimingConfig
     samba_audit: SmbSambaAuditConfig
     client_defaults: dict[Literal["windows", "linux"], str]
     client_profiles: dict[str, SmbClientProfile]

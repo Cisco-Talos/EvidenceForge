@@ -166,6 +166,7 @@ def test_semantic_smb_read_projects_correlated_sparse_evidence(
     )
     connection_end = connection["ts"] + connection["duration"]
     assert all(connection["ts"] <= record["ts"] <= connection_end for record in semantic_actions)
+    assert semantic_files[0]["ts"] + semantic_files[0]["duration"] <= connection_end
     ecar_flows = [
         record
         for record in _json_records(tmp_path, "ecar.json")
@@ -377,6 +378,33 @@ def test_high_audit_smb_lifecycle_uses_native_fields_and_ordering(
     ]
 
     GenerationEngine(Scenario(**data), tmp_path, resource_forecast=_forecast(tmp_path)).generate()
+
+    ground_truth = json.loads((tmp_path / "GROUND_TRUTH.json").read_text(encoding="utf-8"))
+    smb_truth = next(event for event in ground_truth["events"] if event["kind"] == "smb_activity")
+    operation = smb_truth["attributes"]["operations"][0]
+    smb_write = next(
+        record
+        for record in _json_records(tmp_path, "smb_files.json")
+        if record.get("action") == "SMB::FILE_WRITE"
+        and str(record.get("name", "")).endswith("forecast.xlsx")
+    )
+    file_record = next(
+        record
+        for record in _json_records(tmp_path, "files.json")
+        if record.get("fuid") == smb_write["fuid"]
+    )
+    assert operation["content_version"] == 2
+    assert smb_write["size"] == operation["size_bytes"]
+    assert file_record["total_bytes"] == operation["size_bytes"]
+    assert smb_write["fuid"] == file_record["fuid"]
+    write_connection = next(
+        record
+        for record in _json_records(tmp_path, "conn.json")
+        if record["uid"] == smb_write["uid"]
+    )
+    assert file_record["ts"] + file_record["duration"] <= (
+        write_connection["ts"] + write_connection["duration"]
+    )
 
     events = _security_events(tmp_path, "FS-01")
     handle_open = next(

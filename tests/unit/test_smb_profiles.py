@@ -49,6 +49,8 @@ def test_packaged_profiles_cover_native_client_and_server_modes() -> None:
     }
     assert config.samba_audit.operations["smb_file_delete"].label == "unlink"
     assert config.samba_audit.failure_audit_profiles == ("standard", "high")
+    assert config.transfer_timing.throughput_median_bytes_per_second == 25_000_000
+    assert config.transfer_timing.throughput_sigma == 0.72
     assert config.client_defaults == {
         "windows": "windows_explorer",
         "linux": "linux_gvfs",
@@ -79,12 +81,25 @@ def test_packaged_profiles_cover_native_client_and_server_modes() -> None:
     assert all(
         process.image != "/usr/bin/mount.cifs" for process in mounted.operation_processes.values()
     )
-
     samba = select_server_profile("linux", ["samba"])
     assert samba.listener.image == "/usr/sbin/smbd"
     assert samba.listener.lifecycle == "service"
     assert samba.worker is not None
     assert samba.worker.lifecycle == "transport"
+
+
+def test_schema_rejects_incoherent_smb_transfer_timing() -> None:
+    raw = deepcopy(load_smb_profiles().model_dump(mode="python"))
+    raw["transfer_timing"]["throughput_min_bytes_per_second"] = 30_000_000
+
+    with pytest.raises(ValidationError, match="throughput median must fall within"):
+        SmbProfilesConfig.model_validate(raw)
+
+    raw = deepcopy(load_smb_profiles().model_dump(mode="python"))
+    raw["transfer_timing"]["operation_setup_seconds"] = (0.2, 0.1)
+
+    with pytest.raises(ValidationError, match="0 <= minimum < maximum"):
+        SmbProfilesConfig.model_validate(raw)
 
 
 def test_client_selection_prefers_explicit_aliases_and_defaults_generic_smb() -> None:
