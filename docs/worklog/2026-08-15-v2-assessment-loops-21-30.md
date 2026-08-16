@@ -398,6 +398,21 @@ and 1 skipped.
   63.0. Kerberos did not recur. Loop 30 will validate and repair the ranked P0 remote-WMI chronology;
   the failed-SSH lifecycle remains queued for the extended Loop 31–40 run.
 
+### Loop 30 outcome
+
+- The proposed remote-WMI P0 was rejected after exact identity joins proved the later MMC/GPMC
+  DCOM session unrelated to the earlier DC-local WmiPrvSE account chain. No chronology was changed.
+- Commit `065c608b` instead repairs the next validated family: `/24` scans expand to all 254 usable
+  targets, `-sn` emits ICMP discovery, unmodeled targets remain silent, large ranges are stratified,
+  and workload/process-lifetime contracts cover the full fan-out.
+- The full suite, Ruff, generation, and strict probe passed. Both Zeek sensors saw all 254 discovery
+  targets and 99.76% of 1,270 connect probes after observation loss, with zero unassigned responses.
+- Automated evaluation scored 97.2016 over 86,077 records. Frozen digest:
+  `fdff216b4a76486de3b38022d8f3be19bc5804b5f7f82e0103777a363e59b729`.
+- Standalone scores were 52/48/43/78 (average 55.25); deliberation revised to 69.5. The original ten
+  requested loops are complete. The user extended the run through Loop 40; Loop 31 starts with the
+  scanner FLOW-before-process source-timing inversion.
+
 ## Loop 25 — Windows remote-service payload lifecycle
 
 ### Family contract (before implementation)
