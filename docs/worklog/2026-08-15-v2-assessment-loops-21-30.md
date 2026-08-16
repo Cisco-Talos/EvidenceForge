@@ -327,6 +327,21 @@ and 1 skipped.
   priority is the cross-source PSEXESVC file lifecycle inversion, followed by the inventory-shaped
   `/24` scan, proxy DNS millisecond quantization, bounded eCAR delay, and scheduled-task ownership.
 
+### Loop 25 outcome
+
+- Commit `c507f995` binds the remote service payload, install, process, child, and termination to one
+  canonical lifecycle, makes kernel System/PID 4 the remote drop writer, and prevents generic
+  process creation from inventing duplicate PSEXESVC/HealthMonitorSvc file effects.
+- The complete suite passed with 6,041 tests and 22 skips; Ruff check and format check passed. The
+  strict rendered probe found one full PSEXESVC transaction, zero ordering or identity violations,
+  one correct preexisting-binary exemption, and no boundary/observation exemptions.
+- Automated evaluation remained 96.7054 over 73,361 records. Frozen review-data digest:
+  `470234b68e2f662a0fc37189ab778a446d1b37c7ff5204688af036b3b8669527`.
+- The fresh standalone scores were 68/66/57/86 (average 69.25). Deliberation reconciled them to a
+  Synthetic consensus at 78.0. The corrected PsExec lifecycle became explicit realism
+  counterevidence. Loop 26 will address the highest-ranked remaining signature: near-universal
+  exact 35 ms Linux pipeline-stage spacing.
+
 ## Loop 25 — Windows remote-service payload lifecycle
 
 ### Family contract (before implementation)
