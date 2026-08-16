@@ -26900,7 +26900,9 @@ class ActivityGenerator:
         if existing_logon_id:
             candidate = self.state_manager.get_session_at(existing_logon_id, effective_sudo_time)
             if candidate is not None and _session_active_for_activity(
-                candidate, effective_sudo_time
+                candidate,
+                reserve_until,
+                margin_seconds=1.0,
             ):
                 session = candidate
         if session is None:
@@ -26912,7 +26914,11 @@ class ActivityGenerator:
                 )
                 if candidate.system == system.hostname
                 and candidate.session_kind in {"interactive", "ssh"}
-                and _session_active_for_activity(candidate, effective_sudo_time)
+                and _session_active_for_activity(
+                    candidate,
+                    reserve_until,
+                    margin_seconds=1.0,
+                )
             ]
             if compatible_sessions:
                 session = max(compatible_sessions, key=lambda candidate: candidate.start_time)
@@ -26981,6 +26987,20 @@ class ActivityGenerator:
         reserve_until += shell_shift
         timing_shift += shell_shift
         tty_available[tty_key] = reserve_until
+        if not _session_active_for_activity(
+            session,
+            reserve_until,
+            margin_seconds=1.0,
+        ):
+            # Foreground serialization may move a command beyond an SSH
+            # transport close after the initial session-admission check. The
+            # ambient invocation has not emitted anything yet, so reject it
+            # rather than attaching process/PAM evidence to an ended session.
+            if available is None:
+                tty_available.pop(tty_key, None)
+            else:
+                tty_available[tty_key] = available
+            return 0, None, timing_shift, assigned_tty
         sudo_pid = self.generate_process(
             user=user,
             system=system,

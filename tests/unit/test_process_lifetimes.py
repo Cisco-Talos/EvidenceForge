@@ -703,6 +703,51 @@ def test_linux_sudo_companions_share_shell_foreground_slot_across_ttys() -> None
     assert shell_pid > 0 and logon_id
 
 
+def test_linux_sudo_rejects_foreground_shift_past_ssh_transport_close() -> None:
+    """A busy SSH shell cannot acquire a sudo dependent after its transport closes."""
+    generator, state, system, user, logon_id, shell_pid, events = _linux_interactive_shell(
+        session_kind="ssh"
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    close = start + timedelta(minutes=1)
+    state.update_session_metadata(logon_id, network_close_time=close)
+    busy_pid = generator.generate_process(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name="/usr/bin/git",
+        command_line="git status --short",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+    )
+    generator._remember_process_connection_hold(
+        system=system,
+        pid=busy_pid,
+        close_time=close + timedelta(seconds=30),
+    )
+
+    sudo_pid, child_pid, _shift, _tty = generator.generate_linux_sudo_processes(
+        system=system,
+        sudo_time=close - timedelta(seconds=30),
+        child_time=close - timedelta(seconds=29, milliseconds=800),
+        sudo_user=user.username,
+        tty="pts/1",
+        command="/usr/bin/id",
+        reserve_until=close - timedelta(seconds=25),
+        lifecycle_group_id="sudo:after-ssh-close",
+    )
+
+    assert sudo_pid == 0
+    assert child_pid is None
+    assert not any(
+        event.event_type == "process_create"
+        and event.process is not None
+        and event.process.image == "/usr/bin/sudo"
+        for event in events
+    )
+
+
 def test_ssh_session_activity_stops_before_transport_close() -> None:
     start = datetime(2024, 3, 18, 20, 20, 0, tzinfo=UTC)
     close = start + timedelta(minutes=7)

@@ -712,3 +712,17 @@ and 1 skipped.
   rejection. Broad Kerberos, identity, causal, baseline, source-projection, and config verification
   passed 947 tests with one skip; `eforge validate-config` passed all 93 files. Repository-wide
   Ruff check/format and `git diff --check` passed.
+
+### Generation-gate sibling correction
+
+- The first authoritative regeneration exposed a pre-existing Linux admission gap rather than a
+  Kerberos RNG-stream change: ambient sudo selected a still-live SSH session, then shared
+  foreground-shell serialization shifted the sudo process beyond that session's transport close.
+  The source-timing closure-tail invariant correctly rejected the resulting dependent.
+- Sudo admission now requires the owning interactive/SSH session to remain active through the
+  planned command close with source-observation margin, and rechecks that boundary after shell
+  serialization. If a busy shell pushes an ambient invocation past its owning session, the bundle
+  emits no process or PAM evidence instead of attaching activity to an ended session; the strict
+  closure-tail bound is unchanged. The focused busy-shell/SSH-close regression passes, and the
+  broader process, sudo, source-timing, dispatcher, eCAR, activity, and baseline suite passes 855
+  tests with one skip. Repository-wide Ruff check/format and `git diff --check` pass.
