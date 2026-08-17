@@ -50,6 +50,20 @@ from .deployment_registry import (
 )
 from .engine import GenerationEngine
 from .ground_truth import GroundTruthGenerator
+from .ssh_channels import (
+    SshApplicationChannelManager,
+    SshChannelAffinity,
+    SshChannelCensus,
+    SshChannelClosure,
+    SshOperationKind,
+    SshOperationLease,
+    SshProcessHold,
+    SshSessionAdmissionError,
+    SshSessionBinding,
+    SshSessionView,
+    SshTransportPlan,
+    SshWatermarkResult,
+)
 from .state_manager import StateManager
 
 __all__ = [
@@ -75,6 +89,18 @@ __all__ = [
     "LocalArtifactVersionRegistry",
     "LocalArtifactVersionPageCursor",
     "SourceInstanceDeployment",
+    "SshApplicationChannelManager",
+    "SshChannelAffinity",
+    "SshChannelCensus",
+    "SshChannelClosure",
+    "SshOperationKind",
+    "SshOperationLease",
+    "SshProcessHold",
+    "SshSessionAdmissionError",
+    "SshSessionBinding",
+    "SshSessionView",
+    "SshTransportPlan",
+    "SshWatermarkResult",
     "StateManager",
     "UserApplicationAssignment",
     "UserApplicationAssignmentSpec",
