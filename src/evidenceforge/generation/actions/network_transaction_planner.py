@@ -2383,11 +2383,21 @@ class NetworkTransactionPlanner:
                 response_size = request_size
                 orig_bytes = request_size
                 resp_bytes = response_size
-                duration = generator_module._icmp_echo_duration(rng, duration)
+                duration = generator_module._icmp_echo_duration(
+                    rng,
+                    duration,
+                    timing_runtime=self._timing_runtime,
+                    stable_id=f"{request.stable_id}:{conn_id}:icmp-echo-duration",
+                )
             else:
                 orig_bytes = generator_module._icmp_echo_payload_size(rng, orig_bytes)
                 resp_bytes = 0
-                duration = generator_module._icmp_echo_duration(rng, duration)
+                duration = generator_module._icmp_echo_duration(
+                    rng,
+                    duration,
+                    timing_runtime=self._timing_runtime,
+                    stable_id=f"{request.stable_id}:{conn_id}:icmp-no-response-duration",
+                )
         elif dns_has_response:
             conn_state = "SF"
             history = "Dd"
@@ -2776,10 +2786,11 @@ class NetworkTransactionPlanner:
             gap_seed = _stable_seed(
                 f"icmp_observation_gap:{src_ip}:{zeek_type}:{dst_ip}:{zeek_code}:{adjusted_ts_us}"
             )
+            interval_us = max(0, int(round((duration or 0.0) * 1_000_000)))
             network_preparation.stage_point(
                 NetworkRuntimePointFamily.ICMP_OBSERVATION,
                 icmp_key,
-                adjusted_ts_us + 7_000 + (gap_seed % 77_000),
+                adjusted_ts_us + interval_us + 7_000 + (gap_seed % 77_000),
                 expires_at=min(
                     boundary.network_runtime.window_end,
                     ensure_utc(time) + timedelta(days=1),

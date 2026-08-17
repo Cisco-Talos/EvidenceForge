@@ -3435,13 +3435,37 @@ def _icmp_echo_payload_size(rng: random.Random, requested: int | None) -> int:
     return rng.choices(common_sizes, weights=weights, k=1)[0]
 
 
-def _icmp_echo_duration(rng: random.Random, requested: float | None) -> float:
-    """Return realistic ICMP RTT without leaving clamp-shaped plateaus."""
-    if requested is not None and 0.001 <= requested <= 0.15 and rng.random() < 0.65:
-        return requested
-    if rng.random() < 0.85:
-        return rng.uniform(0.001, 0.045)
-    return rng.uniform(0.045, 0.145)
+def _icmp_echo_duration(
+    rng: random.Random,
+    requested: float | None,
+    *,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
+    stable_id: str = "",
+) -> float:
+    """Return one runtime-owned ICMP RTT with the legacy mixture support."""
+    del rng
+    if type(timing_runtime) not in {TimingRuntime, SourceTimingPlanningRuntime}:
+        raise StateError("ICMP echo duration requires an injected TimingRuntime")
+    if type(stable_id) is not str or not stable_id:
+        raise StateError("ICMP echo duration requires a stable connection identity")
+
+    components: tuple[tuple[float, float, float, float], ...] = (
+        (0.85, 0.001, 0.012, 0.045),
+        (0.15, 0.045, 0.072, 0.145),
+    )
+    if requested is not None and 0.001 <= requested <= 0.15:
+        components = (
+            (0.65, requested, requested, requested),
+            (0.35 * 0.85, 0.001, 0.012, 0.045),
+            (0.35 * 0.15, 0.045, 0.072, 0.145),
+        )
+    return BaselineTimingPlanner(timing_runtime, source="activity").mixture_seconds(
+        relationship_key="activity.icmp.echo_rtt",
+        stable_id=stable_id,
+        components=components,
+        lifecycle_id=stable_id,
+        sample_key="rtt",
+    )
 
 
 def _linux_command_process_from_shell(
