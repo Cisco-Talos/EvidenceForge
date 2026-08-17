@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+import ast
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from threading import Event
 
 import pytest
@@ -347,3 +349,80 @@ def test_preparation_census_is_bounded_and_watermark_waits_for_claim() -> None:
             preparation.commit_no_fail()
         future.result(timeout=2)
     assert finished.is_set()
+
+
+def test_production_claim_site_enforces_global_timing_before_authority_lock_order() -> None:
+    """Every production claim must surround authority commit and its timing callback."""
+
+    repository_root = Path(__file__).resolve().parents[2]
+    production_root = repository_root / "src" / "evidenceforge"
+    claim_sites: list[tuple[Path, str, ast.With]] = []
+    for path in production_root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for function in (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ):
+            for node in ast.walk(function):
+                if not isinstance(node, ast.With):
+                    continue
+                if any(
+                    isinstance(item.context_expr, ast.Call)
+                    and isinstance(item.context_expr.func, ast.Attribute)
+                    and item.context_expr.func.attr == "claimed_commit"
+                    for item in node.items
+                ):
+                    claim_sites.append((path.relative_to(repository_root), function.name, node))
+
+    expected_sites = {
+        (
+            "src/evidenceforge/generation/lifecycle_authority.py",
+            "materialize_prepared_network_transaction",
+        ): "materialize_connection_composite",
+    }
+    assert {
+        (path.as_posix(), function): expected_sites[(path.as_posix(), function)]
+        for path, function, _node in claim_sites
+    } == expected_sites
+
+    for path, function, claim_body in claim_sites:
+        materialize_name = expected_sites[(path.as_posix(), function)]
+        assert not any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_finalize_due_process_lifetimes"
+            for statement in claim_body.body
+            for node in ast.walk(statement)
+        )
+        materialize_calls = [
+            node
+            for statement in claim_body.body
+            for node in ast.walk(statement)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == materialize_name
+        ]
+        assert len(materialize_calls) == 1
+        callback = next(
+            keyword.value
+            for keyword in materialize_calls[0].keywords
+            if keyword.arg == "finalize_external_no_fail"
+        )
+        if isinstance(callback, ast.Attribute):
+            assert callback.attr == "commit_no_fail"
+            continue
+        assert isinstance(callback, ast.Name)
+        callback_definitions = [
+            node
+            for statement in claim_body.body
+            for node in ast.walk(statement)
+            if isinstance(node, ast.FunctionDef) and node.name == callback.id
+        ]
+        assert len(callback_definitions) == 1
+        assert any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "commit_no_fail"
+            for node in ast.walk(callback_definitions[0])
+        )

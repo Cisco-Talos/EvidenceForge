@@ -63,14 +63,28 @@ from evidenceforge.generation.lifecycle_registry import (
     ProcessLifecycleSnapshot,
 )
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+from evidenceforge.generation.network_runtime import (
+    NetworkConnectionCommitResult,
+    NetworkTransactionPreparationReceipt,
+    NetworkTransactionRuntime,
+    NetworkTransportLifecycleMode,
+    PreparedNetworkTransactionRoot,
+)
 from evidenceforge.generation.proxy_channels import (
     ExplicitProxyAdmissionCommitResult,
     ExplicitProxyAdmissionToken,
     ExplicitProxyChannelManager,
 )
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanner,
+    SourceTimingPreparation,
+    SourceTimingPreparationReceipt,
+    SourceTimingPreparationToken,
+)
 from evidenceforge.generation.state_manager import (
     ConnectionCompositeMaterializationPlan,
     ConnectionCompositeMaterializationResult,
+    ConnectionMaterializationMode,
     MaterializationBatchPlan,
     PhysicalTransportFingerprint,
     ProcessMaterializationPlan,
@@ -578,6 +592,167 @@ class LifecycleConnectionCompositeResult:
     receipt: LifecycleConnectionCompositeReceipt
 
 
+@dataclass(frozen=True, slots=True)
+class LifecyclePreparedNetworkReceipt:
+    """Authenticated proof of one complete runtime/timing/network publication."""
+
+    _runtime_publication_token: str
+    _state_publication_token: str
+    _transaction_id: str
+    _materialization_mode: ConnectionMaterializationMode
+    _lifecycle_mode: NetworkTransportLifecycleMode
+    _physical_transport: PhysicalTransportFingerprint
+    _result_digest: str
+    _timing_binding_token: SourceTimingPreparationToken
+    _connection_receipt: LifecycleConnectionCompositeReceipt
+    _runtime_receipt: NetworkTransactionPreparationReceipt
+    _timing_receipt: SourceTimingPreparationReceipt
+    _integrity_token: str
+
+    @classmethod
+    def _issue(
+        cls,
+        *,
+        authority_secret: bytes,
+        runtime_publication_token: str,
+        state_publication_token: str,
+        transaction_id: str,
+        materialization_mode: ConnectionMaterializationMode,
+        lifecycle_mode: NetworkTransportLifecycleMode,
+        physical_transport: PhysicalTransportFingerprint,
+        result_digest: str,
+        timing_binding_token: SourceTimingPreparationToken,
+        connection_receipt: LifecycleConnectionCompositeReceipt,
+        runtime_receipt: NetworkTransactionPreparationReceipt,
+        timing_receipt: SourceTimingPreparationReceipt,
+    ) -> LifecyclePreparedNetworkReceipt:
+        """Issue one authority-keyed receipt over every nested commit proof."""
+
+        values = (
+            runtime_publication_token,
+            state_publication_token,
+            transaction_id,
+            materialization_mode,
+            lifecycle_mode,
+            physical_transport,
+            result_digest,
+            timing_binding_token,
+            connection_receipt,
+            runtime_receipt,
+            timing_receipt,
+        )
+        integrity_token = cls._integrity_for(
+            authority_secret=authority_secret,
+            values=values,
+        )
+        return cls(*values, integrity_token)
+
+    @staticmethod
+    def _integrity_for(
+        *,
+        authority_secret: bytes,
+        values: tuple[object, ...],
+    ) -> str:
+        """Return the authority HMAC over exact nested network authority truth."""
+
+        canonical = ("lifecycle-prepared-network-v1", *values)
+        return hmac.new(
+            authority_secret,
+            repr(canonical).encode(),
+            sha256,
+        ).hexdigest()
+
+    @property
+    def prior_version(self) -> int:
+        """Return the StateManager version consumed by this transaction."""
+
+        return self._connection_receipt.prior_version
+
+    @property
+    def committed_version(self) -> int:
+        """Return the StateManager version after this transaction committed."""
+
+        return self._connection_receipt.committed_version
+
+    @property
+    def transaction_id(self) -> str:
+        """Return the finalized network transaction identity."""
+
+        return self._transaction_id
+
+    @property
+    def physical_transport_id(self) -> str:
+        """Return the physical transport owning this occurrence."""
+
+        return self._physical_transport.transport_id
+
+    @property
+    def materializes_connection(self) -> bool:
+        """Return whether this receipt created the physical transport."""
+
+        return self._connection_receipt.materializes_connection
+
+    @property
+    def connection_receipt(self) -> LifecycleConnectionCompositeReceipt:
+        """Return the nested State/lifecycle/application proof."""
+
+        return self._connection_receipt
+
+    @property
+    def runtime_receipt(self) -> NetworkTransactionPreparationReceipt:
+        """Return the nested network-runtime and cryptographic proof."""
+
+        return self._runtime_receipt
+
+    @property
+    def timing_receipt(self) -> SourceTimingPreparationReceipt:
+        """Return the nested source-timing proof."""
+
+        return self._timing_receipt
+
+    @property
+    def timing_binding_token(self) -> SourceTimingPreparationToken:
+        """Return the exact source-timing preparation binding."""
+
+        return self._timing_binding_token
+
+    @property
+    def receipt_token(self) -> str:
+        """Return the opaque outer authority proof."""
+
+        return self._integrity_token
+
+    def _has_valid_integrity(self, authority_secret: bytes) -> bool:
+        values = (
+            self._runtime_publication_token,
+            self._state_publication_token,
+            self._transaction_id,
+            self._materialization_mode,
+            self._lifecycle_mode,
+            self._physical_transport,
+            self._result_digest,
+            self._timing_binding_token,
+            self._connection_receipt,
+            self._runtime_receipt,
+            self._timing_receipt,
+        )
+        expected = self._integrity_for(
+            authority_secret=authority_secret,
+            values=values,
+        )
+        return hmac.compare_digest(self._integrity_token, expected)
+
+
+@dataclass(frozen=True, slots=True)
+class LifecyclePreparedNetworkResult:
+    """Exact committed connection, runtime, and source-timing results."""
+
+    connection: LifecycleConnectionCompositeResult
+    runtime: NetworkTransactionPreparationReceipt
+    timing: SourceTimingPreparationReceipt
+    receipt: LifecyclePreparedNetworkReceipt
+
+
 class _OrderedIntent(Protocol):
     @property
     def order_key(self) -> tuple[datetime, datetime, str, int]: ...
@@ -890,6 +1065,8 @@ class GeneratorLifecycleAuthority:
         self._application_registry: ApplicationChannelRegistry | None = None
         self._http_channel_manager: HttpApplicationChannelManager | None = None
         self._explicit_proxy_manager: ExplicitProxyChannelManager | None = None
+        self._network_runtime: NetworkTransactionRuntime | None = None
+        self._source_timing_planner: SourceTimingPlanner | None = None
 
     @property
     def registry(self) -> LifecycleRegistry:
@@ -925,6 +1102,28 @@ class GeneratorLifecycleAuthority:
         if current is not None and current is not manager:
             raise StateError("Lifecycle authority is already bound to another proxy manager")
         self._explicit_proxy_manager = manager
+
+    def bind_network_transaction_runtime(self, runtime: NetworkTransactionRuntime) -> None:
+        """Bind the one runtime sharing this authority's StateManager."""
+
+        if type(runtime) is not NetworkTransactionRuntime:
+            raise TypeError("Lifecycle authority requires a typed network runtime")
+        if runtime.state_manager is not self._state_manager:
+            raise StateError("Lifecycle authority and network runtime must share StateManager")
+        current = self._network_runtime
+        if current is not None and current is not runtime:
+            raise StateError("Lifecycle authority is already bound to another network runtime")
+        self._network_runtime = runtime
+
+    def bind_source_timing_planner(self, planner: SourceTimingPlanner) -> None:
+        """Bind the one source-timing planner committed by prepared network roots."""
+
+        if type(planner) is not SourceTimingPlanner:
+            raise TypeError("Lifecycle authority requires a typed source timing planner")
+        current = self._source_timing_planner
+        if current is not None and current is not planner:
+            raise StateError("Lifecycle authority is already bound to another timing planner")
+        self._source_timing_planner = planner
 
     def authenticates_materialization_receipt(
         self,
@@ -1555,12 +1754,15 @@ class GeneratorLifecycleAuthority:
         lifecycle_token: LifecycleClosedTransportAdmissionToken | None = None,
         application_token: _ApplicationAdmissionToken | None = None,
         prerequisite_receipts: tuple[LifecycleConnectionCompositeReceipt, ...] = (),
+        finalize_external_no_fail: Callable[[], None] | None = None,
     ) -> LifecycleConnectionCompositeResult:
         """Atomically consume and publish State, lifecycle, and application admissions.
 
         Passing an admission token transfers its one-shot reservation to this
         authority. Every failure path releases still-uncommitted exact capabilities;
         committed prior receipts remain immutable proof inputs and are never consumed.
+        ``finalize_external_no_fail`` runs last while every lower authority fence is
+        retained and must contain only already-claimed, structurally no-fail commits.
         """
 
         try:
@@ -1572,6 +1774,7 @@ class GeneratorLifecycleAuthority:
             )
             lifecycle_receipt: LifecycleClosedTransportPublicationReceipt | None = None
             application_result: _ApplicationAdmissionResult | None = None
+            application_proof: ApplicationChannelCompositeProof | None = None
             with ExitStack() as stack:
                 application_commit = (
                     self._enter_application_admission(stack, application_token)
@@ -1624,6 +1827,34 @@ class GeneratorLifecycleAuthority:
                         application_result = self._commit_application_admission_no_fail(
                             application_commit
                         )
+                    application_proof = (
+                        self._normalize_application_proof(application_token, application_result)
+                        if application_token is not None and application_result is not None
+                        else None
+                    )
+                    if lifecycle_receipt is not None and not (
+                        self._registry.authenticates_closed_transport_publication_receipt(
+                            lifecycle_receipt,
+                            request=lifecycle_receipt.request,
+                            start_plan_tokens=self._connection_batch_member_tokens(plan),
+                        )
+                    ):
+                        raise AssertionError(
+                            "Lifecycle registry returned an unauthenticated receipt"
+                        )
+                    if application_proof is not None:
+                        if application_proof.current_transport_id != plan.physical_transport_id:
+                            raise AssertionError(
+                                "Application manager committed another physical transport"
+                            )
+                        if application_proof.prerequisite_transport_ids != tuple(
+                            proof.physical_transport_id for proof in prerequisite_proofs
+                        ):
+                            raise AssertionError(
+                                "Application manager changed prerequisite transport legs"
+                            )
+                    if finalize_external_no_fail is not None:
+                        finalize_external_no_fail()
         except BaseException:
             self._discard_connection_composite_admissions(
                 lifecycle_token,
@@ -1631,25 +1862,6 @@ class GeneratorLifecycleAuthority:
             )
             raise
 
-        application_proof = (
-            self._normalize_application_proof(application_token, application_result)
-            if application_token is not None and application_result is not None
-            else None
-        )
-        if lifecycle_receipt is not None:
-            if not self._registry.authenticates_closed_transport_publication_receipt(
-                lifecycle_receipt,
-                request=lifecycle_receipt.request,
-                start_plan_tokens=self._connection_batch_member_tokens(plan),
-            ):
-                raise AssertionError("Lifecycle registry returned an unauthenticated receipt")
-        if application_proof is not None:
-            if application_proof.current_transport_id != plan.physical_transport_id:
-                raise AssertionError("Application manager committed another physical transport")
-            if application_proof.prerequisite_transport_ids != tuple(
-                proof.physical_transport_id for proof in prerequisite_proofs
-            ):
-                raise AssertionError("Application manager changed prerequisite transport legs")
         receipt = LifecycleConnectionCompositeReceipt._issue(
             authority_secret=self._receipt_secret,
             state_publication_token=plan.publication_token,
@@ -1668,6 +1880,314 @@ class GeneratorLifecycleAuthority:
             application=application_result,
             receipt=receipt,
         )
+
+    @staticmethod
+    def _prepared_network_result_digest(result: NetworkConnectionCommitResult) -> str:
+        """Return the exact immutable commit-result digest bound into the outer receipt."""
+
+        if type(result) is not NetworkConnectionCommitResult:
+            raise StateError("Prepared network root has no exact commit result")
+        return sha256(repr(("prepared-network-result-v1", result)).encode()).hexdigest()
+
+    def _authenticates_issued_prepared_network_receipt(self, receipt: object) -> bool:
+        """Authenticate a complete prior receipt without retained caller root state."""
+
+        runtime = self._network_runtime
+        planner = self._source_timing_planner
+        if (
+            runtime is None
+            or planner is None
+            or type(receipt) is not LifecyclePreparedNetworkReceipt
+        ):
+            return False
+        try:
+            if (
+                type(receipt._runtime_publication_token) is not str
+                or not receipt._runtime_publication_token
+                or type(receipt._state_publication_token) is not str
+                or not receipt._state_publication_token
+                or type(receipt._transaction_id) is not str
+                or not receipt._transaction_id
+                or type(receipt._materialization_mode) is not ConnectionMaterializationMode
+                or receipt._lifecycle_mode not in {"network", "application_child"}
+                or type(receipt._physical_transport) is not PhysicalTransportFingerprint
+                or type(receipt._result_digest) is not str
+                or not receipt._result_digest
+                or type(receipt._timing_binding_token) is not SourceTimingPreparationToken
+                or type(receipt._connection_receipt) is not LifecycleConnectionCompositeReceipt
+                or type(receipt._runtime_receipt) is not NetworkTransactionPreparationReceipt
+                or type(receipt._timing_receipt) is not SourceTimingPreparationReceipt
+                or type(receipt._integrity_token) is not str
+                or not receipt._integrity_token
+                or not receipt._has_valid_integrity(self._receipt_secret)
+                or not self._authenticates_issued_connection_receipt(receipt._connection_receipt)
+                or not runtime.authenticates_preparation_receipt(receipt._runtime_receipt)
+                or not planner.authenticates_preparation_receipt(receipt._timing_receipt)
+            ):
+                return False
+            connection_receipt = receipt._connection_receipt
+            runtime_receipt = receipt._runtime_receipt
+            timing_receipt = receipt._timing_receipt
+            if (
+                receipt._runtime_publication_token != runtime_receipt.publication_token
+                or receipt._state_publication_token != connection_receipt._state_publication_token
+                or receipt._transaction_id != connection_receipt.transaction_id
+                or receipt._transaction_id != runtime_receipt.transaction_id
+                or receipt._physical_transport != connection_receipt._physical_transport
+                or receipt._timing_binding_token != timing_receipt.binding_token
+            ):
+                return False
+            if receipt._materialization_mode is ConnectionMaterializationMode.PHYSICAL:
+                return (
+                    receipt._lifecycle_mode == "network"
+                    and connection_receipt.materializes_connection
+                )
+            return (
+                receipt._materialization_mode is ConnectionMaterializationMode.APPLICATION_CHILD
+                and receipt._lifecycle_mode == "application_child"
+                and not connection_receipt.materializes_connection
+            )
+        except (
+            AttributeError,
+            LookupError,
+            RecursionError,
+            RuntimeError,
+            StateError,
+            TypeError,
+            ValueError,
+        ):
+            return False
+
+    def _validate_prepared_network_transaction(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        source_timing_preparation: SourceTimingPreparation,
+        lifecycle_token: LifecycleClosedTransportAdmissionToken | None,
+        application_token: _ApplicationAdmissionToken | None,
+        prerequisite_receipts: tuple[LifecyclePreparedNetworkReceipt, ...],
+    ) -> tuple[LifecycleConnectionCompositeReceipt, ...]:
+        """Validate every full prepared-network authority input before claiming locks."""
+
+        runtime = self._network_runtime
+        planner = self._source_timing_planner
+        if runtime is None:
+            raise StateError("Lifecycle authority has no bound network runtime")
+        if planner is None:
+            raise StateError("Lifecycle authority has no bound source timing planner")
+        if type(root) is not PreparedNetworkTransactionRoot:
+            raise StateError("Prepared network materialization requires an exact root")
+        if not runtime.authenticates_preparation_root(root):
+            raise StateError("Prepared network root failed runtime authentication")
+        if root.runtime_token.lifecycle_mode == "deferred_session":
+            raise StateError("Deferred-session network roots require their session authority")
+        if root.runtime_token.lifecycle_mode not in {"network", "application_child"}:
+            raise StateError("Prepared network root has an unsupported lifecycle mode")
+        if root.state_plan.mode is ConnectionMaterializationMode.PHYSICAL:
+            if root.runtime_token.lifecycle_mode != "network":
+                raise StateError("Physical prepared network root requires network lifecycle mode")
+        elif root.state_plan.mode is ConnectionMaterializationMode.APPLICATION_CHILD:
+            if root.runtime_token.lifecycle_mode != "application_child":
+                raise StateError(
+                    "Application-child prepared root requires application_child lifecycle mode"
+                )
+        else:
+            raise StateError("Prepared network root has no explicit materialization mode")
+        if (
+            type(source_timing_preparation) is not SourceTimingPreparation
+            or source_timing_preparation.owner is not planner
+            or not source_timing_preparation.sealed
+            or source_timing_preparation.committed
+            or source_timing_preparation.receipt is not None
+            or not planner.authenticates_preparation(source_timing_preparation)
+        ):
+            raise StateError(
+                "Prepared network source timing capability is not authentic and sealed"
+            )
+        if type(prerequisite_receipts) is not tuple:
+            raise StateError("Prepared network prerequisites require an exact receipt tuple")
+        if len({id(receipt) for receipt in prerequisite_receipts}) != len(prerequisite_receipts):
+            raise StateError("Prepared network root repeats a prerequisite receipt")
+        connection_prerequisites: list[LifecycleConnectionCompositeReceipt] = []
+        for receipt in prerequisite_receipts:
+            if not self._authenticates_issued_prepared_network_receipt(receipt):
+                raise StateError("Prepared network prerequisite receipt is not authentic")
+            if not receipt.materializes_connection:
+                raise StateError("Prepared network prerequisite must own a physical transport")
+            connection_prerequisites.append(receipt.connection_receipt)
+        normalized = tuple(connection_prerequisites)
+        self._validate_connection_composite_admissions(
+            root.state_plan,
+            lifecycle_token,
+            application_token,
+            normalized,
+        )
+        return normalized
+
+    def _discard_prepared_network_transaction(
+        self,
+        root: object,
+        source_timing_preparation: object,
+        lifecycle_token: LifecycleClosedTransportAdmissionToken | None,
+        application_token: _ApplicationAdmissionToken | None,
+    ) -> None:
+        """Best-effort release of every uncommitted transferred root capability."""
+
+        self._discard_connection_composite_admissions(lifecycle_token, application_token)
+        runtime = self._network_runtime
+        if runtime is not None and type(root) is PreparedNetworkTransactionRoot:
+            try:
+                runtime.cancel_preparation(root.runtime_token)
+            except (AttributeError, StateError, TypeError, ValueError):
+                pass
+        planner = self._source_timing_planner
+        if (
+            planner is not None
+            and type(source_timing_preparation) is SourceTimingPreparation
+            and source_timing_preparation.owner is planner
+            and not source_timing_preparation.committed
+        ):
+            try:
+                source_timing_preparation.cancel()
+            except StateError:
+                pass
+
+    def materialize_prepared_network_transaction(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        owner_rng: random.Random,
+        *,
+        source_timing_preparation: SourceTimingPreparation,
+        lifecycle_token: LifecycleClosedTransportAdmissionToken | None = None,
+        application_token: _ApplicationAdmissionToken | None = None,
+        prerequisite_receipts: tuple[LifecyclePreparedNetworkReceipt, ...] = (),
+    ) -> LifecyclePreparedNetworkResult:
+        """Atomically publish a sealed network root through every owning authority.
+
+        Source timing is claimed first, followed by the network runtime, application
+        manager, StateManager, and lifecycle registry. The no-fail tail commits in
+        lifecycle, State, application, runtime/crypto, then source-timing order.
+        Every failure releases all still-uncommitted transferred capabilities.
+        """
+
+        runtime_receipt: NetworkTransactionPreparationReceipt | None = None
+        try:
+            connection_prerequisites = self._validate_prepared_network_transaction(
+                root,
+                source_timing_preparation,
+                lifecycle_token,
+                application_token,
+                prerequisite_receipts,
+            )
+            runtime = self._network_runtime
+            assert runtime is not None
+            with source_timing_preparation.claimed_commit():
+                with runtime.claimed_preparation(root.runtime_token) as runtime_commit:
+
+                    def _finalize_prepared_network_no_fail() -> None:
+                        nonlocal runtime_receipt
+                        runtime_receipt = runtime_commit.commit_no_fail()
+                        source_timing_preparation.commit_no_fail()
+
+                    connection_result = self.materialize_connection_composite(
+                        root.state_plan,
+                        owner_rng,
+                        lifecycle_token=lifecycle_token,
+                        application_token=application_token,
+                        prerequisite_receipts=connection_prerequisites,
+                        finalize_external_no_fail=_finalize_prepared_network_no_fail,
+                    )
+        except BaseException:
+            self._discard_prepared_network_transaction(
+                root,
+                source_timing_preparation,
+                lifecycle_token,
+                application_token,
+            )
+            raise
+
+        timing_receipt = source_timing_preparation.receipt
+        if runtime_receipt is None or timing_receipt is None:
+            raise AssertionError("Prepared network finalizer returned no complete receipts")
+        runtime = self._network_runtime
+        planner = self._source_timing_planner
+        assert runtime is not None and planner is not None
+        if not runtime.authenticates_preparation_receipt(
+            runtime_receipt,
+            token=root.runtime_token,
+        ):
+            raise AssertionError("Network runtime returned an unauthenticated receipt")
+        if not planner.authenticates_preparation_receipt(timing_receipt):
+            raise AssertionError("Source timing planner returned an unauthenticated receipt")
+        result_digest = self._prepared_network_result_digest(root.result)
+        receipt = LifecyclePreparedNetworkReceipt._issue(
+            authority_secret=self._receipt_secret,
+            runtime_publication_token=root.runtime_token.publication_token,
+            state_publication_token=root.state_plan.publication_token,
+            transaction_id=root.transaction.stable_id,
+            materialization_mode=root.state_plan.mode,
+            lifecycle_mode=root.runtime_token.lifecycle_mode,
+            physical_transport=root.state_plan.physical_transport_fingerprint,
+            result_digest=result_digest,
+            timing_binding_token=source_timing_preparation.binding_token,
+            connection_receipt=connection_result.receipt,
+            runtime_receipt=runtime_receipt,
+            timing_receipt=timing_receipt,
+        )
+        return LifecyclePreparedNetworkResult(
+            connection=connection_result,
+            runtime=runtime_receipt,
+            timing=timing_receipt,
+            receipt=receipt,
+        )
+
+    def authenticates_prepared_network_receipt(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        receipt: object,
+    ) -> bool:
+        """Authenticate a full committed receipt against its exact prepared root."""
+
+        runtime = self._network_runtime
+        if (
+            runtime is None
+            or type(root) is not PreparedNetworkTransactionRoot
+            or type(receipt) is not LifecyclePreparedNetworkReceipt
+            or not self._authenticates_issued_prepared_network_receipt(receipt)
+        ):
+            return False
+        try:
+            if (
+                type(root.result) is not NetworkConnectionCommitResult
+                or root.result.transaction != root.transaction
+                or root.state_plan.transaction != root.transaction
+                or root.result.lifecycle_mode != root.runtime_token.lifecycle_mode
+                or receipt._runtime_publication_token != root.runtime_token.publication_token
+                or receipt._state_publication_token != root.state_plan.publication_token
+                or receipt._transaction_id != root.transaction.stable_id
+                or receipt._materialization_mode is not root.state_plan.mode
+                or receipt._lifecycle_mode != root.runtime_token.lifecycle_mode
+                or receipt._physical_transport != root.state_plan.physical_transport_fingerprint
+                or receipt._result_digest != self._prepared_network_result_digest(root.result)
+                or not runtime.authenticates_preparation_receipt(
+                    receipt.runtime_receipt,
+                    token=root.runtime_token,
+                )
+            ):
+                return False
+            return self.authenticates_connection_composite_receipt(
+                root.state_plan,
+                receipt.connection_receipt,
+            )
+        except (
+            AttributeError,
+            LookupError,
+            RecursionError,
+            RuntimeError,
+            StateError,
+            TypeError,
+            ValueError,
+        ):
+            return False
 
     def authenticates_connection_composite_receipt(
         self,

@@ -70,7 +70,12 @@ from evidenceforge.events.contexts import (
     WeirdContext,
     X509Context,
 )
-from evidenceforge.events.contracts import EventKind, SemanticOccurrenceKey, ShadowSealResult
+from evidenceforge.events.contracts import (
+    EffectOccurrenceProvenance,
+    EventKind,
+    SemanticOccurrenceKey,
+    ShadowSealResult,
+)
 from evidenceforge.events.cryptography import (
     OcspTransactionPlan,
     TlsCertificatePresentationPlan,
@@ -174,6 +179,7 @@ class OccurrenceBuilder:
     contract_seal: ShadowSealResult | None = None
     lifecycle: ActionLifecycleContext | None = None
     identity_plan: EventIdentityPlan | None = None
+    effect_provenance: EffectOccurrenceProvenance | None = None
     network_observations: tuple[NetworkSensorObservation, ...] = ()
     network_observations_planned: bool = False
 
@@ -290,6 +296,7 @@ class CanonicalOccurrence:
     contract_seal: ShadowSealResult | None = None
     lifecycle: ActionLifecycleContext | None = None
     identity_plan: EventIdentityPlan | None = None
+    effect_provenance: EffectOccurrenceProvenance | None = None
     network_observations: tuple[NetworkSensorObservation, ...] = ()
     network_observations_planned: bool = False
     _sensor_hostnames_by_format: Mapping[str, tuple[str, ...]] = field(

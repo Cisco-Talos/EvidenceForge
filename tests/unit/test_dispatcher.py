@@ -22,7 +22,10 @@
 
 """Tests for EventDispatcher routing, visibility filtering, and StateManager.apply()."""
 
+import random
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from unittest.mock import MagicMock
 
 import pytest
@@ -37,6 +40,7 @@ from evidenceforge.events import (
     RawProjectionRequest,
 )
 from evidenceforge.events.contexts import (
+    FileContext,
     FileTransferContext,
     HttpContext,
     OcspContext,
@@ -45,16 +49,45 @@ from evidenceforge.events.contexts import (
     SyslogContext,
     X509Context,
 )
-from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
-from evidenceforge.events.dispatcher import FORMAT_GROUPS, EventDispatcher
+from evidenceforge.events.contracts import (
+    EffectOccurrenceKind,
+    EffectOccurrenceProvenance,
+    OccurrenceRole,
+    SemanticOccurrenceKey,
+)
+from evidenceforge.events.dispatcher import (
+    FORMAT_GROUPS,
+    EventDispatcher,
+    PreparedDispatchStateIntent,
+)
+from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.observation import (
     SOURCE_FAMILIES,
     ObservationPolicy,
     source_family_for_format,
 )
-from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.actions.command_effects import ExecutionEffectAuditCounter
+from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
+from evidenceforge.generation.lifecycle_authority import (
+    GeneratorLifecycleAuthority,
+    LifecycleMaterializationReceipt,
+)
+from evidenceforge.generation.lifecycle_production_adapters import LifecycleProductionAdapter
+from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+from evidenceforge.generation.network_runtime import (
+    NetworkTransactionRuntime,
+    PreparedNetworkTransactionRoot,
+)
+from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.generation.state_manager import ProcessMaterializationPlan, StateManager
+from evidenceforge.models.exceptions import EventContractError, StateError
 from tests.network_factories import network_plan
+from tests.unit.test_connection_lifecycle_authority import (
+    _prepared_authority,
+    _prepared_physical_root,
+)
 
 
 def _make_ts():
@@ -117,6 +150,122 @@ def _network() -> NetworkTransactionPlan:
         dst_ip="198.51.100.20",
         dst_port=443,
         protocol="tcp",
+    )
+
+
+def _prepared_connection_builder(root: PreparedNetworkTransactionRoot) -> OccurrenceBuilder:
+    """Build the exact canonical connection occurrence carried by one prepared root."""
+
+    return OccurrenceBuilder(
+        timestamp=root.transaction.started_at,
+        event_type="connection",
+        src_host=_host(),
+        network=root.transaction,
+        http=root.result.http,
+        file_transfers=list(root.result.file_transfers),
+    )
+
+
+def _prepared_network_dispatch_environment() -> tuple[
+    StateManager,
+    GeneratorLifecycleAuthority,
+    LifecycleProductionAdapter,
+    NetworkTransactionRuntime,
+    SourceTimingPlanner,
+    EventDispatcher,
+    MagicMock,
+]:
+    """Return one exact shared runtime/timing/lifecycle dispatcher environment."""
+
+    authority, state, registry, adapter, runtime, _crypto, timing = _prepared_authority()
+    emitter = _make_mock_emitter("ecar", handles=True)
+    dispatcher = EventDispatcher(
+        state_manager=state,
+        emitters={"ecar": emitter},
+        lifecycle_shadow=LifecycleShadow(state, registry),
+        source_timing_planner=timing,
+        enforce_lifecycle_authority=True,
+    )
+    dispatcher.bind_lifecycle_authority(authority)
+    return state, authority, adapter, runtime, timing, dispatcher, emitter
+
+
+def _planned_process(
+    state: StateManager,
+    *,
+    started_at: datetime | None = None,
+) -> ProcessMaterializationPlan:
+    """Return one allocation-free Linux process materialization plan."""
+
+    timestamp = started_at or _make_ts()
+    state.set_current_time(timestamp)
+    return state.plan_process_materialization(
+        system="HOST-01",
+        parent_pid=0,
+        image="/usr/bin/bash",
+        command_line="/usr/bin/bash -lc true",
+        username="root",
+        integrity_level="Medium",
+        os_category="linux",
+        lifecycle_group_id="prepared-process-lifecycle",
+        start_time=timestamp,
+    )
+
+
+def _process_start_builder(plan: ProcessMaterializationPlan) -> OccurrenceBuilder:
+    """Build the exact canonical start row bound to a materialization plan."""
+
+    identity = plan.identity
+    return OccurrenceBuilder(
+        timestamp=identity.started_at,
+        event_type="process_create",
+        src_host=_host(),
+        process=ProcessContext(
+            pid=identity.pid,
+            parent_pid=identity.parent_pid,
+            image=identity.image,
+            command_line=identity.command_line,
+            username=identity.principal,
+            integrity_level=plan.integrity_level,
+            logon_id=identity.logon_id,
+            start_time=identity.started_at,
+        ),
+        identity_plan=EventIdentityPlan(subject=identity),
+        lifecycle=ActionLifecycleContext(
+            group_id=identity.lifecycle_group_id,
+            canonical_start=identity.started_at,
+            phase="start",
+            parent_group_id=identity.parent_lifecycle_group_id or None,
+        ),
+    )
+
+
+def _process_file_builder(plan: ProcessMaterializationPlan) -> OccurrenceBuilder:
+    """Build one dependent file occurrence bound to the planned process actor."""
+
+    identity = plan.identity
+    return OccurrenceBuilder(
+        timestamp=identity.started_at + timedelta(milliseconds=1),
+        event_type="file_create",
+        src_host=_host(),
+        process=ProcessContext(
+            pid=identity.pid,
+            parent_pid=identity.parent_pid,
+            image=identity.image,
+            command_line=identity.command_line,
+            username=identity.principal,
+            integrity_level=plan.integrity_level,
+            logon_id=identity.logon_id,
+            start_time=identity.started_at,
+        ),
+        file=FileContext(path="/tmp/prepared-output", action="create", pid=identity.pid),
+        identity_plan=EventIdentityPlan(actor=identity),
+        lifecycle=ActionLifecycleContext(
+            group_id=identity.lifecycle_group_id,
+            canonical_start=identity.started_at,
+            phase="dependent",
+            parent_group_id=identity.parent_lifecycle_group_id or None,
+        ),
     )
 
 
@@ -343,7 +492,7 @@ class TestObservationProfiles:
         assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"dropped": 1}
 
     def test_source_delay_uses_copy_and_preserves_canonical_state(self, monkeypatch):
-        """Source delays render a timestamp-adjusted copy while state sees canonical time."""
+        """Observation delay changes visibility status without mutating canonical time."""
         monkeypatch.setattr(
             "evidenceforge.events.observation.get_observation_profile",
             lambda _name: {
@@ -372,10 +521,16 @@ class TestObservationProfiles:
         event = _syslog_event()
         dispatcher.dispatch_builder(event)
 
-        _assert_published_once(sm.apply, event)
+        canonical_event = _assert_published_once(sm.apply, event)
         emitted_event = emitter.emit.call_args.args[0]
         assert emitted_event is not event
-        assert emitted_event.timestamp == event.timestamp + timedelta(milliseconds=17)
+        assert canonical_event.timestamp == event.timestamp
+        assert emitted_event.timestamp == event.timestamp
+        assert emitted_event.source_timing is not None
+        assert emitted_event.source_timing.canonical_timestamp == event.timestamp
+        assert emitted_event.source_timing.observation_delays == {
+            "windows_event_sysmon": timedelta(milliseconds=17)
+        }
         assert event.timestamp == _make_ts()
         assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"delayed": 1}
 
@@ -577,10 +732,13 @@ class TestObservationProfiles:
         assert running is not None
         assert running.last_activity_time == event.timestamp
         emitted_event = emitter.emit.call_args.args[0]
-        assert emitted_event.timestamp == event.timestamp + timedelta(milliseconds=900000)
+        assert emitted_event.timestamp == event.timestamp
+        assert emitted_event.source_timing.observation_delays == {
+            "windows_event_sysmon": timedelta(milliseconds=900000)
+        }
 
     def test_zeek_observation_delay_is_coherent_per_uid(self, monkeypatch):
-        """Zeek protocol rows for one UID should share source collection delay."""
+        """Zeek policy delay is visibility-only and cannot mutate canonical time."""
         monkeypatch.setattr(
             "evidenceforge.events.observation.get_observation_profile",
             lambda _name: {
@@ -623,7 +781,8 @@ class TestObservationProfiles:
         conn_event = conn.emit.call_args.args[0]
         http_event = http.emit.call_args.args[0]
         assert conn_event.timestamp == http_event.timestamp
-        assert conn_event.timestamp > event.timestamp
+        assert conn_event.timestamp == event.timestamp
+        assert conn_event.source_timing.canonical_timestamp == event.timestamp
 
     def test_zeek_format_missingness_can_drop_child_without_dropping_conn(self, monkeypatch):
         """Zeek companion analyzers may be missing while conn.log stays visible."""
@@ -972,7 +1131,7 @@ class TestObservationProfiles:
         assert ocsp.emit.call_args.args[0]._observed_formats == expected_formats
 
     def test_zeek_format_missingness_keeps_delay_coherent_when_visible(self, monkeypatch):
-        """Format-specific drop policy must not split same-UID source delay."""
+        """Format-specific visibility cannot split or shift same-UID canonical time."""
         monkeypatch.setattr(
             "evidenceforge.events.observation.get_observation_profile",
             lambda _name: {
@@ -1016,7 +1175,8 @@ class TestObservationProfiles:
         conn_event = conn.emit.call_args.args[0]
         http_event = http.emit.call_args.args[0]
         assert conn_event.timestamp == http_event.timestamp
-        assert conn_event.timestamp > event.timestamp
+        assert conn_event.timestamp == event.timestamp
+        assert conn_event.source_timing.canonical_timestamp == event.timestamp
 
     def test_ecar_storyline_process_observation_delay_is_coherent(self, monkeypatch):
         """Storyline eCAR process graphs should not orphan source-local references."""
@@ -2079,6 +2239,512 @@ class TestDispatchRaw:
             dispatcher.dispatch_raw(entry)
 
 
+class TestPreparedDispatch:
+    """Tests for allocation-free, integrity-bound, one-shot publication."""
+
+    @staticmethod
+    def _environment(
+        *,
+        with_emitter: bool = True,
+    ) -> tuple[
+        StateManager,
+        LifecycleRegistry,
+        GeneratorLifecycleAuthority,
+        EventDispatcher,
+        MagicMock,
+        ProcessMaterializationPlan,
+    ]:
+        state = StateManager()
+        registry = LifecycleRegistry(shard_count=4)
+        shadow = LifecycleShadow(state, registry)
+        authority = GeneratorLifecycleAuthority(state, shadow, shard_count=4)
+        emitter = _make_mock_emitter("ecar", handles=with_emitter)
+        dispatcher = EventDispatcher(
+            state_manager=state,
+            emitters={"ecar": emitter} if with_emitter else {},
+            lifecycle_shadow=shadow,
+            enforce_lifecycle_authority=True,
+        )
+        dispatcher.bind_lifecycle_authority(authority)
+        plan = _planned_process(state)
+        return state, registry, authority, dispatcher, emitter, plan
+
+    def test_prepare_and_validate_leave_every_publication_authority_unchanged(self):
+        """Preparation freezes exact work without consuming any global authority."""
+
+        state, registry, _authority, dispatcher, emitter, plan = self._environment()
+        ledger = IntentExecutionLedger(AuthoredIntentLedger("prepared-zero-mutation", ()))
+        dispatcher.intent_execution_ledger = ledger
+        dispatcher.authored_intent_id = "prepared-process"
+        audit = ExecutionEffectAuditCounter()
+        dispatcher.bind_execution_effect_audit(audit)
+        state_version = state.materialization_version
+        state_digest = state.materialization_digest()
+        allocator_census = state.pid_allocator_census()
+        lifecycle_census = registry.stats()
+        audit_snapshot = audit.snapshot()
+
+        prepared = dispatcher.prepare_builder(
+            _process_start_builder(plan),
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+            lifecycle_ticket=plan,
+        )
+        dispatcher.validate_prepared(prepared)
+
+        assert state.materialization_version == state_version
+        assert state.materialization_digest() == state_digest
+        assert state.pid_allocator_census() == allocator_census
+        assert state.get_process(plan.identity.hostname, plan.identity.pid) is None
+        assert registry.stats() == lifecycle_census
+        assert audit.snapshot() == audit_snapshot
+        assert ledger.snapshot() == ()
+        assert dispatcher.source_evidence_status == {}
+        emitter.emit.assert_not_called()
+
+    def test_authority_precommit_rejection_leaves_prepared_dispatch_unpublished(self):
+        """A rejected root start changes neither state nor lifecycle nor source truth."""
+
+        state, registry, authority, dispatcher, emitter, plan = self._environment()
+        ledger = IntentExecutionLedger(AuthoredIntentLedger("prepared-precommit", ()))
+        dispatcher.intent_execution_ledger = ledger
+        dispatcher.authored_intent_id = "prepared-process"
+        prepared = dispatcher.prepare_builder(
+            _process_start_builder(plan),
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+            lifecycle_ticket=plan,
+        )
+        dispatcher.validate_prepared(prepared)
+        state_version = state.materialization_version
+        state_digest = state.materialization_digest()
+        allocator_census = state.pid_allocator_census()
+        lifecycle_census = registry.stats()
+
+        def _reject() -> None:
+            raise StateError("injected prepared root rejection")
+
+        authority._materialization_precommit_hook = _reject
+        with pytest.raises(StateError, match="injected prepared root rejection"):
+            authority.materialize_process(plan)
+
+        assert state.materialization_version == state_version
+        assert state.materialization_digest() == state_digest
+        assert state.pid_allocator_census() == allocator_census
+        assert state.get_process(plan.identity.hostname, plan.identity.pid) is None
+        assert registry.stats() == lifecycle_census
+        assert ledger.snapshot() == ()
+        assert dispatcher.source_evidence_status == {}
+        emitter.emit.assert_not_called()
+
+    def test_source_timing_preparation_commits_with_authority_and_publishes_once(self):
+        """One timing capability commits inside authority and authenticates one-shot publish."""
+
+        state, registry, authority, dispatcher, emitter, plan = self._environment()
+        planner = dispatcher.source_timing_planner
+        state_digest = state.materialization_digest()
+        lifecycle_census = registry.stats()
+        timing_digest = planner.state_digest()
+        with planner.prepared_planning() as preparation:
+            prepared = dispatcher.prepare_builder(
+                _process_start_builder(plan),
+                state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+                lifecycle_ticket=plan,
+                source_timing_preparation=preparation,
+            )
+
+        assert planner.authenticates_preparation(preparation)
+        dispatcher.validate_prepared(prepared)
+        assert planner.state_digest() == timing_digest
+        assert state.materialization_digest() == state_digest
+        assert registry.stats() == lifecycle_census
+        with pytest.raises(EventContractError, match="source timing capability has no authentic"):
+            dispatcher.publish_prepared(prepared)
+        assert planner.state_digest() == timing_digest
+        assert state.materialization_digest() == state_digest
+        assert registry.stats() == lifecycle_census
+        emitter.emit.assert_not_called()
+
+        with preparation.claimed_commit():
+            process, receipt = authority.materialize_process(
+                plan,
+                finalize_external_no_fail=preparation.commit_no_fail,
+            )
+
+        assert preparation.committed
+        assert preparation.receipt is not None
+        assert planner.authenticates_preparation(preparation)
+        assert planner.authenticates_preparation_receipt(preparation.receipt)
+        receipt_integrity = preparation.receipt._integrity
+        object.__setattr__(preparation.receipt, "_integrity", "forged-timing-receipt")
+        with pytest.raises(EventContractError, match="timing capability failed authentication"):
+            dispatcher.publish_prepared(prepared, materialization_receipt=receipt)
+        emitter.emit.assert_not_called()
+        object.__setattr__(preparation.receipt, "_integrity", receipt_integrity)
+        dispatcher.publish_prepared(prepared, materialization_receipt=receipt)
+        assert state.get_process(plan.identity.hostname, plan.identity.pid) is process
+        emitter.emit.assert_called_once()
+        with pytest.raises(EventContractError, match="already published"):
+            dispatcher.publish_prepared(prepared, materialization_receipt=receipt)
+        emitter.emit.assert_called_once()
+
+    def test_source_timing_preparation_rejects_wrong_planner_and_token_tamper(self):
+        """A foreign or altered timing capability cannot authorize projection publication."""
+
+        state, registry, _authority, dispatcher, emitter, plan = self._environment()
+        timing_digest = dispatcher.source_timing_planner.state_digest()
+        foreign = SourceTimingPlanner()
+        with foreign.prepared_planning() as foreign_preparation:
+            with pytest.raises(EventContractError, match="not active for this planner"):
+                dispatcher.prepare_builder(
+                    _process_start_builder(plan),
+                    state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+                    lifecycle_ticket=plan,
+                    source_timing_preparation=foreign_preparation,
+                )
+        assert dispatcher.source_timing_planner.state_digest() == timing_digest
+
+        with dispatcher.source_timing_planner.prepared_planning() as preparation:
+            prepared = dispatcher.prepare_builder(
+                _process_start_builder(plan),
+                state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+                lifecycle_ticket=plan,
+                source_timing_preparation=preparation,
+            )
+        object.__setattr__(
+            preparation.binding_token,
+            "base_state_digest",
+            "forged-source-timing-state",
+        )
+        with pytest.raises(EventContractError, match="integrity validation failed"):
+            dispatcher.validate_prepared(prepared)
+        assert state.get_process(plan.identity.hostname, plan.identity.pid) is None
+        assert registry.stats().live_processes == 0
+        assert dispatcher.source_timing_planner.state_digest() == timing_digest
+        emitter.emit.assert_not_called()
+
+    def test_nested_occurrence_tamper_rejects_before_root_materialization(self):
+        """Mutable nested context tampering invalidates the opaque prepared dispatch."""
+
+        state, registry, _authority, dispatcher, emitter, plan = self._environment()
+        prepared = dispatcher.prepare_builder(
+            _process_start_builder(plan),
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+            lifecycle_ticket=plan,
+        )
+        state_version = state.materialization_version
+        state_digest = state.materialization_digest()
+        allocator_census = state.pid_allocator_census()
+        lifecycle_census = registry.stats()
+        assert prepared._occurrence.process is not None
+        prepared._occurrence.process.command_line = "/usr/bin/bash -lc tampered"
+
+        with pytest.raises(EventContractError, match="integrity validation failed"):
+            dispatcher.validate_prepared(prepared)
+
+        assert state.materialization_version == state_version
+        assert state.materialization_digest() == state_digest
+        assert state.pid_allocator_census() == allocator_census
+        assert state.get_process(plan.identity.hostname, plan.identity.pid) is None
+        assert registry.stats() == lifecycle_census
+        assert dispatcher.source_evidence_status == {}
+        emitter.emit.assert_not_called()
+
+    def test_wrong_receipt_rejects_then_exact_receipt_publishes_only_once(self):
+        """Only the exact authority receipt may consume a root publication once."""
+
+        state, registry, authority, dispatcher, emitter, plan = self._environment()
+        ledger = IntentExecutionLedger(AuthoredIntentLedger("prepared-receipt", ()))
+        dispatcher.intent_execution_ledger = ledger
+        dispatcher.authored_intent_id = "prepared-process"
+        prepared = dispatcher.prepare_builder(
+            _process_start_builder(plan),
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+            lifecycle_ticket=plan,
+        )
+        dispatcher.validate_prepared(prepared)
+        process, receipt = authority.materialize_process(plan)
+        lifecycle_after_materialization = registry.stats()
+        forged = replace(receipt, _publication_token="forged-publication-token")
+
+        with pytest.raises(EventContractError, match="does not authenticate"):
+            dispatcher.publish_prepared(prepared, materialization_receipt=forged)
+
+        assert ledger.snapshot() == ()
+        assert dispatcher.source_evidence_status == {}
+        emitter.emit.assert_not_called()
+
+        dispatcher.publish_prepared(prepared, materialization_receipt=receipt)
+
+        assert state.get_process(plan.identity.hostname, plan.identity.pid) is process
+        assert registry.stats() == lifecycle_after_materialization
+        assert len(ledger.snapshot()) == 1
+        emitter.emit.assert_called_once()
+        source_status = dispatcher.source_evidence_status
+        with pytest.raises(EventContractError, match="already published"):
+            dispatcher.publish_prepared(prepared, materialization_receipt=receipt)
+        assert len(ledger.snapshot()) == 1
+        assert dispatcher.source_evidence_status == source_status
+        emitter.emit.assert_called_once()
+
+    def test_public_same_field_receipt_forgery_cannot_publish_or_materialize(self):
+        """Public plan fields and SHA256 cannot forge an authority-issued receipt."""
+
+        state, registry, _authority, dispatcher, emitter, plan = self._environment()
+        prepared = dispatcher.prepare_builder(
+            _process_start_builder(plan),
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+            lifecycle_ticket=plan,
+        )
+        dispatcher.validate_prepared(prepared)
+        values = (
+            "process",
+            plan.identity.object_id,
+            plan.publication_token,
+            plan.expected_version,
+            plan.expected_version + 1,
+        )
+        forged = LifecycleMaterializationReceipt(
+            _kind="process",
+            _object_id=plan.identity.object_id,
+            _publication_token=plan.publication_token,
+            _prior_version=plan.expected_version,
+            _committed_version=plan.expected_version + 1,
+            _integrity_token=sha256(repr(values).encode()).hexdigest(),
+        )
+        allocator_census = state.pid_allocator_census()
+        state_digest = state.materialization_digest()
+        lifecycle_census = registry.stats()
+
+        with pytest.raises(EventContractError, match="does not authenticate"):
+            dispatcher.publish_prepared(prepared, materialization_receipt=forged)
+
+        assert state.materialization_version == plan.expected_version
+        assert state.materialization_digest() == state_digest
+        assert state.pid_allocator_census() == allocator_census
+        assert state.get_process(plan.identity.hostname, plan.identity.pid) is None
+        assert registry.stats() == lifecycle_census
+        assert dispatcher.source_evidence_status == {}
+        emitter.emit.assert_not_called()
+
+    def test_apply_intent_rejects_state_version_aba_without_publication(self):
+        """A compatibility prepared row cannot cross a StateManager version change."""
+
+        state = StateManager()
+        state.set_current_time(_make_ts())
+        registry = LifecycleRegistry(shard_count=4)
+        authority = GeneratorLifecycleAuthority(
+            state,
+            LifecycleShadow(state, registry),
+            shard_count=4,
+        )
+        emitter = _make_mock_emitter("syslog", handles=True)
+        dispatcher = EventDispatcher(state_manager=state, emitters={"syslog": emitter})
+        prepared = dispatcher.prepare_builder(_syslog_event())
+        session_plan = state.plan_session_materialization(
+            username="alice",
+            system="HOST-01",
+            logon_type=2,
+            source_ip="-",
+            start_time=_make_ts(),
+            session_kind="interactive",
+        )
+        authority.materialize_session(session_plan)
+
+        with pytest.raises(StateError, match="state version is stale"):
+            dispatcher.publish_prepared(prepared)
+
+        assert dispatcher.source_evidence_status == {}
+        emitter.emit.assert_not_called()
+
+    def test_direct_and_explicit_compatibility_paths_publish_identical_occurrences(self):
+        """The compatibility wrapper is byte-equivalent to explicit prepare/publish."""
+
+        direct_state = MagicMock(spec=StateManager)
+        explicit_state = MagicMock(spec=StateManager)
+        direct_emitter = _make_mock_emitter("syslog", handles=True)
+        explicit_emitter = _make_mock_emitter("syslog", handles=True)
+        direct = EventDispatcher(direct_state, {"syslog": direct_emitter})
+        explicit = EventDispatcher(explicit_state, {"syslog": explicit_emitter})
+
+        direct_ids = direct.dispatch_builder(_syslog_event())
+        prepared = explicit.prepare_builder(_syslog_event())
+        explicit_ids = explicit.publish_prepared(prepared)
+
+        direct_occurrence = direct_emitter.emit.call_args.args[0]
+        explicit_occurrence = explicit_emitter.emit.call_args.args[0]
+        assert direct_ids == explicit_ids
+        assert direct_occurrence == explicit_occurrence
+        assert direct_state.apply.call_args.args[0] == explicit_state.apply.call_args.args[0]
+
+    def test_external_dependent_uses_root_receipt_without_lifecycle_replanning(self):
+        """A root and dependent can share one receipt after complete batch preparation."""
+
+        state, registry, authority, dispatcher, emitter, plan = self._environment()
+        root = dispatcher.prepare_builder(
+            _process_start_builder(plan),
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+            lifecycle_ticket=plan,
+        )
+        dependent = dispatcher.prepare_builder(
+            _process_file_builder(plan),
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_DEPENDENT,
+            lifecycle_ticket=plan,
+        )
+        dispatcher.validate_prepared(root)
+        dispatcher.validate_prepared(dependent)
+        process, receipt = authority.materialize_process(plan)
+        lifecycle_after_materialization = registry.stats()
+
+        dispatcher.publish_prepared(root, materialization_receipt=receipt)
+        dispatcher.publish_prepared(dependent, materialization_receipt=receipt)
+
+        assert state.get_process(plan.identity.hostname, plan.identity.pid) is process
+        assert process.last_activity_time == plan.identity.started_at + timedelta(milliseconds=1)
+        assert registry.stats() == lifecycle_after_materialization
+        assert emitter.emit.call_count == 2
+
+    def test_external_transport_requires_full_receipt_and_never_reapplies_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Only the full root receipt publishes once without a second State mutation."""
+
+        state, authority, adapter, runtime, timing, dispatcher, emitter = (
+            _prepared_network_dispatch_environment()
+        )
+        owner_rng = random.Random(201)
+        root, lifecycle_token = _prepared_physical_root(
+            authority,
+            adapter,
+            runtime,
+            owner_rng,
+            stable_id="dispatcher-prepared-transport",
+        )
+        with timing.prepared_planning() as timing_preparation:
+            prepared = dispatcher.prepare_builder(
+                _prepared_connection_builder(root),
+                state_intent=PreparedDispatchStateIntent.EXTERNAL_TRANSPORT,
+                lifecycle_ticket=root,
+                source_timing_preparation=timing_preparation,
+            )
+        dispatcher.validate_prepared(prepared)
+        result = authority.materialize_prepared_network_transaction(
+            root,
+            owner_rng,
+            source_timing_preparation=timing_preparation,
+            lifecycle_token=lifecycle_token,
+        )
+        state_version = state.materialization_version
+        state_apply = MagicMock(side_effect=AssertionError("external transport reapplied State"))
+        monkeypatch.setattr(state, "apply", state_apply)
+        state_digest = state.materialization_digest()
+
+        with pytest.raises(EventContractError, match="does not authenticate"):
+            dispatcher.publish_prepared(
+                prepared,
+                materialization_receipt=result.connection.receipt,
+            )
+        emitter.emit.assert_not_called()
+        dispatcher.publish_prepared(prepared, materialization_receipt=result.receipt)
+
+        assert state.materialization_version == state_version
+        assert state.materialization_digest() == state_digest
+        state_apply.assert_not_called()
+        emitter.emit.assert_called_once()
+        assert dispatcher._latest_network_plan == root.transaction
+        with pytest.raises(EventContractError, match="already published"):
+            dispatcher.publish_prepared(prepared, materialization_receipt=result.receipt)
+
+    def test_external_transport_rejects_a_different_authentic_timing_commit(self) -> None:
+        """A full receipt cannot publish a dispatch prepared under another timing root."""
+
+        _state, authority, adapter, runtime, timing, dispatcher, emitter = (
+            _prepared_network_dispatch_environment()
+        )
+        owner_rng = random.Random(202)
+        root, lifecycle_token = _prepared_physical_root(
+            authority,
+            adapter,
+            runtime,
+            owner_rng,
+            stable_id="dispatcher-timing-mismatch",
+        )
+        with timing.prepared_planning() as dispatch_timing:
+            prepared = dispatcher.prepare_builder(
+                _prepared_connection_builder(root),
+                state_intent=PreparedDispatchStateIntent.EXTERNAL_TRANSPORT,
+                lifecycle_ticket=root,
+                source_timing_preparation=dispatch_timing,
+            )
+        with dispatch_timing.claimed_commit():
+            dispatch_timing.commit_no_fail()
+        with timing.prepared_planning() as materialization_timing:
+            pass
+        result = authority.materialize_prepared_network_transaction(
+            root,
+            owner_rng,
+            source_timing_preparation=materialization_timing,
+            lifecycle_token=lifecycle_token,
+        )
+
+        assert timing.authenticates_preparation_receipt(dispatch_timing.receipt)
+        assert timing.authenticates_preparation_receipt(result.timing)
+        with pytest.raises(EventContractError, match="does not authenticate"):
+            dispatcher.publish_prepared(prepared, materialization_receipt=result.receipt)
+        emitter.emit.assert_not_called()
+
+    def test_external_transport_binds_event_result_and_root_after_prepare(self) -> None:
+        """Semantic mismatch or later root replacement fails before any publication."""
+
+        state, authority, adapter, runtime, timing, dispatcher, emitter = (
+            _prepared_network_dispatch_environment()
+        )
+        owner_rng = random.Random(203)
+        root, lifecycle_token = _prepared_physical_root(
+            authority,
+            adapter,
+            runtime,
+            owner_rng,
+            stable_id="dispatcher-root-binding",
+        )
+        mismatched_transaction = replace(
+            root.transaction,
+            dst_port=root.transaction.dst_port + 1,
+        )
+        mismatched_builder = _prepared_connection_builder(root)
+        mismatched_builder.network = mismatched_transaction
+        state_digest = state.materialization_digest()
+        with pytest.raises(EventContractError, match="disagrees with its finalized root"):
+            with timing.prepared_planning() as rejected_timing:
+                dispatcher.prepare_builder(
+                    mismatched_builder,
+                    state_intent=PreparedDispatchStateIntent.EXTERNAL_TRANSPORT,
+                    lifecycle_ticket=root,
+                    source_timing_preparation=rejected_timing,
+                )
+        assert state.materialization_digest() == state_digest
+        emitter.emit.assert_not_called()
+
+        with timing.prepared_planning() as timing_preparation:
+            prepared = dispatcher.prepare_builder(
+                _prepared_connection_builder(root),
+                state_intent=PreparedDispatchStateIntent.EXTERNAL_TRANSPORT,
+                lifecycle_ticket=root,
+                source_timing_preparation=timing_preparation,
+            )
+        object.__setattr__(
+            root,
+            "result",
+            replace(root.result, effective_dst_ip="198.51.100.250"),
+        )
+        with pytest.raises(EventContractError, match="integrity validation failed"):
+            dispatcher.validate_prepared(prepared)
+        assert state.materialization_digest() == state_digest
+        emitter.emit.assert_not_called()
+        runtime.cancel_preparation(root.runtime_token)
+        adapter.cancel_closed_transport_publication(lifecycle_token)
+        timing_preparation.cancel()
+
+
 class TestStateManagerApply:
     """Tests for StateManager.apply() with real StateManager."""
 
@@ -2937,6 +3603,154 @@ class TestWarmUpSuppression:
 
         _assert_published_once(sm.apply, event)
         emitter.emit.assert_not_called()
+
+    def test_strict_lifecycle_rejection_does_not_record_intent_occurrence(self):
+        """Rejected canonical state cannot leak into intent or source audit truth."""
+
+        sm = MagicMock(spec=StateManager)
+        emitter = _make_mock_emitter("windows", handles=True)
+        lifecycle_shadow = MagicMock()
+        lifecycle_shadow.prepare.side_effect = StateError("rejected before canonical apply")
+        ledger = IntentExecutionLedger(AuthoredIntentLedger("dispatcher-rejection", ()))
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"windows_event_security": emitter},
+            intent_execution_ledger=ledger,
+            lifecycle_shadow=lifecycle_shadow,
+            enforce_lifecycle_authority=True,
+        )
+        dispatcher.authored_intent_id = "rejected-intent"
+        event = _syslog_event()
+
+        with pytest.raises(StateError, match="rejected before canonical apply"):
+            dispatcher.dispatch_builder(event)
+
+        assert ledger.snapshot() == ()
+        assert dispatcher.source_evidence_status == {}
+        sm.apply.assert_not_called()
+        emitter.emit.assert_not_called()
+
+    def test_strict_lifecycle_rejection_does_not_record_effect_publication(self):
+        """Rejected canonical state cannot enter the independent effect denominator."""
+
+        sm = MagicMock(spec=StateManager)
+        emitter = _make_mock_emitter("windows", handles=True)
+        lifecycle_shadow = MagicMock()
+        lifecycle_shadow.prepare.side_effect = StateError("rejected before canonical apply")
+        audit = ExecutionEffectAuditCounter()
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"windows_event_security": emitter},
+            lifecycle_shadow=lifecycle_shadow,
+            enforce_lifecycle_authority=True,
+        )
+        dispatcher.bind_execution_effect_audit(audit)
+        before = audit.snapshot()
+        event = OccurrenceBuilder(
+            timestamp=_make_ts(),
+            event_type="file_create",
+            src_host=_host(),
+            file=FileContext(path="/tmp/rejected", action="create", pid=42),
+            effect_provenance=EffectOccurrenceProvenance.planned(
+                kind=EffectOccurrenceKind.FILE,
+                root_action_id="process-action",
+                plan_action_id="effect-plan-action",
+                node_id="file-node",
+                occurrence_ordinal=0,
+            ),
+        )
+
+        with pytest.raises(StateError, match="rejected before canonical apply"):
+            dispatcher.dispatch_builder(event)
+
+        assert audit.snapshot() == before
+        assert dispatcher.source_evidence_status == {}
+        sm.apply.assert_not_called()
+        emitter.emit.assert_not_called()
+
+    def test_source_suppressed_event_records_one_accepted_intent_occurrence(self):
+        """Canonical warm-up state remains intent truth even with no rendered source row."""
+
+        output_start = _make_ts() + timedelta(hours=1)
+        sm = MagicMock(spec=StateManager)
+        emitter = _make_mock_emitter("windows", handles=True)
+        ledger = IntentExecutionLedger(AuthoredIntentLedger("dispatcher-suppression", ()))
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"windows_event_security": emitter},
+            output_start_time=output_start,
+            intent_execution_ledger=ledger,
+        )
+        dispatcher.authored_intent_id = "accepted-intent"
+        event = _syslog_event()
+
+        dispatcher.dispatch_builder(event)
+
+        snapshot = ledger.snapshot()
+        assert len(snapshot) == 1
+        assert snapshot[0].intent_id == "accepted-intent"
+        assert snapshot[0].occurrence_reference_count == 1
+        assert snapshot[0].duplicate_occurrence_count == 0
+        _assert_published_once(sm.apply, event)
+        emitter.emit.assert_not_called()
+
+    def test_source_suppressed_effect_records_one_canonical_publication(self):
+        """Warm-up suppression cannot erase an accepted canonical effect occurrence."""
+
+        output_start = _make_ts() + timedelta(hours=1)
+        sm = MagicMock(spec=StateManager)
+        emitter = _make_mock_emitter("windows", handles=True)
+        audit = ExecutionEffectAuditCounter()
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"windows_event_security": emitter},
+            output_start_time=output_start,
+        )
+        dispatcher.bind_execution_effect_audit(audit)
+        event = OccurrenceBuilder(
+            timestamp=_make_ts(),
+            event_type="file_create",
+            src_host=_host(),
+            file=FileContext(path="/tmp/suppressed", action="create", pid=42),
+            effect_provenance=EffectOccurrenceProvenance.planned(
+                kind=EffectOccurrenceKind.FILE,
+                root_action_id="process-action",
+                plan_action_id="effect-plan-action",
+                node_id="file-node",
+                occurrence_ordinal=0,
+            ),
+        )
+
+        dispatcher.dispatch_builder(event)
+
+        snapshot = audit.snapshot()
+        assert snapshot.published_effect_occurrence_count == 1
+        assert snapshot.unprovenanced_effect_occurrence_count == 0
+        assert snapshot.effect_publication_mismatch_count == 1
+        _assert_published_once(sm.apply, event)
+        emitter.emit.assert_not_called()
+
+    def test_unprovenanced_effect_publication_makes_bound_audit_incomplete(self):
+        """A raw accepted FileContext cannot produce an empty-denominator false green."""
+
+        sm = MagicMock(spec=StateManager)
+        audit = ExecutionEffectAuditCounter()
+        dispatcher = EventDispatcher(state_manager=sm, emitters={})
+        dispatcher.bind_execution_effect_audit(audit)
+        event = OccurrenceBuilder(
+            timestamp=_make_ts(),
+            event_type="file_read",
+            src_host=_host(),
+            file=FileContext(path="/tmp/untyped", action="read", pid=42),
+        )
+
+        dispatcher.dispatch_builder(event)
+
+        snapshot = audit.snapshot()
+        assert snapshot.plan_count == 0
+        assert snapshot.unprovenanced_effect_occurrence_count == 1
+        assert not snapshot.complete
+        _assert_published_once(sm.apply, event)
 
     def test_dispatch_emits_at_output_start(self):
         """Events exactly at output_start_time are emitted normally."""

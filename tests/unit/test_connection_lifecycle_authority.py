@@ -23,6 +23,7 @@ from evidenceforge.generation.application_channels import (
     ApplicationChannelPreparedCommit,
     ApplicationChannelRegistry,
 )
+from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.generation.http_channels import (
     HttpApplicationChannelManager,
     HttpChannelAdmissionResult,
@@ -34,6 +35,7 @@ from evidenceforge.generation.lifecycle_authority import (
     ApplicationChannelCompositeProof,
     ConnectionCompositePrerequisiteProof,
     GeneratorLifecycleAuthority,
+    LifecyclePreparedNetworkReceipt,
 )
 from evidenceforge.generation.lifecycle_production_adapters import (
     LifecycleProductionAdapter,
@@ -45,10 +47,20 @@ from evidenceforge.generation.lifecycle_registry import (
     LifecycleRegistry,
 )
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+from evidenceforge.generation.network_runtime import (
+    NetworkTransactionPreparedCommit,
+    NetworkTransactionRuntime,
+    NetworkTransportLifecycleMode,
+    PreparedNetworkTransactionRoot,
+)
 from evidenceforge.generation.proxy_channels import (
     ExplicitProxyAdmissionToken,
     ExplicitProxyChannelAffinity,
     ExplicitProxyChannelManager,
+)
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanner,
+    SourceTimingPreparation,
 )
 from evidenceforge.generation.state_manager import (
     ConnectionCompositeMaterializationPlan,
@@ -116,6 +128,77 @@ def _authority() -> tuple[
         shard_count=8,
     )
     return authority, state, registry, LifecycleProductionAdapter(registry)
+
+
+def _prepared_authority() -> tuple[
+    GeneratorLifecycleAuthority,
+    StateManager,
+    LifecycleRegistry,
+    LifecycleProductionAdapter,
+    NetworkTransactionRuntime,
+    CryptographicMaterialRegistry,
+    SourceTimingPlanner,
+]:
+    authority, state, registry, adapter = _authority()
+    crypto = CryptographicMaterialRegistry()
+    runtime = NetworkTransactionRuntime(
+        state_manager=state,
+        cryptographic_material=crypto,
+        window_start=_START,
+        window_end=_END,
+    )
+    timing = SourceTimingPlanner()
+    authority.bind_network_transaction_runtime(runtime)
+    authority.bind_source_timing_planner(timing)
+    return authority, state, registry, adapter, runtime, crypto, timing
+
+
+def _prepared_physical_root(
+    authority: GeneratorLifecycleAuthority,
+    adapter: LifecycleProductionAdapter,
+    runtime: NetworkTransactionRuntime,
+    owner_rng: random.Random,
+    *,
+    stable_id: str,
+    lifecycle_mode: NetworkTransportLifecycleMode = "network",
+    started_at: datetime = _START,
+    src_ip: str = "10.0.0.10",
+    src_port: int = 50_001,
+    dst_ip: str = "203.0.113.20",
+    dst_port: int = 443,
+) -> tuple[PreparedNetworkTransactionRoot, LifecycleClosedTransportAdmissionToken]:
+    preparation = runtime.begin(
+        owner_rng=owner_rng,
+        stable_id=stable_id,
+        linearization_time=started_at,
+    )
+    identity = preparation.reserve_physical_identity()
+    transaction = _transaction(
+        conn_id=identity.conn_id,
+        zeek_uid=identity.zeek_uid,
+        stable_id=stable_id,
+        started_at=started_at,
+        src_ip=src_ip,
+        src_port=src_port,
+        dst_ip=dst_ip,
+        dst_port=dst_port,
+    )
+    root = preparation.seal(
+        transaction=transaction,
+        lifecycle_mode=lifecycle_mode,
+        materialization_mode=ConnectionMaterializationMode.PHYSICAL,
+        source_system="WS-01",
+        source_hostname="ws-01.example.test",
+        hostname="portal.example.test",
+        initiating_pid=-1,
+    )
+    return root, _lifecycle_token(authority, adapter, root.state_plan)
+
+
+def _sealed_source_timing(planner: SourceTimingPlanner) -> SourceTimingPreparation:
+    with planner.prepared_planning() as preparation:
+        pass
+    return preparation
 
 
 def _physical_plan(
@@ -1024,3 +1107,337 @@ def test_proxy_origin_requires_exact_prior_authority_receipt_and_final_sweep() -
     assert proof.prerequisite_transport_ids == (client_plan.physical_transport_id,)
     assert origin.receipt.prerequisite_proofs[0].receipt_token == client.receipt.receipt_token
     assert authority.authenticates_connection_composite_receipt(origin_plan, origin.receipt)
+
+
+def test_prepared_network_commits_full_authority_chain_in_exact_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority, state, _registry, adapter, runtime, _crypto, timing = _prepared_authority()
+    _application_registry, http = _http_manager(authority)
+    owner_rng = random.Random(101)
+    root, lifecycle_token = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        owner_rng,
+        stable_id="prepared-http-transport",
+    )
+    application_token = _http_open_token(http, root.state_plan)
+    timing_preparation = _sealed_source_timing(timing)
+    order: list[str] = []
+    original_lifecycle = LifecycleRegistry._commit_claimed_closed_transport_publication
+    original_state = StateManager._commit_prevalidated_connection_composite
+    original_http = HttpApplicationChannelManager._commit_claimed_admission
+    original_runtime = NetworkTransactionPreparedCommit.commit_no_fail
+    original_timing = SourceTimingPreparation.commit_no_fail
+
+    def _lifecycle_commit(
+        registry: LifecycleRegistry,
+        token: LifecycleClosedTransportAdmissionToken,
+    ) -> LifecycleClosedTransportPublicationReceipt:
+        order.append("lifecycle")
+        return original_lifecycle(registry, token)
+
+    def _state_commit(
+        manager: StateManager,
+        plan: ConnectionCompositeMaterializationPlan,
+        rng: random.Random,
+    ) -> ConnectionCompositeMaterializationResult:
+        order.append("state")
+        return original_state(manager, plan, rng)
+
+    def _http_commit(
+        manager: HttpApplicationChannelManager,
+        token: HttpChannelAdmissionToken,
+        application_commit: ApplicationChannelPreparedCommit,
+    ) -> HttpChannelAdmissionResult:
+        order.append("application")
+        return original_http(manager, token, application_commit)
+
+    def _runtime_commit(
+        prepared: NetworkTransactionPreparedCommit,
+    ) -> object:
+        order.append("runtime")
+        return original_runtime(prepared)
+
+    def _timing_commit(preparation: SourceTimingPreparation) -> None:
+        order.append("timing")
+        original_timing(preparation)
+
+    monkeypatch.setattr(
+        LifecycleRegistry,
+        "_commit_claimed_closed_transport_publication",
+        _lifecycle_commit,
+    )
+    monkeypatch.setattr(
+        StateManager,
+        "_commit_prevalidated_connection_composite",
+        _state_commit,
+    )
+    monkeypatch.setattr(HttpApplicationChannelManager, "_commit_claimed_admission", _http_commit)
+    monkeypatch.setattr(NetworkTransactionPreparedCommit, "commit_no_fail", _runtime_commit)
+    monkeypatch.setattr(SourceTimingPreparation, "commit_no_fail", _timing_commit)
+    authority._materialization_precommit_hook = lambda: order.append("precommit")
+
+    result = authority.materialize_prepared_network_transaction(
+        root,
+        owner_rng,
+        source_timing_preparation=timing_preparation,
+        lifecycle_token=lifecycle_token,
+        application_token=application_token,
+    )
+
+    assert order == ["precommit", "lifecycle", "state", "application", "runtime", "timing"]
+    assert isinstance(result.receipt, LifecyclePreparedNetworkReceipt)
+    assert authority.authenticates_prepared_network_receipt(root, result.receipt)
+    assert runtime.authenticates_preparation_receipt(result.runtime, token=root.runtime_token)
+    assert result.timing == timing_preparation.receipt
+    assert timing.authenticates_preparation_receipt(result.timing)
+    assert result.connection.state.connection is not None
+    committed_version = state.materialization_version
+    with pytest.raises(StateError, match="failed runtime authentication"):
+        authority.materialize_prepared_network_transaction(
+            root,
+            owner_rng,
+            source_timing_preparation=timing_preparation,
+            lifecycle_token=lifecycle_token,
+            application_token=application_token,
+        )
+    assert state.materialization_version == committed_version
+
+
+def test_prepared_network_rejects_deferred_session_and_cleans_every_capability() -> None:
+    authority, state, registry, adapter, runtime, crypto, timing = _prepared_authority()
+    owner_rng = random.Random(102)
+    rng_before = owner_rng.getstate()
+    state_before = state.materialization_digest()
+    runtime_before = runtime.state_digest()
+    crypto_before = crypto.state_digest()
+    timing_before = timing.state_digest()
+    root, lifecycle_token = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        owner_rng,
+        stable_id="deferred-prepared-transport",
+        lifecycle_mode="deferred_session",
+    )
+    timing_preparation = _sealed_source_timing(timing)
+
+    with pytest.raises(StateError, match="Deferred-session"):
+        authority.materialize_prepared_network_transaction(
+            root,
+            owner_rng,
+            source_timing_preparation=timing_preparation,
+            lifecycle_token=lifecycle_token,
+        )
+
+    assert owner_rng.getstate() == rng_before
+    assert state.materialization_digest() == state_before
+    assert runtime.state_digest() == runtime_before
+    assert crypto.state_digest() == crypto_before
+    assert timing.state_digest() == timing_before
+    assert runtime.census().prepared_transactions == 0
+    assert adapter.closed_transport_preparation_census().reservations == 0
+    assert registry.transport_for_transport_id(root.transaction.stable_id) is None
+    assert not timing_preparation.sealed
+
+
+def test_prepared_network_rejects_foreign_runtime_and_timing_without_foreign_mutation() -> None:
+    authority, state, _registry, adapter, runtime, _crypto, timing = _prepared_authority()
+    (
+        foreign_authority,
+        foreign_state,
+        _foreign_registry,
+        foreign_adapter,
+        foreign_runtime,
+        (_foreign_crypto),
+        foreign_timing,
+    ) = _prepared_authority()
+    local_state_before = state.materialization_digest()
+    foreign_state_before = foreign_state.materialization_digest()
+    foreign_timing_before = foreign_timing.state_digest()
+    foreign_rng = random.Random(107)
+    foreign_root, foreign_lifecycle = _prepared_physical_root(
+        foreign_authority,
+        foreign_adapter,
+        foreign_runtime,
+        foreign_rng,
+        stable_id="foreign-runtime-root",
+    )
+    local_timing = _sealed_source_timing(timing)
+
+    with pytest.raises(StateError, match="failed runtime authentication"):
+        authority.materialize_prepared_network_transaction(
+            foreign_root,
+            foreign_rng,
+            source_timing_preparation=local_timing,
+        )
+
+    assert state.materialization_digest() == local_state_before
+    assert foreign_state.materialization_digest() == foreign_state_before
+    assert foreign_runtime.authenticates_preparation_root(foreign_root)
+    assert foreign_timing.state_digest() == foreign_timing_before
+    assert not local_timing.sealed
+    foreign_runtime.cancel_preparation(foreign_root.runtime_token)
+    foreign_adapter.cancel_closed_transport_publication(foreign_lifecycle)
+
+    local_rng = random.Random(108)
+    local_root, local_lifecycle = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        local_rng,
+        stable_id="foreign-timing-root",
+    )
+    foreign_timing_preparation = _sealed_source_timing(foreign_timing)
+    with pytest.raises(StateError, match="source timing capability"):
+        authority.materialize_prepared_network_transaction(
+            local_root,
+            local_rng,
+            source_timing_preparation=foreign_timing_preparation,
+            lifecycle_token=local_lifecycle,
+        )
+
+    assert state.materialization_digest() == local_state_before
+    assert foreign_state.materialization_digest() == foreign_state_before
+    assert foreign_timing.authenticates_preparation(foreign_timing_preparation)
+    assert foreign_timing_preparation.sealed
+    foreign_timing_preparation.cancel()
+
+
+def test_prepared_http_application_child_reuses_one_physical_transport() -> None:
+    authority, state, registry, adapter, runtime, _crypto, timing = _prepared_authority()
+    _application_registry, http = _http_manager(authority)
+    parent_rng = random.Random(103)
+    parent_root, parent_lifecycle = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        parent_rng,
+        stable_id="prepared-http-parent",
+    )
+    parent = authority.materialize_prepared_network_transaction(
+        parent_root,
+        parent_rng,
+        source_timing_preparation=_sealed_source_timing(timing),
+        lifecycle_token=parent_lifecycle,
+        application_token=_http_open_token(http, parent_root.state_plan),
+    )
+    reuse = http.prepare_reuse(
+        _http_affinity(),
+        requested_at=_START + timedelta(seconds=1),
+        required_until=_START + timedelta(seconds=1, milliseconds=100),
+        request_body_bytes=20,
+        response_body_bytes=200,
+    )
+    assert reuse is not None
+    assert isinstance(reuse.result, HttpChannelReuse)
+    child_rng = random.Random(104)
+    child_preparation = runtime.begin(
+        owner_rng=child_rng,
+        stable_id=reuse.result.operation_id,
+        linearization_time=reuse.result.canonical_request_time,
+    )
+    child_transaction = _transaction(
+        conn_id=parent_root.transaction.conn_id,
+        zeek_uid=parent_root.transaction.zeek_uid,
+        stable_id=reuse.result.operation_id,
+        started_at=reuse.result.canonical_request_time,
+        duration=0.1,
+        application_layer_only=True,
+    )
+    child_root = child_preparation.seal(
+        transaction=child_transaction,
+        lifecycle_mode="application_child",
+        materialization_mode=ConnectionMaterializationMode.APPLICATION_CHILD,
+    )
+    transport_count = registry.stats().live_transports
+
+    child = authority.materialize_prepared_network_transaction(
+        child_root,
+        child_rng,
+        source_timing_preparation=_sealed_source_timing(timing),
+        application_token=reuse,
+    )
+
+    assert child.connection.lifecycle is None
+    assert child.connection.state.connection is parent.connection.state.connection
+    assert child.receipt.physical_transport_id == parent.receipt.physical_transport_id
+    assert not child.receipt.materializes_connection
+    assert registry.stats().live_transports == transport_count
+    assert authority.authenticates_prepared_network_receipt(child_root, child.receipt)
+
+
+def test_prepared_proxy_origin_requires_full_prepared_prerequisite_receipt() -> None:
+    authority, state, _registry, adapter, runtime, _crypto, timing = _prepared_authority()
+    proxy = _proxy_manager(authority)
+    client_rng = random.Random(105)
+    client_root, client_lifecycle = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        client_rng,
+        stable_id="prepared-proxy-client",
+        dst_ip="10.0.3.10",
+        dst_port=8080,
+    )
+    client = authority.materialize_prepared_network_transaction(
+        client_root,
+        client_rng,
+        source_timing_preparation=_sealed_source_timing(timing),
+        lifecycle_token=client_lifecycle,
+    )
+    origin_rng = random.Random(106)
+    origin_root, origin_lifecycle = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        origin_rng,
+        stable_id="prepared-proxy-origin",
+        src_ip="10.0.3.10",
+        src_port=40_001,
+    )
+    timing_preparation = _sealed_source_timing(timing)
+    with pytest.raises(StateError, match="prerequisite receipt is not authentic"):
+        authority.materialize_prepared_network_transaction(
+            origin_root,
+            origin_rng,
+            source_timing_preparation=timing_preparation,
+            lifecycle_token=origin_lifecycle,
+            application_token=_proxy_token(
+                proxy,
+                client_root.state_plan,
+                origin_root.state_plan,
+            ),
+            prerequisite_receipts=(client.connection.receipt,),  # type: ignore[arg-type]
+        )
+
+    origin_root, origin_lifecycle = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        origin_rng,
+        stable_id="prepared-proxy-origin",
+        src_ip="10.0.3.10",
+        src_port=40_001,
+    )
+    origin = authority.materialize_prepared_network_transaction(
+        origin_root,
+        origin_rng,
+        source_timing_preparation=_sealed_source_timing(timing),
+        lifecycle_token=origin_lifecycle,
+        application_token=_proxy_token(
+            proxy,
+            client_root.state_plan,
+            origin_root.state_plan,
+        ),
+        prerequisite_receipts=(client.receipt,),
+    )
+
+    assert origin.receipt.connection_receipt.prerequisite_proofs[0].receipt_token == (
+        client.connection.receipt.receipt_token
+    )
+    assert authority.authenticates_prepared_network_receipt(origin_root, origin.receipt)
+    forged = replace(origin.receipt, _result_digest="forged-result")
+    assert not authority.authenticates_prepared_network_receipt(origin_root, forged)
