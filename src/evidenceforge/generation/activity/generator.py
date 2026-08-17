@@ -4751,7 +4751,6 @@ class ActivityGenerator:
         self._dns_cache: ExpiringIndex[tuple[str, str, str, str], tuple[float, float]] = (
             ExpiringIndex(deadline=lambda window: _dns_cache_window(window)[1])
         )
-        self._dns_observation_cache: dict[tuple[str, str, str, str], list[tuple[float, float]]] = {}
         self._dns_resolver_rrset_cache: dict[
             tuple[str, str, str, tuple[str, ...]], tuple[float, float]
         ] = {}
@@ -22782,41 +22781,6 @@ class ActivityGenerator:
             base_ttl=base_ttl,
             time=time,
         )
-
-    def _dns_observation_cache_hit_or_store(
-        self,
-        *,
-        src_ip: str,
-        resolver_ip: str,
-        dns: DnsContext,
-        time: datetime,
-    ) -> bool:
-        """Return True when an identical DNS answer is already visible inside TTL."""
-        cache_key = _dns_observation_cache_key(src_ip, resolver_ip, dns)
-        if cache_key is None:
-            return False
-        if not self._dns_observation_time_is_visible(time):
-            return False
-        if not hasattr(self, "_dns_observation_cache"):
-            self._dns_observation_cache = {}
-
-        start = time.timestamp()
-        ttl = max(1.0, min(float(value) for value in dns.TTLs))
-        end = start + ttl
-        windows = self._dns_observation_cache.setdefault(cache_key, [])
-        cutoff = start - 86_400
-        if len(windows) > 32:
-            windows[:] = [
-                (old_start, old_end) for old_start, old_end in windows if old_end >= cutoff
-            ]
-        for old_start, old_end in windows:
-            if start < old_end and end > old_start:
-                return True
-        windows.append((start, end))
-        windows.sort()
-        if len(windows) > 32:
-            del windows[:-32]
-        return False
 
     def _dns_observation_time_is_visible(self, time: datetime) -> bool:
         """Return whether DNS evidence at time can reach source emitters."""

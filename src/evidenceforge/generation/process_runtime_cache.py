@@ -1148,12 +1148,12 @@ _DEFINITE_GROWING_FIELDS = (
 )
 _CONDITIONAL_GROWING_FIELDS = (
     "_failed_logon_attempt_times",
-    "_dns_observation_cache",
     "_tls_seen_server_names",
     "_tls_seen_client_server_pairs",
     "_tls_cert_validity",
 )
 REMOVED_DEAD_ACTIVITY_GENERATOR_MUTABLE_FIELDS = (
+    "_dns_observation_cache",
     "_dns_resolver_rrset_cache",
     "_kerberos_cache",
     "_linux_local_logind_session_ids",

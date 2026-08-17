@@ -5,12 +5,15 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from evidenceforge.generation.process_runtime_cache import (
+    ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES,
     PRODUCTION_PROCESS_RUNTIME_CACHE_FAMILIES,
+    REMOVED_DEAD_ACTIVITY_GENERATOR_MUTABLE_FIELDS,
     BoundedRuntimeCache,
     EmailArtifactManifestSpool,
     build_production_process_runtime_caches,
@@ -176,6 +179,22 @@ class ActivityGenerator:
         "lazy",
         "set_cache",
     }
+
+
+def test_dead_dns_observation_cache_is_owned_only_by_network_runtime() -> None:
+    """The retired generator cache cannot re-enter the mutable retention inventory."""
+
+    from evidenceforge.generation.activity.generator import ActivityGenerator
+
+    field_name = "_dns_observation_cache"
+    discoveries = discover_activity_generator_mutable_fields(inspect.getsource(ActivityGenerator))
+
+    assert field_name not in {row.field_name for row in discoveries}
+    assert not hasattr(ActivityGenerator, "_dns_observation_cache_hit_or_store")
+    assert field_name not in {
+        policy.field_name for policy in ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES
+    }
+    assert field_name in REMOVED_DEAD_ACTIVITY_GENERATOR_MUTABLE_FIELDS
 
 
 def test_email_manifest_spool_preserves_former_pretty_json_bytes(tmp_path: Path) -> None:
