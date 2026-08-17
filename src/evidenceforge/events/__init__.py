@@ -26,6 +26,14 @@ This package provides the intermediate representation layer between
 ActivityGenerator (which builds events) and emitters (which render them).
 """
 
+from evidenceforge.events.application import (
+    ApplicationChannelBudget,
+    ApplicationChannelCensus,
+    ApplicationChannelIdentity,
+    ApplicationChannelSnapshot,
+    ApplicationOperationReservation,
+    ApplicationTransportBinding,
+)
 from evidenceforge.events.authentication import (
     RemoteAuthenticationPlan,
     RemoteAuthenticationTransportPlan,
@@ -90,6 +98,12 @@ __all__ = [
     "OccurrenceBuilder",
     "CanonicalOccurrence",
     "RawProjectionRequest",
+    "ApplicationChannelBudget",
+    "ApplicationChannelCensus",
+    "ApplicationChannelIdentity",
+    "ApplicationChannelSnapshot",
+    "ApplicationOperationReservation",
+    "ApplicationTransportBinding",
     "ApplicationProfileIdentity",
     "BinaryReleaseIdentity",
     "BinaryReleaseKey",
