@@ -23,13 +23,49 @@
 """Log generation components for EvidenceForge."""
 
 from .activity import ActivityGenerator
+from .deployment_registry import (
+    AssignmentCategoryIndexCensus,
+    BinaryPathIndexCensus,
+    DeploymentCompilationCensus,
+    DeploymentContentRegistry,
+    DeploymentContentScaleCensus,
+    DeploymentGroupPageCursor,
+    DeploymentRegistryCensus,
+    HostDeployment,
+    HostDeploymentSpec,
+    LocalArtifactCapacityError,
+    LocalArtifactPreparedCommit,
+    LocalArtifactPublishToken,
+    LocalArtifactRegistryCensus,
+    LocalArtifactVersionPageCursor,
+    LocalArtifactVersionRegistry,
+    UserApplicationAssignment,
+    UserApplicationAssignmentSpec,
+)
 from .engine import GenerationEngine
 from .ground_truth import GroundTruthGenerator
 from .state_manager import StateManager
 
 __all__ = [
     "ActivityGenerator",
+    "AssignmentCategoryIndexCensus",
+    "BinaryPathIndexCensus",
+    "DeploymentCompilationCensus",
+    "DeploymentContentRegistry",
+    "DeploymentContentScaleCensus",
+    "DeploymentGroupPageCursor",
+    "DeploymentRegistryCensus",
     "GenerationEngine",
     "GroundTruthGenerator",
+    "HostDeployment",
+    "HostDeploymentSpec",
+    "LocalArtifactCapacityError",
+    "LocalArtifactPreparedCommit",
+    "LocalArtifactPublishToken",
+    "LocalArtifactRegistryCensus",
+    "LocalArtifactVersionRegistry",
+    "LocalArtifactVersionPageCursor",
     "StateManager",
+    "UserApplicationAssignment",
+    "UserApplicationAssignmentSpec",
 ]
