@@ -58,8 +58,10 @@ from evidenceforge.generation.engine.baseline import (
     _resolve_cron_command,
     _windows_background_process_lifetime_seconds,
 )
+from evidenceforge.generation.network_runtime import NetworkRuntimePointFamily
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
+from evidenceforge.models.exceptions import StateError
 
 
 @pytest.fixture
@@ -1871,6 +1873,359 @@ class TestInfrastructureDetection:
         assert event.network.orig_pkts >= 3
         assert event.network.resp_pkts >= 3
         assert event.network.history == "DdDdDd"
+
+    def test_kerberos_primary_dispatch_rejection_cancels_both_runtime_points_and_tgt_cache(
+        self,
+        activity_gen,
+    ):
+        """A rejected primary 4768 cannot leave pair, tuple, or TGT-cache claims."""
+
+        source_ip = "10.10.1.36"
+        dc_hostname = "DC-01"
+        source_port = 50209
+        timestamp = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        runtime = activity_gen._network_transaction_runtime
+        runtime_before = (runtime.state_digest(), runtime.census())
+        tgt_key = activity_gen._kerberos_tgt_cache_key(
+            "WS-01$",
+            source_ip,
+            dc_hostname,
+        )
+
+        with (
+            patch.object(
+                activity_gen.dispatcher,
+                "dispatch_builder",
+                side_effect=StateError("reject primary Kerberos audit"),
+            ),
+            pytest.raises(StateError, match="reject primary Kerberos audit"),
+        ):
+            activity_gen.generate_kerberos_tgt(
+                username="WS-01$",
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=timestamp,
+                source_port=source_port,
+            )
+
+        assert (runtime.state_digest(), runtime.census()) == runtime_before
+        assert tgt_key not in activity_gen._kerberos_tgt_cache_until
+        assert (
+            runtime.get_point(
+                NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+                (source_ip, dc_hostname.lower()),
+            )
+            is None
+        )
+        assert (
+            runtime.get_point(
+                NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+                (source_ip, dc_hostname.lower(), source_port),
+            )
+            is None
+        )
+
+    def test_kerberos_tuple_prepare_conflict_releases_pair_without_dispatching_primary(
+        self,
+        activity_gen,
+        mock_emitters,
+    ):
+        """A tuple reservation conflict cannot strand its already-staged pair sibling."""
+
+        source_ip = "10.10.1.36"
+        dc_hostname = "DC-01"
+        source_port = 50209
+        timestamp = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        runtime = activity_gen._network_transaction_runtime
+        pair_key = (source_ip, dc_hostname.lower())
+        tuple_key = (source_ip, dc_hostname.lower(), source_port)
+        blocker = runtime.begin_point_batch(
+            stable_id="kerberos-audit-tuple-blocker",
+            linearization_time=timestamp,
+        )
+        blocker.stage_point(
+            NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+            tuple_key,
+            (timestamp,),
+            expires_at=timestamp + timedelta(seconds=30),
+        )
+        blocked_census = runtime.census()
+        blocked_digest = runtime.state_digest()
+
+        with pytest.raises(StateError, match="reserved by another preparation"):
+            activity_gen.generate_kerberos_preauth_failed(
+                username="expired.user",
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=timestamp,
+                source_port=source_port,
+            )
+
+        assert runtime.state_digest() == blocked_digest
+        assert runtime.census() == blocked_census
+        assert runtime.get_point(NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR, pair_key) is None
+        assert runtime.get_point(NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE, tuple_key) is None
+        assert not mock_emitters["windows_event_security"].emit.called
+        blocker.cancel()
+        census = runtime.census()
+        assert census.open_preparations == census.reserved_points == 0
+        assert census.preparation_fences == census.reserved_deadlines == 0
+
+    @pytest.mark.parametrize(
+        ("method_name", "event_type"),
+        (
+            ("generate_kerberos_tgt", "kerberos_tgt"),
+            ("generate_kerberos_tgt_renewal", "kerberos_tgt_renewal"),
+        ),
+    )
+    def test_kerberos_tgt_cache_is_remembered_only_after_primary_dispatch(
+        self,
+        activity_gen,
+        method_name,
+        event_type,
+    ):
+        """TGT and renewal cache truth cannot precede their primary DC audit."""
+
+        username = "WS-01$"
+        source_ip = "10.10.1.36"
+        dc_hostname = "DC-01"
+        timestamp = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        tgt_key = activity_gen._kerberos_tgt_cache_key(username, source_ip, dc_hostname)
+        observed: list[str] = []
+
+        def observe_primary(event):
+            assert tgt_key not in activity_gen._kerberos_tgt_cache_until
+            observed.append(event.event_type)
+
+        with patch.object(
+            activity_gen.dispatcher,
+            "dispatch_builder",
+            side_effect=observe_primary,
+        ):
+            getattr(activity_gen, method_name)(
+                username=username,
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=timestamp,
+                source_port=50209,
+            )
+
+        assert observed == [event_type]
+        assert activity_gen._kerberos_tgt_cache_until[tgt_key] > timestamp
+        assert activity_gen._has_recent_kerberos_audit(source_ip, dc_hostname, timestamp)
+
+    def test_kerberos_transport_failure_retains_already_committed_primary_audit_points(
+        self,
+        activity_gen,
+        mock_emitters,
+    ):
+        """A later KDC transport failure cannot erase an accepted primary 4771."""
+
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        client = System(
+            hostname="WS-01",
+            ip="10.10.1.36",
+            os="Windows 10",
+            type="workstation",
+        )
+        activity_gen._ip_to_system = {dc.ip: dc, client.ip: client}
+        activity_gen._dc_systems = [dc]
+        timestamp = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        source_port = 50209
+
+        with (
+            patch.object(
+                activity_gen,
+                "generate_connection",
+                side_effect=RuntimeError("reject optional KDC transport"),
+            ),
+            pytest.raises(RuntimeError, match="reject optional KDC transport"),
+        ):
+            activity_gen.generate_kerberos_preauth_failed(
+                username="expired.user",
+                source_ip=client.ip,
+                dc_hostname=dc.hostname,
+                time=timestamp,
+                source_port=source_port,
+                emit_connection=True,
+            )
+
+        emitted = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "kerberos_preauth_failed"
+        ]
+        assert len(emitted) == 1
+        assert activity_gen._has_recent_kerberos_audit(client.ip, dc.hostname, timestamp)
+        assert (
+            activity_gen._kerberos_audit_count_for_connection(
+                client.ip,
+                dc.hostname,
+                source_port,
+                timestamp,
+            )
+            == 1
+        )
+        census = activity_gen._network_transaction_runtime.census()
+        assert census.live_points == 2
+        assert census.prepared_transactions == census.claimed_transactions == 0
+        assert census.reserved_points == census.preparation_fences == 0
+
+    def test_kerberos_runtime_windows_cap_filter_expire_and_leave_no_generator_owner(
+        self,
+        activity_gen,
+    ):
+        """Pair/tuple points retain bounded ordered windows and prune via watermark."""
+
+        source_ip = "::ffff:10.10.1.36"
+        normalized_source_ip = "10.10.1.36"
+        dc_hostname = "DC-01."
+        source_port = 50209
+        start = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        times = tuple(start + timedelta(milliseconds=100 * index) for index in range(20))
+        runtime = activity_gen._network_transaction_runtime
+
+        assert not hasattr(activity_gen, "_kerberos_connection_audit_times")
+        assert not hasattr(activity_gen, "_kerberos_audit_tuple_times")
+        assert NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR.value == "kerberos_audit_pair"
+        assert NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE.value == "kerberos_audit_tuple"
+
+        for timestamp in times:
+            activity_gen.generate_kerberos_preauth_failed(
+                username="expired.user",
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=timestamp,
+                source_port=source_port,
+            )
+
+        pair_key = (normalized_source_ip, dc_hostname.lower())
+        tuple_key = (normalized_source_ip, dc_hostname.lower().rstrip("."), source_port)
+        assert (
+            runtime.get_point(NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR, pair_key)
+            == times[-12:]
+        )
+        assert (
+            runtime.get_point(
+                NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+                tuple_key,
+            )
+            == times[-16:]
+        )
+        assert (
+            activity_gen._kerberos_audit_count_for_connection(
+                source_ip,
+                dc_hostname,
+                source_port,
+                times[-1],
+            )
+            == 16
+        )
+
+        late = times[-1] + timedelta(seconds=31)
+        activity_gen.generate_kerberos_preauth_failed(
+            username="expired.user",
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            time=late,
+            source_port=source_port,
+        )
+        assert runtime.get_point(
+            NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+            pair_key,
+        ) == (late,)
+        assert runtime.get_point(
+            NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+            tuple_key,
+        ) == (late,)
+        assert activity_gen._has_recent_kerberos_audit(
+            source_ip,
+            dc_hostname,
+            late + timedelta(seconds=9),
+        )
+        assert not activity_gen._has_recent_kerberos_audit(
+            source_ip,
+            dc_hostname,
+            late + timedelta(seconds=11),
+        )
+        assert (
+            activity_gen._kerberos_audit_count_for_connection(
+                source_ip,
+                dc_hostname,
+                source_port,
+                late + timedelta(seconds=4),
+            )
+            == 0
+        )
+
+        expiry = late + timedelta(seconds=30)
+        census = runtime.census()
+        assert census.live_points == census.active_deadlines == census.expiry_backing == 2
+        assert runtime.get_point(
+            NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+            pair_key,
+            at=expiry - timedelta(microseconds=1),
+        ) == (late,)
+        assert (
+            runtime.get_point(
+                NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+                pair_key,
+                at=expiry,
+            )
+            is None
+        )
+
+        expired = runtime.advance_watermark_page(expiry, limit=8)
+        assert expired.processed == 2
+        assert not expired.has_more
+        assert expired.census.live_points == 0
+        assert expired.census.tombstone_points == 2
+        assert expired.census.active_deadlines == expired.census.expiry_backing == 2
+        pruned = runtime.advance_watermark_page(expiry + timedelta(days=1), limit=8)
+        assert pruned.processed == 2
+        assert not pruned.has_more
+        assert pruned.census.live_points == pruned.census.tombstone_points == 0
+        assert pruned.census.active_deadlines == pruned.census.expiry_backing == 0
+
+    def test_kerberos_runtime_read_helpers_reject_legacy_or_malformed_value_shapes(
+        self,
+        activity_gen,
+    ):
+        """Planner reads require exact UTC datetime tuples, never legacy float lists."""
+
+        source_ip = "10.10.1.36"
+        dc_hostname = "DC-01"
+        source_port = 50209
+        timestamp = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        runtime = activity_gen._network_transaction_runtime
+        runtime.set_point(
+            NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+            (source_ip, dc_hostname.lower()),
+            (timestamp.timestamp(),),
+            expires_at=timestamp + timedelta(seconds=30),
+        )
+        runtime.set_point(
+            NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+            (source_ip, dc_hostname.lower(), source_port),
+            [timestamp],
+            expires_at=timestamp + timedelta(seconds=30),
+        )
+
+        with pytest.raises(StateError, match="malformed timestamps"):
+            activity_gen._has_recent_kerberos_audit(source_ip, dc_hostname, timestamp)
+        with pytest.raises(StateError, match="malformed timestamps"):
+            activity_gen._kerberos_audit_count_for_connection(
+                source_ip,
+                dc_hostname,
+                source_port,
+                timestamp,
+            )
 
     def test_connection_driven_kerberos_audits_are_counted_in_packets(
         self,

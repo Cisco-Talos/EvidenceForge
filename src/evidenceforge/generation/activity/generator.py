@@ -267,6 +267,7 @@ from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAutho
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.network_runtime import (
+    NetworkPointBatchToken,
     NetworkRuntimePointFamily,
     NetworkTransactionRuntime,
 )
@@ -4729,7 +4730,6 @@ class ActivityGenerator:
             ExpiringIndex(deadline=lambda seen_at: seen_at)
         )
         self._kerberos_source_port_reservations: dict[tuple[str, str], list[tuple[float, int]]] = {}
-        self._kerberos_audit_tuple_times: dict[tuple[str, str, int], list[float]] = {}
         self._failed_logon_attempt_times: dict[tuple[str, str, int, str], list[datetime]] = {}
         self._failed_logon_attempt_lock = Lock()
         self._privileged_auth_occurrences: set[str] = set()
@@ -6671,31 +6671,45 @@ class ActivityGenerator:
         if not source_ip or source_ip == "-" or not dc_hostname:
             return None
         key = self._kerberos_port_key(source_ip, dc_hostname)
-        current = time.timestamp()
+        current_time = ensure_utc(time)
+        current = current_time.timestamp()
         reservations = [
             (seen_at, port)
             for seen_at, port in self._kerberos_source_port_reservations.get(key, [])
             if abs(current - seen_at) <= window_seconds
         ]
         if dst_ip and exclude_active_tuple:
+            runtime = getattr(self, "_network_transaction_runtime", None)
             filtered_reservations = []
             for seen_at, port in reservations:
-                recent_connection_at = max(
-                    self._recent_connection_tuples.get(
-                        (source_ip, port, dst_ip, dst_port, candidate_proto),
-                        self._recent_connection_tuples.get(
-                            (
-                                source_ip.removeprefix("::ffff:"),
-                                port,
-                                dst_ip,
-                                dst_port,
-                                candidate_proto,
-                            ),
-                            0.0,
-                        ),
-                    )
-                    for candidate_proto in {proto, "tcp", "udp"}
-                )
+                recent_connection_times: list[float] = []
+                for candidate_proto in {proto, "tcp", "udp"}:
+                    for tuple_key in self._connection_tuple_key_variants(
+                        source_ip,
+                        port,
+                        dst_ip,
+                        dst_port,
+                        candidate_proto,
+                    ):
+                        legacy_seen_at = self._recent_connection_tuples.get(tuple_key)
+                        if legacy_seen_at is not None:
+                            recent_connection_times.append(legacy_seen_at)
+                        if runtime is None:
+                            continue
+                        runtime_seen_at = runtime.get_point(
+                            NetworkRuntimePointFamily.RECENT_TUPLE,
+                            tuple_key,
+                            None,
+                            at=current_time,
+                        )
+                        if runtime_seen_at is None:
+                            continue
+                        if type(runtime_seen_at) is not float:
+                            raise StateError(
+                                "Network runtime recent-tuple point contains a malformed timestamp"
+                            )
+                        recent_connection_times.append(runtime_seen_at)
+                recent_connection_at = max(recent_connection_times, default=0.0)
                 reuse_cooldown = min(window_seconds, 2.0)
                 if not recent_connection_at or current - recent_connection_at > reuse_cooldown:
                     filtered_reservations.append((seen_at, port))
@@ -16302,41 +16316,115 @@ class ActivityGenerator:
             session_end_plan=session_end_plan,
         )
 
-    def _remember_kerberos_audit(
+    @staticmethod
+    def _kerberos_audit_runtime_times(value: object) -> tuple[datetime, ...]:
+        """Return one exact runtime-owned Kerberos audit window."""
+
+        if type(value) is not tuple or any(
+            type(seen) is not datetime or seen.tzinfo is not UTC for seen in value
+        ):
+            raise StateError("Kerberos audit runtime point contains malformed timestamps")
+        return value
+
+    def _prepare_kerberos_audit_publication(
         self,
         source_ip: str,
         dc_hostname: str,
         time: datetime,
         *,
+        stable_id: str,
         source_port: int | None = None,
-    ) -> None:
-        """Track recently emitted DC audit so connection-layer repair does not duplicate it."""
+    ) -> NetworkPointBatchToken | None:
+        """Prepare pair and tuple audit windows for one primary DC occurrence."""
+
         if not source_ip or source_ip == "-" or not dc_hostname:
-            return
-        cache: dict[tuple[str, str], list[float]] = getattr(
-            self,
-            "_kerberos_connection_audit_times",
-            {},
+            return None
+        current = ensure_utc(time)
+        normalized_source_ip = source_ip.removeprefix("::ffff:")
+        pair_key = (normalized_source_ip, dc_hostname.lower())
+        runtime = self._network_transaction_runtime
+        batch = runtime.begin_point_batch(
+            stable_id=f"{stable_id}:audit-runtime",
+            linearization_time=current,
         )
-        self._kerberos_connection_audit_times = cache
-        key = (source_ip.removeprefix("::ffff:"), dc_hostname.lower())
-        current = time.timestamp()
-        recent = [seen for seen in cache.get(key, []) if abs(current - seen) <= 30.0]
-        recent.append(current)
-        cache[key] = recent[-12:]
-        if source_port is None or source_port <= 0:
-            return
-        tuple_cache = self._kerberos_audit_tuple_times
-        tuple_key = (
-            source_ip.removeprefix("::ffff:"),
-            dc_hostname.lower().rstrip("."),
-            source_port,
+        try:
+            pair_times = self._kerberos_audit_runtime_times(
+                batch.read_point(
+                    NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+                    pair_key,
+                    (),
+                )
+            )
+            pair_recent = tuple(
+                seen for seen in pair_times if abs((current - seen).total_seconds()) <= 30.0
+            )
+            pair_recent = (*pair_recent, current)[-12:]
+            pair_expiry = min(max(pair_recent) + timedelta(seconds=30), runtime.window_end)
+            batch.stage_point(
+                NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+                pair_key,
+                pair_recent,
+                expires_at=pair_expiry,
+            )
+            if source_port is not None and source_port > 0:
+                tuple_key = (
+                    normalized_source_ip,
+                    dc_hostname.lower().rstrip("."),
+                    source_port,
+                )
+                tuple_times = self._kerberos_audit_runtime_times(
+                    batch.read_point(
+                        NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+                        tuple_key,
+                        (),
+                    )
+                )
+                tuple_recent = tuple(
+                    seen for seen in tuple_times if abs((current - seen).total_seconds()) <= 30.0
+                )
+                tuple_recent = (*tuple_recent, current)[-16:]
+                tuple_expiry = min(
+                    max(tuple_recent) + timedelta(seconds=30),
+                    runtime.window_end,
+                )
+                batch.stage_point(
+                    NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+                    tuple_key,
+                    tuple_recent,
+                    expires_at=tuple_expiry,
+                )
+            return batch.seal()
+        except BaseException:
+            try:
+                batch.cancel()
+            except StateError:
+                pass
+            raise
+
+    def _dispatch_prepared_kerberos_audit(
+        self,
+        event: OccurrenceBuilder,
+        *,
+        stable_id: str,
+        source_ip: str,
+        dc_hostname: str,
+        source_port: int | None,
+    ) -> None:
+        """Publish one primary DC audit and its point windows as one occurrence."""
+
+        token = self._prepare_kerberos_audit_publication(
+            source_ip,
+            dc_hostname,
+            event.timestamp,
+            stable_id=stable_id,
+            source_port=source_port,
         )
-        tuple_recent = [
-            seen for seen in tuple_cache.get(tuple_key, []) if abs(current - seen) <= 30.0
-        ]
-        tuple_recent.append(current)
-        tuple_cache[tuple_key] = tuple_recent[-16:]
+        if token is None:
+            self.dispatcher.dispatch_builder(event)
+            return
+        with self._network_transaction_runtime.claimed_point_batch(token) as prepared:
+            self.dispatcher.dispatch_builder(event)
+            prepared.commit_no_fail()
 
     def _kerberos_audit_count_for_connection(
         self,
@@ -16351,12 +16439,16 @@ class ActivityGenerator:
         if not source_ip or source_ip == "-" or not dc_hostname or source_port <= 0:
             return 0
         key = (source_ip.removeprefix("::ffff:"), dc_hostname.lower().rstrip("."), source_port)
-        current = time.timestamp()
-        return sum(
-            1
-            for seen in self._kerberos_audit_tuple_times.get(key, [])
-            if abs(current - seen) <= window_seconds
+        current = ensure_utc(time)
+        times = self._kerberos_audit_runtime_times(
+            self._network_transaction_runtime.get_point(
+                NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+                key,
+                (),
+                at=current,
+            )
         )
+        return sum(1 for seen in times if abs((current - seen).total_seconds()) <= window_seconds)
 
     def _has_recent_kerberos_audit(
         self,
@@ -16368,14 +16460,17 @@ class ActivityGenerator:
     ) -> bool:
         if not source_ip or source_ip == "-" or not dc_hostname:
             return False
-        cache: dict[tuple[str, str], list[float]] = getattr(
-            self,
-            "_kerberos_connection_audit_times",
-            {},
-        )
         key = (source_ip.removeprefix("::ffff:"), dc_hostname.lower())
-        current = time.timestamp()
-        return any(abs(current - seen) <= window_seconds for seen in cache.get(key, []))
+        current = ensure_utc(time)
+        times = self._kerberos_audit_runtime_times(
+            self._network_transaction_runtime.get_point(
+                NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+                key,
+                (),
+                at=current,
+            )
+        )
+        return any(abs((current - seen).total_seconds()) <= window_seconds for seen in times)
 
     def _emit_dc_audit_for_kerberos_connection(
         self,
@@ -24800,14 +24895,14 @@ class ActivityGenerator:
             ),
         )
 
-        self._remember_kerberos_audit(
-            source_ip,
-            dc_hostname,
-            time,
+        self._dispatch_prepared_kerberos_audit(
+            event,
+            stable_id=request.stable_id,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
             source_port=source_port,
         )
         self._remember_kerberos_tgt_cache(username, source_ip, dc_hostname, time, rng)
-        self.dispatcher.dispatch_builder(event)
 
     def generate_kerberos_tgt_renewal(
         self,
@@ -24877,14 +24972,14 @@ class ActivityGenerator:
             ),
         )
 
-        self._remember_kerberos_audit(
-            source_ip,
-            dc_hostname,
-            time,
+        self._dispatch_prepared_kerberos_audit(
+            event,
+            stable_id=request.stable_id,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
             source_port=source_port,
         )
         self._remember_kerberos_tgt_cache(username, source_ip, dc_hostname, time, rng)
-        self.dispatcher.dispatch_builder(event)
 
     def generate_kerberos_service_ticket(
         self,
@@ -25000,13 +25095,13 @@ class ActivityGenerator:
             ),
         )
 
-        self._remember_kerberos_audit(
-            source_ip,
-            dc_hostname,
-            time,
+        self._dispatch_prepared_kerberos_audit(
+            event,
+            stable_id=request.stable_id,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
             source_port=source_port,
         )
-        self.dispatcher.dispatch_builder(event)
 
     def generate_ntlm_validation(
         self,
@@ -26008,13 +26103,13 @@ class ActivityGenerator:
                 reporting_pid=reporting_pid,
             ),
         )
-        self._remember_kerberos_audit(
-            source_ip,
-            dc_hostname,
-            time,
+        self._dispatch_prepared_kerberos_audit(
+            event,
+            stable_id=request.stable_id,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
             source_port=source_port,
         )
-        self.dispatcher.dispatch_builder(event)
 
         if not emit_connection or not has_source_ip:
             return

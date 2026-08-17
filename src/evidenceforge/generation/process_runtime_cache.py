@@ -1129,7 +1129,6 @@ _BOUNDED_LEGACY_FIELDS = (
     "_user_process_history",
     "_proxy_auth_session_deadlines",
     "_kerberos_source_port_reservations",
-    "_kerberos_connection_audit_times",
     "_kerberos_tgt_cache_until",
     "_visible_account_created_at",
     "_visible_account_kerberos_transport_emitted",
@@ -1143,7 +1142,6 @@ _BOUNDED_LEGACY_FIELDS = (
 )
 _DEFINITE_GROWING_FIELDS = (
     "_ad_srv_discovery_cache",
-    "_kerberos_audit_tuple_times",
     "_ssh_source_ports",
 )
 _CONDITIONAL_GROWING_FIELDS = (

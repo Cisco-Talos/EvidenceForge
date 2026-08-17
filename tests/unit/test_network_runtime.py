@@ -18,6 +18,7 @@ from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.generation.network_runtime import (
     NetworkConnectionCommitResult,
+    NetworkPointBatchPreparedCommit,
     NetworkRuntimePointFamily,
     NetworkTransactionPreparation,
     NetworkTransactionRuntime,
@@ -1699,3 +1700,525 @@ def test_invalid_family_time_and_enum_inputs_are_preflight_neutral() -> None:
 
     assert runtime.census() == before
     assert runtime.state_digest() == digest_before
+
+
+def test_point_batch_open_and_sealed_cancel_restore_every_authority() -> None:
+    """Point-only cancellation is neutral to runtime, State, crypto, and caller RNG."""
+
+    runtime, state, crypto = _runtime()
+    rng = random.Random(1103)
+    before = _authority_snapshot(runtime, state, crypto, rng)
+
+    open_batch = runtime.begin_point_batch(
+        stable_id="point-batch-open-cancel",
+        linearization_time=_START,
+    )
+    open_batch.stage_point(
+        NetworkRuntimePointFamily.DNS_OBSERVATION,
+        "open-a",
+        (1, 2),
+        expires_at=_START + timedelta(hours=1),
+    )
+    open_batch.stage_point(
+        NetworkRuntimePointFamily.TLS_SERVER_NAME,
+        "open-b",
+        "api.example.test",
+        expires_at=_START + timedelta(hours=1),
+    )
+    assert runtime.census().open_preparations == 1
+    assert runtime.census().reserved_points == 2
+    open_batch.cancel()
+    assert _authority_snapshot(runtime, state, crypto, rng) == before
+
+    sealed_batch = runtime.begin_point_batch(
+        stable_id="point-batch-sealed-cancel",
+        linearization_time=_START,
+    )
+    sealed_batch.stage_point(
+        NetworkRuntimePointFamily.DNS_OBSERVATION,
+        "sealed-a",
+        (3, 4),
+        expires_at=_START + timedelta(hours=1),
+    )
+    token = sealed_batch.seal()
+    assert runtime.authenticates_point_batch_token(
+        token,
+        expected_stable_id="point-batch-sealed-cancel",
+    )
+    assert runtime.cancel_point_batch(token)
+    assert not runtime.cancel_point_batch(token)
+    assert _authority_snapshot(runtime, state, crypto, rng) == before
+
+
+def test_empty_point_batch_seal_fails_without_fence_or_authority_residue() -> None:
+    """An empty batch cannot mint a signed no-op publication receipt."""
+
+    runtime, state, crypto = _runtime()
+    rng = random.Random(1105)
+    before = _authority_snapshot(runtime, state, crypto, rng)
+    batch = runtime.begin_point_batch(
+        stable_id="point-batch-empty-rejected",
+        linearization_time=_START,
+    )
+
+    with pytest.raises(StateError, match="at least one mutation"):
+        batch.seal()
+
+    assert _authority_snapshot(runtime, state, crypto, rng) == before
+    assert runtime.census().preparation_fences == 0
+
+
+def test_read_only_point_batch_seal_releases_exact_reservation_and_deadline() -> None:
+    """A read-only overlay fails closed and releases its live-point reservation."""
+
+    runtime, state, crypto = _runtime()
+    rng = random.Random(1107)
+    runtime.set_point(
+        NetworkRuntimePointFamily.DIRECT_DNS_TTL,
+        "read-only.example.test",
+        "203.0.113.70",
+        expires_at=_START + timedelta(hours=1),
+    )
+    before = _authority_snapshot(runtime, state, crypto, rng)
+    batch = runtime.begin_point_batch(
+        stable_id="point-batch-read-only-rejected",
+        linearization_time=_START,
+    )
+    assert (
+        batch.read_point(
+            NetworkRuntimePointFamily.DIRECT_DNS_TTL,
+            "read-only.example.test",
+        )
+        == "203.0.113.70"
+    )
+    assert runtime.census().reserved_points == 1
+    assert runtime.census().reserved_deadlines == 1
+
+    with pytest.raises(StateError, match="at least one mutation"):
+        batch.seal()
+
+    assert _authority_snapshot(runtime, state, crypto, rng) == before
+    assert runtime.census().preparation_fences == 0
+    assert runtime.census().reserved_points == 0
+    assert runtime.census().reserved_deadlines == 0
+    runtime.set_point(
+        NetworkRuntimePointFamily.DIRECT_DNS_TTL,
+        "read-only.example.test",
+        "203.0.113.71",
+        expires_at=_START + timedelta(hours=1),
+    )
+
+
+def test_point_batch_commit_atomically_publishes_two_points_and_signed_receipt() -> None:
+    """One claim publishes the frozen two-point overlay without touching other authorities."""
+
+    runtime, state, crypto = _runtime()
+    rng = random.Random(1109)
+    state_before = state.materialization_digest()
+    state_version_before = state.materialization_version
+    crypto_before = (crypto.state_digest(), crypto.census(), crypto.tls_preparation_census())
+    rng_before = rng.getstate()
+    batch = runtime.begin_point_batch(
+        stable_id="point-batch-two-point-commit",
+        linearization_time=_START,
+    )
+    mutable_value = {"ports": [88, 464]}
+    batch.stage_point(
+        NetworkRuntimePointFamily.DNS_OBSERVATION,
+        "dc-a",
+        mutable_value,
+        expires_at=_START + timedelta(minutes=30),
+    )
+    batch.stage_point(
+        NetworkRuntimePointFamily.TLS_CLIENT_SERVER_PAIR,
+        ("client-a", "dc-a"),
+        (_START, _START + timedelta(seconds=1)),
+        expires_at=_START + timedelta(minutes=30),
+    )
+    token = batch.seal()
+    mutable_value["ports"].append(749)
+
+    assert runtime.get_point(NetworkRuntimePointFamily.DNS_OBSERVATION, "dc-a") is None
+    constructed = NetworkPointBatchPreparedCommit(runtime)
+    with pytest.raises(StateError, match="stale or foreign"):
+        constructed.commit_no_fail()
+
+    with runtime.claimed_point_batch(token) as prepared:
+        assert runtime.get_point(NetworkRuntimePointFamily.DNS_OBSERVATION, "dc-a") is None
+        with pytest.raises(StateError, match="active preparation"):
+            runtime.set_point(NetworkRuntimePointFamily.DNS_OBSERVATION, "dc-a", "conflict")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            disjoint = pool.submit(
+                runtime.set_point,
+                NetworkRuntimePointFamily.NTP_PARSER,
+                "server-a",
+                "ntp",
+            )
+            disjoint.result(timeout=2.0)
+        receipt = prepared.commit_no_fail()
+        with pytest.raises(StateError, match="already committed"):
+            prepared.commit_no_fail()
+
+    assert runtime.authenticates_point_batch_receipt(receipt)
+    assert runtime.authenticates_point_batch_receipt(receipt, token=token)
+    assert receipt.committed_point_mutations == token.point_mutations == 2
+    assert runtime.get_point(NetworkRuntimePointFamily.DNS_OBSERVATION, "dc-a") == {
+        "ports": [88, 464]
+    }
+    assert runtime.get_point(
+        NetworkRuntimePointFamily.TLS_CLIENT_SERVER_PAIR,
+        ("client-a", "dc-a"),
+    ) == (_START, _START + timedelta(seconds=1))
+    assert runtime.get_point(NetworkRuntimePointFamily.NTP_PARSER, "server-a") == "ntp"
+    assert state.materialization_digest() == state_before
+    assert state.materialization_version == state_version_before
+    assert (
+        crypto.state_digest(),
+        crypto.census(),
+        crypto.tls_preparation_census(),
+    ) == crypto_before
+    assert rng.getstate() == rng_before
+    assert runtime.census().prepared_transactions == 0
+    assert runtime.census().claimed_transactions == 0
+    assert runtime.census().reserved_points == 0
+    with pytest.raises(StateError, match="no longer active"):
+        prepared.commit_no_fail()
+
+
+def test_point_batch_abandoned_and_exceptional_claims_cancel_without_publication() -> None:
+    """Every uncommitted claim exit releases its token, fence, and reservations."""
+
+    for raise_from_body in (False, True):
+        runtime, state, crypto = _runtime()
+        rng = random.Random(1117)
+        before = _authority_snapshot(runtime, state, crypto, rng)
+        batch = runtime.begin_point_batch(
+            stable_id=f"point-batch-abandon-{raise_from_body}",
+            linearization_time=_START,
+        )
+        batch.stage_point(
+            NetworkRuntimePointFamily.DIRECT_DNS_TTL,
+            "abandoned.example.test",
+            "203.0.113.40",
+            expires_at=_START + timedelta(hours=1),
+        )
+        token = batch.seal()
+
+        if raise_from_body:
+            with pytest.raises(RuntimeError, match="abort occurrence"):
+                with runtime.claimed_point_batch(token):
+                    raise RuntimeError("abort occurrence")
+        else:
+            with runtime.claimed_point_batch(token):
+                pass
+
+        assert _authority_snapshot(runtime, state, crypto, rng) == before
+        assert not runtime.authenticates_point_batch_token(token)
+        assert (
+            runtime.get_point(
+                NetworkRuntimePointFamily.DIRECT_DNS_TTL,
+                "abandoned.example.test",
+            )
+            is None
+        )
+
+
+def test_point_batch_malformed_overlay_and_token_fail_closed_without_partial_state() -> None:
+    """One invalid mutation or an original-token tamper releases the entire batch."""
+
+    runtime, state, crypto = _runtime()
+    rng = random.Random(1123)
+    before = _authority_snapshot(runtime, state, crypto, rng)
+    malformed = runtime.begin_point_batch(
+        stable_id="point-batch-malformed-overlay",
+        linearization_time=_START,
+    )
+    malformed.stage_point(
+        NetworkRuntimePointFamily.DNS_OBSERVATION,
+        "valid-before-invalid",
+        1,
+        expires_at=_START + timedelta(minutes=10),
+    )
+    malformed.stage_point(
+        NetworkRuntimePointFamily.DNS_OBSERVATION,
+        "invalid",
+        2,
+        expires_at=_START + timedelta(minutes=10),
+    )
+    invalid_mutation = malformed._mutations[(NetworkRuntimePointFamily.DNS_OBSERVATION, "invalid")]
+    object.__setattr__(invalid_mutation, "value", object())
+
+    with pytest.raises(ValueError, match="deterministic primitives"):
+        malformed.seal()
+
+    assert _authority_snapshot(runtime, state, crypto, rng) == before
+    assert (
+        runtime.get_point(
+            NetworkRuntimePointFamily.DNS_OBSERVATION,
+            "valid-before-invalid",
+        )
+        is None
+    )
+
+    tampered = runtime.begin_point_batch(
+        stable_id="point-batch-tampered-token",
+        linearization_time=_START,
+    )
+    tampered.stage_point(
+        NetworkRuntimePointFamily.DNS_OBSERVATION,
+        "tampered",
+        3,
+        expires_at=_START + timedelta(minutes=10),
+    )
+    token = tampered.seal()
+    object.__setattr__(token, "overlay_digest", object())
+    assert not runtime.authenticates_point_batch_token(token)
+    with pytest.raises(StateError, match="malformed fields"):
+        with runtime.claimed_point_batch(token):
+            pytest.fail("a malformed token must not enter its claim body")
+
+    assert _authority_snapshot(runtime, state, crypto, rng) == before
+    runtime.set_point(NetworkRuntimePointFamily.DNS_OBSERVATION, "tampered", 4)
+    assert runtime.get_point(NetworkRuntimePointFamily.DNS_OBSERVATION, "tampered") == 4
+
+
+def test_point_batch_duplicate_reserved_and_stale_mutations_reject_neutrally() -> None:
+    """Duplicate, conflicting, and overtaken updates never publish a partial overlay."""
+
+    runtime, state, crypto = _runtime()
+    rng = random.Random(1129)
+    before = _authority_snapshot(runtime, state, crypto, rng)
+    duplicate = runtime.begin_point_batch(
+        stable_id="point-batch-duplicate",
+        linearization_time=_START,
+    )
+    duplicate.stage_point(
+        NetworkRuntimePointFamily.RECENT_TUPLE,
+        "tuple-a",
+        1,
+        expires_at=_START + timedelta(minutes=5),
+    )
+    with pytest.raises(StateError, match="duplicate mutation"):
+        duplicate.stage_point(
+            NetworkRuntimePointFamily.RECENT_TUPLE,
+            "tuple-a",
+            2,
+            expires_at=_START + timedelta(minutes=5),
+        )
+    duplicate.cancel()
+    assert _authority_snapshot(runtime, state, crypto, rng) == before
+
+    owner = runtime.begin_point_batch(
+        stable_id="point-batch-reservation-owner",
+        linearization_time=_START,
+    )
+    owner.stage_point(
+        NetworkRuntimePointFamily.RECENT_TUPLE,
+        "tuple-a",
+        3,
+        expires_at=_START + timedelta(minutes=5),
+    )
+    contender = runtime.begin_point_batch(
+        stable_id="point-batch-reservation-contender",
+        linearization_time=_START,
+    )
+    with pytest.raises(StateError, match="reserved by another preparation"):
+        contender.stage_point(
+            NetworkRuntimePointFamily.RECENT_TUPLE,
+            "tuple-a",
+            4,
+            expires_at=_START + timedelta(minutes=5),
+        )
+    contender.cancel()
+    owner.cancel()
+    assert _authority_snapshot(runtime, state, crypto, rng) == before
+
+    stale = runtime.begin_point_batch(
+        stable_id="point-batch-stale-expiry",
+        linearization_time=_START + timedelta(minutes=1),
+    )
+    stale.stage_point(
+        NetworkRuntimePointFamily.RECENT_TUPLE,
+        "tuple-a",
+        5,
+        expires_at=_START + timedelta(minutes=2),
+    )
+    stale_mutation = next(iter(stale._mutations.values()))
+    object.__setattr__(stale_mutation, "expires_at", _START + timedelta(seconds=30))
+    with pytest.raises(StateError, match="overtaken"):
+        stale.seal()
+    assert _authority_snapshot(runtime, state, crypto, rng) == before
+
+
+def test_point_batch_exact_token_identity_and_claim_owner_survive_forgery() -> None:
+    """A copied or duplicate token cannot authenticate, cancel, or revoke the owner."""
+
+    runtime, _state, _crypto = _runtime()
+    batch = runtime.begin_point_batch(
+        stable_id="point-batch-exact-token",
+        linearization_time=_START,
+    )
+    batch.stage_point(
+        NetworkRuntimePointFamily.TLS_SERVER_NAME,
+        "10.0.0.20",
+        "api.example.test",
+        expires_at=_START + timedelta(hours=1),
+    )
+    token = batch.seal()
+    forged = replace(token)
+    foreign, _foreign_state, _foreign_crypto = _runtime()
+
+    assert not runtime.authenticates_point_batch_token(forged)
+    assert not runtime.cancel_point_batch(forged)
+    with pytest.raises(StateError, match="stale"):
+        with runtime.claimed_point_batch(forged):
+            pytest.fail("a copied token must not enter its claim body")
+    assert runtime.authenticates_point_batch_token(token)
+    assert not foreign.authenticates_point_batch_token(token)
+    assert not foreign.cancel_point_batch(token)
+    with pytest.raises(StateError, match="another runtime"):
+        with foreign.claimed_point_batch(token):
+            pytest.fail("a foreign runtime must not enter the claim body")
+    assert runtime.authenticates_point_batch_token(token)
+
+    with runtime.claimed_point_batch(token) as owner:
+        with pytest.raises(StateError, match="already claimed"):
+            with runtime.claimed_point_batch(token):
+                pytest.fail("a duplicate claim must not enter its body")
+        object.__setattr__(token, "stable_id", "tampered-after-claim")
+        receipt = owner.commit_no_fail()
+
+    assert receipt.stable_id == "point-batch-exact-token"
+    assert runtime.authenticates_point_batch_receipt(receipt)
+    assert not runtime.authenticates_point_batch_receipt(receipt, token=token)
+    assert (
+        runtime.get_point(
+            NetworkRuntimePointFamily.TLS_SERVER_NAME,
+            "10.0.0.20",
+        )
+        == "api.example.test"
+    )
+
+
+def test_point_batch_authenticators_are_total_for_malformed_values() -> None:
+    """Public point-batch proof checks return False for every malformed carrier."""
+
+    class EvilEquality:
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError("caller equality must not escape")
+
+    runtime, _state, _crypto = _runtime()
+    batch = runtime.begin_point_batch(
+        stable_id="point-batch-total-authenticator",
+        linearization_time=_START,
+    )
+    batch.stage_point(
+        NetworkRuntimePointFamily.DNS_OBSERVATION,
+        "total",
+        1,
+        expires_at=_START + timedelta(hours=1),
+    )
+    token = batch.seal()
+    with runtime.claimed_point_batch(token) as prepared:
+        receipt = prepared.commit_no_fail()
+
+    assert not runtime.authenticates_point_batch_token(object())
+    assert not runtime.authenticates_point_batch_receipt(object())
+    for field_name, malformed in (
+        ("stable_id", object()),
+        ("committed_point_mutations", -1),
+        ("_runtime_token", EvilEquality()),
+        ("_integrity_token", object()),
+    ):
+        candidate = replace(receipt)
+        object.__setattr__(candidate, field_name, malformed)
+        assert not runtime.authenticates_point_batch_receipt(candidate)
+        assert not runtime.authenticates_point_batch_receipt(candidate, token=token)
+
+
+def test_point_batch_fences_watermark_through_open_sealed_and_claimed_states() -> None:
+    """The indexed preparation fence remains authoritative for every batch state."""
+
+    runtime, _state, _crypto = _runtime()
+    batch = runtime.begin_point_batch(
+        stable_id="point-batch-watermark-fence",
+        linearization_time=_START + timedelta(hours=1),
+    )
+    batch.stage_point(
+        NetworkRuntimePointFamily.NTP_ASSOCIATION,
+        "client-a",
+        "server-a",
+        expires_at=_START + timedelta(hours=2),
+    )
+    page = runtime.advance_watermark_page(_START + timedelta(minutes=30), limit=1)
+    assert not page.has_more
+    with pytest.raises(StateError, match="fenced by a preparation"):
+        runtime.advance_watermark_page(_START + timedelta(hours=1), limit=1)
+
+    token = batch.seal()
+    with pytest.raises(StateError, match="fenced by a preparation"):
+        runtime.advance_watermark_page(_START + timedelta(hours=1), limit=1)
+    with runtime.claimed_point_batch(token):
+        with pytest.raises(StateError, match="fenced by a preparation"):
+            runtime.advance_watermark_page(_START + timedelta(hours=1), limit=1)
+
+    page = runtime.advance_watermark_page(_START + timedelta(hours=1), limit=1)
+    assert not page.has_more
+    assert page.census.preparation_fences == 0
+    assert page.census.reserved_deadlines == 0
+
+
+def test_point_batch_overlay_and_commit_digest_are_independent_of_stage_order() -> None:
+    """Equivalent point overlays produce the same digest regardless of insertion order."""
+
+    first, first_state, first_crypto = _runtime()
+    second, second_state, second_crypto = _runtime()
+    entries = (
+        (
+            NetworkRuntimePointFamily.DNS_OBSERVATION,
+            "dns-a",
+            ("a.example.test", _START),
+        ),
+        (
+            NetworkRuntimePointFamily.TLS_CLIENT_SERVER_PAIR,
+            ("client-a", "server-a"),
+            (_START, _START + timedelta(seconds=2)),
+        ),
+    )
+
+    def prepare(
+        runtime: NetworkTransactionRuntime,
+        ordered_entries: tuple[tuple[NetworkRuntimePointFamily, object, object], ...],
+    ) -> object:
+        batch = runtime.begin_point_batch(
+            stable_id="point-batch-order-independent",
+            linearization_time=_START,
+        )
+        for family, key, value in ordered_entries:
+            batch.stage_point(
+                family,
+                key,
+                value,
+                expires_at=_START + timedelta(hours=1),
+            )
+        return batch.seal()
+
+    first_token = prepare(first, entries)
+    second_token = prepare(second, tuple(reversed(entries)))
+    assert first_token.overlay_digest == second_token.overlay_digest
+    first_state_before = first_state.materialization_digest()
+    second_state_before = second_state.materialization_digest()
+    first_crypto_before = first_crypto.state_digest()
+    second_crypto_before = second_crypto.state_digest()
+
+    with first.claimed_point_batch(first_token) as prepared:
+        first_receipt = prepared.commit_no_fail()
+    with second.claimed_point_batch(second_token) as prepared:
+        second_receipt = prepared.commit_no_fail()
+
+    assert first_receipt.committed_runtime_digest == second_receipt.committed_runtime_digest
+    assert first.state_digest() == second.state_digest()
+    assert first_state.materialization_digest() == first_state_before
+    assert second_state.materialization_digest() == second_state_before
+    assert first_crypto.state_digest() == first_crypto_before
+    assert second_crypto.state_digest() == second_crypto_before

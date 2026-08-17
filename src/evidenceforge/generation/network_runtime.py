@@ -110,6 +110,8 @@ class NetworkRuntimePointFamily(StrEnum):
     NTP_SERVER_PROFILE = "ntp_server_profile"
     NTP_PARSER = "ntp_parser"
     RESPONDER_BINDING = "responder_binding"
+    KERBEROS_AUDIT_PAIR = "kerberos_audit_pair"
+    KERBEROS_AUDIT_TUPLE = "kerberos_audit_tuple"
 
 
 def _canonical_family(family: NetworkRuntimePointFamily) -> NetworkRuntimePointFamily:
@@ -722,6 +724,44 @@ class NetworkTransactionPreparationReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class NetworkPointBatchToken:
+    """Opaque owner-authenticated reservation for one point-only overlay."""
+
+    preparation_id: int
+    stable_id: str
+    linearization_time: datetime
+    overlay_digest: str
+    point_mutations: int
+    _runtime_token: int = field(repr=False, default=0)
+    _integrity_token: str = field(repr=False, default="")
+
+    @property
+    def publication_token(self) -> str:
+        """Return the stable keyed proof bound into an outer occurrence owner."""
+
+        return self._integrity_token
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkPointBatchReceipt:
+    """Authenticated proof that one point-only overlay committed once."""
+
+    publication_token: str
+    stable_id: str
+    overlay_digest: str
+    committed_runtime_digest: str
+    committed_point_mutations: int
+    _runtime_token: int = field(repr=False, default=0)
+    _integrity_token: str = field(repr=False, default="")
+
+    @property
+    def receipt_token(self) -> str:
+        """Return the keyed proof over the exact committed point outcome."""
+
+        return self._integrity_token
+
+
+@dataclass(frozen=True, slots=True)
 class PreparedNetworkTransactionRoot:
     """Frozen State and runtime inputs ready for outer-authority composition."""
 
@@ -850,6 +890,25 @@ class _PreparedCapability:
 
 
 @dataclass(frozen=True, slots=True)
+class _OpenPointBatchCapability:
+    preparation_id: int
+    preparation_identity: int
+    stable_id: str
+    linearization_time: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedPointBatchCapability:
+    token_identity: int
+    preparation_id: int
+    integrity_token: str
+    trusted_token: NetworkPointBatchToken
+    expectations: tuple[_PointExpectation, ...]
+    mutations: tuple[_PointMutation, ...]
+    reserved_points: tuple[_PointKey, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _ClaimedCompositeCapability:
     """Runtime-owned nested crypto authority for one public outer claim."""
 
@@ -857,6 +916,15 @@ class _ClaimedCompositeCapability:
     preparation_id: int
     token: NetworkTransactionPreparationToken
     crypto_commit: CryptographicMaterialPreparedCommit
+
+
+@dataclass(frozen=True, slots=True)
+class _ClaimedPointBatchCapability:
+    """Runtime-owned authority for one public point-only claim facade."""
+
+    prepared_identity: int
+    preparation_id: int
+    token: NetworkPointBatchToken
 
 
 @dataclass(frozen=True, slots=True)
@@ -964,6 +1032,249 @@ def _validated_receipt_integrity(
         return _receipt_integrity(secret, receipt)
     except (AttributeError, TypeError, ValueError) as exc:
         raise StateError("Network transaction receipt contains malformed fields") from exc
+
+
+def _point_batch_token_integrity(secret: bytes, token: NetworkPointBatchToken) -> str:
+    preimage = (
+        "network-point-batch-v1",
+        token.preparation_id,
+        token.stable_id,
+        token.linearization_time,
+        token.overlay_digest,
+        token.point_mutations,
+        token._runtime_token,
+    )
+    return hmac.new(secret, repr(preimage).encode(), hashlib.sha256).hexdigest()
+
+
+def _validated_point_batch_token_integrity(
+    secret: bytes,
+    token: NetworkPointBatchToken,
+) -> str:
+    """Return point-batch token integrity or reject malformed caller fields."""
+
+    if (
+        type(token) is not NetworkPointBatchToken
+        or type(token.preparation_id) is not int
+        or token.preparation_id <= 0
+        or type(token.stable_id) is not str
+        or not token.stable_id
+        or type(token.linearization_time) is not datetime
+        or token.linearization_time.tzinfo is not UTC
+        or type(token.overlay_digest) is not str
+        or type(token.point_mutations) is not int
+        or token.point_mutations < 0
+        or type(token._runtime_token) is not int
+        or type(token._integrity_token) is not str
+    ):
+        raise StateError("Network point-batch token contains malformed fields")
+    try:
+        return _point_batch_token_integrity(secret, token)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise StateError("Network point-batch token contains malformed fields") from exc
+
+
+def _point_batch_receipt_integrity(secret: bytes, receipt: NetworkPointBatchReceipt) -> str:
+    preimage = (
+        "network-point-batch-receipt-v1",
+        receipt.publication_token,
+        receipt.stable_id,
+        receipt.overlay_digest,
+        receipt.committed_runtime_digest,
+        receipt.committed_point_mutations,
+        receipt._runtime_token,
+    )
+    return hmac.new(secret, repr(preimage).encode(), hashlib.sha256).hexdigest()
+
+
+def _validated_point_batch_receipt_integrity(
+    secret: bytes,
+    receipt: NetworkPointBatchReceipt,
+) -> str:
+    """Return point-batch receipt integrity or reject malformed caller fields."""
+
+    if (
+        type(receipt) is not NetworkPointBatchReceipt
+        or type(receipt.publication_token) is not str
+        or type(receipt.stable_id) is not str
+        or not receipt.stable_id
+        or type(receipt.overlay_digest) is not str
+        or type(receipt.committed_runtime_digest) is not str
+        or type(receipt.committed_point_mutations) is not int
+        or receipt.committed_point_mutations < 0
+        or type(receipt._runtime_token) is not int
+        or type(receipt._integrity_token) is not str
+    ):
+        raise StateError("Network point-batch receipt contains malformed fields")
+    try:
+        return _point_batch_receipt_integrity(secret, receipt)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise StateError("Network point-batch receipt contains malformed fields") from exc
+
+
+class NetworkPointBatch:
+    """Open copy-on-write planner for atomic point-only publication."""
+
+    __slots__ = (
+        "_cancelled",
+        "_expectations",
+        "_linearization_time",
+        "_mutations",
+        "_owner",
+        "_preparation_id",
+        "_sealed",
+        "_stable_id",
+    )
+
+    def __init__(
+        self,
+        owner: NetworkTransactionRuntime,
+        *,
+        preparation_id: int,
+        stable_id: str,
+        linearization_time: datetime,
+    ) -> None:
+        self._owner = owner
+        self._preparation_id = preparation_id
+        self._stable_id = stable_id
+        self._linearization_time = linearization_time
+        self._expectations: dict[_PointKey, _PointExpectation] = {}
+        self._mutations: dict[_PointKey, _PointMutation] = {}
+        self._sealed = False
+        self._cancelled = False
+
+    @property
+    def preparation_id(self) -> int:
+        """Return this runtime's monotonic preparation identifier."""
+
+        return self._preparation_id
+
+    def read_point(
+        self,
+        family: NetworkRuntimePointFamily,
+        key: Hashable,
+        default: object = None,
+        *,
+        at: datetime | None = None,
+    ) -> object:
+        """Read one exact point through the overlay and reserve its preimage."""
+
+        self._require_open()
+        canonical_family = _canonical_family(family)
+        canonical_key = _canonical_key(key)
+        canonical_default = _canonical_value(default)
+        canonical_at = None if at is None else _canonical_datetime(at, field_name="point read time")
+        point_key = (canonical_family, canonical_key)
+        mutation = self._mutations.get(point_key)
+        if mutation is not None:
+            if mutation.kind == "delete":
+                return canonical_default
+            if canonical_at is not None and mutation.expires_at <= canonical_at:
+                return canonical_default
+            return _canonical_value(mutation.value)
+        expectation, value, expires_at, visible = self._owner._reserve_point_batch_point(
+            self,
+            canonical_family,
+            canonical_key,
+        )
+        self._expectations.setdefault(point_key, expectation)
+        if not visible or (canonical_at is not None and expires_at <= canonical_at):
+            return canonical_default
+        return _canonical_value(value)
+
+    def stage_point(
+        self,
+        family: NetworkRuntimePointFamily,
+        key: Hashable,
+        value: object,
+        *,
+        expires_at: datetime | None = None,
+    ) -> None:
+        """Stage one exact point replacement without changing canonical state."""
+
+        self._require_open()
+        canonical_family = _canonical_family(family)
+        canonical_key = _canonical_key(key)
+        canonical_value = _canonical_value(value)
+        canonical_expiry = (
+            _MAX_TIME
+            if expires_at is None
+            else _canonical_datetime(expires_at, field_name="point expiry")
+        )
+        point_key = (canonical_family, canonical_key)
+        if point_key in self._mutations:
+            raise StateError("Network point batch contains a duplicate mutation")
+        self._owner._validate_point_batch_expiry(self, canonical_expiry)
+        if point_key not in self._expectations:
+            expectation, _value, _expires_at, _visible = self._owner._reserve_point_batch_point(
+                self,
+                canonical_family,
+                canonical_key,
+            )
+            self._expectations[point_key] = expectation
+        self._mutations[point_key] = _PointMutation(
+            family=canonical_family,
+            key=canonical_key,
+            kind="set",
+            value=canonical_value,
+            expires_at=canonical_expiry,
+        )
+
+    def delete_point(self, family: NetworkRuntimePointFamily, key: Hashable) -> None:
+        """Stage one exact deletion while retaining an ABA generation."""
+
+        self._require_open()
+        canonical_family = _canonical_family(family)
+        canonical_key = _canonical_key(key)
+        point_key = (canonical_family, canonical_key)
+        if point_key in self._mutations:
+            raise StateError("Network point batch contains a duplicate mutation")
+        if point_key not in self._expectations:
+            expectation, _value, _expires_at, _visible = self._owner._reserve_point_batch_point(
+                self,
+                canonical_family,
+                canonical_key,
+            )
+            self._expectations[point_key] = expectation
+        self._mutations[point_key] = _PointMutation(
+            family=canonical_family,
+            key=canonical_key,
+            kind="delete",
+            value=None,
+            expires_at=_MAX_TIME,
+        )
+
+    def seal(self) -> NetworkPointBatchToken:
+        """Seal an exact point overlay without publishing it."""
+
+        self._require_open()
+        try:
+            token = self._owner._seal_point_batch(self)
+        except BaseException:
+            self._abort_failed_seal()
+            raise
+        self._sealed = True
+        return token
+
+    def cancel(self) -> None:
+        """Cancel this open batch without changing canonical point state."""
+
+        self._require_open()
+        self._owner._cancel_open_point_batch(self)
+        self._cancelled = True
+
+    def _abort_failed_seal(self) -> None:
+        try:
+            self._owner._cancel_open_point_batch(self)
+        except StateError:
+            pass
+        self._cancelled = True
+
+    def _require_open(self) -> None:
+        if self._cancelled:
+            raise StateError("Network point batch is cancelled")
+        if self._sealed:
+            raise StateError("Network point batch is already sealed")
 
 
 class NetworkTransactionPreparation:
@@ -1289,6 +1600,45 @@ class NetworkTransactionPreparedCommit:
         self._active = False
 
 
+class NetworkPointBatchPreparedCommit:
+    """Claim facade for one structurally no-fail point-only commit."""
+
+    __slots__ = ("_active", "_committed", "_owner", "_receipt")
+
+    def __init__(self, owner: NetworkTransactionRuntime) -> None:
+        self._owner = owner
+        self._active = True
+        self._committed = False
+        self._receipt: NetworkPointBatchReceipt | None = None
+
+    @property
+    def committed(self) -> bool:
+        """Return whether this exact claim committed once."""
+
+        return self._committed
+
+    @property
+    def receipt(self) -> NetworkPointBatchReceipt | None:
+        """Return the signed receipt after commit."""
+
+        return self._receipt
+
+    def commit_no_fail(self) -> NetworkPointBatchReceipt:
+        """Publish every prevalidated primitive point write atomically."""
+
+        if not self._active:
+            raise StateError("Network point-batch prepared commit is no longer active")
+        if self._committed:
+            raise StateError("Network point batch was already committed")
+        receipt = self._owner._commit_point_batch_claim_no_fail(self)
+        self._receipt = receipt
+        self._committed = True
+        return receipt
+
+    def _close(self) -> None:
+        self._active = False
+
+
 class NetworkTransactionRuntime:
     """Versioned exact-point authority for generator-local network planning."""
 
@@ -1337,10 +1687,17 @@ class NetworkTransactionRuntime:
         self._open_preparations: dict[int, _OpenPreparationCapability] = {}
         self._open_objects: dict[int, NetworkTransactionPreparation] = {}
         self._open_capabilities_by_identity: dict[int, _OpenPreparationCapability] = {}
+        self._open_point_batches: dict[int, _OpenPointBatchCapability] = {}
+        self._open_point_batch_objects: dict[int, NetworkPointBatch] = {}
+        self._open_point_batch_capabilities_by_identity: dict[int, _OpenPointBatchCapability] = {}
         self._prepared_tokens: dict[int, NetworkTransactionPreparationToken] = {}
         self._prepared_capabilities: dict[int, _PreparedCapability] = {}
+        self._point_batch_tokens: dict[int, NetworkPointBatchToken] = {}
+        self._point_batch_capabilities: dict[int, _PreparedPointBatchCapability] = {}
         self._claimed_preparations: set[int] = set()
         self._claimed_composites: dict[int, _ClaimedCompositeCapability] = {}
+        self._claimed_point_batches: set[int] = set()
+        self._claimed_point_batch_commits: dict[int, _ClaimedPointBatchCapability] = {}
         self._reserved_points: dict[tuple[NetworkRuntimePointFamily, Hashable], int] = {}
         self._reserved_by_preparation: dict[
             int, set[tuple[NetworkRuntimePointFamily, Hashable]]
@@ -1437,6 +1794,48 @@ class NetworkTransactionRuntime:
             crypto.cancel(owner=crypto_owner)
             raise
 
+    def begin_point_batch(
+        self,
+        *,
+        stable_id: str,
+        linearization_time: datetime,
+    ) -> NetworkPointBatch:
+        """Begin one allocation-free point-only preparation."""
+
+        if type(stable_id) is not str or not stable_id.strip():
+            raise ValueError("Network point-batch stable_id must not be empty")
+        canonical_time = _canonical_datetime(
+            linearization_time,
+            field_name="point-batch linearization_time",
+        )
+        with self._lock:
+            fence = self._pending_watermark or self._watermark
+            if canonical_time < fence:
+                raise StateError("Network point-batch preparation starts behind the watermark")
+            if canonical_time >= self._window_end:
+                raise StateError(
+                    "Network point-batch preparation starts at or after the runtime window end"
+                )
+            preparation_id = self._next_preparation_id
+            self._next_preparation_id += 1
+            preparation = NetworkPointBatch(
+                self,
+                preparation_id=preparation_id,
+                stable_id=stable_id,
+                linearization_time=canonical_time,
+            )
+            capability = _OpenPointBatchCapability(
+                preparation_id=preparation_id,
+                preparation_identity=id(preparation),
+                stable_id=stable_id,
+                linearization_time=canonical_time,
+            )
+            self._open_point_batches[preparation_id] = capability
+            self._open_point_batch_objects[id(preparation)] = preparation
+            self._open_point_batch_capabilities_by_identity[id(preparation)] = capability
+            self._preparation_fences.set(preparation_id, canonical_time)
+            return preparation
+
     def get_point(
         self,
         family: NetworkRuntimePointFamily,
@@ -1507,6 +1906,129 @@ class NetworkTransactionRuntime:
                 _PointMutation(canonical_family, canonical_key, "delete", None, _MAX_TIME)
             )
             return True
+
+    def cancel_point_batch(self, token: NetworkPointBatchToken) -> bool:
+        """Cancel one unclaimed sealed point batch and release its reservations."""
+
+        if type(token) is not NetworkPointBatchToken:
+            return False
+        error: StateError | None = None
+        with self._lock:
+            capability = self._point_batch_capabilities.get(id(token))
+            if capability is None:
+                return False
+            if capability.preparation_id in self._claimed_point_batches:
+                return False
+            try:
+                capability = self._active_point_batch_capability_locked(token)
+            except StateError as exc:
+                self._release_point_batch_capability_locked(capability)
+                error = exc
+            else:
+                self._release_point_batch_capability_locked(capability)
+        if error is not None:
+            raise error
+        return True
+
+    def authenticates_point_batch_token(
+        self,
+        token: NetworkPointBatchToken,
+        *,
+        expected_stable_id: str | None = None,
+    ) -> bool:
+        """Return whether this runtime owns one intact active point-batch token."""
+
+        if type(token) is not NetworkPointBatchToken:
+            return False
+        try:
+            with self._lock:
+                capability = self._active_point_batch_capability_locked(token)
+                if (
+                    expected_stable_id is not None
+                    and capability.trusted_token.stable_id != expected_stable_id
+                ):
+                    return False
+                return True
+        except (
+            AttributeError,
+            LookupError,
+            RecursionError,
+            RuntimeError,
+            StateError,
+            TypeError,
+            ValueError,
+        ):
+            return False
+
+    def authenticates_point_batch_receipt(
+        self,
+        receipt: NetworkPointBatchReceipt,
+        *,
+        token: NetworkPointBatchToken | None = None,
+    ) -> bool:
+        """Authenticate one exact point-batch receipt and optional issuing token."""
+
+        if type(receipt) is not NetworkPointBatchReceipt:
+            return False
+        try:
+            expected = _validated_point_batch_receipt_integrity(self._secret, receipt)
+            if receipt._runtime_token != id(self) or not hmac.compare_digest(
+                receipt.receipt_token,
+                expected,
+            ):
+                return False
+            if token is None:
+                return True
+            if type(token) is not NetworkPointBatchToken:
+                return False
+            expected_token = _validated_point_batch_token_integrity(self._secret, token)
+            if token._runtime_token != id(self) or not hmac.compare_digest(
+                token.publication_token,
+                expected_token,
+            ):
+                return False
+            return (
+                receipt.publication_token == token.publication_token
+                and receipt.stable_id == token.stable_id
+                and receipt.overlay_digest == token.overlay_digest
+                and receipt.committed_point_mutations == token.point_mutations
+            )
+        except (
+            AttributeError,
+            LookupError,
+            RecursionError,
+            RuntimeError,
+            StateError,
+            TypeError,
+            ValueError,
+        ):
+            return False
+
+    @contextmanager
+    def claimed_point_batch(
+        self,
+        token: NetworkPointBatchToken,
+    ) -> Iterator[NetworkPointBatchPreparedCommit]:
+        """Claim one point-only token without retaining the runtime lock."""
+
+        capability = self._claim_point_batch(token)
+        try:
+            prepared = NetworkPointBatchPreparedCommit(self)
+            self._register_claimed_point_batch(
+                prepared,
+                capability=capability,
+                token=token,
+            )
+            try:
+                yield prepared
+            finally:
+                if not prepared.committed:
+                    self._cancel_claimed_point_batch(token)
+                self._close_claimed_point_batch(prepared)
+                prepared._close()
+        except BaseException:
+            self._cancel_claimed_point_batch(token)
+            raise
 
     def cancel_preparation(self, token: NetworkTransactionPreparationToken) -> bool:
         """Cancel one unclaimed sealed preparation and release exact reservations."""
@@ -1823,9 +2345,9 @@ class NetworkTransactionRuntime:
         return NetworkTransactionRuntimeCensus(
             live_points=self._live_points,
             tombstone_points=self._tombstone_points,
-            open_preparations=len(self._open_preparations),
-            prepared_transactions=len(self._prepared_tokens),
-            claimed_transactions=len(self._claimed_preparations),
+            open_preparations=len(self._open_preparations) + len(self._open_point_batches),
+            prepared_transactions=len(self._prepared_tokens) + len(self._point_batch_tokens),
+            claimed_transactions=len(self._claimed_preparations) + len(self._claimed_point_batches),
             reserved_points=len(self._reserved_points),
             preparation_fences=len(self._preparation_fences),
             reserved_deadlines=len(self._reserved_deadlines),
@@ -2000,30 +2522,56 @@ class NetworkTransactionRuntime:
         point_key = (family, key)
         with self._lock:
             capability = self._active_open_preparation_locked(preparation)
-            owner = self._reserved_points.get(point_key)
-            if owner is not None and owner != capability.preparation_id:
-                raise StateError("Network runtime point is reserved by another preparation")
-            self._reserved_points[point_key] = capability.preparation_id
-            self._reserved_by_preparation.setdefault(capability.preparation_id, set()).add(
-                point_key
+            return self._reserve_point_locked(
+                preparation_id=capability.preparation_id,
+                point_key=point_key,
             )
-            slot = self._points.get(point_key)
-            if slot is None:
-                self._reserved_deadlines.replace(point_key, None)
-                expectation = _PointExpectation(family, key, 0, _MISSING_DIGEST)
-                return expectation, None, _MAX_TIME, False
-            self._reserved_deadlines.replace(
-                point_key,
-                self._expiry_entry_for_slot(point_key, slot),
+
+    def _reserve_point_batch_point(
+        self,
+        preparation: NetworkPointBatch,
+        family: NetworkRuntimePointFamily,
+        key: Hashable,
+    ) -> tuple[_PointExpectation, object | None, datetime, bool]:
+        point_key = (family, key)
+        with self._lock:
+            capability = self._active_open_point_batch_locked(preparation)
+            return self._reserve_point_locked(
+                preparation_id=capability.preparation_id,
+                point_key=point_key,
             )
-            value_digest = _MISSING_DIGEST if slot.is_tombstone else _value_digest(slot.value)
-            expectation = _PointExpectation(family, key, slot.generation, value_digest)
-            return (
-                expectation,
-                _canonical_value(slot.value),
-                slot.expires_at,
-                not slot.is_tombstone,
-            )
+
+    def _reserve_point_locked(
+        self,
+        *,
+        preparation_id: int,
+        point_key: _PointKey,
+    ) -> tuple[_PointExpectation, object | None, datetime, bool]:
+        """Reserve one canonical key for an already-authenticated open owner."""
+
+        family, key = point_key
+        owner = self._reserved_points.get(point_key)
+        if owner is not None and owner != preparation_id:
+            raise StateError("Network runtime point is reserved by another preparation")
+        self._reserved_points[point_key] = preparation_id
+        self._reserved_by_preparation.setdefault(preparation_id, set()).add(point_key)
+        slot = self._points.get(point_key)
+        if slot is None:
+            self._reserved_deadlines.replace(point_key, None)
+            expectation = _PointExpectation(family, key, 0, _MISSING_DIGEST)
+            return expectation, None, _MAX_TIME, False
+        self._reserved_deadlines.replace(
+            point_key,
+            self._expiry_entry_for_slot(point_key, slot),
+        )
+        value_digest = _MISSING_DIGEST if slot.is_tombstone else _value_digest(slot.value)
+        expectation = _PointExpectation(family, key, slot.generation, value_digest)
+        return (
+            expectation,
+            _canonical_value(slot.value),
+            slot.expires_at,
+            not slot.is_tombstone,
+        )
 
     def _validate_prepared_point_expiry(
         self,
@@ -2044,6 +2592,130 @@ class NetworkTransactionRuntime:
                 )
             if expires_at != _MAX_TIME and expires_at > self._window_end:
                 raise StateError("Network runtime point expiry exceeds the runtime window")
+
+    def _validate_point_batch_expiry(
+        self,
+        preparation: NetworkPointBatch,
+        expires_at: datetime,
+    ) -> None:
+        """Validate one point-only deadline against its publication fence."""
+
+        with self._lock:
+            capability = self._active_open_point_batch_locked(preparation)
+            deadline_floor = max(
+                self._pending_watermark or self._watermark,
+                capability.linearization_time,
+            )
+            if expires_at <= deadline_floor:
+                raise StateError("Network runtime point expiry must follow the batch linearization")
+            if expires_at != _MAX_TIME and expires_at > self._window_end:
+                raise StateError("Network runtime point expiry exceeds the runtime window")
+
+    def _seal_point_batch(self, preparation: NetworkPointBatch) -> NetworkPointBatchToken:
+        """Freeze one point-only overlay and retain its exact capability."""
+
+        if type(preparation._expectations) is not dict or type(preparation._mutations) is not dict:
+            raise StateError("Network point batch contains a malformed overlay map")
+        canonical_expectations: dict[_PointKey, _PointExpectation] = {}
+        for public_key, value in preparation._expectations.items():
+            expectation = _canonical_expectation(value)
+            canonical_key = _canonical_point_key(public_key)
+            if canonical_key != (expectation.family, expectation.key):
+                raise StateError("Network point-batch expectation key disagrees with its payload")
+            if canonical_key in canonical_expectations:
+                raise StateError("Network point batch contains duplicate expectations")
+            canonical_expectations[canonical_key] = expectation
+        expectations = tuple(
+            canonical_expectations[key]
+            for key in sorted(canonical_expectations, key=_point_key_order)
+        )
+        canonical_mutations: dict[_PointKey, _PointMutation] = {}
+        for public_key, value in preparation._mutations.items():
+            mutation = _canonical_mutation(value)
+            canonical_key = _canonical_point_key(public_key)
+            if canonical_key != (mutation.family, mutation.key):
+                raise StateError("Network point-batch mutation key disagrees with its payload")
+            if canonical_key in canonical_mutations:
+                raise StateError("Network point batch contains duplicate mutations")
+            if canonical_key not in canonical_expectations:
+                raise StateError("Network point-batch mutation has no reserved expectation")
+            canonical_mutations[canonical_key] = mutation
+        mutations = tuple(
+            canonical_mutations[key] for key in sorted(canonical_mutations, key=_point_key_order)
+        )
+        if not mutations:
+            raise StateError("Network point batch must publish at least one mutation")
+        overlay_preimage = (
+            "network-point-batch-overlay-v1",
+            tuple(
+                (
+                    item.family.value,
+                    _freeze_digest_value(item.key),
+                    item.generation,
+                    item.value_digest,
+                )
+                for item in expectations
+            ),
+            tuple(
+                (
+                    item.family.value,
+                    _freeze_digest_value(item.key),
+                    item.kind,
+                    _freeze_digest_value(item.value),
+                    item.expires_at,
+                )
+                for item in mutations
+            ),
+        )
+        overlay_digest = hashlib.sha256(repr(overlay_preimage).encode()).hexdigest()
+        with self._lock:
+            open_capability = self._active_open_point_batch_locked(preparation)
+            fence = self._pending_watermark or self._watermark
+            if open_capability.linearization_time < fence:
+                raise StateError("Network point batch starts behind the runtime watermark")
+            deadline_floor = max(fence, open_capability.linearization_time)
+            if any(mutation.expires_at <= deadline_floor for mutation in mutations):
+                raise StateError("Network point expiry was overtaken before batch seal")
+            self._validate_expectations_locked(expectations)
+            reserved_points = tuple(
+                (expectation.family, expectation.key) for expectation in expectations
+            )
+            self._validate_point_batch_reservations_locked(
+                open_capability.preparation_id,
+                reserved_points,
+            )
+            token = NetworkPointBatchToken(
+                preparation_id=open_capability.preparation_id,
+                stable_id=open_capability.stable_id,
+                linearization_time=open_capability.linearization_time,
+                overlay_digest=overlay_digest,
+                point_mutations=len(mutations),
+                _runtime_token=id(self),
+            )
+            token = replace(
+                token,
+                _integrity_token=_point_batch_token_integrity(self._secret, token),
+            )
+            trusted_token = replace(token)
+            capability = _PreparedPointBatchCapability(
+                token_identity=id(token),
+                preparation_id=open_capability.preparation_id,
+                integrity_token=token.publication_token,
+                trusted_token=trusted_token,
+                expectations=expectations,
+                mutations=mutations,
+                reserved_points=reserved_points,
+            )
+            self._open_point_batches.pop(open_capability.preparation_id)
+            self._open_point_batch_objects.pop(id(preparation))
+            self._open_point_batch_capabilities_by_identity.pop(id(preparation))
+            self._point_batch_tokens[open_capability.preparation_id] = token
+            self._point_batch_capabilities[id(token)] = capability
+            self._preparation_fences.set(
+                open_capability.preparation_id,
+                open_capability.linearization_time,
+            )
+            return token
 
     def _seal_preparation(
         self,
@@ -2199,6 +2871,29 @@ class NetworkTransactionRuntime:
             )
             return root
 
+    def _cancel_open_point_batch(self, preparation: NetworkPointBatch) -> None:
+        with self._lock:
+            capability = self._active_open_point_batch_locked(preparation)
+            self._open_point_batches.pop(capability.preparation_id)
+            self._open_point_batch_objects.pop(id(preparation))
+            self._open_point_batch_capabilities_by_identity.pop(id(preparation))
+            self._preparation_fences.remove(capability.preparation_id)
+            self._release_point_reservations_locked(capability.preparation_id)
+
+    def _active_open_point_batch_locked(
+        self,
+        preparation: NetworkPointBatch,
+    ) -> _OpenPointBatchCapability:
+        capability = self._open_point_batch_capabilities_by_identity.get(id(preparation))
+        if (
+            capability is None
+            or capability.preparation_identity != id(preparation)
+            or self._open_point_batches.get(capability.preparation_id) is not capability
+            or self._open_point_batch_objects.get(id(preparation)) is not preparation
+        ):
+            raise StateError("Network point batch is stale or foreign")
+        return capability
+
     def _cancel_open_preparation(
         self,
         preparation: NetworkTransactionPreparation,
@@ -2224,6 +2919,144 @@ class NetworkTransactionRuntime:
         ):
             raise StateError("Network transaction preparation is stale or foreign")
         return capability
+
+    def _active_point_batch_capability_locked(
+        self,
+        token: NetworkPointBatchToken,
+    ) -> _PreparedPointBatchCapability:
+        if type(token) is not NetworkPointBatchToken:
+            raise StateError("Network point-batch token has an invalid type")
+        capability = self._point_batch_capabilities.get(id(token))
+        if capability is None:
+            if type(token._runtime_token) is not int or token._runtime_token != id(self):
+                raise StateError("Network point-batch token belongs to another runtime")
+            raise StateError("Network point-batch token is stale or already consumed")
+        active = self._point_batch_tokens.get(capability.preparation_id)
+        if active is not token:
+            raise StateError("Network point-batch token is stale or already consumed")
+        expected = _validated_point_batch_token_integrity(self._secret, token)
+        if not hmac.compare_digest(token.publication_token, capability.integrity_token) or not (
+            hmac.compare_digest(expected, capability.integrity_token)
+        ):
+            raise StateError("Network point-batch token integrity validation failed")
+        return capability
+
+    def _claim_point_batch(
+        self,
+        token: NetworkPointBatchToken,
+    ) -> _PreparedPointBatchCapability:
+        if type(token) is not NetworkPointBatchToken:
+            raise StateError("Network point-batch token has an invalid type")
+        error: StateError | None = None
+        with self._lock:
+            capability = self._point_batch_capabilities.get(id(token))
+            if capability is not None and capability.preparation_id in self._claimed_point_batches:
+                raise StateError("Network point-batch token is already claimed")
+            try:
+                capability = self._active_point_batch_capability_locked(token)
+                fence = self._pending_watermark or self._watermark
+                publication_floor = max(
+                    fence,
+                    capability.trusted_token.linearization_time,
+                )
+                if capability.trusted_token.linearization_time < fence:
+                    raise StateError("Network point-batch token starts behind the watermark")
+                if any(
+                    mutation.expires_at <= publication_floor for mutation in capability.mutations
+                ):
+                    raise StateError("Network point expiry was overtaken before batch claim")
+                self._validate_expectations_locked(capability.expectations)
+                self._validate_point_batch_reservations_locked(
+                    capability.preparation_id,
+                    capability.reserved_points,
+                )
+                self._claimed_point_batches.add(capability.preparation_id)
+            except StateError as exc:
+                if capability is not None:
+                    self._release_point_batch_capability_locked(capability)
+                error = exc
+        if error is not None:
+            raise error
+        assert capability is not None
+        return capability
+
+    def _register_claimed_point_batch(
+        self,
+        prepared: NetworkPointBatchPreparedCommit,
+        *,
+        capability: _PreparedPointBatchCapability,
+        token: NetworkPointBatchToken,
+    ) -> None:
+        with self._lock:
+            if capability.preparation_id not in self._claimed_point_batches:
+                raise StateError("Network point-batch token is not claimed")
+            if self._point_batch_capabilities.get(id(token)) is not capability:
+                raise StateError("Network point-batch claim capability changed")
+            self._claimed_point_batch_commits[id(prepared)] = _ClaimedPointBatchCapability(
+                prepared_identity=id(prepared),
+                preparation_id=capability.preparation_id,
+                token=token,
+            )
+
+    def _close_claimed_point_batch(self, prepared: NetworkPointBatchPreparedCommit) -> None:
+        with self._lock:
+            capability = self._claimed_point_batch_commits.pop(id(prepared), None)
+            if capability is not None and capability.prepared_identity != id(prepared):
+                raise StateError("Network point-batch claim identity diverged")
+
+    def _cancel_claimed_point_batch(self, token: NetworkPointBatchToken) -> None:
+        with self._lock:
+            capability = self._point_batch_capabilities.get(id(token))
+            if capability is None:
+                return
+            if capability.preparation_id not in self._claimed_point_batches:
+                return
+            self._release_point_batch_capability_locked(capability)
+
+    def _commit_point_batch_claim_no_fail(
+        self,
+        prepared: NetworkPointBatchPreparedCommit,
+    ) -> NetworkPointBatchReceipt:
+        with self._lock:
+            composite = self._claimed_point_batch_commits.get(id(prepared))
+            if composite is None or composite.prepared_identity != id(prepared):
+                raise StateError("Network point-batch claim is stale or foreign")
+            capability = self._point_batch_capabilities.get(id(composite.token))
+            if (
+                capability is None
+                or capability.preparation_id != composite.preparation_id
+                or capability.preparation_id not in self._claimed_point_batches
+            ):
+                raise StateError("Network point-batch claim lost its authority")
+
+            # Claim validation and exact-key reservations make the remainder
+            # primitive and structurally no-fail. Caller-owned token fields are
+            # never revisited after this point.
+            trusted_token = capability.trusted_token
+            tombstone_anchor = max(
+                self._watermark,
+                trusted_token.linearization_time,
+            )
+            for mutation in capability.mutations:
+                self._apply_point_mutation_locked(
+                    mutation,
+                    tombstone_anchor=tombstone_anchor,
+                    trusted_value=True,
+                )
+            receipt = NetworkPointBatchReceipt(
+                publication_token=capability.integrity_token,
+                stable_id=trusted_token.stable_id,
+                overlay_digest=trusted_token.overlay_digest,
+                committed_runtime_digest=self._state_digest_locked(),
+                committed_point_mutations=len(capability.mutations),
+                _runtime_token=id(self),
+            )
+            receipt = replace(
+                receipt,
+                _integrity_token=_point_batch_receipt_integrity(self._secret, receipt),
+            )
+            self._release_point_batch_claim_no_fail_locked(capability)
+            return receipt
 
     def _active_capability_locked(
         self,
@@ -2411,6 +3244,44 @@ class NetworkTransactionRuntime:
             if generation != expectation.generation or value_digest != expectation.value_digest:
                 raise StateError("Network runtime point changed after preparation")
 
+    def _validate_point_batch_reservations_locked(
+        self,
+        preparation_id: int,
+        reserved_points: tuple[_PointKey, ...],
+    ) -> None:
+        expected = set(reserved_points)
+        retained = self._reserved_by_preparation.get(preparation_id, set())
+        if retained != expected or any(
+            self._reserved_points.get(point_key) != preparation_id for point_key in expected
+        ):
+            raise StateError("Network point-batch reservations changed after preparation")
+
+    def _release_point_batch_capability_locked(
+        self,
+        capability: _PreparedPointBatchCapability,
+    ) -> None:
+        active = self._point_batch_tokens.get(capability.preparation_id)
+        retained = self._point_batch_capabilities.get(capability.token_identity)
+        if active is None or id(active) != capability.token_identity or retained is not capability:
+            raise StateError("Network point-batch capability ownership diverged")
+        self._point_batch_tokens.pop(capability.preparation_id)
+        self._point_batch_capabilities.pop(capability.token_identity)
+        self._claimed_point_batches.discard(capability.preparation_id)
+        self._preparation_fences.remove(capability.preparation_id)
+        self._release_point_reservations_locked(capability.preparation_id)
+
+    def _release_point_batch_claim_no_fail_locked(
+        self,
+        capability: _PreparedPointBatchCapability,
+    ) -> None:
+        """Release a claim whose exact ownership was validated before publication."""
+
+        self._point_batch_tokens.pop(capability.preparation_id, None)
+        self._point_batch_capabilities.pop(capability.token_identity, None)
+        self._claimed_point_batches.discard(capability.preparation_id)
+        self._preparation_fences.remove(capability.preparation_id)
+        self._release_point_reservations_locked(capability.preparation_id)
+
     def _release_capability_locked(self, capability: _PreparedCapability) -> None:
         active = self._prepared_tokens.pop(capability.preparation_id, None)
         retained = self._prepared_capabilities.pop(capability.token_identity, None)
@@ -2595,6 +3466,10 @@ class NetworkTransactionRuntime:
 __all__ = [
     "NetworkConnectionCommitResult",
     "NetworkCryptographicMaterialPreparation",
+    "NetworkPointBatch",
+    "NetworkPointBatchPreparedCommit",
+    "NetworkPointBatchReceipt",
+    "NetworkPointBatchToken",
     "NetworkRuntimePointFamily",
     "NetworkRuntimeWatermarkPage",
     "NetworkTransactionPreparation",
