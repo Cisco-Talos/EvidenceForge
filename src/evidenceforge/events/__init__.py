@@ -105,6 +105,19 @@ from evidenceforge.events.network import (
     SignaturePredicate,
 )
 from evidenceforge.events.protocol import ProtocolTransactionPlan
+from evidenceforge.events.rdp import (
+    RdpLogicalSessionIdentity,
+    RdpOperationAdmission,
+    RdpReconnectCensus,
+    RdpRetentionLease,
+    RdpSessionAffinity,
+    RdpSessionClosure,
+    RdpSessionSnapshot,
+    RdpSessionState,
+    RdpTransportGeneration,
+    RdpTransportPlan,
+    RdpWatermarkResult,
+)
 
 __all__ = [
     "OccurrenceBuilder",
@@ -116,6 +129,17 @@ __all__ = [
     "ApplicationChannelSnapshot",
     "ApplicationOperationReservation",
     "ApplicationTransportBinding",
+    "RdpLogicalSessionIdentity",
+    "RdpOperationAdmission",
+    "RdpReconnectCensus",
+    "RdpRetentionLease",
+    "RdpSessionClosure",
+    "RdpSessionAffinity",
+    "RdpSessionSnapshot",
+    "RdpSessionState",
+    "RdpTransportGeneration",
+    "RdpTransportPlan",
+    "RdpWatermarkResult",
     "CollectionBatchingPolicy",
     "CollectionCapability",
     "CollectionWindow",

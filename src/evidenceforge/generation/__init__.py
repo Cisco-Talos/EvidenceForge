@@ -50,6 +50,7 @@ from .deployment_registry import (
 )
 from .engine import GenerationEngine
 from .ground_truth import GroundTruthGenerator
+from .rdp_sessions import RdpReconnectStateManager
 from .ssh_channels import (
     SshApplicationChannelManager,
     SshChannelAffinity,
@@ -82,6 +83,7 @@ __all__ = [
     "GroundTruthGenerator",
     "HostDeployment",
     "HostDeploymentSpec",
+    "RdpReconnectStateManager",
     "LocalArtifactCapacityError",
     "LocalArtifactPreparedCommit",
     "LocalArtifactPublishToken",
