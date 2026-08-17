@@ -181,20 +181,23 @@ class ActivityGenerator:
     }
 
 
-def test_dead_dns_observation_cache_is_owned_only_by_network_runtime() -> None:
-    """The retired generator cache cannot re-enter the mutable retention inventory."""
+def test_dead_dns_caches_cannot_reenter_generator_retention() -> None:
+    """Retired generator DNS caches cannot re-enter the mutable retention inventory."""
 
     from evidenceforge.generation.activity.generator import ActivityGenerator
 
-    field_name = "_dns_observation_cache"
     discoveries = discover_activity_generator_mutable_fields(inspect.getsource(ActivityGenerator))
-
-    assert field_name not in {row.field_name for row in discoveries}
-    assert not hasattr(ActivityGenerator, "_dns_observation_cache_hit_or_store")
-    assert field_name not in {
-        policy.field_name for policy in ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES
+    discovered_fields = {row.field_name for row in discoveries}
+    retired_fields = {
+        "_dns_observation_cache",
+        "_dns_resolver_rrset_cache",
     }
-    assert field_name in REMOVED_DEAD_ACTIVITY_GENERATOR_MUTABLE_FIELDS
+
+    assert retired_fields.isdisjoint(discovered_fields)
+    assert not hasattr(ActivityGenerator, "_dns_observation_cache_hit_or_store")
+    policy_fields = {policy.field_name for policy in ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES}
+    assert retired_fields.isdisjoint(policy_fields)
+    assert retired_fields <= set(REMOVED_DEAD_ACTIVITY_GENERATOR_MUTABLE_FIELDS)
 
 
 def test_email_manifest_spool_preserves_former_pretty_json_bytes(tmp_path: Path) -> None:

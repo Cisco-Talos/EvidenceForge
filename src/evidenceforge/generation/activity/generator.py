@@ -4825,9 +4825,6 @@ class ActivityGenerator:
         self._dns_cache: ExpiringIndex[tuple[str, str, str, str], tuple[float, float]] = (
             ExpiringIndex(deadline=lambda window: _dns_cache_window(window)[1])
         )
-        self._dns_resolver_rrset_cache: dict[
-            tuple[str, str, str, tuple[str, ...]], tuple[float, float]
-        ] = {}
         self._dns_cache_last_prune = 0.0
         self._tls_seen_server_names: set[str] = set()
         self._tls_seen_client_server_pairs: set[tuple[str, str, int, str]] = set()
