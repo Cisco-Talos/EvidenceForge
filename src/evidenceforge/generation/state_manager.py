@@ -168,6 +168,7 @@ _MAX_RETAINED_SESSION_IDENTITIES = 500_000
 _MAX_RETAINED_PROCESS_IDENTITIES = 500_000
 _MAX_RETAINED_THREAD_IDENTITIES = 1_000_000
 _MAX_SMB_MUTATION_OVERLAY = 100_000
+_MAX_ACTION_COHORT_LIVE_SESSION_PROCESS_ROLE_PATCHES = 256
 _SESSION_PROCESS_REFERENCE_FIELDS = (
     "explorer_pid",
     "session_user_manager_pid",
@@ -1098,6 +1099,38 @@ class ActionCohortSessionMetadataState:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class ActionCohortLiveSessionProcessRolesState:
+    """Closed process-role projection for one already-live session."""
+
+    transport_pid: int | None = None
+    session_shell_pid: int | None = None
+    session_user_manager_pid: int | None = None
+    session_winlogon_pid: int | None = None
+    explorer_pid: int | None = None
+    initial_explorer_pid: int | None = None
+    process_tree_root: int | None = None
+    windows_shell_bootstrapped: bool = False
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous PID and bootstrap values at the public boundary."""
+
+        for name in (
+            "transport_pid",
+            "session_shell_pid",
+            "session_user_manager_pid",
+            "session_winlogon_pid",
+            "explorer_pid",
+            "initial_explorer_pid",
+            "process_tree_root",
+        ):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not int or value <= 0):
+                raise TypeError(f"Action cohort live-session role {name} requires a positive PID")
+        if type(self.windows_shell_bootstrapped) is not bool:
+            raise TypeError("Action cohort live-session shell bootstrap requires an exact bool")
+
+
 class _ActionCohortCapability:
     """Unforgeable process-local identity for one ephemeral HMAC member."""
 
@@ -1111,6 +1144,19 @@ class ActionCohortSessionMetadataPatch:
     target: SessionMaterializationPlan | SessionIdentity
     before: ActionCohortSessionMetadataState
     after: ActionCohortSessionMetadataState
+    _capability: _ActionCohortCapability = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ActionCohortLiveSessionProcessRolesPatch:
+    """Exact live-session shell-role transition backed by staged processes."""
+
+    target: SessionIdentity
+    before: ActionCohortLiveSessionProcessRolesState
+    after: ActionCohortLiveSessionProcessRolesState
+    winlogon_plan: ProcessMaterializationPlan | None
+    explorer_plan: ProcessMaterializationPlan
+    process_tree_root_plan: ProcessMaterializationPlan | None
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
 
 
@@ -1212,6 +1258,7 @@ class ActionCohortMaterializationPlan:
     _sessions: tuple[SessionMaterializationPlan, ...]
     _processes: tuple[ProcessMaterializationPlan, ...]
     _session_process_links: tuple[_ActionCohortSessionProcessLinks, ...]
+    _live_session_process_roles: tuple[ActionCohortLiveSessionProcessRolesPatch, ...]
     _session_metadata: tuple[ActionCohortSessionMetadataPatch, ...]
     _process_activity: tuple[ActionCohortProcessActivityPatch, ...]
     _session_activity: tuple[ActionCohortSessionActivityPatch, ...]
@@ -1244,6 +1291,14 @@ class ActionCohortMaterializationPlan:
         """Return exact parent-before-child process starts."""
 
         return self._processes
+
+    @property
+    def live_session_process_role_patches(
+        self,
+    ) -> tuple[ActionCohortLiveSessionProcessRolesPatch, ...]:
+        """Return exact live-session role transitions for authority projection."""
+
+        return self._live_session_process_roles
 
     @property
     def session_metadata_patches(self) -> tuple[ActionCohortSessionMetadataPatch, ...]:
@@ -1308,6 +1363,9 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         super().__init__(manager, expected_version)
         self._action_sessions: list[SessionMaterializationPlan] = []
         self._action_session_process_plans: dict[int, dict[str, ProcessMaterializationPlan]] = {}
+        self._live_session_process_roles_patches: list[
+            ActionCohortLiveSessionProcessRolesPatch
+        ] = []
         self._session_metadata_patches: list[ActionCohortSessionMetadataPatch] = []
         self._process_activity_patches: list[ActionCohortProcessActivityPatch] = []
         self._session_activity_patches: list[ActionCohortSessionActivityPatch] = []
@@ -1339,6 +1397,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         self._action_sessions.clear()
         self._processes.clear()
         self._action_session_process_plans.clear()
+        self._live_session_process_roles_patches.clear()
         self._session_metadata_patches.clear()
         self._process_activity_patches.clear()
         self._session_activity_patches.clear()
@@ -1505,6 +1564,36 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             if current is not None and current is not process:
                 raise StateError(f"Action cohort session {role} is already bound")
             links[role] = process
+
+    def bind_live_windows_session_shell(
+        self,
+        target: SessionIdentity,
+        *,
+        winlogon_plan: ProcessMaterializationPlan | None,
+        explorer_plan: ProcessMaterializationPlan,
+        process_tree_root_plan: ProcessMaterializationPlan | None,
+    ) -> None:
+        """Bind a staged Windows shell into one exact already-live desktop session."""
+
+        self._require_open()
+        if len(self._live_session_process_roles_patches) >= (
+            _MAX_ACTION_COHORT_LIVE_SESSION_PROCESS_ROLE_PATCHES
+        ):
+            raise StateError("Action cohort live-session role patch limit exceeded")
+        patch = self._manager._prepare_action_cohort_live_windows_session_shell_patch(
+            self,
+            target=target,
+            winlogon_plan=winlogon_plan,
+            explorer_plan=explorer_plan,
+            process_tree_root_plan=process_tree_root_plan,
+        )
+        target_key = self._manager._action_session_target_key(patch.target)
+        if any(
+            self._manager._action_session_target_key(candidate.target) == target_key
+            for candidate in self._live_session_process_roles_patches
+        ):
+            raise StateError("Action cohort repeats a live-session process-role patch")
+        self._live_session_process_roles_patches.append(patch)
 
     def session_metadata(
         self,
@@ -1912,6 +2001,8 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         _SessionProcessMaterializationLinks,
         ActionCohortSessionMetadataState,
         ActionCohortSessionMetadataPatch,
+        ActionCohortLiveSessionProcessRolesState,
+        ActionCohortLiveSessionProcessRolesPatch,
         ActionCohortProcessActivityPatch,
         ActionCohortSessionActivityPatch,
         ActionCohortProcessTermination,
@@ -1996,6 +2087,7 @@ def _action_cohort_semantic_preimage(
     sessions: tuple[SessionMaterializationPlan, ...],
     processes: tuple[ProcessMaterializationPlan, ...],
     session_process_links: tuple[_ActionCohortSessionProcessLinks, ...],
+    live_session_process_roles: tuple[ActionCohortLiveSessionProcessRolesPatch, ...],
     session_metadata: tuple[ActionCohortSessionMetadataPatch, ...],
     process_activity: tuple[ActionCohortProcessActivityPatch, ...],
     session_activity: tuple[ActionCohortSessionActivityPatch, ...],
@@ -2005,13 +2097,32 @@ def _action_cohort_semantic_preimage(
     """Return deterministic semantics without secrets or object addresses."""
 
     return (
-        "action-cohort-materialization-v1",
+        "action-cohort-materialization-v2",
         expected_version,
         expected_state_time,
         final_state_time,
         tuple(_action_cohort_session_target_semantic(plan) for plan in sessions),
         tuple(_action_cohort_process_target_semantic(plan) for plan in processes),
         session_process_links,
+        tuple(
+            (
+                _action_cohort_session_target_semantic(patch.target),
+                patch.before,
+                patch.after,
+                (
+                    _action_cohort_process_target_semantic(patch.winlogon_plan)
+                    if patch.winlogon_plan is not None
+                    else None
+                ),
+                _action_cohort_process_target_semantic(patch.explorer_plan),
+                (
+                    _action_cohort_process_target_semantic(patch.process_tree_root_plan)
+                    if patch.process_tree_root_plan is not None
+                    else None
+                ),
+            )
+            for patch in live_session_process_roles
+        ),
         tuple(
             (
                 _action_cohort_session_target_semantic(patch.target),
@@ -2096,6 +2207,7 @@ def _action_cohort_integrity_token(
     capability: _ActionCohortCapability,
     sessions: tuple[SessionMaterializationPlan, ...],
     processes: tuple[ProcessMaterializationPlan, ...],
+    live_session_process_roles: tuple[ActionCohortLiveSessionProcessRolesPatch, ...],
     session_metadata: tuple[ActionCohortSessionMetadataPatch, ...],
     process_activity: tuple[ActionCohortProcessActivityPatch, ...],
     session_activity: tuple[ActionCohortSessionActivityPatch, ...],
@@ -2105,11 +2217,30 @@ def _action_cohort_integrity_token(
     """Authenticate the exact ephemeral capabilities and their tuple order."""
 
     canonical = (
-        "action-cohort-capability-v1",
+        "action-cohort-capability-v2",
         semantic_id,
         id(capability),
         tuple((id(plan), plan.publication_token) for plan in sessions),
         tuple((id(plan), plan.publication_token) for plan in processes),
+        tuple(
+            (
+                id(patch),
+                id(patch._capability),
+                _action_cohort_target_capability(patch.target),
+                (
+                    _action_cohort_target_capability(patch.winlogon_plan)
+                    if patch.winlogon_plan is not None
+                    else ()
+                ),
+                _action_cohort_target_capability(patch.explorer_plan),
+                (
+                    _action_cohort_target_capability(patch.process_tree_root_plan)
+                    if patch.process_tree_root_plan is not None
+                    else ()
+                ),
+            )
+            for patch in live_session_process_roles
+        ),
         tuple(
             (
                 id(patch._capability),
@@ -2698,6 +2829,7 @@ class StateManager:
             plan._sessions,
             plan._processes,
             plan._session_process_links,
+            plan._live_session_process_roles,
             plan._session_metadata,
             plan._process_activity,
             plan._session_activity,
@@ -2706,10 +2838,18 @@ class StateManager:
         )
         if any(type(value) is not tuple for value in tuple_fields):
             raise StateError("Action cohort materialization members must be exact tuples")
+        if len(plan._live_session_process_roles) > (
+            _MAX_ACTION_COHORT_LIVE_SESSION_PROCESS_ROLE_PATCHES
+        ):
+            raise StateError("Action cohort live-session role patch limit exceeded")
         expected_types = (
             (plan._sessions, SessionMaterializationPlan),
             (plan._processes, ProcessMaterializationPlan),
             (plan._session_process_links, _ActionCohortSessionProcessLinks),
+            (
+                plan._live_session_process_roles,
+                ActionCohortLiveSessionProcessRolesPatch,
+            ),
             (plan._session_metadata, ActionCohortSessionMetadataPatch),
             (plan._process_activity, ActionCohortProcessActivityPatch),
             (plan._session_activity, ActionCohortSessionActivityPatch),
@@ -2726,6 +2866,7 @@ class StateManager:
                 plan._sessions,
                 plan._processes,
                 plan._session_process_links,
+                plan._live_session_process_roles,
                 plan._session_metadata,
                 plan._process_activity,
                 plan._session_activity,
@@ -2771,7 +2912,24 @@ class StateManager:
                 for reference in termination.staged_session_references
             ):
                 raise StateError("Action cohort staged session references are malformed")
+        for patch in plan._live_session_process_roles:
+            if (
+                type(patch.target) is not SessionIdentity
+                or type(patch.before) is not ActionCohortLiveSessionProcessRolesState
+                or type(patch.after) is not ActionCohortLiveSessionProcessRolesState
+                or type(patch.explorer_plan) is not ProcessMaterializationPlan
+                or (
+                    patch.winlogon_plan is not None
+                    and type(patch.winlogon_plan) is not ProcessMaterializationPlan
+                )
+                or (
+                    patch.process_tree_root_plan is not None
+                    and type(patch.process_tree_root_plan) is not ProcessMaterializationPlan
+                )
+            ):
+                raise StateError("Action cohort live-session role patch is malformed")
         for patch in (
+            *plan._live_session_process_roles,
             *plan._session_metadata,
             *plan._process_activity,
             *plan._session_activity,
@@ -2798,6 +2956,7 @@ class StateManager:
             "sessions": plan._sessions,
             "processes": plan._processes,
             "session_process_links": plan._session_process_links,
+            "live_session_process_roles": plan._live_session_process_roles,
             "session_metadata": plan._session_metadata,
             "process_activity": plan._process_activity,
             "session_activity": plan._session_activity,
@@ -2813,6 +2972,7 @@ class StateManager:
             capability=plan._capability,
             sessions=plan._sessions,
             processes=plan._processes,
+            live_session_process_roles=plan._live_session_process_roles,
             session_metadata=plan._session_metadata,
             process_activity=plan._process_activity,
             session_activity=plan._session_activity,
@@ -3221,6 +3381,150 @@ class StateManager:
             end_plan=session.end_plan,
         )
 
+    def _action_cohort_live_session_process_roles(
+        self,
+        target: SessionIdentity,
+    ) -> ActionCohortLiveSessionProcessRolesState:
+        """Snapshot every mutable process-role field for one exact live session."""
+
+        session = self._validate_action_live_session_identity(target)
+        return ActionCohortLiveSessionProcessRolesState(
+            transport_pid=session.transport_pid,
+            session_shell_pid=session.session_shell_pid,
+            session_user_manager_pid=session.session_user_manager_pid,
+            session_winlogon_pid=session.session_winlogon_pid,
+            explorer_pid=session.explorer_pid,
+            initial_explorer_pid=session.initial_explorer_pid,
+            process_tree_root=session.process_tree_root,
+            windows_shell_bootstrapped=session.windows_shell_bootstrapped,
+        )
+
+    @staticmethod
+    def _action_cohort_windows_process_basename(plan: ProcessMaterializationPlan) -> str:
+        """Return a case-folded Windows basename without platform-dependent path rules."""
+
+        return plan.identity.image.replace("/", "\\").rsplit("\\", 1)[-1].casefold()
+
+    def _action_cohort_process_pid_namespaces(
+        self,
+        processes: list[ProcessMaterializationPlan] | tuple[ProcessMaterializationPlan, ...],
+    ) -> dict[int, str]:
+        """Resolve each staged process to its authenticated host PID namespace."""
+
+        namespaces = dict(self._pid_os)
+        resolved: dict[int, str] = {}
+        for process in processes:
+            identity = process.identity
+            patch = process._allocator_patch.pid_os
+            if patch is not None:
+                host, category = patch
+                if host != identity.hostname or category not in {"linux", "windows"}:
+                    raise StateError("Action cohort process PID namespace patch is malformed")
+                existing = namespaces.get(host)
+                if existing is not None and existing != category:
+                    raise StateError("Action cohort process PID namespace changed within a cohort")
+                namespaces[host] = category
+            category = namespaces.get(identity.hostname)
+            if category not in {"linux", "windows"}:
+                raise StateError("Action cohort process has no exact PID namespace")
+            resolved[id(process)] = category
+        return resolved
+
+    @staticmethod
+    def _action_cohort_is_valid_windows_pid(pid: int) -> bool:
+        """Return whether a PID lies in the modeled Windows rendered namespace."""
+
+        return type(pid) is int and 0 < pid <= _WINDOWS_PID_MAX and pid % _WINDOWS_PID_STEP == 0
+
+    def _prepare_action_cohort_live_windows_session_shell_patch(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        *,
+        target: SessionIdentity,
+        winlogon_plan: ProcessMaterializationPlan | None,
+        explorer_plan: ProcessMaterializationPlan,
+        process_tree_root_plan: ProcessMaterializationPlan | None,
+    ) -> ActionCohortLiveSessionProcessRolesPatch:
+        """Build one manager-issued live desktop role transition without mutation."""
+
+        with self._lock:
+            if type(target) is not SessionIdentity:
+                raise TypeError("Live Windows session shell target requires an exact identity")
+            normalized = self._normalize_action_cohort_session_target(builder, target)
+            assert type(normalized) is SessionIdentity
+            for name, process in (
+                ("winlogon", winlogon_plan),
+                ("explorer", explorer_plan),
+                ("process-tree root", process_tree_root_plan),
+            ):
+                if process is None:
+                    continue
+                if type(process) is not ProcessMaterializationPlan or not any(
+                    process is candidate for candidate in builder._processes
+                ):
+                    raise StateError(
+                        f"Live Windows session {name} must be an exact same-cohort process plan"
+                    )
+            if (winlogon_plan is None) != (process_tree_root_plan is None):
+                raise StateError(
+                    "Live Windows session winlogon and process-tree root must be staged together"
+                )
+            if winlogon_plan is not None and process_tree_root_plan is not winlogon_plan:
+                raise StateError(
+                    "Live Windows session process-tree root must be its exact staged winlogon"
+                )
+
+            before = self._action_cohort_live_session_process_roles(normalized)
+            explorer_pid = explorer_plan.identity.pid
+            new_winlogon_pid = (
+                winlogon_plan.identity.pid
+                if winlogon_plan is not None
+                else before.session_winlogon_pid
+            )
+            new_root_pid = (
+                process_tree_root_plan.identity.pid
+                if process_tree_root_plan is not None
+                else before.process_tree_root
+            )
+            after = replace(
+                before,
+                session_winlogon_pid=new_winlogon_pid,
+                explorer_pid=explorer_pid,
+                initial_explorer_pid=(
+                    explorer_pid
+                    if before.initial_explorer_pid is None
+                    else before.initial_explorer_pid
+                ),
+                process_tree_root=new_root_pid,
+                windows_shell_bootstrapped=True,
+            )
+            patch = ActionCohortLiveSessionProcessRolesPatch(
+                target=normalized,
+                before=before,
+                after=after,
+                winlogon_plan=winlogon_plan,
+                explorer_plan=explorer_plan,
+                process_tree_root_plan=process_tree_root_plan,
+                _capability=_ActionCohortCapability(),
+            )
+            processes = {process.identity.object_id: process for process in builder._processes}
+            processes_by_pid = {
+                (process.identity.hostname, process.identity.pid): process
+                for process in builder._processes
+            }
+            process_indexes = {
+                id(process): index for index, process in enumerate(builder._processes)
+            }
+            process_pid_namespaces = self._action_cohort_process_pid_namespaces(builder._processes)
+            self._validate_action_cohort_live_session_process_roles_transition(
+                patch,
+                processes=processes,
+                processes_by_pid=processes_by_pid,
+                process_indexes=process_indexes,
+                process_pid_namespaces=process_pid_namespaces,
+            )
+            return patch
+
     def _action_cohort_process_parent_target(
         self,
         builder: ActionCohortMaterializationBuilder,
@@ -3297,6 +3601,7 @@ class StateManager:
                 (
                     sessions,
                     processes,
+                    builder._live_session_process_roles_patches,
                     builder._session_metadata_patches,
                     builder._process_activity_patches,
                     builder._session_activity_patches,
@@ -3375,6 +3680,7 @@ class StateManager:
                 "sessions": sessions,
                 "processes": processes,
                 "session_process_links": frozen_links,
+                "live_session_process_roles": tuple(builder._live_session_process_roles_patches),
                 "session_metadata": tuple(builder._session_metadata_patches),
                 "process_activity": tuple(builder._process_activity_patches),
                 "session_activity": tuple(builder._session_activity_patches),
@@ -3389,6 +3695,7 @@ class StateManager:
                 _sessions=sessions,
                 _processes=processes,
                 _session_process_links=frozen_links,
+                _live_session_process_roles=tuple(builder._live_session_process_roles_patches),
                 _session_metadata=tuple(builder._session_metadata_patches),
                 _process_activity=tuple(builder._process_activity_patches),
                 _session_activity=tuple(builder._session_activity_patches),
@@ -3406,6 +3713,7 @@ class StateManager:
                     capability=capability,
                     sessions=sessions,
                     processes=processes,
+                    live_session_process_roles=plan._live_session_process_roles,
                     session_metadata=plan._session_metadata,
                     process_activity=plan._process_activity,
                     session_activity=plan._session_activity,
@@ -6021,6 +6329,179 @@ class StateManager:
             raise StateError("Action cohort cannot replace a hard session end plan")
         return identity
 
+    def _validate_action_cohort_live_session_process_roles_transition(
+        self,
+        patch: ActionCohortLiveSessionProcessRolesPatch,
+        *,
+        processes: dict[str, ProcessMaterializationPlan],
+        processes_by_pid: dict[tuple[str, int], ProcessMaterializationPlan],
+        process_indexes: dict[int, int],
+        process_pid_namespaces: dict[int, str],
+    ) -> SessionIdentity:
+        """Validate one closed live Windows desktop role transition."""
+
+        target = patch.target
+        session = self._validate_action_live_session_identity(target)
+        if not windows_logon_can_own_desktop(session.logon_type) or session.session_kind in {
+            "network",
+            "new_credentials",
+            "service",
+        }:
+            raise StateError("Action cohort live Windows shell requires a desktop-owning session")
+        current = self._action_cohort_live_session_process_roles(target)
+        if patch.before != current:
+            raise StateError("Action cohort live-session process-role before-state drifted")
+        if patch.before.explorer_pid is not None:
+            raise StateError("Action cohort cannot overwrite a live session Explorer role")
+
+        def _require_staged(
+            plan: ProcessMaterializationPlan | None,
+            role: str,
+        ) -> ProcessMaterializationPlan:
+            if plan is None or processes.get(plan.identity.object_id) is not plan:
+                raise StateError(
+                    f"Action cohort live-session {role} replaced its staged process capability"
+                )
+            return plan
+
+        def _require_staged_windows_pid(
+            plan: ProcessMaterializationPlan,
+            role: str,
+        ) -> None:
+            identity = plan.identity
+            if (
+                process_pid_namespaces.get(id(plan)) != "windows"
+                or not self._action_cohort_is_valid_windows_pid(identity.pid)
+                or identity.pid == identity.parent_pid
+            ):
+                raise StateError(f"Action cohort live-session {role} requires an exact Windows PID")
+
+        def _require_target_valid_at(start_time: datetime, role: str) -> None:
+            if self.get_session_at(target.logon_id, start_time) is not session:
+                raise StateError(f"Action cohort live-session target is not valid at {role} start")
+
+        explorer = _require_staged(patch.explorer_plan, "Explorer")
+        explorer_identity = explorer.identity
+        if (
+            explorer_identity.hostname != target.hostname
+            or explorer_identity.logon_id != target.logon_id
+            or explorer_identity.principal != target.principal
+            or self._action_cohort_windows_process_basename(explorer) != "explorer.exe"
+            or explorer.integrity_level != "Medium"
+        ):
+            raise StateError("Action cohort live-session Explorer identity is incompatible")
+        _require_staged_windows_pid(explorer, "Explorer")
+        initial_explorer_pid = patch.before.initial_explorer_pid
+        if initial_explorer_pid is not None and self.is_process_active_at(
+            target.hostname,
+            initial_explorer_pid,
+            explorer_identity.started_at,
+        ):
+            raise StateError(
+                "Action cohort cannot replace an initial Explorer active at replacement start"
+            )
+
+        userinit = processes_by_pid.get((explorer_identity.hostname, explorer_identity.parent_pid))
+        if (
+            userinit is None
+            or process_indexes[id(userinit)] >= process_indexes[id(explorer)]
+            or userinit.identity.logon_id != target.logon_id
+            or userinit.identity.principal != target.principal
+            or self._action_cohort_windows_process_basename(userinit) != "userinit.exe"
+            or userinit.integrity_level != "Medium"
+        ):
+            raise StateError(
+                "Action cohort live-session Explorer requires an earlier staged userinit"
+            )
+        _require_staged_windows_pid(userinit, "userinit")
+
+        winlogon = patch.winlogon_plan
+        process_tree_root = patch.process_tree_root_plan
+        if (winlogon is None) != (process_tree_root is None):
+            raise StateError("Action cohort live-session winlogon and process-tree root drifted")
+        if winlogon is not None:
+            staged_winlogon = _require_staged(winlogon, "winlogon")
+            staged_root = _require_staged(process_tree_root, "process-tree root")
+            if staged_root is not staged_winlogon:
+                raise StateError(
+                    "Action cohort live-session process-tree root is not its staged winlogon"
+                )
+            winlogon_identity = staged_winlogon.identity
+            if (
+                patch.before.session_winlogon_pid is not None
+                or patch.before.process_tree_root is not None
+            ):
+                raise StateError("Action cohort cannot overwrite a live session winlogon role")
+            _require_staged_windows_pid(staged_winlogon, "winlogon")
+            if (
+                winlogon_identity.hostname != target.hostname
+                or winlogon_identity.logon_id.casefold() != "0x3e7"
+                or winlogon_identity.principal.casefold() != "system"
+                or self._action_cohort_windows_process_basename(staged_winlogon) != "winlogon.exe"
+                or staged_winlogon.integrity_level != "System"
+                or userinit.identity.parent_pid != winlogon_identity.pid
+                or process_indexes[id(staged_winlogon)] >= process_indexes[id(userinit)]
+            ):
+                raise StateError("Action cohort live-session winlogon identity is incompatible")
+            expected_winlogon_pid = winlogon_identity.pid
+            expected_root_pid = winlogon_identity.pid
+            winlogon_start_time = winlogon_identity.started_at
+        else:
+            existing_winlogon_pid = patch.before.session_winlogon_pid
+            if existing_winlogon_pid is None:
+                raise StateError(
+                    "Action cohort live-session shell requires a live or staged winlogon"
+                )
+            live_winlogon = self.state.running_processes.get(
+                (target.hostname, existing_winlogon_pid)
+            )
+            if (
+                live_winlogon is None
+                or self._pid_os.get(target.hostname) != "windows"
+                or not self._action_cohort_is_valid_windows_pid(existing_winlogon_pid)
+                or live_winlogon.pid == live_winlogon.parent_pid
+                or live_winlogon.logon_id.casefold() != "0x3e7"
+                or live_winlogon.username.casefold() != "system"
+                or live_winlogon.image.replace("/", "\\").rsplit("\\", 1)[-1].casefold()
+                != "winlogon.exe"
+                or userinit.identity.parent_pid != existing_winlogon_pid
+                or ensure_utc(live_winlogon.start_time) > userinit.identity.started_at
+            ):
+                raise StateError("Action cohort live-session retained winlogon is incompatible")
+            expected_winlogon_pid = existing_winlogon_pid
+            expected_root_pid = patch.before.process_tree_root
+            winlogon_start_time = ensure_utc(live_winlogon.start_time)
+
+        _require_target_valid_at(winlogon_start_time, "winlogon")
+        _require_target_valid_at(userinit.identity.started_at, "userinit")
+        _require_target_valid_at(explorer_identity.started_at, "Explorer")
+        if (
+            userinit.auth_session_id != target.session_id
+            or userinit.auth_logon_type != session.logon_type
+        ):
+            raise StateError("Action cohort live-session userinit auth owner is incompatible")
+        if (
+            explorer.auth_session_id != target.session_id
+            or explorer.auth_logon_type != session.logon_type
+        ):
+            raise StateError("Action cohort live-session Explorer auth owner is incompatible")
+
+        expected_after = replace(
+            patch.before,
+            session_winlogon_pid=expected_winlogon_pid,
+            explorer_pid=explorer_identity.pid,
+            initial_explorer_pid=(
+                explorer_identity.pid
+                if patch.before.initial_explorer_pid is None
+                else patch.before.initial_explorer_pid
+            ),
+            process_tree_root=expected_root_pid,
+            windows_shell_bootstrapped=True,
+        )
+        if patch.after != expected_after:
+            raise StateError("Action cohort live-session process-role after-state drifted")
+        return target
+
     def validate_action_cohort_materialization(
         self,
         plan: ActionCohortMaterializationPlan,
@@ -6154,8 +6635,31 @@ class StateManager:
                 processes_by_pid[key] = process
                 thread_keys.add(thread_key)
 
+            process_pid_namespaces = self._action_cohort_process_pid_namespaces(plan.processes)
             if len(plan._session_process_links) != len(plan.sessions):
                 raise StateError("Action cohort session process links are incomplete")
+            role_plan_owners: dict[int, str] = {}
+            role_pid_owners: dict[tuple[str, int], str] = {}
+
+            def _claim_staged_role_owner(
+                process: ProcessMaterializationPlan,
+                owner_object_id: str,
+            ) -> None:
+                plan_owner = role_plan_owners.get(id(process))
+                pid_key = (process.identity.hostname, process.identity.pid)
+                pid_owner = role_pid_owners.get(pid_key)
+                if (
+                    plan_owner is not None
+                    and plan_owner != owner_object_id
+                    or pid_owner is not None
+                    and pid_owner != owner_object_id
+                ):
+                    raise StateError(
+                        "Action cohort staged process role is bound to multiple sessions"
+                    )
+                role_plan_owners[id(process)] = owner_object_id
+                role_pid_owners[pid_key] = owner_object_id
+
             for expected_index, session_links in enumerate(plan._session_process_links):
                 if session_links.session_index != expected_index:
                     raise StateError("Action cohort session process link order drifted")
@@ -6183,6 +6687,48 @@ class StateManager:
                         process_identity.logon_id != session.identity.logon_id
                     ):
                         raise StateError("Action cohort session role crosses session boundaries")
+                    _claim_staged_role_owner(
+                        plan.processes[process_index],
+                        session.identity.object_id,
+                    )
+
+            live_role_by_session: dict[str, ActionCohortLiveSessionProcessRolesPatch] = {}
+            live_role_process_owners: dict[str, str] = {}
+            live_role_process_references: set[tuple[str, int]] = set()
+            for patch in plan._live_session_process_roles:
+                identity = self._validate_action_cohort_live_session_process_roles_transition(
+                    patch,
+                    processes=processes,
+                    processes_by_pid=processes_by_pid,
+                    process_indexes=process_indexes,
+                    process_pid_namespaces=process_pid_namespaces,
+                )
+                if identity.object_id in live_role_by_session:
+                    raise StateError("Action cohort repeats a live-session process-role target")
+                live_role_by_session[identity.object_id] = patch
+                role_plans = {
+                    role.identity.object_id: role
+                    for role in (
+                        patch.winlogon_plan,
+                        patch.explorer_plan,
+                        patch.process_tree_root_plan,
+                    )
+                    if role is not None
+                }
+                for object_id, role_plan in role_plans.items():
+                    _claim_staged_role_owner(role_plan, identity.object_id)
+                    live_role_process_owners[object_id] = identity.object_id
+                for field_name in _SESSION_PROCESS_REFERENCE_FIELDS:
+                    pid = getattr(patch.after, field_name)
+                    if pid is not None:
+                        pid_key = (identity.hostname, pid)
+                        pid_owner = role_pid_owners.get(pid_key)
+                        if pid_owner is not None and pid_owner != identity.object_id:
+                            raise StateError(
+                                "Action cohort process-role PID is bound to multiple sessions"
+                            )
+                        role_pid_owners[pid_key] = identity.object_id
+                        live_role_process_references.add(pid_key)
 
             metadata_by_session: dict[str, ActionCohortSessionMetadataPatch] = {}
             for patch in plan._session_metadata:
@@ -6274,13 +6820,23 @@ class StateManager:
                 activity = process_activity.get(object_id)
                 if activity is not None and activity.activity_time > termination.end_time:
                     raise StateError("Action cohort process activity follows process close")
+                if object_id in live_role_process_owners:
+                    raise StateError("Action cohort cannot close a staged live-session shell role")
+                if (identity.hostname, identity.pid) in live_role_process_references:
+                    raise StateError("Action cohort cannot close a live-session process role")
 
             for process in plan.processes:
-                parent_activity_time = process._payload.parent_activity_time
                 identity = process.identity
+                parent = processes_by_pid.get((identity.hostname, identity.parent_pid))
+                if parent is not None:
+                    parent_close = termination_by_process.get(parent.identity.object_id)
+                    if parent_close is not None and parent_close[1].end_time < identity.started_at:
+                        raise StateError(
+                            "Action cohort staged parent closes before its child starts"
+                        )
+                parent_activity_time = process._payload.parent_activity_time
                 if parent_activity_time is None or identity.parent_pid in {0, 4}:
                     continue
-                parent = processes_by_pid.get((identity.hostname, identity.parent_pid))
                 parent_identity = (
                     parent.identity
                     if parent is not None
@@ -6297,6 +6853,10 @@ class StateManager:
                 identity = terminalization.identity
                 if identity.object_id in terminalization_by_session:
                     raise StateError("Action cohort repeats a session terminalization")
+                if identity.object_id in live_role_by_session:
+                    raise StateError(
+                        "Action cohort cannot terminalize a live session receiving shell roles"
+                    )
                 if type(terminalization.target) is SessionMaterializationPlan:
                     if sessions.get(identity.object_id) is not terminalization.target:
                         raise StateError("Action cohort staged session close replaced its start")
@@ -6422,6 +6982,23 @@ class StateManager:
             session.end_plan = after.end_plan
             self._index_authoritative_session_end(session)
 
+    def _commit_action_cohort_live_session_process_roles(
+        self,
+        patch: ActionCohortLiveSessionProcessRolesPatch,
+    ) -> None:
+        """Install one fully validated live-session process-role projection."""
+
+        session = self._active_sessions[self._resolve_logon_id(patch.target.logon_id)]
+        after = patch.after
+        session.transport_pid = after.transport_pid
+        session.session_shell_pid = after.session_shell_pid
+        session.session_user_manager_pid = after.session_user_manager_pid
+        session.session_winlogon_pid = after.session_winlogon_pid
+        session.explorer_pid = after.explorer_pid
+        session.initial_explorer_pid = after.initial_explorer_pid
+        session.process_tree_root = after.process_tree_root
+        session.windows_shell_bootstrapped = after.windows_shell_bootstrapped
+
     def _commit_action_cohort_staged_process_termination(
         self,
         termination: ActionCohortProcessTermination,
@@ -6513,6 +7090,8 @@ class StateManager:
                 session.initial_explorer_pid = explorer_pid
                 session.windows_shell_bootstrapped = True
 
+        for patch in plan._live_session_process_roles:
+            self._commit_action_cohort_live_session_process_roles(patch)
         for patch in plan._session_metadata:
             self._commit_action_cohort_session_metadata(patch)
         for patch in plan._process_activity:
