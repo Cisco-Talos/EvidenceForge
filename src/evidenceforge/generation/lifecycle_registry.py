@@ -26,6 +26,7 @@ from struct import Struct
 from sys import getsizeof
 from threading import Condition, Lock, RLock, get_ident
 from typing import Literal
+from weakref import ReferenceType, ref
 
 from evidenceforge.events.content_identity import (
     CompiledServiceDeploymentIdentity,
@@ -103,6 +104,11 @@ _START_TRANSITION_KIND_COUNT = 3
 _SESSION_START_TAG = 0
 _SERVICE_START_TAG = 1
 _TRANSPORT_START_TAG = 2
+_MAX_ACTION_COHORT_OPERATIONS_PER_REQUEST = 256
+_MAX_ACTION_COHORT_RESERVATIONS = 1_024
+_MAX_ACTION_COHORT_RESERVED_KEYS = 65_536
+_MAX_ACTION_COHORT_REQUEST_BYTES = 16 * 1_024 * 1_024
+_MAX_ACTION_COHORT_COMMITTED_PROVENANCE = 4_096
 
 
 class LifecycleLeaseConflictError(StateError):
@@ -115,6 +121,10 @@ class LifecycleClosedTransportPublicationInProgressError(StateError):
 
 class LifecycleServicePublicationInProgressError(StateError):
     """An exact service operation is waiting for a reservation that owns its keys."""
+
+
+class LifecycleActionCohortInProgressError(StateError):
+    """An exact action cohort is waiting for the reservation that owns its keys."""
 
 
 def _semantic_hash(namespace: str, *parts: str) -> int:
@@ -7378,12 +7388,454 @@ class LifecycleSubjectClosureControl:
     ticket_id: str
 
     def __post_init__(self) -> None:
-        """Require stable ticket identity and supported service-core subjects."""
+        """Require stable ticket identity and a supported closable subject."""
 
         if not self.ticket_id:
             raise ValueError("Lifecycle subject closure requires a ticket ID")
-        if self.barrier.subject.kind not in {"process", "service"}:
-            raise ValueError("Service-core closure controls support process or service subjects")
+        if self.barrier.subject.kind not in {"process", "service", "session"}:
+            raise ValueError(
+                "Lifecycle closure controls support process, service, or session subjects"
+            )
+
+
+LifecycleActionCohortOperation = (
+    LifecycleSessionStartRequest
+    | LifecycleProcessStartRequest
+    | LifecycleTransition
+    | LifecycleHold
+    | LifecycleSubjectClosureControl
+)
+LifecycleActionCohortOperationResult = (
+    SessionLifecycleSnapshotView | ProcessLifecycleSnapshot | LifecycleTransition | LifecycleHold
+)
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleActionCohortRequest:
+    """One author-ordered lifecycle transaction bound to an opaque State plan."""
+
+    state_publication_token: str
+    operations: tuple[LifecycleActionCohortOperation, ...]
+
+    def __post_init__(self) -> None:
+        """Reject incomplete, unordered, duplicated, or causally invalid operations."""
+
+        if type(self.state_publication_token) is not str or not self.state_publication_token:
+            raise ValueError("Lifecycle action cohorts require an opaque State publication token")
+        if type(self.operations) is not tuple or not self.operations:
+            raise ValueError("Lifecycle action cohorts require an ordered operation tuple")
+        if len(self.operations) > _MAX_ACTION_COHORT_OPERATIONS_PER_REQUEST:
+            raise ValueError(
+                "Lifecycle action cohort operation capacity exceeded: "
+                f"{len(self.operations)} > {_MAX_ACTION_COHORT_OPERATIONS_PER_REQUEST}"
+            )
+
+        supported = {
+            LifecycleSessionStartRequest,
+            LifecycleProcessStartRequest,
+            LifecycleTransition,
+            LifecycleHold,
+            LifecycleSubjectClosureControl,
+        }
+        if any(type(operation) not in supported for operation in self.operations):
+            raise TypeError("Lifecycle action cohort contains an unsupported operation type")
+
+        start_positions: dict[LifecycleEntityRef, int] = {}
+        session_starts: dict[str, LifecycleSessionStartRequest] = {}
+        process_starts: dict[str, LifecycleProcessStartRequest] = {}
+        object_ids: set[str] = set()
+        session_groups: set[tuple[str, str]] = set()
+        process_groups: set[tuple[str, int]] = set()
+        for position, operation in enumerate(self.operations):
+            if type(operation) is LifecycleSessionStartRequest:
+                identity = operation.identity
+                if type(identity) is not SessionLifecycleIdentity:
+                    raise TypeError("Lifecycle cohort session starts require exact identities")
+                if (
+                    type(operation.action_id) is not str
+                    or type(operation.transition_id) is not str
+                    or not operation.action_id
+                    or not operation.transition_id
+                ):
+                    raise ValueError(
+                        "Lifecycle cohort session starts require action and transition IDs"
+                    )
+                if (
+                    type(operation.transition_ordinal) is not int
+                    or operation.transition_ordinal < 0
+                ):
+                    raise ValueError("Lifecycle cohort session start ordinal must be non-negative")
+                if identity.object_id in object_ids:
+                    raise ValueError("Lifecycle action cohort repeats a lifecycle object")
+                group = (
+                    identity.hostname.strip().casefold(),
+                    identity.logon_id.strip().casefold(),
+                )
+                if group in session_groups:
+                    raise ValueError("Lifecycle action cohort repeats a session LogonID interval")
+                object_ids.add(identity.object_id)
+                session_groups.add(group)
+                session_starts[identity.object_id] = operation
+                start_positions[identity.ref] = position
+            elif type(operation) is LifecycleProcessStartRequest:
+                identity = operation.identity
+                if (
+                    type(identity) is not ProcessLifecycleIdentity
+                    or type(operation.token) is not ProcessTokenIdentity
+                    or type(operation.membership) is not LifecycleMembership
+                ):
+                    raise TypeError(
+                        "Lifecycle cohort process starts require exact lifecycle values"
+                    )
+                if (
+                    type(operation.action_id) is not str
+                    or type(operation.transition_id) is not str
+                    or not operation.action_id
+                    or not operation.transition_id
+                ):
+                    raise ValueError(
+                        "Lifecycle cohort process starts require action and transition IDs"
+                    )
+                if (
+                    type(operation.transition_ordinal) is not int
+                    or operation.transition_ordinal < 0
+                ):
+                    raise ValueError("Lifecycle cohort process start ordinal must be non-negative")
+                if identity.object_id in object_ids:
+                    raise ValueError("Lifecycle action cohort repeats a lifecycle object")
+                group = (identity.hostname.strip().casefold(), identity.pid)
+                if group in process_groups:
+                    raise ValueError("Lifecycle action cohort repeats a process PID interval")
+                object_ids.add(identity.object_id)
+                process_groups.add(group)
+                process_starts[identity.object_id] = operation
+                start_positions[identity.ref] = position
+
+        transition_ids: set[str] = set()
+        transition_commits: set[tuple[LifecycleEntityRef, str, int]] = set()
+        hold_ids: set[str] = set()
+        barrier_ids: set[str] = set()
+        ticket_ids: set[str] = set()
+        closed_subjects: set[LifecycleEntityRef] = set()
+        prior_time: datetime | None = None
+        equal_time_ordinals: dict[tuple[LifecycleEntityRef, datetime, str], int] = {}
+
+        def claim_transition(
+            transition_id: str,
+            subject: LifecycleEntityRef,
+            action_id: str,
+            ordinal: int,
+            canonical_time: datetime,
+        ) -> None:
+            if transition_id in transition_ids:
+                raise ValueError("Lifecycle action cohort repeats a transition ID")
+            transition_ids.add(transition_id)
+            commit = (subject, action_id, ordinal)
+            if commit in transition_commits:
+                raise ValueError("Lifecycle action cohort repeats an action commit ordinal")
+            transition_commits.add(commit)
+            order_key = (subject, canonical_time, action_id)
+            prior_ordinal = equal_time_ordinals.get(order_key)
+            if prior_ordinal is not None and ordinal <= prior_ordinal:
+                raise ValueError(
+                    "Lifecycle action cohort ordinals must preserve equal-time operation order"
+                )
+            equal_time_ordinals[order_key] = ordinal
+
+        for position, operation in enumerate(self.operations):
+            if type(operation) is LifecycleSessionStartRequest:
+                subject = operation.identity.ref
+                canonical_time = operation.identity.started_at
+                action_id = operation.action_id
+                ordinal = operation.transition_ordinal
+                transition_id = operation.transition_id
+            elif type(operation) is LifecycleProcessStartRequest:
+                subject = operation.identity.ref
+                canonical_time = operation.identity.started_at
+                action_id = operation.action_id
+                ordinal = operation.transition_ordinal
+                transition_id = operation.transition_id
+                parent_id = operation.identity.parent_object_id
+                if parent_id in process_starts:
+                    parent = process_starts[parent_id]
+                    if start_positions[parent.identity.ref] >= position:
+                        raise ValueError(
+                            "Lifecycle action cohort process parent must start before its child"
+                        )
+                    if parent.identity.ref in closed_subjects:
+                        raise ValueError(
+                            "Lifecycle action cohort starts a child after parent close"
+                        )
+                session_id = operation.membership.session_object_id
+                if session_id in session_starts:
+                    session = session_starts[session_id]
+                    if start_positions[session.identity.ref] >= position:
+                        raise ValueError(
+                            "Lifecycle action cohort session must start before its member process"
+                        )
+                    if session.identity.ref in closed_subjects:
+                        raise ValueError(
+                            "Lifecycle action cohort starts a member after session close"
+                        )
+            elif type(operation) is LifecycleTransition:
+                if (
+                    type(operation.subject) is not LifecycleEntityRef
+                    or type(operation.transition_id) is not str
+                    or type(operation.action_id) is not str
+                    or type(operation.reason) is not str
+                    or type(operation.transition_ordinal) is not int
+                ):
+                    raise TypeError("Lifecycle action cohort dependent fields must be exact")
+                if operation.kind != "dependent" or operation.subject.kind not in {
+                    "process",
+                    "session",
+                }:
+                    raise ValueError(
+                        "Lifecycle action cohort transitions must be process/session dependents"
+                    )
+                subject = operation.subject
+                canonical_time = operation.canonical_time
+                action_id = operation.action_id
+                ordinal = operation.transition_ordinal
+                transition_id = operation.transition_id
+            elif type(operation) is LifecycleHold:
+                if (
+                    type(operation.subject) is not LifecycleEntityRef
+                    or type(operation.hold_id) is not str
+                    or type(operation.action_id) is not str
+                    or type(operation.reason) is not str
+                    or type(operation.transition_ordinal) is not int
+                ):
+                    raise TypeError("Lifecycle action cohort hold fields must be exact")
+                if operation.subject.kind not in {"process", "session"}:
+                    raise ValueError(
+                        "Lifecycle action cohort holds must target process or session subjects"
+                    )
+                subject = operation.subject
+                canonical_time = operation.acquired_at
+                action_id = operation.action_id
+                ordinal = operation.transition_ordinal
+                transition_id = f"{operation.hold_id}:acquired"
+                if operation.hold_id in hold_ids:
+                    raise ValueError("Lifecycle action cohort repeats a hold ID")
+                hold_ids.add(operation.hold_id)
+            else:
+                assert type(operation) is LifecycleSubjectClosureControl
+                barrier = operation.barrier
+                if (
+                    type(barrier) is not LifecycleCloseBarrier
+                    or type(barrier.subject) is not LifecycleEntityRef
+                    or type(operation.ticket_id) is not str
+                ):
+                    raise TypeError("Lifecycle action cohort closure fields must be exact")
+                if barrier.subject.kind not in {"process", "session"}:
+                    raise ValueError(
+                        "Lifecycle action cohort closures must target process or session subjects"
+                    )
+                subject = barrier.subject
+                canonical_time = barrier.requested_at
+                action_id = barrier.action_id
+                ordinal = 0
+                transition_id = f"{barrier.barrier_id}:requested"
+                if barrier.barrier_id in barrier_ids:
+                    raise ValueError("Lifecycle action cohort repeats a close barrier")
+                if operation.ticket_id in ticket_ids:
+                    raise ValueError("Lifecycle action cohort repeats a closure ticket")
+                barrier_ids.add(barrier.barrier_id)
+                ticket_ids.add(operation.ticket_id)
+
+            staged_position = start_positions.get(subject)
+            if staged_position is not None and staged_position > position:
+                raise ValueError("Lifecycle action cohort operation precedes its staged start")
+            if subject in closed_subjects:
+                raise ValueError("Lifecycle action cohort contains an operation after closure")
+            if prior_time is not None and canonical_time < prior_time:
+                raise ValueError("Lifecycle action cohort operations must be time ordered")
+            prior_time = canonical_time
+
+            claim_transition(transition_id, subject, action_id, ordinal, canonical_time)
+            if type(operation) is LifecycleSubjectClosureControl:
+                claim_transition(
+                    f"{operation.ticket_id}:scheduled",
+                    subject,
+                    action_id,
+                    1,
+                    canonical_time,
+                )
+                claim_transition(
+                    f"{operation.ticket_id}:closed",
+                    subject,
+                    action_id,
+                    2,
+                    canonical_time,
+                )
+                for process in process_starts.values():
+                    process_ref = process.identity.ref
+                    if (
+                        subject.kind == "process"
+                        and process.identity.parent_object_id == subject.object_id
+                    ):
+                        if (
+                            start_positions[process_ref] < position
+                            and process_ref not in closed_subjects
+                        ):
+                            raise ValueError(
+                                "Lifecycle action cohort must close staged children before parent"
+                            )
+                    if (
+                        subject.kind == "session"
+                        and process.membership.session_object_id == subject.object_id
+                        and start_positions[process_ref] < position
+                        and process_ref not in closed_subjects
+                    ):
+                        raise ValueError(
+                            "Lifecycle action cohort must close staged members before session"
+                        )
+                closed_subjects.add(subject)
+
+    @property
+    def linearization_time(self) -> datetime:
+        """Return the first canonical operation time fenced by this cohort."""
+
+        operation = self.operations[0]
+        if type(operation) is LifecycleSessionStartRequest:
+            return operation.identity.started_at
+        if type(operation) is LifecycleProcessStartRequest:
+            return operation.identity.started_at
+        if type(operation) is LifecycleTransition:
+            return operation.canonical_time
+        if type(operation) is LifecycleHold:
+            return operation.acquired_at
+        assert type(operation) is LifecycleSubjectClosureControl
+        return operation.barrier.requested_at
+
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class LifecycleActionCohortAdmissionToken:
+    """Opaque authenticated reservation for one lifecycle action cohort."""
+
+    request: LifecycleActionCohortRequest
+    registry_id: str
+    preparation_id: int
+    expected_watermark: datetime | None
+    plan_digest: str
+    _integrity: str = field(repr=False)
+
+    @property
+    def publication_token(self) -> str:
+        """Return the opaque preparation proof for a composite authority."""
+
+        return self._integrity
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleActionCohortReceipt:
+    """Authenticated proof of one complete ordered lifecycle transaction."""
+
+    request: LifecycleActionCohortRequest
+    operation_results: tuple[LifecycleActionCohortOperationResult, ...]
+    registry_id: str
+    plan_digest: str
+    committed_digest: str
+    _integrity: str = field(repr=False)
+
+    @property
+    def state_publication_token(self) -> str:
+        """Return the exact opaque State plan token bound by this receipt."""
+
+        return self.request.state_publication_token
+
+    @property
+    def publication_token(self) -> str:
+        """Return the opaque receipt proof for a composite authority."""
+
+        return self._integrity
+
+    def _results_for(self, operation_type: type[object]) -> tuple[object, ...]:
+        return tuple(
+            result
+            for operation, result in zip(
+                self.request.operations,
+                self.operation_results,
+                strict=True,
+            )
+            if type(operation) is operation_type
+        )
+
+    @property
+    def started_sessions(self) -> tuple[SessionLifecycleSnapshotView, ...]:
+        """Return final snapshots for session-start operations in author order."""
+
+        return self._results_for(LifecycleSessionStartRequest)  # type: ignore[return-value]
+
+    @property
+    def started_processes(self) -> tuple[ProcessLifecycleSnapshot, ...]:
+        """Return final snapshots for process-start operations in author order."""
+
+        return self._results_for(LifecycleProcessStartRequest)  # type: ignore[return-value]
+
+    @property
+    def dependents(self) -> tuple[LifecycleTransition, ...]:
+        """Return dependent transitions in author order."""
+
+        return self._results_for(LifecycleTransition)  # type: ignore[return-value]
+
+    @property
+    def holds(self) -> tuple[LifecycleHold, ...]:
+        """Return holds in author order."""
+
+        return self._results_for(LifecycleHold)  # type: ignore[return-value]
+
+    @property
+    def closed_processes(self) -> tuple[ProcessLifecycleSnapshot, ...]:
+        """Return final process-closure snapshots in author order."""
+
+        return tuple(
+            result
+            for operation, result in zip(
+                self.request.operations,
+                self.operation_results,
+                strict=True,
+            )
+            if type(operation) is LifecycleSubjectClosureControl
+            and operation.barrier.subject.kind == "process"
+        )  # type: ignore[return-value]
+
+    @property
+    def closed_sessions(self) -> tuple[SessionLifecycleSnapshotView, ...]:
+        """Return final session-closure snapshots in author order."""
+
+        return tuple(
+            result
+            for operation, result in zip(
+                self.request.operations,
+                self.operation_results,
+                strict=True,
+            )
+            if type(operation) is LifecycleSubjectClosureControl
+            and operation.barrier.subject.kind == "session"
+        )  # type: ignore[return-value]
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleActionCohortPreparationCensus:
+    """Constant-time census of transient action-cohort capabilities."""
+
+    reservations: int
+    unclaimed_reservations: int
+    claimed_reservations: int
+    committing_reservations: int
+    reserved_keys: int
+    capability_locators: int
+    retained_request_bytes: int
+    committed_provenance: int
+    pending_provenance_insertions: int
+    pending_provenance_evictions: int
+    operation_capacity_per_request: int
+    reservation_capacity: int
+    reserved_key_capacity: int
+    request_byte_capacity: int
+    committed_provenance_capacity: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -7853,6 +8305,123 @@ class PreparedLifecycleClosedTransportPublication:
         self._active = False
 
 
+@dataclass(slots=True)
+class _ActionCohortSubjectState:
+    """Allocation-free shadow of one staged or live cohort subject."""
+
+    subject: LifecycleEntityRef
+    partition_id: int
+    started_at: datetime
+    parent_object_id: str = ""
+    session_object_id: str = ""
+    process_role: str = ""
+    close_barrier: LifecycleCloseBarrier | None = None
+    closure_ticket: LifecycleClosureTicket | None = None
+    closed_at: datetime | None = None
+    latest_dependent_at: datetime | None = None
+    latest_hold_until: datetime | None = None
+
+
+@dataclass(slots=True)
+class _PreparedActionCohortOperation:
+    """One validated operation retained by a claimed action-cohort token."""
+
+    operation: LifecycleActionCohortOperation
+    partition_id: int
+    session_start: _PreparedSessionPartitionStart | None = None
+    process_start: _PreparedProcessPartitionStart | None = None
+    prior_session_route: object | None = None
+    effective_at: datetime | None = None
+    already_present: bool = False
+
+
+@dataclass(slots=True)
+class _PreparedActionCohortCommitPlan:
+    """Every prevalidated primitive needed for one no-fail cohort commit."""
+
+    token: LifecycleActionCohortAdmissionToken
+    operations: tuple[_PreparedActionCohortOperation, ...]
+    partition_ids: tuple[int, ...]
+    reservation_keys: tuple[tuple[str, str], ...]
+    receipt_request_preimage: bytes
+    operations_digest: str
+    retry_receipt: LifecycleActionCohortReceipt | None = None
+    already_present: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _CommittedActionCohortProvenance:
+    """Bounded durable proof that one exact State/lifecycle cohort already committed."""
+
+    binding: tuple[str, str]
+    operations_digest: str
+    receipt: LifecycleActionCohortReceipt
+
+
+@dataclass(slots=True)
+class _ActionCohortReservation:
+    """Transient exact-key action-cohort reservation with no canonical rows."""
+
+    token_ref: ReferenceType[LifecycleActionCohortAdmissionToken]
+    token_id: int
+    canonical_token: LifecycleActionCohortAdmissionToken
+    keys: tuple[tuple[str, str], ...]
+    partition_ids: tuple[int, ...]
+    request_bytes: int
+    provenance_binding: tuple[str, str]
+    operations_digest: str
+    provenance_new: bool
+    provenance_eviction: tuple[str, str] | None = None
+    retry_receipt: LifecycleActionCohortReceipt | None = None
+    claimed: bool = False
+    committing: bool = False
+    claim_thread_id: int | None = None
+    commit_plan: _PreparedActionCohortCommitPlan | None = None
+
+
+class PreparedLifecycleActionCohort:
+    """One-shot no-validation commit capability for a claimed action cohort."""
+
+    __slots__ = ("_active", "_committed", "_registry", "_result", "_token")
+
+    def __init__(
+        self,
+        registry: LifecycleRegistry,
+        token: LifecycleActionCohortAdmissionToken,
+    ) -> None:
+        self._registry = registry
+        self._token = token
+        self._active = True
+        self._committed = False
+        self._result: LifecycleActionCohortReceipt | None = None
+
+    @property
+    def committed(self) -> bool:
+        """Return whether this exact capability has committed."""
+
+        return self._committed
+
+    @property
+    def receipt(self) -> LifecycleActionCohortReceipt | None:
+        """Return the authenticated receipt after a successful commit."""
+
+        return self._result
+
+    def commit_no_fail(self) -> LifecycleActionCohortReceipt:
+        """Publish every prevalidated primitive exactly once."""
+
+        if not self._active:
+            raise StateError("Prepared lifecycle action cohort is no longer active")
+        if self._committed:
+            raise StateError("Prepared lifecycle action cohort is already committed")
+        self._result = self._registry._commit_claimed_action_cohort(self._token)
+        self._committed = True
+        return self._result
+
+    def _close(self) -> None:
+        self._active = False
+
+
 class LifecycleRegistry:
     """Bounded stable-host shards around the strict lifecycle authority."""
 
@@ -7905,6 +8474,27 @@ class LifecycleRegistry:
         self._service_claimed_closures = 0
         self._service_capability_locators: dict[int, tuple[str, int]] = {}
         self._service_reserved_keys: dict[tuple[str, str], tuple[str, int]] = {}
+        self._action_cohort_registry_id = token_bytes(16).hex()
+        self._action_cohort_secret = token_bytes(32)
+        self._next_action_cohort_preparation_id = 1
+        self._action_cohort_reservations: dict[int, _ActionCohortReservation] = {}
+        self._action_cohort_claimed_reservations = 0
+        self._action_cohort_committing_reservations = 0
+        self._action_cohort_capability_locators: dict[int, int] = {}
+        self._action_cohort_reserved_keys: dict[tuple[str, str], int] = {}
+        self._action_cohort_retained_request_bytes = 0
+        self._action_cohort_operation_capacity = _MAX_ACTION_COHORT_OPERATIONS_PER_REQUEST
+        self._action_cohort_reservation_capacity = _MAX_ACTION_COHORT_RESERVATIONS
+        self._action_cohort_reserved_key_capacity = _MAX_ACTION_COHORT_RESERVED_KEYS
+        self._action_cohort_request_byte_capacity = _MAX_ACTION_COHORT_REQUEST_BYTES
+        self._action_cohort_provenance_capacity = _MAX_ACTION_COHORT_COMMITTED_PROVENANCE
+        self._action_cohort_committed_provenance: OrderedDict[
+            tuple[str, str], _CommittedActionCohortProvenance
+        ] = OrderedDict()
+        self._action_cohort_provenance_by_operations: dict[str, tuple[str, str]] = {}
+        self._action_cohort_pending_provenance_insertions = 0
+        self._action_cohort_pending_provenance_evictions: set[tuple[str, str]] = set()
+        self._action_cohort_provenance_pins: dict[tuple[str, str], int] = {}
 
     @property
     def closed_retention(self) -> timedelta:
@@ -8381,6 +8971,7 @@ class LifecycleRegistry:
         *,
         reject_mutating: bool = True,
         allowed_service_owner: tuple[Literal["publication", "closure"], int] | None = None,
+        allowed_action_cohort_owner: int | None = None,
     ) -> None:
         for key in keys:
             if key in self._closed_transport_reserved_keys:
@@ -8390,6 +8981,9 @@ class LifecycleRegistry:
             service_owner = self._service_reserved_keys.get(key)
             if service_owner is not None and service_owner != allowed_service_owner:
                 raise StateError(f"Lifecycle {key[0]} {key[1]!r} has a prepared service operation")
+            action_owner = self._action_cohort_reserved_keys.get(key)
+            if action_owner is not None and action_owner != allowed_action_cohort_owner:
+                raise StateError(f"Lifecycle {key[0]} {key[1]!r} has a prepared action cohort")
             if reject_mutating and self._closed_transport_mutating_keys.get(key, 0):
                 raise StateError(f"Lifecycle {key[0]} {key[1]!r} has an in-flight mutation")
 
@@ -8424,6 +9018,2248 @@ class LifecycleRegistry:
                     else:
                         self._closed_transport_mutating_keys.pop(key)
                 self._closed_transport_preparation_condition.notify_all()
+
+    @staticmethod
+    def _action_cohort_exact_text(
+        value: object,
+        *,
+        field_name: str,
+        allow_empty: bool = True,
+    ) -> str:
+        if type(value) is not str:
+            raise TypeError(f"Lifecycle action cohort {field_name} must be an exact string")
+        if not allow_empty and not value:
+            raise ValueError(f"Lifecycle action cohort {field_name} cannot be empty")
+        return value
+
+    @staticmethod
+    def _action_cohort_exact_int(
+        value: object,
+        *,
+        field_name: str,
+        allow_none: bool = False,
+    ) -> int | None:
+        if value is None and allow_none:
+            return None
+        if type(value) is not int:
+            raise TypeError(f"Lifecycle action cohort {field_name} must be an exact integer")
+        if value < 0:
+            raise ValueError(f"Lifecycle action cohort {field_name} must be non-negative")
+        return value
+
+    @staticmethod
+    def _action_cohort_exact_datetime(
+        value: object,
+        *,
+        field_name: str,
+        allow_none: bool = False,
+    ) -> datetime | None:
+        if value is None and allow_none:
+            return None
+        if type(value) is not datetime or value.tzinfo is not UTC:
+            raise TypeError(f"Lifecycle action cohort {field_name} must be an exact UTC datetime")
+        return value
+
+    @classmethod
+    def _normalize_action_cohort_ref(cls, value: object) -> LifecycleEntityRef:
+        if type(value) is not LifecycleEntityRef:
+            raise TypeError("Lifecycle action cohort subjects must be exact entity references")
+        return LifecycleEntityRef(
+            kind=cls._action_cohort_exact_text(
+                value.kind,
+                field_name="subject kind",
+                allow_empty=False,
+            ),  # type: ignore[arg-type]
+            object_id=cls._action_cohort_exact_text(
+                value.object_id,
+                field_name="subject object ID",
+                allow_empty=False,
+            ),
+        )
+
+    @classmethod
+    def _normalize_action_cohort_session_identity(
+        cls,
+        value: object,
+    ) -> SessionLifecycleIdentity:
+        if type(value) is not SessionLifecycleIdentity:
+            raise TypeError("Lifecycle action cohort session identity must be exact")
+        session_id = cls._action_cohort_exact_int(
+            value.session_id,
+            field_name="session ID",
+        )
+        assert session_id is not None
+        started_at = cls._action_cohort_exact_datetime(
+            value.started_at,
+            field_name="session start time",
+        )
+        assert started_at is not None
+        return SessionLifecycleIdentity(
+            hostname=cls._action_cohort_exact_text(
+                value.hostname,
+                field_name="session hostname",
+                allow_empty=False,
+            ),
+            object_id=cls._action_cohort_exact_text(
+                value.object_id,
+                field_name="session object ID",
+                allow_empty=False,
+            ),
+            logon_id=cls._action_cohort_exact_text(
+                value.logon_id,
+                field_name="session LogonID",
+                allow_empty=False,
+            ),
+            principal=cls._action_cohort_exact_text(
+                value.principal,
+                field_name="session principal",
+                allow_empty=False,
+            ),
+            session_kind=cls._action_cohort_exact_text(
+                value.session_kind,
+                field_name="session kind",
+                allow_empty=False,
+            ),
+            started_at=started_at,
+            session_id=session_id,
+            logon_guid=cls._action_cohort_exact_text(
+                value.logon_guid,
+                field_name="session LogonGuid",
+            ),
+        )
+
+    @classmethod
+    def _normalize_action_cohort_process_identity(
+        cls,
+        value: object,
+    ) -> ProcessLifecycleIdentity:
+        if type(value) is not ProcessLifecycleIdentity:
+            raise TypeError("Lifecycle action cohort process identity must be exact")
+        pid = cls._action_cohort_exact_int(value.pid, field_name="process PID")
+        assert pid is not None
+        started_at = cls._action_cohort_exact_datetime(
+            value.started_at,
+            field_name="process start time",
+        )
+        assert started_at is not None
+        return ProcessLifecycleIdentity(
+            hostname=cls._action_cohort_exact_text(
+                value.hostname,
+                field_name="process hostname",
+                allow_empty=False,
+            ),
+            object_id=cls._action_cohort_exact_text(
+                value.object_id,
+                field_name="process object ID",
+                allow_empty=False,
+            ),
+            pid=pid,
+            started_at=started_at,
+            image=cls._action_cohort_exact_text(
+                value.image,
+                field_name="process image",
+                allow_empty=False,
+            ),
+            parent_object_id=cls._action_cohort_exact_text(
+                value.parent_object_id,
+                field_name="parent process object ID",
+            ),
+            role=cls._action_cohort_exact_text(
+                value.role,
+                field_name="process role",
+                allow_empty=False,
+            ),
+        )
+
+    @classmethod
+    def _normalize_action_cohort_process_token(
+        cls,
+        value: object,
+    ) -> ProcessTokenIdentity:
+        if type(value) is not ProcessTokenIdentity:
+            raise TypeError("Lifecycle action cohort process token must be exact")
+        session_id = cls._action_cohort_exact_int(
+            value.session_id,
+            field_name="token session ID",
+            allow_none=True,
+        )
+        logon_type = cls._action_cohort_exact_int(
+            value.logon_type,
+            field_name="token logon type",
+            allow_none=True,
+        )
+        return ProcessTokenIdentity(
+            principal=cls._action_cohort_exact_text(
+                value.principal,
+                field_name="token principal",
+                allow_empty=False,
+            ),
+            logon_id=cls._action_cohort_exact_text(
+                value.logon_id,
+                field_name="token LogonID",
+            ),
+            session_id=session_id,
+            logon_type=logon_type,
+            integrity_level=cls._action_cohort_exact_text(
+                value.integrity_level,
+                field_name="token integrity level",
+            ),
+        )
+
+    @classmethod
+    def _normalize_action_cohort_membership(
+        cls,
+        value: object,
+    ) -> LifecycleMembership:
+        if type(value) is not LifecycleMembership:
+            raise TypeError("Lifecycle action cohort membership must be exact")
+        return LifecycleMembership(
+            owner_kind=cls._action_cohort_exact_text(
+                value.owner_kind,
+                field_name="membership owner kind",
+                allow_empty=False,
+            ),  # type: ignore[arg-type]
+            owner_object_id=cls._action_cohort_exact_text(
+                value.owner_object_id,
+                field_name="membership owner object ID",
+                allow_empty=False,
+            ),
+            session_object_id=cls._action_cohort_exact_text(
+                value.session_object_id,
+                field_name="membership session object ID",
+            ),
+        )
+
+    @classmethod
+    def _normalize_action_cohort_transition(cls, value: object) -> LifecycleTransition:
+        if type(value) is not LifecycleTransition:
+            raise TypeError("Lifecycle action cohort transition must be exact")
+        canonical_time = cls._action_cohort_exact_datetime(
+            value.canonical_time,
+            field_name="transition time",
+        )
+        ordinal = cls._action_cohort_exact_int(
+            value.transition_ordinal,
+            field_name="transition ordinal",
+        )
+        assert canonical_time is not None and ordinal is not None
+        return LifecycleTransition(
+            transition_id=cls._action_cohort_exact_text(
+                value.transition_id,
+                field_name="transition ID",
+                allow_empty=False,
+            ),
+            subject=cls._normalize_action_cohort_ref(value.subject),
+            kind=cls._action_cohort_exact_text(
+                value.kind,
+                field_name="transition kind",
+                allow_empty=False,
+            ),  # type: ignore[arg-type]
+            canonical_time=canonical_time,
+            action_id=cls._action_cohort_exact_text(
+                value.action_id,
+                field_name="transition action ID",
+                allow_empty=False,
+            ),
+            reason=cls._action_cohort_exact_text(
+                value.reason,
+                field_name="transition reason",
+            ),
+            transition_ordinal=ordinal,
+        )
+
+    @classmethod
+    def _normalize_action_cohort_hold(cls, value: object) -> LifecycleHold:
+        if type(value) is not LifecycleHold:
+            raise TypeError("Lifecycle action cohort hold must be exact")
+        acquired_at = cls._action_cohort_exact_datetime(
+            value.acquired_at,
+            field_name="hold acquisition time",
+        )
+        hold_until = cls._action_cohort_exact_datetime(
+            value.hold_until,
+            field_name="hold deadline",
+        )
+        ordinal = cls._action_cohort_exact_int(
+            value.transition_ordinal,
+            field_name="hold ordinal",
+        )
+        assert acquired_at is not None and hold_until is not None and ordinal is not None
+        return LifecycleHold(
+            hold_id=cls._action_cohort_exact_text(
+                value.hold_id,
+                field_name="hold ID",
+                allow_empty=False,
+            ),
+            subject=cls._normalize_action_cohort_ref(value.subject),
+            acquired_at=acquired_at,
+            hold_until=hold_until,
+            action_id=cls._action_cohort_exact_text(
+                value.action_id,
+                field_name="hold action ID",
+                allow_empty=False,
+            ),
+            reason=cls._action_cohort_exact_text(
+                value.reason,
+                field_name="hold reason",
+                allow_empty=False,
+            ),
+            transition_ordinal=ordinal,
+        )
+
+    @classmethod
+    def _normalize_action_cohort_barrier(cls, value: object) -> LifecycleCloseBarrier:
+        if type(value) is not LifecycleCloseBarrier:
+            raise TypeError("Lifecycle action cohort close barrier must be exact")
+        requested_at = cls._action_cohort_exact_datetime(
+            value.requested_at,
+            field_name="close request time",
+        )
+        assert requested_at is not None
+        return LifecycleCloseBarrier(
+            barrier_id=cls._action_cohort_exact_text(
+                value.barrier_id,
+                field_name="close barrier ID",
+                allow_empty=False,
+            ),
+            subject=cls._normalize_action_cohort_ref(value.subject),
+            requested_at=requested_at,
+            authority=cls._action_cohort_exact_text(
+                value.authority,
+                field_name="close authority",
+                allow_empty=False,
+            ),  # type: ignore[arg-type]
+            action_id=cls._action_cohort_exact_text(
+                value.action_id,
+                field_name="close action ID",
+                allow_empty=False,
+            ),
+        )
+
+    @classmethod
+    def _normalize_action_cohort_ticket(cls, value: object) -> LifecycleClosureTicket:
+        if type(value) is not LifecycleClosureTicket:
+            raise TypeError("Lifecycle action cohort closure ticket must be exact")
+        requested_at = cls._action_cohort_exact_datetime(
+            value.requested_at,
+            field_name="ticket request time",
+        )
+        effective_at = cls._action_cohort_exact_datetime(
+            value.effective_at,
+            field_name="ticket effective time",
+        )
+        assert requested_at is not None and effective_at is not None
+        return LifecycleClosureTicket(
+            ticket_id=cls._action_cohort_exact_text(
+                value.ticket_id,
+                field_name="closure ticket ID",
+                allow_empty=False,
+            ),
+            barrier_id=cls._action_cohort_exact_text(
+                value.barrier_id,
+                field_name="ticket barrier ID",
+                allow_empty=False,
+            ),
+            subject=cls._normalize_action_cohort_ref(value.subject),
+            requested_at=requested_at,
+            effective_at=effective_at,
+            authority=cls._action_cohort_exact_text(
+                value.authority,
+                field_name="ticket authority",
+                allow_empty=False,
+            ),  # type: ignore[arg-type]
+            action_id=cls._action_cohort_exact_text(
+                value.action_id,
+                field_name="ticket action ID",
+                allow_empty=False,
+            ),
+        )
+
+    @classmethod
+    def _normalize_action_cohort_operation(
+        cls,
+        operation: object,
+    ) -> LifecycleActionCohortOperation:
+        if type(operation) is LifecycleSessionStartRequest:
+            ordinal = cls._action_cohort_exact_int(
+                operation.transition_ordinal,
+                field_name="session start ordinal",
+            )
+            assert ordinal is not None
+            return LifecycleSessionStartRequest(
+                identity=cls._normalize_action_cohort_session_identity(operation.identity),
+                action_id=cls._action_cohort_exact_text(
+                    operation.action_id,
+                    field_name="session start action ID",
+                    allow_empty=False,
+                ),
+                transition_id=cls._action_cohort_exact_text(
+                    operation.transition_id,
+                    field_name="session start transition ID",
+                    allow_empty=False,
+                ),
+                transition_ordinal=ordinal,
+            )
+        if type(operation) is LifecycleProcessStartRequest:
+            ordinal = cls._action_cohort_exact_int(
+                operation.transition_ordinal,
+                field_name="process start ordinal",
+            )
+            assert ordinal is not None
+            return LifecycleProcessStartRequest(
+                identity=cls._normalize_action_cohort_process_identity(operation.identity),
+                token=cls._normalize_action_cohort_process_token(operation.token),
+                membership=cls._normalize_action_cohort_membership(operation.membership),
+                action_id=cls._action_cohort_exact_text(
+                    operation.action_id,
+                    field_name="process start action ID",
+                    allow_empty=False,
+                ),
+                transition_id=cls._action_cohort_exact_text(
+                    operation.transition_id,
+                    field_name="process start transition ID",
+                    allow_empty=False,
+                ),
+                transition_ordinal=ordinal,
+            )
+        if type(operation) is LifecycleTransition:
+            return cls._normalize_action_cohort_transition(operation)
+        if type(operation) is LifecycleHold:
+            return cls._normalize_action_cohort_hold(operation)
+        if type(operation) is LifecycleSubjectClosureControl:
+            return LifecycleSubjectClosureControl(
+                barrier=cls._normalize_action_cohort_barrier(operation.barrier),
+                ticket_id=cls._action_cohort_exact_text(
+                    operation.ticket_id,
+                    field_name="closure ticket ID",
+                    allow_empty=False,
+                ),
+            )
+        raise TypeError("Lifecycle action cohort contains an unsupported exact operation")
+
+    @classmethod
+    def _normalize_action_cohort_request(
+        cls,
+        request: object,
+    ) -> LifecycleActionCohortRequest:
+        """Copy one caller request only after recursively closing every scalar type."""
+
+        if type(request) is not LifecycleActionCohortRequest:
+            raise TypeError("Lifecycle action cohort preparation requires an exact request")
+        state_publication_token = cls._action_cohort_exact_text(
+            request.state_publication_token,
+            field_name="State publication token",
+            allow_empty=False,
+        )
+        operations = request.operations
+        if type(operations) is not tuple or not operations:
+            raise TypeError("Lifecycle action cohort operations must be an exact non-empty tuple")
+        if len(operations) > _MAX_ACTION_COHORT_OPERATIONS_PER_REQUEST:
+            raise ValueError(
+                "Lifecycle action cohort operation capacity exceeded: "
+                f"{len(operations)} > {_MAX_ACTION_COHORT_OPERATIONS_PER_REQUEST}"
+            )
+        return LifecycleActionCohortRequest(
+            state_publication_token=state_publication_token,
+            operations=tuple(cls._normalize_action_cohort_operation(item) for item in operations),
+        )
+
+    @staticmethod
+    def _action_cohort_request_preimage(request: LifecycleActionCohortRequest) -> bytes:
+        """Serialize only an already-normalized closed request."""
+
+        return repr(request).encode("utf-8")
+
+    @classmethod
+    def _action_cohort_plan_digest(cls, request: LifecycleActionCohortRequest) -> str:
+        """Return one deterministic digest over every normalized cohort input."""
+
+        return sha256(cls._action_cohort_request_preimage(request)).hexdigest()
+
+    @staticmethod
+    def _action_cohort_operations_digest(request: LifecycleActionCohortRequest) -> str:
+        """Identify exact lifecycle semantics independently of the opaque State token."""
+
+        return sha256(repr(request.operations).encode("utf-8")).hexdigest()
+
+    def _action_cohort_token_integrity(
+        self,
+        *,
+        preparation_id: int,
+        expected_watermark: datetime | None,
+        plan_digest: str,
+    ) -> str:
+        watermark = "" if expected_watermark is None else expected_watermark.isoformat()
+        payload = (
+            "lifecycle-action-cohort-admission\0"
+            f"{self._action_cohort_registry_id}\0{preparation_id}\0{watermark}\0{plan_digest}"
+        ).encode()
+        return hmac.new(self._action_cohort_secret, payload, sha256).hexdigest()
+
+    def _action_cohort_receipt_integrity(
+        self,
+        *,
+        plan_digest: str,
+        committed_digest: str,
+    ) -> str:
+        payload = (
+            "lifecycle-action-cohort-receipt\0"
+            f"{self._action_cohort_registry_id}\0{plan_digest}\0{committed_digest}"
+        ).encode()
+        return hmac.new(self._action_cohort_secret, payload, sha256).hexdigest()
+
+    @staticmethod
+    def _action_cohort_operation_subject(
+        operation: LifecycleActionCohortOperation,
+    ) -> LifecycleEntityRef:
+        if type(operation) in {LifecycleSessionStartRequest, LifecycleProcessStartRequest}:
+            return operation.identity.ref
+        if type(operation) in {LifecycleTransition, LifecycleHold}:
+            return operation.subject
+        assert type(operation) is LifecycleSubjectClosureControl
+        return operation.barrier.subject
+
+    def _action_cohort_static_reservation_keys(
+        self,
+        request: LifecycleActionCohortRequest,
+    ) -> tuple[tuple[str, str], ...]:
+        """Return exact declared keys before relationship expansion under locks."""
+
+        keys: list[tuple[str, str]] = []
+        for operation in request.operations:
+            subject = self._action_cohort_operation_subject(operation)
+            keys.append(self._closed_transport_subject_key(subject))
+            if type(operation) is LifecycleSessionStartRequest:
+                identity = operation.identity
+                keys.extend(
+                    (
+                        ("transition", operation.transition_id),
+                        (
+                            "session_logon",
+                            repr(
+                                (
+                                    identity.hostname.strip().casefold(),
+                                    identity.logon_id.strip().casefold(),
+                                )
+                            ),
+                        ),
+                    )
+                )
+            elif type(operation) is LifecycleProcessStartRequest:
+                identity = operation.identity
+                keys.extend(
+                    (
+                        ("transition", operation.transition_id),
+                        (
+                            "process_pid",
+                            repr((identity.hostname.strip().casefold(), identity.pid)),
+                        ),
+                    )
+                )
+                if identity.parent_object_id:
+                    keys.append(
+                        self._closed_transport_subject_key(
+                            LifecycleEntityRef("process", identity.parent_object_id)
+                        )
+                    )
+                if operation.membership.session_object_id:
+                    keys.append(
+                        self._closed_transport_subject_key(
+                            LifecycleEntityRef(
+                                "session",
+                                operation.membership.session_object_id,
+                            )
+                        )
+                    )
+            elif type(operation) is LifecycleTransition:
+                keys.append(("transition", operation.transition_id))
+            elif type(operation) is LifecycleHold:
+                keys.extend(
+                    (
+                        ("hold", operation.hold_id),
+                        ("transition", f"{operation.hold_id}:acquired"),
+                    )
+                )
+            else:
+                assert type(operation) is LifecycleSubjectClosureControl
+                barrier = operation.barrier
+                keys.extend(
+                    (
+                        self._resource_lease_subject_key(barrier.subject),
+                        ("barrier", barrier.barrier_id),
+                        ("ticket", operation.ticket_id),
+                        ("transition", f"{barrier.barrier_id}:requested"),
+                        ("transition", f"{operation.ticket_id}:scheduled"),
+                        ("transition", f"{operation.ticket_id}:closed"),
+                    )
+                )
+        return tuple(dict.fromkeys(keys))
+
+    def _action_cohort_route_keys(
+        self,
+        request: LifecycleActionCohortRequest,
+    ) -> tuple[tuple[str, str], ...]:
+        """Return every exact route shard used by validation and commit."""
+
+        keys: list[tuple[str, str]] = []
+        for operation in request.operations:
+            subject = self._action_cohort_operation_subject(operation)
+            keys.append((subject.kind, subject.object_id))
+            if type(operation) is LifecycleSessionStartRequest:
+                keys.append(("transition", operation.transition_id))
+            elif type(operation) is LifecycleProcessStartRequest:
+                keys.append(("transition", operation.transition_id))
+                if operation.identity.parent_object_id:
+                    keys.append(("process", operation.identity.parent_object_id))
+                if operation.membership.session_object_id:
+                    keys.append(("session", operation.membership.session_object_id))
+            elif type(operation) is LifecycleTransition:
+                keys.append(("transition", operation.transition_id))
+            elif type(operation) is LifecycleHold:
+                keys.extend(
+                    (
+                        ("hold", operation.hold_id),
+                        ("transition", f"{operation.hold_id}:acquired"),
+                    )
+                )
+            else:
+                assert type(operation) is LifecycleSubjectClosureControl
+                keys.extend(
+                    (
+                        ("barrier", operation.barrier.barrier_id),
+                        ("ticket", operation.ticket_id),
+                        ("transition", f"{operation.barrier.barrier_id}:requested"),
+                        ("transition", f"{operation.ticket_id}:scheduled"),
+                        ("transition", f"{operation.ticket_id}:closed"),
+                    )
+                )
+        return tuple(dict.fromkeys(keys))
+
+    def _action_cohort_partition_ids_locked(
+        self,
+        request: LifecycleActionCohortRequest,
+    ) -> tuple[int, ...]:
+        """Resolve every staged and live subject before sorted partition locking."""
+
+        staged_partitions: dict[LifecycleEntityRef, int] = {}
+        for operation in request.operations:
+            if type(operation) in {LifecycleSessionStartRequest, LifecycleProcessStartRequest}:
+                staged_partitions[operation.identity.ref] = self._partition_id(
+                    operation.identity.hostname
+                )
+        partition_ids = set(staged_partitions.values())
+        for operation in request.operations:
+            subject = self._action_cohort_operation_subject(operation)
+            partition_id = staged_partitions.get(subject)
+            if partition_id is None:
+                partition_id = self._subject_partition_locked(subject)
+            partition_ids.add(partition_id)
+            if type(operation) is not LifecycleProcessStartRequest:
+                continue
+            parent_id = operation.identity.parent_object_id
+            parent_ref = LifecycleEntityRef("process", parent_id) if parent_id else None
+            if parent_ref is not None and parent_ref not in staged_partitions:
+                parent_partition = self._routes.get_locked("process", parent_id)
+                if not isinstance(parent_partition, int):
+                    raise StateError(f"Unknown parent process lifecycle object {parent_id}")
+                partition_ids.add(parent_partition)
+            session_id = operation.membership.session_object_id
+            session_ref = LifecycleEntityRef("session", session_id) if session_id else None
+            if session_ref is not None and session_ref not in staged_partitions:
+                session_route = self._routes.get_locked("session", session_id)
+                session_partition = self._session_partition_from_route(session_route)
+                if session_partition is None:
+                    raise StateError(f"Unknown session lifecycle object {session_id}")
+                partition_ids.add(session_partition)
+        return tuple(sorted(partition_ids))
+
+    def _validate_action_cohort_token(
+        self,
+        token: LifecycleActionCohortAdmissionToken,
+    ) -> LifecycleActionCohortAdmissionToken:
+        """Authenticate one exact immutable action-cohort token."""
+
+        if type(token) is not LifecycleActionCohortAdmissionToken:
+            raise StateError("Lifecycle action-cohort token must have its exact public type")
+        registry_id = token.registry_id
+        request = token.request
+        preparation_id = token.preparation_id
+        expected_watermark = token.expected_watermark
+        claimed_plan_digest = token.plan_digest
+        integrity = token._integrity
+        if type(registry_id) is not str:
+            raise StateError("Lifecycle action-cohort token fields are malformed")
+        if registry_id != self._action_cohort_registry_id:
+            raise StateError("Lifecycle action-cohort token belongs to another registry")
+        if (
+            type(preparation_id) is not int
+            or preparation_id <= 0
+            or (
+                expected_watermark is not None
+                and (
+                    type(expected_watermark) is not datetime or expected_watermark.tzinfo is not UTC
+                )
+            )
+            or type(claimed_plan_digest) is not str
+            or type(integrity) is not str
+        ):
+            raise StateError("Lifecycle action-cohort token fields are malformed")
+        try:
+            normalized_request = self._normalize_action_cohort_request(request)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise StateError("Lifecycle action-cohort token request is malformed") from exc
+        plan_digest = self._action_cohort_plan_digest(normalized_request)
+        expected = self._action_cohort_token_integrity(
+            preparation_id=preparation_id,
+            expected_watermark=expected_watermark,
+            plan_digest=plan_digest,
+        )
+        if claimed_plan_digest != plan_digest or not hmac.compare_digest(integrity, expected):
+            raise StateError("Lifecycle action-cohort token integrity check failed")
+        return LifecycleActionCohortAdmissionToken(
+            request=normalized_request,
+            registry_id=registry_id,
+            preparation_id=preparation_id,
+            expected_watermark=expected_watermark,
+            plan_digest=claimed_plan_digest,
+            _integrity=integrity,
+        )
+
+    @staticmethod
+    def _action_cohort_token_matches_canonical(
+        token: LifecycleActionCohortAdmissionToken,
+        canonical: LifecycleActionCohortAdmissionToken,
+    ) -> bool:
+        return (
+            token.request == canonical.request
+            and token.registry_id == canonical.registry_id
+            and token.preparation_id == canonical.preparation_id
+            and token.expected_watermark == canonical.expected_watermark
+            and token.plan_digest == canonical.plan_digest
+            and token._integrity == canonical._integrity
+        )
+
+    def _active_action_cohort_reservation_locked(
+        self,
+        token: LifecycleActionCohortAdmissionToken,
+    ) -> _ActionCohortReservation:
+        preparation_id = self._action_cohort_capability_locators.get(id(token))
+        if preparation_id is None:
+            self._validate_action_cohort_token(token)
+            raise StateError("Lifecycle action-cohort token is stale or consumed")
+        active = self._action_cohort_reservations.get(preparation_id)
+        if active is None or active.token_ref() is not token:
+            self._action_cohort_capability_locators.pop(id(token), None)
+            raise StateError("Lifecycle action-cohort token is stale or consumed")
+        try:
+            validated_token = self._validate_action_cohort_token(token)
+            if not self._action_cohort_token_matches_canonical(
+                validated_token,
+                active.canonical_token,
+            ):
+                raise StateError("Lifecycle action-cohort token was mutated after preparation")
+        except (
+            AssertionError,
+            AttributeError,
+            RecursionError,
+            StateError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            self._release_action_cohort_reservation_locked(active)
+            if isinstance(exc, StateError):
+                raise
+            raise StateError("Lifecycle action-cohort token is malformed") from exc
+        return active
+
+    def _release_action_cohort_reservation_locked(
+        self,
+        reservation: _ActionCohortReservation,
+        *,
+        allow_committing: bool = False,
+    ) -> bool:
+        if reservation.committing and not allow_committing:
+            return False
+        preparation_id = reservation.canonical_token.preparation_id
+        if self._action_cohort_reservations.pop(preparation_id, None) is not reservation:
+            return False
+        if reservation.claimed:
+            self._action_cohort_claimed_reservations -= 1
+        if reservation.committing:
+            self._action_cohort_committing_reservations -= 1
+        self._action_cohort_capability_locators.pop(reservation.token_id, None)
+        self._action_cohort_retained_request_bytes -= reservation.request_bytes
+        if reservation.provenance_new:
+            self._action_cohort_pending_provenance_insertions -= 1
+            if reservation.provenance_eviction is not None:
+                self._action_cohort_pending_provenance_evictions.discard(
+                    reservation.provenance_eviction
+                )
+        elif reservation.retry_receipt is not None:
+            remaining = self._action_cohort_provenance_pins[reservation.provenance_binding] - 1
+            if remaining:
+                self._action_cohort_provenance_pins[reservation.provenance_binding] = remaining
+            else:
+                self._action_cohort_provenance_pins.pop(reservation.provenance_binding)
+        for key in reservation.keys:
+            if self._action_cohort_reserved_keys.get(key) == preparation_id:
+                self._action_cohort_reserved_keys.pop(key)
+        if not self._action_cohort_reservations:
+            self._action_cohort_reserved_keys.clear()
+        self._closed_transport_preparation_condition.notify_all()
+        return True
+
+    def _prune_action_cohort_reservations_locked(self) -> int:
+        """Release bounded unclaimed reservations with dead owners or stale watermarks."""
+
+        released = 0
+        for preparation_id in tuple(sorted(self._action_cohort_reservations)):
+            reservation = self._action_cohort_reservations.get(preparation_id)
+            if reservation is None or reservation.claimed or reservation.committing:
+                continue
+            owner_is_gone = reservation.token_ref() is None
+            watermark_is_stale = reservation.canonical_token.expected_watermark != self._watermark
+            if (owner_is_gone or watermark_is_stale) and (
+                self._release_action_cohort_reservation_locked(reservation)
+            ):
+                released += 1
+        return released
+
+    def _reserve_action_cohort_provenance_locked(
+        self,
+        plan: _PreparedActionCohortCommitPlan,
+    ) -> tuple[bool, tuple[str, str] | None, LifecycleActionCohortReceipt | None]:
+        """Pre-reserve one retry pin or one bounded durable provenance insertion."""
+
+        binding = (plan.token.request.state_publication_token, plan.token.plan_digest)
+        if plan.retry_receipt is not None:
+            if binding in self._action_cohort_pending_provenance_evictions:
+                raise LifecycleActionCohortInProgressError(
+                    "Exact lifecycle action-cohort retry provenance is reserved for bounded "
+                    "eviction by another prepared cohort"
+                )
+            self._action_cohort_provenance_pins[binding] = (
+                self._action_cohort_provenance_pins.get(binding, 0) + 1
+            )
+            return False, None, plan.retry_receipt
+
+        if self._action_cohort_provenance_capacity <= 0:
+            raise StateError(
+                "Lifecycle action-cohort committed provenance capacity is zero; "
+                "increase the configured capacity before preparing a new cohort"
+            )
+        effective_entries = (
+            len(self._action_cohort_committed_provenance)
+            + self._action_cohort_pending_provenance_insertions
+            - len(self._action_cohort_pending_provenance_evictions)
+        )
+        eviction: tuple[str, str] | None = None
+        if effective_entries >= self._action_cohort_provenance_capacity:
+            eviction = next(
+                (
+                    candidate
+                    for candidate in self._action_cohort_committed_provenance
+                    if candidate not in self._action_cohort_provenance_pins
+                    and candidate not in self._action_cohort_pending_provenance_evictions
+                ),
+                None,
+            )
+            if eviction is None:
+                raise StateError(
+                    "Lifecycle action-cohort committed provenance capacity is exhausted by "
+                    "active exact retries; commit or cancel those retries before preparing "
+                    "another cohort"
+                )
+            self._action_cohort_pending_provenance_evictions.add(eviction)
+        self._action_cohort_pending_provenance_insertions += 1
+        return True, eviction, None
+
+    def _record_action_cohort_provenance_locked(
+        self,
+        reservation: _ActionCohortReservation,
+        receipt: LifecycleActionCohortReceipt,
+    ) -> None:
+        """Apply one already-preflighted FIFO eviction and insert exact commit provenance."""
+
+        eviction = reservation.provenance_eviction
+        if eviction is not None:
+            evicted = self._action_cohort_committed_provenance.pop(eviction, None)
+            if (
+                evicted is not None
+                and self._action_cohort_provenance_by_operations.get(evicted.operations_digest)
+                == eviction
+            ):
+                self._action_cohort_provenance_by_operations.pop(evicted.operations_digest)
+        provenance = _CommittedActionCohortProvenance(
+            binding=reservation.provenance_binding,
+            operations_digest=reservation.operations_digest,
+            receipt=deepcopy(receipt),
+        )
+        self._action_cohort_committed_provenance[reservation.provenance_binding] = provenance
+        self._action_cohort_provenance_by_operations[reservation.operations_digest] = (
+            reservation.provenance_binding
+        )
+
+    def _discard_action_cohort_reservation_for_token(
+        self,
+        token: LifecycleActionCohortAdmissionToken,
+    ) -> None:
+        """Best-effort cleanup keyed only by the exact token object capability."""
+
+        with self._gate.mutation(), self._closed_transport_preparation_lock:
+            preparation_id = self._action_cohort_capability_locators.get(id(token))
+            if preparation_id is None:
+                return
+            reservation = self._action_cohort_reservations.get(preparation_id)
+            if (
+                reservation is not None
+                and reservation.token_ref() is token
+                and not reservation.committing
+            ):
+                self._release_action_cohort_reservation_locked(reservation)
+
+    def _action_cohort_existing_state_locked(
+        self,
+        subject: LifecycleEntityRef,
+        *,
+        partition_id: int,
+    ) -> _ActionCohortSubjectState:
+        """Snapshot one live or retained process/session while its partition is locked."""
+
+        partition = self._partitions[partition_id]
+        entry = partition._entry(subject)
+        if entry is None:
+            raise StateError(f"Unknown {subject.kind} lifecycle object {subject.object_id}")
+        if subject.kind == "process":
+            if not isinstance(entry, _ProcessEntry):
+                raise StateError("Lifecycle action cohort resolved an incompatible process")
+            parent_object_id = entry.identity.parent_object_id
+            session_object_id = entry.membership.session_object_id
+            process_role = entry.identity.role
+        elif subject.kind == "session":
+            if not isinstance(entry, _SessionEntry):
+                raise StateError("Lifecycle action cohort resolved an incompatible session")
+            parent_object_id = ""
+            session_object_id = ""
+            process_role = ""
+        else:
+            raise StateError("Lifecycle action cohorts support process or session subjects")
+        return _ActionCohortSubjectState(
+            subject=subject,
+            partition_id=partition_id,
+            started_at=partition._entry_started_at(entry),
+            parent_object_id=parent_object_id,
+            session_object_id=session_object_id,
+            process_role=process_role,
+            close_barrier=entry.close_barrier,
+            closure_ticket=entry.closure_ticket,
+            closed_at=entry.closed_at,
+            latest_dependent_at=entry.state.latest_dependent_at,
+            latest_hold_until=entry.state.latest_hold_until,
+        )
+
+    @staticmethod
+    def _action_cohort_transition_for_start(
+        operation: LifecycleSessionStartRequest | LifecycleProcessStartRequest,
+    ) -> LifecycleTransition:
+        return LifecycleTransition(
+            transition_id=operation.transition_id,
+            subject=operation.identity.ref,
+            kind="started",
+            canonical_time=operation.identity.started_at,
+            action_id=operation.action_id,
+            transition_ordinal=operation.transition_ordinal,
+        )
+
+    def _action_cohort_validate_global_transition_locked(
+        self,
+        transition: LifecycleTransition,
+    ) -> LifecycleTransition | None:
+        prior = self._routes.get_locked("transition", transition.transition_id)
+        actual = self._transition_from_route(prior, transition.transition_id)
+        if actual is not None and actual != transition:
+            self._reject_exact_conflict("transition", transition.transition_id)
+        if prior is not None and actual is None:
+            self._reject_exact_conflict("transition", transition.transition_id)
+        return actual
+
+    def _action_cohort_validate_descendants_locked(
+        self,
+        state: _ActionCohortSubjectState,
+        *,
+        effective_at: datetime,
+        states: dict[LifecycleEntityRef, _ActionCohortSubjectState],
+        staged_children: dict[str, set[str]],
+        staged_members: dict[str, set[str]],
+        reservation_keys: list[tuple[str, str]],
+    ) -> None:
+        """Require every child/member relation to close first inside the cohort."""
+
+        partition = self._partitions[state.partition_id]
+        subject = state.subject
+        if subject.kind == "process":
+            aggregate = partition._children_by_parent.get(subject.object_id)
+            related_ids = {
+                binding.child_object_id
+                for binding in partition._live_children.find_iter(
+                    "parent",
+                    subject.object_id,
+                )
+            }
+            related_ids.update(staged_children.get(subject.object_id, ()))
+            relationship = "child processes"
+            external = partition._service_bindings_by_process.get(subject.object_id)
+            if external is not None and external.blocks_close_at(effective_at):
+                raise StateError(
+                    f"Cannot close lifecycle {subject.object_id}: service bindings remain active"
+                )
+        else:
+            aggregate = partition._members_by_session.get(subject.object_id)
+            related_ids = {
+                binding.process_object_id
+                for binding in partition._live_session_members.find_iter(
+                    "session",
+                    subject.object_id,
+                )
+            }
+            related_ids.update(staged_members.get(subject.object_id, ()))
+            relationship = "session members"
+            external = partition._transport_bindings_by_session.get(subject.object_id)
+            if external is not None and external.blocks_close_at(effective_at):
+                raise StateError(
+                    f"Cannot close lifecycle {subject.object_id}: transport bindings remain active"
+                )
+        if aggregate is not None and (
+            aggregate.latest_closed_at is not None and aggregate.latest_closed_at > effective_at
+        ):
+            raise StateError(
+                f"Cannot close lifecycle {subject.object_id} before an existing {relationship} close"
+            )
+        for object_id in sorted(related_ids):
+            child_ref = LifecycleEntityRef("process", object_id)
+            reservation_keys.append(self._closed_transport_subject_key(child_ref))
+            child = states.get(child_ref)
+            if child is None:
+                child = self._action_cohort_existing_state_locked(
+                    child_ref,
+                    partition_id=state.partition_id,
+                )
+                states[child_ref] = child
+            if child.closed_at is None:
+                raise StateError(
+                    f"Cannot close lifecycle {subject.object_id}: {relationship} remain active"
+                )
+            if child.closed_at > effective_at:
+                raise StateError(
+                    f"Cannot close lifecycle {subject.object_id} before {relationship} close"
+                )
+
+    def _action_cohort_validate_durable_capacity_locked(
+        self,
+        state: _ActionCohortSubjectState,
+    ) -> None:
+        """Preflight the three durable control commits added by one closure."""
+
+        partition = self._partitions[state.partition_id]
+        entry = partition._entry(state.subject)
+        if entry is None:
+            existing_count = 1
+        elif entry.state.commits is not None:
+            existing_count = len(entry.state.commits)
+        else:
+            existing_count = len(
+                {
+                    (transition.action_id, transition.transition_ordinal)
+                    for transition in entry.transitions
+                    if transition.kind not in _STREAMED_TRANSITION_KINDS
+                }
+            )
+        if existing_count + 3 > _MAX_DURABLE_COMMITS_PER_ENTITY:
+            raise StateError(
+                f"Lifecycle durable commit bound exceeded for {state.subject.object_id}"
+            )
+
+    def _prepare_action_cohort_commit_locked(
+        self,
+        token: LifecycleActionCohortAdmissionToken,
+        *,
+        partition_ids: tuple[int, ...],
+    ) -> _PreparedActionCohortCommitPlan:
+        """Validate every ordered operation without publishing canonical rows."""
+
+        request = token.request
+        admitted_sessions: dict[str, SessionLifecycleIdentity] = {}
+        admitted_processes: dict[str, ProcessLifecycleIdentity] = {}
+        states: dict[LifecycleEntityRef, _ActionCohortSubjectState] = {}
+        staged_children: dict[str, set[str]] = {}
+        staged_members: dict[str, set[str]] = {}
+        reservation_keys = list(self._action_cohort_static_reservation_keys(request))
+        prepared_operations: list[_PreparedActionCohortOperation] = []
+        presence: list[bool] = []
+
+        def state_for(subject: LifecycleEntityRef) -> _ActionCohortSubjectState:
+            state = states.get(subject)
+            if state is not None:
+                return state
+            partition_id = self._subject_partition_locked(subject)
+            state = self._action_cohort_existing_state_locked(
+                subject,
+                partition_id=partition_id,
+            )
+            states[subject] = state
+            return state
+
+        for operation in request.operations:
+            if type(operation) is LifecycleSessionStartRequest:
+                identity = operation.identity
+                transition = self._action_cohort_transition_for_start(operation)
+                partition_id = self._partition_id(identity.hostname)
+                prior_session = self._routes.get_locked("session", identity.object_id)
+                prior_partition = self._session_partition_from_route(prior_session)
+                if prior_partition is not None and prior_partition != partition_id:
+                    raise StateError(
+                        f"Session lifecycle object {identity.object_id} is already registered"
+                    )
+                if isinstance(prior_session, bytes):
+                    if _decode_session_row(prior_session).object_id != identity.object_id:
+                        raise StateError("Lifecycle session route semantic hash collision")
+                elif isinstance(prior_session, int):
+                    routed_partition, handle = self._decode_session_locator(prior_session)
+                    snapshot = self._partitions[routed_partition].get_session_by_handle(handle)
+                    if snapshot is None or snapshot.identity.object_id != identity.object_id:
+                        raise StateError("Lifecycle session route semantic hash collision")
+                prior_transition = self._action_cohort_validate_global_transition_locked(transition)
+                prepared = self._partitions[partition_id]._prepare_session_registration_locked(
+                    identity,
+                    transition=transition,
+                )
+                already_present = prepared.existing is not None
+                if already_present != (prior_partition is not None):
+                    raise StateError("Lifecycle session retry lost its exact subject route")
+                if already_present != (prior_transition is not None):
+                    raise StateError("Lifecycle session retry lost its exact start transition")
+                if already_present:
+                    state = self._action_cohort_existing_state_locked(
+                        identity.ref,
+                        partition_id=partition_id,
+                    )
+                else:
+                    state = _ActionCohortSubjectState(
+                        subject=identity.ref,
+                        partition_id=partition_id,
+                        started_at=identity.started_at,
+                    )
+                states[identity.ref] = state
+                admitted_sessions[identity.object_id] = identity
+                prepared_operations.append(
+                    _PreparedActionCohortOperation(
+                        operation=operation,
+                        partition_id=partition_id,
+                        session_start=prepared,
+                        prior_session_route=prior_session,
+                        already_present=already_present,
+                    )
+                )
+                presence.append(already_present)
+                continue
+
+            if type(operation) is LifecycleProcessStartRequest:
+                identity = operation.identity
+                transition = self._action_cohort_transition_for_start(operation)
+                partition_id = self._partition_id(identity.hostname)
+                prior_process = self._routes.get_locked("process", identity.object_id)
+                if prior_process is not None and prior_process != partition_id:
+                    raise StateError(
+                        f"Process lifecycle object {identity.object_id} is already registered"
+                    )
+                prior_transition = self._action_cohort_validate_global_transition_locked(transition)
+                prepared = self._partitions[partition_id]._prepare_process_registration_locked(
+                    identity,
+                    token=operation.token,
+                    membership=operation.membership,
+                    transition=transition,
+                    staged_sessions=admitted_sessions,
+                    staged_processes=admitted_processes,
+                )
+                already_present = prepared.existing is not None
+                if already_present != (prior_process is not None):
+                    raise StateError("Lifecycle process retry lost its exact subject route")
+                if already_present != (prior_transition is not None):
+                    raise StateError("Lifecycle process retry lost its exact start transition")
+                if already_present:
+                    state = self._action_cohort_existing_state_locked(
+                        identity.ref,
+                        partition_id=partition_id,
+                    )
+                else:
+                    state = _ActionCohortSubjectState(
+                        subject=identity.ref,
+                        partition_id=partition_id,
+                        started_at=identity.started_at,
+                        parent_object_id=identity.parent_object_id,
+                        session_object_id=operation.membership.session_object_id,
+                        process_role=identity.role,
+                    )
+                    if identity.parent_object_id:
+                        parent = state_for(LifecycleEntityRef("process", identity.parent_object_id))
+                        if parent.closed_at is not None or parent.close_barrier is not None:
+                            raise StateError("Lifecycle action cohort starts after parent closure")
+                    if operation.membership.session_object_id:
+                        session = state_for(
+                            LifecycleEntityRef(
+                                "session",
+                                operation.membership.session_object_id,
+                            )
+                        )
+                        if session.closed_at is not None or session.close_barrier is not None:
+                            raise StateError("Lifecycle action cohort starts after session closure")
+                states[identity.ref] = state
+                admitted_processes[identity.object_id] = identity
+                if identity.parent_object_id:
+                    parent = state_for(LifecycleEntityRef("process", identity.parent_object_id))
+                    if parent.process_role != "bootstrap_handoff":
+                        staged_children.setdefault(identity.parent_object_id, set()).add(
+                            identity.object_id
+                        )
+                if operation.membership.session_object_id:
+                    staged_members.setdefault(
+                        operation.membership.session_object_id,
+                        set(),
+                    ).add(identity.object_id)
+                prepared_operations.append(
+                    _PreparedActionCohortOperation(
+                        operation=operation,
+                        partition_id=partition_id,
+                        process_start=prepared,
+                        already_present=already_present,
+                    )
+                )
+                presence.append(already_present)
+                continue
+
+            subject = self._action_cohort_operation_subject(operation)
+            state = state_for(subject)
+            partition_id = state.partition_id
+            partition = self._partitions[partition_id]
+            entry = partition._entry(subject)
+
+            if type(operation) is LifecycleTransition:
+                prior = self._action_cohort_validate_global_transition_locked(operation)
+                already_present = prior is not None
+                if already_present:
+                    if entry is None or not partition._entry_has_transition(entry, operation):
+                        raise StateError("Lifecycle dependent retry lost exact subject state")
+                else:
+                    partition._reject_behind_watermark(
+                        operation.canonical_time,
+                        "dependent transition",
+                    )
+                    if operation.canonical_time < state.started_at:
+                        raise StateError("Lifecycle dependent cannot precede its owning start")
+                    if state.closed_at is not None and operation.canonical_time >= state.closed_at:
+                        raise StateError("Lifecycle dependent cannot occur after closure")
+                    if (
+                        state.close_barrier is not None
+                        and operation.canonical_time >= state.close_barrier.requested_at
+                    ):
+                        raise StateError("Lifecycle dependent cannot occur after its close barrier")
+                    partition._validate_transition_claim(operation)
+                    if (
+                        state.latest_dependent_at is None
+                        or operation.canonical_time > state.latest_dependent_at
+                    ):
+                        state.latest_dependent_at = operation.canonical_time
+                prepared_operations.append(
+                    _PreparedActionCohortOperation(
+                        operation=operation,
+                        partition_id=partition_id,
+                        already_present=already_present,
+                    )
+                )
+                presence.append(already_present)
+                continue
+
+            if type(operation) is LifecycleHold:
+                transition = LifecycleTransition(
+                    transition_id=f"{operation.hold_id}:acquired",
+                    subject=operation.subject,
+                    kind="hold_acquired",
+                    canonical_time=operation.acquired_at,
+                    action_id=operation.action_id,
+                    reason=operation.reason,
+                    transition_ordinal=operation.transition_ordinal,
+                )
+                prior_hold = self._routes.get_locked("hold", operation.hold_id)
+                prior_transition = self._action_cohort_validate_global_transition_locked(transition)
+                partition_hold = partition.hold(operation.hold_id)
+                if prior_hold is not None:
+                    if prior_hold != operation or prior_transition != transition:
+                        self._reject_exact_conflict("hold", operation.hold_id)
+                    if partition_hold != operation:
+                        raise StateError("Lifecycle hold retry lost exact subject state")
+                    already_present = True
+                else:
+                    if partition_hold is not None:
+                        raise StateError("Lifecycle hold retry lost its exact global route")
+                    if prior_transition is not None:
+                        raise StateError("Partial lifecycle hold retry is not admissible")
+                    already_present = False
+                    partition._reject_behind_watermark(
+                        operation.acquired_at,
+                        "hold acquisition",
+                    )
+                    if operation.acquired_at < state.started_at:
+                        raise StateError("Lifecycle hold cannot precede its owning start")
+                    if state.close_barrier is not None or state.closed_at is not None:
+                        raise StateError("Lifecycle hold cannot follow lifecycle closure")
+                    partition._validate_transition_claim(transition)
+                    if (
+                        state.latest_dependent_at is None
+                        or operation.acquired_at > state.latest_dependent_at
+                    ):
+                        state.latest_dependent_at = operation.acquired_at
+                    if (
+                        state.latest_hold_until is None
+                        or operation.hold_until > state.latest_hold_until
+                    ):
+                        state.latest_hold_until = operation.hold_until
+                prepared_operations.append(
+                    _PreparedActionCohortOperation(
+                        operation=operation,
+                        partition_id=partition_id,
+                        already_present=already_present,
+                    )
+                )
+                presence.append(already_present)
+                continue
+
+            assert type(operation) is LifecycleSubjectClosureControl
+            barrier = operation.barrier
+            if entry is not None and entry.closed_at is not None:
+                ticket = entry.closure_ticket
+                if ticket is None:
+                    raise StateError("Terminal lifecycle lost its exact closure ticket")
+                expected = self._expected_subject_closure_transitions(
+                    operation,
+                    ticket.effective_at,
+                )
+                if (
+                    entry.close_barrier != barrier
+                    or ticket != expected[0]
+                    or not partition._entry_has_transition(entry, expected[3])
+                    or entry.closed_at != ticket.effective_at
+                ):
+                    raise StateError("Terminal action-cohort retry disagrees with exact closure")
+                for kind, semantic_id, value in (
+                    ("barrier", barrier.barrier_id, barrier),
+                    ("ticket", operation.ticket_id, expected[0]),
+                    ("transition", expected[1].transition_id, expected[1]),
+                    ("transition", expected[2].transition_id, expected[2]),
+                    ("transition", expected[3].transition_id, expected[3]),
+                ):
+                    prior = self._routes.get_locked(kind, semantic_id)
+                    actual = (
+                        self._transition_from_route(prior, semantic_id)
+                        if kind == "transition"
+                        else prior
+                    )
+                    if actual != value:
+                        raise StateError("Terminal action-cohort retry lost exact control state")
+                state.close_barrier = barrier
+                state.closure_ticket = ticket
+                state.closed_at = ticket.effective_at
+                prepared_operations.append(
+                    _PreparedActionCohortOperation(
+                        operation=operation,
+                        partition_id=partition_id,
+                        effective_at=ticket.effective_at,
+                        already_present=True,
+                    )
+                )
+                presence.append(True)
+                continue
+            if state.close_barrier is not None or state.closure_ticket is not None:
+                raise StateError("Partial action-cohort terminal retry is not admissible")
+            partition._reject_behind_watermark(barrier.requested_at, "close barrier")
+            if barrier.requested_at < state.started_at:
+                raise StateError("Lifecycle close precedes its start")
+            if (
+                state.latest_dependent_at is not None
+                and state.latest_dependent_at >= barrier.requested_at
+            ):
+                raise StateError("Lifecycle close barrier precedes a dependent operation")
+            latest_hold = state.latest_hold_until or barrier.requested_at
+            latest_resource = partition._resource_lease_deadline_for(subject)
+            latest_dependency = max(
+                latest_hold,
+                latest_resource or barrier.requested_at,
+            )
+            if barrier.authority == "authoritative" and latest_dependency > barrier.requested_at:
+                raise StateError("Authoritative lifecycle close conflicts with a hold or lease")
+            effective_at = max(barrier.requested_at, latest_dependency)
+            self._action_cohort_validate_descendants_locked(
+                state,
+                effective_at=effective_at,
+                states=states,
+                staged_children=staged_children,
+                staged_members=staged_members,
+                reservation_keys=reservation_keys,
+            )
+            if subject.kind == "process":
+                if state.parent_object_id:
+                    reservation_keys.append(
+                        self._closed_transport_subject_key(
+                            LifecycleEntityRef("process", state.parent_object_id)
+                        )
+                    )
+                if state.session_object_id:
+                    reservation_keys.append(
+                        self._closed_transport_subject_key(
+                            LifecycleEntityRef("session", state.session_object_id)
+                        )
+                    )
+            expected = self._expected_subject_closure_transitions(operation, effective_at)
+            for kind, semantic_id, value in (
+                ("barrier", barrier.barrier_id, barrier),
+                ("ticket", operation.ticket_id, expected[0]),
+                ("transition", expected[1].transition_id, expected[1]),
+                ("transition", expected[2].transition_id, expected[2]),
+                ("transition", expected[3].transition_id, expected[3]),
+            ):
+                prior = self._routes.get_locked(kind, semantic_id)
+                actual = (
+                    self._transition_from_route(prior, semantic_id)
+                    if kind == "transition"
+                    else prior
+                )
+                if prior is not None:
+                    if actual != value:
+                        self._reject_exact_conflict(kind, semantic_id)
+                    raise StateError("Partial action-cohort terminal retry is not admissible")
+            if entry is not None:
+                partition._validate_barrier_claim(barrier)
+                partition._validate_ticket_claim(expected[0])
+                for transition in expected[1:]:
+                    partition._validate_transition_claim(transition)
+            self._action_cohort_validate_durable_capacity_locked(state)
+            state.close_barrier = barrier
+            state.closure_ticket = expected[0]
+            state.closed_at = effective_at
+            prepared_operations.append(
+                _PreparedActionCohortOperation(
+                    operation=operation,
+                    partition_id=partition_id,
+                    effective_at=effective_at,
+                )
+            )
+            presence.append(False)
+
+        if any(presence) and not all(presence):
+            raise StateError("Partial lifecycle action-cohort retry is not admissible")
+        already_present = all(presence)
+        receipt_request_preimage = self._action_cohort_request_preimage(request)
+        operations_digest = self._action_cohort_operations_digest(request)
+        binding = (request.state_publication_token, token.plan_digest)
+        provenance_binding = self._action_cohort_provenance_by_operations.get(operations_digest)
+        provenance = self._action_cohort_committed_provenance.get(binding)
+        retry_receipt: LifecycleActionCohortReceipt | None = None
+        if already_present:
+            if (
+                provenance_binding != binding
+                or provenance is None
+                or provenance.operations_digest != operations_digest
+            ):
+                raise StateError(
+                    "Committed lifecycle action cohort has no matching original State/plan "
+                    "provenance; exact retry cannot rebind existing lifecycle state"
+                )
+            retry_receipt = provenance.receipt
+        elif provenance_binding is not None or provenance is not None:
+            raise StateError(
+                "Lifecycle action cohort State/plan provenance is already bound to another "
+                "canonical operation set"
+            )
+        return _PreparedActionCohortCommitPlan(
+            token=token,
+            operations=tuple(prepared_operations),
+            partition_ids=partition_ids,
+            reservation_keys=tuple(dict.fromkeys(reservation_keys)),
+            receipt_request_preimage=receipt_request_preimage,
+            operations_digest=operations_digest,
+            retry_receipt=retry_receipt,
+            already_present=already_present,
+        )
+
+    def prepare_action_cohort(
+        self,
+        request: LifecycleActionCohortRequest,
+    ) -> LifecycleActionCohortAdmissionToken:
+        """Validate and reserve one ordered action cohort without canonical writes."""
+
+        public_request = self._normalize_action_cohort_request(request)
+        if len(public_request.operations) > self._action_cohort_operation_capacity:
+            raise StateError(
+                "Lifecycle action-cohort operation capacity exceeded: "
+                f"{len(public_request.operations)} > "
+                f"{self._action_cohort_operation_capacity}"
+            )
+        request_preimage = self._action_cohort_request_preimage(public_request)
+        request_bytes = len(request_preimage)
+        if request_bytes > self._action_cohort_request_byte_capacity:
+            raise StateError(
+                "Lifecycle action-cohort request-byte capacity exceeded: "
+                f"{request_bytes} > {self._action_cohort_request_byte_capacity}"
+            )
+        static_keys = self._action_cohort_static_reservation_keys(public_request)
+        route_keys = self._action_cohort_route_keys(public_request)
+        with self._gate.mutation(), self._closed_transport_preparation_lock:
+            self._prune_action_cohort_reservations_locked()
+            if len(self._action_cohort_reservations) >= self._action_cohort_reservation_capacity:
+                raise StateError(
+                    "Lifecycle action-cohort reservation capacity is exhausted; commit, "
+                    "cancel, or prune an unclaimed preparation before retrying"
+                )
+            if (
+                self._action_cohort_retained_request_bytes + request_bytes
+                > self._action_cohort_request_byte_capacity
+            ):
+                raise StateError(
+                    "Lifecycle action-cohort retained request-byte capacity is exhausted; "
+                    "commit, cancel, or prune an unclaimed preparation before retrying"
+                )
+            conflicts = {
+                owner
+                for key in static_keys
+                if (owner := self._action_cohort_reserved_keys.get(key)) is not None
+            }
+            if conflicts and all(
+                (active := self._action_cohort_reservations.get(preparation_id)) is not None
+                and active.canonical_token.request == public_request
+                for preparation_id in conflicts
+            ):
+                raise LifecycleActionCohortInProgressError(
+                    "Exact lifecycle action cohort is already in progress"
+                )
+            self._reject_closed_transport_reservation_conflict_locked(static_keys)
+            preparation_id = self._next_action_cohort_preparation_id
+            expected_watermark = self._watermark
+            plan_digest = sha256(request_preimage).hexdigest()
+            token = LifecycleActionCohortAdmissionToken(
+                request=public_request,
+                registry_id=self._action_cohort_registry_id,
+                preparation_id=preparation_id,
+                expected_watermark=expected_watermark,
+                plan_digest=plan_digest,
+                _integrity=self._action_cohort_token_integrity(
+                    preparation_id=preparation_id,
+                    expected_watermark=expected_watermark,
+                    plan_digest=plan_digest,
+                ),
+            )
+            canonical_token = LifecycleActionCohortAdmissionToken(
+                request=deepcopy(public_request),
+                registry_id=token.registry_id,
+                preparation_id=token.preparation_id,
+                expected_watermark=token.expected_watermark,
+                plan_digest=token.plan_digest,
+                _integrity=token._integrity,
+            )
+            with self._routes.locked(route_keys):
+                partition_ids = self._action_cohort_partition_ids_locked(public_request)
+                with self._locked_partition_ids(partition_ids):
+                    plan = self._prepare_action_cohort_commit_locked(
+                        canonical_token,
+                        partition_ids=partition_ids,
+                    )
+            reservation_keys = plan.reservation_keys
+            self._reject_closed_transport_reservation_conflict_locked(reservation_keys)
+            if (
+                len(self._action_cohort_reserved_keys) + len(reservation_keys)
+                > self._action_cohort_reserved_key_capacity
+            ):
+                raise StateError(
+                    "Lifecycle action-cohort reserved-key capacity is exhausted; commit, "
+                    "cancel, or prune an unclaimed preparation before retrying"
+                )
+            provenance_new, provenance_eviction, retry_receipt = (
+                self._reserve_action_cohort_provenance_locked(plan)
+            )
+            provenance_binding = (
+                public_request.state_publication_token,
+                plan_digest,
+            )
+            self._next_action_cohort_preparation_id += 1
+            reservation = _ActionCohortReservation(
+                token_ref=ref(token),
+                token_id=id(token),
+                canonical_token=canonical_token,
+                keys=reservation_keys,
+                partition_ids=partition_ids,
+                request_bytes=request_bytes,
+                provenance_binding=provenance_binding,
+                operations_digest=plan.operations_digest,
+                provenance_new=provenance_new,
+                provenance_eviction=provenance_eviction,
+                retry_receipt=retry_receipt,
+            )
+            self._action_cohort_reservations[preparation_id] = reservation
+            self._action_cohort_capability_locators[id(token)] = preparation_id
+            self._action_cohort_retained_request_bytes += request_bytes
+            for key in reservation_keys:
+                self._action_cohort_reserved_keys[key] = preparation_id
+            return token
+
+    def prune_action_cohort_preparations(self) -> int:
+        """Release stale or ownerless unclaimed action-cohort preparations."""
+
+        with self._gate.mutation(), self._closed_transport_preparation_lock:
+            return self._prune_action_cohort_reservations_locked()
+
+    def cancel_action_cohort(self, token: LifecycleActionCohortAdmissionToken) -> None:
+        """Cancel one unclaimed action-cohort reservation with zero canonical rows."""
+
+        with self._gate.mutation(), self._closed_transport_preparation_lock:
+            reservation = self._active_action_cohort_reservation_locked(token)
+            if reservation.committing:
+                raise StateError("Committing lifecycle action cohort cannot be cancelled")
+            if reservation.claimed:
+                raise StateError("Claimed lifecycle action cohort cannot cancel directly")
+            self._release_action_cohort_reservation_locked(reservation)
+
+    def authenticates_action_cohort_admission_token(
+        self,
+        token: object,
+        *,
+        request: LifecycleActionCohortRequest | None = None,
+        state_publication_token: str | None = None,
+    ) -> bool:
+        """Totally authenticate one active cohort admission without consuming it."""
+
+        if type(token) is not LifecycleActionCohortAdmissionToken:
+            return False
+        if request is not None and type(request) is not LifecycleActionCohortRequest:
+            return False
+        if state_publication_token is not None and type(state_publication_token) is not str:
+            return False
+        try:
+            normalized_request = (
+                None if request is None else self._normalize_action_cohort_request(request)
+            )
+        except (AttributeError, RecursionError, TypeError, ValueError):
+            return False
+        with self._closed_transport_preparation_lock:
+            try:
+                reservation = self._active_action_cohort_reservation_locked(token)
+                canonical_request = reservation.canonical_token.request
+                if normalized_request is not None and canonical_request != normalized_request:
+                    return False
+                return (
+                    state_publication_token is None
+                    or canonical_request.state_publication_token == state_publication_token
+                )
+            except (
+                AssertionError,
+                AttributeError,
+                RecursionError,
+                StateError,
+                TypeError,
+                ValueError,
+            ):
+                return False
+
+    def action_cohort_preparation_census(
+        self,
+    ) -> LifecycleActionCohortPreparationCensus:
+        """Return transient action-cohort capability counts in constant time."""
+
+        with self._closed_transport_preparation_lock:
+            reservations = len(self._action_cohort_reservations)
+            return LifecycleActionCohortPreparationCensus(
+                reservations=reservations,
+                unclaimed_reservations=(reservations - self._action_cohort_claimed_reservations),
+                claimed_reservations=self._action_cohort_claimed_reservations,
+                committing_reservations=self._action_cohort_committing_reservations,
+                reserved_keys=len(self._action_cohort_reserved_keys),
+                capability_locators=len(self._action_cohort_capability_locators),
+                retained_request_bytes=self._action_cohort_retained_request_bytes,
+                committed_provenance=len(self._action_cohort_committed_provenance),
+                pending_provenance_insertions=(self._action_cohort_pending_provenance_insertions),
+                pending_provenance_evictions=len(self._action_cohort_pending_provenance_evictions),
+                operation_capacity_per_request=self._action_cohort_operation_capacity,
+                reservation_capacity=self._action_cohort_reservation_capacity,
+                reserved_key_capacity=self._action_cohort_reserved_key_capacity,
+                request_byte_capacity=self._action_cohort_request_byte_capacity,
+                committed_provenance_capacity=self._action_cohort_provenance_capacity,
+            )
+
+    @contextmanager
+    def claimed_action_cohort(
+        self,
+        token: LifecycleActionCohortAdmissionToken,
+    ) -> Iterator[PreparedLifecycleActionCohort]:
+        """Short-claim one token, then yield without retaining registry locks."""
+
+        with self._gate.mutation(), self._closed_transport_preparation_lock:
+            reservation = self._active_action_cohort_reservation_locked(token)
+            canonical_token = reservation.canonical_token
+            if reservation.claimed:
+                raise StateError("Lifecycle action-cohort token is already claimed")
+            if self._watermark != canonical_token.expected_watermark:
+                self._release_action_cohort_reservation_locked(reservation)
+                raise StateError(
+                    "Lifecycle action-cohort admission is stale after watermark advance"
+                )
+            route_keys = self._action_cohort_route_keys(canonical_token.request)
+            try:
+                with self._routes.locked(route_keys):
+                    partition_ids = self._action_cohort_partition_ids_locked(
+                        canonical_token.request
+                    )
+                    if partition_ids != reservation.partition_ids:
+                        raise StateError("Lifecycle action-cohort partition ownership changed")
+                    with self._locked_partition_ids(partition_ids):
+                        commit_plan = self._prepare_action_cohort_commit_locked(
+                            canonical_token,
+                            partition_ids=partition_ids,
+                        )
+                if commit_plan.reservation_keys != reservation.keys:
+                    raise StateError("Lifecycle action-cohort relationship ownership changed")
+                if (
+                    commit_plan.operations_digest != reservation.operations_digest
+                    or reservation.provenance_new == commit_plan.already_present
+                    or commit_plan.retry_receipt is not reservation.retry_receipt
+                ):
+                    raise StateError("Lifecycle action-cohort provenance changed before claim")
+                validated_token = self._validate_action_cohort_token(token)
+                if not self._action_cohort_token_matches_canonical(
+                    validated_token,
+                    canonical_token,
+                ):
+                    raise StateError("Lifecycle action-cohort token was mutated after preparation")
+            except BaseException:
+                self._release_action_cohort_reservation_locked(reservation)
+                raise
+            reservation.commit_plan = commit_plan
+            reservation.claimed = True
+            reservation.claim_thread_id = get_ident()
+            self._action_cohort_claimed_reservations += 1
+
+        capability = PreparedLifecycleActionCohort(self, token)
+        try:
+            yield capability
+        except BaseException:
+            if not capability.committed:
+                self._discard_action_cohort_reservation_for_token(token)
+            raise
+        else:
+            if not capability.committed:
+                self._discard_action_cohort_reservation_for_token(token)
+                raise StateError("Claimed lifecycle action cohort exited without commit_no_fail")
+        finally:
+            capability._close()
+
+    def _cancel_claimed_action_cohort(
+        self,
+        token: LifecycleActionCohortAdmissionToken,
+    ) -> None:
+        """Release one claimed cohort after its enclosing composite aborts."""
+
+        with self._gate.mutation(), self._closed_transport_preparation_lock:
+            reservation = self._active_action_cohort_reservation_locked(token)
+            if not reservation.claimed:
+                raise StateError("Lifecycle action-cohort token is not claimed")
+            if reservation.committing:
+                raise StateError("Committing lifecycle action cohort cannot be cancelled")
+            self._release_action_cohort_reservation_locked(reservation)
+
+    @classmethod
+    def _normalize_action_cohort_process_snapshot(
+        cls,
+        value: object,
+    ) -> ProcessLifecycleSnapshot:
+        if type(value) is not ProcessLifecycleSnapshot:
+            raise TypeError("Lifecycle action cohort process result must be an exact snapshot")
+        if type(value.transitions) is not tuple or type(value.holds) is not tuple:
+            raise TypeError("Lifecycle action cohort process result collections must be tuples")
+        close_barrier = (
+            None
+            if value.close_barrier is None
+            else cls._normalize_action_cohort_barrier(value.close_barrier)
+        )
+        closure_ticket = (
+            None
+            if value.closure_ticket is None
+            else cls._normalize_action_cohort_ticket(value.closure_ticket)
+        )
+        closed_at = cls._action_cohort_exact_datetime(
+            value.closed_at,
+            field_name="process result close time",
+            allow_none=True,
+        )
+        latest_dependent_at = cls._action_cohort_exact_datetime(
+            value.latest_dependent_at,
+            field_name="process result latest dependent time",
+            allow_none=True,
+        )
+        latest_hold_until = cls._action_cohort_exact_datetime(
+            value.latest_hold_until,
+            field_name="process result latest hold time",
+            allow_none=True,
+        )
+        counts = tuple(
+            cls._action_cohort_exact_int(item, field_name=label)
+            for item, label in (
+                (value.transition_count, "process result transition count"),
+                (
+                    value.compacted_transition_count,
+                    "process result compacted transition count",
+                ),
+                (value.hold_count, "process result hold count"),
+                (value.compacted_hold_count, "process result compacted hold count"),
+            )
+        )
+        assert all(item is not None for item in counts)
+        return ProcessLifecycleSnapshot(
+            identity=cls._normalize_action_cohort_process_identity(value.identity),
+            token=cls._normalize_action_cohort_process_token(value.token),
+            membership=cls._normalize_action_cohort_membership(value.membership),
+            transitions=tuple(
+                cls._normalize_action_cohort_transition(item) for item in value.transitions
+            ),
+            holds=tuple(cls._normalize_action_cohort_hold(item) for item in value.holds),
+            close_barrier=close_barrier,
+            closure_ticket=closure_ticket,
+            closed_at=closed_at,
+            transition_count=counts[0],  # type: ignore[arg-type]
+            compacted_transition_count=counts[1],  # type: ignore[arg-type]
+            transition_ledger_digest=cls._action_cohort_exact_text(
+                value.transition_ledger_digest,
+                field_name="process result transition ledger digest",
+            ),
+            hold_count=counts[2],  # type: ignore[arg-type]
+            compacted_hold_count=counts[3],  # type: ignore[arg-type]
+            hold_ledger_digest=cls._action_cohort_exact_text(
+                value.hold_ledger_digest,
+                field_name="process result hold ledger digest",
+            ),
+            latest_dependent_at=latest_dependent_at,
+            latest_hold_until=latest_hold_until,
+        )
+
+    @classmethod
+    def _normalize_action_cohort_session_snapshot(
+        cls,
+        value: object,
+    ) -> SessionLifecycleSnapshot:
+        if type(value) is not SessionLifecycleSnapshot:
+            raise TypeError("Lifecycle action cohort session result must be an exact snapshot")
+        if type(value.transitions) is not tuple or type(value.holds) is not tuple:
+            raise TypeError("Lifecycle action cohort session result collections must be tuples")
+        close_barrier = (
+            None
+            if value.close_barrier is None
+            else cls._normalize_action_cohort_barrier(value.close_barrier)
+        )
+        closure_ticket = (
+            None
+            if value.closure_ticket is None
+            else cls._normalize_action_cohort_ticket(value.closure_ticket)
+        )
+        closed_at = cls._action_cohort_exact_datetime(
+            value.closed_at,
+            field_name="session result close time",
+            allow_none=True,
+        )
+        latest_dependent_at = cls._action_cohort_exact_datetime(
+            value.latest_dependent_at,
+            field_name="session result latest dependent time",
+            allow_none=True,
+        )
+        latest_hold_until = cls._action_cohort_exact_datetime(
+            value.latest_hold_until,
+            field_name="session result latest hold time",
+            allow_none=True,
+        )
+        counts = tuple(
+            cls._action_cohort_exact_int(item, field_name=label)
+            for item, label in (
+                (value.transition_count, "session result transition count"),
+                (
+                    value.compacted_transition_count,
+                    "session result compacted transition count",
+                ),
+                (value.hold_count, "session result hold count"),
+                (value.compacted_hold_count, "session result compacted hold count"),
+            )
+        )
+        assert all(item is not None for item in counts)
+        return SessionLifecycleSnapshot(
+            identity=cls._normalize_action_cohort_session_identity(value.identity),
+            transitions=tuple(
+                cls._normalize_action_cohort_transition(item) for item in value.transitions
+            ),
+            holds=tuple(cls._normalize_action_cohort_hold(item) for item in value.holds),
+            close_barrier=close_barrier,
+            closure_ticket=closure_ticket,
+            closed_at=closed_at,
+            transition_count=counts[0],  # type: ignore[arg-type]
+            compacted_transition_count=counts[1],  # type: ignore[arg-type]
+            transition_ledger_digest=cls._action_cohort_exact_text(
+                value.transition_ledger_digest,
+                field_name="session result transition ledger digest",
+            ),
+            hold_count=counts[2],  # type: ignore[arg-type]
+            compacted_hold_count=counts[3],  # type: ignore[arg-type]
+            hold_ledger_digest=cls._action_cohort_exact_text(
+                value.hold_ledger_digest,
+                field_name="session result hold ledger digest",
+            ),
+            latest_dependent_at=latest_dependent_at,
+            latest_hold_until=latest_hold_until,
+        )
+
+    @classmethod
+    def _normalize_action_cohort_results(
+        cls,
+        request: LifecycleActionCohortRequest,
+        results: object,
+    ) -> tuple[LifecycleActionCohortOperationResult, ...]:
+        if type(results) is not tuple or len(results) != len(request.operations):
+            raise TypeError(
+                "Lifecycle action cohort results must be an exact operation-aligned tuple"
+            )
+        normalized: list[LifecycleActionCohortOperationResult] = []
+        for operation, result in zip(request.operations, results, strict=True):
+            if type(operation) is LifecycleSessionStartRequest:
+                normalized.append(cls._normalize_action_cohort_session_snapshot(result))
+            elif type(operation) is LifecycleProcessStartRequest:
+                normalized.append(cls._normalize_action_cohort_process_snapshot(result))
+            elif type(operation) is LifecycleTransition:
+                normalized.append(cls._normalize_action_cohort_transition(result))
+            elif type(operation) is LifecycleHold:
+                normalized.append(cls._normalize_action_cohort_hold(result))
+            elif operation.barrier.subject.kind == "process":
+                normalized.append(cls._normalize_action_cohort_process_snapshot(result))
+            else:
+                normalized.append(cls._normalize_action_cohort_session_snapshot(result))
+        return tuple(normalized)
+
+    @staticmethod
+    def _action_cohort_result_matches_operation(
+        operation: LifecycleActionCohortOperation,
+        result: object,
+    ) -> bool:
+        if type(operation) is LifecycleSessionStartRequest:
+            return type(result) is SessionLifecycleSnapshot and (
+                result.identity == operation.identity
+            )
+        if type(operation) is LifecycleProcessStartRequest:
+            return (
+                type(result) is ProcessLifecycleSnapshot and result.identity == operation.identity
+            )
+        if type(operation) is LifecycleTransition:
+            return type(result) is LifecycleTransition and result == operation
+        if type(operation) is LifecycleHold:
+            return type(result) is LifecycleHold and result == operation
+        assert type(operation) is LifecycleSubjectClosureControl
+        if operation.barrier.subject.kind == "process":
+            if type(result) is not ProcessLifecycleSnapshot:
+                return False
+        elif type(result) is not SessionLifecycleSnapshot:
+            return False
+        return (
+            result.identity.ref == operation.barrier.subject
+            and result.close_barrier == operation.barrier
+            and result.closure_ticket is not None
+            and result.closure_ticket.ticket_id == operation.ticket_id
+            and result.closed_at == result.closure_ticket.effective_at
+        )
+
+    @classmethod
+    def _action_cohort_results_match_request(
+        cls,
+        request: LifecycleActionCohortRequest,
+        results: tuple[LifecycleActionCohortOperationResult, ...],
+    ) -> bool:
+        return len(request.operations) == len(results) and all(
+            cls._action_cohort_result_matches_operation(operation, result)
+            for operation, result in zip(request.operations, results, strict=True)
+        )
+
+    @staticmethod
+    def _action_cohort_committed_digest(
+        request_preimage: bytes,
+        results: tuple[LifecycleActionCohortOperationResult, ...],
+    ) -> str:
+        digest = sha256(request_preimage)
+        digest.update(b"\0lifecycle-action-cohort-results\0")
+        digest.update(repr(results).encode("utf-8"))
+        return digest.hexdigest()
+
+    def authenticates_action_cohort_receipt(
+        self,
+        receipt: object,
+        *,
+        request: LifecycleActionCohortRequest | None = None,
+        state_publication_token: str | None = None,
+    ) -> bool:
+        """Totally authenticate one committed cohort receipt and optional bindings."""
+
+        if type(receipt) is not LifecycleActionCohortReceipt:
+            return False
+        if state_publication_token is not None and type(state_publication_token) is not str:
+            return False
+        try:
+            if (
+                type(receipt.registry_id) is not str
+                or receipt.registry_id != self._action_cohort_registry_id
+            ):
+                return False
+            if type(receipt.request) is not LifecycleActionCohortRequest:
+                return False
+            if (
+                type(receipt.plan_digest) is not str
+                or type(receipt.committed_digest) is not str
+                or type(receipt._integrity) is not str
+            ):
+                return False
+            normalized_receipt_request = self._normalize_action_cohort_request(receipt.request)
+            normalized_expected_request = (
+                None if request is None else self._normalize_action_cohort_request(request)
+            )
+            if (
+                normalized_expected_request is not None
+                and normalized_receipt_request != normalized_expected_request
+            ):
+                return False
+            if (
+                state_publication_token is not None
+                and normalized_receipt_request.state_publication_token != state_publication_token
+            ):
+                return False
+            normalized_results = self._normalize_action_cohort_results(
+                normalized_receipt_request,
+                receipt.operation_results,
+            )
+            if not self._action_cohort_results_match_request(
+                normalized_receipt_request,
+                normalized_results,
+            ):
+                return False
+            request_preimage = self._action_cohort_request_preimage(normalized_receipt_request)
+            plan_digest = sha256(request_preimage).hexdigest()
+            committed_digest = self._action_cohort_committed_digest(
+                request_preimage,
+                normalized_results,
+            )
+            if receipt.plan_digest != plan_digest or receipt.committed_digest != committed_digest:
+                return False
+            expected = self._action_cohort_receipt_integrity(
+                plan_digest=plan_digest,
+                committed_digest=committed_digest,
+            )
+            return hmac.compare_digest(receipt._integrity, expected)
+        except (
+            AssertionError,
+            AttributeError,
+            RecursionError,
+            TypeError,
+            ValueError,
+        ):
+            return False
+
+    def _commit_action_cohort_closure_locked(
+        self,
+        prepared: _PreparedActionCohortOperation,
+    ) -> ProcessLifecycleSnapshot | SessionLifecycleSnapshotView:
+        """Publish one prevalidated process/session barrier, ticket, and close."""
+
+        operation = prepared.operation
+        assert type(operation) is LifecycleSubjectClosureControl
+        effective_at = prepared.effective_at
+        assert effective_at is not None
+        partition = self._partitions[prepared.partition_id]
+        expected = self._expected_subject_closure_transitions(operation, effective_at)
+        ticket = partition.request_close(
+            operation.barrier,
+            ticket_id=operation.ticket_id,
+        )
+        if ticket != expected[0]:
+            raise StateError("Prepared action-cohort closure ticket changed during commit")
+        self._routes.invalidate_subject_snapshot_locked(operation.barrier.subject)
+        self._routes.set_locked("barrier", operation.barrier.barrier_id, operation.barrier)
+        self._routes.set_locked("ticket", operation.ticket_id, ticket)
+        self._routes.set_locked("transition", expected[1].transition_id, expected[1])
+        self._routes.set_locked("transition", expected[2].transition_id, expected[2])
+        snapshot = partition.close(operation.ticket_id)
+        if not isinstance(snapshot, (ProcessLifecycleSnapshot, SessionLifecycleSnapshot)):
+            raise StateError("Prepared action-cohort close returned an incompatible lifecycle")
+        self._routes.set_locked("transition", expected[3].transition_id, expected[3])
+        self._promote_session_route_locked(
+            operation.barrier.subject,
+            prepared.partition_id,
+        )
+        return snapshot
+
+    def _action_cohort_result_locked(
+        self,
+        prepared: _PreparedActionCohortOperation,
+    ) -> LifecycleActionCohortOperationResult:
+        """Resolve one final immutable result aligned with the author operation."""
+
+        operation = prepared.operation
+        partition = self._partitions[prepared.partition_id]
+        if type(operation) in {
+            LifecycleSessionStartRequest,
+            LifecycleProcessStartRequest,
+            LifecycleSubjectClosureControl,
+        }:
+            subject = self._action_cohort_operation_subject(operation)
+            if subject.kind == "process":
+                snapshot = partition.get_process(subject.object_id)
+            else:
+                snapshot = partition.get_session(subject.object_id)
+            if snapshot is None:
+                raise StateError("Committed lifecycle action cohort lost a subject snapshot")
+            if type(snapshot) is _PackedSessionSnapshot:
+                snapshot = snapshot._materialized()
+            return snapshot
+        if type(operation) is LifecycleTransition:
+            return operation
+        assert type(operation) is LifecycleHold
+        return operation
+
+    def _commit_action_cohort_primitives_locked(
+        self,
+        plan: _PreparedActionCohortCommitPlan,
+    ) -> LifecycleActionCohortReceipt:
+        """Apply only primitive writes covered by the claimed cohort admission."""
+
+        if plan.already_present:
+            if plan.retry_receipt is None:
+                raise AssertionError("Exact lifecycle action-cohort retry lost its receipt")
+            return deepcopy(plan.retry_receipt)
+
+        for prepared in plan.operations:
+            operation = prepared.operation
+            partition = self._partitions[prepared.partition_id]
+            if type(operation) is LifecycleSessionStartRequest:
+                assert prepared.session_start is not None
+                PreparedSessionRegistration(
+                    _registry=self,
+                    _partition_id=prepared.partition_id,
+                    _prepared=prepared.session_start,
+                    _prior_session_route=prepared.prior_session_route,
+                ).commit()
+            elif type(operation) is LifecycleProcessStartRequest:
+                assert prepared.process_start is not None
+                PreparedProcessRegistration(
+                    _registry=self,
+                    _partition_id=prepared.partition_id,
+                    _prepared=prepared.process_start,
+                    _membership=operation.membership,
+                ).commit()
+            elif type(operation) is LifecycleTransition:
+                self._routes.invalidate_subject_snapshot_locked(operation.subject)
+                result = partition.record_dependent(
+                    operation.subject,
+                    transition_id=operation.transition_id,
+                    canonical_time=operation.canonical_time,
+                    action_id=operation.action_id,
+                    reason=operation.reason,
+                    transition_ordinal=operation.transition_ordinal,
+                )
+                self._routes.set_locked("transition", operation.transition_id, result)
+                self._promote_session_route_locked(
+                    operation.subject,
+                    prepared.partition_id,
+                )
+            elif type(operation) is LifecycleHold:
+                transition = LifecycleTransition(
+                    transition_id=f"{operation.hold_id}:acquired",
+                    subject=operation.subject,
+                    kind="hold_acquired",
+                    canonical_time=operation.acquired_at,
+                    action_id=operation.action_id,
+                    reason=operation.reason,
+                    transition_ordinal=operation.transition_ordinal,
+                )
+                self._routes.invalidate_subject_snapshot_locked(operation.subject)
+                result = partition.add_hold(operation)
+                self._routes.set_locked("hold", operation.hold_id, result)
+                self._routes.set_locked("transition", transition.transition_id, transition)
+                self._promote_session_route_locked(
+                    operation.subject,
+                    prepared.partition_id,
+                )
+            else:
+                self._commit_action_cohort_closure_locked(prepared)
+
+        results = self._normalize_action_cohort_results(
+            plan.token.request,
+            tuple(self._action_cohort_result_locked(item) for item in plan.operations),
+        )
+        request = plan.token.request
+        committed_digest = self._action_cohort_committed_digest(
+            plan.receipt_request_preimage,
+            results,
+        )
+        return LifecycleActionCohortReceipt(
+            request=request,
+            operation_results=results,
+            registry_id=self._action_cohort_registry_id,
+            plan_digest=plan.token.plan_digest,
+            committed_digest=committed_digest,
+            _integrity=self._action_cohort_receipt_integrity(
+                plan_digest=plan.token.plan_digest,
+                committed_digest=committed_digest,
+            ),
+        )
+
+    def _commit_claimed_action_cohort(
+        self,
+        token: LifecycleActionCohortAdmissionToken,
+    ) -> LifecycleActionCohortReceipt:
+        """Commit one claimed cohort under sorted locks and consume it once."""
+
+        with self._gate.mutation():
+            with self._closed_transport_preparation_lock:
+                reservation = self._active_action_cohort_reservation_locked(token)
+                canonical_token = reservation.canonical_token
+                if not reservation.claimed or reservation.commit_plan is None:
+                    raise StateError("Lifecycle action-cohort token is not claimed")
+                if reservation.claim_thread_id != get_ident():
+                    raise StateError("Lifecycle action cohort must commit on its claiming thread")
+                if reservation.committing:
+                    raise StateError("Lifecycle action cohort is already committing")
+                if self._watermark != canonical_token.expected_watermark:
+                    raise StateError(
+                        "Lifecycle action-cohort admission is stale after watermark advance"
+                    )
+                commit_plan = reservation.commit_plan
+                validated_token = self._validate_action_cohort_token(token)
+                if not self._action_cohort_token_matches_canonical(
+                    validated_token,
+                    canonical_token,
+                ):
+                    raise StateError("Lifecycle action-cohort token was mutated after preparation")
+                reservation.committing = True
+                self._action_cohort_committing_reservations += 1
+            route_keys = self._action_cohort_route_keys(canonical_token.request)
+            with self._routes.locked(route_keys):
+                with self._locked_partition_ids(reservation.partition_ids):
+                    receipt = self._commit_action_cohort_primitives_locked(commit_plan)
+            with self._closed_transport_preparation_lock:
+                active = self._action_cohort_reservations.get(canonical_token.preparation_id)
+                if active is not reservation:
+                    raise StateError("Lifecycle action-cohort token was consumed during commit")
+                if reservation.provenance_new:
+                    self._record_action_cohort_provenance_locked(reservation, receipt)
+                self._release_action_cohort_reservation_locked(
+                    reservation,
+                    allow_committing=True,
+                )
+            return receipt
 
     def prepare_closed_transport_publication(
         self,
@@ -12724,6 +15560,15 @@ class LifecycleRegistry:
                         "Lifecycle watermark cannot move while a claimed service operation "
                         "fences the prior watermark"
                     )
+                if any(
+                    reservation.claimed
+                    and canonical_cutoff != reservation.canonical_token.expected_watermark
+                    for reservation in self._action_cohort_reservations.values()
+                ):
+                    raise StateError(
+                        "Lifecycle watermark cannot move while a claimed action cohort "
+                        "fences the prior watermark"
+                    )
             if self._watermark is not None and canonical_cutoff < self._watermark:
                 raise StateError(
                     f"Lifecycle watermark cannot move backward: "
@@ -12740,6 +15585,8 @@ class LifecycleRegistry:
             if self._ledger_floor is None or ledger_floor > self._ledger_floor:
                 self._ledger_floor = ledger_floor
             self._watermark = canonical_cutoff
+            with self._closed_transport_preparation_lock:
+                self._prune_action_cohort_reservations_locked()
             evicted.sort(key=lambda subject: (subject.kind, subject.object_id))
             return tuple(evicted)
 
