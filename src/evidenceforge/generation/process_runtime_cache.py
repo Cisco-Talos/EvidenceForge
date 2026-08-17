@@ -14,6 +14,7 @@ from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from threading import RLock
 from typing import Generic, TypeVar, cast
 
 from evidenceforge.generation.indexes import (
@@ -28,6 +29,16 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")
+
+_COMPACT_STORE_GET = CompactIndexedStore.__getitem__
+_COMPACT_STORE_SET = CompactIndexedStore.__setitem__
+_COMPACT_STORE_DELETE = CompactIndexedStore.__delitem__
+_COMPACT_STORE_HANDLE = CompactIndexedStore.handle_for
+_COMPACT_STORE_COMPACT = CompactIndexedStore.compact_primary
+_PACKED_DEADLINE_GET = PackedHandleExpiryIndex.get
+_PACKED_DEADLINE_SET = PackedHandleExpiryIndex.set
+_PACKED_DEADLINE_POP = PackedHandleExpiryIndex.pop
+_PACKED_DEADLINE_COMPACT = PackedHandleExpiryIndex.compact
 
 
 @dataclass(frozen=True, slots=True)
@@ -661,6 +672,8 @@ class BoundedRuntimeCache(Generic[K, V]):
     keys or bounded expiry pages.
     """
 
+    _FAILURE_REPAIR_COMPACTION_LIMIT = 4_096
+
     def __init__(self, *, default_deadline: Callable[[V], datetime | float | int]) -> None:
         self._default_deadline = default_deadline
         self._records: CompactIndexedStore[K, _RuntimeCacheRecord[V]] = CompactIndexedStore()
@@ -670,14 +683,17 @@ class BoundedRuntimeCache(Generic[K, V]):
         self._expiry_work = 0
         self._high_water_entries = 0
         self._estimated_payload_bytes = 0
+        self._lock = RLock()
 
     def __len__(self) -> int:
         """Return physically retained entries in constant time."""
 
-        return len(self._records)
+        with self._lock:
+            return len(self._records)
 
     def __bool__(self) -> bool:
-        return bool(self._records)
+        with self._lock:
+            return bool(self._records)
 
     def __contains__(self, key: object) -> bool:
         return self.get(key) is not None  # type: ignore[arg-type]
@@ -696,25 +712,82 @@ class BoundedRuntimeCache(Generic[K, V]):
         return watermark is None or record.deadline_seconds >= watermark
 
     def _record(self, key: K) -> _RuntimeCacheRecord[V] | None:
-        try:
-            return self._records[key]
-        except KeyError:
-            return None
+        with self._lock:
+            try:
+                return self._records[key]
+            except KeyError:
+                return None
 
     def get(self, key: K, default: V | None = None) -> V | None:
         """Return one exact visible entry and account one candidate at most."""
 
-        record = self._record(key)
-        if record is None:
-            return default
-        self._lookup_candidates_inspected += 1
-        return record.value if self._visible(record) else default
+        with self._lock:
+            record = self._record(key)
+            if record is None:
+                return default
+            self._lookup_candidates_inspected += 1
+            return record.value if self._visible(record) else default
 
     def raw_get(self, key: K, default: V | None = None) -> V | None:
         """Return one physically retained entry for exact expiry bookkeeping."""
 
-        record = self._record(key)
-        return default if record is None else record.value
+        with self._lock:
+            record = self._record(key)
+            return default if record is None else record.value
+
+    def _restore_failed_set_locked(
+        self,
+        key: K,
+        record: _RuntimeCacheRecord[V],
+        *,
+        prior: _RuntimeCacheRecord[V] | None,
+        prior_handle: int | None,
+        prior_deadline: float | None,
+        prior_payload_bytes: int,
+        prior_high_water_entries: int,
+    ) -> None:
+        """Restore one failed record/deadline install to its exact logical preimage."""
+
+        try:
+            current = _COMPACT_STORE_GET(self._records, key)
+        except KeyError:
+            current = None
+        try:
+            current_handle = _COMPACT_STORE_HANDLE(self._records, key)
+        except KeyError:
+            current_handle = None
+
+        deadline_changed = False
+        if prior is None:
+            if current_handle is not None:
+                if _PACKED_DEADLINE_GET(self._deadlines, current_handle) is not None:
+                    _PACKED_DEADLINE_POP(self._deadlines, current_handle)
+                    deadline_changed = True
+                if current is record:
+                    _COMPACT_STORE_DELETE(self._records, key)
+        else:
+            if prior_handle is None or prior_deadline is None:
+                raise AssertionError("Runtime cache prior record has no deadline owner")
+            current_deadline = _PACKED_DEADLINE_GET(self._deadlines, prior_handle)
+            if current_deadline != prior_deadline:
+                _PACKED_DEADLINE_SET(self._deadlines, prior_handle, prior_deadline)
+                deadline_changed = True
+            if current is not prior:
+                _COMPACT_STORE_SET(self._records, key, prior)
+
+        self._estimated_payload_bytes = prior_payload_bytes
+        self._high_water_entries = prior_high_water_entries
+        if deadline_changed:
+            _PACKED_DEADLINE_COMPACT(
+                self._deadlines,
+                max_slots=self._FAILURE_REPAIR_COMPACTION_LIMIT,
+                force=True,
+            )
+        _COMPACT_STORE_COMPACT(
+            self._records,
+            max_slots=self._FAILURE_REPAIR_COMPACTION_LIMIT,
+        )
+        self._reset_empty_backing()
 
     def set(
         self,
@@ -726,39 +799,69 @@ class BoundedRuntimeCache(Generic[K, V]):
         """Insert or replace one exact entry and versioned expiry deadline."""
 
         deadline_value = deadline_seconds(deadline)
+        expected_deadline_us = PackedHandleExpiryIndex._to_microseconds(deadline_value)
+        if expected_deadline_us >= 1 << 63:
+            raise ValueError("Runtime cache deadline is outside int64 range")
+        expected_deadline = PackedHandleExpiryIndex._to_seconds(expected_deadline_us)
         retained_bytes = _retained_size((key, value))
         record = _RuntimeCacheRecord(value, deadline_value, retained_bytes)
-        prior = self._record(key)
-        self._records[key] = record
-        handle = self._records.handle_for(key)
-        self._deadlines.set(handle, deadline_value)
-        if prior is None:
+        with self._lock:
+            prior = self._record(key)
+            prior_handle = self._records.handle_for(key) if prior is not None else None
+            prior_deadline = self._deadlines.get(prior_handle) if prior_handle is not None else None
+            if prior is not None and prior_deadline is None:
+                raise AssertionError("Runtime cache record has no synchronized deadline")
+            prior_payload_bytes = self._estimated_payload_bytes
+            prior_high_water_entries = self._high_water_entries
+            try:
+                self._records[key] = record
+                handle = self._records.handle_for(key)
+                self._deadlines.set(handle, deadline_value)
+                installed = self._record(key)
+                installed_deadline = self._deadlines.get(handle)
+                if installed is not record or installed_deadline != expected_deadline:
+                    raise RuntimeError("Runtime cache owner install did not reach both indexes")
+            except BaseException:
+                self._restore_failed_set_locked(
+                    key,
+                    record,
+                    prior=prior,
+                    prior_handle=prior_handle,
+                    prior_deadline=prior_deadline,
+                    prior_payload_bytes=prior_payload_bytes,
+                    prior_high_water_entries=prior_high_water_entries,
+                )
+                raise
+            self._estimated_payload_bytes = (
+                prior_payload_bytes
+                - (0 if prior is None else prior.retained_bytes)
+                + retained_bytes
+            )
             self._high_water_entries = max(self._high_water_entries, len(self._records))
-        else:
-            self._estimated_payload_bytes -= prior.retained_bytes
-        self._estimated_payload_bytes += retained_bytes
 
     def redeadline(self, key: K, *, deadline: datetime | float | int) -> bool:
         """Move one exact retained entry to a new deadline without a scan."""
 
-        record = self._record(key)
-        if record is None:
-            return False
-        self.set(key, record.value, deadline=deadline)
-        return True
+        with self._lock:
+            record = self._record(key)
+            if record is None:
+                return False
+            self.set(key, record.value, deadline=deadline)
+            return True
 
     def pop(self, key: K, default: V | None = None) -> V | None:
         """Remove one exact entry."""
 
-        record = self._record(key)
-        if record is None:
-            return default
-        handle = self._records.handle_for(key)
-        self._deadlines.pop(handle)
-        del self._records[key]
-        self._estimated_payload_bytes -= record.retained_bytes
-        self._reset_empty_backing()
-        return record.value
+        with self._lock:
+            record = self._record(key)
+            if record is None:
+                return default
+            handle = self._records.handle_for(key)
+            self._deadlines.pop(handle)
+            del self._records[key]
+            self._estimated_payload_bytes -= record.retained_bytes
+            self._reset_empty_backing()
+            return record.value
 
     def _reset_empty_backing(self) -> None:
         if self._records:
@@ -775,88 +878,95 @@ class BoundedRuntimeCache(Generic[K, V]):
     ) -> tuple[tuple[K, V], ...]:
         """Advance logical visibility and reclaim at most one bounded page."""
 
-        if limit <= 0:
-            raise ValueError("Runtime cache watermark page limit must be positive")
-        cutoff_seconds = deadline_seconds(cutoff)
-        if self._watermark_seconds is not None and cutoff_seconds < self._watermark_seconds:
-            raise ValueError("Runtime cache watermark cannot move backward")
-        self._watermark_seconds = cutoff_seconds
-        expired_handles = self._deadlines.expire_before_page(
-            cutoff_seconds,
-            inclusive=False,
-            limit=limit,
-        )
-        expired: list[tuple[K, V]] = []
-        for handle, _deadline in expired_handles:
-            try:
-                key = self._records.key_by_handle(handle)
-                record = self._records.get_by_handle(handle)
-            except KeyError:  # pragma: no cover - synchronized handle/deadline invariant
-                continue
-            del self._records[key]
-            self._estimated_payload_bytes -= record.retained_bytes
-            expired.append((key, record.value))
-        self._expiry_work += len(expired)
-        self._deadlines.compact(max_slots=limit)
-        self._records.compact_primary(max_slots=limit)
-        self._reset_empty_backing()
-        return tuple(expired)
+        with self._lock:
+            if limit <= 0:
+                raise ValueError("Runtime cache watermark page limit must be positive")
+            cutoff_seconds = deadline_seconds(cutoff)
+            if self._watermark_seconds is not None and cutoff_seconds < self._watermark_seconds:
+                raise ValueError("Runtime cache watermark cannot move backward")
+            self._watermark_seconds = cutoff_seconds
+            expired_handles = self._deadlines.expire_before_page(
+                cutoff_seconds,
+                inclusive=False,
+                limit=limit,
+            )
+            expired: list[tuple[K, V]] = []
+            for handle, _deadline in expired_handles:
+                try:
+                    key = self._records.key_by_handle(handle)
+                    record = self._records.get_by_handle(handle)
+                except KeyError:  # pragma: no cover - synchronized handle/deadline invariant
+                    continue
+                del self._records[key]
+                self._estimated_payload_bytes -= record.retained_bytes
+                expired.append((key, record.value))
+            self._expiry_work += len(expired)
+            self._deadlines.compact(max_slots=limit)
+            self._records.compact_primary(max_slots=limit)
+            self._reset_empty_backing()
+            return tuple(expired)
 
     def metrics(self, *, estimate_bytes: bool = False) -> IndexMetrics:
         """Return structural index metrics without iterating retained entries."""
 
-        records = self._records.metrics(estimate_bytes=estimate_bytes)
-        deadlines = self._deadlines.metrics(estimate_bytes=estimate_bytes)
-        return IndexMetrics(
-            live_entries=len(self._records),
-            backing_entries=deadlines.backing_entries,
-            stale_entries=deadlines.stale_entries,
-            allocated_slots=records.allocated_slots,
-            high_water_mark=self._high_water_entries,
-            lookup_candidates_inspected=self._lookup_candidates_inspected,
-            compaction_work=deadlines.compaction_work,
-            compaction_seconds=deadlines.compaction_seconds,
-            compaction_pending=deadlines.compaction_pending,
-            estimated_bytes=records.estimated_bytes + deadlines.estimated_bytes,
-            primary_map_entries=records.primary_map_entries,
-            primary_map_backing_bytes=records.primary_map_backing_bytes,
-            primary_compaction_pending=records.primary_compaction_pending,
-            primary_compaction_rotations=records.primary_compaction_rotations,
-            primary_compaction_work=records.primary_compaction_work,
-            primary_compaction_seconds=records.primary_compaction_seconds,
-        )
+        with self._lock:
+            records = self._records.metrics(estimate_bytes=estimate_bytes)
+            deadlines = self._deadlines.metrics(estimate_bytes=estimate_bytes)
+            return IndexMetrics(
+                live_entries=len(self._records),
+                backing_entries=deadlines.backing_entries,
+                stale_entries=deadlines.stale_entries,
+                allocated_slots=records.allocated_slots,
+                high_water_mark=self._high_water_entries,
+                lookup_candidates_inspected=self._lookup_candidates_inspected,
+                compaction_work=deadlines.compaction_work,
+                compaction_seconds=deadlines.compaction_seconds,
+                compaction_pending=deadlines.compaction_pending,
+                estimated_bytes=records.estimated_bytes + deadlines.estimated_bytes,
+                primary_map_entries=records.primary_map_entries,
+                primary_map_backing_bytes=records.primary_map_backing_bytes,
+                primary_compaction_pending=records.primary_compaction_pending,
+                primary_compaction_rotations=records.primary_compaction_rotations,
+                primary_compaction_work=records.primary_compaction_work,
+                primary_compaction_seconds=records.primary_compaction_seconds,
+            )
 
     @property
     def lookup_candidates_inspected(self) -> int:
         """Return cumulative exact lookup candidates."""
 
-        return self._lookup_candidates_inspected
+        with self._lock:
+            return self._lookup_candidates_inspected
 
     @property
     def watermark_seconds(self) -> float | None:
         """Return the current logical watermark without scanning retained entries."""
 
-        return self._watermark_seconds
+        with self._lock:
+            return self._watermark_seconds
 
     @property
     def expiry_work(self) -> int:
         """Return cumulative physically reclaimed entries."""
 
-        return self._expiry_work
+        with self._lock:
+            return self._expiry_work
 
     @property
     def estimated_payload_bytes(self) -> int:
         """Return mutation-maintained retained key/value bytes."""
 
-        return self._estimated_payload_bytes
+        with self._lock:
+            return self._estimated_payload_bytes
 
     @property
     def watermark(self) -> datetime | None:
         """Return the current logical watermark."""
 
-        if self._watermark_seconds is None:
-            return None
-        return _EPOCH + (datetime.fromtimestamp(self._watermark_seconds, tz=UTC) - _EPOCH)
+        with self._lock:
+            if self._watermark_seconds is None:
+                return None
+            return _EPOCH + (datetime.fromtimestamp(self._watermark_seconds, tz=UTC) - _EPOCH)
 
 
 @dataclass(frozen=True, slots=True)
