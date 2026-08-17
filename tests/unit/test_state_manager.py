@@ -22,7 +22,8 @@
 
 """Unit tests for StateManager."""
 
-from dataclasses import FrozenInstanceError
+import random
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 
@@ -32,6 +33,11 @@ from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.network import (
+    DirectionalTrafficLedger,
+    NetworkTrafficLedger,
+    NetworkTransactionPlan,
+)
 from evidenceforge.generation import state_manager as state_manager_module
 from evidenceforge.generation.indexes import TemporalAllocationIndex
 from evidenceforge.generation.state_manager import StateManager
@@ -51,12 +57,304 @@ class TestStateManagerInit:
         assert len(sm.state.dns_cache) == 0
         assert sm.state.current_time is None
 
+
+def test_session_materialization_plan_rejects_identity_and_allocator_tampering() -> None:
+    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+    mutations = (
+        lambda plan: object.__setattr__(
+            plan,
+            "_identity",
+            replace(plan.identity, logon_id="0xdead"),
+        ),
+        lambda plan: object.__setattr__(
+            plan,
+            "_identity",
+            replace(plan.identity, started_at=start + timedelta(seconds=1)),
+        ),
+        lambda plan: object.__setattr__(
+            plan,
+            "_allocator_patch",
+            replace(plan._allocator_patch, used_logon_id=0xDEAD),
+        ),
+        lambda plan: object.__setattr__(
+            plan,
+            "_payload",
+            replace(plan._payload, state_time=start + timedelta(seconds=1)),
+        ),
+    )
+
+    for mutate in mutations:
+        manager = StateManager()
+        manager.set_current_time(start)
+        plan = manager.plan_session_materialization(
+            username="analyst",
+            system="WS-01",
+            logon_type=2,
+            source_ip="10.0.0.5",
+        )
+        mutate(plan)
+        digest = manager.materialization_digest()
+
+        with pytest.raises(StateError, match="integrity validation failed"):
+            with manager.materialization_guard(plan):
+                manager.materialize_session(plan)
+
+        assert manager.materialization_digest() == digest
+        assert not manager.state.active_sessions
+        assert not manager._used_logon_ids
+        assert manager._materialization_version == 0
+
+
+def test_process_materialization_plan_rejects_process_thread_and_allocator_tampering() -> None:
+    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+
+    def _thread_tamper(plan):
+        thread = plan.identity.primary_thread
+        assert thread is not None
+        object.__setattr__(
+            plan,
+            "_identity",
+            replace(plan.identity, primary_thread=replace(thread, tid=thread.tid + 4)),
+        )
+
+    def _pid_tamper(plan):
+        thread = plan.identity.primary_thread
+        assert thread is not None
+        object.__setattr__(
+            plan,
+            "_identity",
+            replace(plan.identity, pid=9999, primary_thread=replace(thread, pid=9999)),
+        )
+
+    mutations = (
+        _pid_tamper,
+        lambda plan: object.__setattr__(
+            plan,
+            "_identity",
+            replace(plan.identity, parent_pid=4321),
+        ),
+        lambda plan: object.__setattr__(
+            plan,
+            "_identity",
+            replace(plan.identity, image=r"C:\tampered.exe"),
+        ),
+        lambda plan: object.__setattr__(
+            plan,
+            "_identity",
+            replace(plan.identity, started_at=start + timedelta(seconds=1)),
+        ),
+        _thread_tamper,
+        lambda plan: object.__setattr__(
+            plan,
+            "_allocator_patch",
+            replace(plan._allocator_patch, pid_allocation_count_delta=99),
+        ),
+        lambda plan: object.__setattr__(
+            plan,
+            "_payload",
+            replace(plan._payload, parent_activity_time=start + timedelta(seconds=1)),
+        ),
+    )
+
+    for mutate in mutations:
+        manager = StateManager()
+        manager.set_current_time(start)
+        plan = manager.plan_process_materialization(
+            system="WS-01",
+            parent_pid=0,
+            image=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe",
+            username="analyst",
+            integrity_level="Medium",
+            os_category="windows",
+        )
+        mutate(plan)
+        digest = manager.materialization_digest()
+
+        with pytest.raises(StateError, match="integrity validation failed"):
+            with manager.materialization_guard(plan):
+                manager.materialize_process(plan)
+
+        assert manager.materialization_digest() == digest
+        assert not manager.state.running_processes
+        assert not manager.state.running_threads
+        assert manager._materialization_version == 0
+
+
+def test_materialization_plans_reject_public_same_field_checksum_forgery() -> None:
+    """Only the issuing StateManager can authenticate an otherwise exact plan."""
+
+    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+    manager = StateManager()
+    manager.set_current_time(start)
+    session_plan = manager.plan_session_materialization(
+        username="analyst",
+        system="WS-01",
+        logon_type=2,
+        source_ip="10.0.0.5",
+    )
+    forged_session = replace(
+        session_plan,
+        _integrity_token=state_manager_module.hashlib.sha256(
+            repr(
+                (
+                    "session",
+                    session_plan._expected_version,
+                    session_plan._identity,
+                    session_plan._payload,
+                    session_plan._allocator_patch,
+                )
+            ).encode()
+        ).hexdigest(),
+    )
+    process_plan = manager.plan_process_materialization(
+        system="WS-01",
+        parent_pid=0,
+        image=r"C:\Windows\System32\cmd.exe",
+        command_line="cmd.exe",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="windows",
+    )
+    forged_process = replace(
+        process_plan,
+        _integrity_token=state_manager_module.hashlib.sha256(
+            repr(
+                (
+                    "process",
+                    process_plan._expected_version,
+                    process_plan._identity,
+                    process_plan._payload,
+                    process_plan._allocator_patch,
+                )
+            ).encode()
+        ).hexdigest(),
+    )
+    digest = manager.materialization_digest()
+
+    with pytest.raises(StateError, match="integrity validation failed"):
+        manager.materialize_session(forged_session)
+    with pytest.raises(StateError, match="integrity validation failed"):
+        manager.materialize_process(forged_process)
+
+    assert manager.materialization_digest() == digest
+
+
+def test_standalone_luid_and_transient_pid_allocations_fence_prepared_plans() -> None:
+    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+    manager = StateManager()
+    manager.set_current_time(start)
+    session_plan = manager.plan_session_materialization(
+        username="analyst",
+        system="LNX-01",
+        logon_type=2,
+        source_ip="-",
+        start_time=start,
+    )
+
+    manager.allocate_logon_id("LNX-01", start)
+
+    with pytest.raises(StateError, match="plan is stale"):
+        with manager.materialization_guard(session_plan):
+            manager.materialize_session(session_plan)
+
+    process_plan = manager.plan_process_materialization(
+        system="LNX-01",
+        parent_pid=0,
+        image="/bin/bash",
+        command_line="/bin/bash -l",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="linux",
+        start_time=start,
+    )
+    manager.allocate_transient_linux_pid("LNX-01", start + timedelta(seconds=1))
+
+    with pytest.raises(StateError, match="plan is stale"):
+        with manager.materialization_guard(process_plan):
+            manager.materialize_process(process_plan)
+
+
+def test_boot_epoch_and_explicit_thread_allocation_fence_prepared_process_plan() -> None:
+    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+    manager = StateManager()
+    manager.set_current_time(start)
+    boot_sensitive = manager.plan_process_materialization(
+        system="LNX-01",
+        parent_pid=0,
+        image="/sbin/init",
+        command_line="/sbin/init",
+        username="root",
+        integrity_level="System",
+        os_category="linux",
+        start_time=start,
+    )
+
+    manager.register_boot_time("LNX-01", start - timedelta(hours=1))
+
+    with pytest.raises(StateError, match="plan is stale"):
+        with manager.materialization_guard(boot_sensitive):
+            manager.materialize_process(boot_sensitive)
+
+    owner_plan = manager.plan_process_materialization(
+        system="LNX-01",
+        parent_pid=0,
+        image="/bin/bash",
+        command_line="/bin/bash -l",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="linux",
+        start_time=start,
+    )
+    owner = manager.materialize_process(owner_plan)
+    stale = manager.plan_process_materialization(
+        system="LNX-01",
+        parent_pid=owner.pid,
+        image="/usr/bin/id",
+        command_line="id",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="linux",
+        start_time=start + timedelta(seconds=1),
+    )
+    manager.create_thread(
+        "LNX-01",
+        owner.ecar_object_id,
+        kind="worker",
+        start_time=start + timedelta(milliseconds=500),
+    )
+
+    with pytest.raises(StateError, match="plan is stale"):
+        with manager.materialization_guard(stale):
+            manager.materialize_process(stale)
+
     def test_init_sets_counters(self):
         """Test that counters are initialized correctly."""
         sm = StateManager()
         assert sm._connection_id_counter == 0
         assert len(sm._pid_counters) == 0
         assert len(sm._used_logon_ids) == 0
+
+    def test_channel_state_is_not_duplicated_in_legacy_manager(self):
+        """Protocol channel state belongs only to the shared application registry."""
+
+        sm = StateManager()
+
+        for attribute in (
+            "_smb_sessions",
+            "_smb_session_affinity",
+            "_smb_trees",
+            "_smb_tree_by_session_share",
+            "_smb_handles",
+            "open_smb_session",
+            "get_or_open_smb_tree",
+            "open_smb_handle",
+            "sweep_smb_state",
+        ):
+            assert not hasattr(sm, attribute)
+        assert "smb_sessions" not in sm.get_state_summary()
+        assert "smb_trees" not in sm.get_state_summary()
+        assert "smb_handles" not in sm.get_state_summary()
 
     def test_linux_logind_session_ids_follow_event_time(self):
         """Logind session IDs should sort with event time, not generation order."""
@@ -310,6 +608,31 @@ class TestStateManagerInit:
         with pytest.raises(StateError, match="Cannot replace authoritative"):
             sm.plan_session_end(logon_id, replacement)
         assert sm.get_session_end_plan(logon_id) == first
+
+    def test_action_bundle_end_plan_is_an_immutable_latest_deadline(self):
+        """An action-owned fence is immutable without becoming an exact authored end."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = sm.create_session(
+            username="alice",
+            system="WS-01",
+            logon_type=10,
+            source_ip="10.0.1.50",
+            start_time=start,
+            session_kind="rdp",
+        )
+        deadline = SessionEndPlan(start + timedelta(hours=8), "action_bundle")
+
+        assert deadline.is_hard_deadline
+        assert not deadline.is_authoritative
+        assert sm.plan_session_end(logon_id, deadline)
+        assert sm.plan_session_end(logon_id, deadline)
+        with pytest.raises(StateError, match="action-bundle session end plan"):
+            sm.plan_session_end(
+                logon_id,
+                SessionEndPlan(start + timedelta(hours=9), "action_bundle"),
+            )
+        assert sm.get_session_end_plan(logon_id) == deadline
 
     def test_linux_logind_session_collision_ids_avoid_elapsed_second_deltas(self):
         """Collision bumps should not recreate an exact session-time delta."""
@@ -933,99 +1256,6 @@ class TestSmbState:
         assert recreated.file_id != compiled.file_id
         assert recreated.version == 1
         assert sm.smb_file_is_available(compiled) is False
-
-    def test_session_affinity_reuses_then_expires_within_hard_bound(self):
-        sm = StateManager()
-        start = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
-        first = sm.open_smb_session(
-            client_ip="10.0.0.5",
-            principal="alice",
-            server="FS-01",
-            security_policy="standard",
-            logon_id="0x100",
-            transport_uid="C-first",
-            started_at=start,
-            reuse=True,
-        )
-        reused = sm.open_smb_session(
-            client_ip="10.0.0.5",
-            principal="alice",
-            server="FS-01",
-            security_policy="standard",
-            logon_id="0x100",
-            transport_uid="C-first",
-            started_at=start + timedelta(minutes=5),
-            reuse=True,
-        )
-        rebound = sm.open_smb_session(
-            client_ip="10.0.0.5",
-            principal="alice",
-            server="FS-01",
-            security_policy="standard",
-            logon_id="0x200",
-            transport_uid="C-second",
-            started_at=start + timedelta(minutes=6),
-            reuse=True,
-        )
-        tree = sm.get_or_open_smb_tree(
-            reused.session_id,
-            "FS-01.finance",
-            start + timedelta(minutes=5),
-        )
-
-        assert reused.session_id == first.session_id
-        assert rebound.session_id != first.session_id
-        assert sm.get_smb_tree(tree.tree_id) == tree
-
-        sm.sweep_smb_state(start + timedelta(hours=2))
-
-        assert sm.get_smb_tree(tree.tree_id) is None
-        assert sm.get_state_summary()["smb_sessions"] == 0
-
-    def test_samba_session_keeps_neutral_auth_identity_and_protocol_affinity(self):
-        """Samba state uses a neutral reference and never conflates distinct auth modes."""
-
-        sm = StateManager()
-        start = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
-        kerberos = sm.open_smb_session(
-            client_ip="10.0.0.5",
-            principal="alice",
-            server="SAMBA-01",
-            security_policy="standard",
-            logon_id="0x100",
-            transport_uid="C-kerberos",
-            started_at=start,
-            auth_session_ref="smb-auth-1",
-            auth_protocol="kerberos",
-            account_scope="directory",
-            effective_uid=2401,
-            effective_gid=2401,
-            client_access="cifs_mount",
-            reuse=True,
-        )
-        ntlm = sm.open_smb_session(
-            client_ip="10.0.0.5",
-            principal="alice",
-            server="SAMBA-01",
-            security_policy="standard",
-            logon_id="0x101",
-            transport_uid="C-ntlm",
-            started_at=start + timedelta(seconds=1),
-            auth_session_ref="smb-auth-2",
-            auth_protocol="ntlmssp",
-            account_scope="directory",
-            effective_uid=2401,
-            effective_gid=2401,
-            client_access="smbclient",
-            reuse=True,
-        )
-
-        assert kerberos.session_id != ntlm.session_id
-        assert kerberos.auth_session_ref == "smb-auth-1"
-        assert kerberos.auth_protocol == "kerberos"
-        assert (kerberos.effective_uid, kerberos.effective_gid) == (2401, 2401)
-        sm.close_smb_session(kerberos.session_id, start + timedelta(minutes=1))
-        assert sm.get_smb_session(kerberos.session_id).closed_at == start + timedelta(minutes=1)
 
 
 class TestSessionManagement:
@@ -2129,6 +2359,100 @@ class TestProcessManagement:
 
         procs = sm.list_running_processes()
         assert len(procs) == 2
+
+
+def _final_connection_transaction(
+    *,
+    conn_id: str,
+    zeek_uid: str,
+) -> NetworkTransactionPlan:
+    started_at = datetime(2026, 8, 16, 13, 0, tzinfo=UTC)
+    closed_at = started_at + timedelta(seconds=1.25)
+    return NetworkTransactionPlan(
+        stable_id="network-transaction-atomic",
+        hostname="WS-01",
+        outcome="success",
+        phase_times=(("transport_start", started_at), ("transport_close", closed_at)),
+        started_at=started_at,
+        closed_at=closed_at,
+        src_ip="10.0.0.10",
+        src_port=50_001,
+        dst_ip="10.0.0.20",
+        dst_port=443,
+        protocol="tcp",
+        service="https",
+        zeek_uid=zeek_uid,
+        conn_id=conn_id,
+        duration=1.25,
+        conn_state="SF",
+        history="ShADadFf",
+        traffic=NetworkTrafficLedger(
+            orig=DirectionalTrafficLedger(payload_bytes=120, packets=2, ip_bytes=200),
+            resp=DirectionalTrafficLedger(payload_bytes=480, packets=3, ip_bytes=600),
+        ),
+    )
+
+
+def test_connection_materialization_plan_cancel_commit_and_tamper_are_atomic() -> None:
+    """Final connection truth and both allocator streams publish exactly once."""
+
+    manager = StateManager()
+    rng = random.Random(42)
+    digest_before = manager.materialization_digest()
+    rng_before = rng.getstate()
+    identity = manager.plan_connection_identity(rng)
+    continuation = identity.continuation_rng()
+    continuation.random()  # representative protocol texture after UID allocation
+    transaction = _final_connection_transaction(
+        conn_id=identity.conn_id,
+        zeek_uid=identity.zeek_uid,
+    )
+    plan = manager.finalize_connection_materialization(
+        identity,
+        transaction,
+        continuation_rng=continuation,
+        source_system="WS-01",
+        source_hostname="ws-01.example.test",
+        hostname="example.test",
+        initiating_pid=4242,
+    )
+
+    assert manager.materialization_digest() == digest_before
+    assert rng.getstate() == rng_before
+    with manager.prepared_connection_materialization(plan, rng):
+        pass
+    assert manager.materialization_digest() == digest_before
+    assert rng.getstate() == rng_before
+
+    tampered = replace(
+        plan,
+        _payload=replace(
+            plan._payload,
+            transaction=replace(transaction, stable_id="tampered-transaction"),
+        ),
+    )
+    with pytest.raises(StateError, match="integrity validation failed"):
+        manager.materialize_connection(tampered, rng)
+    assert manager.materialization_digest() == digest_before
+    assert rng.getstate() == rng_before
+
+    with manager.prepared_connection_materialization(plan, rng) as prepared:
+        connection = prepared.commit()
+    assert connection is not None
+    assert connection.conn_id == identity.conn_id
+    assert connection.zeek_uid == identity.zeek_uid
+    assert connection.transaction_id == transaction.stable_id
+    assert connection.start_time == transaction.started_at
+    assert connection.close_time == transaction.closed_at
+    assert connection.traffic_ledger == transaction.traffic
+    assert connection.bytes_sent == transaction.orig_bytes
+    assert connection.bytes_received == transaction.resp_bytes
+    assert rng.getstate() == continuation.getstate()
+
+    committed_digest = manager.materialization_digest()
+    with pytest.raises(StateError, match="stale before commit"):
+        manager.materialize_connection(plan, rng)
+    assert manager.materialization_digest() == committed_digest
 
 
 class TestConnectionManagement:

@@ -27,16 +27,22 @@ log generation, ensuring consistency across log formats.
 """
 
 import hashlib
+import hmac
 import logging
 import random
+import secrets
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import datetime, timedelta
+from enum import Enum, StrEnum
 from threading import RLock
 
 from evidenceforge.events.authentication import windows_logon_can_own_desktop
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
-from evidenceforge.events.network import NetworkTransactionPlan
+from evidenceforge.events.network import NetworkTrafficLedger, NetworkTransactionPlan
 from evidenceforge.generation.indexes import (
     ExpiringIndex,
     GroupedTemporalIndex,
@@ -51,12 +57,9 @@ from evidenceforge.models.state import (
     RunningProcess,
     RunningThread,
     SmbFileState,
-    SmbHandleState,
-    SmbSessionState,
-    SmbTreeState,
 )
-from evidenceforge.utils.ids import generate_zeek_uid
-from evidenceforge.utils.rng import _stable_seed, stable_uuid
+from evidenceforge.utils.ids import generate_zeek_uid_from_rng
+from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -68,6 +71,89 @@ _HOST_LOGON_BUCKET_SPACE = 0x01000000
 _HOST_LOGON_BUCKET_STEP = 131071
 _NULL_LOGON_GUID = "{00000000-0000-0000-0000-000000000000}"
 _LINUX_PID_BLOCK_SECONDS = 300
+
+
+def _freeze_materialization_digest_value(
+    value: object,
+    active: set[int],
+) -> object:
+    """Return a deterministic test snapshot for one StateManager-owned value."""
+
+    if value is None or isinstance(value, (bool, int, float, str, bytes)):
+        return value
+    if isinstance(value, datetime):
+        return ("datetime", ensure_utc(value).isoformat())
+    if isinstance(value, Enum):
+        return (type(value).__qualname__, value.value)
+    if isinstance(value, random.Random):
+        return ("random.Random", value.getstate())
+    if callable(value):
+        return (
+            "callable",
+            getattr(value, "__module__", ""),
+            getattr(value, "__qualname__", type(value).__qualname__),
+        )
+
+    object_id = id(value)
+    if object_id in active:
+        return ("cycle", type(value).__module__, type(value).__qualname__)
+    active.add(object_id)
+    try:
+        if is_dataclass(value) and not isinstance(value, type):
+            return (
+                type(value).__module__,
+                type(value).__qualname__,
+                tuple(
+                    (
+                        item.name,
+                        _freeze_materialization_digest_value(getattr(value, item.name), active),
+                    )
+                    for item in fields(value)
+                ),
+            )
+        if isinstance(value, Mapping):
+            frozen_items = [
+                (
+                    _freeze_materialization_digest_value(key, active),
+                    _freeze_materialization_digest_value(item, active),
+                )
+                for key, item in value.items()
+            ]
+            return ("mapping", tuple(sorted(frozen_items, key=repr)))
+        if isinstance(value, (set, frozenset)):
+            frozen = [_freeze_materialization_digest_value(item, active) for item in value]
+            return ("set", tuple(sorted(frozen, key=repr)))
+        if isinstance(value, (list, tuple)):
+            return (
+                type(value).__qualname__,
+                tuple(_freeze_materialization_digest_value(item, active) for item in value),
+            )
+        attributes = getattr(value, "__dict__", None)
+        if isinstance(attributes, dict):
+            return (
+                type(value).__module__,
+                type(value).__qualname__,
+                tuple(
+                    sorted(
+                        (
+                            name,
+                            _freeze_materialization_digest_value(item, active),
+                        )
+                        for name, item in attributes.items()
+                        if name != "_lock"
+                    )
+                ),
+            )
+        if hasattr(value, "tolist"):
+            return (
+                type(value).__qualname__,
+                _freeze_materialization_digest_value(value.tolist(), active),
+            )
+        return (type(value).__module__, type(value).__qualname__, repr(value))
+    finally:
+        active.remove(object_id)
+
+
 _LINUX_PID_MIN = 500
 _LINUX_PID_MAX_EXCLUSIVE = 4_194_304
 _LINUX_PID_REORDER_LANE_SECONDS = 30
@@ -81,6 +167,1097 @@ _ENDED_IDENTITY_RETENTION = timedelta(hours=48)
 _MAX_RETAINED_PROCESS_IDENTITIES = 500_000
 _MAX_RETAINED_THREAD_IDENTITIES = 1_000_000
 _MAX_SMB_MUTATION_OVERLAY = 100_000
+_SESSION_PROCESS_REFERENCE_FIELDS = (
+    "explorer_pid",
+    "session_user_manager_pid",
+    "session_winlogon_pid",
+    "session_shell_pid",
+    "process_tree_root",
+    "transport_pid",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _LinuxLogindAllocatorPatch:
+    system: str
+    event_time: datetime
+    session_id: int
+    initial: int | None
+    epoch: datetime | None
+    rng_state_after: object
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionAllocatorPatch:
+    host_base: tuple[str, int] | None
+    host_epoch: tuple[str, datetime] | None
+    ordinal: tuple[tuple[str, int, int], int] | None
+    used_logon_id: int | None
+    windows_session_counter: tuple[str, int] | None
+    linux_logind: _LinuxLogindAllocatorPatch | None
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionMaterializationPayload:
+    """Immutable primitive inputs used to construct one runtime session."""
+
+    logon_type: int
+    source_ip: str
+    source_port: int
+    transport_pid: int | None
+    auth_protocol: str
+    smb_principal: str
+    account_scope: str
+    auth_session_ref: str
+    effective_uid: int | None
+    effective_gid: int | None
+    state_time: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SessionMaterializationPlan:
+    """Integrity-authenticated allocation-free plan for one session start.
+
+    Runtime state is intentionally absent. Callers may inspect only the immutable
+    canonical identity; StateManager constructs the mutable ``ActiveSession``
+    inside the guarded no-sampling commit.
+    """
+
+    _expected_version: int
+    _identity: SessionIdentity
+    _payload: _SessionMaterializationPayload
+    _allocator_patch: _SessionAllocatorPatch
+    _integrity_token: str = field(repr=False)
+
+    @property
+    def expected_version(self) -> int:
+        """Return the StateManager version against which this plan was prepared."""
+
+        return self._expected_version
+
+    @property
+    def identity(self) -> SessionIdentity:
+        """Return the immutable canonical session identity."""
+
+        return self._identity
+
+    @property
+    def publication_token(self) -> str:
+        """Return the authenticated token bound to downstream prepared work."""
+
+        return self._integrity_token
+
+    @property
+    def logon_type(self) -> int:
+        """Return the immutable source-native logon type required by lifecycle token plans."""
+
+        return self._payload.logon_type
+
+    @property
+    def external_rng_state_after(self) -> object | None:
+        """Return the action RNG state to install only after a successful commit."""
+
+        patch = self._allocator_patch.linux_logind
+        return patch.rng_state_after if patch is not None else None
+
+
+@dataclass(frozen=True, slots=True)
+class _ProcessAllocatorPatch:
+    pid_counter: tuple[str, int] | None
+    pid_os: tuple[str, str] | None
+    pid_rng_state: tuple[str, object] | None
+    pid_epoch: tuple[str, datetime] | None
+    pid_weekly_prefix: tuple[str, tuple[int, ...]] | None
+    linux_allocation: tuple[str, datetime, int] | None
+    pid_bucket_offset: tuple[tuple[str, datetime], int] | None
+    fixed_pid: tuple[str, int] | None
+    pid_allocation_count_delta: int
+    pid_candidate_probe_delta: int
+    thread_counter: tuple[str, int] | None
+    thread_rng_state: tuple[str, object] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ProcessMaterializationPayload:
+    """Immutable primitive inputs used to construct one runtime process."""
+
+    integrity_level: str
+    concurrency_group_id: str
+    pid_logical_position: int
+    state_time: datetime
+    parent_activity_time: datetime | None
+    auth_session_id: int | None
+    auth_logon_type: int | None
+    require_session: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessMaterializationPlan:
+    """Integrity-authenticated allocation-free process/thread start plan."""
+
+    _expected_version: int
+    _identity: ProcessIdentity
+    _payload: _ProcessMaterializationPayload
+    _allocator_patch: _ProcessAllocatorPatch
+    _integrity_token: str = field(repr=False)
+
+    @property
+    def expected_version(self) -> int:
+        """Return the StateManager version against which this plan was prepared."""
+
+        return self._expected_version
+
+    @property
+    def identity(self) -> ProcessIdentity:
+        """Return the immutable canonical process and primary-thread identity."""
+
+        return self._identity
+
+    @property
+    def publication_token(self) -> str:
+        """Return the authenticated token bound to downstream prepared work."""
+
+        return self._integrity_token
+
+    @property
+    def integrity_level(self) -> str:
+        """Return the immutable process-token integrity level."""
+
+        return self._payload.integrity_level
+
+    @property
+    def auth_session_id(self) -> int | None:
+        """Return the prepublished process token's exact session identifier."""
+
+        return self._payload.auth_session_id
+
+    @property
+    def auth_logon_type(self) -> int | None:
+        """Return the prepublished process token's exact logon type."""
+
+        return self._payload.auth_logon_type
+
+
+@dataclass(frozen=True, slots=True)
+class _ProcessTerminationSessionReference:
+    """Exact active-session fields cleared by one process termination."""
+
+    logon_id: str
+    object_id: str
+    fields: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ProcessTerminationMaterializationPayload:
+    """Immutable StateManager writes owned by one process termination."""
+
+    end_time: datetime
+    threads: tuple[ThreadIdentity, ...]
+    parent_identity: ProcessIdentity | None
+    parent_activity_time: datetime | None
+    session_references: tuple[_ProcessTerminationSessionReference, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessTerminationMaterializationPlan:
+    """Authenticated allocation-free plan for one exact live process termination."""
+
+    _expected_version: int
+    _identity: ProcessIdentity
+    _payload: _ProcessTerminationMaterializationPayload
+    _integrity_token: str = field(repr=False)
+
+    @property
+    def expected_version(self) -> int:
+        """Return the StateManager version against which this plan was prepared."""
+
+        return self._expected_version
+
+    @property
+    def identity(self) -> ProcessIdentity:
+        """Return the exact immutable identity of the process being terminated."""
+
+        return self._identity
+
+    @property
+    def publication_token(self) -> str:
+        """Return the authenticated token bound to downstream prepared work."""
+
+        return self._integrity_token
+
+    @property
+    def end_time(self) -> datetime:
+        """Return the exact canonical termination time."""
+
+        return self._payload.end_time
+
+    @property
+    def parent_activity_time(self) -> datetime | None:
+        """Return the optional exact parent-activity frontier."""
+
+        return self._payload.parent_activity_time
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionIdentityPlan:
+    """Authenticated allocation-free reservation of one connection ID and Zeek UID."""
+
+    _expected_version: int
+    _conn_id: str
+    _zeek_uid: str
+    _counter_after: int
+    _rng_state_before: object
+    _rng_state_after_identity: object
+    _integrity_token: str = field(repr=False)
+
+    @property
+    def expected_version(self) -> int:
+        """Return the StateManager version against which identity was planned."""
+
+        return self._expected_version
+
+    @property
+    def conn_id(self) -> str:
+        """Return the reserved logical connection identifier."""
+
+        return self._conn_id
+
+    @property
+    def zeek_uid(self) -> str:
+        """Return the reserved source-native Zeek UID."""
+
+        return self._zeek_uid
+
+    @property
+    def publication_token(self) -> str:
+        """Return the authenticated identity-plan token."""
+
+        return self._integrity_token
+
+    def continuation_rng(self) -> random.Random:
+        """Return an isolated RNG positioned immediately after UID allocation."""
+
+        rng = random.Random()
+        rng.setstate(self._rng_state_after_identity)
+        return rng
+
+
+class _ConnectionPlanningRandom:
+    """Revocable Random-compatible view over a cursor-owned isolated stream."""
+
+    __slots__ = ("_cursor",)
+
+    def __init__(self, cursor: "ConnectionPlanningCursor") -> None:
+        self._cursor = cursor
+
+    def __getattr__(self, name: str) -> object:
+        if name.startswith("_") or name in {"seed", "setstate"}:
+            raise AttributeError(name)
+        target = self._cursor._rng_attribute(name)
+        if not callable(target):
+            return target
+
+        def _call(*args: object, **kwargs: object) -> object:
+            method = self._cursor._rng_attribute(name)
+            return method(*args, **kwargs)
+
+        return _call
+
+
+class ConnectionPlanningCursor:
+    """Opaque one-shot owner for allocation-free connection-planning draws.
+
+    The caller's RNG remains unchanged while planning.  Sampling occurs only on
+    a private clone exposed through a revocable proxy; successful composite
+    materialization advances the real owner directly from its authenticated
+    entry state to the sealed final state.
+    """
+
+    __slots__ = (
+        "_manager",
+        "_expected_version",
+        "_expected_state_time",
+        "_expected_connection_counter",
+        "_owner_rng",
+        "_owner_identity",
+        "_rng_state_entry",
+        "_preview_rng",
+        "_proxy",
+        "_identity",
+        "_identity_binding_token",
+        "_cursor_token",
+        "_sealed",
+        "_cancelled",
+    )
+
+    def __init__(
+        self,
+        manager: "StateManager",
+        *,
+        expected_version: int,
+        expected_state_time: datetime | None,
+        expected_connection_counter: int,
+        owner_rng: random.Random,
+        rng_state_entry: object,
+        cursor_token: str,
+    ) -> None:
+        self._manager = manager
+        self._expected_version = expected_version
+        self._expected_state_time = expected_state_time
+        self._expected_connection_counter = expected_connection_counter
+        self._owner_rng = owner_rng
+        self._owner_identity = id(owner_rng)
+        self._rng_state_entry = rng_state_entry
+        preview_rng = random.Random()
+        preview_rng.setstate(self._rng_state_entry)
+        self._preview_rng: random.Random | None = preview_rng
+        self._proxy = _ConnectionPlanningRandom(self)
+        self._identity: ConnectionIdentityPlan | None = None
+        self._identity_binding_token = ""
+        self._cursor_token = cursor_token
+        self._sealed = False
+        self._cancelled = False
+
+    @property
+    def rng(self) -> _ConnectionPlanningRandom:
+        """Return the revocable isolated planning stream."""
+
+        self._require_active()
+        return self._proxy
+
+    @property
+    def expected_version(self) -> int:
+        """Return the StateManager fence captured at transaction entry."""
+
+        return self._expected_version
+
+    def reserve_identity(self) -> ConnectionIdentityPlan:
+        """Perform the one historical physical connection-ID/UID draw."""
+
+        self._require_active()
+        return self._manager._reserve_connection_cursor_identity(self)
+
+    def cancel(self) -> None:
+        """Revoke the cursor without changing its RNG owner or StateManager."""
+
+        if self._cancelled:
+            raise StateError("Connection planning cursor is already cancelled")
+        if self._sealed:
+            raise StateError("Connection planning cursor is already sealed")
+        self._cancelled = True
+        self._preview_rng = None
+
+    def _require_active(self) -> None:
+        if self._cancelled:
+            raise StateError("Connection planning cursor is cancelled")
+        if self._sealed:
+            raise StateError("Connection planning cursor is already sealed")
+
+    def _rng_attribute(self, name: str) -> object:
+        self._require_active()
+        rng = self._preview_rng
+        if rng is None:
+            raise StateError("Connection planning cursor has no active RNG")
+        return getattr(rng, name)
+
+    def _seal(self) -> object:
+        self._require_active()
+        rng = self._preview_rng
+        if rng is None:
+            raise StateError("Connection planning cursor has no active RNG")
+        final_state = rng.getstate()
+        self._sealed = True
+        self._preview_rng = None
+        return final_state
+
+
+@dataclass(frozen=True, slots=True)
+class _ConnectionMaterializationPayload:
+    """Final immutable connection row and compatibility allocation semantics."""
+
+    transaction: NetworkTransactionPlan
+    source_system: str
+    source_hostname: str
+    hostname: str
+    initiating_pid: int
+    materialize_connection: bool
+    final_rng_state: object
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionMaterializationPlan:
+    """Authenticated final connection state ready for one primitive commit."""
+
+    _expected_version: int
+    _identity: ConnectionIdentityPlan
+    _payload: _ConnectionMaterializationPayload
+    _integrity_token: str = field(repr=False)
+
+    @property
+    def expected_version(self) -> int:
+        """Return the StateManager version against which this plan was finalized."""
+
+        return self._expected_version
+
+    @property
+    def identity(self) -> ConnectionIdentityPlan:
+        """Return the allocation-free connection identity reservation."""
+
+        return self._identity
+
+    @property
+    def transaction(self) -> NetworkTransactionPlan:
+        """Return the final canonical connection transaction."""
+
+        return self._payload.transaction
+
+    @property
+    def publication_token(self) -> str:
+        """Return the authenticated final plan token."""
+
+        return self._integrity_token
+
+    @property
+    def materializes_connection(self) -> bool:
+        """Return whether commit creates a new retained OpenConnection row."""
+
+        return self._payload.materialize_connection
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionProcessMaterializationLinks:
+    """Process-member indexes installed into the new session at batch commit."""
+
+    transport: int = -1
+    shell: int = -1
+    user_manager: int = -1
+    winlogon: int = -1
+    explorer: int = -1
+    process_tree_root: int = -1
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializationBatchPlan:
+    """Authenticated allocation-free session/process start transaction.
+
+    A batch owns at most one new session and an arbitrary parent-ordered process
+    tree.  Every member is planned against the same StateManager version and the
+    primitive commit advances that version exactly once.
+    """
+
+    _expected_version: int
+    _expected_state_time: datetime | None
+    _final_state_time: datetime
+    _session: SessionMaterializationPlan | None
+    _processes: tuple[ProcessMaterializationPlan, ...]
+    _session_process_links: _SessionProcessMaterializationLinks
+    _integrity_token: str = field(repr=False)
+
+    @property
+    def expected_version(self) -> int:
+        """Return the single StateManager fence consumed by this batch."""
+
+        return self._expected_version
+
+    @property
+    def session(self) -> SessionMaterializationPlan | None:
+        """Return the optional session member."""
+
+        return self._session
+
+    @property
+    def final_state_time(self) -> datetime:
+        """Return the authenticated final StateManager time frontier."""
+
+        return self._final_state_time
+
+    @property
+    def processes(self) -> tuple[ProcessMaterializationPlan, ...]:
+        """Return process members in parent-before-child commit order."""
+
+        return self._processes
+
+    @property
+    def publication_token(self) -> str:
+        """Return the authenticated token bound to the complete batch."""
+
+        return self._integrity_token
+
+
+class MaterializationBatchBuilder:
+    """Allocation-free builder for one session and its bootstrap process tree."""
+
+    def __init__(self, manager: "StateManager", expected_version: int) -> None:
+        self._manager = manager
+        self._expected_version = expected_version
+        self._expected_state_time = manager.state.current_time
+        self._session: SessionMaterializationPlan | None = None
+        self._processes: list[ProcessMaterializationPlan] = []
+        self._session_process_plans: dict[str, ProcessMaterializationPlan] = {}
+        self._sealed = False
+        self._pid_counters: dict[str, int] = {}
+        self._pid_rng_states: dict[str, object] = {}
+        self._pid_os: dict[str, str] = {}
+        self._new_pid_namespaces: set[str] = set()
+        self._pid_namespace_patch_emitted: set[str] = set()
+        self._pid_epochs: dict[str, datetime] = {}
+        self._pid_prefixes: dict[str, tuple[int, ...]] = {}
+        self._pid_bucket_offsets: dict[tuple[str, datetime], int] = {}
+        self._linux_allocations: dict[str, list[tuple[datetime, int]]] = {}
+        self._planned_pids: dict[str, set[int]] = {}
+        self._thread_counters: dict[str, int] = {}
+        self._thread_rng_states: dict[str, object] = {}
+        self._planned_tids: dict[str, set[int]] = {}
+
+    @property
+    def expected_version(self) -> int:
+        """Return the StateManager fence captured when the builder was created."""
+
+        return self._expected_version
+
+    def plan_session(self, **kwargs: object) -> SessionMaterializationPlan:
+        """Plan the batch's optional session without changing canonical state."""
+
+        if self._sealed:
+            raise StateError("Materialization batch builder is already sealed")
+        if self._session is not None:
+            raise StateError("Materialization batch may contain only one session")
+        if self._processes:
+            raise StateError("Materialization batch session must be planned before processes")
+        plan = self._manager._plan_batch_session(self, kwargs)
+        self._session = plan
+        return plan
+
+    def enrich_linux_logind_session(
+        self,
+        plan: SessionMaterializationPlan,
+        *,
+        rng: random.Random,
+        event_time: datetime,
+    ) -> SessionMaterializationPlan:
+        """Attach one allocation-free logind identity to the planned session."""
+
+        if self._sealed:
+            raise StateError("Materialization batch builder is already sealed")
+        if self._session is not plan or self._processes:
+            raise StateError("Linux logind enrichment must precede batch process planning")
+        enriched = self._manager._enrich_batch_linux_logind_session(
+            self,
+            plan,
+            rng=rng,
+            event_time=event_time,
+        )
+        self._session = enriched
+        return enriched
+
+    def plan_process(
+        self,
+        *,
+        system: str,
+        parent_pid: int,
+        image: str,
+        command_line: str,
+        username: str,
+        integrity_level: str,
+        os_category: str,
+        logon_id: str = "",
+        lifecycle_group_id: str = "",
+        parent_lifecycle_group_id: str = "",
+        concurrency_group_id: str = "",
+        start_time: datetime | None = None,
+        fixed_pid: int | None = None,
+        require_session: bool = False,
+        parent_activity_time: datetime | None = None,
+        auth_session_id: int | None = None,
+        auth_logon_type: int | None = None,
+        parent_plan: ProcessMaterializationPlan | None = None,
+        session_plan: SessionMaterializationPlan | None = None,
+    ) -> ProcessMaterializationPlan:
+        """Plan one process member using prior batch members as exact owners."""
+
+        if self._sealed:
+            raise StateError("Materialization batch builder is already sealed")
+        plan = self._manager._plan_batch_process(
+            self,
+            system=system,
+            parent_pid=parent_pid,
+            image=image,
+            command_line=command_line,
+            username=username,
+            integrity_level=integrity_level,
+            os_category=os_category,
+            logon_id=logon_id,
+            lifecycle_group_id=lifecycle_group_id,
+            parent_lifecycle_group_id=parent_lifecycle_group_id,
+            concurrency_group_id=concurrency_group_id,
+            start_time=start_time,
+            fixed_pid=fixed_pid,
+            require_session=require_session,
+            parent_activity_time=parent_activity_time,
+            auth_session_id=auth_session_id,
+            auth_logon_type=auth_logon_type,
+            parent_plan=parent_plan,
+            session_plan=session_plan,
+        )
+        self._processes.append(plan)
+        return plan
+
+    def bind_session_processes(
+        self,
+        session: SessionMaterializationPlan,
+        *,
+        transport_plan: ProcessMaterializationPlan | None = None,
+        shell_plan: ProcessMaterializationPlan | None = None,
+        user_manager_plan: ProcessMaterializationPlan | None = None,
+        winlogon_plan: ProcessMaterializationPlan | None = None,
+        explorer_plan: ProcessMaterializationPlan | None = None,
+        process_tree_root_plan: ProcessMaterializationPlan | None = None,
+    ) -> None:
+        """Bind exact planned process roles into the session's primitive commit."""
+
+        if self._sealed:
+            raise StateError("Materialization batch builder is already sealed")
+        if self._session is not session:
+            raise StateError("Session process links require this batch's session member")
+        values = {
+            "transport": transport_plan,
+            "shell": shell_plan,
+            "user_manager": user_manager_plan,
+            "winlogon": winlogon_plan,
+            "explorer": explorer_plan,
+            "process_tree_root": process_tree_root_plan,
+        }
+        for role, process in values.items():
+            if process is None:
+                continue
+            if process not in self._processes:
+                raise StateError(f"Session {role} link must reference a planned batch process")
+            self._session_process_plans[role] = process
+
+    def seal(self) -> MaterializationBatchPlan:
+        """Freeze and authenticate the complete allocation-free batch."""
+
+        if self._sealed:
+            raise StateError("Materialization batch builder is already sealed")
+        if self._session is None and not self._processes:
+            raise StateError("Materialization batch cannot be empty")
+        self._sealed = True
+        return self._manager._seal_materialization_batch(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessActivityPatch:
+    """Exact process-object activity frontier installed by a composite commit."""
+
+    identity: ProcessIdentity
+    activity_time: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SessionActivityPatch:
+    """Exact session-object activity frontier installed by a composite commit."""
+
+    identity: SessionIdentity
+    activity_time: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalTransportFingerprint:
+    """Immutable State-authenticated identity of one physical network transport."""
+
+    transport_id: str
+    conn_id: str
+    zeek_uid: str
+    tuple_key: tuple[str, int, str, int, str]
+    started_at: datetime
+    closed_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ConnectionParentSnapshot:
+    """Immutable fingerprint of a physical parent before child accounting."""
+
+    conn_id: str
+    zeek_uid: str
+    src_ip: str
+    src_port: int
+    dst_ip: str
+    dst_port: int
+    protocol: str
+    state: str
+    start_time: datetime
+    source_system: str
+    source_hostname: str
+    hostname: str
+    initiating_pid: int
+    close_time: datetime | None
+    bytes_sent: int
+    bytes_received: int
+    traffic_ledger: NetworkTrafficLedger
+    transaction_id: str
+    conn_state: str
+    history: str
+    duration: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ConnectionParentAccountingPatch:
+    """Authenticated one-shot traffic delta for an application child."""
+
+    before: _ConnectionParentSnapshot
+    after_traffic: NetworkTrafficLedger
+
+
+class ConnectionMaterializationMode(StrEnum):
+    """State publication disposition for one canonical network transaction."""
+
+    PHYSICAL = "physical"
+    APPLICATION_CHILD = "application_child"
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionCompositeMaterializationPlan:
+    """Authenticated State-only transaction for connection and optional starts."""
+
+    _expected_version: int
+    _expected_state_time: datetime | None
+    _expected_connection_counter: int
+    _owner_rng: random.Random = field(repr=False, compare=False)
+    _owner_identity: int
+    _rng_state_entry: object = field(repr=False)
+    _rng_state_final: object = field(repr=False)
+    _cursor_token: str = field(repr=False)
+    _identity: ConnectionIdentityPlan | None
+    _transaction: NetworkTransactionPlan
+    _source_system: str
+    _source_hostname: str
+    _hostname: str
+    _initiating_pid: int
+    _mode: ConnectionMaterializationMode
+    _parent_patch: _ConnectionParentAccountingPatch | None
+    _batch: MaterializationBatchPlan | None
+    _process_activity: tuple[ProcessActivityPatch, ...]
+    _session_activity: tuple[SessionActivityPatch, ...]
+    _final_state_time: datetime
+    _integrity_token: str = field(repr=False)
+
+    @property
+    def expected_version(self) -> int:
+        """Return the StateManager fence consumed by this composite."""
+
+        return self._expected_version
+
+    @property
+    def publication_token(self) -> str:
+        """Return the manager-authenticated composite publication token."""
+
+        return self._integrity_token
+
+    @property
+    def transaction(self) -> NetworkTransactionPlan:
+        """Return the exact final canonical network transaction."""
+
+        return self._transaction
+
+    @property
+    def materializes_connection(self) -> bool:
+        """Return whether this transaction creates a physical State row."""
+
+        return self._mode is ConnectionMaterializationMode.PHYSICAL
+
+    @property
+    def mode(self) -> ConnectionMaterializationMode:
+        """Return the explicit physical/application-child disposition."""
+
+        return self._mode
+
+    @property
+    def physical_transport_id(self) -> str:
+        """Return the authenticated physical transport owning this transaction."""
+
+        return self.physical_transport_fingerprint.transport_id
+
+    @property
+    def physical_transport_fingerprint(self) -> PhysicalTransportFingerprint:
+        """Return immutable physical identity for lifecycle/app authority matching."""
+
+        if self._mode is ConnectionMaterializationMode.PHYSICAL:
+            transaction = self._transaction
+            return PhysicalTransportFingerprint(
+                transport_id=transaction.stable_id,
+                conn_id=transaction.conn_id,
+                zeek_uid=transaction.zeek_uid,
+                tuple_key=(
+                    transaction.src_ip,
+                    transaction.src_port,
+                    transaction.dst_ip,
+                    transaction.dst_port,
+                    transaction.protocol.casefold(),
+                ),
+                started_at=transaction.started_at,
+                closed_at=transaction.closed_at,
+            )
+        parent_patch = self._parent_patch
+        if parent_patch is None:
+            raise StateError("Application-child composite has no physical parent")
+        parent = parent_patch.before
+        return PhysicalTransportFingerprint(
+            transport_id=parent.transaction_id,
+            conn_id=parent.conn_id,
+            zeek_uid=parent.zeek_uid,
+            tuple_key=(
+                parent.src_ip,
+                parent.src_port,
+                parent.dst_ip,
+                parent.dst_port,
+                parent.protocol.casefold(),
+            ),
+            started_at=parent.start_time,
+            closed_at=parent.close_time,
+        )
+
+    @property
+    def batch(self) -> MaterializationBatchPlan | None:
+        """Return the optional session/process start batch."""
+
+        return self._batch
+
+    @property
+    def process_activity(self) -> tuple[ProcessActivityPatch, ...]:
+        """Return normalized exact process activity patches."""
+
+        return self._process_activity
+
+    @property
+    def session_activity(self) -> tuple[SessionActivityPatch, ...]:
+        """Return normalized exact session activity patches."""
+
+        return self._session_activity
+
+    @property
+    def final_state_time(self) -> datetime:
+        """Return the authenticated post-commit StateManager frontier."""
+
+        return self._final_state_time
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionCompositeMaterializationResult:
+    """Rows published by one successful connection composite."""
+
+    connection: OpenConnection | None
+    session: ActiveSession | None
+    processes: tuple[RunningProcess, ...]
+
+
+_MaterializationPlan = (
+    SessionMaterializationPlan
+    | ProcessMaterializationPlan
+    | ProcessTerminationMaterializationPlan
+    | ConnectionMaterializationPlan
+    | MaterializationBatchPlan
+    | ConnectionCompositeMaterializationPlan
+)
+
+
+def _materialization_integrity_token(
+    authority_secret: bytes,
+    kind: str,
+    expected_version: int,
+    identity: SessionIdentity | ProcessIdentity,
+    payload: _SessionMaterializationPayload | _ProcessMaterializationPayload,
+    allocator_patch: _SessionAllocatorPatch | _ProcessAllocatorPatch,
+) -> str:
+    """Authenticate every immutable plan and allocator-patch field."""
+
+    canonical = repr((kind, expected_version, identity, payload, allocator_patch)).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+def _process_termination_materialization_integrity_token(
+    authority_secret: bytes,
+    *,
+    expected_version: int,
+    identity: ProcessIdentity,
+    payload: _ProcessTerminationMaterializationPayload,
+) -> str:
+    """Authenticate every immutable field in one process-termination plan."""
+
+    canonical = repr(
+        (
+            "process-termination-materialization",
+            expected_version,
+            identity,
+            payload,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+def _connection_identity_integrity_token(
+    authority_secret: bytes,
+    *,
+    expected_version: int,
+    conn_id: str,
+    zeek_uid: str,
+    counter_after: int,
+    rng_state_before: object,
+    rng_state_after_identity: object,
+) -> str:
+    """Authenticate every connection identity reservation field."""
+
+    canonical = repr(
+        (
+            "connection-identity",
+            expected_version,
+            conn_id,
+            zeek_uid,
+            counter_after,
+            rng_state_before,
+            rng_state_after_identity,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+def _connection_materialization_integrity_token(
+    authority_secret: bytes,
+    *,
+    expected_version: int,
+    identity: ConnectionIdentityPlan,
+    payload: _ConnectionMaterializationPayload,
+) -> str:
+    """Authenticate one final connection payload and its reserved identity."""
+
+    canonical = repr(
+        (
+            "connection-materialization",
+            expected_version,
+            identity.publication_token,
+            payload,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+def _connection_cursor_integrity_token(
+    authority_secret: bytes,
+    *,
+    expected_version: int,
+    expected_state_time: datetime | None,
+    expected_connection_counter: int,
+    owner_identity: int,
+    rng_state_entry: object,
+) -> str:
+    """Authenticate one RNG-owner and StateManager transaction entry fence."""
+
+    canonical = repr(
+        (
+            "connection-planning-cursor",
+            expected_version,
+            expected_state_time,
+            expected_connection_counter,
+            owner_identity,
+            rng_state_entry,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+def _connection_cursor_identity_binding_token(
+    authority_secret: bytes,
+    *,
+    cursor_token: str,
+    identity_token: str,
+) -> str:
+    """Bind the historical UID draw to the exact cursor that performed it."""
+
+    canonical = repr(
+        (
+            "connection-cursor-identity",
+            cursor_token,
+            identity_token,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+def _connection_composite_integrity_token(
+    authority_secret: bytes,
+    *,
+    expected_version: int,
+    expected_state_time: datetime | None,
+    expected_connection_counter: int,
+    owner_identity: int,
+    rng_state_entry: object,
+    rng_state_final: object,
+    cursor_token: str,
+    identity: ConnectionIdentityPlan | None,
+    transaction: NetworkTransactionPlan,
+    source_system: str,
+    source_hostname: str,
+    hostname: str,
+    initiating_pid: int,
+    mode: ConnectionMaterializationMode,
+    parent_patch: _ConnectionParentAccountingPatch | None,
+    batch: MaterializationBatchPlan | None,
+    process_activity: tuple[ProcessActivityPatch, ...],
+    session_activity: tuple[SessionActivityPatch, ...],
+    final_state_time: datetime,
+) -> str:
+    """Authenticate every State-owned field in one connection composite."""
+
+    canonical = repr(
+        (
+            "connection-composite",
+            expected_version,
+            expected_state_time,
+            expected_connection_counter,
+            owner_identity,
+            rng_state_entry,
+            rng_state_final,
+            cursor_token,
+            identity.publication_token if identity is not None else "",
+            transaction,
+            source_system,
+            source_hostname,
+            hostname,
+            initiating_pid,
+            mode,
+            parent_patch,
+            batch.publication_token if batch is not None else "",
+            process_activity,
+            session_activity,
+            final_state_time,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+def _materialization_batch_integrity_token(
+    authority_secret: bytes,
+    *,
+    expected_version: int,
+    expected_state_time: datetime | None,
+    final_state_time: datetime,
+    session: SessionMaterializationPlan | None,
+    processes: tuple[ProcessMaterializationPlan, ...],
+    session_process_links: _SessionProcessMaterializationLinks,
+) -> str:
+    """Authenticate the exact ordered membership of one start batch."""
+
+    canonical = repr(
+        (
+            "materialization-batch",
+            expected_version,
+            expected_state_time,
+            final_state_time,
+            session.publication_token if session is not None else "",
+            tuple(plan.publication_token for plan in processes),
+            session_process_links,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
 
 
 def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
@@ -88,7 +1265,7 @@ def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
     if ensure_utc(session.start_time) > cutoff:
         return False
     end_plan = session.end_plan
-    if end_plan is not None and end_plan.is_authoritative:
+    if end_plan is not None and end_plan.is_hard_deadline:
         return cutoff < ensure_utc(end_plan.canonical_end)
     network_close_time = session.network_close_time
     if (
@@ -100,6 +1277,69 @@ def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
     if end_plan is not None and cutoff >= ensure_utc(end_plan.canonical_end):
         return False
     return True
+
+
+@dataclass(slots=True)
+class PreparedConnectionMaterialization:
+    """State-lock-scoped connection commit ticket with no remaining validation."""
+
+    _manager: "StateManager"
+    _plan: ConnectionMaterializationPlan
+    _rng: random.Random
+    _active: bool = True
+    _committed: bool = False
+    _result: OpenConnection | None = None
+
+    @property
+    def committed(self) -> bool:
+        """Return whether connection allocator/state truth was published."""
+
+        return self._committed
+
+    def commit(self) -> OpenConnection | None:
+        """Publish the fully validated plan using primitive writes only."""
+
+        if not self._active:
+            raise StateError("Prepared connection materialization is no longer active")
+        if not self._committed:
+            self._result = self._manager._commit_prevalidated_connection_materialization(
+                self._plan,
+                self._rng,
+            )
+            self._committed = True
+        return self._result
+
+
+@dataclass(slots=True)
+class PreparedConnectionCompositeMaterialization:
+    """State-guard-scoped one-shot composite commit capability."""
+
+    _manager: "StateManager"
+    _plan: ConnectionCompositeMaterializationPlan
+    _owner_rng: random.Random
+    _active: bool = True
+    _committed: bool = False
+    _result: ConnectionCompositeMaterializationResult | None = None
+
+    @property
+    def committed(self) -> bool:
+        """Return whether the complete State transaction was published."""
+
+        return self._committed
+
+    def commit(self) -> ConnectionCompositeMaterializationResult:
+        """Publish the fully prevalidated composite exactly once."""
+
+        if not self._active:
+            raise StateError("Prepared connection composite is no longer active")
+        if self._committed:
+            raise StateError("Prepared connection composite is already committed")
+        self._result = self._manager._commit_prevalidated_connection_composite(
+            self._plan,
+            self._owner_rng,
+        )
+        self._committed = True
+        return self._result
 
 
 def _normalize_generated_logon_luid(value: int) -> int:
@@ -204,6 +1444,8 @@ class StateManager:
         self._linux_logind_session_used_ids: dict[str, set[int]] = {}
         self._linux_logind_session_allocations: dict[str, TemporalAllocationIndex] = {}
         self._lock = RLock()  # Reentrant lock for thread safety
+        self._materialization_version = 0
+        self._materialization_secret = secrets.token_bytes(32)
 
         # Entity lifecycle: per-system boot times for temporal validation
         self._system_boot_times: dict[str, datetime] = {}
@@ -227,13 +1469,730 @@ class StateManager:
         )
         self._ended_processes_by_object_id: ExpiringIndex[str, RunningProcess] = ExpiringIndex()
         self._ended_threads: ExpiringIndex[tuple[str, str, int], RunningThread] = ExpiringIndex()
-        self._smb_sessions: dict[str, SmbSessionState] = {}
-        self._smb_session_affinity: dict[tuple[str, str, str, str, str, str], str] = {}
-        self._smb_trees: dict[str, SmbTreeState] = {}
-        self._smb_tree_by_session_share: dict[tuple[str, str], str] = {}
-        self._smb_handles: dict[str, SmbHandleState] = {}
         self._smb_file_overlay: dict[str, SmbFileState] = {}
         self._smb_file_by_share_path: dict[tuple[str, str], str] = {}
+
+    @property
+    def materialization_version(self) -> int:
+        """Return the monotonic start-publication fence for prepared dispatches."""
+
+        with self._lock:
+            return self._materialization_version
+
+    def authenticates_materialization_plan(self, plan: _MaterializationPlan) -> bool:
+        """Verify an opaque plan's keyed integrity without applying its version fence."""
+
+        with self._lock:
+            try:
+                if isinstance(plan, SessionMaterializationPlan):
+                    self._validate_session_materialization_plan(plan)
+                elif isinstance(plan, ProcessMaterializationPlan):
+                    self._validate_process_materialization_plan(plan)
+                elif isinstance(plan, ProcessTerminationMaterializationPlan):
+                    self._validate_process_termination_materialization_plan(plan)
+                elif isinstance(plan, ConnectionMaterializationPlan):
+                    self._validate_connection_materialization_plan(plan)
+                elif isinstance(plan, MaterializationBatchPlan):
+                    self._validate_materialization_batch_plan(plan)
+                elif isinstance(plan, ConnectionCompositeMaterializationPlan):
+                    self._validate_connection_composite_plan_integrity(plan)
+                else:
+                    return False
+            except StateError:
+                return False
+            return True
+
+    def authenticates_process_termination_plan(
+        self,
+        plan: ProcessTerminationMaterializationPlan,
+    ) -> bool:
+        """Verify a process-termination plan's keyed integrity without its version fence."""
+
+        with self._lock:
+            if not isinstance(plan, ProcessTerminationMaterializationPlan):
+                return False
+            try:
+                self._validate_process_termination_materialization_plan(plan)
+            except StateError:
+                return False
+            return True
+
+    def materialization_digest(self) -> str:
+        """Return an exact immutable digest of StateManager publication authority.
+
+        This intentionally expensive diagnostic is for atomicity tests and offline
+        audit only. It covers canonical live/ended state, current time, every LUID,
+        PID, thread, session-ID and connection allocator, reservations, reverse maps,
+        temporal indexes, RNG states, and the materialization version. Production hot
+        paths must use the constant-time censuses instead.
+        """
+
+        with self._lock:
+            payload = tuple(
+                sorted(
+                    (
+                        name,
+                        _freeze_materialization_digest_value(value, set()),
+                    )
+                    for name, value in self.__dict__.items()
+                    if name not in {"_lock", "_materialization_secret", "state"}
+                )
+            )
+            state_payload = (
+                ("current_time", self.state.current_time),
+                ("dns_cache", self.state.dns_cache),
+            )
+            frozen = _freeze_materialization_digest_value(
+                (payload, state_payload),
+                set(),
+            )
+            return hashlib.sha256(repr(frozen).encode()).hexdigest()
+
+    @contextmanager
+    def materialization_guard(self, plan: _MaterializationPlan | int) -> Iterator[None]:
+        """Hold the state-start lane after authenticating one opaque plan.
+
+        Global prepared-publication lock order is artifact publication (when an
+        occurrence owns one), then this StateManager guard, then the LifecycleRegistry
+        prepared-start ticket. No registry path may acquire this guard while retaining
+        a registry lock, and StateManager never acquires artifact-registry ownership.
+
+        The integer form remains a private compatibility seam for callers that have
+        not yet adopted an opaque plan; production start publication passes the plan.
+        """
+
+        with self._lock:
+            expected_version = plan if isinstance(plan, int) else plan.expected_version
+            if expected_version != self._materialization_version:
+                raise StateError(
+                    "State materialization plan is stale: "
+                    f"expected version {expected_version}, current "
+                    f"{self._materialization_version}"
+                )
+            if isinstance(plan, SessionMaterializationPlan):
+                self._validate_session_materialization_plan(plan)
+            elif isinstance(plan, ProcessMaterializationPlan):
+                self._validate_process_materialization_plan(plan)
+            elif isinstance(plan, ProcessTerminationMaterializationPlan):
+                self._validate_process_termination_materialization_plan(plan)
+            elif isinstance(plan, ConnectionMaterializationPlan):
+                self._validate_connection_materialization_plan(plan)
+            elif isinstance(plan, MaterializationBatchPlan):
+                self._validate_materialization_batch_plan(plan)
+            elif isinstance(plan, ConnectionCompositeMaterializationPlan):
+                self._validate_connection_composite_plan_integrity(plan)
+            yield
+
+    @contextmanager
+    def process_termination_materialization_guard(
+        self,
+        plan: ProcessTerminationMaterializationPlan,
+    ) -> Iterator[None]:
+        """Hold the StateManager lane after fully validating one termination plan."""
+
+        with self._lock:
+            self.validate_process_termination_materialization(plan)
+            yield
+
+    def _validate_session_materialization_plan(self, plan: SessionMaterializationPlan) -> None:
+        expected = _materialization_integrity_token(
+            self._materialization_secret,
+            "session",
+            plan._expected_version,
+            plan._identity,
+            plan._payload,
+            plan._allocator_patch,
+        )
+        if not hmac.compare_digest(plan._integrity_token, expected):
+            raise StateError("Session materialization plan integrity validation failed")
+
+    def _validate_process_materialization_plan(self, plan: ProcessMaterializationPlan) -> None:
+        expected = _materialization_integrity_token(
+            self._materialization_secret,
+            "process",
+            plan._expected_version,
+            plan._identity,
+            plan._payload,
+            plan._allocator_patch,
+        )
+        if not hmac.compare_digest(plan._integrity_token, expected):
+            raise StateError("Process materialization plan integrity validation failed")
+
+    def _validate_process_termination_materialization_plan(
+        self,
+        plan: ProcessTerminationMaterializationPlan,
+    ) -> None:
+        expected = _process_termination_materialization_integrity_token(
+            self._materialization_secret,
+            expected_version=plan._expected_version,
+            identity=plan._identity,
+            payload=plan._payload,
+        )
+        if not hmac.compare_digest(plan._integrity_token, expected):
+            raise StateError("Process termination materialization plan integrity validation failed")
+
+    def _validate_connection_identity_plan(self, plan: ConnectionIdentityPlan) -> None:
+        expected = _connection_identity_integrity_token(
+            self._materialization_secret,
+            expected_version=plan._expected_version,
+            conn_id=plan._conn_id,
+            zeek_uid=plan._zeek_uid,
+            counter_after=plan._counter_after,
+            rng_state_before=plan._rng_state_before,
+            rng_state_after_identity=plan._rng_state_after_identity,
+        )
+        if not hmac.compare_digest(plan._integrity_token, expected):
+            raise StateError("Connection identity plan integrity validation failed")
+
+    def _validate_connection_materialization_plan(
+        self,
+        plan: ConnectionMaterializationPlan,
+    ) -> None:
+        self._validate_connection_identity_plan(plan._identity)
+        expected = _connection_materialization_integrity_token(
+            self._materialization_secret,
+            expected_version=plan._expected_version,
+            identity=plan._identity,
+            payload=plan._payload,
+        )
+        if not hmac.compare_digest(plan._integrity_token, expected):
+            raise StateError("Connection materialization plan integrity validation failed")
+
+    def _validate_connection_composite_plan_integrity(
+        self,
+        plan: ConnectionCompositeMaterializationPlan,
+    ) -> None:
+        expected_cursor = _connection_cursor_integrity_token(
+            self._materialization_secret,
+            expected_version=plan._expected_version,
+            expected_state_time=plan._expected_state_time,
+            expected_connection_counter=plan._expected_connection_counter,
+            owner_identity=plan._owner_identity,
+            rng_state_entry=plan._rng_state_entry,
+        )
+        if not hmac.compare_digest(plan._cursor_token, expected_cursor):
+            raise StateError("Connection composite cursor integrity validation failed")
+        if plan._identity is not None:
+            self._validate_connection_identity_plan(plan._identity)
+        if plan._batch is not None:
+            self._validate_materialization_batch_plan(plan._batch)
+        expected = _connection_composite_integrity_token(
+            self._materialization_secret,
+            expected_version=plan._expected_version,
+            expected_state_time=plan._expected_state_time,
+            expected_connection_counter=plan._expected_connection_counter,
+            owner_identity=plan._owner_identity,
+            rng_state_entry=plan._rng_state_entry,
+            rng_state_final=plan._rng_state_final,
+            cursor_token=plan._cursor_token,
+            identity=plan._identity,
+            transaction=plan._transaction,
+            source_system=plan._source_system,
+            source_hostname=plan._source_hostname,
+            hostname=plan._hostname,
+            initiating_pid=plan._initiating_pid,
+            mode=plan._mode,
+            parent_patch=plan._parent_patch,
+            batch=plan._batch,
+            process_activity=plan._process_activity,
+            session_activity=plan._session_activity,
+            final_state_time=plan._final_state_time,
+        )
+        if not hmac.compare_digest(plan._integrity_token, expected):
+            raise StateError("Connection composite plan integrity validation failed")
+
+    def _validate_materialization_batch_plan(self, plan: MaterializationBatchPlan) -> None:
+        session = plan._session
+        if session is not None:
+            self._validate_session_materialization_plan(session)
+            if session.expected_version != plan.expected_version:
+                raise StateError("Materialization batch session uses another state version")
+        for process in plan._processes:
+            self._validate_process_materialization_plan(process)
+            if process.expected_version != plan.expected_version:
+                raise StateError("Materialization batch process uses another state version")
+        expected = _materialization_batch_integrity_token(
+            self._materialization_secret,
+            expected_version=plan._expected_version,
+            expected_state_time=plan._expected_state_time,
+            final_state_time=plan._final_state_time,
+            session=session,
+            processes=plan._processes,
+            session_process_links=plan._session_process_links,
+        )
+        if not hmac.compare_digest(plan._integrity_token, expected):
+            raise StateError("Materialization batch plan integrity validation failed")
+
+    def begin_materialization_batch(self) -> MaterializationBatchBuilder:
+        """Return an allocation-free builder bound to the current state fence."""
+
+        with self._lock:
+            return MaterializationBatchBuilder(self, self._materialization_version)
+
+    def _plan_batch_session(
+        self,
+        builder: MaterializationBatchBuilder,
+        kwargs: dict[str, object],
+    ) -> SessionMaterializationPlan:
+        """Plan the one batch session while preserving the builder's state fence."""
+
+        with self._lock:
+            if builder._manager is not self:
+                raise StateError("Materialization batch belongs to another StateManager")
+            if builder.expected_version != self._materialization_version:
+                raise StateError("Materialization batch became stale during session planning")
+            if self.state.current_time != builder._expected_state_time:
+                raise StateError("Materialization batch state-time fence changed during planning")
+            plan = self.plan_session_materialization(**kwargs)  # type: ignore[arg-type]
+            if plan.expected_version != builder.expected_version:
+                raise StateError("Materialization batch session fence changed during planning")
+            return plan
+
+    def _enrich_batch_linux_logind_session(
+        self,
+        builder: MaterializationBatchBuilder,
+        plan: SessionMaterializationPlan,
+        *,
+        rng: random.Random,
+        event_time: datetime,
+    ) -> SessionMaterializationPlan:
+        """Enrich the one batch session without publishing either allocator."""
+
+        with self._lock:
+            if (
+                builder._manager is not self
+                or builder.expected_version != self._materialization_version
+            ):
+                raise StateError("Materialization batch became stale during logind planning")
+            if self.state.current_time != builder._expected_state_time:
+                raise StateError("Materialization batch state-time fence changed during planning")
+            return self.plan_linux_logind_session_materialization(
+                plan,
+                rng=rng,
+                event_time=event_time,
+            )
+
+    def _seal_materialization_batch(
+        self,
+        builder: MaterializationBatchBuilder,
+    ) -> MaterializationBatchPlan:
+        """Authenticate the builder's exact session/process membership."""
+
+        with self._lock:
+            if builder._manager is not self:
+                raise StateError("Materialization batch belongs to another StateManager")
+            if builder.expected_version != self._materialization_version:
+                raise StateError("Materialization batch became stale before sealing")
+            if self.state.current_time != builder._expected_state_time:
+                raise StateError("Materialization batch state-time fence changed before sealing")
+            processes = tuple(builder._processes)
+            state_times = [process._payload.state_time for process in processes]
+            state_times.extend(
+                process._payload.parent_activity_time
+                for process in processes
+                if process._payload.parent_activity_time is not None
+            )
+            if builder._session is not None:
+                state_times.append(builder._session._payload.state_time)
+                linux_logind = builder._session._allocator_patch.linux_logind
+                if linux_logind is not None:
+                    state_times.append(linux_logind.event_time)
+            if builder._expected_state_time is not None:
+                state_times.append(ensure_utc(builder._expected_state_time))
+            final_state_time = max(state_times)
+            process_indexes = {id(process): index for index, process in enumerate(processes)}
+            links = _SessionProcessMaterializationLinks(
+                **{
+                    role: process_indexes[id(process)]
+                    for role, process in builder._session_process_plans.items()
+                }
+            )
+            plan = MaterializationBatchPlan(
+                _expected_version=builder.expected_version,
+                _expected_state_time=builder._expected_state_time,
+                _final_state_time=final_state_time,
+                _session=builder._session,
+                _processes=processes,
+                _session_process_links=links,
+                _integrity_token=_materialization_batch_integrity_token(
+                    self._materialization_secret,
+                    expected_version=builder.expected_version,
+                    expected_state_time=builder._expected_state_time,
+                    final_state_time=final_state_time,
+                    session=builder._session,
+                    processes=processes,
+                    session_process_links=links,
+                ),
+            )
+            self._validate_materialization_batch_plan(plan)
+            return plan
+
+    def _preview_host_logon_base(self, system: str) -> tuple[int, tuple[str, int] | None]:
+        base = self._logon_id_host_bases.get(system)
+        if base is not None:
+            return base, None
+        bucket = _stable_seed(f"logon_luid_host_{system}") % _HOST_LOGON_BUCKET_SPACE
+        salt = 0
+        while True:
+            candidate = _MIN_GENERATED_LOGON_LUID + (
+                (bucket + (salt * _HOST_LOGON_BUCKET_STEP)) % _HOST_LOGON_BUCKET_SPACE
+            )
+            if candidate not in self._logon_id_used_host_bases:
+                return candidate, (system, candidate)
+            salt += 1
+
+    def _preview_host_logon_epoch(
+        self,
+        system: str,
+        current_time: datetime,
+    ) -> tuple[datetime, tuple[str, datetime] | None]:
+        boot_time = self._system_boot_times.get(system)
+        if boot_time is not None:
+            return ensure_utc(boot_time), None
+        epoch = self._logon_id_epochs.get(system)
+        if epoch is not None:
+            return epoch, None
+        uptime_seconds = 3600 + (_stable_seed(f"logon_luid_uptime_{system}") % (3 * 86400))
+        epoch = ensure_utc(current_time) - timedelta(seconds=uptime_seconds)
+        return epoch, (system, epoch)
+
+    def _preview_logon_luid(
+        self,
+        system: str,
+        event_time: datetime,
+    ) -> tuple[
+        int, tuple[str, int] | None, tuple[str, datetime] | None, tuple[tuple[str, int, int], int]
+    ]:
+        current_time = ensure_utc(event_time)
+        base, host_base_patch = self._preview_host_logon_base(system)
+        epoch, host_epoch_patch = self._preview_host_logon_epoch(system, current_time)
+        elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
+        block = elapsed_seconds // 60
+        second_in_block = elapsed_seconds % 60
+        subsecond_bucket = min(15, current_time.microsecond // 62500)
+        ordinal_key = (system, elapsed_seconds, subsecond_bucket)
+        ordinal = self._logon_id_second_ordinals.get(ordinal_key, 0)
+        stride = self._logon_luid_block_stride(system, block)
+        candidate = base + self._logon_luid_block_offset(system, block)
+        candidate += (second_in_block * stride) + (subsecond_bucket * 3) + ordinal
+        candidate += (
+            _stable_seed(f"logon_luid_low:{system}:{current_time.isoformat()}:{ordinal}") % 3
+        )
+        candidate = _normalize_generated_logon_luid(candidate)
+        while candidate in self._used_logon_ids or candidate in self._reserved_logon_ids:
+            candidate = _normalize_generated_logon_luid(candidate + 1)
+        return candidate, host_base_patch, host_epoch_patch, (ordinal_key, ordinal + 1)
+
+    def _preview_windows_session_id(
+        self,
+        *,
+        system: str,
+        username: str,
+        logon_type: int,
+        session_kind: str,
+    ) -> tuple[int, tuple[str, int] | None]:
+        if not windows_logon_can_own_desktop(logon_type) or session_kind in {
+            "network",
+            "new_credentials",
+            "service",
+            "ssh",
+        }:
+            return 0, None
+        used_ids = {
+            session.session_id
+            for session in self._active_sessions.find("system", system)
+            if session.session_id > 0
+        }
+        if logon_type in {2, 11} and session_kind in {"interactive", "logon"}:
+            preferred = 1 + (_stable_seed(f"windows_console_session:{system}") % 2)
+            if preferred not in used_ids:
+                return preferred, None
+        initial = self._windows_session_id_counters.get(
+            system,
+            3 + (_stable_seed(f"windows_session_initial:{system}") % 3),
+        )
+        candidate = initial
+        while candidate in used_ids or candidate <= 0:
+            candidate += 1 + (_stable_seed(f"windows_session_gap:{system}:{candidate}") % 2)
+        return candidate, (system, candidate + 1)
+
+    def plan_session_materialization(
+        self,
+        *,
+        username: str,
+        system: str,
+        logon_type: int,
+        source_ip: str,
+        source_port: int = 0,
+        session_kind: str = "logon",
+        transport_pid: int | None = None,
+        start_time: datetime | None = None,
+        logon_id: str | None = None,
+        logon_guid: str = "",
+        logon_guid_required: bool | None = None,
+        session_id: int | None = None,
+        lifecycle_group_id: str = "",
+        parent_lifecycle_group_id: str = "",
+        auth_protocol: str = "",
+        smb_principal: str = "",
+        account_scope: str = "",
+        auth_session_ref: str = "",
+        effective_uid: int | None = None,
+        effective_gid: int | None = None,
+    ) -> SessionMaterializationPlan:
+        """Plan one exact session identity without consuming LUID/session allocators."""
+
+        with self._lock:
+            if start_time is None and self.state.current_time is None:
+                raise StateError("Cannot plan session: current_time not set")
+            session_start = ensure_utc(start_time or self.state.current_time)
+            provided_logon_id = logon_id is not None
+            host_base_patch: tuple[str, int] | None = None
+            host_epoch_patch: tuple[str, datetime] | None = None
+            ordinal_patch: tuple[tuple[str, int, int], int] | None = None
+            used_logon_id: int | None = None
+            if logon_id is None:
+                (
+                    used_logon_id,
+                    host_base_patch,
+                    host_epoch_patch,
+                    ordinal_patch,
+                ) = self._preview_logon_luid(system, session_start)
+                logon_id = f"0x{used_logon_id:x}"
+            else:
+                resolved = self._resolve_logon_id(logon_id)
+                if logon_id in self._ended_sessions or resolved in self._ended_sessions:
+                    raise StateError(
+                        "Cannot register a new session with ended LogonID "
+                        f"{logon_id}; allocate a fresh canonical LogonID"
+                    )
+                if resolved in self.state.active_sessions:
+                    raise StateError(
+                        f"Cannot plan session: LogonID {logon_id} is already materialized"
+                    )
+                try:
+                    used_logon_id = int(logon_id, 16)
+                except (TypeError, ValueError):
+                    used_logon_id = None
+                if used_logon_id is not None and used_logon_id in self._used_logon_ids:
+                    raise StateError(f"Cannot plan session: LogonID {logon_id} is already used")
+
+            linux_logind_patch: _LinuxLogindAllocatorPatch | None = None
+            if session_id is None:
+                session_id, session_counter_patch = self._preview_windows_session_id(
+                    system=system,
+                    username=username,
+                    logon_type=logon_type,
+                    session_kind=session_kind,
+                )
+            else:
+                session_counter_patch = None
+            object_id = stable_uuid(
+                "registered-session" if provided_logon_id else "session",
+                system,
+                username,
+                logon_type,
+                session_kind,
+                source_ip,
+                source_port,
+                session_start.isoformat(),
+                logon_id,
+                session_id,
+            )
+            if logon_guid_required is not None:
+                logon_guid = (
+                    self._stable_logon_guid(system, logon_id)
+                    if logon_guid_required
+                    else _NULL_LOGON_GUID
+                )
+            lifecycle_id = lifecycle_group_id or stable_uuid("session-lifecycle", object_id)
+            identity = SessionIdentity(
+                hostname=system,
+                object_id=object_id,
+                logon_id=logon_id,
+                session_id=session_id,
+                principal=username,
+                session_kind=session_kind,
+                started_at=session_start,
+                lifecycle_group_id=lifecycle_id,
+                logon_guid=logon_guid,
+                parent_lifecycle_group_id=parent_lifecycle_group_id,
+            )
+            payload = _SessionMaterializationPayload(
+                logon_type=logon_type,
+                source_ip=source_ip,
+                source_port=source_port,
+                transport_pid=transport_pid,
+                auth_protocol=auth_protocol,
+                smb_principal=smb_principal,
+                account_scope=account_scope,
+                auth_session_ref=auth_session_ref,
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
+                state_time=session_start,
+            )
+            allocator_patch = _SessionAllocatorPatch(
+                host_base=host_base_patch,
+                host_epoch=host_epoch_patch,
+                ordinal=ordinal_patch,
+                used_logon_id=used_logon_id,
+                windows_session_counter=session_counter_patch,
+                linux_logind=linux_logind_patch,
+            )
+            expected_version = self._materialization_version
+            return SessionMaterializationPlan(
+                _expected_version=expected_version,
+                _identity=identity,
+                _payload=payload,
+                _allocator_patch=allocator_patch,
+                _integrity_token=_materialization_integrity_token(
+                    self._materialization_secret,
+                    "session",
+                    expected_version,
+                    identity,
+                    payload,
+                    allocator_patch,
+                ),
+            )
+
+    def materialize_session(self, plan: SessionMaterializationPlan) -> ActiveSession:
+        """Commit one already-admitted session plan without sampling or domain validation."""
+
+        with self._lock:
+            self.validate_session_materialization(plan)
+            return self._commit_prevalidated_session_materialization(plan)
+
+    def plan_linux_logind_session_materialization(
+        self,
+        plan: SessionMaterializationPlan,
+        *,
+        rng: random.Random,
+        event_time: datetime,
+    ) -> SessionMaterializationPlan:
+        """Enrich an uncommitted session plan with one exact Linux logind ID.
+
+        The input plan remains allocation-free and is commonly used to derive a
+        LogonID-scoped deterministic RNG. The returned replacement carries the
+        exact allocator patch and action RNG successor state; neither owner is
+        mutated until authority commit.
+        """
+
+        with self._lock:
+            self._validate_session_materialization_plan(plan)
+            if plan.expected_version != self._materialization_version:
+                raise StateError("Session materialization plan became stale before enrichment")
+            if plan._allocator_patch.linux_logind is not None:
+                raise StateError("Session materialization plan already owns a Linux logind ID")
+            if plan.identity.session_id != 0:
+                raise StateError("Linux logind enrichment requires an unresolved session_id=0 plan")
+            session_id, logind_patch = self._preview_linux_logind_session_id(
+                plan.identity.hostname,
+                rng.getstate(),
+                event_time,
+            )
+            identity = replace(plan.identity, session_id=session_id)
+            allocator_patch = replace(
+                plan._allocator_patch,
+                windows_session_counter=None,
+                linux_logind=logind_patch,
+            )
+            return SessionMaterializationPlan(
+                _expected_version=plan.expected_version,
+                _identity=identity,
+                _payload=plan._payload,
+                _allocator_patch=allocator_patch,
+                _integrity_token=_materialization_integrity_token(
+                    self._materialization_secret,
+                    "session",
+                    plan.expected_version,
+                    identity,
+                    plan._payload,
+                    allocator_patch,
+                ),
+            )
+
+    def validate_session_materialization(self, plan: SessionMaterializationPlan) -> None:
+        """Validate every fallible session-start condition without publishing state."""
+
+        with self._lock:
+            self._validate_session_materialization_plan(plan)
+            if plan.expected_version != self._materialization_version:
+                raise StateError("Session materialization plan became stale before commit")
+            identity = plan.identity
+            if identity.logon_id in self.state.active_sessions:
+                raise StateError(
+                    f"Session materialization LogonID is already live: {identity.logon_id}"
+                )
+            if identity.logon_id in self._ended_sessions:
+                raise StateError(
+                    f"Session materialization LogonID is already ended: {identity.logon_id}"
+                )
+
+    def _commit_prevalidated_session_materialization(
+        self,
+        plan: SessionMaterializationPlan,
+        *,
+        advance_version: bool = True,
+        update_state_time: bool = True,
+    ) -> ActiveSession:
+        """Perform primitive session writes after validation under materialization_guard."""
+
+        patch = plan._allocator_patch
+        if patch.host_base is not None:
+            host, base = patch.host_base
+            self._logon_id_host_bases[host] = base
+            self._logon_id_used_host_bases.add(base)
+        if patch.host_epoch is not None:
+            host, epoch = patch.host_epoch
+            self._logon_id_epochs[host] = epoch
+        if patch.ordinal is not None:
+            key, value = patch.ordinal
+            self._logon_id_second_ordinals[key] = value
+        if patch.used_logon_id is not None:
+            self._used_logon_ids.add(patch.used_logon_id)
+        if patch.windows_session_counter is not None:
+            host, counter = patch.windows_session_counter
+            self._windows_session_id_counters[host] = counter
+        if patch.linux_logind is not None:
+            self._commit_linux_logind_allocator_patch(patch.linux_logind)
+        identity = plan.identity
+        payload = plan._payload
+        if update_state_time:
+            self.state.current_time = payload.state_time
+        session = ActiveSession(
+            logon_id=identity.logon_id,
+            username=identity.principal,
+            system=identity.hostname,
+            logon_type=payload.logon_type,
+            start_time=identity.started_at,
+            source_ip=payload.source_ip,
+            session_id=identity.session_id,
+            source_port=payload.source_port,
+            session_kind=identity.session_kind,
+            transport_pid=payload.transport_pid,
+            ecar_object_id=identity.object_id,
+            logon_guid=identity.logon_guid,
+            lifecycle_group_id=identity.lifecycle_group_id,
+            parent_lifecycle_group_id=identity.parent_lifecycle_group_id,
+            auth_protocol=payload.auth_protocol,
+            smb_principal=payload.smb_principal,
+            account_scope=payload.account_scope,
+            auth_session_ref=payload.auth_session_ref,
+            effective_uid=payload.effective_uid,
+            effective_gid=payload.effective_gid,
+        )
+        self.state.active_sessions[session.logon_id] = session
+        self._logon_id_aliases.pop(session.logon_id, None)
+        self._remove_ended_session(session.logon_id)
+        if advance_version:
+            self._materialization_version += 1
+        logger.debug(
+            "Materialized session %s for %s@%s",
+            session.logon_id,
+            session.username,
+            session.system,
+        )
+        return session
 
     # ========================================
     # Session Management
@@ -345,7 +2304,19 @@ class StateManager:
                 if self.state.current_time is None:
                     raise StateError("Cannot allocate LogonID: current_time not set")
                 event_time = self.state.current_time
-            return f"0x{self._allocate_logon_luid(system, event_time):x}"
+            logon_id = f"0x{self._allocate_logon_luid(system, event_time):x}"
+            self._materialization_version += 1
+            return logon_id
+
+    def preview_logon_id(self, system: str, event_time: datetime) -> str:
+        """Return the next canonical LogonID without mutating allocator state."""
+
+        with self._lock:
+            candidate, _host_base, _host_epoch, _ordinal = self._preview_logon_luid(
+                system,
+                ensure_utc(event_time),
+            )
+            return f"0x{candidate:x}"
 
     def next_semantic_peer_ordinal(self, family: str, stable_key: str) -> int:
         """Allocate an ordinal scoped only to otherwise identical semantic peers."""
@@ -438,7 +2409,7 @@ class StateManager:
     def _index_authoritative_session_end(self, session: ActiveSession) -> None:
         """Index an authoritative end plan for constant-time rebootstrap checks."""
         plan = session.end_plan
-        if plan is None or not plan.is_authoritative:
+        if plan is None or not plan.is_hard_deadline:
             return
         self._authoritative_session_ends.add(
             session.logon_id,
@@ -486,72 +2457,29 @@ class StateManager:
         Raises:
             StateError: If current_time is not set or LogonID counter exhausted
         """
-        with self._lock:
-            if start_time is None and self.state.current_time is None:
-                raise StateError("Cannot create session: current_time not set")
-
-            session_start_time = ensure_utc(start_time or self.state.current_time)
-            val = self._allocate_logon_luid(system, session_start_time)
-            logon_id = f"0x{val:x}"
-
-            # Create session
-            windows_session_id = (
-                session_id
-                if session_id is not None
-                else self._allocate_windows_session_id(
-                    system,
-                    username,
-                    logon_type,
-                    session_kind,
-                )
-            )
-            session_object_id = stable_uuid(
-                "session",
-                system,
-                username,
-                logon_type,
-                session_kind,
-                source_ip,
-                source_port,
-                session_start_time.isoformat(),
-                logon_id,
-                windows_session_id,
-            )
-            if logon_guid_required is not None:
-                logon_guid = (
-                    self._stable_logon_guid(system, logon_id)
-                    if logon_guid_required
-                    else _NULL_LOGON_GUID
-                )
-            session = ActiveSession(
-                logon_id=logon_id,
-                username=username,
-                system=system,
-                logon_type=logon_type,
-                start_time=session_start_time,
-                source_ip=source_ip,
-                session_id=windows_session_id,
-                source_port=source_port,
-                session_kind=session_kind,
-                transport_pid=transport_pid,
-                ecar_object_id=session_object_id,
-                logon_guid=logon_guid,
-                lifecycle_group_id=lifecycle_group_id
-                or stable_uuid("session-lifecycle", session_object_id),
-                parent_lifecycle_group_id=parent_lifecycle_group_id,
-                auth_protocol=auth_protocol,
-                smb_principal=smb_principal,
-                account_scope=account_scope,
-                auth_session_ref=auth_session_ref,
-                effective_uid=effective_uid,
-                effective_gid=effective_gid,
-            )
-
-            self.state.active_sessions[logon_id] = session
-            self._logon_id_aliases.pop(logon_id, None)
-            self._remove_ended_session(logon_id)
-            logger.debug(f"Created session {logon_id} for {username}@{system}")
-            return logon_id
+        plan = self.plan_session_materialization(
+            username=username,
+            system=system,
+            logon_type=logon_type,
+            source_ip=source_ip,
+            source_port=source_port,
+            session_kind=session_kind,
+            transport_pid=transport_pid,
+            start_time=start_time,
+            logon_guid=logon_guid,
+            logon_guid_required=logon_guid_required,
+            session_id=session_id,
+            lifecycle_group_id=lifecycle_group_id,
+            parent_lifecycle_group_id=parent_lifecycle_group_id,
+            auth_protocol=auth_protocol,
+            smb_principal=smb_principal,
+            account_scope=account_scope,
+            auth_session_ref=auth_session_ref,
+            effective_uid=effective_uid,
+            effective_gid=effective_gid,
+        )
+        with self.materialization_guard(plan.expected_version):
+            return self.materialize_session(plan).logon_id
 
     def get_session(self, logon_id: str) -> ActiveSession | None:
         """Get an active session by LogonID.
@@ -761,69 +2689,30 @@ class StateManager:
             )
             if existing is not None:
                 return existing
-            if logon_id in self._ended_sessions or resolved_logon_id in self._ended_sessions:
-                raise StateError(
-                    "Cannot register a new session with ended LogonID "
-                    f"{logon_id}; allocate a fresh canonical LogonID"
-                )
-            self._mark_logon_id_used(logon_id)
-
-            windows_session_id = (
-                session_id
-                if session_id is not None
-                else self._allocate_windows_session_id(
-                    system,
-                    username,
-                    logon_type,
-                    session_kind,
-                )
-            )
-            session_object_id = stable_uuid(
-                "registered-session",
-                system,
-                username,
-                logon_type,
-                session_kind,
-                source_ip,
-                source_port,
-                ensure_utc(start_time).isoformat(),
-                logon_id,
-                windows_session_id,
-            )
-            if logon_guid_required is not None:
-                logon_guid = (
-                    self._stable_logon_guid(system, logon_id)
-                    if logon_guid_required
-                    else _NULL_LOGON_GUID
-                )
-            session = ActiveSession(
-                logon_id=logon_id,
-                username=username,
-                system=system,
-                logon_type=logon_type,
-                start_time=ensure_utc(start_time),
-                source_ip=source_ip,
-                session_id=windows_session_id,
-                source_port=source_port,
-                session_kind=session_kind,
-                transport_pid=transport_pid,
-                ecar_object_id=session_object_id,
-                logon_guid=logon_guid,
-                lifecycle_group_id=lifecycle_group_id
-                or stable_uuid("session-lifecycle", session_object_id),
-                parent_lifecycle_group_id=parent_lifecycle_group_id,
-                auth_protocol=auth_protocol,
-                smb_principal=smb_principal,
-                account_scope=account_scope,
-                auth_session_ref=auth_session_ref,
-                effective_uid=effective_uid,
-                effective_gid=effective_gid,
-            )
-            self.state.active_sessions[logon_id] = session
-            self._logon_id_aliases.pop(logon_id, None)
-            self._remove_ended_session(logon_id)
-            logger.debug("Registered external session %s for %s@%s", logon_id, username, system)
-            return session
+        plan = self.plan_session_materialization(
+            logon_id=logon_id,
+            username=username,
+            system=system,
+            logon_type=logon_type,
+            source_ip=source_ip,
+            start_time=start_time,
+            source_port=source_port,
+            session_kind=session_kind,
+            transport_pid=transport_pid,
+            logon_guid=logon_guid,
+            logon_guid_required=logon_guid_required,
+            session_id=session_id,
+            lifecycle_group_id=lifecycle_group_id,
+            parent_lifecycle_group_id=parent_lifecycle_group_id,
+            auth_protocol=auth_protocol,
+            smb_principal=smb_principal,
+            account_scope=account_scope,
+            auth_session_ref=auth_session_ref,
+            effective_uid=effective_uid,
+            effective_gid=effective_gid,
+        )
+        with self.materialization_guard(plan.expected_version):
+            return self.materialize_session(plan)
 
     def update_session_metadata(
         self,
@@ -910,8 +2799,9 @@ class StateManager:
     def plan_session_end(self, logon_id: str, plan: SessionEndPlan) -> bool:
         """Attach an immutable canonical end plan to an active session.
 
-        An explicit storyline deadline cannot be silently replaced by another
-        event. Re-applying the same plan is idempotent.
+        Explicit storyline ends and action-bundle hard deadlines cannot be
+        silently replaced by another event. Re-applying the same plan is
+        idempotent.
         """
 
         with self._lock:
@@ -920,9 +2810,9 @@ class StateManager:
                 return False
             existing = session.end_plan
             if existing is not None and existing != plan:
-                if existing.is_authoritative:
+                if existing.is_hard_deadline:
                     raise StateError(
-                        "Cannot replace authoritative session end plan for "
+                        "Cannot replace authoritative or action-bundle session end plan for "
                         f"{logon_id}: {existing.canonical_end.isoformat()}"
                     )
             session.end_plan = plan
@@ -1030,6 +2920,7 @@ class StateManager:
             self._logon_id_aliases[logon_id] = new_logon_id
             self._remove_ended_session(logon_id)
             self._remove_ended_session(new_logon_id)
+            self._materialization_version += 1
             return new_logon_id
 
     def end_session(self, logon_id: str, end_time: datetime | None = None) -> bool:
@@ -1092,6 +2983,91 @@ class StateManager:
         with self._lock:
             return list(self.state.active_sessions.values())
 
+    def _preview_linux_logind_session_id(
+        self,
+        system: str,
+        rng_state: object,
+        event_time: datetime,
+    ) -> tuple[int, _LinuxLogindAllocatorPatch]:
+        """Preview one logind ID and its exact allocator patch without mutation."""
+
+        preview_rng = random.Random()
+        preview_rng.setstate(rng_state)
+        sampled_initial = preview_rng.randint(20, 250)
+        normalized_time = ensure_utc(event_time).replace(microsecond=0)
+        current_initial = self._linux_logind_session_initials.get(system)
+        initial = current_initial if current_initial is not None else sampled_initial
+        initial_patch = initial if current_initial is None else None
+        boot_epoch = self._system_boot_times.get(system)
+        current_epoch = self._linux_logind_session_epochs.get(system)
+        epoch = boot_epoch if boot_epoch is not None else current_epoch
+        epoch_patch: datetime | None = None
+        if epoch is None:
+            epoch = normalized_time
+            epoch_patch = normalized_time
+        elapsed_seconds = max(
+            0,
+            int((normalized_time - ensure_utc(epoch)).total_seconds()),
+        )
+        elapsed_minutes = elapsed_seconds // 60
+        second_slot = normalized_time.second // 10
+        stride = 8 + (_stable_seed(f"logind_session_minute_stride:{system}") % 2)
+        minute_jitter = _stable_seed(f"logind_session_minute_jitter:{system}:{elapsed_minutes}") % 2
+        candidate = initial + (elapsed_minutes * stride) + second_slot + minute_jitter
+        used = self._linux_logind_session_used_ids.get(system, set())
+        allocations = self._linux_logind_session_allocations.get(system)
+        earlier_max = (
+            allocations.max_value_at_or_before(normalized_time) if allocations is not None else None
+        )
+        if earlier_max is not None and candidate <= earlier_max:
+            bump = 1 + (
+                _stable_seed(f"logind_session_lower_bound:{system}:{normalized_time}:{candidate}")
+                % 3
+            )
+            candidate = earlier_max + bump
+        salt = 0
+        while candidate in used or (
+            allocations is not None
+            and allocations.matches_elapsed_delta(
+                normalized_time,
+                candidate,
+                tolerance=0.0,
+                integral_seconds=True,
+            )
+        ):
+            candidate += 7 + (
+                _stable_seed(f"logind_session_collision:{system}:{candidate}:{salt}") % 7
+            )
+            salt += 1
+        return candidate, _LinuxLogindAllocatorPatch(
+            system=system,
+            event_time=normalized_time,
+            session_id=candidate,
+            initial=initial_patch,
+            epoch=epoch_patch,
+            rng_state_after=preview_rng.getstate(),
+        )
+
+    def _commit_linux_logind_allocator_patch(
+        self,
+        patch: _LinuxLogindAllocatorPatch,
+    ) -> None:
+        """Apply one validated logind allocator patch with primitive writes only."""
+
+        if patch.initial is not None:
+            self._linux_logind_session_initials[patch.system] = patch.initial
+        if patch.epoch is not None:
+            self._linux_logind_session_epochs[patch.system] = patch.epoch
+        self._linux_logind_session_used_ids.setdefault(patch.system, set()).add(patch.session_id)
+        self._linux_logind_session_allocations.setdefault(
+            patch.system,
+            TemporalAllocationIndex(),
+        ).add(patch.event_time, patch.session_id)
+        self._linux_logind_session_last_ids[patch.system] = max(
+            patch.session_id,
+            self._linux_logind_session_last_ids.get(patch.system, patch.session_id),
+        )
+
     def next_linux_logind_session_id(
         self,
         system: str,
@@ -1106,63 +3082,20 @@ class StateManager:
         """
         with self._lock:
             if event_time is not None:
-                normalized_time = ensure_utc(event_time).replace(microsecond=0)
-                initial = self._linux_logind_session_initials.setdefault(
+                candidate, patch = self._preview_linux_logind_session_id(
                     system,
-                    rng.randint(20, 250),
+                    rng.getstate(),
+                    event_time,
                 )
-                epoch = self._system_boot_times.get(system)
-                if epoch is None:
-                    epoch = self._linux_logind_session_epochs.setdefault(
-                        system,
-                        normalized_time,
-                    )
-                elapsed_seconds = max(
-                    0,
-                    int((normalized_time - ensure_utc(epoch)).total_seconds()),
-                )
-                elapsed_minutes = elapsed_seconds // 60
-                second_slot = normalized_time.second // 10
-                stride = 8 + (_stable_seed(f"logind_session_minute_stride:{system}") % 2)
-                minute_jitter = (
-                    _stable_seed(f"logind_session_minute_jitter:{system}:{elapsed_minutes}") % 2
-                )
-                candidate = initial + (elapsed_minutes * stride) + second_slot + minute_jitter
-                used = self._linux_logind_session_used_ids.setdefault(system, set())
-                allocations = self._linux_logind_session_allocations.setdefault(
-                    system,
-                    TemporalAllocationIndex(),
-                )
-                earlier_max = allocations.max_value_at_or_before(normalized_time)
-                if earlier_max is not None and candidate <= earlier_max:
-                    bump = 1 + (
-                        _stable_seed(
-                            f"logind_session_lower_bound:{system}:{normalized_time}:{candidate}"
-                        )
-                        % 3
-                    )
-                    candidate = earlier_max + bump
-                salt = 0
-                while candidate in used or allocations.matches_elapsed_delta(
-                    normalized_time,
-                    candidate,
-                    tolerance=0.0,
-                    integral_seconds=True,
-                ):
-                    candidate += 7 + (
-                        _stable_seed(f"logind_session_collision:{system}:{candidate}:{salt}") % 7
-                    )
-                    salt += 1
-                used.add(candidate)
-                allocations.add(normalized_time, candidate)
-                self._linux_logind_session_last_ids[system] = max(
-                    candidate, self._linux_logind_session_last_ids.get(system, candidate)
-                )
+                self._commit_linux_logind_allocator_patch(patch)
+                rng.setstate(patch.rng_state_after)
+                self._materialization_version += 1
                 return candidate
 
             if system not in self._linux_logind_session_counters:
                 self._linux_logind_session_counters[system] = rng.randint(20, 250)
             self._linux_logind_session_counters[system] += rng.randint(1, 4)
+            self._materialization_version += 1
             return self._linux_logind_session_counters[system]
 
     def _linux_logind_session_block_offset(self, system: str, block: int) -> int:
@@ -1177,6 +3110,1456 @@ class StateManager:
     # ========================================
     # Process Management
     # ========================================
+
+    @staticmethod
+    def _build_linux_pid_weekly_churn_prefix(system: str) -> tuple[int, ...]:
+        """Build one immutable hidden-churn prefix without mutating allocator caches."""
+
+        rng = random.Random(_stable_seed(f"linux_pid_hidden_churn:{system}"))
+        prefix = [0]
+        hourly_factor = 1.0
+        hourly_regimes = [0.20, 0.40, 0.70, 1.00, 1.50, 2.80]
+        for minute_of_week in range(_MINUTES_PER_WEEK):
+            day = minute_of_week // (24 * 60)
+            minute_of_day = minute_of_week % (24 * 60)
+            hour = minute_of_day // 60
+            if minute_of_day % 60 == 0:
+                if hour % len(hourly_regimes) == 0:
+                    rng.shuffle(hourly_regimes)
+                hourly_factor = hourly_regimes[hour % len(hourly_regimes)]
+            base_churn = 76 if day >= 5 else 116 if 8 <= hour < 18 else 92
+            hourly_target = round(base_churn * hourly_factor)
+            lower = max(48, round(hourly_target * 0.45))
+            upper = min(720, max(lower, round(hourly_target * 1.55)))
+            churn = rng.randint(lower, upper)
+            if rng.random() < 0.04:
+                churn += rng.randint(90, 480)
+            churn = max(churn, 2 * _LINUX_PID_REORDER_LANE_WIDTH)
+            prefix.append(prefix[-1] + churn)
+        return tuple(prefix)
+
+    @staticmethod
+    def _linux_pid_hidden_churn_from_prefix(
+        prefix: tuple[int, ...],
+        elapsed_seconds: int,
+    ) -> int:
+        if elapsed_seconds <= 0:
+            return 0
+        elapsed_minutes, second_in_minute = divmod(elapsed_seconds, 60)
+        full_weeks, minute_of_week = divmod(elapsed_minutes, _MINUTES_PER_WEEK)
+        weekly_churn = prefix[-1]
+        minute_churn = prefix[minute_of_week + 1] - prefix[minute_of_week]
+        partial_churn = (second_in_minute * minute_churn) // 60
+        return (full_weeks * weekly_churn) + prefix[minute_of_week] + partial_churn
+
+    def _preview_pid_allocator(
+        self,
+        system: str,
+        os_category: str,
+    ) -> tuple[int, random.Random, bool]:
+        retained_os = self._pid_os.get(system)
+        if retained_os is not None and retained_os != os_category:
+            raise StateError(
+                f"Cannot plan {os_category} process in {retained_os} PID namespace for {system}"
+            )
+        retained_rng = self._pid_rngs.get(system)
+        if retained_rng is not None:
+            rng = random.Random()
+            rng.setstate(retained_rng.getstate())
+            return self._pid_counters[system], rng, False
+        rng = random.Random(_stable_seed(f"pid_alloc_{system}"))
+        if system in self._pid_counters:
+            return self._pid_counters[system], rng, False
+        if os_category == "windows":
+            start = rng.randint(2000, 6000)
+            counter = start - (start % 4)
+        else:
+            counter = rng.randint(8000, 42000)
+        return counter, rng, True
+
+    def _preview_windows_pid(
+        self,
+        *,
+        system: str,
+        counter: int,
+        rng: random.Random,
+        current_time: datetime,
+        extra_reserved_pids: set[int] | None = None,
+    ) -> tuple[int, int, int, int]:
+        logical_position = counter
+        gap = max(1, int(rng.lognormvariate(1.2, 0.8)))
+        next_logical = logical_position + (_WINDOWS_PID_STEP * gap)
+        planned = extra_reserved_pids or set()
+        occupied = self._reserved_pid_count(system) + len(planned)
+        candidates = 0
+        for _probe in range(occupied + 1):
+            candidates += 1
+            pid = (
+                logical_position
+                if logical_position <= _WINDOWS_PID_MAX
+                else self._normalize_windows_pid(logical_position)
+            )
+            if pid not in planned and not self._pid_is_reserved(
+                system,
+                pid,
+                current_time,
+                None,
+            ):
+                return (
+                    pid,
+                    logical_position,
+                    max(next_logical, logical_position + _WINDOWS_PID_STEP),
+                    candidates,
+                )
+            logical_position += _WINDOWS_PID_STEP
+        raise StateError("Windows PID namespace is fully occupied by active reservations")
+
+    def _preview_linux_pid(
+        self,
+        *,
+        system: str,
+        counter: int,
+        rng: random.Random,
+        current_time: datetime,
+        minimum_logical_exclusive: int | None,
+        prefix: tuple[int, ...],
+        epoch: datetime,
+        bucket_ordinal: int | None = None,
+        extra_allocations: tuple[tuple[datetime, int], ...] = (),
+        extra_reserved_pids: set[int] | None = None,
+    ) -> tuple[int, int, tuple[tuple[str, datetime], int], int]:
+        if (
+            self._pid_allocation_watermark is not None
+            and current_time < self._pid_allocation_watermark
+        ):
+            raise StateError(
+                "Cannot plan PID before the sealed allocation watermark: "
+                f"{current_time.isoformat()} < {self._pid_allocation_watermark.isoformat()}"
+            )
+        elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
+        time_offset = self._linux_pid_hidden_churn_from_prefix(prefix, elapsed_seconds)
+        lane_start_seconds = (
+            elapsed_seconds // _LINUX_PID_REORDER_LANE_SECONDS
+        ) * _LINUX_PID_REORDER_LANE_SECONDS
+        lane_end_seconds = lane_start_seconds + _LINUX_PID_REORDER_LANE_SECONDS
+        lane_start = epoch + timedelta(seconds=lane_start_seconds)
+        lane_end = epoch + timedelta(seconds=lane_end_seconds)
+        lane_start_offset = self._linux_pid_hidden_churn_from_prefix(prefix, lane_start_seconds)
+        lane_end_offset = self._linux_pid_hidden_churn_from_prefix(prefix, lane_end_seconds)
+        if lane_end_offset - lane_start_offset < _LINUX_PID_REORDER_LANE_WIDTH:
+            raise StateError(
+                "Linux PID reorder lane is narrower than its configured capacity "
+                f"(host={system}, start={lane_start.isoformat()})"
+            )
+        lane_lower_bound = counter + lane_start_offset
+        lane_upper_bound = counter + lane_end_offset
+        ordinal_key = (system, current_time)
+        ordinal = (
+            self._pid_bucket_offsets.get(ordinal_key, 0)
+            if bucket_ordinal is None
+            else bucket_ordinal
+        )
+        gap = max(1, min(5, int(rng.lognormvariate(0.3, 0.8))))
+        lane_width = lane_upper_bound - lane_lower_bound
+        natural_offset = min(
+            max(0, time_offset - lane_start_offset),
+            lane_width - _LINUX_PID_REORDER_LANE_HEADROOM - 1,
+        )
+        natural_lane_position = lane_lower_bound + natural_offset
+        logical_position = natural_lane_position + ordinal
+        natural_logical_position = logical_position
+        allocations = self._linux_pid_allocations.get(system)
+        extra_before = [
+            logical for allocated_at, logical in extra_allocations if allocated_at <= current_time
+        ]
+        extra_after = sorted(
+            (allocated_at, logical)
+            for allocated_at, logical in extra_allocations
+            if allocated_at > current_time
+        )
+        prior_logical = (
+            allocations.max_value_at_or_before(current_time) if allocations is not None else None
+        )
+        if extra_before:
+            prior_logical = max(
+                max(extra_before),
+                prior_logical if prior_logical is not None else max(extra_before),
+            )
+        sealed_logical = self._pid_sealed_logical_positions.get(system)
+        lower_bound = max(
+            value
+            for value in (minimum_logical_exclusive, prior_logical, sealed_logical, 0)
+            if value is not None
+        )
+        future_logical = allocations.min_value_after(current_time) if allocations else None
+        future_record = allocations.first_record_after(current_time) if allocations else None
+        if extra_after and (future_record is None or extra_after[0][0] < future_record[0]):
+            future_record = extra_after[0]
+            future_logical = extra_after[0][1]
+        future_lane_record = (
+            allocations.first_record_after(lane_end - timedelta(microseconds=1))
+            if allocations
+            else None
+        )
+        extra_lane_record = next(
+            (
+                (allocated_at, logical)
+                for allocated_at, logical in extra_after
+                if allocated_at >= lane_end
+            ),
+            None,
+        )
+        if extra_lane_record is not None and (
+            future_lane_record is None or extra_lane_record[0] < future_lane_record[0]
+        ):
+            future_lane_record = extra_lane_record
+        logical_position = max(logical_position, lower_bound + 1, lane_lower_bound)
+        if future_logical is not None and logical_position >= future_logical:
+            logical_position = max(lower_bound + 1, lane_lower_bound)
+        if future_logical is not None and logical_position >= future_logical:
+            future_time = future_record[0] if future_record is not None else None
+            if future_time is not None and future_time < lane_end:
+                logical_position = max(natural_logical_position, lower_bound, future_logical) + 1
+                future_logical = None
+            else:
+                raise StateError(
+                    "Cannot plan Linux PID inside its bounded 30-second reorder lane; "
+                    f"host={system} time={current_time.isoformat()}"
+                )
+        if logical_position >= lane_upper_bound and future_lane_record is not None:
+            raise StateError(
+                "Linux PID 30-second reorder lane capacity exhausted "
+                f"(host={system}, time={current_time.isoformat()})"
+            )
+        planned_pids = extra_reserved_pids or set()
+        occupied = (
+            self._reserved_pid_count(system)
+            + (len(allocations) if allocations else 0)
+            + len(extra_allocations)
+            + len(planned_pids)
+        )
+        available_positions = max(0, lane_upper_bound - logical_position)
+        probe_budget = (
+            min(occupied + 1, available_positions)
+            if future_lane_record is not None
+            else occupied + 1
+        )
+        candidates = 0
+        for _probe in range(probe_budget):
+            candidates += 1
+            pid = self._normalize_linux_pid(logical_position)
+            if (
+                (allocations is None or not allocations.contains_value(logical_position))
+                and all(
+                    planned_logical != logical_position
+                    for _planned_at, planned_logical in extra_allocations
+                )
+                and pid not in planned_pids
+                and not self._pid_is_reserved(system, pid, current_time, None)
+            ):
+                consumed = logical_position - natural_lane_position
+                return (
+                    pid,
+                    logical_position,
+                    (ordinal_key, max(ordinal + gap, consumed + gap)),
+                    candidates,
+                )
+            logical_position += 1
+            if logical_position >= lane_upper_bound and future_lane_record is not None:
+                break
+            if future_logical is not None and logical_position >= future_logical:
+                future_time = future_record[0] if future_record is not None else None
+                if future_time is not None and future_time < lane_end:
+                    logical_position = future_logical + 1
+                    future_logical = None
+                    continue
+                raise StateError(
+                    "Cannot plan Linux PID before a future lane; current lane is reserved"
+                )
+        raise StateError(
+            "Linux PID 30-second reorder lane contains only reserved candidates "
+            f"(host={system}, time={current_time.isoformat()})"
+        )
+
+    def _preview_primary_thread(
+        self,
+        *,
+        system: str,
+        os_category: str,
+        object_id: str,
+        pid: int,
+        counter_override: int | None = None,
+        rng_state_override: object | None = None,
+        extra_used_tids: set[int] | None = None,
+    ) -> tuple[int, tuple[str, int] | None, tuple[str, object] | None]:
+        if os_category == "linux":
+            return pid, None, None
+        counter = (
+            self._thread_id_counters.get(
+                system,
+                2000 + (4 * (_stable_seed(f"windows_tid_initial:{system}") % 5000)),
+            )
+            if counter_override is None
+            else counter_override
+        )
+        retained_rng = self._thread_id_rngs.get(system)
+        rng = random.Random()
+        rng.setstate(
+            rng_state_override
+            if rng_state_override is not None
+            else retained_rng.getstate()
+            if retained_rng is not None
+            else random.Random(_stable_seed(f"windows_tid_alloc:{system}")).getstate()
+        )
+        used = {thread.tid for thread in self._running_threads.find("system", system)}
+        used.update(extra_used_tids or ())
+        candidate = counter - (counter % 4)
+        while candidate in used or candidate <= 0:
+            candidate += 4
+        next_counter = candidate + (4 * rng.randint(1, 17))
+        return candidate, (system, next_counter), (system, rng.getstate())
+
+    def plan_process_materialization(
+        self,
+        *,
+        system: str,
+        parent_pid: int,
+        image: str,
+        command_line: str,
+        username: str,
+        integrity_level: str,
+        os_category: str,
+        logon_id: str = "",
+        lifecycle_group_id: str = "",
+        parent_lifecycle_group_id: str = "",
+        concurrency_group_id: str = "",
+        start_time: datetime | None = None,
+        fixed_pid: int | None = None,
+        require_session: bool = False,
+        parent_activity_time: datetime | None = None,
+        auth_session_id: int | None = None,
+        auth_logon_type: int | None = None,
+    ) -> ProcessMaterializationPlan:
+        """Plan one exact process identity without consuming PID/thread allocators."""
+
+        with self._lock:
+            raw_start = start_time or self.state.current_time
+            if raw_start is None:
+                raise StateError("Cannot plan process: current_time not set")
+            effective_start = ensure_utc(raw_start)
+            if parent_pid not in {0, 4} and not self.is_process_active_at(
+                system, parent_pid, effective_start
+            ):
+                raise StateError(
+                    f"Cannot plan process: parent PID {parent_pid} does not exist on {system}"
+                )
+            if require_session and not logon_id:
+                raise StateError("Session-owned process materialization requires a LogonID")
+            owning_session = self.get_session_at(logon_id, effective_start) if logon_id else None
+            if require_session and logon_id and owning_session is None:
+                raise StateError(
+                    f"Cannot plan process outside session {logon_id} at "
+                    f"{effective_start.isoformat()}"
+                )
+            if owning_session is not None:
+                if auth_session_id is not None and auth_session_id != owning_session.session_id:
+                    raise StateError("Process auth session ID disagrees with its owning session")
+                if auth_logon_type is not None and auth_logon_type != owning_session.logon_type:
+                    raise StateError("Process auth logon type disagrees with its owning session")
+                auth_session_id = owning_session.session_id
+                auth_logon_type = owning_session.logon_type
+            counter, pid_rng, allocator_new = self._preview_pid_allocator(system, os_category)
+            pid_epoch_patch: tuple[str, datetime] | None = None
+            prefix_patch: tuple[str, tuple[int, ...]] | None = None
+            linux_allocation: tuple[str, datetime, int] | None = None
+            bucket_patch: tuple[tuple[str, datetime], int] | None = None
+            fixed_patch: tuple[str, int] | None = None
+            candidate_delta = 0
+            allocation_delta = 0
+            if fixed_pid is not None:
+                if fixed_pid < 0 or self._pid_is_reserved(system, fixed_pid, effective_start, None):
+                    raise StateError(
+                        f"Cannot plan fixed process: PID {fixed_pid} is reserved on {system}"
+                    )
+                pid = fixed_pid
+                logical_position = fixed_pid
+                fixed_patch = (system, fixed_pid)
+                if os_category == "linux":
+                    linux_allocation = (system, effective_start, fixed_pid)
+            elif os_category == "windows":
+                pid, logical_position, counter, candidate_delta = self._preview_windows_pid(
+                    system=system,
+                    counter=counter,
+                    rng=pid_rng,
+                    current_time=effective_start,
+                )
+                allocation_delta = 1
+            else:
+                epoch = self._system_boot_times.get(system) or self._pid_time_epochs.get(system)
+                if epoch is None:
+                    epoch = effective_start
+                    pid_epoch_patch = (system, epoch)
+                prefix = self._linux_pid_weekly_churn_prefixes.get(system)
+                if prefix is None:
+                    prefix = self._build_linux_pid_weekly_churn_prefix(system)
+                    prefix_patch = (system, prefix)
+                minimum_parent = None
+                parent = self.state.running_processes.get((system, parent_pid))
+                if parent is not None and parent.start_time <= effective_start and parent.pid > 1:
+                    minimum_parent = parent.pid_logical_position
+                pid, logical_position, bucket_patch, candidate_delta = self._preview_linux_pid(
+                    system=system,
+                    counter=counter,
+                    rng=pid_rng,
+                    current_time=effective_start,
+                    minimum_logical_exclusive=minimum_parent,
+                    prefix=prefix,
+                    epoch=ensure_utc(epoch),
+                )
+                linux_allocation = (system, effective_start, logical_position)
+                allocation_delta = 1
+            object_id = stable_uuid(
+                "registered-process" if fixed_pid is not None else "process",
+                system,
+                pid,
+                parent_pid,
+                image,
+                command_line,
+                username,
+                effective_start.isoformat(),
+                logon_id,
+            )
+            process_lifecycle_id = lifecycle_group_id or stable_uuid("process-lifecycle", object_id)
+            process_parent_group = self._process_parent_lifecycle_group(
+                process_lifecycle_id,
+                parent_lifecycle_group_id,
+                owning_session,
+            )
+            thread_os_category = (
+                os_category if allocator_new else self._pid_os.get(system, "windows")
+            )
+            primary_tid, thread_counter, thread_rng_state = self._preview_primary_thread(
+                system=system,
+                os_category=thread_os_category,
+                object_id=object_id,
+                pid=pid,
+            )
+            thread_object_id = stable_uuid(
+                "thread",
+                system,
+                object_id,
+                pid,
+                primary_tid,
+                effective_start.isoformat(),
+                "primary",
+            )
+            identity = ProcessIdentity(
+                hostname=system,
+                object_id=object_id,
+                pid=pid,
+                parent_pid=parent_pid,
+                image=image,
+                command_line=command_line,
+                principal=username,
+                logon_id=logon_id,
+                started_at=effective_start,
+                lifecycle_group_id=process_lifecycle_id,
+                parent_lifecycle_group_id=process_parent_group,
+                primary_thread=ThreadIdentity(
+                    hostname=system,
+                    process_object_id=object_id,
+                    pid=pid,
+                    tid=primary_tid,
+                    object_id=thread_object_id,
+                    started_at=effective_start,
+                ),
+            )
+            payload = _ProcessMaterializationPayload(
+                integrity_level=integrity_level,
+                concurrency_group_id=concurrency_group_id,
+                pid_logical_position=logical_position,
+                state_time=effective_start,
+                parent_activity_time=(
+                    ensure_utc(parent_activity_time) if parent_activity_time is not None else None
+                ),
+                auth_session_id=auth_session_id,
+                auth_logon_type=auth_logon_type,
+                require_session=require_session,
+            )
+            allocator_patch = _ProcessAllocatorPatch(
+                pid_counter=(system, counter),
+                pid_os=(system, os_category) if allocator_new else None,
+                pid_rng_state=(system, pid_rng.getstate()),
+                pid_epoch=pid_epoch_patch,
+                pid_weekly_prefix=prefix_patch,
+                linux_allocation=linux_allocation,
+                pid_bucket_offset=bucket_patch,
+                fixed_pid=fixed_patch,
+                pid_allocation_count_delta=allocation_delta,
+                pid_candidate_probe_delta=candidate_delta,
+                thread_counter=thread_counter,
+                thread_rng_state=thread_rng_state,
+            )
+            expected_version = self._materialization_version
+            return ProcessMaterializationPlan(
+                _expected_version=expected_version,
+                _identity=identity,
+                _payload=payload,
+                _allocator_patch=allocator_patch,
+                _integrity_token=_materialization_integrity_token(
+                    self._materialization_secret,
+                    "process",
+                    expected_version,
+                    identity,
+                    payload,
+                    allocator_patch,
+                ),
+            )
+
+    def _process_termination_threads(
+        self,
+        process_object_id: str,
+    ) -> tuple[ThreadIdentity, ...]:
+        """Return the exact ordered live-thread set for one process object."""
+
+        return tuple(
+            sorted(
+                (
+                    self._thread_identity(thread)
+                    for thread in self._running_threads.find(
+                        "process_object_id",
+                        process_object_id,
+                    )
+                ),
+                key=lambda thread: (
+                    thread.hostname,
+                    thread.process_object_id,
+                    thread.tid,
+                    thread.object_id,
+                ),
+            )
+        )
+
+    def _process_termination_session_references(
+        self,
+        system: str,
+        pid: int,
+    ) -> tuple[_ProcessTerminationSessionReference, ...]:
+        """Return the exact active-session pointers cleared by a termination."""
+
+        references = []
+        for session in self._active_sessions.find("system", system):
+            referenced_fields = tuple(
+                name for name in _SESSION_PROCESS_REFERENCE_FIELDS if getattr(session, name) == pid
+            )
+            if referenced_fields:
+                references.append(
+                    _ProcessTerminationSessionReference(
+                        logon_id=session.logon_id,
+                        object_id=session.ecar_object_id,
+                        fields=referenced_fields,
+                    )
+                )
+        return tuple(
+            sorted(
+                references,
+                key=lambda reference: (
+                    reference.logon_id,
+                    reference.object_id,
+                    reference.fields,
+                ),
+            )
+        )
+
+    def plan_process_termination_materialization(
+        self,
+        *,
+        system: str,
+        pid: int,
+        end_time: datetime | None = None,
+        parent_activity_time: datetime | None = None,
+    ) -> ProcessTerminationMaterializationPlan:
+        """Freeze one exact live process termination without publishing state."""
+
+        with self._lock:
+            process = self.state.running_processes.get((system, pid))
+            if process is None:
+                raise StateError(
+                    f"Cannot plan process termination: PID {pid} is not live on {system}"
+                )
+            identity = self._process_identity(process)
+            effective_end = ensure_utc(end_time or self.state.current_time or process.start_time)
+            normalized_parent_activity = (
+                ensure_utc(parent_activity_time) if parent_activity_time is not None else None
+            )
+            parent_identity: ProcessIdentity | None = None
+            if normalized_parent_activity is not None:
+                if identity.parent_pid <= 0 or identity.parent_pid == identity.pid:
+                    raise StateError(
+                        "Process termination parent activity requires a distinct live parent"
+                    )
+                parent = self.state.running_processes.get((identity.hostname, identity.parent_pid))
+                if parent is None:
+                    raise StateError(
+                        "Process termination parent activity requires an exact live parent: "
+                        f"{identity.hostname} PID={identity.parent_pid}"
+                    )
+                parent_identity = self._process_identity(parent)
+                if normalized_parent_activity < parent_identity.started_at:
+                    raise StateError("Process termination parent activity precedes parent start")
+
+            payload = _ProcessTerminationMaterializationPayload(
+                end_time=effective_end,
+                threads=self._process_termination_threads(identity.object_id),
+                parent_identity=parent_identity,
+                parent_activity_time=normalized_parent_activity,
+                session_references=self._process_termination_session_references(system, pid),
+            )
+            expected_version = self._materialization_version
+            plan = ProcessTerminationMaterializationPlan(
+                _expected_version=expected_version,
+                _identity=identity,
+                _payload=payload,
+                _integrity_token=_process_termination_materialization_integrity_token(
+                    self._materialization_secret,
+                    expected_version=expected_version,
+                    identity=identity,
+                    payload=payload,
+                ),
+            )
+            self.validate_process_termination_materialization(plan)
+            return plan
+
+    def _plan_batch_process(
+        self,
+        builder: MaterializationBatchBuilder,
+        *,
+        system: str,
+        parent_pid: int,
+        image: str,
+        command_line: str,
+        username: str,
+        integrity_level: str,
+        os_category: str,
+        logon_id: str,
+        lifecycle_group_id: str,
+        parent_lifecycle_group_id: str,
+        concurrency_group_id: str,
+        start_time: datetime | None,
+        fixed_pid: int | None,
+        require_session: bool,
+        parent_activity_time: datetime | None,
+        auth_session_id: int | None,
+        auth_logon_type: int | None,
+        parent_plan: ProcessMaterializationPlan | None,
+        session_plan: SessionMaterializationPlan | None,
+    ) -> ProcessMaterializationPlan:
+        """Plan one batch process against exact canonical and prior staged owners."""
+
+        with self._lock:
+            if (
+                builder._manager is not self
+                or builder.expected_version != self._materialization_version
+            ):
+                raise StateError("Materialization batch became stale during process planning")
+            if self.state.current_time != builder._expected_state_time:
+                raise StateError("Materialization batch state-time fence changed during planning")
+            raw_start = start_time or self.state.current_time
+            if raw_start is None:
+                raise StateError("Cannot plan process: current_time not set")
+            effective_start = ensure_utc(raw_start)
+
+            planned_parent: ProcessIdentity | None = None
+            if parent_plan is not None:
+                if parent_plan not in builder._processes:
+                    raise StateError("Batch process parent must be an earlier planned member")
+                planned_parent = parent_plan.identity
+                if (
+                    planned_parent.hostname != system
+                    or planned_parent.pid != parent_pid
+                    or planned_parent.started_at > effective_start
+                ):
+                    raise StateError("Batch process parent identity is not active for child start")
+            elif parent_pid not in {0, 4} and not self.is_process_active_at(
+                system,
+                parent_pid,
+                effective_start,
+            ):
+                raise StateError(
+                    f"Cannot plan process: parent PID {parent_pid} does not exist on {system}"
+                )
+
+            if require_session and not logon_id:
+                raise StateError("Session-owned process materialization requires a LogonID")
+            if session_plan is None and builder._session is not None:
+                if builder._session.identity.logon_id == logon_id:
+                    session_plan = builder._session
+            if session_plan is not None:
+                if session_plan is not builder._session:
+                    raise StateError("Batch process session must be the batch session member")
+                planned_session = session_plan.identity
+                if (
+                    planned_session.hostname != system
+                    or planned_session.logon_id != logon_id
+                    or planned_session.started_at > effective_start
+                ):
+                    raise StateError("Batch process session identity is not active for start")
+                owning_session = None
+            else:
+                planned_session = None
+                owning_session = (
+                    self.get_session_at(logon_id, effective_start) if logon_id else None
+                )
+            if require_session and logon_id and owning_session is None and planned_session is None:
+                raise StateError(
+                    f"Cannot plan process outside session {logon_id} at "
+                    f"{effective_start.isoformat()}"
+                )
+            expected_session_id = (
+                planned_session.session_id
+                if planned_session is not None
+                else owning_session.session_id
+                if owning_session is not None
+                else None
+            )
+            expected_logon_type = (
+                session_plan.logon_type
+                if planned_session is not None and session_plan is not None
+                else owning_session.logon_type
+                if owning_session is not None
+                else None
+            )
+            if planned_session is not None or owning_session is not None:
+                if auth_session_id is not None and auth_session_id != expected_session_id:
+                    raise StateError("Process auth session ID disagrees with its owning session")
+                if auth_logon_type is not None and auth_logon_type != expected_logon_type:
+                    raise StateError("Process auth logon type disagrees with its owning session")
+                auth_session_id = expected_session_id
+                auth_logon_type = expected_logon_type
+
+            allocator_new = False
+            if system not in builder._pid_counters:
+                counter, pid_rng, allocator_new = self._preview_pid_allocator(
+                    system,
+                    os_category,
+                )
+                builder._pid_counters[system] = counter
+                builder._pid_rng_states[system] = pid_rng.getstate()
+                builder._pid_os[system] = os_category
+                if allocator_new:
+                    builder._new_pid_namespaces.add(system)
+            elif builder._pid_os[system] != os_category:
+                raise StateError(
+                    f"Cannot plan {os_category} process in {builder._pid_os[system]} "
+                    f"PID namespace for {system}"
+                )
+            counter = builder._pid_counters[system]
+            pid_rng = random.Random()
+            pid_rng.setstate(builder._pid_rng_states[system])
+            planned_pids = builder._planned_pids.setdefault(system, set())
+
+            pid_epoch_patch: tuple[str, datetime] | None = None
+            prefix_patch: tuple[str, tuple[int, ...]] | None = None
+            linux_allocation: tuple[str, datetime, int] | None = None
+            bucket_patch: tuple[tuple[str, datetime], int] | None = None
+            fixed_patch: tuple[str, int] | None = None
+            candidate_delta = 0
+            allocation_delta = 0
+            if fixed_pid is not None:
+                if (
+                    fixed_pid < 0
+                    or fixed_pid in planned_pids
+                    or self._pid_is_reserved(system, fixed_pid, effective_start, None)
+                ):
+                    raise StateError(
+                        f"Cannot plan fixed process: PID {fixed_pid} is reserved on {system}"
+                    )
+                pid = fixed_pid
+                logical_position = fixed_pid
+                fixed_patch = (system, fixed_pid)
+                if os_category == "linux":
+                    linux_allocation = (system, effective_start, fixed_pid)
+            elif os_category == "windows":
+                pid, logical_position, counter, candidate_delta = self._preview_windows_pid(
+                    system=system,
+                    counter=counter,
+                    rng=pid_rng,
+                    current_time=effective_start,
+                    extra_reserved_pids=planned_pids,
+                )
+                allocation_delta = 1
+            else:
+                epoch = builder._pid_epochs.get(system)
+                if epoch is None:
+                    epoch = self._system_boot_times.get(system) or self._pid_time_epochs.get(system)
+                    if epoch is None:
+                        epoch = effective_start
+                        pid_epoch_patch = (system, epoch)
+                    builder._pid_epochs[system] = ensure_utc(epoch)
+                prefix = builder._pid_prefixes.get(system)
+                if prefix is None:
+                    prefix = self._linux_pid_weekly_churn_prefixes.get(system)
+                    if prefix is None:
+                        prefix = self._build_linux_pid_weekly_churn_prefix(system)
+                        prefix_patch = (system, prefix)
+                    builder._pid_prefixes[system] = prefix
+                minimum_parent = None
+                if planned_parent is not None:
+                    minimum_parent = parent_plan._payload.pid_logical_position
+                else:
+                    parent = self.state.running_processes.get((system, parent_pid))
+                    if (
+                        parent is not None
+                        and parent.start_time <= effective_start
+                        and parent.pid > 1
+                    ):
+                        minimum_parent = parent.pid_logical_position
+                ordinal_key = (system, effective_start)
+                bucket_ordinal = builder._pid_bucket_offsets.get(
+                    ordinal_key,
+                    self._pid_bucket_offsets.get(ordinal_key, 0),
+                )
+                planned_allocations = tuple(builder._linux_allocations.get(system, ()))
+                pid, logical_position, bucket_patch, candidate_delta = self._preview_linux_pid(
+                    system=system,
+                    counter=counter,
+                    rng=pid_rng,
+                    current_time=effective_start,
+                    minimum_logical_exclusive=minimum_parent,
+                    prefix=prefix,
+                    epoch=ensure_utc(epoch),
+                    bucket_ordinal=bucket_ordinal,
+                    extra_allocations=planned_allocations,
+                    extra_reserved_pids=planned_pids,
+                )
+                linux_allocation = (system, effective_start, logical_position)
+                builder._linux_allocations.setdefault(system, []).append(
+                    (effective_start, logical_position)
+                )
+                builder._pid_bucket_offsets[bucket_patch[0]] = bucket_patch[1]
+                allocation_delta = 1
+
+            object_id = stable_uuid(
+                "registered-process" if fixed_pid is not None else "process",
+                system,
+                pid,
+                parent_pid,
+                image,
+                command_line,
+                username,
+                effective_start.isoformat(),
+                logon_id,
+            )
+            process_lifecycle_id = lifecycle_group_id or stable_uuid(
+                "process-lifecycle",
+                object_id,
+            )
+            if parent_lifecycle_group_id and parent_lifecycle_group_id != process_lifecycle_id:
+                process_parent_group = parent_lifecycle_group_id
+            elif planned_session is not None:
+                process_parent_group = (
+                    planned_session.parent_lifecycle_group_id
+                    if planned_session.lifecycle_group_id == process_lifecycle_id
+                    else planned_session.lifecycle_group_id
+                )
+            else:
+                process_parent_group = self._process_parent_lifecycle_group(
+                    process_lifecycle_id,
+                    parent_lifecycle_group_id,
+                    owning_session,
+                )
+
+            thread_os_category = builder._pid_os[system]
+            primary_tid, thread_counter, thread_rng_state = self._preview_primary_thread(
+                system=system,
+                os_category=thread_os_category,
+                object_id=object_id,
+                pid=pid,
+                counter_override=builder._thread_counters.get(system),
+                rng_state_override=builder._thread_rng_states.get(system),
+                extra_used_tids=builder._planned_tids.setdefault(system, set()),
+            )
+            thread_object_id = stable_uuid(
+                "thread",
+                system,
+                object_id,
+                pid,
+                primary_tid,
+                effective_start.isoformat(),
+                "primary",
+            )
+            identity = ProcessIdentity(
+                hostname=system,
+                object_id=object_id,
+                pid=pid,
+                parent_pid=parent_pid,
+                image=image,
+                command_line=command_line,
+                principal=username,
+                logon_id=logon_id,
+                started_at=effective_start,
+                lifecycle_group_id=process_lifecycle_id,
+                parent_lifecycle_group_id=process_parent_group,
+                primary_thread=ThreadIdentity(
+                    hostname=system,
+                    process_object_id=object_id,
+                    pid=pid,
+                    tid=primary_tid,
+                    object_id=thread_object_id,
+                    started_at=effective_start,
+                ),
+            )
+            payload = _ProcessMaterializationPayload(
+                integrity_level=integrity_level,
+                concurrency_group_id=concurrency_group_id,
+                pid_logical_position=logical_position,
+                state_time=effective_start,
+                parent_activity_time=(
+                    ensure_utc(parent_activity_time) if parent_activity_time is not None else None
+                ),
+                auth_session_id=auth_session_id,
+                auth_logon_type=auth_logon_type,
+                require_session=require_session,
+            )
+            allocator_patch = _ProcessAllocatorPatch(
+                pid_counter=(system, counter),
+                pid_os=(system, os_category)
+                if system in builder._new_pid_namespaces
+                and system not in builder._pid_namespace_patch_emitted
+                else None,
+                pid_rng_state=(system, pid_rng.getstate()),
+                pid_epoch=pid_epoch_patch,
+                pid_weekly_prefix=prefix_patch,
+                linux_allocation=linux_allocation,
+                pid_bucket_offset=bucket_patch,
+                fixed_pid=fixed_patch,
+                pid_allocation_count_delta=allocation_delta,
+                pid_candidate_probe_delta=candidate_delta,
+                thread_counter=thread_counter,
+                thread_rng_state=thread_rng_state,
+            )
+            plan = ProcessMaterializationPlan(
+                _expected_version=builder.expected_version,
+                _identity=identity,
+                _payload=payload,
+                _allocator_patch=allocator_patch,
+                _integrity_token=_materialization_integrity_token(
+                    self._materialization_secret,
+                    "process",
+                    builder.expected_version,
+                    identity,
+                    payload,
+                    allocator_patch,
+                ),
+            )
+            builder._pid_counters[system] = counter
+            builder._pid_rng_states[system] = pid_rng.getstate()
+            if allocator_patch.pid_os is not None:
+                builder._pid_namespace_patch_emitted.add(system)
+            planned_pids.add(pid)
+            builder._planned_tids.setdefault(system, set()).add(primary_tid)
+            if thread_counter is not None:
+                builder._thread_counters[system] = thread_counter[1]
+            if thread_rng_state is not None:
+                builder._thread_rng_states[system] = thread_rng_state[1]
+            return plan
+
+    def materialize_process(self, plan: ProcessMaterializationPlan) -> RunningProcess:
+        """Commit one already-admitted process plan without sampling or domain validation."""
+
+        with self._lock:
+            self.validate_process_materialization(plan)
+            return self._commit_prevalidated_process_materialization(plan)
+
+    def validate_process_termination_materialization(
+        self,
+        plan: ProcessTerminationMaterializationPlan,
+    ) -> None:
+        """Validate every fallible process-termination condition without mutation."""
+
+        with self._lock:
+            self._validate_process_termination_materialization_plan(plan)
+            if plan.expected_version != self._materialization_version:
+                raise StateError("Process termination materialization plan became stale")
+
+            identity = plan.identity
+            key = (identity.hostname, identity.pid)
+            process = self.state.running_processes.get(key)
+            if process is None:
+                raise StateError(
+                    "Process termination materialization target is no longer live: "
+                    f"{identity.hostname} PID={identity.pid}"
+                )
+            if self._process_identity(process) != identity:
+                raise StateError("Process termination materialization target identity drifted")
+            if (
+                self._process_object_ids.get(key) != identity.object_id
+                or self._processes_by_object_id.get(identity.object_id) is not process
+            ):
+                raise StateError("Process termination materialization live indexes drifted")
+            if self._active_pid_reservation_counts.get(identity.hostname, 0) <= 0:
+                raise StateError("Process termination materialization PID reservation is absent")
+
+            live_threads = self._process_termination_threads(identity.object_id)
+            if live_threads != plan._payload.threads:
+                raise StateError("Process termination materialization live threads drifted")
+
+            parent_identity = plan._payload.parent_identity
+            parent_activity_time = plan._payload.parent_activity_time
+            if (parent_identity is None) != (parent_activity_time is None):
+                raise StateError("Process termination parent activity patch is incomplete")
+            if parent_identity is not None and parent_activity_time is not None:
+                parent_key = (parent_identity.hostname, parent_identity.pid)
+                parent = self.state.running_processes.get(parent_key)
+                if (
+                    parent is None
+                    or parent_identity.hostname != identity.hostname
+                    or parent_identity.pid != identity.parent_pid
+                    or parent_identity.pid == identity.pid
+                    or self._process_identity(parent) != parent_identity
+                    or self._process_object_ids.get(parent_key) != parent_identity.object_id
+                    or self._processes_by_object_id.get(parent_identity.object_id) is not parent
+                ):
+                    raise StateError(
+                        "Process termination parent activity does not name the exact live parent"
+                    )
+                if parent_activity_time < parent_identity.started_at:
+                    raise StateError("Process termination parent activity precedes parent start")
+
+            if (
+                self._process_termination_session_references(
+                    identity.hostname,
+                    identity.pid,
+                )
+                != plan._payload.session_references
+            ):
+                raise StateError("Process termination active-session references drifted")
+
+    def _commit_prevalidated_process_termination_materialization(
+        self,
+        plan: ProcessTerminationMaterializationPlan,
+    ) -> ProcessIdentity:
+        """Perform primitive process-termination writes after guarded validation."""
+
+        identity = plan.identity
+        payload = plan._payload
+        key = (identity.hostname, identity.pid)
+        process = self.state.running_processes[key]
+
+        parent_identity = payload.parent_identity
+        parent_activity_time = payload.parent_activity_time
+        if parent_identity is not None and parent_activity_time is not None:
+            parent = self._processes_by_object_id[parent_identity.object_id]
+            if (
+                parent.last_activity_time is None
+                or parent.last_activity_time < parent_activity_time
+            ):
+                parent.last_activity_time = parent_activity_time
+
+        thread_deadline = (payload.end_time + _ENDED_IDENTITY_RETENTION).timestamp()
+        for thread_identity in payload.threads:
+            thread_key = (
+                thread_identity.hostname,
+                thread_identity.process_object_id,
+                thread_identity.tid,
+            )
+            thread = self.state.running_threads.pop(thread_key)
+            thread.end_time = payload.end_time
+            self._ended_threads.set(thread_key, thread, thread_deadline)
+
+        del self.state.running_processes[key]
+        remaining = self._active_pid_reservation_counts[identity.hostname] - 1
+        if remaining > 0:
+            self._active_pid_reservation_counts[identity.hostname] = remaining
+        else:
+            self._active_pid_reservation_counts.pop(identity.hostname)
+        process.end_time = payload.end_time
+        self._process_object_ids.pop(key)
+        self._processes_by_object_id.pop(identity.object_id)
+        process_deadline = (payload.end_time + _ENDED_IDENTITY_RETENTION).timestamp()
+        self._ended_processes_by_key.set(key, process, process_deadline)
+        self._ended_processes_by_object_id.set(
+            identity.object_id,
+            process,
+            process_deadline,
+        )
+
+        for reference in payload.session_references:
+            session = self.state.active_sessions[reference.logon_id]
+            for name in reference.fields:
+                setattr(session, name, None)
+
+        self._trim_retained_thread_identities()
+        self._trim_retained_process_identities()
+        self._materialization_version += 1
+        logger.debug("Ended process %s on %s", identity.pid, identity.hostname)
+        return identity
+
+    def materialize_process_termination(
+        self,
+        plan: ProcessTerminationMaterializationPlan,
+    ) -> ProcessIdentity:
+        """Commit one exact process termination and return its receipt-ready identity."""
+
+        with self.process_termination_materialization_guard(plan):
+            return self._commit_prevalidated_process_termination_materialization(plan)
+
+    def validate_materialization_batch(self, plan: MaterializationBatchPlan) -> None:
+        """Validate every batch member and dependency without publishing state."""
+
+        with self._lock:
+            self._validate_materialization_batch_plan(plan)
+            if plan.expected_version != self._materialization_version:
+                raise StateError("Materialization batch became stale before commit")
+            if self.state.current_time != plan._expected_state_time:
+                raise StateError("Materialization batch state-time fence changed before commit")
+            session = plan.session
+            if session is not None:
+                identity = session.identity
+                if identity.logon_id in self.state.active_sessions:
+                    raise StateError(
+                        f"Session materialization LogonID is already live: {identity.logon_id}"
+                    )
+                if identity.logon_id in self._ended_sessions:
+                    raise StateError(
+                        f"Session materialization LogonID is already ended: {identity.logon_id}"
+                    )
+            link_values = {
+                "transport": plan._session_process_links.transport,
+                "shell": plan._session_process_links.shell,
+                "user_manager": plan._session_process_links.user_manager,
+                "winlogon": plan._session_process_links.winlogon,
+                "explorer": plan._session_process_links.explorer,
+                "process_tree_root": plan._session_process_links.process_tree_root,
+            }
+            if any(index >= 0 for index in link_values.values()) and session is None:
+                raise StateError("Session process links require a batch session")
+            for role, index in link_values.items():
+                if index < 0:
+                    continue
+                if index >= len(plan.processes):
+                    raise StateError(f"Session {role} link index is outside the batch")
+                process_identity = plan.processes[index].identity
+                assert session is not None
+                if role != "transport" and process_identity.hostname != session.identity.hostname:
+                    raise StateError(f"Session {role} process cannot use another host")
+                if role in {"shell", "user_manager", "explorer"} and (
+                    process_identity.logon_id != session.identity.logon_id
+                ):
+                    raise StateError(f"Session {role} process must belong to the session")
+
+            staged_processes: dict[str, ProcessIdentity] = {}
+            staged_processes_by_pid: dict[tuple[str, int], ProcessIdentity] = {}
+            staged_pids: set[tuple[str, int]] = set()
+            staged_threads: set[tuple[str, str, int]] = set()
+            for process in plan.processes:
+                identity = process.identity
+                primary_thread = identity.primary_thread
+                if primary_thread is None:
+                    raise StateError("Process materialization plan has no primary thread")
+                process_key = (identity.hostname, identity.pid)
+                if process_key in self.state.running_processes or process_key in staged_pids:
+                    raise StateError(
+                        f"Process materialization PID is already live: {identity.hostname} "
+                        f"PID={identity.pid}"
+                    )
+                if (
+                    identity.object_id in self._processes_by_object_id
+                    or identity.object_id in staged_processes
+                ):
+                    raise StateError(
+                        f"Process materialization object is already live: {identity.object_id}"
+                    )
+                thread_key = (
+                    primary_thread.hostname,
+                    primary_thread.process_object_id,
+                    primary_thread.tid,
+                )
+                if thread_key in self.state.running_threads or thread_key in staged_threads:
+                    raise StateError(
+                        f"Process materialization primary thread is already live: {thread_key!r}"
+                    )
+                if identity.parent_pid not in {0, 4}:
+                    planned_parent = staged_processes_by_pid.get(
+                        (identity.hostname, identity.parent_pid)
+                    )
+                    if planned_parent is None and not self.is_process_active_at(
+                        identity.hostname,
+                        identity.parent_pid,
+                        identity.started_at,
+                    ):
+                        raise StateError(
+                            f"Process materialization parent PID {identity.parent_pid} "
+                            "is not active"
+                        )
+                    if (
+                        planned_parent is not None
+                        and planned_parent.started_at > identity.started_at
+                    ):
+                        raise StateError("Batch process parent starts after its child")
+                if process._payload.require_session and not identity.logon_id:
+                    raise StateError("Session-owned process materialization requires a LogonID")
+                if process._payload.require_session and identity.logon_id:
+                    planned_session = (
+                        session is not None
+                        and session.identity.logon_id == identity.logon_id
+                        and session.identity.hostname == identity.hostname
+                        and session.identity.started_at <= identity.started_at
+                    )
+                    if (
+                        not planned_session
+                        and self.get_session_at(
+                            identity.logon_id,
+                            identity.started_at,
+                        )
+                        is None
+                    ):
+                        raise StateError(
+                            f"Cannot materialize batch process outside session {identity.logon_id}"
+                        )
+                token_session = (
+                    session
+                    if session is not None and session.identity.logon_id == identity.logon_id
+                    else None
+                )
+                live_session = (
+                    self.get_session_at(identity.logon_id, identity.started_at)
+                    if identity.logon_id and token_session is None
+                    else None
+                )
+                expected_session_id = (
+                    token_session.identity.session_id
+                    if token_session is not None
+                    else live_session.session_id
+                    if live_session is not None
+                    else None
+                )
+                expected_logon_type = (
+                    token_session.logon_type
+                    if token_session is not None
+                    else live_session.logon_type
+                    if live_session is not None
+                    else None
+                )
+                if (token_session is not None or live_session is not None) and (
+                    process.auth_session_id != expected_session_id
+                    or process.auth_logon_type != expected_logon_type
+                ):
+                    raise StateError("Process auth token disagrees with its owning session")
+                staged_processes[identity.object_id] = identity
+                staged_processes_by_pid[process_key] = identity
+                staged_pids.add(process_key)
+                staged_threads.add(thread_key)
+
+    def _commit_prevalidated_materialization_batch(
+        self,
+        plan: MaterializationBatchPlan,
+        *,
+        advance_version: bool = True,
+        update_state_time: bool = True,
+    ) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
+        """Publish all prevalidated members with primitive writes and one version step."""
+
+        session = (
+            self._commit_prevalidated_session_materialization(
+                plan.session,
+                advance_version=False,
+                update_state_time=False,
+            )
+            if plan.session is not None
+            else None
+        )
+        processes = tuple(
+            self._commit_prevalidated_process_materialization(
+                process,
+                advance_version=False,
+                update_state_time=False,
+            )
+            for process in plan.processes
+        )
+        if session is not None:
+            links = plan._session_process_links
+
+            def _linked_pid(index: int) -> int | None:
+                return processes[index].pid if index >= 0 else None
+
+            session.transport_pid = _linked_pid(links.transport) or session.transport_pid
+            session.session_shell_pid = _linked_pid(links.shell)
+            session.session_user_manager_pid = _linked_pid(links.user_manager)
+            session.session_winlogon_pid = _linked_pid(links.winlogon)
+            session.process_tree_root = _linked_pid(links.process_tree_root)
+            explorer_pid = _linked_pid(links.explorer)
+            if explorer_pid is not None:
+                session.explorer_pid = explorer_pid
+                session.initial_explorer_pid = explorer_pid
+                session.windows_shell_bootstrapped = True
+        if update_state_time:
+            self.state.current_time = plan.final_state_time
+        if advance_version:
+            self._materialization_version += 1
+        return session, processes
+
+    def validate_process_materialization(self, plan: ProcessMaterializationPlan) -> None:
+        """Validate every fallible process-start condition without publishing state."""
+
+        with self._lock:
+            self._validate_process_materialization_plan(plan)
+            if plan.expected_version != self._materialization_version:
+                raise StateError("Process materialization plan became stale before commit")
+            identity = plan.identity
+            primary_thread = identity.primary_thread
+            if primary_thread is None:
+                raise StateError("Process materialization plan has no primary thread")
+            process_key = (identity.hostname, identity.pid)
+            if process_key in self.state.running_processes:
+                raise StateError(
+                    f"Process materialization PID is already live: {identity.hostname} "
+                    f"PID={identity.pid}"
+                )
+            if identity.object_id in self._processes_by_object_id:
+                raise StateError(
+                    f"Process materialization object is already live: {identity.object_id}"
+                )
+            thread_key = (
+                primary_thread.hostname,
+                primary_thread.process_object_id,
+                primary_thread.tid,
+            )
+            if thread_key in self.state.running_threads:
+                raise StateError(
+                    f"Process materialization primary thread is already live: {thread_key!r}"
+                )
+            if identity.parent_pid not in {0, 4} and not self.is_process_active_at(
+                identity.hostname,
+                identity.parent_pid,
+                identity.started_at,
+            ):
+                raise StateError(
+                    f"Process materialization parent PID {identity.parent_pid} is not active"
+                )
+            if plan._payload.require_session and not identity.logon_id:
+                raise StateError("Session-owned process materialization requires a LogonID")
+            owning_session = (
+                self.get_session_at(identity.logon_id, identity.started_at)
+                if identity.logon_id
+                else None
+            )
+            if plan._payload.require_session and owning_session is None:
+                raise StateError(f"Cannot materialize process outside session {identity.logon_id}")
+            if owning_session is not None and (
+                plan.auth_session_id != owning_session.session_id
+                or plan.auth_logon_type != owning_session.logon_type
+            ):
+                raise StateError("Process auth token disagrees with its owning session")
+
+    def _commit_prevalidated_process_materialization(
+        self,
+        plan: ProcessMaterializationPlan,
+        *,
+        advance_version: bool = True,
+        update_state_time: bool = True,
+    ) -> RunningProcess:
+        """Perform primitive process writes after validation under materialization_guard."""
+
+        patch = plan._allocator_patch
+        if patch.pid_counter is not None:
+            host, counter = patch.pid_counter
+            self._pid_counters[host] = counter
+        if patch.pid_os is not None:
+            host, category = patch.pid_os
+            self._pid_os[host] = category
+        if patch.pid_rng_state is not None:
+            host, rng_state = patch.pid_rng_state
+            rng = self._pid_rngs.setdefault(host, random.Random())
+            rng.setstate(rng_state)
+        if patch.pid_epoch is not None:
+            host, epoch = patch.pid_epoch
+            self._pid_time_epochs[host] = epoch
+        if patch.pid_weekly_prefix is not None:
+            host, prefix = patch.pid_weekly_prefix
+            self._linux_pid_weekly_churn_prefixes[host] = prefix
+        if patch.linux_allocation is not None:
+            host, at, logical_position = patch.linux_allocation
+            self._linux_pid_allocations.setdefault(host, TemporalAllocationIndex()).add(
+                at, logical_position
+            )
+        if patch.pid_bucket_offset is not None:
+            key, offset = patch.pid_bucket_offset
+            self._pid_bucket_offsets[key] = offset
+        if patch.fixed_pid is not None:
+            host, pid = patch.fixed_pid
+            self._fixed_pid_reservations.setdefault(host, set()).add(pid)
+        self._pid_allocation_count += patch.pid_allocation_count_delta
+        self._pid_candidate_probe_count += patch.pid_candidate_probe_delta
+        if patch.thread_counter is not None:
+            host, counter = patch.thread_counter
+            self._thread_id_counters[host] = counter
+        if patch.thread_rng_state is not None:
+            host, rng_state = patch.thread_rng_state
+            rng = self._thread_id_rngs.setdefault(host, random.Random())
+            rng.setstate(rng_state)
+
+        identity = plan.identity
+        payload = plan._payload
+        if update_state_time:
+            self.state.current_time = payload.state_time
+        if payload.parent_activity_time is not None and identity.parent_pid:
+            parent = self.state.running_processes.get((identity.hostname, identity.parent_pid))
+            if parent is not None and (
+                parent.last_activity_time is None
+                or parent.last_activity_time < payload.parent_activity_time
+            ):
+                parent.last_activity_time = payload.parent_activity_time
+        primary_thread_identity = identity.primary_thread
+        assert primary_thread_identity is not None
+        process = RunningProcess(
+            pid=identity.pid,
+            parent_pid=identity.parent_pid,
+            image=identity.image,
+            command_line=identity.command_line,
+            username=identity.principal,
+            system=identity.hostname,
+            start_time=identity.started_at,
+            integrity_level=payload.integrity_level,
+            logon_id=identity.logon_id,
+            token_logon_id=identity.logon_id,
+            auth_session_id=payload.auth_session_id,
+            auth_logon_type=payload.auth_logon_type,
+            ecar_object_id=identity.object_id,
+            primary_tid=primary_thread_identity.tid,
+            lifecycle_group_id=identity.lifecycle_group_id,
+            parent_lifecycle_group_id=identity.parent_lifecycle_group_id,
+            concurrency_group_id=payload.concurrency_group_id,
+            pid_logical_position=payload.pid_logical_position,
+        )
+        key = (process.system, process.pid)
+        self.state.running_processes[key] = process
+        self._active_pid_reservation_counts[process.system] = (
+            self._active_pid_reservation_counts.get(process.system, 0) + 1
+        )
+        self._process_object_ids[key] = process.ecar_object_id
+        self._processes_by_object_id[process.ecar_object_id] = process
+        self._ended_processes_by_key.pop(key, None)
+        thread = RunningThread(
+            hostname=primary_thread_identity.hostname,
+            process_object_id=primary_thread_identity.process_object_id,
+            pid=primary_thread_identity.pid,
+            tid=primary_thread_identity.tid,
+            object_id=primary_thread_identity.object_id,
+            start_time=primary_thread_identity.started_at,
+            kind=primary_thread_identity.kind,
+        )
+        self.state.running_threads[(thread.hostname, thread.process_object_id, thread.tid)] = thread
+        self._ended_threads.pop((thread.hostname, thread.process_object_id, thread.tid), None)
+        if advance_version:
+            self._materialization_version += 1
+        logger.debug(
+            "Materialized process %s on %s: %s",
+            process.pid,
+            process.system,
+            process.image,
+        )
+        return process
 
     def _linux_pid_epoch(self, system: str, current_time: datetime) -> datetime:
         """Return the per-host epoch used for Linux time-aware PID allocation."""
@@ -1424,6 +4807,7 @@ class StateManager:
                     del self._transient_pid_reservations[system]
                     self._transient_pid_reservation_counts.pop(system, None)
             self._pid_allocation_watermark = normalized_cutoff
+            self._materialization_version += 1
 
     def pid_allocator_census(self) -> dict[str, int]:
         """Return stable allocator-state and operation counters for probes."""
@@ -1614,6 +4998,7 @@ class StateManager:
             self._transient_pid_reservation_counts[system] = (
                 self._transient_pid_reservation_counts.get(system, 0) + 1
             )
+            self._materialization_version += 1
             return pid
 
     def register_process(
@@ -1638,90 +5023,22 @@ class StateManager:
         and Linux PID 1 that cannot use the ordinary PID allocator.
         """
 
-        with self._lock:
-            effective_start = start_time or self.state.current_time
-            if effective_start is None:
-                raise StateError("Cannot register process: current_time not set")
-            if pid < 0:
-                raise StateError("Cannot register process: PID must be non-negative")
-            if (system, pid) in self.state.running_processes:
-                raise StateError(f"Cannot register process: PID {pid} already exists on {system}")
-            if (
-                parent_pid not in {0, 4}
-                and (system, parent_pid) not in self.state.running_processes
-            ):
-                raise StateError(
-                    f"Cannot register process: parent PID {parent_pid} does not exist on {system}"
-                )
-
-            normalized_start = ensure_utc(effective_start)
-            self._initialize_pid_allocator(system, os_category)
-            self._fixed_pid_reservations.setdefault(system, set()).add(pid)
-            if os_category == "linux":
-                self._linux_pid_allocations.setdefault(
-                    system,
-                    TemporalAllocationIndex(),
-                ).add(normalized_start, pid)
-            object_id = stable_uuid(
-                "registered-process",
-                system,
-                pid,
-                parent_pid,
-                image,
-                command_line,
-                username,
-                normalized_start.isoformat(),
-                logon_id,
-            )
-            owning_session = self.get_session(logon_id) if logon_id else None
-            process_lifecycle_group_id = lifecycle_group_id or stable_uuid(
-                "process-lifecycle", object_id
-            )
-            process_parent_group_id = self._process_parent_lifecycle_group(
-                process_lifecycle_group_id,
-                parent_lifecycle_group_id,
-                owning_session,
-            )
-            process = RunningProcess(
-                pid=pid,
-                parent_pid=parent_pid,
-                image=image,
-                command_line=command_line,
-                username=username,
-                system=system,
-                start_time=normalized_start,
-                integrity_level=integrity_level,
-                logon_id=logon_id,
-                token_logon_id=logon_id,
-                ecar_object_id=object_id,
-                lifecycle_group_id=process_lifecycle_group_id,
-                parent_lifecycle_group_id=process_parent_group_id,
-                pid_logical_position=pid,
-            )
-            self.state.running_processes[(system, pid)] = process
-            self._active_pid_reservation_counts[system] = (
-                self._active_pid_reservation_counts.get(system, 0) + 1
-            )
-            self._process_object_ids[(system, pid)] = object_id
-            self._processes_by_object_id[object_id] = process
-            self._ended_processes_by_key.pop((system, pid), None)
-            primary_tid = (
-                pid
-                if os_category == "linux"
-                else self._allocate_thread_id(
-                    system,
-                    object_id,
-                    pid,
-                )
-            )
-            thread = self._register_thread(
-                process,
-                tid=primary_tid,
-                kind="primary",
-                start_time=normalized_start,
-            )
-            process.primary_tid = thread.tid
-            return process
+        plan = self.plan_process_materialization(
+            system=system,
+            fixed_pid=pid,
+            parent_pid=parent_pid,
+            image=image,
+            command_line=command_line,
+            username=username,
+            integrity_level=integrity_level,
+            os_category=os_category,
+            start_time=start_time,
+            logon_id=logon_id,
+            lifecycle_group_id=lifecycle_group_id,
+            parent_lifecycle_group_id=parent_lifecycle_group_id,
+        )
+        with self.materialization_guard(plan.expected_version):
+            return self.materialize_process(plan)
 
     def create_process(
         self,
@@ -1755,115 +5072,24 @@ class StateManager:
         with self._lock:
             if self.state.current_time is None:
                 raise StateError("Cannot create process: current_time not set")
-
-            # Validate parent exists (unless parent_pid is 0 or 4 for system processes)
-            # PID 0: Idle/System Idle Process
-            # PID 4: System process (Windows)
-            if parent_pid not in (0, 4):
-                parent_key = (system, parent_pid)
-                if parent_key not in self.state.running_processes:
-                    raise StateError(
-                        f"Cannot create process: parent PID {parent_pid} does not exist on {system}"
-                    )
-
-            # Allocate PID for this system — OS-aware allocation (Phase 6.0)
-            if system not in self._pid_counters:
-                # Detect OS from image path: backslash = Windows, forward slash = Linux
-                is_windows = "\\" in image
-                self._initialize_pid_allocator(system, "windows" if is_windows else "linux")
-
-            # Increment with OS-aware gaps
-            if system not in self._pid_rngs:
-                self._pid_rngs[system] = random.Random(_stable_seed(f"pid_alloc_{system}"))
-            pid_rng = self._pid_rngs[system]
-            if self._pid_os.get(system) == "windows":
-                pid, pid_logical_position = self._allocate_windows_pid(
-                    system,
-                    pid_rng,
-                    self.state.current_time,
-                )
-            else:
-                minimum_logical_exclusive = None
-                parent = self.state.running_processes.get((system, parent_pid))
-                if (
-                    parent is not None
-                    and parent.start_time <= self.state.current_time
-                    and parent.pid > 1
-                ):
-                    minimum_logical_exclusive = parent.pid_logical_position
-                pid, pid_logical_position = self._allocate_linux_pid(
-                    system,
-                    pid_rng,
-                    minimum_logical_exclusive=minimum_logical_exclusive,
-                )
-
-            # Create process
-            ecar_object_id = stable_uuid(
-                "process",
-                system,
-                pid,
-                parent_pid,
-                image,
-                command_line,
-                username,
-                self.state.current_time.isoformat(),
-                logon_id,
+            os_category = self._pid_os.get(system) or (
+                "windows" if "\\" in image or image.casefold().endswith(".exe") else "linux"
             )
-            owning_session = self.get_session(logon_id) if logon_id else None
-            process_lifecycle_group_id = lifecycle_group_id or stable_uuid(
-                "process-lifecycle", ecar_object_id
-            )
-            process_parent_group_id = self._process_parent_lifecycle_group(
-                process_lifecycle_group_id,
-                parent_lifecycle_group_id,
-                owning_session,
-            )
-            process = RunningProcess(
-                pid=pid,
-                parent_pid=parent_pid,
-                image=image,
-                command_line=command_line,
-                username=username,
-                system=system,
-                start_time=self.state.current_time,
-                integrity_level=integrity_level,
-                logon_id=logon_id,
-                token_logon_id=logon_id,
-                ecar_object_id=ecar_object_id,
-                lifecycle_group_id=process_lifecycle_group_id,
-                parent_lifecycle_group_id=process_parent_group_id,
-                concurrency_group_id=concurrency_group_id,
-                pid_logical_position=pid_logical_position,
-            )
-
-            key = (system, pid)
-            if key in self.state.running_processes:
-                raise StateError(f"Cannot create process: PID {pid} already exists on {system}")
-            self.state.running_processes[key] = process
-            self._active_pid_reservation_counts[system] = (
-                self._active_pid_reservation_counts.get(system, 0) + 1
-            )
-            self._process_object_ids[key] = ecar_object_id
-            self._processes_by_object_id[ecar_object_id] = process
-            self._ended_processes_by_key.pop(key, None)
-            primary_tid = (
-                pid
-                if self._pid_os.get(system) == "linux"
-                else self._allocate_thread_id(
-                    system,
-                    ecar_object_id,
-                    pid,
-                )
-            )
-            primary_thread = self._register_thread(
-                process,
-                tid=primary_tid,
-                kind="primary",
-                start_time=self.state.current_time,
-            )
-            process.primary_tid = primary_thread.tid
-            logger.debug(f"Created process {pid} on {system}: {image}")
-            return pid
+        plan = self.plan_process_materialization(
+            system=system,
+            parent_pid=parent_pid,
+            image=image,
+            command_line=command_line,
+            username=username,
+            integrity_level=integrity_level,
+            os_category=os_category,
+            logon_id=logon_id,
+            lifecycle_group_id=lifecycle_group_id,
+            parent_lifecycle_group_id=parent_lifecycle_group_id,
+            concurrency_group_id=concurrency_group_id,
+        )
+        with self.materialization_guard(plan.expected_version):
+            return self.materialize_process(plan).pid
 
     @staticmethod
     def _process_parent_lifecycle_group(
@@ -1979,12 +5205,16 @@ class StateManager:
             effective_start = start_time or self.state.current_time
             if effective_start is None:
                 raise StateError("Cannot create thread: current_time not set")
+            thread_key = (system, process_object_id, thread_id)
+            was_live = thread_key in self.state.running_threads
             thread = self._register_thread(
                 process,
                 tid=thread_id,
                 kind=kind,
                 start_time=effective_start,
             )
+            if not was_live:
+                self._materialization_version += 1
             return self._thread_identity(thread)
 
     @staticmethod
@@ -2111,6 +5341,10 @@ class StateManager:
             if process is None:
                 return False
             effective_time = ensure_utc(time)
+            if process.logon_id:
+                session = self.state.active_sessions.get(self._resolve_logon_id(process.logon_id))
+                if session is not None and not _session_valid_at(session, effective_time):
+                    return False
             return process.start_time <= effective_time and (
                 process.end_time is None or effective_time < process.end_time
             )
@@ -2144,6 +5378,10 @@ class StateManager:
             if proc is None:
                 return False
             activity_time = ensure_utc(activity_time)
+            if proc.logon_id:
+                session = self.state.active_sessions.get(self._resolve_logon_id(proc.logon_id))
+                if session is not None and not _session_valid_at(session, activity_time):
+                    return False
             if proc.last_activity_time is None or activity_time > proc.last_activity_time:
                 proc.last_activity_time = activity_time
             return True
@@ -2305,42 +5543,15 @@ class StateManager:
             True if process was found and removed, False if not found
         """
         with self._lock:
-            key = (system, pid)
-            process = self.state.running_processes.get(key)
-            if process is not None:
-                effective_end = ensure_utc(
-                    end_time or self.state.current_time or process.start_time
-                )
-                thread_keys = [
-                    (thread.hostname, thread.process_object_id, thread.tid)
-                    for thread in self._running_threads.find(
-                        "process_object_id",
-                        process.ecar_object_id,
-                    )
-                ]
-                for thread_key in thread_keys:
-                    self.end_thread(*thread_key, end_time=effective_end)
-                del self.state.running_processes[key]
-                remaining = self._active_pid_reservation_counts.get(system, 1) - 1
-                if remaining > 0:
-                    self._active_pid_reservation_counts[system] = remaining
-                else:
-                    self._active_pid_reservation_counts.pop(system, None)
-                process.end_time = effective_end
-                self._process_object_ids.pop(key, None)
-                self._processes_by_object_id.pop(process.ecar_object_id, None)
-                deadline = (effective_end + _ENDED_IDENTITY_RETENTION).timestamp()
-                self._ended_processes_by_key.set(key, process, deadline)
-                self._ended_processes_by_object_id.set(
-                    process.ecar_object_id,
-                    process,
-                    deadline,
-                )
-                self._trim_retained_process_identities()
-                self._clear_session_process_references(system, pid)
-                logger.debug(f"Ended process {pid} on {system}")
-                return True
-            return False
+            if self.state.running_processes.get((system, pid)) is None:
+                return False
+            plan = self.plan_process_termination_materialization(
+                system=system,
+                pid=pid,
+                end_time=end_time,
+            )
+            self.materialize_process_termination(plan)
+            return True
 
     def _trim_retained_process_identities(self) -> None:
         """Enforce a hard cap while preserving the newest ended process identities."""
@@ -2447,6 +5658,781 @@ class StateManager:
         self._terminal_connection_ids.pop(conn_id, None)
         return True
 
+    @staticmethod
+    def _connection_parent_snapshot(connection: OpenConnection) -> _ConnectionParentSnapshot:
+        """Freeze every retained physical field relevant to child accounting."""
+
+        return _ConnectionParentSnapshot(
+            conn_id=connection.conn_id,
+            zeek_uid=connection.zeek_uid,
+            src_ip=connection.src_ip,
+            src_port=connection.src_port,
+            dst_ip=connection.dst_ip,
+            dst_port=connection.dst_port,
+            protocol=connection.protocol,
+            state=connection.state,
+            start_time=connection.start_time,
+            source_system=connection.source_system,
+            source_hostname=connection.source_hostname,
+            hostname=connection.hostname,
+            initiating_pid=connection.initiating_pid,
+            close_time=connection.close_time,
+            bytes_sent=connection.bytes_sent,
+            bytes_received=connection.bytes_received,
+            traffic_ledger=connection.traffic_ledger,
+            transaction_id=connection.transaction_id,
+            conn_state=connection.conn_state,
+            history=connection.history,
+            duration=connection.duration,
+        )
+
+    @staticmethod
+    def _normalize_process_activity_patches(
+        patches: tuple[ProcessActivityPatch, ...],
+    ) -> tuple[ProcessActivityPatch, ...]:
+        """Coalesce exact process objects to one stable maximum frontier."""
+
+        normalized: dict[str, ProcessActivityPatch] = {}
+        for patch in patches:
+            object_id = patch.identity.object_id
+            if not object_id:
+                raise StateError("Process activity patch requires an exact object identity")
+            activity_time = ensure_utc(patch.activity_time)
+            existing = normalized.get(object_id)
+            if existing is not None and existing.identity != patch.identity:
+                raise StateError("Process activity patches disagree on exact object identity")
+            if existing is None or activity_time > existing.activity_time:
+                normalized[object_id] = ProcessActivityPatch(patch.identity, activity_time)
+        return tuple(
+            normalized[object_id]
+            for object_id in sorted(
+                normalized,
+                key=lambda candidate: (
+                    normalized[candidate].identity.hostname,
+                    candidate,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _normalize_session_activity_patches(
+        patches: tuple[SessionActivityPatch, ...],
+    ) -> tuple[SessionActivityPatch, ...]:
+        """Coalesce exact session objects to one stable maximum frontier."""
+
+        normalized: dict[str, SessionActivityPatch] = {}
+        for patch in patches:
+            object_id = patch.identity.object_id
+            if not object_id:
+                raise StateError("Session activity patch requires an exact object identity")
+            activity_time = ensure_utc(patch.activity_time)
+            existing = normalized.get(object_id)
+            if existing is not None and existing.identity != patch.identity:
+                raise StateError("Session activity patches disagree on exact object identity")
+            if existing is None or activity_time > existing.activity_time:
+                normalized[object_id] = SessionActivityPatch(patch.identity, activity_time)
+        return tuple(
+            normalized[object_id]
+            for object_id in sorted(
+                normalized,
+                key=lambda candidate: (
+                    normalized[candidate].identity.hostname,
+                    candidate,
+                ),
+            )
+        )
+
+    def begin_connection_planning(self, owner_rng: random.Random) -> ConnectionPlanningCursor:
+        """Start an isolated, allocation-free connection-planning transaction."""
+
+        with self._lock:
+            entry_state = owner_rng.getstate()
+            token = _connection_cursor_integrity_token(
+                self._materialization_secret,
+                expected_version=self._materialization_version,
+                expected_state_time=self.state.current_time,
+                expected_connection_counter=self._connection_id_counter,
+                owner_identity=id(owner_rng),
+                rng_state_entry=entry_state,
+            )
+            return ConnectionPlanningCursor(
+                self,
+                expected_version=self._materialization_version,
+                expected_state_time=self.state.current_time,
+                expected_connection_counter=self._connection_id_counter,
+                owner_rng=owner_rng,
+                rng_state_entry=entry_state,
+                cursor_token=token,
+            )
+
+    def _validate_connection_cursor(self, cursor: ConnectionPlanningCursor) -> None:
+        """Validate a live cursor without sealing or sampling it."""
+
+        if cursor._manager is not self:
+            raise StateError("Connection planning cursor belongs to another StateManager")
+        cursor._require_active()
+        expected = _connection_cursor_integrity_token(
+            self._materialization_secret,
+            expected_version=cursor._expected_version,
+            expected_state_time=cursor._expected_state_time,
+            expected_connection_counter=cursor._expected_connection_counter,
+            owner_identity=cursor._owner_identity,
+            rng_state_entry=cursor._rng_state_entry,
+        )
+        if not hmac.compare_digest(cursor._cursor_token, expected):
+            raise StateError("Connection planning cursor integrity validation failed")
+        if cursor._expected_version != self._materialization_version:
+            raise StateError("Connection planning cursor became stale")
+        if cursor._expected_state_time != self.state.current_time:
+            raise StateError("Connection planning cursor state-time fence changed")
+        if cursor._expected_connection_counter != self._connection_id_counter:
+            raise StateError("Connection allocator changed during isolated planning")
+        if cursor._owner_rng.getstate() != cursor._rng_state_entry:
+            raise StateError("Connection planning RNG owner changed during isolated planning")
+
+    def _reserve_connection_cursor_identity(
+        self,
+        cursor: ConnectionPlanningCursor,
+    ) -> ConnectionIdentityPlan:
+        """Perform the exact historical UID draw on a live isolated cursor."""
+
+        with self._lock:
+            self._validate_connection_cursor(cursor)
+            if cursor._identity is not None:
+                raise StateError("Connection planning cursor already reserved an identity")
+            if self._connection_id_counter > 999_999_999:
+                raise StateError("Connection ID counter exhausted")
+            preview_rng = cursor._preview_rng
+            if preview_rng is None:
+                raise StateError("Connection planning cursor has no active RNG")
+            rng_state_before = preview_rng.getstate()
+            zeek_uid = generate_zeek_uid_from_rng(preview_rng, "C")
+            rng_state_after_identity = preview_rng.getstate()
+            counter_after = self._connection_id_counter + 1
+            conn_id = f"conn-{self._connection_id_counter}"
+            identity = ConnectionIdentityPlan(
+                _expected_version=cursor.expected_version,
+                _conn_id=conn_id,
+                _zeek_uid=zeek_uid,
+                _counter_after=counter_after,
+                _rng_state_before=rng_state_before,
+                _rng_state_after_identity=rng_state_after_identity,
+                _integrity_token=_connection_identity_integrity_token(
+                    self._materialization_secret,
+                    expected_version=cursor.expected_version,
+                    conn_id=conn_id,
+                    zeek_uid=zeek_uid,
+                    counter_after=counter_after,
+                    rng_state_before=rng_state_before,
+                    rng_state_after_identity=rng_state_after_identity,
+                ),
+            )
+            cursor._identity = identity
+            cursor._identity_binding_token = _connection_cursor_identity_binding_token(
+                self._materialization_secret,
+                cursor_token=cursor._cursor_token,
+                identity_token=identity.publication_token,
+            )
+            return identity
+
+    def _validate_application_child_transaction(
+        self,
+        transaction: NetworkTransactionPlan,
+        parent: OpenConnection,
+    ) -> None:
+        """Validate exact reuse and immutable interval containment."""
+
+        if not transaction.application_layer_only:
+            raise StateError("Application-child composite requires application_layer_only")
+        if transaction.conn_id != parent.conn_id or transaction.zeek_uid != parent.zeek_uid:
+            raise StateError("Application-child transaction changed parent connection identity")
+        if (
+            transaction.src_ip != parent.src_ip
+            or transaction.src_port != parent.src_port
+            or transaction.dst_ip != parent.dst_ip
+            or transaction.dst_port != parent.dst_port
+            or transaction.protocol != parent.protocol
+        ):
+            raise StateError("Application-child transaction changed parent network tuple")
+        if parent.close_time is None or transaction.closed_at is None:
+            raise StateError("Application-child transaction requires a closed parent interval")
+        if ensure_utc(transaction.started_at) < ensure_utc(parent.start_time) or ensure_utc(
+            transaction.closed_at
+        ) > ensure_utc(parent.close_time):
+            raise StateError("Application-child transaction is outside its parent interval")
+
+    def _validate_connection_activity_patches(
+        self,
+        process_activity: tuple[ProcessActivityPatch, ...],
+        session_activity: tuple[SessionActivityPatch, ...],
+        batch: MaterializationBatchPlan | None,
+    ) -> None:
+        """Validate exact live or staged owners for all activity frontiers."""
+
+        staged_processes = (
+            {process.identity.object_id: process.identity for process in batch.processes}
+            if batch is not None
+            else {}
+        )
+        staged_session = batch.session.identity if batch is not None and batch.session else None
+        for patch in process_activity:
+            expected = staged_processes.get(patch.identity.object_id)
+            if expected is None:
+                live = self._processes_by_object_id.get(patch.identity.object_id)
+                expected = self._process_identity(live) if live is not None else None
+            if expected != patch.identity:
+                raise StateError("Process activity patch does not name an exact live owner")
+            if ensure_utc(patch.activity_time) < ensure_utc(patch.identity.started_at):
+                raise StateError("Process activity patch precedes process start")
+        for patch in session_activity:
+            expected = (
+                staged_session
+                if staged_session is not None
+                and staged_session.object_id == patch.identity.object_id
+                else None
+            )
+            if expected is None:
+                live = self.state.active_sessions.get(
+                    self._resolve_logon_id(patch.identity.logon_id)
+                )
+                if live is not None and live.ecar_object_id == patch.identity.object_id:
+                    expected = self.get_session_identity(live.logon_id)
+            if expected != patch.identity:
+                raise StateError("Session activity patch does not name an exact live owner")
+            if ensure_utc(patch.activity_time) < ensure_utc(patch.identity.started_at):
+                raise StateError("Session activity patch precedes session start")
+
+    def finalize_connection_composite_materialization(
+        self,
+        cursor: ConnectionPlanningCursor,
+        transaction: NetworkTransactionPlan,
+        *,
+        source_system: str = "",
+        source_hostname: str = "",
+        hostname: str = "",
+        initiating_pid: int = -1,
+        mode: ConnectionMaterializationMode = ConnectionMaterializationMode.PHYSICAL,
+        batch: MaterializationBatchPlan | None = None,
+        process_activity: tuple[ProcessActivityPatch, ...] = (),
+        session_activity: tuple[SessionActivityPatch, ...] = (),
+    ) -> ConnectionCompositeMaterializationPlan:
+        """Seal one physical/child transaction and optional start batch without mutation."""
+
+        with self._lock:
+            self._validate_connection_cursor(cursor)
+            if not isinstance(mode, ConnectionMaterializationMode):
+                raise StateError("Connection composite requires an explicit typed mode")
+            normalized_process_activity = self._normalize_process_activity_patches(process_activity)
+            normalized_session_activity = self._normalize_session_activity_patches(session_activity)
+            if batch is not None:
+                self.validate_materialization_batch(batch)
+                if batch.expected_version != cursor.expected_version:
+                    raise StateError("Connection composite batch uses another State version")
+                if batch._expected_state_time != cursor._expected_state_time:
+                    raise StateError("Connection composite batch uses another state-time fence")
+            self._validate_connection_activity_patches(
+                normalized_process_activity,
+                normalized_session_activity,
+                batch,
+            )
+
+            identity = cursor._identity
+            parent_patch: _ConnectionParentAccountingPatch | None = None
+            if mode is ConnectionMaterializationMode.PHYSICAL:
+                if identity is None:
+                    raise StateError("Physical connection composite requires reserved identity")
+                self._validate_connection_identity_plan(identity)
+                expected_binding = _connection_cursor_identity_binding_token(
+                    self._materialization_secret,
+                    cursor_token=cursor._cursor_token,
+                    identity_token=identity.publication_token,
+                )
+                if not hmac.compare_digest(
+                    cursor._identity_binding_token,
+                    expected_binding,
+                ):
+                    raise StateError("Physical identity belongs to another planning cursor")
+                if transaction.application_layer_only:
+                    raise StateError("Physical connection cannot be application-layer-only")
+                if transaction.conn_id != identity.conn_id:
+                    raise StateError("Physical connection transaction ID changed after planning")
+                if transaction.zeek_uid != identity.zeek_uid:
+                    raise StateError("Physical connection Zeek UID changed after planning")
+                if transaction.conn_id in self.state.open_connections:
+                    raise StateError(
+                        f"Connection materialization ID is already live: {transaction.conn_id}"
+                    )
+                if self._open_connections.find("zeek_uid", transaction.zeek_uid):
+                    raise StateError(
+                        f"Connection materialization UID is already live: {transaction.zeek_uid}"
+                    )
+            else:
+                if identity is not None or cursor._identity_binding_token:
+                    raise StateError("Application-child composite cannot reserve a new identity")
+                parent = self.state.open_connections.get(transaction.conn_id)
+                if parent is None:
+                    raise StateError(
+                        f"Application-child composite references unknown {transaction.conn_id}"
+                    )
+                self._validate_application_child_transaction(transaction, parent)
+                before = self._connection_parent_snapshot(parent)
+                parent_patch = _ConnectionParentAccountingPatch(
+                    before=before,
+                    after_traffic=before.traffic_ledger.accumulate(transaction.traffic),
+                )
+
+            times = [ensure_utc(transaction.started_at)]
+            if transaction.closed_at is not None:
+                times.append(ensure_utc(transaction.closed_at))
+            if cursor._expected_state_time is not None:
+                times.append(ensure_utc(cursor._expected_state_time))
+            if batch is not None:
+                times.append(ensure_utc(batch.final_state_time))
+            times.extend(patch.activity_time for patch in normalized_process_activity)
+            times.extend(patch.activity_time for patch in normalized_session_activity)
+            final_state_time = max(times)
+            rng_state_final = cursor._seal()
+            validated_rng = random.Random()
+            validated_rng.setstate(rng_state_final)
+            plan = ConnectionCompositeMaterializationPlan(
+                _expected_version=cursor._expected_version,
+                _expected_state_time=cursor._expected_state_time,
+                _expected_connection_counter=cursor._expected_connection_counter,
+                _owner_rng=cursor._owner_rng,
+                _owner_identity=cursor._owner_identity,
+                _rng_state_entry=cursor._rng_state_entry,
+                _rng_state_final=rng_state_final,
+                _cursor_token=cursor._cursor_token,
+                _identity=identity,
+                _transaction=transaction,
+                _source_system=source_system,
+                _source_hostname=source_hostname,
+                _hostname=hostname,
+                _initiating_pid=initiating_pid,
+                _mode=mode,
+                _parent_patch=parent_patch,
+                _batch=batch,
+                _process_activity=normalized_process_activity,
+                _session_activity=normalized_session_activity,
+                _final_state_time=final_state_time,
+                _integrity_token="",
+            )
+            token = _connection_composite_integrity_token(
+                self._materialization_secret,
+                expected_version=plan._expected_version,
+                expected_state_time=plan._expected_state_time,
+                expected_connection_counter=plan._expected_connection_counter,
+                owner_identity=plan._owner_identity,
+                rng_state_entry=plan._rng_state_entry,
+                rng_state_final=plan._rng_state_final,
+                cursor_token=plan._cursor_token,
+                identity=plan._identity,
+                transaction=plan._transaction,
+                source_system=plan._source_system,
+                source_hostname=plan._source_hostname,
+                hostname=plan._hostname,
+                initiating_pid=plan._initiating_pid,
+                mode=plan._mode,
+                parent_patch=plan._parent_patch,
+                batch=plan._batch,
+                process_activity=plan._process_activity,
+                session_activity=plan._session_activity,
+                final_state_time=plan._final_state_time,
+            )
+            return replace(plan, _integrity_token=token)
+
+    def _validate_connection_composite_semantics(
+        self,
+        plan: ConnectionCompositeMaterializationPlan,
+        owner_rng: random.Random,
+    ) -> None:
+        """Validate every fallible composite condition under the State guard."""
+
+        self._validate_connection_composite_plan_integrity(plan)
+        if plan.expected_version != self._materialization_version:
+            raise StateError("Connection composite became stale before commit")
+        if self.state.current_time != plan._expected_state_time:
+            raise StateError("Connection composite state-time fence changed before commit")
+        if self._connection_id_counter != plan._expected_connection_counter:
+            raise StateError("Connection allocator changed before composite commit")
+        if owner_rng is not plan._owner_rng or id(owner_rng) != plan._owner_identity:
+            raise StateError("Connection composite belongs to another RNG owner")
+        if owner_rng.getstate() != plan._rng_state_entry:
+            raise StateError("Connection composite RNG owner changed before commit")
+        validated_rng = random.Random()
+        validated_rng.setstate(plan._rng_state_final)
+
+        if plan.materializes_connection:
+            identity = plan._identity
+            if identity is None:
+                raise StateError("Physical connection composite has no reserved identity")
+            if identity.expected_version != plan.expected_version:
+                raise StateError("Physical connection identity uses another State version")
+            if identity._counter_after != self._connection_id_counter + 1:
+                raise StateError("Physical connection allocator changed after planning")
+            transaction = plan.transaction
+            if transaction.application_layer_only:
+                raise StateError("Physical connection cannot be application-layer-only")
+            if transaction.conn_id != identity.conn_id or transaction.zeek_uid != identity.zeek_uid:
+                raise StateError("Physical connection identity changed after planning")
+            if transaction.conn_id in self.state.open_connections:
+                raise StateError(
+                    f"Connection materialization ID is already live: {transaction.conn_id}"
+                )
+            if self._open_connections.find("zeek_uid", transaction.zeek_uid):
+                raise StateError(
+                    f"Connection materialization UID is already live: {transaction.zeek_uid}"
+                )
+            if plan._parent_patch is not None:
+                raise StateError("Physical connection composite carries child accounting")
+        else:
+            if plan._identity is not None:
+                raise StateError("Application-child composite reserved a physical identity")
+            patch = plan._parent_patch
+            if patch is None:
+                raise StateError("Application-child composite has no parent accounting patch")
+            parent = self.state.open_connections.get(plan.transaction.conn_id)
+            if parent is None:
+                raise StateError(
+                    f"Application-child composite references unknown {plan.transaction.conn_id}"
+                )
+            if self._connection_parent_snapshot(parent) != patch.before:
+                raise StateError("Application-child parent changed after planning")
+            self._validate_application_child_transaction(plan.transaction, parent)
+            if patch.after_traffic != parent.traffic_ledger.accumulate(plan.transaction.traffic):
+                raise StateError("Application-child accounting changed after planning")
+
+        if plan.batch is not None:
+            self.validate_materialization_batch(plan.batch)
+        self._validate_connection_activity_patches(
+            plan.process_activity,
+            plan.session_activity,
+            plan.batch,
+        )
+        times = [ensure_utc(plan.transaction.started_at)]
+        if plan.transaction.closed_at is not None:
+            times.append(ensure_utc(plan.transaction.closed_at))
+        if plan._expected_state_time is not None:
+            times.append(ensure_utc(plan._expected_state_time))
+        if plan.batch is not None:
+            times.append(ensure_utc(plan.batch.final_state_time))
+        times.extend(patch.activity_time for patch in plan.process_activity)
+        times.extend(patch.activity_time for patch in plan.session_activity)
+        if plan.final_state_time != max(times):
+            raise StateError("Connection composite final State frontier changed")
+
+    def validate_connection_composite_materialization(
+        self,
+        plan: ConnectionCompositeMaterializationPlan,
+        owner_rng: random.Random,
+    ) -> None:
+        """Validate an exact connection composite without publishing any state."""
+
+        with self._lock:
+            self._validate_connection_composite_semantics(plan, owner_rng)
+
+    @contextmanager
+    def prepared_connection_composite_materialization(
+        self,
+        plan: ConnectionCompositeMaterializationPlan,
+        owner_rng: random.Random,
+    ) -> Iterator[PreparedConnectionCompositeMaterialization]:
+        """Claim the State guard after all composite validation has succeeded."""
+
+        with self._lock:
+            self._validate_connection_composite_semantics(plan, owner_rng)
+            prepared = PreparedConnectionCompositeMaterialization(
+                _manager=self,
+                _plan=plan,
+                _owner_rng=owner_rng,
+            )
+            try:
+                yield prepared
+            finally:
+                prepared._active = False
+
+    def materialize_connection_composite(
+        self,
+        plan: ConnectionCompositeMaterializationPlan,
+        owner_rng: random.Random,
+    ) -> ConnectionCompositeMaterializationResult:
+        """Commit one fully finalized State-only connection transaction."""
+
+        with self.prepared_connection_composite_materialization(plan, owner_rng) as prepared:
+            return prepared.commit()
+
+    def _commit_prevalidated_connection_composite(
+        self,
+        plan: ConnectionCompositeMaterializationPlan,
+        owner_rng: random.Random,
+    ) -> ConnectionCompositeMaterializationResult:
+        """Apply primitive composite writes after the retained guard validates all inputs."""
+
+        connection: OpenConnection | None
+        if plan.materializes_connection:
+            identity = plan._identity
+            assert identity is not None
+            transaction = plan.transaction
+            connection = OpenConnection(
+                conn_id=transaction.conn_id,
+                zeek_uid=transaction.zeek_uid,
+                src_ip=transaction.src_ip,
+                src_port=transaction.src_port,
+                dst_ip=transaction.dst_ip,
+                dst_port=transaction.dst_port,
+                protocol=transaction.protocol,
+                state=("closed" if transaction.closed_at is not None else transaction.conn_state),
+                start_time=ensure_utc(transaction.started_at),
+                source_system=plan._source_system,
+                source_hostname=plan._source_hostname,
+                hostname=plan._hostname,
+                initiating_pid=plan._initiating_pid,
+                close_time=(
+                    ensure_utc(transaction.closed_at) if transaction.closed_at is not None else None
+                ),
+                bytes_sent=transaction.traffic.orig.payload_bytes,
+                bytes_received=transaction.traffic.resp.payload_bytes,
+                traffic_ledger=transaction.traffic,
+                transaction_id=transaction.stable_id,
+                conn_state=transaction.conn_state,
+                history=transaction.history,
+                duration=transaction.duration,
+            )
+            self.state.open_connections[connection.conn_id] = connection
+            self._index_connection(connection)
+            self._connection_id_counter = identity._counter_after
+        else:
+            connection = self.state.open_connections[plan.transaction.conn_id]
+            patch = plan._parent_patch
+            assert patch is not None
+            connection.traffic_ledger = patch.after_traffic
+            connection.bytes_sent = patch.after_traffic.orig.payload_bytes
+            connection.bytes_received = patch.after_traffic.resp.payload_bytes
+
+        session: ActiveSession | None = None
+        processes: tuple[RunningProcess, ...] = ()
+        if plan.batch is not None:
+            session, processes = self._commit_prevalidated_materialization_batch(
+                plan.batch,
+                advance_version=False,
+                update_state_time=False,
+            )
+        for patch in plan.process_activity:
+            process = self._processes_by_object_id[patch.identity.object_id]
+            if (
+                process.last_activity_time is None
+                or process.last_activity_time < patch.activity_time
+            ):
+                process.last_activity_time = patch.activity_time
+        for patch in plan.session_activity:
+            active_session = self.state.active_sessions[
+                self._resolve_logon_id(patch.identity.logon_id)
+            ]
+            if (
+                active_session.last_activity_time is None
+                or active_session.last_activity_time < patch.activity_time
+            ):
+                active_session.last_activity_time = patch.activity_time
+        self.state.current_time = plan.final_state_time
+        owner_rng.setstate(plan._rng_state_final)
+        self._materialization_version += 1
+        return ConnectionCompositeMaterializationResult(
+            connection=connection,
+            session=session,
+            processes=processes,
+        )
+
+    def plan_connection_identity(self, rng: random.Random) -> ConnectionIdentityPlan:
+        """Reserve deterministic connection/UID identity without advancing either owner."""
+
+        with self._lock:
+            if self._connection_id_counter > 999_999_999:
+                raise StateError("Connection ID counter exhausted")
+            expected_version = self._materialization_version
+            counter_after = self._connection_id_counter + 1
+            conn_id = f"conn-{self._connection_id_counter}"
+            rng_state_before = rng.getstate()
+            preview_rng = random.Random()
+            preview_rng.setstate(rng_state_before)
+            zeek_uid = generate_zeek_uid_from_rng(preview_rng, "C")
+            rng_state_after_identity = preview_rng.getstate()
+            return ConnectionIdentityPlan(
+                _expected_version=expected_version,
+                _conn_id=conn_id,
+                _zeek_uid=zeek_uid,
+                _counter_after=counter_after,
+                _rng_state_before=rng_state_before,
+                _rng_state_after_identity=rng_state_after_identity,
+                _integrity_token=_connection_identity_integrity_token(
+                    self._materialization_secret,
+                    expected_version=expected_version,
+                    conn_id=conn_id,
+                    zeek_uid=zeek_uid,
+                    counter_after=counter_after,
+                    rng_state_before=rng_state_before,
+                    rng_state_after_identity=rng_state_after_identity,
+                ),
+            )
+
+    def finalize_connection_materialization(
+        self,
+        identity: ConnectionIdentityPlan,
+        transaction: NetworkTransactionPlan,
+        *,
+        continuation_rng: random.Random,
+        source_system: str = "",
+        source_hostname: str = "",
+        hostname: str = "",
+        initiating_pid: int = -1,
+        materialize_connection: bool = True,
+    ) -> ConnectionMaterializationPlan:
+        """Freeze final connection/accounting truth without publishing allocator or state."""
+
+        with self._lock:
+            self._validate_connection_identity_plan(identity)
+            if identity.expected_version != self._materialization_version:
+                raise StateError("Connection identity plan became stale before finalization")
+            if materialize_connection and (
+                transaction.conn_id != identity.conn_id or transaction.zeek_uid != identity.zeek_uid
+            ):
+                raise StateError(
+                    "New connection transaction must use its reserved connection and UID"
+                )
+            final_rng_state = continuation_rng.getstate()
+            validated_rng = random.Random()
+            validated_rng.setstate(final_rng_state)
+            payload = _ConnectionMaterializationPayload(
+                transaction=transaction,
+                source_system=source_system,
+                source_hostname=source_hostname,
+                hostname=hostname,
+                initiating_pid=initiating_pid,
+                materialize_connection=materialize_connection,
+                final_rng_state=final_rng_state,
+            )
+            return ConnectionMaterializationPlan(
+                _expected_version=identity.expected_version,
+                _identity=identity,
+                _payload=payload,
+                _integrity_token=_connection_materialization_integrity_token(
+                    self._materialization_secret,
+                    expected_version=identity.expected_version,
+                    identity=identity,
+                    payload=payload,
+                ),
+            )
+
+    def validate_connection_materialization(
+        self,
+        plan: ConnectionMaterializationPlan,
+        rng: random.Random,
+    ) -> None:
+        """Validate every fallible allocator and final-row condition without mutation."""
+
+        with self._lock:
+            self._validate_connection_materialization_plan(plan)
+            if plan.expected_version != self._materialization_version:
+                raise StateError("Connection materialization plan became stale before commit")
+            identity = plan.identity
+            if identity._counter_after != self._connection_id_counter + 1:
+                raise StateError("Connection allocator changed after identity planning")
+            if rng.getstate() != identity._rng_state_before:
+                raise StateError("Connection identity RNG stream changed before commit")
+            transaction = plan.transaction
+            if plan.materializes_connection:
+                if transaction.conn_id != identity.conn_id:
+                    raise StateError("Connection transaction ID changed after planning")
+                if transaction.zeek_uid != identity.zeek_uid:
+                    raise StateError("Connection Zeek UID changed after planning")
+                if transaction.conn_id in self.state.open_connections:
+                    raise StateError(
+                        f"Connection materialization ID is already live: {transaction.conn_id}"
+                    )
+                if self._open_connections.find("zeek_uid", transaction.zeek_uid):
+                    raise StateError(
+                        f"Connection materialization UID is already live: {transaction.zeek_uid}"
+                    )
+            else:
+                existing = self.state.open_connections.get(transaction.conn_id)
+                if existing is None:
+                    raise StateError(
+                        f"Reused connection materialization references unknown {transaction.conn_id}"
+                    )
+                if existing.zeek_uid != transaction.zeek_uid:
+                    raise StateError("Reused connection materialization UID changed")
+
+    @contextmanager
+    def prepared_connection_materialization(
+        self,
+        plan: ConnectionMaterializationPlan,
+        rng: random.Random,
+    ) -> Iterator[PreparedConnectionMaterialization]:
+        """Validate one connection and retain the state guard until commit or cancel."""
+
+        with self._lock:
+            self.validate_connection_materialization(plan, rng)
+            prepared = PreparedConnectionMaterialization(
+                _manager=self,
+                _plan=plan,
+                _rng=rng,
+            )
+            try:
+                yield prepared
+            finally:
+                prepared._active = False
+
+    def materialize_connection(
+        self,
+        plan: ConnectionMaterializationPlan,
+        rng: random.Random,
+    ) -> OpenConnection | None:
+        """Compatibility commit for one already-finalized connection plan."""
+
+        with self.prepared_connection_materialization(plan, rng) as prepared:
+            return prepared.commit()
+
+    def _commit_prevalidated_connection_materialization(
+        self,
+        plan: ConnectionMaterializationPlan,
+        rng: random.Random,
+    ) -> OpenConnection | None:
+        """Apply primitive allocator/final-row writes under a prepared state guard."""
+
+        identity = plan.identity
+        payload = plan._payload
+        transaction = payload.transaction
+        self._connection_id_counter = identity._counter_after
+        connection: OpenConnection | None = None
+        if payload.materialize_connection:
+            connection = OpenConnection(
+                conn_id=transaction.conn_id,
+                zeek_uid=transaction.zeek_uid,
+                src_ip=transaction.src_ip,
+                src_port=transaction.src_port,
+                dst_ip=transaction.dst_ip,
+                dst_port=transaction.dst_port,
+                protocol=transaction.protocol,
+                state=("closed" if transaction.closed_at is not None else transaction.conn_state),
+                start_time=transaction.started_at,
+                source_system=payload.source_system,
+                source_hostname=payload.source_hostname,
+                hostname=payload.hostname,
+                initiating_pid=payload.initiating_pid,
+                close_time=transaction.closed_at,
+                bytes_sent=transaction.traffic.orig.payload_bytes,
+                bytes_received=transaction.traffic.resp.payload_bytes,
+                traffic_ledger=transaction.traffic,
+                transaction_id=transaction.stable_id,
+                conn_state=transaction.conn_state,
+                history=transaction.history,
+                duration=transaction.duration,
+            )
+            self.state.open_connections[connection.conn_id] = connection
+            self._index_connection(connection)
+        rng.setstate(payload.final_rng_state)
+        self._materialization_version += 1
+        return connection
+
     def open_connection(
         self,
         src_ip: str,
@@ -2516,12 +6502,20 @@ class StateManager:
         parent's rendered tuple and UID instead of creating a shadow OpenConnection.
         """
 
+        rng = _get_rng()
+        plan = self.plan_connection_identity(rng)
         with self._lock:
-            if self._connection_id_counter > 999999999:
-                raise StateError("Connection ID counter exhausted")
-            conn_id = f"conn-{self._connection_id_counter}"
-            self._connection_id_counter += 1
-            return conn_id, generate_zeek_uid("C")
+            self._validate_connection_identity_plan(plan)
+            if plan.expected_version != self._materialization_version:
+                raise StateError("Connection identity plan became stale before commit")
+            if rng.getstate() != plan._rng_state_before:
+                raise StateError("Connection identity RNG stream changed before commit")
+            if plan._counter_after != self._connection_id_counter + 1:
+                raise StateError("Connection allocator changed after identity planning")
+            self._connection_id_counter = plan._counter_after
+            rng.setstate(plan._rng_state_after_identity)
+            self._materialization_version += 1
+            return plan.conn_id, plan.zeek_uid
 
     def get_zeek_uid(self, conn_id: str) -> str:
         """Get the Zeek UID for a connection.
@@ -2825,140 +6819,6 @@ class StateManager:
     # Canonical SMB Runtime State
     # ========================================
 
-    def open_smb_session(
-        self,
-        *,
-        client_ip: str,
-        principal: str,
-        server: str,
-        security_policy: str,
-        logon_id: str,
-        transport_uid: str,
-        started_at: datetime,
-        auth_session_ref: str = "",
-        auth_protocol: str = "",
-        account_scope: str = "",
-        effective_uid: int | None = None,
-        effective_gid: int | None = None,
-        client_access: str = "",
-        idle_timeout: timedelta = timedelta(minutes=15),
-        reuse: bool = False,
-    ) -> SmbSessionState:
-        """Create or reuse one bounded SMB application session."""
-
-        started_at = ensure_utc(started_at)
-        key = (
-            client_ip,
-            principal.casefold(),
-            server.casefold(),
-            security_policy,
-            auth_protocol.casefold(),
-            account_scope.casefold(),
-        )
-        with self._lock:
-            if reuse:
-                session_id = self._smb_session_affinity.get(key)
-                session = self._smb_sessions.get(session_id or "")
-                if (
-                    session is not None
-                    and session.closed_at is None
-                    and session.expires_at >= started_at
-                    and session.started_at + timedelta(hours=1) >= started_at
-                    and session.transport_uid == transport_uid
-                    and session.auth_session_ref == auth_session_ref
-                ):
-                    session.expires_at = min(
-                        session.started_at + timedelta(hours=1),
-                        started_at + idle_timeout,
-                    )
-                    return session
-            session_id = stable_uuid(
-                "smb-session",
-                client_ip,
-                principal,
-                server,
-                security_policy,
-                transport_uid,
-                started_at.isoformat(),
-            )
-            session = SmbSessionState(
-                session_id=session_id,
-                client_ip=client_ip,
-                principal=principal,
-                server=server,
-                security_policy=security_policy,
-                logon_id=logon_id,
-                transport_uid=transport_uid,
-                started_at=started_at,
-                expires_at=min(started_at + timedelta(hours=1), started_at + idle_timeout),
-                auth_session_ref=auth_session_ref,
-                auth_protocol=auth_protocol,
-                account_scope=account_scope,
-                effective_uid=effective_uid,
-                effective_gid=effective_gid,
-                client_access=client_access,
-            )
-            self._smb_sessions[session_id] = session
-            self._smb_session_affinity[key] = session_id
-            return session
-
-    def get_smb_session(self, session_id: str) -> SmbSessionState | None:
-        """Return one active SMB session without exposing mutable indexes."""
-
-        with self._lock:
-            return self._smb_sessions.get(session_id)
-
-    def close_smb_session(self, session_id: str, timestamp: datetime) -> None:
-        """Close an SMB session and its active trees and handles."""
-
-        timestamp = ensure_utc(timestamp)
-        with self._lock:
-            session = self._smb_sessions.get(session_id)
-            if session is None:
-                return
-            session.closed_at = timestamp
-            for tree in self._smb_trees.values():
-                if tree.session_id != session_id or tree.closed_at is not None:
-                    continue
-                tree.closed_at = timestamp
-                for handle in self._smb_handles.values():
-                    if handle.tree_id == tree.tree_id and handle.closed_at is None:
-                        handle.closed_at = timestamp
-
-    def get_or_open_smb_tree(
-        self,
-        session_id: str,
-        share: str,
-        timestamp: datetime,
-    ) -> SmbTreeState:
-        """Return the active tree for a session/share pair or create it."""
-
-        timestamp = ensure_utc(timestamp)
-        key = (session_id, share.casefold())
-        with self._lock:
-            tree_id = self._smb_tree_by_session_share.get(key)
-            tree = self._smb_trees.get(tree_id or "")
-            if tree is not None and tree.closed_at is None:
-                tree.last_activity_at = timestamp
-                return tree
-            tree_id = stable_uuid("smb-tree", session_id, share.casefold())
-            tree = SmbTreeState(
-                tree_id=tree_id,
-                session_id=session_id,
-                share=share,
-                connected_at=timestamp,
-                last_activity_at=timestamp,
-            )
-            self._smb_trees[tree_id] = tree
-            self._smb_tree_by_session_share[key] = tree_id
-            return tree
-
-    def get_smb_tree(self, tree_id: str) -> SmbTreeState | None:
-        """Return one active SMB tree without exposing mutable indexes to callers."""
-
-        with self._lock:
-            return self._smb_trees.get(tree_id)
-
     def smb_file_is_available(self, file: object) -> bool:
         """Return whether a compiled catalog entry still exists at its original path."""
 
@@ -2980,56 +6840,6 @@ class StateManager:
             if state is None:
                 return max(0, int(file.size_bytes))
             return 0 if state.deleted else state.size_bytes
-
-    def open_smb_handle(
-        self,
-        *,
-        tree_id: str,
-        file_id: str,
-        timestamp: datetime,
-        access: str,
-        deny_write: bool = False,
-    ) -> SmbHandleState:
-        """Open one minimal SMB handle."""
-
-        timestamp = ensure_utc(timestamp)
-        with self._lock:
-            handle_id = stable_uuid(
-                "smb-handle",
-                tree_id,
-                file_id,
-                access,
-                timestamp.isoformat(),
-                len(self._smb_handles),
-            )
-            handle = SmbHandleState(
-                handle_id=handle_id,
-                tree_id=tree_id,
-                file_id=file_id,
-                opened_at=timestamp,
-                access=access,
-                deny_write=deny_write,
-            )
-            self._smb_handles[handle_id] = handle
-            return handle
-
-    def has_smb_write_conflict(self, file_id: str) -> bool:
-        """Return whether an active handle denies writes to a file."""
-
-        with self._lock:
-            return any(
-                handle.file_id == file_id and handle.closed_at is None and handle.deny_write
-                for handle in self._smb_handles.values()
-            )
-
-    def close_smb_handle(self, handle_id: str, timestamp: datetime) -> None:
-        """Close and evict one SMB handle."""
-
-        with self._lock:
-            handle = self._smb_handles.get(handle_id)
-            if handle is not None:
-                handle.closed_at = ensure_utc(timestamp)
-                self._smb_handles.pop(handle_id, None)
 
     def touch_smb_file(self, file: object) -> SmbFileState:
         """Return a mutable overlay view for one compiled storage file."""
@@ -3134,43 +6944,6 @@ class StateManager:
             )
             return state
 
-    def sweep_smb_state(self, cutoff: datetime) -> None:
-        """Expire SMB sessions, trees, and handles at the hourly state barrier."""
-
-        cutoff = ensure_utc(cutoff)
-        with self._lock:
-            expired_sessions = {
-                session_id
-                for session_id, session in self._smb_sessions.items()
-                if session.expires_at < cutoff or session.closed_at is not None
-            }
-            for session_id in expired_sessions:
-                session = self._smb_sessions.pop(session_id)
-                key = (
-                    session.client_ip,
-                    session.principal.casefold(),
-                    session.server.casefold(),
-                    session.security_policy,
-                    session.auth_protocol.casefold(),
-                    session.account_scope.casefold(),
-                )
-                if self._smb_session_affinity.get(key) == session_id:
-                    self._smb_session_affinity.pop(key, None)
-            expired_trees = {
-                tree_id
-                for tree_id, tree in self._smb_trees.items()
-                if tree.session_id in expired_sessions or tree.closed_at is not None
-            }
-            for tree_id in expired_trees:
-                tree = self._smb_trees.pop(tree_id)
-                self._smb_tree_by_session_share.pop(
-                    (tree.session_id, tree.share.casefold()),
-                    None,
-                )
-            for handle_id, handle in list(self._smb_handles.items()):
-                if handle.tree_id in expired_trees or handle.closed_at is not None:
-                    self._smb_handles.pop(handle_id, None)
-
     def get_state_summary(self) -> dict:
         """Get a summary of current state for logging/debugging.
 
@@ -3183,9 +6956,6 @@ class StateManager:
                 "running_processes": len(self.state.running_processes),
                 "open_connections": len(self.state.open_connections),
                 "dns_cache_entries": len(self.state.dns_cache),
-                "smb_sessions": len(self._smb_sessions),
-                "smb_trees": len(self._smb_trees),
-                "smb_handles": len(self._smb_handles),
                 "smb_mutations": len(self._smb_file_overlay),
                 "current_time": str(self.state.current_time) if self.state.current_time else None,
             }
@@ -3201,7 +6971,11 @@ class StateManager:
         boot_time will generate warnings.
         """
         with self._lock:
-            self._system_boot_times[system] = boot_time
+            normalized = ensure_utc(boot_time)
+            if self._system_boot_times.get(system) == normalized:
+                return
+            self._system_boot_times[system] = normalized
+            self._materialization_version += 1
 
     def get_boot_time(self, system: str) -> datetime | None:
         """Get a system's registered boot time."""
@@ -3278,7 +7052,16 @@ class StateManager:
                         closed_at = event.network.closed_at
                         if closed_at is not None:
                             activity_time = max(activity_time, ensure_utc(closed_at))
-                    if proc.last_activity_time is None or activity_time > proc.last_activity_time:
+                    owning_session = (
+                        self.state.active_sessions.get(self._resolve_logon_id(proc.logon_id))
+                        if proc.logon_id
+                        else None
+                    )
+                    if (
+                        owning_session is None or _session_valid_at(owning_session, activity_time)
+                    ) and (
+                        proc.last_activity_time is None or activity_time > proc.last_activity_time
+                    ):
                         proc.last_activity_time = activity_time
 
             if event.event_type == "logoff" and event.auth:
