@@ -3137,6 +3137,35 @@ def _dns_inclusive_millisecond_distribution(
     )
 
 
+def _rdp_inclusive_millisecond_distribution(
+    minimum_ms: int,
+    maximum_ms: int,
+) -> DistributionSpec:
+    """Return a continuous distribution for one inclusive RDP millisecond support."""
+
+    if minimum_ms > maximum_ms:
+        raise ValueError(
+            "RDP timing support minimum must not exceed maximum: "
+            f"minimum_ms={minimum_ms} maximum_ms={maximum_ms}"
+        )
+    if minimum_ms == maximum_ms:
+        return ConstantDistribution(float(minimum_ms))
+    lower = float(minimum_ms) - 0.5
+    upper = float(maximum_ms) + 0.5
+    return MixtureDistribution(
+        components=(
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=lower, mode=lower, maximum=upper),
+            ),
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=lower, mode=upper, maximum=upper),
+            ),
+        )
+    )
+
+
 def _jitter_default_connection_duration(
     duration: float | None,
     *,
@@ -24314,6 +24343,56 @@ class ActivityGenerator:
             return system.ip
         return None
 
+    def _sample_rdp_outer_timing_milliseconds(
+        self,
+        *,
+        relationship_key: str,
+        stable_id: str,
+        host: str,
+        lifecycle_id: str,
+        sample_key: str,
+        minimum_ms: int,
+        maximum_ms: int,
+        ordinal: int = 0,
+    ) -> int:
+        """Sample one RDP outer-placement gap through the exact engine runtime."""
+
+        runtime = self.timing_runtime
+        if type(runtime) not in {TimingRuntime, SourceTimingPlanningRuntime}:
+            raise StateError("RDP outer timing requires the exact engine-owned runtime")
+        if (
+            type(relationship_key) is not str
+            or not relationship_key
+            or type(stable_id) is not str
+            or not stable_id
+            or type(host) is not str
+            or not host
+            or type(lifecycle_id) is not str
+            or not lifecycle_id
+            or type(sample_key) is not str
+            or not sample_key
+            or type(minimum_ms) is not int
+            or type(maximum_ms) is not int
+            or minimum_ms < 0
+            or maximum_ms < minimum_ms
+            or type(ordinal) is not int
+            or ordinal < 0
+        ):
+            raise StateError("RDP outer timing scope and support must use exact built-in values")
+        sampled = runtime.sampler.sample_value(
+            _rdp_inclusive_millisecond_distribution(minimum_ms, maximum_ms),
+            relationship_key=relationship_key,
+            scope=TimingScope(
+                stable_id=stable_id,
+                host=host,
+                source="activity.rdp",
+                lifecycle_id=lifecycle_id,
+                ordinal=ordinal,
+            ),
+            sample_key=sample_key,
+        )
+        return int(sampled + 0.5)
+
     def execute_baseline_activity(
         self, user: User, system: System, time: datetime, activity_type: str
     ) -> None:
@@ -24455,7 +24534,6 @@ class ActivityGenerator:
                 and source_ip
                 and source_ip != system.ip
             ):
-                rdp_time = time - timedelta(milliseconds=_get_rng().randint(80, 400))
                 rdp_source_system = self._resolve_direct_rdp_source_system(
                     user,
                     system,
@@ -24464,8 +24542,34 @@ class ActivityGenerator:
                 )
                 if rdp_source_system is not None:
                     source_ip = rdp_source_system.ip
+                canonical_activity_time = ensure_utc(time)
+                rdp_lifecycle_id = (
+                    f"baseline-rdp:{user.username}:{source_ip}:{system.hostname}:"
+                    f"{canonical_activity_time.isoformat()}"
+                )
+                rdp_lead_ms = self._sample_rdp_outer_timing_milliseconds(
+                    relationship_key="activity.rdp.session_before_baseline_logon",
+                    stable_id=rdp_lifecycle_id,
+                    host=system.hostname,
+                    lifecycle_id=rdp_lifecycle_id,
+                    sample_key="session_lead_ms",
+                    minimum_ms=80,
+                    maximum_ms=400,
+                )
+                rdp_time = time - timedelta(milliseconds=rdp_lead_ms)
                 source_process_time = (
-                    rdp_time - timedelta(milliseconds=_get_rng().randint(1800, 3200))
+                    rdp_time
+                    - timedelta(
+                        milliseconds=self._sample_rdp_outer_timing_milliseconds(
+                            relationship_key="activity.rdp.source_process_before_session",
+                            stable_id=rdp_lifecycle_id,
+                            host=rdp_source_system.hostname,
+                            lifecycle_id=rdp_lifecycle_id,
+                            sample_key="source_process_lead_ms",
+                            minimum_ms=1800,
+                            maximum_ms=3200,
+                        )
+                    )
                     if rdp_source_system is not None
                     else None
                 )
