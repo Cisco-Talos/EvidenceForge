@@ -53,14 +53,14 @@ from evidenceforge.generation.actions.base import (
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
-    sample_packet_timing_delta,
     sample_ssh_authentication_phase_ms,
     sample_timing_delta,
 )
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.generation.timing import TemporalConstraintGraph
+from evidenceforge.generation.timing import TemporalConstraintGraph, TimingRuntime
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
@@ -237,6 +237,7 @@ class SshSessionExecutor(Protocol):
     _network_visibility: Any
     _source_timing_planner: SourceTimingPlanner
     identity_directory: IdentityDirectory | None
+    timing_runtime: TimingRuntime
 
     def _build_host_context(self, system: System) -> HostContext:
         """Build canonical host context for a scenario system."""
@@ -389,6 +390,17 @@ class SshSessionActionBundle:
     request: SshSessionRequest
     executor: SshSessionExecutor
 
+    def _timing_planner(self) -> BaselineTimingPlanner:
+        """Return the engine planner or one stateless direct-test adapter."""
+
+        runtime = getattr(self.executor, "timing_runtime", None)
+        return BaselineTimingPlanner(
+            runtime
+            if isinstance(runtime, TimingRuntime)
+            else TimingRuntime.compatibility_default(),
+            source="ssh",
+        )
+
     @property
     def anchor(self) -> ActionAnchor:
         """Return the stable action anchor for this SSH session."""
@@ -494,18 +506,7 @@ class SshSessionActionBundle:
             self._source_os(),
             time=request.time,
         )
-        transport_open_time = request.time + sample_packet_timing_delta(
-            "network.connection_start_jitter",
-            seed_parts=(
-                request.source_ip,
-                src_port,
-                request.target_system.ip,
-                22,
-                "tcp",
-                "ssh",
-                request.time,
-            ),
-        )
+        transport_open_time = self._transport_open_time(src_port)
         if request.duration is not None:
             duration = max(1.0, request.duration)
         else:
@@ -1110,20 +1111,38 @@ class SshSessionActionBundle:
                 connection.close_time = state.close_time
 
     def _predicted_transport_open_time(self, state: _SshTransportState) -> datetime:
-        """Return the deterministic source-visible transport anchor for this SSH tuple."""
+        """Return the single planned source-visible transport anchor for this SSH tuple."""
+
+        if isinstance(state.open_time, datetime):
+            return ensure_utc(state.open_time)
+        return self._transport_open_time(state.source_port)
+
+    def _transport_open_time(self, source_port: int) -> datetime:
+        """Sample one tuple-scoped SSH transport-open time through the engine runtime."""
 
         request = self.request
-        return request.time + sample_packet_timing_delta(
-            "network.connection_start_jitter",
-            seed_parts=(
-                request.source_ip,
-                state.source_port,
-                request.target_system.ip,
-                22,
-                "tcp",
-                "ssh",
-                request.time,
-            ),
+        relationship_key = "network.connection_start_jitter"
+        window = get_timing_window(
+            relationship_key,
+            default_min_ms=0,
+            default_max_ms=0,
+            default_position="after",
+        )
+        execution_id = request.execution_stable_id(source_port)
+        source_host = (
+            request.source_system.hostname
+            if request.source_system is not None
+            else request.source_ip
+        )
+        network_timing = BaselineTimingPlanner(self._timing_planner().runtime, source="network")
+        return request.time + network_timing.packet_observation_delta(
+            relationship_key=relationship_key,
+            stable_id=f"{execution_id}:transport-open",
+            minimum_ms=window.min_ms,
+            maximum_ms=window.max_ms,
+            host=source_host,
+            lifecycle_id=execution_id,
+            sample_key="transport_open",
         )
 
     def _resolve_responder_pid(self, state: _SshTransportState, conn_delay_ms: int) -> int:

@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from evidenceforge.generation.timing import (
     ConstantDistribution,
     MixtureDistribution,
+    TimingDistributionError,
     TimingRuntime,
     TimingScope,
     TriangularDistribution,
@@ -113,6 +114,58 @@ class BaselineTimingPlanner:
             sample_key=sample_key,
         )
         return microseconds / 1_000_000
+
+    def packet_observation_delta(
+        self,
+        *,
+        relationship_key: str,
+        stable_id: str,
+        minimum_ms: int,
+        maximum_ms: int,
+        host: str = "",
+        lifecycle_id: str = "",
+        ordinal: int = 0,
+        sample_key: str = "packet_observation",
+        mode_fraction: float = 0.35,
+    ) -> timedelta:
+        """Return one typed packet-observation gap with microsecond texture.
+
+        The legacy packet helper composed an integer-millisecond relationship
+        sample with an independently seeded 37--997 microsecond suffix. One
+        runtime-owned triangular draw now preserves that exact inclusive
+        support without retaining the millisecond lattice or a second timing
+        authority.
+        """
+
+        if minimum_ms < 0:
+            raise TimingDistributionError("minimum_ms must be non-negative")
+        if maximum_ms < minimum_ms:
+            raise TimingDistributionError("maximum_ms must not be less than minimum_ms")
+        if not 0.0 <= mode_fraction <= 1.0:
+            raise TimingDistributionError("mode_fraction must be between zero and one")
+
+        # TimingSampler quantizes continuous distributions to a whole
+        # microsecond strictly inside their support. These open bounds therefore
+        # produce the former inclusive [min_ms + 37us, max_ms + 997us] range.
+        minimum_us = (minimum_ms * 1_000) + 36
+        maximum_us = (maximum_ms * 1_000) + 998
+        mode_us = minimum_us + ((maximum_us - minimum_us) * mode_fraction)
+        return self.runtime.sampler.sample_timedelta(
+            TriangularDistribution(
+                minimum=float(minimum_us),
+                mode=mode_us,
+                maximum=float(maximum_us),
+            ),
+            relationship_key=relationship_key,
+            scope=TimingScope(
+                stable_id=stable_id,
+                host=host,
+                source=self.source,
+                lifecycle_id=lifecycle_id,
+                ordinal=ordinal,
+            ),
+            sample_key=sample_key,
+        )
 
     def centered_seconds(
         self,

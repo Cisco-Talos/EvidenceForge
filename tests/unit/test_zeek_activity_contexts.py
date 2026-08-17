@@ -53,7 +53,6 @@ from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
-    sample_packet_timing_delta,
     sample_timing_delta,
 )
 from evidenceforge.generation.emitters.ecar import EcarEmitter
@@ -1064,22 +1063,17 @@ class TestSslContextPopulation:
             services=["ssh"],
         )
         base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        timing_request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+        )
+        timing_bundle = SshSessionActionBundle(request=timing_request, executor=gen)
         source_port = next(
             port
             for port in range(40000, 65000)
-            if sample_packet_timing_delta(
-                "network.connection_start_jitter",
-                seed_parts=(
-                    "10.0.10.50",
-                    port,
-                    target.ip,
-                    22,
-                    "tcp",
-                    "ssh",
-                    base_time,
-                ),
-            )
-            > timedelta(milliseconds=650)
+            if timing_bundle._transport_open_time(port) - base_time > timedelta(milliseconds=650)
         )
 
         gen.generate_ssh_session(
@@ -2011,7 +2005,10 @@ class TestSslContextPopulation:
             _observed_dst_port,
             _observed_proto,
             _observed_service,
+            *,
+            timing_runtime,
         ):
+            assert timing_runtime is gen.timing_runtime
             if observed_src_ip == source.ip and observed_dst_ip == proxy.ip:
                 return base_time - timedelta(seconds=5)
             return observed_base_time

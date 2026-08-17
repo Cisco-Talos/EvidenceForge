@@ -249,7 +249,6 @@ from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window as _activity_get_timing_window,
 )
 from evidenceforge.generation.activity.timing_profiles import (
-    sample_packet_timing_delta,
     sample_timing_delta,
 )
 from evidenceforge.generation.activity.windows_auth_realism import (
@@ -1778,19 +1777,32 @@ def _zeek_conn_observation_time(
     dst_port: int,
     proto: str,
     service: str,
+    *,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
 ) -> datetime:
-    """Return a deterministic canonical spacing time for same-scheduled flows."""
-    return base_time + sample_packet_timing_delta(
-        "network.connection_start_jitter",
-        seed_parts=(
-            src_ip,
-            src_port,
-            dst_ip,
-            dst_port,
-            proto,
-            service,
-            base_time,
-        ),
+    """Return runtime-owned canonical spacing for one exact transport tuple."""
+
+    relationship_key = "network.connection_start_jitter"
+    window = _activity_get_timing_window(
+        relationship_key,
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    stable_id = (
+        f"network-connection-start:{src_ip}:{src_port}:{dst_ip}:{dst_port}:"
+        f"{proto}:{service}:{base_time.isoformat()}"
+    )
+    runtime = timing_runtime or TimingRuntime.compatibility_default()
+    planner = BaselineTimingPlanner(runtime, source="network")
+    return base_time + planner.packet_observation_delta(
+        relationship_key=relationship_key,
+        stable_id=stable_id,
+        minimum_ms=window.min_ms,
+        maximum_ms=window.max_ms,
+        host=src_ip,
+        lifecycle_id=stable_id,
+        sample_key="transport_open",
     )
 
 

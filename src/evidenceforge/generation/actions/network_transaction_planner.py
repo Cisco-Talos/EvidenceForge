@@ -2759,6 +2759,7 @@ class NetworkTransactionPlanner:
                 dst_port,
                 proto,
                 service or "",
+                timing_runtime=self._timing_runtime,
             )
         if proto == "icmp":
             zeek_type = src_port if src_port else 8

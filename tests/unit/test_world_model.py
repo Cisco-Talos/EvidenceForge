@@ -1124,7 +1124,6 @@ def test_rdp_target_logon_uses_canonical_transport_phase_gap() -> None:
         ),
     )
     logon_time = bundle._target_logon_time(
-        rng=random.Random(7),
         source_ip="10.10.10.50",
         src_port=52875,
         transport_start_time=base_time,
@@ -1157,7 +1156,6 @@ def test_rdp_target_logon_is_independent_of_observation_profile() -> None:
     )
 
     logon_time = bundle._target_logon_time(
-        rng=random.Random(7),
         source_ip=source.ip,
         src_port=52875,
         transport_start_time=base_time,

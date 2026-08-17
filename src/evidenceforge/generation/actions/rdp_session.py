@@ -49,10 +49,11 @@ from evidenceforge.generation.actions.windows_remote_authentication import (
     WindowsRemoteAuthenticationRequest,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.generation.timing import TemporalConstraintGraph
+from evidenceforge.generation.timing import TemporalConstraintGraph, TimingRuntime
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
@@ -117,6 +118,7 @@ class RdpSessionExecutor(Protocol):
     dispatcher: EventDispatcher
     _source_timing_planner: SourceTimingPlanner
     _ip_to_system: dict[str, System]
+    timing_runtime: TimingRuntime
 
     def _coerce_windows_rdp_user_from_existing_session(
         self,
@@ -179,6 +181,17 @@ class RdpSessionActionBundle:
         self._source_process_factory = source_process_factory
         self._rendered_logon_id = ""
 
+    def _timing_planner(self) -> BaselineTimingPlanner:
+        """Return the engine planner or one stateless direct-test adapter."""
+
+        runtime = getattr(self._executor, "timing_runtime", None)
+        return BaselineTimingPlanner(
+            runtime
+            if isinstance(runtime, TimingRuntime)
+            else TimingRuntime.compatibility_default(),
+            source="rdp",
+        )
+
     @property
     def rendered_logon_id(self) -> str:
         """Return the target session LogonID after execution."""
@@ -240,7 +253,6 @@ class RdpSessionActionBundle:
             )
 
         logon_time = self._target_logon_time(
-            rng=rng,
             source_ip=source_ip,
             src_port=src_port,
             transport_start_time=self._request.time,
@@ -474,27 +486,54 @@ class RdpSessionActionBundle:
     def _target_logon_time(
         self,
         *,
-        rng: random.Random,
         source_ip: str,
         src_port: int,
         transport_start_time: datetime | None = None,
     ) -> datetime:
         """Resolve canonical target authentication after the RDP transport starts."""
 
+        timing = self._timing_planner()
+        timing_id = (
+            f"{self._request.stable_id}:transport:{source_ip}:{src_port}:"
+            f"{self._request.target_system.ip}:3389:tcp:rdp"
+        )
         observed_connection_time = transport_start_time
         if observed_connection_time is None:
-            observed_connection_time = self._request.time + sample_timing_delta(
+            window = get_timing_window(
                 "network.connection_start_jitter",
-                seed_parts=(
-                    source_ip,
-                    src_port,
-                    self._request.target_system.ip,
-                    3389,
-                    "tcp",
-                    "rdp",
-                    self._request.time,
-                ),
+                default_min_ms=0,
+                default_max_ms=0,
+                default_position="after",
             )
+            network_timing = BaselineTimingPlanner(timing.runtime, source="network")
+            minimum_seconds = window.min_ms / 1_000
+            maximum_seconds = (
+                minimum_seconds
+                if window.max_ms <= window.min_ms
+                else ((window.max_ms * 1_000) + 1) / 1_000_000
+            )
+            observed_connection_time = self._request.time + timedelta(
+                seconds=network_timing.triangular_seconds(
+                    relationship_key="network.connection_start_jitter",
+                    stable_id=timing_id,
+                    minimum=minimum_seconds,
+                    mode=(window.min_ms + (window.max_ms - window.min_ms) * 0.35) / 1_000,
+                    maximum=maximum_seconds,
+                    host=source_ip,
+                    lifecycle_id=self._request.stable_id,
+                    sample_key="transport_open",
+                )
+            )
+        target_logon_gap = timing.triangular_seconds(
+            relationship_key="rdp.target_logon_after_transport",
+            stable_id=timing_id,
+            minimum=0.899999,
+            mode=1.12,
+            maximum=1.600001,
+            host=self._request.target_system.hostname,
+            lifecycle_id=self._request.stable_id,
+            sample_key="target_logon",
+        )
         graph = TemporalConstraintGraph()
         graph.add_node(
             "transport_observed",
@@ -503,8 +542,7 @@ class RdpSessionActionBundle:
         )
         graph.add_node(
             "target_logon",
-            observed_connection_time
-            + timedelta(milliseconds=self._target_logon_gap_after_transport(rng)),
+            observed_connection_time + timedelta(seconds=target_logon_gap),
         )
         graph.constrain_after(
             "target_logon",
@@ -512,10 +550,3 @@ class RdpSessionActionBundle:
             min_gap=timedelta(milliseconds=900),
         )
         return graph.resolved_time("target_logon")
-
-    def _target_logon_gap_after_transport(self, rng: random.Random) -> int:
-        """Choose an RDP target logon gap after endpoint transport visibility."""
-        return max(
-            rng.randint(900, 1600),
-            900,
-        )

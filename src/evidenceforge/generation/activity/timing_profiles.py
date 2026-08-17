@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.utils.rng import _stable_seed
 
 _CONFIG_PATH = get_activity_directory() / "timing_profiles.yaml"
@@ -253,11 +255,31 @@ def sample_timing_delta(key: str, *, seed_parts: tuple[Any, ...] = ()) -> timede
 
 
 def sample_packet_timing_delta(key: str, *, seed_parts: tuple[Any, ...] = ()) -> timedelta:
-    """Sample a deterministic packet-observation delta with sub-millisecond jitter."""
-    base_delta = sample_timing_delta(key, seed_parts=seed_parts)
-    seed = "packet_timing_delta:" + key + ":" + ":".join(str(part) for part in seed_parts)
-    rng = random.Random(_stable_seed(seed))
-    return base_delta + timedelta(microseconds=rng.randint(37, 997))
+    """Sample a direct-helper-compatible typed packet-observation delta.
+
+    Production generators inject their engine timing runtime directly. This
+    stateless adapter remains only for direct helper tests and external callers
+    that have not constructed an engine.
+    """
+
+    window = get_timing_window(
+        key,
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    stable_id = (
+        "packet-timing-compatibility:" + key + ":" + ":".join(str(part) for part in seed_parts)
+    )
+    return BaselineTimingPlanner(
+        TimingRuntime.compatibility_default(),
+        source="network",
+    ).packet_observation_delta(
+        relationship_key=key,
+        stable_id=stable_id,
+        minimum_ms=window.min_ms,
+        maximum_ms=window.max_ms,
+    )
 
 
 def ssh_authentication_timing(auth_method: str) -> SshAuthenticationTiming:
