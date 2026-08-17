@@ -4358,7 +4358,6 @@ class BaselineMixin:
                 )
                 next_hour = current_hour + timedelta(hours=1)
                 self.state_manager.sweep_closed_connections(next_hour)
-                self.state_manager.sweep_smb_state(next_hour)
                 allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
                 self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
                 self.activity_generator.advance_process_state_watermark(allocation_cutoff)
@@ -4396,7 +4395,6 @@ class BaselineMixin:
             # Evict completed/failed connections to bound memory during long runs
             next_hour = current_hour + timedelta(hours=1)
             self.state_manager.sweep_closed_connections(next_hour)
-            self.state_manager.sweep_smb_state(next_hour)
             allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
             self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
             self.activity_generator.advance_process_state_watermark(allocation_cutoff)
