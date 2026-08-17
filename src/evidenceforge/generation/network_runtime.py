@@ -112,6 +112,7 @@ class NetworkRuntimePointFamily(StrEnum):
     RESPONDER_BINDING = "responder_binding"
     KERBEROS_AUDIT_PAIR = "kerberos_audit_pair"
     KERBEROS_AUDIT_TUPLE = "kerberos_audit_tuple"
+    AD_SRV_DISCOVERY = "ad_srv_discovery"
 
 
 def _canonical_family(family: NetworkRuntimePointFamily) -> NetworkRuntimePointFamily:

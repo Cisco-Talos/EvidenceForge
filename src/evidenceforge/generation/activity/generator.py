@@ -23500,6 +23500,80 @@ class ActivityGenerator:
                 parent_action_group_id=request.parent_action_group_id,
             )
 
+    @staticmethod
+    def _ad_srv_discovery_runtime_identity(
+        *,
+        src_ip: str,
+        domain: str,
+        time: datetime,
+        query: str,
+    ) -> tuple[tuple[str, str, int, str], datetime, datetime]:
+        """Return the bounded runtime point identity for one hourly SRV query."""
+
+        current = ensure_utc(time)
+        bucket_start = (current + timedelta(seconds=5)).replace(
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        bucket = (bucket_start - datetime(1970, 1, 1, tzinfo=UTC)) // timedelta(hours=1)
+        key = (
+            src_ip.removeprefix("::ffff:"),
+            domain.lower().rstrip("."),
+            bucket,
+            query.lower().rstrip("."),
+        )
+        return key, bucket_start, bucket_start + timedelta(hours=1)
+
+    def _prepare_ad_srv_discovery_publication(
+        self,
+        *,
+        src_ip: str,
+        domain: str,
+        time: datetime,
+        query: str,
+    ) -> NetworkPointBatchToken | None:
+        """Prepare one hourly SRV marker before publishing its network occurrence."""
+
+        key, marker, nominal_expiry = self._ad_srv_discovery_runtime_identity(
+            src_ip=src_ip,
+            domain=domain,
+            time=time,
+            query=query,
+        )
+        runtime = self._network_transaction_runtime
+        batch = runtime.begin_point_batch(
+            stable_id=f"ad-srv-discovery:{key[0]}:{key[1]}:{key[2]}:{key[3]}",
+            linearization_time=ensure_utc(time),
+        )
+        try:
+            existing = batch.read_point(
+                NetworkRuntimePointFamily.AD_SRV_DISCOVERY,
+                key,
+                None,
+                at=ensure_utc(time),
+            )
+            if existing is not None:
+                if type(existing) is not datetime or existing.tzinfo is not UTC:
+                    raise StateError("AD SRV runtime point contains a malformed bucket marker")
+                if existing != marker:
+                    raise StateError("AD SRV runtime point bucket marker disagrees with its key")
+                batch.cancel()
+                return None
+            batch.stage_point(
+                NetworkRuntimePointFamily.AD_SRV_DISCOVERY,
+                key,
+                marker,
+                expires_at=min(nominal_expiry, runtime.window_end),
+            )
+            return batch.seal()
+        except BaseException:
+            try:
+                batch.cancel()
+            except StateError:
+                pass
+            raise
+
     def _emit_ad_srv_discovery(
         self,
         *,
@@ -23515,13 +23589,6 @@ class ActivityGenerator:
         dc_systems = list(getattr(self, "_dc_systems", []) or [])
         if not dc_systems:
             return
-
-        if not hasattr(self, "_ad_srv_discovery_cache"):
-            self._ad_srv_discovery_cache: set[tuple[str, str, int]] = set()
-        cache_key = (src_ip, domain.lower(), int((time + timedelta(seconds=5)).timestamp() // 3600))
-        if cache_key in self._ad_srv_discovery_cache:
-            return
-        self._ad_srv_discovery_cache.add(cache_key)
 
         from evidenceforge.events.contexts import DnsContext
 
@@ -23546,46 +23613,56 @@ class ActivityGenerator:
         )
         for index, query_template in enumerate(selected_queries):
             query = query_template.format(domain=domain)
+            token = self._prepare_ad_srv_discovery_publication(
+                src_ip=src_ip,
+                domain=domain,
+                time=time,
+                query=query,
+            )
+            if token is None:
+                continue
             service_prefix = query.split(".", 1)[0]
             port = _SRV_PORT_MAP.get(service_prefix, 389)
             answers = [f"0 100 {port} {hostname}" for hostname in dc_hosts[:2]]
-            srv_time = time + timedelta(milliseconds=index * rng.randint(35, 95))
-            src_port = self._allocate_ephemeral_port(
-                src_ip,
-                dns_server_ip,
-                53,
-                "udp",
-                srv_time,
-                src_os,
-            )
-            srv_ctx = DnsContext(
-                query=query,
-                trans_id=rng.randint(1, 65535),
-                qtype=33,
-                query_type="SRV",
-                rcode="NOERROR",
-                rcode_num=0,
-                answers=answers,
-                TTLs=[float(_dns_base_ttl(query, True))] * len(answers),
-                rtt=_dns_rtt(rng, dns_server_ip),
-                AA=True,
-                RD=True,
-                RA=True,
-                query_process=query_process,
-            )
-            self.generate_connection(
-                src_ip=src_ip,
-                dst_ip=dns_server_ip,
-                time=srv_time,
-                dst_port=53,
-                proto="udp",
-                service="dns",
-                duration=rng.uniform(0.001, 0.02),
-                orig_bytes=rng.randint(48, 110),
-                resp_bytes=rng.randint(140, 520),
-                src_port=src_port,
-                dns=srv_ctx,
-            )
+            with self._network_transaction_runtime.claimed_point_batch(token) as prepared:
+                srv_time = time + timedelta(milliseconds=index * rng.randint(35, 95))
+                src_port = self._allocate_ephemeral_port(
+                    src_ip,
+                    dns_server_ip,
+                    53,
+                    "udp",
+                    srv_time,
+                    src_os,
+                )
+                srv_ctx = DnsContext(
+                    query=query,
+                    trans_id=rng.randint(1, 65535),
+                    qtype=33,
+                    query_type="SRV",
+                    rcode="NOERROR",
+                    rcode_num=0,
+                    answers=answers,
+                    TTLs=[float(_dns_base_ttl(query, True))] * len(answers),
+                    rtt=_dns_rtt(rng, dns_server_ip),
+                    AA=True,
+                    RD=True,
+                    RA=True,
+                    query_process=query_process,
+                )
+                self.generate_connection(
+                    src_ip=src_ip,
+                    dst_ip=dns_server_ip,
+                    time=srv_time,
+                    dst_port=53,
+                    proto="udp",
+                    service="dns",
+                    duration=rng.uniform(0.001, 0.02),
+                    orig_bytes=rng.randint(48, 110),
+                    resp_bytes=rng.randint(140, 520),
+                    src_port=src_port,
+                    dns=srv_ctx,
+                )
+                prepared.commit_no_fail()
 
     def get_baseline_pattern(
         self,

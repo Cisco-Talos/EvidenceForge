@@ -1140,10 +1140,7 @@ _BOUNDED_LEGACY_FIELDS = (
     "_linux_shell_last_session_close",
     "_postfix_qmgr_pid_cache",
 )
-_DEFINITE_GROWING_FIELDS = (
-    "_ad_srv_discovery_cache",
-    "_ssh_source_ports",
-)
+_DEFINITE_GROWING_FIELDS = ("_ssh_source_ports",)
 _CONDITIONAL_GROWING_FIELDS = (
     "_failed_logon_attempt_times",
     "_tls_seen_server_names",
