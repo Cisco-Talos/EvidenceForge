@@ -25,6 +25,8 @@ from evidenceforge.generation.actions.network_connection import (
 from evidenceforge.generation.activity.windows_auth_realism import (
     sample_remote_auth_transport_duration,
 )
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
 
@@ -66,6 +68,7 @@ class WindowsRemoteAuthenticationExecutor(Protocol):
     """Services required by the remote-authentication action planner."""
 
     state_manager: object
+    timing_runtime: TimingRuntime
 
 
 class WindowsRemoteAuthenticationPlanner:
@@ -73,6 +76,17 @@ class WindowsRemoteAuthenticationPlanner:
 
     def __init__(self, executor: WindowsRemoteAuthenticationExecutor) -> None:
         self._executor = executor
+
+    def _timing_planner(self) -> BaselineTimingPlanner:
+        """Return the engine planner or a stateless direct-test adapter."""
+
+        runtime = getattr(self._executor, "timing_runtime", None)
+        return BaselineTimingPlanner(
+            runtime
+            if isinstance(runtime, TimingRuntime)
+            else TimingRuntime.compatibility_default(),
+            source="windows-remote-auth",
+        )
 
     def execute(self, request: WindowsRemoteAuthenticationRequest) -> RemoteAuthenticationPlan:
         """Emit the primary transport and return frozen canonical authentication truth."""
@@ -195,31 +209,52 @@ class WindowsRemoteAuthenticationPlanner:
             f"{request.target_system.ip}:{request.destination_port}"
         )
         rng = random.Random(seed)
+        timing = self._timing_planner()
         if request.outcome == "success":
-            start_gap_ms = rng.randint(150, 900)
+            start_gap_seconds = timing.right_skew_seconds(
+                relationship_key="windows.remote_auth.transport_lead",
+                stable_id=request.stable_id,
+                minimum=0.15,
+                median=0.34,
+                maximum=0.9,
+                host=request.target_system.hostname,
+                lifecycle_id=request.stable_id,
+                sample_key="lead",
+            )
             duration = sample_remote_auth_transport_duration(
                 source=request.source,
                 outcome=request.outcome,
                 rng=rng,
+                timing_runtime=timing.runtime,
+                stable_id=request.stable_id,
+                minimum_seconds=start_gap_seconds + 0.25,
             )
             conn_state = "SF"
             orig_bytes = rng.randint(800, 8000)
             resp_bytes = rng.randint(500, 12000)
         else:
-            start_gap_ms = rng.randint(20, 250)
+            start_gap_seconds = timing.right_skew_seconds(
+                relationship_key="windows.remote_auth.transport_lead",
+                stable_id=request.stable_id,
+                minimum=0.02,
+                median=0.07,
+                maximum=0.25,
+                host=request.target_system.hostname,
+                lifecycle_id=request.stable_id,
+                sample_key="lead",
+            )
             duration = sample_remote_auth_transport_duration(
                 source=request.source,
                 outcome=request.outcome,
                 rng=rng,
+                timing_runtime=timing.runtime,
+                stable_id=request.stable_id,
             )
             conn_state = rng.choices(["SF", "RSTR"], weights=[70, 30], k=1)[0]
             orig_bytes = rng.randint(120, 900)
             resp_bytes = rng.randint(0, 500)
 
-        started_at = request.time - timedelta(milliseconds=start_gap_ms)
-        if request.outcome == "success":
-            minimum_duration = (request.time - started_at).total_seconds() + 0.25
-            duration = max(duration, minimum_duration)
+        started_at = request.time - timedelta(seconds=start_gap_seconds)
         service = {
             88: "kerberos",
             389: "ldap",

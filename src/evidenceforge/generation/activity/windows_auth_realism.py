@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import math
 import random
 from typing import Any, Literal
 
@@ -15,6 +14,9 @@ from evidenceforge.config.schemas import (
     WindowsAnonymousSmbBaselineConfig,
     WindowsRemoteAuthTransportConfig,
 )
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
+from evidenceforge.generation.timing import TimingRuntime
+from evidenceforge.utils.rng import _stable_seed
 
 _CONFIG_PATH = get_activity_directory() / "windows_auth_realism.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
@@ -84,6 +86,9 @@ def sample_remote_auth_transport_duration(
     source: str,
     outcome: Literal["success", "failure"],
     rng: random.Random,
+    timing_runtime: TimingRuntime | None = None,
+    stable_id: str = "",
+    minimum_seconds: float | None = None,
 ) -> float:
     """Sample one deterministic, bounded, right-skew remote-auth duration."""
 
@@ -91,8 +96,21 @@ def sample_remote_auth_transport_duration(
     source_profiles = config.sources.get(source, config.defaults)
     profile_name = source_profiles.success if outcome == "success" else source_profiles.failure
     profile = config.profiles[profile_name]
-    duration = rng.lognormvariate(math.log(profile.median_seconds), profile.sigma)
-    return max(profile.minimum_seconds, min(duration, profile.maximum_seconds))
+    scope_id = stable_id or f"compat-{_stable_seed(repr(rng.getstate())):016x}"
+    minimum = max(profile.minimum_seconds, minimum_seconds or profile.minimum_seconds)
+    return BaselineTimingPlanner(
+        timing_runtime or TimingRuntime.compatibility_default(),
+        source="windows-remote-auth",
+    ).right_skew_seconds(
+        relationship_key="windows.remote_auth.transport_duration",
+        stable_id=f"{scope_id}:{source}:{outcome}:{profile_name}",
+        minimum=minimum,
+        median=max(minimum + 0.000001, profile.median_seconds),
+        maximum=profile.maximum_seconds,
+        sigma=profile.sigma,
+        lifecycle_id=scope_id,
+        sample_key="duration",
+    )
 
 
 def anonymous_smb_baseline_config() -> WindowsAnonymousSmbBaselineConfig:

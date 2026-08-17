@@ -43,9 +43,20 @@ def test_planner_uses_request_source_and_outcome_for_duration(monkeypatch):
 
     observed: list[tuple[str, str]] = []
 
-    def sample_duration(*, source, outcome, rng):
+    def sample_duration(
+        *,
+        source,
+        outcome,
+        rng,
+        timing_runtime,
+        stable_id,
+        minimum_seconds,
+    ):
         observed.append((source, outcome))
         assert rng is not None
+        assert timing_runtime is not None
+        assert stable_id.startswith("windows-remote-auth-")
+        assert minimum_seconds > 0.25
         return 17.25
 
     monkeypatch.setattr(

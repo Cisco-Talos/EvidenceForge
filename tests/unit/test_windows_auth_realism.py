@@ -5,8 +5,10 @@
 
 import random
 import statistics
+from datetime import UTC, datetime
 
 from evidenceforge.generation.activity import windows_auth_realism
+from evidenceforge.generation.timing import TimingRuntime
 
 
 def test_min_unlock_gap_seconds_clamps_too_large_values(monkeypatch):
@@ -65,3 +67,29 @@ def test_remote_auth_failure_profile_remains_short_and_deterministic():
 
     assert first == second
     assert 0.02 <= first <= 1.5
+
+
+def test_remote_auth_runtime_samples_are_interior_microsecond_and_unsaturated():
+    """Remote-auth transports have no clamp ceiling or exact-ms fingerprint."""
+
+    runtime = TimingRuntime(
+        reference_time=datetime(2026, 8, 16, 12, tzinfo=UTC),
+        namespace="remote-auth-shape",
+    )
+    values = [
+        windows_auth_realism.sample_remote_auth_transport_duration(
+            source="machine_account_logon",
+            outcome="success",
+            rng=random.Random(0),
+            timing_runtime=runtime,
+            stable_id=f"remote-auth-shape:{ordinal}",
+        )
+        for ordinal in range(4_096)
+    ]
+
+    assert min(values) > 0.5
+    assert max(values) < 120.0
+    assert statistics.mean(values) > statistics.median(values)
+    assert sum(round(value * 1_000_000) % 1_000 == 0 for value in values) / len(values) < 0.005
+    audit = runtime.audit.snapshot()
+    assert audit.total_saturations / max(1, audit.total_samples) < 0.005
