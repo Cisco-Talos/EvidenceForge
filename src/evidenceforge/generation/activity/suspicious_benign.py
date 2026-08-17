@@ -33,15 +33,89 @@ Configurable via baseline_activity.suspicious_noise:
 import logging
 import random
 from datetime import datetime, timedelta
+from typing import Protocol
 
 from evidenceforge.generation.activity.host_activity_profiles import (
     generate_encoded_powershell_command,
+)
+from evidenceforge.generation.timing import (
+    MixtureDistribution,
+    TimingRuntime,
+    TimingSampler,
+    TimingScope,
+    TriangularDistribution,
+    WeightedDistribution,
 )
 from evidenceforge.models.scenario import Persona, System, User
 
 from .suspicious_benign_config import pick_suspicious_dns_host, pick_unusual_connection
 
 logger = logging.getLogger(__name__)
+
+
+class _SuspiciousBenignTimingRuntime(Protocol):
+    """Timing owner surface used by suspicious-benign placement planning."""
+
+    sampler: TimingSampler
+
+
+_HOURLY_PLACEMENT_MAX_SECONDS: dict[str, int] = {
+    "after_hours_admin": 3599,
+    "suspicious_cli": 3599,
+    "failed_logon_burst": 3500,
+    "service_account_anomaly": 3599,
+    "suspicious_dns": 3599,
+    "unusual_outbound": 3599,
+    "scheduled_scan_overlap": 3599,
+    "temp_dir_execution": 3599,
+    "unusual_powershell": 3599,
+}
+
+
+def _inclusive_integer_distribution(minimum: int, maximum: int) -> MixtureDistribution:
+    """Return a continuous mixture that rounds to an inclusive uniform integer support."""
+
+    lower = float(minimum) - 0.5
+    upper = float(maximum) + 0.5
+    return MixtureDistribution(
+        components=(
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=lower, mode=lower, maximum=upper),
+            ),
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=lower, mode=upper, maximum=upper),
+            ),
+        )
+    )
+
+
+def _sample_hourly_placement_seconds(
+    *,
+    pattern: str,
+    hostname: str,
+    current_hour: datetime,
+    timing_runtime: _SuspiciousBenignTimingRuntime | None,
+    timing_ordinal: int,
+) -> int:
+    """Return one owner-audited, order-independent offset inside the current hour."""
+
+    maximum = _HOURLY_PLACEMENT_MAX_SECONDS[pattern]
+    runtime = timing_runtime or TimingRuntime.compatibility_default()
+    sampled = runtime.sampler.sample_value(
+        _inclusive_integer_distribution(0, maximum),
+        relationship_key=f"suspicious_benign.{pattern}.hourly_placement",
+        scope=TimingScope(
+            stable_id=pattern,
+            host=hostname,
+            source="suspicious_benign",
+            lifecycle_id=current_hour.isoformat(),
+            ordinal=timing_ordinal,
+        ),
+        sample_key="offset_seconds",
+    )
+    return int(sampled + 0.5)
 
 
 def _domain_to_dn(domain: str) -> str:
@@ -175,6 +249,8 @@ def generate_after_hours_admin(
     users: list[User],
     systems: list[System],
     current_hour: datetime,
+    timing_runtime: _SuspiciousBenignTimingRuntime | None = None,
+    timing_ordinal: int = 0,
 ) -> dict | None:
     """Generate an after-hours admin login event.
 
@@ -190,7 +266,15 @@ def generate_after_hours_admin(
     servers = [s for s in systems if s.type in ("server", "domain_controller")]
     system = rng.choice(servers) if servers else rng.choice(systems)
 
-    offset = timedelta(seconds=rng.randint(0, 3599))
+    offset = timedelta(
+        seconds=_sample_hourly_placement_seconds(
+            pattern="after_hours_admin",
+            hostname=system.hostname,
+            current_hour=current_hour,
+            timing_runtime=timing_runtime,
+            timing_ordinal=timing_ordinal,
+        )
+    )
     event_time = current_hour + offset
 
     return {
@@ -208,6 +292,8 @@ def generate_suspicious_cli(
     systems: list[System],
     current_hour: datetime,
     ad_domain: str = "corp.local",
+    timing_runtime: _SuspiciousBenignTimingRuntime | None = None,
+    timing_ordinal: int = 0,
 ) -> dict | None:
     """Generate a suspicious CLI command from a non-attacker user."""
     user = rng.choice(users)
@@ -215,7 +301,15 @@ def generate_suspicious_cli(
     system = rng.choice(system_candidates) if system_candidates else rng.choice(systems)
 
     os_cat = _get_os_category(system)
-    offset = timedelta(seconds=rng.randint(0, 3599))
+    offset = timedelta(
+        seconds=_sample_hourly_placement_seconds(
+            pattern="suspicious_cli",
+            hostname=system.hostname,
+            current_hour=current_hour,
+            timing_runtime=timing_runtime,
+            timing_ordinal=timing_ordinal,
+        )
+    )
     event_time = current_hour + offset
 
     if os_cat == "windows":
@@ -248,13 +342,23 @@ def generate_failed_logon_burst(
     users: list[User],
     systems: list[System],
     current_hour: datetime,
+    timing_runtime: _SuspiciousBenignTimingRuntime | None = None,
+    timing_ordinal: int = 0,
 ) -> dict | None:
     """Generate a burst of failed logons followed by success (fat-fingered password)."""
     user = rng.choice(users)
     system_candidates = [s for s in systems if s.assigned_user == user.username]
     system = rng.choice(system_candidates) if system_candidates else rng.choice(systems)
 
-    offset = timedelta(seconds=rng.randint(0, 3500))
+    offset = timedelta(
+        seconds=_sample_hourly_placement_seconds(
+            pattern="failed_logon_burst",
+            hostname=system.hostname,
+            current_hour=current_hour,
+            timing_runtime=timing_runtime,
+            timing_ordinal=timing_ordinal,
+        )
+    )
     start_time = current_hour + offset
     num_failures = rng.randint(3, 6)
 
@@ -272,6 +376,8 @@ def generate_service_account_anomaly(
     users: list[User],
     systems: list[System],
     current_hour: datetime,
+    timing_runtime: _SuspiciousBenignTimingRuntime | None = None,
+    timing_ordinal: int = 0,
 ) -> dict | None:
     """Generate a service account logging in from an unusual host."""
     # Find service-like users
@@ -286,7 +392,15 @@ def generate_service_account_anomaly(
     other_systems = [s for s in systems if s.hostname != (user.primary_system or "")]
     system = rng.choice(other_systems) if other_systems else rng.choice(systems)
 
-    offset = timedelta(seconds=rng.randint(0, 3599))
+    offset = timedelta(
+        seconds=_sample_hourly_placement_seconds(
+            pattern="service_account_anomaly",
+            hostname=system.hostname,
+            current_hour=current_hour,
+            timing_runtime=timing_runtime,
+            timing_ordinal=timing_ordinal,
+        )
+    )
     event_time = current_hour + offset
 
     return {
@@ -303,6 +417,8 @@ def generate_suspicious_dns(
     users: list[User],
     systems: list[System],
     current_hour: datetime,
+    timing_runtime: _SuspiciousBenignTimingRuntime | None = None,
+    timing_ordinal: int = 0,
 ) -> dict | None:
     """Generate suspicious-looking but benign DNS query.
 
@@ -311,7 +427,15 @@ def generate_suspicious_dns(
     but are actually legitimate.
     """
     system = rng.choice(systems)
-    offset = timedelta(seconds=rng.randint(0, 3599))
+    offset = timedelta(
+        seconds=_sample_hourly_placement_seconds(
+            pattern="suspicious_dns",
+            hostname=system.hostname,
+            current_hour=current_hour,
+            timing_runtime=timing_runtime,
+            timing_ordinal=timing_ordinal,
+        )
+    )
     event_time = current_hour + offset
     hostname = pick_suspicious_dns_host(rng)
 
@@ -328,6 +452,8 @@ def generate_unusual_outbound(
     users: list[User],
     systems: list[System],
     current_hour: datetime,
+    timing_runtime: _SuspiciousBenignTimingRuntime | None = None,
+    timing_ordinal: int = 0,
 ) -> dict | None:
     """Generate unusual but legitimate outbound connection.
 
@@ -338,7 +464,15 @@ def generate_unusual_outbound(
     workstations = [s for s in systems if s.type == "workstation"]
     system = rng.choice(workstations) if workstations else rng.choice(systems)
 
-    offset = timedelta(seconds=rng.randint(0, 3599))
+    offset = timedelta(
+        seconds=_sample_hourly_placement_seconds(
+            pattern="unusual_outbound",
+            hostname=system.hostname,
+            current_hour=current_hour,
+            timing_runtime=timing_runtime,
+            timing_ordinal=timing_ordinal,
+        )
+    )
     event_time = current_hour + offset
     conn_info = pick_unusual_connection(rng)
 
@@ -360,6 +494,8 @@ def generate_scheduled_scan_overlap(
     users: list[User],
     systems: list[System],
     current_hour: datetime,
+    timing_runtime: _SuspiciousBenignTimingRuntime | None = None,
+    timing_ordinal: int = 0,
 ) -> dict | None:
     """Generate vulnerability scan traffic that overlaps with attack window.
 
@@ -375,7 +511,15 @@ def generate_scheduled_scan_overlap(
         [s for s in systems if s != scanner],
         min(rng.randint(3, 6), len(systems) - 1),
     )
-    offset = timedelta(seconds=rng.randint(0, 3599))
+    offset = timedelta(
+        seconds=_sample_hourly_placement_seconds(
+            pattern="scheduled_scan_overlap",
+            hostname=scanner.hostname,
+            current_hour=current_hour,
+            timing_runtime=timing_runtime,
+            timing_ordinal=timing_ordinal,
+        )
+    )
     event_time = current_hour + offset
 
     return {
@@ -391,6 +535,8 @@ def generate_temp_dir_execution(
     users: list[User],
     systems: list[System],
     current_hour: datetime,
+    timing_runtime: _SuspiciousBenignTimingRuntime | None = None,
+    timing_ordinal: int = 0,
 ) -> dict | None:
     """Generate a process execution from a temp directory (benign installer/update)."""
     user = rng.choice(users)
@@ -398,7 +544,15 @@ def generate_temp_dir_execution(
     system = rng.choice(system_candidates) if system_candidates else rng.choice(systems)
 
     os_cat = _get_os_category(system)
-    offset = timedelta(seconds=rng.randint(0, 3599))
+    offset = timedelta(
+        seconds=_sample_hourly_placement_seconds(
+            pattern="temp_dir_execution",
+            hostname=system.hostname,
+            current_hour=current_hour,
+            timing_runtime=timing_runtime,
+            timing_ordinal=timing_ordinal,
+        )
+    )
     event_time = current_hour + offset
 
     if os_cat == "windows":
@@ -456,6 +610,8 @@ def generate_unusual_powershell(
     systems: list[System],
     current_hour: datetime,
     ad_domain: str = "corp.local",
+    timing_runtime: _SuspiciousBenignTimingRuntime | None = None,
+    timing_ordinal: int = 0,
 ) -> dict | None:
     """Generate PowerShell with suspicious-looking flags (benign admin scripts)."""
     # Only Windows systems
@@ -467,7 +623,15 @@ def generate_unusual_powershell(
     system_candidates = [s for s in windows_systems if s.assigned_user == user.username]
     system = rng.choice(system_candidates) if system_candidates else rng.choice(windows_systems)
 
-    offset = timedelta(seconds=rng.randint(0, 3599))
+    offset = timedelta(
+        seconds=_sample_hourly_placement_seconds(
+            pattern="unusual_powershell",
+            hostname=system.hostname,
+            current_hour=current_hour,
+            timing_runtime=timing_runtime,
+            timing_ordinal=timing_ordinal,
+        )
+    )
     event_time = current_hour + offset
 
     _LOG_DIRS = ["Logs", "AppLogs", "EventExport", "Temp\\Logs", "Audit"]

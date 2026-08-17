@@ -5039,7 +5039,7 @@ class BaselineMixin:
         systems = self.scenario.environment.systems
         personas = self.scenario.personas
 
-        for _ in range(num_events):
+        for event_ordinal in range(num_events):
             pattern_info = pick_suspicious_pattern(
                 rng, enabled_users, systems, personas, current_hour
             )
@@ -5049,7 +5049,14 @@ class BaselineMixin:
             pattern_type = pattern_info["type"]
 
             if pattern_type == "after_hours_admin":
-                result = generate_after_hours_admin(rng, enabled_users, systems, current_hour)
+                result = generate_after_hours_admin(
+                    rng,
+                    enabled_users,
+                    systems,
+                    current_hour,
+                    self.activity_generator.timing_runtime,
+                    event_ordinal,
+                )
                 if result:
                     target_system = result["system"]
                     if (
@@ -5080,6 +5087,8 @@ class BaselineMixin:
                     systems,
                     current_hour,
                     self.scenario.environment.domain or "corp.local",
+                    self.activity_generator.timing_runtime,
+                    event_ordinal,
                 )
                 if result:
                     aligned_time = self._align_rsat_with_future_workstation_session(
@@ -5115,7 +5124,14 @@ class BaselineMixin:
                     )
 
             elif pattern_type == "failed_logon_burst":
-                result = generate_failed_logon_burst(rng, enabled_users, systems, current_hour)
+                result = generate_failed_logon_burst(
+                    rng,
+                    enabled_users,
+                    systems,
+                    current_hour,
+                    self.activity_generator.timing_runtime,
+                    event_ordinal,
+                )
                 if result:
                     # Generate failed logons followed by a success
                     user = result["user"]
@@ -5141,7 +5157,14 @@ class BaselineMixin:
                     )
 
             elif pattern_type == "service_account_anomaly":
-                result = generate_service_account_anomaly(rng, enabled_users, systems, current_hour)
+                result = generate_service_account_anomaly(
+                    rng,
+                    enabled_users,
+                    systems,
+                    current_hour,
+                    self.activity_generator.timing_runtime,
+                    event_ordinal,
+                )
                 if result:
                     self.activity_generator.generate_logon(
                         user=result["user"],
@@ -5151,7 +5174,14 @@ class BaselineMixin:
                     )
 
             elif pattern_type == "suspicious_dns":
-                result = generate_suspicious_dns(rng, enabled_users, systems, current_hour)
+                result = generate_suspicious_dns(
+                    rng,
+                    enabled_users,
+                    systems,
+                    current_hour,
+                    self.activity_generator.timing_runtime,
+                    event_ordinal,
+                )
                 if result:
                     # Emit DNS query via a UDP/53 connection with DnsContext
                     from evidenceforge.events.contexts import DnsContext
@@ -5196,7 +5226,14 @@ class BaselineMixin:
                     )
 
             elif pattern_type == "unusual_outbound":
-                result = generate_unusual_outbound(rng, enabled_users, systems, current_hour)
+                result = generate_unusual_outbound(
+                    rng,
+                    enabled_users,
+                    systems,
+                    current_hour,
+                    self.activity_generator.timing_runtime,
+                    event_ordinal,
+                )
                 if result:
                     self.state_manager.set_current_time(result["time"])
                     # Large transfers get bigger byte counts
@@ -5222,7 +5259,14 @@ class BaselineMixin:
                     )
 
             elif pattern_type == "scheduled_scan_overlap":
-                result = generate_scheduled_scan_overlap(rng, enabled_users, systems, current_hour)
+                result = generate_scheduled_scan_overlap(
+                    rng,
+                    enabled_users,
+                    systems,
+                    current_hour,
+                    self.activity_generator.timing_runtime,
+                    event_ordinal,
+                )
                 if result:
                     ScheduledScanOverlapActionBundle(
                         executor=self,
@@ -5247,9 +5291,18 @@ class BaselineMixin:
                         systems,
                         current_hour,
                         self.scenario.environment.domain or "corp.local",
+                        self.activity_generator.timing_runtime,
+                        event_ordinal,
                     )
                 else:
-                    result = gen_fn(rng, enabled_users, systems, current_hour)
+                    result = gen_fn(
+                        rng,
+                        enabled_users,
+                        systems,
+                        current_hour,
+                        self.activity_generator.timing_runtime,
+                        event_ordinal,
+                    )
                 if result:
                     self.state_manager.set_current_time(result["time"])
                     logon_id = self._ensure_session_on_system(
