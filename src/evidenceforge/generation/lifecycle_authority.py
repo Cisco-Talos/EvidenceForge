@@ -27,10 +27,12 @@ from typing import Any, Generic, Literal, Protocol, TypeVar
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
 from evidenceforge.events.lifecycle import (
+    LifecycleCloseBarrier,
     LifecycleEntityRef,
     LifecycleForegroundLease,
     LifecycleHold,
     LifecycleSingletonLease,
+    LifecycleTransition,
     ProcessLifecycleIdentity,
     ServiceProcessBindingIdentity,
     SessionLifecycleIdentity,
@@ -48,6 +50,10 @@ from evidenceforge.generation.http_channels import (
 )
 from evidenceforge.generation.indexes import CompactIndexedStore, PackedHandleExpiryIndex
 from evidenceforge.generation.lifecycle_registry import (
+    LifecycleActionCohortAdmissionToken,
+    LifecycleActionCohortOperation,
+    LifecycleActionCohortReceipt,
+    LifecycleActionCohortRequest,
     LifecycleClosedTransportAdmissionToken,
     LifecycleClosedTransportPublicationReceipt,
     LifecycleClosedTransportStartMember,
@@ -60,6 +66,7 @@ from evidenceforge.generation.lifecycle_registry import (
     LifecycleServicePublicationReceipt,
     LifecycleServiceStagedProcessBindingMember,
     LifecycleSessionStartRequest,
+    LifecycleSubjectClosureControl,
     ProcessLifecycleSnapshot,
 )
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
@@ -82,6 +89,7 @@ from evidenceforge.generation.source_timing import (
     SourceTimingPreparationToken,
 )
 from evidenceforge.generation.state_manager import (
+    ActionCohortMaterializationPlan,
     ConnectionCompositeMaterializationPlan,
     ConnectionCompositeMaterializationResult,
     ConnectionMaterializationMode,
@@ -102,6 +110,7 @@ ProcessInstanceKey = tuple[str, int, datetime | None]
 StrictLifecycleKey = tuple[str, str]
 _DEFAULT_SHARD_COUNT = 64
 _DEFAULT_DUE_PAGE = 4_096
+_MAX_ACTION_COHORT_OPERATIONS = 256
 
 _ApplicationAdmissionToken = (
     ApplicationChannelAdmissionToken | HttpChannelAdmissionToken | ExplicitProxyAdmissionToken
@@ -1194,6 +1203,565 @@ class GeneratorLifecycleAuthority:
                 *batch.processes,
             )
         )
+
+    @staticmethod
+    def _action_cohort_id(
+        plan: ActionCohortMaterializationPlan,
+        category: str,
+        source_ordinal: int,
+        object_id: str,
+        role: str,
+    ) -> str:
+        """Derive one stable lifecycle member ID from authenticated State semantics."""
+
+        return stable_uuid(
+            "lifecycle-authority-action-cohort",
+            plan.semantic_id,
+            category,
+            source_ordinal,
+            object_id,
+            role,
+        )
+
+    def _action_cohort_registered_session(
+        self,
+        identity: SessionIdentity,
+    ) -> SessionIdentity:
+        """Require one exact State session identity in this authority's registry."""
+
+        snapshot = self._registry.get_session(identity.object_id)
+        expected = self._shadow.project_session_start(identity)
+        if snapshot is None or snapshot.identity != expected:
+            raise StateError(
+                "Action cohort session owner is not registered with exact lifecycle identity: "
+                f"{identity.object_id}"
+            )
+        return identity
+
+    def _action_cohort_live_session_for_process(
+        self,
+        identity: ProcessIdentity,
+    ) -> SessionIdentity | None:
+        """Resolve a process start's exact retained live session without backfill."""
+
+        if not identity.logon_id:
+            return None
+        session = self._state_manager.get_session_identity(identity.logon_id)
+        if session is None:
+            return None
+        if session.hostname != identity.hostname:
+            raise StateError(
+                f"Action cohort process {identity.object_id} uses a cross-host session"
+            )
+        snapshot = self._registry.session_for_logon_at(
+            identity.hostname,
+            identity.logon_id,
+            identity.started_at,
+        )
+        expected = self._shadow.project_session_start(session)
+        if snapshot is None or snapshot.identity != expected:
+            raise StateError(
+                "Action cohort process session is not registered with exact lifecycle identity: "
+                f"{session.object_id}"
+            )
+        return session
+
+    def _action_cohort_registered_process(
+        self,
+        identity: ProcessIdentity,
+    ) -> ProcessIdentity:
+        """Require one exact State process identity in this authority's registry."""
+
+        snapshot = self._registry.get_process(identity.object_id)
+        if snapshot is None:
+            raise StateError(
+                "Action cohort process owner is not registered in lifecycle authority: "
+                f"{identity.object_id}"
+            )
+        parent_object_id = ""
+        if identity.parent_pid not in {0, 4}:
+            parent = self._registry.process_for_pid_at(
+                identity.hostname,
+                identity.parent_pid,
+                identity.started_at,
+            )
+            if parent is None:
+                raise StateError(
+                    "Action cohort registered process has no exact lifecycle parent: "
+                    f"{identity.object_id}"
+                )
+            parent_object_id = parent.identity.object_id
+        expected, _token, _membership = self._shadow.project_process_start(
+            identity,
+            integrity_level=snapshot.token.integrity_level,
+            session=None,
+            token_session_id=snapshot.token.session_id,
+            session_logon_type=snapshot.token.logon_type,
+            parent_object_id=parent_object_id,
+        )
+        if snapshot.identity != expected:
+            raise StateError(
+                "Action cohort process owner disagrees with exact State identity: "
+                f"{identity.object_id}"
+            )
+        return identity
+
+    def _action_cohort_live_parent(
+        self,
+        identity: ProcessIdentity,
+    ) -> ProcessIdentity:
+        """Resolve an exact State-backed lifecycle parent at the child's start."""
+
+        if identity.parent_pid in {0, 4}:
+            raise StateError(
+                f"Action cohort process {identity.object_id} has no modeled lifecycle parent"
+            )
+        snapshot = self._registry.process_for_pid_at(
+            identity.hostname,
+            identity.parent_pid,
+            identity.started_at,
+        )
+        if snapshot is None:
+            raise StateError(
+                "Action cohort process parent is not registered and live at child start: "
+                f"{identity.hostname} PID={identity.parent_pid}"
+            )
+        parent = self._state_manager.get_process_identity_by_object_id(snapshot.identity.object_id)
+        if (
+            parent is None
+            or parent.hostname != identity.hostname
+            or parent.pid != identity.parent_pid
+        ):
+            raise StateError(
+                "Action cohort lifecycle parent is not owned by the same StateManager: "
+                f"{snapshot.identity.object_id}"
+            )
+        return self._action_cohort_registered_process(parent)
+
+    def _action_cohort_request_from_authenticated_plan(
+        self,
+        plan: ActionCohortMaterializationPlan,
+    ) -> LifecycleActionCohortRequest:
+        """Project one HMAC-authenticated State plan without publishing either owner."""
+
+        entries: list[tuple[datetime, int, int, LifecycleActionCohortOperation]] = []
+        source_sequence = 0
+
+        def append(
+            canonical_time: datetime,
+            tie_class: int,
+            operation: LifecycleActionCohortOperation,
+        ) -> None:
+            nonlocal source_sequence
+            entries.append((ensure_utc(canonical_time), tie_class, source_sequence, operation))
+            source_sequence += 1
+
+        staged_sessions: dict[tuple[str, str], SessionMaterializationPlan] = {}
+        for ordinal, session_plan in enumerate(plan.sessions):
+            identity = session_plan.identity
+            staged_sessions[(identity.hostname, identity.logon_id)] = session_plan
+            projected = self._shadow.project_session_start(identity)
+            category = "session-start"
+            append(
+                identity.started_at,
+                0,
+                LifecycleSessionStartRequest(
+                    identity=projected,
+                    action_id=self._action_cohort_id(
+                        plan,
+                        category,
+                        ordinal,
+                        identity.object_id,
+                        "action",
+                    ),
+                    transition_id=self._action_cohort_id(
+                        plan,
+                        category,
+                        ordinal,
+                        identity.object_id,
+                        "transition",
+                    ),
+                ),
+            )
+
+        staged_processes: dict[tuple[str, int], ProcessMaterializationPlan] = {}
+        for ordinal, process_plan in enumerate(plan.processes):
+            identity = process_plan.identity
+            parent_object_id = ""
+            if identity.parent_pid not in {0, 4}:
+                parent_plan = staged_processes.get((identity.hostname, identity.parent_pid))
+                parent = (
+                    parent_plan.identity
+                    if parent_plan is not None
+                    else self._action_cohort_live_parent(identity)
+                )
+                parent_object_id = parent.object_id
+
+            staged_session = staged_sessions.get((identity.hostname, identity.logon_id))
+            session = (
+                staged_session.identity
+                if staged_session is not None
+                else self._action_cohort_live_session_for_process(identity)
+            )
+            session_logon_type = (
+                staged_session.logon_type
+                if staged_session is not None
+                else process_plan.auth_logon_type
+            )
+            lifecycle_identity, token, membership = self._shadow.project_process_start(
+                identity,
+                integrity_level=process_plan.integrity_level,
+                session=session,
+                token_session_id=process_plan.auth_session_id,
+                session_logon_type=session_logon_type,
+                parent_object_id=parent_object_id,
+            )
+            category = "process-start"
+            append(
+                identity.started_at,
+                1,
+                LifecycleProcessStartRequest(
+                    identity=lifecycle_identity,
+                    token=token,
+                    membership=membership,
+                    action_id=self._action_cohort_id(
+                        plan,
+                        category,
+                        ordinal,
+                        identity.object_id,
+                        "action",
+                    ),
+                    transition_id=self._action_cohort_id(
+                        plan,
+                        category,
+                        ordinal,
+                        identity.object_id,
+                        "transition",
+                    ),
+                ),
+            )
+            parent_activity_time = process_plan._payload.parent_activity_time
+            if parent_activity_time is not None:
+                if not parent_object_id:
+                    raise StateError(
+                        "Action cohort process parent activity has no lifecycle parent"
+                    )
+                activity_category = "process-start-parent-activity"
+                append(
+                    parent_activity_time,
+                    2,
+                    LifecycleTransition(
+                        transition_id=self._action_cohort_id(
+                            plan,
+                            activity_category,
+                            ordinal,
+                            parent_object_id,
+                            "transition",
+                        ),
+                        subject=LifecycleEntityRef("process", parent_object_id),
+                        kind="dependent",
+                        canonical_time=parent_activity_time,
+                        action_id=self._action_cohort_id(
+                            plan,
+                            activity_category,
+                            ordinal,
+                            parent_object_id,
+                            "action",
+                        ),
+                        reason="State process-start parent activity",
+                    ),
+                )
+            staged_processes[(identity.hostname, identity.pid)] = process_plan
+
+        for ordinal, patch in enumerate(plan.session_metadata_patches):
+            target = patch.target
+            identity = target.identity if type(target) is SessionMaterializationPlan else target
+            if type(target) is not SessionMaterializationPlan:
+                self._action_cohort_registered_session(identity)
+            transition_time = max(
+                value
+                for value in (
+                    identity.started_at,
+                    patch.after.source_ready_time,
+                    patch.after.network_close_time,
+                )
+                if value is not None
+            )
+            category = "session-metadata"
+            append(
+                transition_time,
+                2,
+                LifecycleTransition(
+                    transition_id=self._action_cohort_id(
+                        plan,
+                        category,
+                        ordinal,
+                        identity.object_id,
+                        "transition",
+                    ),
+                    subject=LifecycleEntityRef("session", identity.object_id),
+                    kind="dependent",
+                    canonical_time=transition_time,
+                    action_id=self._action_cohort_id(
+                        plan,
+                        category,
+                        ordinal,
+                        identity.object_id,
+                        "action",
+                    ),
+                    reason="State session metadata transition",
+                ),
+            )
+
+        for ordinal, patch in enumerate(plan.process_activity_patches):
+            target = patch.target
+            identity = target.identity if type(target) is ProcessMaterializationPlan else target
+            if type(target) is not ProcessMaterializationPlan:
+                self._action_cohort_registered_process(identity)
+            category = "process-activity"
+            append(
+                patch.activity_time,
+                2,
+                LifecycleTransition(
+                    transition_id=self._action_cohort_id(
+                        plan,
+                        category,
+                        ordinal,
+                        identity.object_id,
+                        "transition",
+                    ),
+                    subject=LifecycleEntityRef("process", identity.object_id),
+                    kind="dependent",
+                    canonical_time=patch.activity_time,
+                    action_id=self._action_cohort_id(
+                        plan,
+                        category,
+                        ordinal,
+                        identity.object_id,
+                        "action",
+                    ),
+                    reason="State process activity transition",
+                ),
+            )
+
+        for ordinal, patch in enumerate(plan.session_activity_patches):
+            target = patch.target
+            identity = target.identity if type(target) is SessionMaterializationPlan else target
+            if type(target) is not SessionMaterializationPlan:
+                self._action_cohort_registered_session(identity)
+            category = "session-activity"
+            append(
+                patch.activity_time,
+                2,
+                LifecycleTransition(
+                    transition_id=self._action_cohort_id(
+                        plan,
+                        category,
+                        ordinal,
+                        identity.object_id,
+                        "transition",
+                    ),
+                    subject=LifecycleEntityRef("session", identity.object_id),
+                    kind="dependent",
+                    canonical_time=patch.activity_time,
+                    action_id=self._action_cohort_id(
+                        plan,
+                        category,
+                        ordinal,
+                        identity.object_id,
+                        "action",
+                    ),
+                    reason="State session activity transition",
+                ),
+            )
+
+        for ordinal, termination in enumerate(plan.process_terminations):
+            parent_activity = termination.parent_activity
+            parent_activity_time: datetime | None = None
+            parent_identity: ProcessIdentity | None = None
+            if parent_activity is not None:
+                target = parent_activity.target
+                parent_identity = (
+                    target.identity if type(target) is ProcessMaterializationPlan else target
+                )
+                if type(target) is not ProcessMaterializationPlan:
+                    self._action_cohort_registered_process(parent_identity)
+                parent_activity_time = parent_activity.activity_time
+            elif type(termination.target) is ProcessTerminationMaterializationPlan:
+                parent_activity_time = termination.target.parent_activity_time
+                if parent_activity_time is not None:
+                    parent_identity = self._action_cohort_live_parent(termination.identity)
+            if parent_activity_time is not None and parent_identity is not None:
+                category = "process-close-parent-activity"
+                append(
+                    parent_activity_time,
+                    2,
+                    LifecycleTransition(
+                        transition_id=self._action_cohort_id(
+                            plan,
+                            category,
+                            ordinal,
+                            parent_identity.object_id,
+                            "transition",
+                        ),
+                        subject=LifecycleEntityRef("process", parent_identity.object_id),
+                        kind="dependent",
+                        canonical_time=parent_activity_time,
+                        action_id=self._action_cohort_id(
+                            plan,
+                            category,
+                            ordinal,
+                            parent_identity.object_id,
+                            "action",
+                        ),
+                        reason="State process-close parent activity",
+                    ),
+                )
+
+            identity = termination.identity
+            if type(termination.target) is ProcessTerminationMaterializationPlan:
+                self._action_cohort_registered_process(identity)
+            category = "process-close"
+            subject = LifecycleEntityRef("process", identity.object_id)
+            append(
+                termination.end_time,
+                3,
+                LifecycleSubjectClosureControl(
+                    barrier=LifecycleCloseBarrier(
+                        barrier_id=self._action_cohort_id(
+                            plan,
+                            category,
+                            ordinal,
+                            identity.object_id,
+                            "barrier",
+                        ),
+                        subject=subject,
+                        requested_at=termination.end_time,
+                        authority="authoritative",
+                        action_id=self._action_cohort_id(
+                            plan,
+                            category,
+                            ordinal,
+                            identity.object_id,
+                            "action",
+                        ),
+                    ),
+                    ticket_id=self._action_cohort_id(
+                        plan,
+                        category,
+                        ordinal,
+                        identity.object_id,
+                        "ticket",
+                    ),
+                ),
+            )
+
+        for ordinal, terminalization in enumerate(plan.session_terminalizations):
+            target = terminalization.target
+            identity = target.identity if type(target) is SessionMaterializationPlan else target
+            if type(target) is not SessionMaterializationPlan:
+                self._action_cohort_registered_session(identity)
+            category = "session-close"
+            subject = LifecycleEntityRef("session", identity.object_id)
+            append(
+                terminalization.end_time,
+                4,
+                LifecycleSubjectClosureControl(
+                    barrier=LifecycleCloseBarrier(
+                        barrier_id=self._action_cohort_id(
+                            plan,
+                            category,
+                            ordinal,
+                            identity.object_id,
+                            "barrier",
+                        ),
+                        subject=subject,
+                        requested_at=terminalization.end_time,
+                        authority="authoritative",
+                        action_id=self._action_cohort_id(
+                            plan,
+                            category,
+                            ordinal,
+                            identity.object_id,
+                            "action",
+                        ),
+                    ),
+                    ticket_id=self._action_cohort_id(
+                        plan,
+                        category,
+                        ordinal,
+                        identity.object_id,
+                        "ticket",
+                    ),
+                ),
+            )
+
+        operations = tuple(entry[3] for entry in sorted(entries, key=lambda entry: entry[:3]))
+        if len(operations) > _MAX_ACTION_COHORT_OPERATIONS:
+            raise StateError(
+                "State action cohort projects too many lifecycle operations: "
+                f"{len(operations)} > {_MAX_ACTION_COHORT_OPERATIONS}"
+            )
+        return LifecycleActionCohortRequest(
+            state_publication_token=plan.publication_token,
+            operations=operations,
+        )
+
+    def action_cohort_request(
+        self,
+        plan: ActionCohortMaterializationPlan,
+    ) -> LifecycleActionCohortRequest:
+        """Project an exact current State cohort into one ordered lifecycle request."""
+
+        if not self._state_manager.authenticates_action_cohort_plan(plan):
+            raise StateError("Action cohort State plan integrity validation failed")
+        self._state_manager.validate_action_cohort_materialization(plan)
+        return self._action_cohort_request_from_authenticated_plan(plan)
+
+    def prepare_action_cohort(
+        self,
+        plan: ActionCohortMaterializationPlan,
+    ) -> LifecycleActionCohortAdmissionToken:
+        """Prepare lifecycle admission bound to one exact current State cohort."""
+
+        return self._registry.prepare_action_cohort(self.action_cohort_request(plan))
+
+    def authenticates_action_cohort_binding(
+        self,
+        plan: object,
+        binding: object,
+    ) -> bool:
+        """Totally authenticate an active token or receipt against one State plan."""
+
+        if not self._state_manager.authenticates_action_cohort_plan(plan):
+            return False
+        assert type(plan) is ActionCohortMaterializationPlan
+        try:
+            request = self._action_cohort_request_from_authenticated_plan(plan)
+            if type(binding) is LifecycleActionCohortAdmissionToken:
+                return self._registry.authenticates_action_cohort_admission_token(
+                    binding,
+                    request=request,
+                    state_publication_token=plan.publication_token,
+                )
+            if type(binding) is LifecycleActionCohortReceipt:
+                return self._registry.authenticates_action_cohort_receipt(
+                    binding,
+                    request=request,
+                    state_publication_token=plan.publication_token,
+                )
+            return False
+        except (
+            AssertionError,
+            AttributeError,
+            LookupError,
+            RecursionError,
+            RuntimeError,
+            StateError,
+            TypeError,
+            ValueError,
+        ):
+            return False
 
     def connection_composite_start_members(
         self,

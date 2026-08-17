@@ -1246,6 +1246,24 @@ class ActionCohortMaterializationPlan:
         return self._processes
 
     @property
+    def session_metadata_patches(self) -> tuple[ActionCohortSessionMetadataPatch, ...]:
+        """Return exact staged/live session metadata transitions."""
+
+        return self._session_metadata
+
+    @property
+    def process_activity_patches(self) -> tuple[ActionCohortProcessActivityPatch, ...]:
+        """Return exact staged/live process activity transitions."""
+
+        return self._process_activity
+
+    @property
+    def session_activity_patches(self) -> tuple[ActionCohortSessionActivityPatch, ...]:
+        """Return exact staged/live session activity transitions."""
+
+        return self._session_activity
+
+    @property
     def process_terminations(self) -> tuple[ActionCohortProcessTermination, ...]:
         """Return exact child-before-parent process terminalizations."""
 
