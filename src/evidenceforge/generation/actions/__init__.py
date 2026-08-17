@@ -141,7 +141,9 @@ from evidenceforge.generation.actions.ocsp_transaction import (
 )
 from evidenceforge.generation.actions.process_execution import (
     ProcessExecutionActionBundle,
+    ProcessExecutionPreparedEffects,
     ProcessExecutionRequest,
+    ProcessRuntimeImageLoadPlan,
     ProcessTerminationActionBundle,
     ProcessTerminationRequest,
 )
@@ -315,9 +317,11 @@ __all__ = [
     "PasswordResetActionBundle",
     "PasswordResetRequest",
     "ProcessExecutionActionBundle",
+    "ProcessExecutionPreparedEffects",
     "ProcessExecutionRequest",
     "ProcessAccessActionBundle",
     "ProcessAccessRequest",
+    "ProcessRuntimeImageLoadPlan",
     "ProcessTerminationActionBundle",
     "ProcessTerminationRequest",
     "NmapCommandProbeActionBundle",

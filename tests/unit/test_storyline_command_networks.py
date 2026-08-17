@@ -4,11 +4,13 @@
 """Tests for network evidence inferred from storyline commands."""
 
 import random
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.events.contexts import HostContext
+from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.generation.actions import (
     HttpResponseFileTransferActionBundle,
@@ -41,6 +43,26 @@ from evidenceforge.models.scenario import (
     System,
     User,
 )
+
+
+class _CapturingDispatcherProxy:
+    """Capture canonical builders while preserving the real atomic dispatcher."""
+
+    def __init__(self, delegate: Any, capture: Callable[[Any], None]) -> None:
+        self._delegate = delegate
+        self._capture = capture
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def prepare_builder(self, event: Any, *args: Any, **kwargs: Any) -> Any:
+        prepared = self._delegate.prepare_builder(event, *args, **kwargs)
+        self._capture(event)
+        return prepared
+
+    def dispatch_builder(self, event: Any, *args: Any, **kwargs: Any) -> Any:
+        self._capture(event)
+        return self._delegate.dispatch_builder(event, *args, **kwargs)
 
 
 class TestStorylineCommandNetworks:
@@ -1589,8 +1611,11 @@ class TestFileTransferActionBundles:
         source = System(hostname="DB-PROD-01", ip="10.0.0.10", os="Ubuntu 22.04", type="server")
         target = System(hostname="APP-INT-01", ip="10.0.0.20", os="Ubuntu 22.04", type="server")
         actor = User(username="root", full_name="Root", email="root@example.local")
-        activity = ActivityGenerator(state, {})
-        activity.dispatcher = SimpleNamespace(dispatch_builder=lambda event: None)
+        activity = ActivityGenerator(
+            state,
+            {},
+            dispatcher=EventDispatcher(state_manager=state, emitters={}),
+        )
         state.set_current_time(timestamp)
         source_pid = state.create_process(
             source.hostname,
@@ -1601,10 +1626,23 @@ class TestFileTransferActionBundles:
             "High",
         )
         source_object_id = state.get_process_object_id(source.hostname, source_pid)
+        activity.ensure_linux_ssh_responder_process(
+            target_system=target,
+            time=timestamp + timedelta(seconds=1),
+            source_ip=source.ip,
+            source_port=49152,
+            target_user="root",
+        )
+        activity._remember_ssh_session_ready_time(
+            source.ip,
+            49152,
+            target.ip,
+            timestamp + timedelta(seconds=1, milliseconds=100),
+        )
         dispatched: list[Any] = []
         executor = SimpleNamespace(
             activity_generator=activity,
-            dispatcher=SimpleNamespace(dispatch_builder=dispatched.append),
+            dispatcher=_CapturingDispatcherProxy(activity.dispatcher, dispatched.append),
             state_manager=state,
         )
 

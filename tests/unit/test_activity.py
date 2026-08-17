@@ -51,6 +51,9 @@ from evidenceforge.generation.actions import (
     AnonymousLogonRequest,
     CreateRemoteThreadActionBundle,
     CreateRemoteThreadRequest,
+    ExecutionEffectPlan,
+    ExecutionEffectPlanError,
+    ExecutionEffectPlanErrorCode,
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
     FailedLogonActionBundle,
@@ -5402,6 +5405,62 @@ class TestActivityGenerator:
 
         assert pid == 4242
         executor._execute_process_create_bundle.assert_called_once_with(request)
+
+    def test_process_execution_bundle_preflights_effect_plan_before_adapter(
+        self,
+        test_user,
+        test_system,
+    ):
+        """An opted-in executor should plan before entering its stateful adapter."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        request = ProcessExecutionRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_id="0x12345",
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c dir",
+        )
+        calls = []
+
+        class Executor:
+            def _plan_process_execution_effects(self, planned_request, anchor):
+                calls.append(("plan", planned_request.effect_plan))
+                return ExecutionEffectPlan(anchor)
+
+            def _execute_process_create_bundle(self, execution_request):
+                calls.append(("execute", execution_request.effect_plan))
+                return 4242
+
+        pid = ProcessExecutionActionBundle(Executor(), request).execute()
+
+        assert pid == 4242
+        assert calls[0] == ("plan", None)
+        assert calls[1][0] == "execute"
+        assert isinstance(calls[1][1], ExecutionEffectPlan)
+
+    def test_process_execution_bundle_rejects_invalid_plan_before_adapter(
+        self,
+        test_user,
+        test_system,
+    ):
+        """Invalid preflight output must not enter PID/state allocation code."""
+        request = ProcessExecutionRequest(
+            user=test_user,
+            system=test_system,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            logon_id="0x12345",
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c dir",
+        )
+        executor = Mock()
+        executor._plan_process_execution_effects = Mock(return_value="invalid-plan")
+
+        with pytest.raises(ExecutionEffectPlanError) as exc_info:
+            ProcessExecutionActionBundle(executor, request).execute()
+
+        assert exc_info.value.code == ExecutionEffectPlanErrorCode.INVALID_PLAN
+        executor._execute_process_create_bundle.assert_not_called()
 
     def test_process_termination_bundle_delegates_to_adapter(self, test_user, test_system):
         """Termination should share the process action-bundle boundary."""
