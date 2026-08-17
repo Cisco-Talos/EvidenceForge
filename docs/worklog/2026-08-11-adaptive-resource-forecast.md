@@ -144,3 +144,58 @@ Verification after the v3 fit:
 - Repository-wide Ruff lint, Ruff format, and `git diff --check`: passed.
 - Real `eforge validate --show-storage` output displayed separate peak-memory, final-output, and
   peak-working-disk forecasts under calibration model v3.
+
+## Bounded-registry calibration model v5 (2026-08-16)
+
+Model v5 keeps the established whole-generator memory/disk forecast and adds a typed registry
+report driven by the V2 foundation scale workload. `WorkloadEstimate.registry_inputs` records the
+scenario duration, base/effect occurrences, render-channel observations, effect/channel fanout,
+static deployment bindings, and exact scenario-override contribution for each registry family.
+The resource layer applies data-owned lifecycle/retention horizons and capacities to derive
+created, live, retained, leased, stale, expired, backing, and high-water counts. Mutable state
+plateaus from cadence × horizon rather than retaining duration-wide measurement history.
+
+Each `RegistryResourceProjection` reports a structural/expected/upper memory range, measured load,
+mutation, lookup, and expiry costs, plateau horizon and reached time, maximum lookup candidates,
+heap/segment amplification, and bounded compaction work. The report includes lifecycle,
+application channels, local artifacts, collection deployment, and deployment/content in one stable
+order. Missing measurements fail closed. Mutable operation costs remain explicitly provisional and
+tagged `foundation_smoke_prior` until the active release matrix replaces them data-only. The
+deployment/content measurement remains explicitly
+`provisional` and provenance-tagged `deployment_path_scale_packed_final` because it comes from the
+separate packed 1M/2M binding workload rather than the four-registry mixed probe.
+
+Registry memory does not get added to the legacy calibrated peak. Instead, model v5 constructs an
+explicit registry-plus-emitter/payload floor and takes the maximum of that floor and the prior
+whole-generator calibration. This retains existing budgets while preventing both underforecasting
+and double counting. Pre-v5 `ResourceForecastCalibration` values may omit `registries`; they keep
+the exact legacy calculation and return `registry_report=None`.
+
+## Release evidence closure (2026-08-17)
+
+The release-scale harness now preserves the canonical matrix as an exact static contract: 93 scale
+cases, 32 duration cases, 35 protocol-sidecar cases, and one mixed-family case, for 161 cases total.
+The sizes, durations, concurrency points, hash seeds, query counts, churn, and one-million-entry
+mixed/sidecar thresholds are unchanged. This closure did not execute the matrix.
+
+Every retained-state family now has typed release evidence. Lifecycle, application channels, local
+artifacts, collection deployment, and deployment/content bind to their scenario forecast registry.
+Process-runtime and timing-runtime remain conservative legacy-peak components but bind to their
+exact family census in the mixed case. HTTP, explicit proxy, SMB, RDP, and SSH remain conservative
+legacy-peak components but bind to their exact one-million-entry sidecar case. Report validation
+rejects a missing, swapped, or silently reclassified evidence binding.
+
+Implementation provenance now hashes the complete integration-owner manifest used by the mixed and
+sidecar workloads, including configuration, event contracts, action bundles, timing, deployment,
+lifecycle, protocol, and scale-probe owners. An authoritative result exists only for
+`--profile release --enforce --require-complete` with the canonical 161-case configuration. The
+harness rejects an unavailable Git revision or dirty worktree before starting child cases, then
+captures the ending Git revision and worktree state immediately after the children and before it
+writes the JSON report. Final authority requires one implementation digest, an unchanged Git SHA,
+a clean start and end, the complete provenance manifest, and all 161 cases. Non-authoritative
+focused development leaves the Git/release-only gates open rather than rejecting a dirty tree;
+existing reference-host absolute gates remain unchanged.
+
+Focused verification (no full or one-million-entry matrix):
+
+- `uv run pytest --no-cov tests/unit/test_foundation_scale_workload.py tests/unit/test_resource_forecast.py tests/unit/test_workload_limits.py`: 48 passed in an isolated HEAD-plus-candidate checkout.

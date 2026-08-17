@@ -3,25 +3,42 @@
 
 """Tests for machine-aware generation resource forecasts."""
 
+import os
+import subprocess
+import sys
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from rich.console import Console
 
 from evidenceforge.cli import commands
 from evidenceforge.config import get_formats_directory
 from evidenceforge.generation.resource_forecast import (
+    RegistryForecastReport,
+    RegistryResourceProjection,
+    ResourceForecast,
+    ResourceForecastCalibration,
     ResourceSnapshot,
     build_resource_forecast,
     load_resource_forecast_calibration,
     snapshot_resources,
 )
-from evidenceforge.generation.workload import estimate_workload
+from evidenceforge.generation.workload import RETAINED_STATE_FAMILIES, estimate_workload
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.files import load_yaml
 
 _GIB = 1024**3
+
+
+def _registry(
+    forecast: ResourceForecast,
+    name: str,
+) -> RegistryResourceProjection:
+    report = forecast.registry_report
+    assert report is not None
+    return next(item for item in report.registries if item.registry == name)
 
 
 def _minimal_scenario() -> Scenario:
@@ -141,6 +158,41 @@ def test_resource_snapshot_honors_container_memory_limit(monkeypatch, tmp_path: 
     assert snapshot.free_disk_bytes == 500 * _GIB
 
 
+def test_resource_snapshot_treats_unavailable_swap_as_zero(monkeypatch, tmp_path: Path) -> None:
+    """Restricted swap telemetry cannot make an otherwise valid forecast unavailable."""
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.resource_forecast.psutil.virtual_memory",
+        lambda: SimpleNamespace(total=64 * _GIB, available=40 * _GIB),
+    )
+
+    def unavailable_swap() -> None:
+        raise OSError("swap telemetry denied")
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.resource_forecast.psutil.swap_memory",
+        unavailable_swap,
+    )
+    monkeypatch.setattr(
+        "evidenceforge.generation.resource_forecast.psutil.disk_usage",
+        lambda _path: SimpleNamespace(free=500 * _GIB),
+    )
+    monkeypatch.setattr(
+        "evidenceforge.generation.resource_forecast._cgroup_memory",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "evidenceforge.generation.resource_forecast._cgroup_free_swap",
+        lambda: None,
+    )
+
+    snapshot = snapshot_resources(tmp_path / "future-output")
+
+    assert snapshot.available_memory_bytes == 40 * _GIB
+    assert snapshot.free_swap_bytes == 0
+    assert snapshot.free_disk_bytes == 500 * _GIB
+
+
 def test_forecast_always_reports_memory_disk_and_calibration() -> None:
     """A forecast includes both resource dimensions even when neither warns."""
     scenario = _minimal_scenario()
@@ -161,8 +213,377 @@ def test_forecast_always_reports_memory_disk_and_calibration() -> None:
     assert forecast.disk.expected_bytes < forecast.disk.upper_bytes
     assert forecast.disk.lower_bytes >= forecast.final_output.lower_bytes
     assert forecast.disk.expected_bytes >= forecast.final_output.expected_bytes
-    assert forecast.calibration_version == 4
+    assert forecast.calibration_version == 5
+    assert forecast.registry_report is not None
+    assert len(forecast.registry_report.registries) == 5
+    coverage = forecast.registry_report.retained_state_family_coverage
+    assert tuple(item.family for item in coverage) == RETAINED_STATE_FAMILIES
+    assert {item.family for item in coverage if item.disposition == "modeled_registry"} == {
+        "lifecycle",
+        "application_channels",
+        "local_artifacts",
+        "collection_deployment",
+        "deployment_content",
+    }
+    assert {item.family for item in coverage if item.disposition == "legacy_calibrated_peak"} == {
+        "process_runtime",
+        "timing_runtime",
+        "http",
+        "proxy",
+        "smb",
+        "rdp",
+        "ssh",
+    }
+    assert all(item.rationale for item in coverage)
+    evidence = {
+        item.family: (item.release_evidence_kind, item.release_evidence_id) for item in coverage
+    }
+    assert evidence == {
+        "lifecycle": ("scenario_forecast", "resource_forecast:registry:lifecycle"),
+        "application_channels": (
+            "scenario_forecast",
+            "resource_forecast:registry:application_channels",
+        ),
+        "local_artifacts": (
+            "scenario_forecast",
+            "resource_forecast:registry:local_artifacts",
+        ),
+        "collection_deployment": (
+            "scenario_forecast",
+            "resource_forecast:registry:collection_deployment",
+        ),
+        "deployment_content": (
+            "scenario_forecast",
+            "resource_forecast:registry:deployment_content",
+        ),
+        "process_runtime": ("mixed_exact_case", "foundation_scale:mixed:process_runtime"),
+        "timing_runtime": ("mixed_exact_case", "foundation_scale:mixed:timing_runtime"),
+        "http": ("sidecar_exact_case", "foundation_scale:sidecar:http"),
+        "proxy": ("sidecar_exact_case", "foundation_scale:sidecar:proxy"),
+        "smb": ("sidecar_exact_case", "foundation_scale:sidecar:smb"),
+        "rdp": ("sidecar_exact_case", "foundation_scale:sidecar:rdp"),
+        "ssh": ("sidecar_exact_case", "foundation_scale:sidecar:ssh"),
+    }
     assert forecast.pressures == ()
+
+
+def test_registry_report_uses_maximum_floor_without_double_counting() -> None:
+    """Measured registry memory is a floor, not an additive legacy duplicate."""
+
+    scenario = _minimal_scenario()
+    forecast = build_resource_forecast(
+        scenario,
+        estimate_workload(scenario),
+        Path("/forecast-target"),
+        snapshot=_snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB),
+    )
+    report = forecast.registry_report
+    assert report is not None
+
+    assert report.total_registry_memory.expected_bytes == sum(
+        item.memory.expected_bytes for item in report.registries
+    )
+    assert report.total_structural_bytes == sum(item.structural_bytes for item in report.registries)
+    assert report.modeled_peak_floor_bytes == (
+        report.total_registry_memory.expected_bytes + report.emitter_payload_excluded_bytes
+    )
+    assert forecast.memory.expected_bytes == max(
+        report.legacy_calibrated_peak_bytes,
+        report.modeled_peak_floor_bytes,
+    )
+    assert report.peak_memory_combination == "maximum_not_sum"
+    assert "rendered_payload_and_attachment_buffers" in report.excluded_components
+
+
+def test_registry_report_rejects_reclassifying_an_excluded_mixed_family() -> None:
+    """A sidecar cannot silently masquerade as one of the five modeled registries."""
+
+    scenario = _minimal_scenario()
+    forecast = build_resource_forecast(
+        scenario,
+        estimate_workload(scenario),
+        Path("/forecast-target"),
+        snapshot=_snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB),
+    )
+    report = forecast.registry_report
+    assert report is not None
+    payload = report.model_dump(mode="python")
+    process_runtime = next(
+        item
+        for item in payload["retained_state_family_coverage"]
+        if item["family"] == "process_runtime"
+    )
+    process_runtime["disposition"] = "modeled_registry"
+    process_runtime["registry"] = "lifecycle"
+    process_runtime["release_evidence_kind"] = "scenario_forecast"
+    process_runtime["release_evidence_id"] = "resource_forecast:registry:lifecycle"
+
+    with pytest.raises(ValueError, match="canonical registry map"):
+        RegistryForecastReport.model_validate(payload)
+
+
+def test_registry_report_rejects_swapped_exact_exclusion_evidence() -> None:
+    """A documented legacy-peak exclusion must retain its exact measured family case."""
+
+    scenario = _minimal_scenario()
+    forecast = build_resource_forecast(
+        scenario,
+        estimate_workload(scenario),
+        Path("/forecast-target"),
+        snapshot=_snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB),
+    )
+    report = forecast.registry_report
+    assert report is not None
+    payload = report.model_dump(mode="python")
+    ssh = next(
+        item for item in payload["retained_state_family_coverage"] if item["family"] == "ssh"
+    )
+    ssh["release_evidence_id"] = "foundation_scale:sidecar:http"
+
+    with pytest.raises(ValueError, match="canonical forecast or exact-case evidence"):
+        RegistryForecastReport.model_validate(payload)
+
+
+def test_legacy_calibration_without_registry_section_remains_compatible() -> None:
+    """Existing callers may construct the pre-v5 calibration shape unchanged."""
+
+    scenario = _minimal_scenario()
+    estimate = estimate_workload(scenario)
+    current = load_resource_forecast_calibration()
+    legacy_payload = current.model_dump(mode="python", exclude={"registries"})
+    legacy_payload["version"] = 4
+    calibration = ResourceForecastCalibration.model_validate(legacy_payload)
+    forecast = build_resource_forecast(
+        scenario,
+        estimate,
+        Path("/forecast-target"),
+        snapshot=_snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB),
+        calibration=calibration,
+    )
+
+    assert forecast.registry_report is None
+    assert forecast.memory.expected_bytes > 0
+
+    legacy_payload["version"] = 5
+    with pytest.raises(ValueError, match=r"v5\+ requires registry costs"):
+        ResourceForecastCalibration.model_validate(legacy_payload)
+
+
+def test_registry_forecasts_plateau_between_large_and_thirty_day_runs() -> None:
+    """Bounded mutable state plateaus while lifetime expiry work keeps growing."""
+
+    scenario = _minimal_scenario()
+    snapshot = _snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB)
+
+    def forecast_for(duration: str):
+        candidate = scenario.model_copy(
+            update={
+                "time_window": scenario.time_window.model_copy(
+                    update={"duration": duration, "end": None}
+                )
+            }
+        )
+        return build_resource_forecast(
+            candidate,
+            estimate_workload(candidate),
+            Path("/forecast-target"),
+            snapshot=snapshot,
+        )
+
+    small = forecast_for("1h")
+    large = forecast_for("7d")
+    month = forecast_for("30d")
+    for name in ("lifecycle", "application_channels", "local_artifacts"):
+        small_registry = _registry(small, name)
+        large_registry = _registry(large, name)
+        month_registry = _registry(month, name)
+        assert (
+            small_registry.entries.high_water_entries <= large_registry.entries.high_water_entries
+        )
+        assert (
+            large_registry.entries.high_water_entries == month_registry.entries.high_water_entries
+        )
+        assert large_registry.memory.expected_bytes == month_registry.memory.expected_bytes
+        assert month_registry.plateau_reached_after_seconds == (
+            month_registry.plateau_horizon_seconds
+        )
+        assert month_registry.costs.expiry_operations >= large_registry.costs.expiry_operations
+
+
+def test_channel_fanout_increases_lookup_work_not_canonical_registry_rows() -> None:
+    """Additional render channels do not duplicate canonical channel state."""
+
+    scenario = _minimal_scenario()
+    single = scenario.model_copy(deep=True)
+    single.output.logs = [{"format": "zeek_conn"}]
+    snapshot = _snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB)
+    single_forecast = build_resource_forecast(
+        single,
+        estimate_workload(single),
+        Path("/forecast-target"),
+        snapshot=snapshot,
+    )
+    fanout_forecast = build_resource_forecast(
+        scenario,
+        estimate_workload(scenario),
+        Path("/forecast-target"),
+        snapshot=snapshot,
+    )
+    single_channels = _registry(single_forecast, "application_channels")
+    fanout_channels = _registry(fanout_forecast, "application_channels")
+
+    assert fanout_channels.input.channel_fanout > single_channels.input.channel_fanout
+    assert fanout_channels.entries.created_entries == single_channels.entries.created_entries
+    assert fanout_channels.entries.high_water_entries == single_channels.entries.high_water_entries
+    assert fanout_channels.costs.lookup_operations > single_channels.costs.lookup_operations
+
+
+def test_deployment_overrides_replace_projected_application_bindings() -> None:
+    """Exact host/user replacements reduce rather than append deployment inventory."""
+
+    fixture = Path(__file__).parent.parent / "fixtures" / "scenarios" / "minimal.yaml"
+    base_data = load_yaml(fixture)
+    base_data["environment"]["users"][0]["persona"] = "developer"
+    base = Scenario(**base_data)
+    override_data = load_yaml(fixture)
+    override_data["environment"]["users"][0]["persona"] = "developer"
+    override_data["environment"]["deployment_overrides"] = [
+        {
+            "system": "TEST-01",
+            "applications": ["slack"],
+            "user_applications": [{"user": "test_user", "applications": ["slack"]}],
+        }
+    ]
+    overridden = Scenario(**override_data)
+    base_input = next(
+        item
+        for item in estimate_workload(base).registry_inputs
+        if item.registry == "deployment_content"
+    )
+    override_input = next(
+        item
+        for item in estimate_workload(overridden).registry_inputs
+        if item.registry == "deployment_content"
+    )
+
+    assert override_input.scenario_override_entries == 2
+    assert override_input.static_entries < base_input.static_entries
+
+
+def test_measured_cost_update_is_data_only_and_changes_registry_projection() -> None:
+    """Replacing one measured cost requires no forecast-code change."""
+
+    scenario = _minimal_scenario()
+    estimate = estimate_workload(scenario)
+    snapshot = _snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB)
+    calibration = load_resource_forecast_calibration()
+    baseline = build_resource_forecast(
+        scenario,
+        estimate,
+        Path("/forecast-target"),
+        snapshot=snapshot,
+        calibration=calibration,
+    )
+    artifact = calibration.registries["local_artifacts"]
+    resident = artifact.measurement.resident_bytes_per_entry
+    assert resident is not None
+    changed_measurement = artifact.measurement.model_copy(
+        update={
+            "profile": "replacement-measurement",
+            "resident_bytes_per_entry": resident * 2,
+        }
+    )
+    changed_registry = artifact.model_copy(update={"measurement": changed_measurement})
+    changed_calibration = calibration.model_copy(
+        update={
+            "registries": {
+                **calibration.registries,
+                "local_artifacts": changed_registry,
+            }
+        }
+    )
+    changed = build_resource_forecast(
+        scenario,
+        estimate,
+        Path("/forecast-target"),
+        snapshot=snapshot,
+        calibration=changed_calibration,
+    )
+
+    assert _registry(changed, "local_artifacts").measured_profile == "replacement-measurement"
+    assert _registry(changed, "local_artifacts").memory.expected_bytes > (
+        _registry(baseline, "local_artifacts").memory.expected_bytes
+    )
+
+
+def test_unavailable_registry_measurement_fails_closed() -> None:
+    """A missing measured cost cannot silently become a zero-memory forecast."""
+
+    scenario = _minimal_scenario()
+    estimate = estimate_workload(scenario)
+    calibration = load_resource_forecast_calibration()
+    lifecycle = calibration.registries["lifecycle"]
+    unavailable = lifecycle.measurement.model_copy(
+        update={"status": "unavailable", "profile": "missing", "measured_entries": 0}
+    )
+    changed_calibration = calibration.model_copy(
+        update={
+            "registries": {
+                **calibration.registries,
+                "lifecycle": lifecycle.model_copy(update={"measurement": unavailable}),
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="registry measurement unavailable for lifecycle"):
+        build_resource_forecast(
+            scenario,
+            estimate,
+            Path("/forecast-target"),
+            snapshot=_snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB),
+            calibration=changed_calibration,
+        )
+
+
+def test_registry_forecast_is_python_hash_seed_independent() -> None:
+    """Registry drivers and projections are stable across interpreter hash seeds."""
+
+    script = r"""
+import json
+from pathlib import Path
+from evidenceforge.generation.resource_forecast import ResourceSnapshot, build_resource_forecast
+from evidenceforge.generation.workload import estimate_workload
+from evidenceforge.models.scenario import Scenario
+from evidenceforge.utils.files import load_yaml
+
+scenario = Scenario(**load_yaml(Path("tests/fixtures/scenarios/minimal.yaml")))
+estimate = estimate_workload(scenario)
+forecast = build_resource_forecast(
+    scenario,
+    estimate,
+    Path("/forecast-target"),
+    snapshot=ResourceSnapshot(
+        total_memory_bytes=10**12,
+        available_memory_bytes=10**12,
+        free_swap_bytes=0,
+        free_disk_bytes=10**12,
+        disk_path="/forecast-target",
+    ),
+)
+print(json.dumps(forecast.registry_report.model_dump(mode="json"), sort_keys=True))
+"""
+    outputs: list[str] = []
+    for seed in ("1", "8675309"):
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        outputs.append(result.stdout)
+
+    assert outputs[0] == outputs[1]
 
 
 def test_disk_calibration_covers_every_shipped_output_format() -> None:

@@ -1,5 +1,5 @@
-version: 4
-calibration_label: "Cross-platform SMB and Samba empirical working-set model"
+version: 5
+calibration_label: "Measured bounded-registry and cross-platform emitter working-set model"
 
 memory:
   base_mib: 90
@@ -26,6 +26,145 @@ memory:
   # grows across long emitter runs. A 2.10x ceiling retains 12% measured
   # headroom without making the expected value duration-dependent.
   upper_multiplier: 2.10
+
+# Fresh-process registry costs. Memory/load/lookup use the stable 250K isolated
+# points from scripts/foundation_scale_workload.py. The report classifies all 12
+# mixed retained-state families: these five receive scenario-derived registry
+# projections. Process/timing runtime remain explicitly assigned to the
+# calibrated whole-generator peak and bind to their exact mixed-family release
+# cases; HTTP/proxy/SMB/RDP/SSH bind to exact sidecar cases while remaining in
+# that legacy peak. Those documented exclusions stay provisional until
+# scenario-driver coefficients replace them. Mutable operation costs use
+# conservative maxima from the prior deterministic smoke probes. Deployment
+# content is also provisional because its packed 1M/2M path workload is separate
+# from the mixed calibration.
+registries:
+  lifecycle:
+    measurement:
+      status: provisional
+      profile: foundation_scale_release_250k_lifecycle
+      operation_profile: foundation_smoke_prior
+      measured_entries: 250000
+      resident_bytes_per_entry: 773.849088
+      structural_bytes_per_entry: 217.762896
+      load_microseconds_per_entry: 27.718
+      mutation_microseconds_per_entry: 42.52
+      lookup_p95_microseconds: 9.041
+      expiry_microseconds_per_entry: 14.70
+      resident_upper_multiplier: 1.25
+      maximum_lookup_candidates: 2
+      heap_segment_amplification: 1.0
+      compaction_budget_entries: 4096
+    projection:
+      created_per_effect: 0.30
+      mutations_per_created: 2.0
+      lookups_per_created: 3.0
+      live_horizon_seconds: 7200
+      retention_horizon_seconds: 172800
+      lease_fraction: 0.10
+      lease_bytes_per_entry: 64
+      stale_fraction_before_compaction: 0.02
+  application_channels:
+    measurement:
+      status: provisional
+      profile: foundation_scale_release_250k_application_channels
+      operation_profile: foundation_smoke_prior
+      measured_entries: 250000
+      resident_bytes_per_entry: 496.500736
+      structural_bytes_per_entry: 134.792192
+      load_microseconds_per_entry: 25.1944
+      mutation_microseconds_per_entry: 104.85
+      lookup_p95_microseconds: 9.75
+      expiry_microseconds_per_entry: 65.15
+      resident_upper_multiplier: 1.25
+      maximum_lookup_candidates: 2
+      heap_segment_amplification: 1.0
+      compaction_budget_entries: 4096
+    projection:
+      created_per_effect: 0.08
+      mutations_per_created: 3.0
+      lookups_per_created: 2.0
+      live_horizon_seconds: 7200
+      retention_horizon_seconds: 30
+      lease_fraction: 0.0
+      lease_bytes_per_entry: 0
+      stale_fraction_before_compaction: 0.02
+  local_artifacts:
+    measurement:
+      status: provisional
+      profile: foundation_scale_release_250k_local_artifacts
+      operation_profile: foundation_smoke_prior
+      measured_entries: 250000
+      resident_bytes_per_entry: 247.922688
+      structural_bytes_per_entry: 244.862828
+      load_microseconds_per_entry: 27.84
+      mutation_microseconds_per_entry: 15.81
+      lookup_p95_microseconds: 7.96
+      expiry_microseconds_per_entry: 6.71
+      resident_upper_multiplier: 1.25
+      maximum_lookup_candidates: 1
+      heap_segment_amplification: 1.0
+      compaction_budget_entries: 4096
+    projection:
+      created_per_effect: 0.03
+      mutations_per_created: 1.5
+      lookups_per_created: 2.0
+      live_horizon_seconds: 172800
+      retention_horizon_seconds: 0
+      lease_fraction: 0.02
+      lease_bytes_per_entry: 48
+      maximum_entries: 100000
+      stale_fraction_before_compaction: 0.02
+  collection_deployment:
+    measurement:
+      status: measured
+      profile: foundation_scale_release_250k_collection_deployment
+      unit: source
+      measured_entries: 250000
+      resident_bytes_per_entry: 362.74176
+      structural_bytes_per_entry: 123.62424
+      load_microseconds_per_entry: 13.1884
+      mutation_microseconds_per_entry: 0.0
+      lookup_p95_microseconds: 1.291
+      expiry_microseconds_per_entry: 0.0
+      resident_upper_multiplier: 1.25
+      maximum_lookup_candidates: 1
+      heap_segment_amplification: 1.0
+      compaction_budget_entries: 0
+    projection:
+      created_per_effect: 0.0
+      mutations_per_created: 0.0
+      lookups_per_created: 1.0
+      live_horizon_seconds: 0
+      retention_horizon_seconds: 0
+      lease_fraction: 0.0
+      lease_bytes_per_entry: 0
+      stale_fraction_before_compaction: 0.0
+  deployment_content:
+    measurement:
+      status: provisional
+      profile: deployment_path_scale_packed_final
+      unit: path_binding_equivalent
+      measured_entries: 1000000
+      resident_bytes_per_entry: 358.58
+      structural_bytes_per_entry: 168.99
+      load_microseconds_per_entry: 9.551
+      mutation_microseconds_per_entry: 0.0
+      lookup_p95_microseconds: 1.709
+      expiry_microseconds_per_entry: 0.0
+      resident_upper_multiplier: 1.25
+      maximum_lookup_candidates: 1
+      heap_segment_amplification: 1.0
+      compaction_budget_entries: 0
+    projection:
+      created_per_effect: 0.0
+      mutations_per_created: 0.0
+      lookups_per_created: 1.0
+      live_horizon_seconds: 0
+      retention_horizon_seconds: 0
+      lease_fraction: 0.0
+      lease_bytes_per_entry: 0
+      stale_fraction_before_compaction: 0.0
 
 disk:
   base_mib: 0.1
