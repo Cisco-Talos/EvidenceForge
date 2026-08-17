@@ -1307,6 +1307,24 @@ class GenerationManifestDocument(BaseModel):
     compiled_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     resolved_file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     files: dict[str, str]
+    effect_reconciliation: dict[str, int | str | bool] | None = None
+
+    @field_validator("effect_reconciliation")
+    @classmethod
+    def validate_effect_reconciliation(
+        cls,
+        value: dict[str, int | str | bool] | None,
+    ) -> dict[str, int | str | bool] | None:
+        """Apply the same bounded reconciliation contract as canonical ground truth."""
+
+        if value is None:
+            return None
+        from evidenceforge.events.ground_truth import (
+            GroundTruthExecutionEffectReconciliation,
+        )
+
+        GroundTruthExecutionEffectReconciliation.model_validate(value)
+        return value
 
     @model_validator(mode="after")
     def validate_file_hashes(self) -> GenerationManifestDocument:

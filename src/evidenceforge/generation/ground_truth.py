@@ -43,6 +43,7 @@ from evidenceforge.utils.paths import safe_write_text
 from evidenceforge.utils.time import resolve_time_window
 
 if TYPE_CHECKING:
+    from evidenceforge.generation.actions.command_effects import ExecutionEffectAuditSnapshot
     from evidenceforge.generation.intent_ledger import (
         AuthoredIntentLedger,
         IntentExecutionSnapshot,
@@ -102,6 +103,7 @@ class GroundTruthGenerator:
         ids_evaluation_summary: dict[str, dict[str, dict[str, object]]] | None = None,
         authored_intent_ledger: AuthoredIntentLedger | None = None,
         intent_execution_snapshot: tuple[IntentExecutionSnapshot, ...] = (),
+        execution_effect_audit_snapshot: ExecutionEffectAuditSnapshot | None = None,
     ):
         self.scenario = scenario
         self.malicious_events = malicious_events
@@ -110,6 +112,7 @@ class GroundTruthGenerator:
         self.ids_evaluation_summary = ids_evaluation_summary
         self.authored_intent_ledger = authored_intent_ledger
         self.intent_execution_snapshot = intent_execution_snapshot
+        self.execution_effect_audit_snapshot = execution_effect_audit_snapshot
 
     def build_document(self) -> GroundTruthDocument:
         """Build the canonical machine-readable ground-truth document."""
@@ -131,6 +134,11 @@ class GroundTruthGenerator:
                 "storyline_steps": self._build_storyline_steps(),
                 "red_herring_steps": self._build_red_herring_steps(),
                 "intent_reconciliation": self._build_intent_reconciliation(),
+                "effect_reconciliation": (
+                    self.execution_effect_audit_snapshot.as_dict()
+                    if self.execution_effect_audit_snapshot is not None
+                    else None
+                ),
                 "events": self._build_event_records(),
             }
         )
@@ -147,7 +155,9 @@ class GroundTruthGenerator:
         accounted_ids = {
             snapshot.intent_id
             for snapshot in self.intent_execution_snapshot
-            if snapshot.planned or snapshot.occurrence_ids or snapshot.source_observations
+            if snapshot.planned
+            or snapshot.occurrence_reference_count
+            or snapshot.source_observations
         }
         reconciliation = self.authored_intent_ledger.reconcile(accounted_ids)
         rows = []
@@ -167,10 +177,24 @@ class GroundTruthGenerator:
                     "planned": bool(execution and execution.planned),
                     "action_ids": list(execution.action_ids) if execution else [],
                     "occurrence_ids": list(execution.occurrence_ids) if execution else [],
+                    "action_reference_count": (
+                        execution.action_reference_count if execution else None
+                    ),
+                    "occurrence_reference_count": (
+                        execution.occurrence_reference_count if execution else None
+                    ),
+                    "action_digest": execution.action_digest if execution else None,
+                    "occurrence_digest": execution.occurrence_digest if execution else None,
+                    "duplicate_occurrence_count": (
+                        execution.duplicate_occurrence_count if execution else 0
+                    ),
+                    "occurrence_window_counts": (
+                        execution.occurrence_window_counts if execution else {}
+                    ),
                     "source_status": execution.source_status if execution else {},
                 }
             )
-        occurred_count = sum(bool(row["occurrence_ids"]) for row in rows)
+        occurred_count = sum(bool(row["occurrence_reference_count"]) for row in rows)
         observed_count = sum(
             any(
                 statuses.get("visible", 0) > 0 or statuses.get("delayed", 0) > 0
@@ -179,11 +203,15 @@ class GroundTruthGenerator:
             for row in rows
         )
         return {
-            "complete": reconciliation.complete,
+            "complete": reconciliation.complete
+            and not any(row["duplicate_occurrence_count"] for row in rows),
             "expected_count": len(rows),
             "planned_count": sum(bool(row["planned"]) for row in rows),
             "occurred_count": occurred_count,
             "observed_count": observed_count,
+            "duplicate_occurrence_count": sum(
+                int(row["duplicate_occurrence_count"]) for row in rows
+            ),
             "missing_intent_ids": sorted(reconciliation.missing_intent_ids),
             "unexpected_intent_ids": sorted(reconciliation.unexpected_intent_ids),
             "intents": rows,

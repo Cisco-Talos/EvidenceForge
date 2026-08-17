@@ -215,35 +215,39 @@ class CausalityScorer(DimensionScorer):
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}
         vis = VisibilityModel(scenario, enabled)
 
-        progress("sub_score_start", {"name": "Causal Ordering", "step": 1, "total": 7})
+        progress("sub_score_start", {"name": "Causal Ordering", "step": 1, "total": 8})
         s1 = self._score_causal_ordering(records, scenario)
         progress("sub_score_done", {"name": "Causal Ordering", "score": s1.score})
 
-        progress("sub_score_start", {"name": "Event Presence", "step": 2, "total": 7})
+        progress("sub_score_start", {"name": "Event Presence", "step": 2, "total": 8})
         s2 = self._score_event_presence(resolved, context)
         progress("sub_score_done", {"name": "Event Presence", "score": s2.score})
 
-        progress("sub_score_start", {"name": "Indicator Accuracy", "step": 3, "total": 7})
+        progress("sub_score_start", {"name": "Indicator Accuracy", "step": 3, "total": 8})
         s3 = self._score_indicator_accuracy(resolved)
         progress("sub_score_done", {"name": "Indicator Accuracy", "score": s3.score})
 
-        progress("sub_score_start", {"name": "Pivot Linkability", "step": 4, "total": 7})
+        progress("sub_score_start", {"name": "Pivot Linkability", "step": 4, "total": 8})
         s4 = self._score_pivot_linkability(resolved, context)
         progress("sub_score_done", {"name": "Pivot Linkability", "score": s4.score})
 
-        progress("sub_score_start", {"name": "Temporal Integrity", "step": 5, "total": 7})
+        progress("sub_score_start", {"name": "Temporal Integrity", "step": 5, "total": 8})
         s5 = self._score_temporal_integrity(resolved, context)
         progress("sub_score_done", {"name": "Temporal Integrity", "score": s5.score})
 
-        progress("sub_score_start", {"name": "Storyline Trace Coverage", "step": 6, "total": 7})
+        progress("sub_score_start", {"name": "Storyline Trace Coverage", "step": 6, "total": 8})
         s6 = self._score_storyline_trace_coverage(resolved, vis, host_time_index, context)
         progress("sub_score_done", {"name": "Storyline Trace Coverage", "score": s6.score})
 
-        progress("sub_score_start", {"name": "Intent Reconciliation", "step": 7, "total": 7})
+        progress("sub_score_start", {"name": "Intent Reconciliation", "step": 7, "total": 8})
         s7 = self._score_intent_reconciliation(scenario, context)
         progress("sub_score_done", {"name": "Intent Reconciliation", "score": s7.score})
 
-        sub_scores = [s1, s2, s3, s4, s5, s6, s7]
+        progress("sub_score_start", {"name": "Effect Reconciliation", "step": 8, "total": 8})
+        s8 = self._score_effect_reconciliation(context)
+        progress("sub_score_done", {"name": "Effect Reconciliation", "score": s8.score})
+
+        sub_scores = [s1, s2, s3, s4, s5, s6, s7, s8]
         dim_score = aggregate_sub_scores(sub_scores)
 
         host_log_profile = _build_host_log_profile(records, vis, scenario)
@@ -360,6 +364,84 @@ class CausalityScorer(DimensionScorer):
                 f"{correct}/{total_assertions} authored/planner reconciliation assertions pass; "
                 f"{reconciliation.occurred_count} intents dispatched canonical events and "
                 f"{reconciliation.observed_count} had visible or delayed source evidence"
+            ),
+            sample_failures=sorted(set(failures))[:10],
+        )
+
+    @staticmethod
+    def _score_effect_reconciliation(context: EvaluationContext) -> SubScore:
+        """Apply an all-or-none gate to generated effect-plan reconciliation."""
+
+        ground_truth = context.ground_truth
+        if ground_truth is None or ground_truth.effect_reconciliation is None:
+            return SubScore(
+                name="Effect Reconciliation",
+                key="effect_reconciliation",
+                weight=0.0,
+                score=None,
+                skipped=True,
+                details="Legacy ground truth has no execution-effect reconciliation contract",
+            )
+        reconciliation = ground_truth.effect_reconciliation
+        failures = []
+        defect_fields = {
+            "failed_node_count": reconciliation.failed_node_count,
+            "missing_node_count": reconciliation.missing_node_count,
+            "missing_required_node_count": reconciliation.missing_required_node_count,
+            "unexpected_node_count": reconciliation.unexpected_node_count,
+            "unplanned_failure_count": reconciliation.unplanned_failure_count,
+            "invalid_outcome_node_count": reconciliation.invalid_outcome_node_count,
+            "policy_invalid_outcome_count": reconciliation.policy_invalid_outcome_count,
+            "cardinality_mismatch_count": reconciliation.cardinality_mismatch_count,
+            "duplicate_outcome_count": reconciliation.duplicate_outcome_count,
+            "incomplete_reconciliation_count": (reconciliation.incomplete_reconciliation_count),
+            "exempt_effect_occurrence_count": reconciliation.exempt_effect_occurrence_count,
+            "unprovenanced_effect_occurrence_count": (
+                reconciliation.unprovenanced_effect_occurrence_count
+            ),
+            "effect_publication_mismatch_count": (reconciliation.effect_publication_mismatch_count),
+        }
+        failures.extend(
+            f"Execution-effect reconciliation reports {field}={count}"
+            for field, count in defect_fields.items()
+            if count
+        )
+        if not reconciliation.complete:
+            failures.append("Execution-effect reconciliation reports complete=false")
+        if (
+            reconciliation.required_node_count
+            + reconciliation.optional_node_count
+            + reconciliation.externally_owned_node_count
+            != reconciliation.planned_node_count
+        ):
+            failures.append("Execution-effect requirement totals contradict planned nodes")
+        if (
+            reconciliation.realized_node_count
+            + reconciliation.linked_node_count
+            + reconciliation.suppressed_node_count
+            + reconciliation.failed_node_count
+            + reconciliation.missing_node_count
+            != reconciliation.planned_node_count
+        ):
+            failures.append("Execution-effect outcome totals contradict planned nodes")
+        if (
+            reconciliation.published_effect_occurrence_count
+            != reconciliation.reconciled_effect_occurrence_count
+        ):
+            failures.append(
+                "Published effect occurrences contradict realized reconciliation cardinality"
+            )
+        score = 0.0 if failures else 100.0
+        return SubScore(
+            name="Effect Reconciliation",
+            key="effect_reconciliation",
+            weight=0.0,
+            score=score,
+            details=(
+                f"{reconciliation.plan_count} effect plans, "
+                f"{reconciliation.owned_effect_plan_count} owned effect plans, "
+                f"{reconciliation.planned_node_count} planned nodes, "
+                f"digest {reconciliation.reconciliation_digest}"
             ),
             sample_failures=sorted(set(failures))[:10],
         )

@@ -627,6 +627,12 @@ class GroundTruthIntentEvidence(BaseModel):
     planned: bool
     action_ids: list[str] = Field(default_factory=list)
     occurrence_ids: list[str] = Field(default_factory=list)
+    action_reference_count: int | None = Field(default=None, ge=0)
+    occurrence_reference_count: int | None = Field(default=None, ge=0)
+    action_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    occurrence_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    duplicate_occurrence_count: int = Field(default=0, ge=0)
+    occurrence_window_counts: dict[Literal["24h", "7d", "30d"], int] = Field(default_factory=dict)
     source_status: dict[str, dict[str, int]] = Field(default_factory=dict)
 
     model_config = ConfigDict(extra="forbid")
@@ -647,6 +653,35 @@ class GroundTruthIntentEvidence(BaseModel):
                     raise ValueError(f"source_status[{source!r}][{status!r}] must be non-negative")
         return value
 
+    @model_validator(mode="after")
+    def validate_bounded_identity_aggregates(self) -> GroundTruthIntentEvidence:
+        """Keep samples subordinate to authoritative count/digest aggregates."""
+
+        if len(self.action_ids) > 8 or len(self.occurrence_ids) > 8:
+            raise ValueError("intent identity samples cannot exceed eight IDs")
+        if self.action_reference_count is not None:
+            if self.action_reference_count < len(self.action_ids):
+                raise ValueError("action_reference_count cannot be smaller than its ID sample")
+            if self.action_digest is None:
+                raise ValueError("action_digest is required with action_reference_count")
+        if self.occurrence_reference_count is not None:
+            if self.occurrence_reference_count < len(self.occurrence_ids):
+                raise ValueError("occurrence_reference_count cannot be smaller than its ID sample")
+            if self.occurrence_digest is None:
+                raise ValueError("occurrence_digest is required with occurrence_reference_count")
+            if self.duplicate_occurrence_count > self.occurrence_reference_count:
+                raise ValueError("duplicate occurrence count exceeds occurrence references")
+            window_counts = [
+                self.occurrence_window_counts.get(window, 0) for window in ("24h", "7d", "30d")
+            ]
+            if window_counts != sorted(window_counts):
+                raise ValueError("intent occurrence window counts must be monotonic")
+            if window_counts[-1] > self.occurrence_reference_count:
+                raise ValueError("30d occurrence count exceeds lifetime occurrence references")
+        if any(count < 0 for count in self.occurrence_window_counts.values()):
+            raise ValueError("intent occurrence window counts must be non-negative")
+        return self
+
 
 class GroundTruthIntentReconciliation(BaseModel):
     """Dataset-level reconciliation of the independent authored intent ledger."""
@@ -656,6 +691,7 @@ class GroundTruthIntentReconciliation(BaseModel):
     planned_count: int = Field(ge=0)
     occurred_count: int = Field(ge=0)
     observed_count: int = Field(ge=0)
+    duplicate_occurrence_count: int = Field(default=0, ge=0)
     missing_intent_ids: list[str] = Field(default_factory=list)
     unexpected_intent_ids: list[str] = Field(default_factory=list)
     intents: list[GroundTruthIntentEvidence] = Field(default_factory=list)
@@ -673,8 +709,19 @@ class GroundTruthIntentReconciliation(BaseModel):
             raise ValueError("reconciled intent IDs must be unique")
         if self.planned_count != sum(intent.planned for intent in self.intents):
             raise ValueError("planned_count does not match reconciled intent rows")
-        if self.occurred_count != sum(bool(intent.occurrence_ids) for intent in self.intents):
+        if self.occurred_count != sum(
+            (
+                intent.occurrence_reference_count > 0
+                if intent.occurrence_reference_count is not None
+                else bool(intent.occurrence_ids)
+            )
+            for intent in self.intents
+        ):
             raise ValueError("occurred_count does not match reconciled intent rows")
+        if self.duplicate_occurrence_count != sum(
+            intent.duplicate_occurrence_count for intent in self.intents
+        ):
+            raise ValueError("duplicate_occurrence_count does not match reconciled intent rows")
         observed_count = sum(
             any(
                 statuses.get("visible", 0) > 0 or statuses.get("delayed", 0) > 0
@@ -688,9 +735,122 @@ class GroundTruthIntentReconciliation(BaseModel):
             self.planned_count == self.expected_count
             and not self.missing_intent_ids
             and not self.unexpected_intent_ids
+            and self.duplicate_occurrence_count == 0
         )
         if self.complete != expected_complete:
             raise ValueError("complete does not match missing/unexpected intent IDs")
+        return self
+
+
+class GroundTruthExecutionEffectReconciliation(BaseModel):
+    """Bounded run-level effect-plan reconciliation and deterministic digest."""
+
+    complete: bool
+    plan_count: int = Field(ge=0)
+    no_effect_plan_count: int = Field(ge=0)
+    planned_node_count: int = Field(ge=0)
+    required_node_count: int = Field(ge=0)
+    optional_node_count: int = Field(ge=0)
+    externally_owned_node_count: int = Field(ge=0)
+    planned_effect_occurrence_count: int = Field(ge=0)
+    owned_effect_plan_count: int = Field(default=0, ge=0)
+    owned_effect_expected_occurrence_count: int = Field(default=0, ge=0)
+    owned_effect_published_occurrence_count: int = Field(default=0, ge=0)
+    realized_node_count: int = Field(ge=0)
+    realized_effect_occurrence_count: int = Field(ge=0)
+    linked_node_count: int = Field(ge=0)
+    suppressed_node_count: int = Field(ge=0)
+    failed_node_count: int = Field(ge=0)
+    missing_node_count: int = Field(ge=0)
+    missing_required_node_count: int = Field(ge=0)
+    unexpected_node_count: int = Field(ge=0)
+    unplanned_failure_count: int = Field(ge=0)
+    invalid_outcome_node_count: int = Field(ge=0)
+    policy_invalid_outcome_count: int = Field(ge=0)
+    cardinality_mismatch_count: int = Field(ge=0)
+    duplicate_outcome_count: int = Field(ge=0)
+    incomplete_reconciliation_count: int = Field(ge=0)
+    reconciled_effect_occurrence_count: int = Field(ge=0)
+    published_effect_occurrence_count: int = Field(ge=0)
+    exempt_effect_occurrence_count: int = Field(ge=0)
+    unprovenanced_effect_occurrence_count: int = Field(ge=0)
+    effect_publication_mismatch_count: int = Field(ge=0)
+    reconciliation_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    effect_occurrence_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_effect_totals(self) -> GroundTruthExecutionEffectReconciliation:
+        """Reject count drift and summaries that claim false completeness."""
+
+        if self.no_effect_plan_count > self.plan_count:
+            raise ValueError("no_effect_plan_count cannot exceed plan_count")
+        if self.plan_count == 0 and self.planned_node_count:
+            raise ValueError("planned effects require at least one execution-effect plan")
+        if (
+            self.plan_count + self.owned_effect_plan_count == 0
+            and self.published_effect_occurrence_count
+        ):
+            raise ValueError("published effects require an execution or owned-effect plan")
+        if self.owned_effect_plan_count == 0 and self.owned_effect_expected_occurrence_count:
+            raise ValueError("owned effect occurrences require an owned-effect plan")
+        if (
+            self.owned_effect_plan_count
+            and self.owned_effect_expected_occurrence_count < self.owned_effect_plan_count
+        ):
+            raise ValueError("every owned-effect plan must expect at least one occurrence")
+        if self.owned_effect_expected_occurrence_count > self.reconciled_effect_occurrence_count:
+            raise ValueError("owned expected effects cannot exceed all reconciled effects")
+        if self.owned_effect_published_occurrence_count > self.published_effect_occurrence_count:
+            raise ValueError("owned published effects cannot exceed all published effects")
+        if (
+            self.required_node_count + self.optional_node_count + self.externally_owned_node_count
+            != self.planned_node_count
+        ):
+            raise ValueError("effect requirement totals do not match planned_node_count")
+        if (
+            self.realized_node_count
+            + self.linked_node_count
+            + self.suppressed_node_count
+            + self.failed_node_count
+            + self.missing_node_count
+            != self.planned_node_count
+        ):
+            raise ValueError("effect outcome totals do not match planned_node_count")
+        if self.missing_required_node_count > self.missing_node_count:
+            raise ValueError("missing required effects cannot exceed all missing effects")
+        if (
+            self.policy_invalid_outcome_count + self.cardinality_mismatch_count
+            != self.invalid_outcome_node_count
+        ):
+            raise ValueError("invalid effect outcome categories do not match their total")
+        publication_counts_match = (
+            self.published_effect_occurrence_count == self.reconciled_effect_occurrence_count
+        )
+        if not publication_counts_match and self.effect_publication_mismatch_count == 0:
+            raise ValueError(
+                "effect publication mismatch truth contradicts published/realized counts"
+            )
+        expected_complete = not any(
+            (
+                self.failed_node_count,
+                self.missing_node_count,
+                self.missing_required_node_count,
+                self.unexpected_node_count,
+                self.unplanned_failure_count,
+                self.invalid_outcome_node_count,
+                self.policy_invalid_outcome_count,
+                self.cardinality_mismatch_count,
+                self.duplicate_outcome_count,
+                self.incomplete_reconciliation_count,
+                self.exempt_effect_occurrence_count,
+                self.unprovenanced_effect_occurrence_count,
+                self.effect_publication_mismatch_count,
+            )
+        )
+        if self.complete != expected_complete:
+            raise ValueError("effect reconciliation completeness contradicts defect totals")
         return self
 
 
@@ -762,6 +922,7 @@ class GroundTruthDocument(BaseModel):
     storyline_steps: list[GroundTruthStep] = Field(default_factory=list)
     red_herring_steps: list[GroundTruthStep] = Field(default_factory=list)
     intent_reconciliation: GroundTruthIntentReconciliation | None = None
+    effect_reconciliation: GroundTruthExecutionEffectReconciliation | None = None
     events: list[GroundTruthEvent] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid")

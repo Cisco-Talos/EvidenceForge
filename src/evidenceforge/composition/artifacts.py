@@ -161,6 +161,7 @@ def write_generation_manifest(
     formats: list[str],
     oob_hosts: tuple[str, ...] = (),
     overrides: dict[str, Any] | None = None,
+    effect_reconciliation: dict[str, int | str | bool] | None = None,
 ) -> Path:
     """Write the run identity last, after hashing every other bundle file."""
 
@@ -194,6 +195,8 @@ def write_generation_manifest(
         "resolved_file_sha256": hashlib.sha256(resolved_path.read_bytes()).hexdigest(),
         "files": _bundle_file_hashes(output_root),
     }
+    if effect_reconciliation is not None:
+        payload["effect_reconciliation"] = effect_reconciliation
     content = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
     temporary.write_text(content, encoding="utf-8", newline="\n")
@@ -238,6 +241,28 @@ def verify_generation_bundle(output_root: Path) -> dict[str, Any]:
             "generation bundle hash verification failed: "
             f"missing={missing}, changed={changed}, unexpected={unexpected}"
         )
+    from evidenceforge.events.ground_truth import (
+        GROUND_TRUTH_JSON_FILENAME,
+        GroundTruthDocument,
+    )
+
+    ground_truth_path = output_root / GROUND_TRUTH_JSON_FILENAME
+    if ground_truth_path.is_file():
+        try:
+            ground_truth = GroundTruthDocument.model_validate_json(
+                ground_truth_path.read_text(encoding="utf-8")
+            )
+        except (ValidationError, ValueError) as exc:
+            raise SchemaValidationError(f"invalid ground truth document: {exc}") from exc
+        ground_truth_effects = (
+            ground_truth.effect_reconciliation.model_dump(mode="json")
+            if ground_truth.effect_reconciliation is not None
+            else None
+        )
+        if manifest.get("effect_reconciliation") != ground_truth_effects:
+            raise SchemaValidationError(
+                "generation manifest and ground truth effect reconciliation disagree"
+            )
     return manifest
 
 

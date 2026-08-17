@@ -154,6 +154,7 @@ _CATEGORY_DEFINITIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         "Declared Scenario Completeness",
         (
             "intent_reconciliation",
+            "effect_reconciliation",
             "event_presence",
             "indicator_accuracy",
             "pivot_linkability",

@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import random
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -24,9 +26,15 @@ from evidenceforge.composition.artifacts import (
 from evidenceforge.composition.models import EffectiveConfig, PackReference
 from evidenceforge.composition.packs import CATALOG_FILES, PackRepository
 from evidenceforge.config.provider import effective_config_scope
+from evidenceforge.events.ground_truth import (
+    GROUND_TRUTH_JSON_FILENAME,
+    write_ground_truth_document,
+)
+from evidenceforge.generation.actions.command_effects import ExecutionEffectAuditCounter
 from evidenceforge.generation.activity.dns_registry import load_dns_registry, pick_domain_and_ip
 from evidenceforge.generation.activity.network import REVERSE_DNS
 from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
+from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.storage_world import StorageWorldModel, _load_catalog_config
 from evidenceforge.models.exceptions import PackError, SchemaValidationError
 from evidenceforge.utils import load_yaml
@@ -725,6 +733,90 @@ def test_generation_manifest_detects_bundle_corruption(tmp_path: Path) -> None:
     assert verify_generation_bundle(tmp_path)["scenario"] == compiled.scenario.name
     log.write_text('{"event": 2}\n', encoding="utf-8")
     with pytest.raises(SchemaValidationError, match="hash verification failed"):
+        verify_generation_bundle(tmp_path)
+
+
+def test_generation_manifest_validates_bounded_effect_reconciliation(tmp_path: Path) -> None:
+    """Published bundle identity carries the same untampered effect audit as ground truth."""
+
+    compiled = compile_scenario(_MINIMAL)
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "events.json").write_text("{}\n", encoding="utf-8")
+    write_resolved_scenario(compiled, tmp_path)
+    effect_reconciliation = ExecutionEffectAuditCounter().snapshot().as_dict()
+    write_generation_manifest(
+        compiled,
+        tmp_path,
+        output_target="default",
+        formats=["zeek_conn"],
+        effect_reconciliation=effect_reconciliation,
+    )
+
+    manifest = verify_generation_bundle(tmp_path)
+    assert manifest["effect_reconciliation"] == effect_reconciliation
+
+    manifest_path = tmp_path / "GENERATION_MANIFEST.json"
+    tampered = json.loads(manifest_path.read_text(encoding="utf-8"))
+    tampered["effect_reconciliation"]["missing_required_node_count"] = 1
+    manifest_path.write_text(json.dumps(tampered), encoding="utf-8")
+
+    with pytest.raises(SchemaValidationError, match="invalid generation manifest"):
+        verify_generation_bundle(tmp_path)
+
+
+def test_generation_manifest_and_ground_truth_reject_removed_effect_reconciliation(
+    tmp_path: Path,
+) -> None:
+    """New bundles cannot remove the audit from either authoritative document."""
+
+    compiled = compile_scenario(_MINIMAL)
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "events.json").write_text("{}\n", encoding="utf-8")
+    snapshot = ExecutionEffectAuditCounter().snapshot()
+    ground_truth_path = tmp_path / GROUND_TRUTH_JSON_FILENAME
+    write_ground_truth_document(
+        ground_truth_path,
+        GroundTruthGenerator(
+            compiled.scenario,
+            [],
+            execution_effect_audit_snapshot=snapshot,
+        ).build_document(),
+    )
+    write_resolved_scenario(compiled, tmp_path)
+    write_generation_manifest(
+        compiled,
+        tmp_path,
+        output_target="default",
+        formats=["zeek_conn"],
+        effect_reconciliation=snapshot.as_dict(),
+    )
+    assert verify_generation_bundle(tmp_path)["effect_reconciliation"] == snapshot.as_dict()
+
+    manifest_path = tmp_path / "GENERATION_MANIFEST.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("effect_reconciliation")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SchemaValidationError, match="effect reconciliation disagree"):
+        verify_generation_bundle(tmp_path)
+
+    write_generation_manifest(
+        compiled,
+        tmp_path,
+        output_target="default",
+        formats=["zeek_conn"],
+        effect_reconciliation=snapshot.as_dict(),
+    )
+    ground_truth = json.loads(ground_truth_path.read_text(encoding="utf-8"))
+    ground_truth.pop("effect_reconciliation")
+    ground_truth_path.write_text(json.dumps(ground_truth), encoding="utf-8")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][GROUND_TRUTH_JSON_FILENAME] = hashlib.sha256(
+        ground_truth_path.read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SchemaValidationError, match="effect reconciliation disagree"):
         verify_generation_bundle(tmp_path)
 
 
