@@ -41,7 +41,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum, StrEnum
-from threading import RLock
+from threading import RLock, get_ident
 from typing import Any, Literal
 
 from evidenceforge.events.contexts import (
@@ -926,6 +926,7 @@ class _ClaimedPointBatchCapability:
     prepared_identity: int
     preparation_id: int
     token: NetworkPointBatchToken
+    claim_thread_id: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -2997,6 +2998,7 @@ class NetworkTransactionRuntime:
                 prepared_identity=id(prepared),
                 preparation_id=capability.preparation_id,
                 token=token,
+                claim_thread_id=get_ident(),
             )
 
     def _close_claimed_point_batch(self, prepared: NetworkPointBatchPreparedCommit) -> None:
@@ -3022,6 +3024,8 @@ class NetworkTransactionRuntime:
             composite = self._claimed_point_batch_commits.get(id(prepared))
             if composite is None or composite.prepared_identity != id(prepared):
                 raise StateError("Network point-batch claim is stale or foreign")
+            if composite.claim_thread_id != get_ident():
+                raise StateError("Network point batch must commit on its claiming thread")
             capability = self._point_batch_capabilities.get(id(composite.token))
             if (
                 capability is None

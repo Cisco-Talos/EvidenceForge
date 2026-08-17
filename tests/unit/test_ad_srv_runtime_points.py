@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import random
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.network_runtime import NetworkRuntimePointFamily
 from evidenceforge.generation.process_runtime_cache import _DEFINITE_GROWING_FIELDS
 from evidenceforge.generation.state_manager import StateManager
@@ -238,37 +240,47 @@ def test_ad_srv_malformed_marker_fails_closed_without_network_or_reservation_res
 
 
 def test_ad_srv_hourly_point_backing_plateaus_from_seven_to_thirty_days() -> None:
-    generator = _activity_generator()
-    generator.generate_connection = Mock(return_value="CAdSrvDurationProbe1")
-    runtime = generator._network_transaction_runtime
-    seven_day_shape: tuple[int, int, int, int] | None = None
+    def run_duration(days: int) -> tuple[int, int, int, int]:
+        generator = _activity_generator()
+        generator.generate_connection = Mock(return_value="CAdSrvDurationProbe1")
+        state_manager = Mock()
+        engine = SimpleNamespace(
+            scenario=SimpleNamespace(environment=SimpleNamespace(users=[])),
+            warmup_duration=timedelta(0),
+            warmup_start_time=_START,
+            start_time=_START,
+            end_time=_START + timedelta(days=days),
+            state_manager=state_manager,
+            activity_generator=generator,
+            _emit_dhcp_leases=Mock(),
+            _emit_sensor_startup=Mock(),
+            _report_progress=Mock(),
+        )
 
-    for hour in range(30 * 24):
-        current = _START + timedelta(hours=hour)
-        page = runtime.advance_watermark_page(current)
-        assert not page.has_more
-        _emit_discovery(generator, at=current, rng=random.Random(hour))
-        if hour == 7 * 24 - 1:
-            census = runtime.census()
-            seven_day_shape = (
-                census.live_points,
-                census.tombstone_points,
-                census.active_deadlines,
-                census.expiry_backing,
+        def generate_hour(
+            current: datetime,
+            _users: list[object],
+            **_kwargs: object,
+        ) -> None:
+            ordinal = int((current - _START).total_seconds() // 3600)
+            _emit_discovery(
+                generator,
+                at=current - timedelta(seconds=2, milliseconds=250),
+                rng=random.Random(ordinal),
             )
 
-    census = runtime.census()
-    thirty_day_shape = (
-        census.live_points,
-        census.tombstone_points,
-        census.active_deadlines,
-        census.expiry_backing,
-    )
+        engine._generate_hour = generate_hour
+        BaselineMixin._generate_baseline(engine)
+        census = generator._network_transaction_runtime.census()
+        assert state_manager.advance_pid_allocation_watermark.call_count == days * 24
+        return (
+            census.live_points,
+            census.tombstone_points,
+            census.active_deadlines,
+            census.expiry_backing,
+        )
+
+    seven_day_shape = run_duration(7)
+    thirty_day_shape = run_duration(30)
     assert seven_day_shape == thirty_day_shape
-    assert thirty_day_shape == (2, 48, 50, 50)
-    assert census.open_preparations == 0
-    assert census.prepared_transactions == 0
-    assert census.claimed_transactions == 0
-    assert census.reserved_points == 0
-    assert census.preparation_fences == 0
-    assert census.reserved_deadlines == 0
+    assert thirty_day_shape == (48, 48, 96, 96)

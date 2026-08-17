@@ -1885,6 +1885,64 @@ def test_point_batch_commit_atomically_publishes_two_points_and_signed_receipt()
         prepared.commit_no_fail()
 
 
+@pytest.mark.parametrize("claimant_commits", [False, True])
+def test_point_batch_commit_is_bound_to_its_claiming_thread(claimant_commits: bool) -> None:
+    """A foreign thread cannot publish or consume the claimant's exact capability."""
+
+    runtime, state, crypto = _runtime()
+    rng = random.Random(1111)
+    before = _authority_snapshot(runtime, state, crypto, rng)
+    batch = runtime.begin_point_batch(
+        stable_id=f"point-batch-thread-owner-{claimant_commits}",
+        linearization_time=_START,
+    )
+    batch.stage_point(
+        NetworkRuntimePointFamily.AD_SRV_DISCOVERY,
+        ("10.0.1.50", "corp.example", 496236, "_ldap._tcp.corp.example"),
+        _START,
+        expires_at=_START + timedelta(hours=1),
+    )
+    token = batch.seal()
+
+    with runtime.claimed_point_batch(token) as prepared:
+        claimed_census = runtime.census()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            foreign_commit = pool.submit(prepared.commit_no_fail)
+            with pytest.raises(StateError, match="claiming thread"):
+                foreign_commit.result(timeout=2.0)
+
+        assert not prepared.committed
+        assert runtime.census() == claimed_census
+        assert (
+            runtime.get_point(
+                NetworkRuntimePointFamily.AD_SRV_DISCOVERY,
+                ("10.0.1.50", "corp.example", 496236, "_ldap._tcp.corp.example"),
+            )
+            is None
+        )
+        if claimant_commits:
+            receipt = prepared.commit_no_fail()
+
+    if claimant_commits:
+        assert prepared.committed
+        assert runtime.authenticates_point_batch_receipt(receipt, token=token)
+        assert (
+            runtime.get_point(
+                NetworkRuntimePointFamily.AD_SRV_DISCOVERY,
+                ("10.0.1.50", "corp.example", 496236, "_ldap._tcp.corp.example"),
+            )
+            == _START
+        )
+        census = runtime.census()
+        assert census.prepared_transactions == 0
+        assert census.claimed_transactions == 0
+        assert census.reserved_points == 0
+        assert census.preparation_fences == 0
+        assert census.reserved_deadlines == 0
+    else:
+        assert _authority_snapshot(runtime, state, crypto, rng) == before
+
+
 def test_point_batch_abandoned_and_exceptional_claims_cancel_without_publication() -> None:
     """Every uncommitted claim exit releases its token, fence, and reservations."""
 

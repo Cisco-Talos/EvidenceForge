@@ -4362,6 +4362,7 @@ class BaselineMixin:
                 allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
                 self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
                 self.activity_generator.advance_process_state_watermark(allocation_cutoff)
+                self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
                 current_hour += timedelta(hours=1)
 
             logger.info(f"Warm-up complete: processed {warmup_count} hours")
@@ -4399,6 +4400,7 @@ class BaselineMixin:
             allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
             self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
             self.activity_generator.advance_process_state_watermark(allocation_cutoff)
+            self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
