@@ -3137,6 +3137,25 @@ def _dns_inclusive_millisecond_distribution(
     )
 
 
+def _email_mta_outbound_process_lead_distribution() -> DistributionSpec:
+    """Return the former uniform 180--850 ms MTA process-lead support."""
+
+    lower = 179.5
+    upper = 850.5
+    return MixtureDistribution(
+        components=(
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=lower, mode=lower, maximum=upper),
+            ),
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=lower, mode=upper, maximum=upper),
+            ),
+        )
+    )
+
+
 def _rdp_inclusive_millisecond_distribution(
     minimum_ms: int,
     maximum_ms: int,
@@ -17610,6 +17629,70 @@ class ActivityGenerator:
             return self._email_server_process_image(system, port=25)
         return "/usr/lib/postfix/sbin/smtp"
 
+    def _sample_email_mta_outbound_process_lead_milliseconds(
+        self,
+        *,
+        hostname: str,
+        image: str,
+        activity_time: datetime,
+    ) -> int:
+        """Sample one outbound-MTA process lead through the exact engine runtime."""
+
+        runtime = self.timing_runtime
+        if type(runtime) not in {TimingRuntime, SourceTimingPlanningRuntime}:
+            raise StateError("Email MTA timing requires the exact engine-owned runtime")
+        if (
+            type(hostname) is not str
+            or not hostname
+            or type(image) is not str
+            or not image
+            or type(activity_time) is not datetime
+        ):
+            raise StateError("Email MTA timing scope must use exact built-in values")
+        normalized_time = ensure_utc(activity_time)
+        lifecycle_id = f"email-mta-outbound:{hostname}:{normalized_time.isoformat()}"
+        sampled = runtime.sampler.sample_value(
+            _email_mta_outbound_process_lead_distribution(),
+            relationship_key="activity.email.mta_outbound_process_lead",
+            scope=TimingScope(
+                stable_id=f"{lifecycle_id}:{image}",
+                host=hostname,
+                source="email_mta",
+                lifecycle_id=lifecycle_id,
+            ),
+            sample_key="process_lead_ms",
+        )
+        return int(sampled + 0.5)
+
+    def _active_email_mta_outbound_process(
+        self,
+        *,
+        system: "System",
+        time: datetime,
+    ) -> int | None:
+        """Return the exact active Postfix SMTP worker without sampling timing."""
+
+        family = service_process_family("postfix")
+        manager_parent = self._profiled_service_manager_parent_pid(
+            system=system,
+            time=time,
+            family=family,
+        )
+        manager_pid = self._active_profiled_service_process(
+            system=system,
+            time=time,
+            spec=family.manager,
+            parent_pid=manager_parent,
+        )
+        if manager_pid is None:
+            return None
+        return self._active_profiled_service_process(
+            system=system,
+            time=time,
+            spec=family.workers["smtp"],
+            parent_pid=manager_pid,
+        )
+
     def _ensure_email_mta_outbound_process(
         self,
         system: "System",
@@ -17622,12 +17705,18 @@ class ActivityGenerator:
             return self._ensure_email_server_process(system, time=time, port=25)
 
         if _get_os_category(system.os) == "linux":
-            rng = random.Random(
-                _stable_seed(
-                    f"email_mta_outbound_process:{system.hostname}:{image}:{time.isoformat()}"
+            active_pid = self._active_email_mta_outbound_process(system=system, time=time)
+            if active_pid is not None:
+                self.state_manager.update_process_activity_time(system.hostname, active_pid, time)
+                self.state_manager.set_current_time(time)
+                return active_pid
+            process_time = time - timedelta(
+                milliseconds=self._sample_email_mta_outbound_process_lead_milliseconds(
+                    hostname=system.hostname,
+                    image=image,
+                    activity_time=time,
                 )
             )
-            process_time = time - timedelta(milliseconds=rng.randint(180, 850))
             if process_time >= time:
                 process_time = time - timedelta(milliseconds=50)
             pid = self._ensure_profiled_service_worker(
@@ -17658,10 +17747,13 @@ class ActivityGenerator:
 
         sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
         parent_pid = sys_pids.get("systemd", sys_pids.get("init", 1))
-        rng = random.Random(
-            _stable_seed(f"email_mta_outbound_process:{system.hostname}:{image}:{time.isoformat()}")
+        process_time = time - timedelta(
+            milliseconds=self._sample_email_mta_outbound_process_lead_milliseconds(
+                hostname=system.hostname,
+                image=image,
+                activity_time=time,
+            )
         )
-        process_time = time - timedelta(milliseconds=rng.randint(180, 850))
         if process_time >= time:
             process_time = time - timedelta(milliseconds=50)
         pid = self.generate_system_process(
