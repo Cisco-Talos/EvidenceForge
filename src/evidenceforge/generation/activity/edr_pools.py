@@ -16,10 +16,11 @@ import re
 import shlex
 import uuid
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay
+from evidenceforge.config.schemas import EdrInstalledSoftwareProduct
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.yaml_loader import load_yaml_file
 
@@ -65,9 +66,13 @@ _USERASSIST_RUNPATHS = (
 )
 _DEFAULT_INSTALLED_SOFTWARE_PRODUCTS = (
     {
+        "product_id": "microsoft-update-health-tools",
         "name": "Microsoft Update Health Tools",
         "publisher": "Microsoft Corporation",
         "version": "5.72.0.0",
+        "build": "5.72.0.0",
+        "architectures": ["neutral"],
+        "scope": "machine",
     },
 )
 _WINDOWS_SERVICE_USERS = {
@@ -112,6 +117,28 @@ _LINUX_SERVICE_USERS = {
     "uucp",
     "www-data",
 }
+
+
+class _InstalledSoftwareRelease(Protocol):
+    """Minimum immutable inventory descriptor consumed by template rendering."""
+
+    name: str
+    publisher: str
+    version: str
+
+
+class _InstalledSoftwareRegistry(Protocol):
+    """Exact compiled inventory access required by production materialization."""
+
+    def count_installed_software_on_host(self, hostname: str) -> int: ...
+
+    def installed_software_on_host_at(
+        self,
+        hostname: str,
+        ordinal: int,
+    ) -> _InstalledSoftwareRelease | None: ...
+
+
 _LINUX_ROOT_ONLY_FILE_PREFIXES = (
     "/var/cache/apt/",
     "/var/lib/apt/",
@@ -180,16 +207,37 @@ def _is_valid_registry_pool(value: Any) -> bool:
     return True
 
 
-def _is_valid_installed_software_products(value: Any) -> bool:
+def _validated_installed_software_products(value: Any) -> list[dict[str, Any]] | None:
+    """Return current typed product mappings or ``None`` for an invalid section."""
+
     if not isinstance(value, list) or len(value) == 0:
-        return False
+        return None
+    normalized: list[dict[str, Any]] = []
+    product_ids: set[str] = set()
+    current_fields = {"product_id", "build", "architectures", "scope"}
     for item in value:
         if not isinstance(item, dict):
-            return False
-        required = ("name", "publisher", "version")
-        if any(not isinstance(item.get(field), str) or not item.get(field) for field in required):
-            return False
-    return True
+            return None
+        present = current_fields & set(item)
+        if present and present != current_fields:
+            missing = ", ".join(sorted(current_fields - present))
+            raise ValueError(
+                "installed software mixes legacy and current fields; add all current fields: "
+                + missing
+            )
+        try:
+            product = EdrInstalledSoftwareProduct.model_validate(item)
+        except ValueError:
+            return None
+        if product.product_id in product_ids:
+            raise ValueError(f"installed software product_id {product.product_id!r} must be unique")
+        product_ids.add(product.product_id)
+        normalized.append(product.model_dump(mode="python"))
+    return normalized
+
+
+def _is_valid_installed_software_products(value: Any) -> bool:
+    return _validated_installed_software_products(value) is not None
 
 
 def _is_valid_ownership_rules(value: Any, marker_key: str) -> bool:
@@ -216,7 +264,6 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
         "registry_mru_filenames": _is_valid_string_list,
         "registry_keys_hkcu": _is_valid_registry_pool,
         "registry_keys_hklm": _is_valid_registry_pool,
-        "installed_software_products": _is_valid_installed_software_products,
         "group_policy_extension_guids": _is_valid_guid_string_list,
         "linux_service_users": _is_valid_string_list,
     }
@@ -230,6 +277,21 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
                 "Invalid EDR pool section %s in overlay-merged config; falling back to package defaults",
                 key,
             )
+    normalized_products = _validated_installed_software_products(
+        merged.get("installed_software_products")
+    )
+    if normalized_products is not None:
+        sanitized["installed_software_products"] = normalized_products
+    else:
+        fallback_products = _validated_installed_software_products(
+            defaults.get("installed_software_products")
+        )
+        if fallback_products is not None:
+            sanitized["installed_software_products"] = fallback_products
+        logger.warning(
+            "Invalid EDR pool section installed_software_products in overlay-merged config; "
+            "falling back to package defaults"
+        )
     candidate_profiles = merged.get("file_side_effect_profiles")
     if isinstance(candidate_profiles, list) and all(
         isinstance(p, dict) for p in candidate_profiles
@@ -378,8 +440,28 @@ def get_dll_pool() -> list[str]:
     return pools.get("dll_pool", [])
 
 
-def _installed_software_product(rng: random.Random) -> dict[str, str]:
+def _installed_software_product(
+    rng: random.Random,
+    *,
+    deployment_registry: _InstalledSoftwareRegistry | None = None,
+    hostname: str = "",
+) -> dict[str, str]:
     """Return one data-driven installed software product template."""
+    if deployment_registry is not None:
+        product_count = deployment_registry.count_installed_software_on_host(hostname)
+        if isinstance(product_count, int) and product_count > 0:
+            ordinal = rng.randrange(product_count)
+            release = deployment_registry.installed_software_on_host_at(hostname, ordinal)
+            if release is None:  # pragma: no cover - count and ordinal are one registry snapshot
+                raise RuntimeError("compiled installed-software count disagrees with exact lookup")
+            return {
+                "name": release.name,
+                "publisher": release.publisher,
+                "version": release.version,
+            }
+
+    # Compatibility-only callers and lightweight registry fixtures do not
+    # carry a compiled inventory. Production compilation always supplies one.
     products = load_edr_pools().get(
         "installed_software_products",
         list(_DEFAULT_INSTALLED_SOFTWARE_PRODUCTS),
@@ -731,10 +813,15 @@ def materialize_edr_template(
     host_os: str = "",
     process_name: str = "",
     occurrence_time: datetime | None = None,
+    deployment_registry: _InstalledSoftwareRegistry | None = None,
 ) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
-    installed_product = _installed_software_product(rng)
+    installed_product = _installed_software_product(
+        rng,
+        deployment_registry=deployment_registry,
+        hostname=host_key,
+    )
     template_lower = template.lower()
     registry_filename = (
         _registry_mru_filename(rng, _registry_artifact_extension(template))
@@ -838,10 +925,15 @@ def materialize_edr_template_group(
     host_os: str = "",
     process_name: str = "",
     occurrence_time: datetime | None = None,
+    deployment_registry: _InstalledSoftwareRegistry | None = None,
 ) -> tuple[str, ...]:
     """Materialize related templates with one shared placeholder context."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
-    installed_product = _installed_software_product(rng)
+    installed_product = _installed_software_product(
+        rng,
+        deployment_registry=deployment_registry,
+        hostname=host_key,
+    )
     combined_lower = "\n".join(templates).lower()
     registry_filename = (
         _registry_mru_filename(rng, _registry_artifact_extension("\n".join(templates)))
@@ -951,6 +1043,7 @@ def materialize_registry_effect(
     dns_server_ip: str = "",
     host_os: str = "",
     process_name: str = "",
+    deployment_registry: _InstalledSoftwareRegistry | None = None,
 ) -> tuple[str, str, str, Literal["string", "dword", "qword", "binary"]]:
     """Materialize one timestamp-aware canonical registry effect."""
     key, value_name, value = materialize_edr_template_group(
@@ -963,6 +1056,7 @@ def materialize_registry_effect(
         host_os=host_os,
         process_name=process_name,
         occurrence_time=occurrence_time,
+        deployment_registry=deployment_registry,
     )
     target = f"{key}\\{value_name}"
     return key, value_name, value, registry_value_type(target, value)

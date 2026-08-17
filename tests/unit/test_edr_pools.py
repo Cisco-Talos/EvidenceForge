@@ -1041,9 +1041,13 @@ class TestTemplateMaterialization:
 
     def test_materializes_installed_product_identity_stably_per_host(self):
         product = {
+            "product_id": "contoso-endpoint-agent",
             "name": "Contoso Endpoint Agent",
             "publisher": "Contoso Ltd.",
             "version": "8.4.2",
+            "build": "8.4.2",
+            "architectures": ["neutral"],
+            "scope": "machine",
         }
         with patch(
             "evidenceforge.generation.activity.edr_pools.load_edr_pools",
@@ -1076,9 +1080,13 @@ class TestTemplateMaterialization:
 
     def test_materializes_installed_product_related_values_together(self):
         product = {
+            "product_id": "contoso-endpoint-agent",
             "name": "Contoso Endpoint Agent",
             "publisher": "Contoso Ltd.",
             "version": "8.4.2",
+            "build": "8.4.2",
+            "architectures": ["neutral"],
+            "scope": "machine",
         }
         with patch(
             "evidenceforge.generation.activity.edr_pools.load_edr_pools",
@@ -1097,6 +1105,48 @@ class TestTemplateMaterialization:
         assert "{" in key and "}" in key
         assert publisher == "Contoso Ltd."
         assert version == "8.4.2"
+
+    def test_materializes_installed_product_from_exact_compiled_inventory(self):
+        class Release:
+            name = "Compiled Endpoint Agent"
+            publisher = "Compiled Software Ltd."
+            version = "12.7.4"
+
+        class Registry:
+            def __init__(self) -> None:
+                self.ordinals: list[int] = []
+
+            def count_installed_software_on_host(self, hostname: str) -> int:
+                assert hostname == "WS-COMPILED-01"
+                return 1
+
+            def installed_software_on_host_at(self, hostname: str, ordinal: int):
+                assert hostname == "WS-COMPILED-01"
+                self.ordinals.append(ordinal)
+                return Release()
+
+        registry = Registry()
+        templates = (
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+            r"\{{{installed_product_guid}}}",
+            "{installed_product_publisher}",
+            "{installed_product_version}",
+        )
+        with patch(
+            "evidenceforge.generation.activity.edr_pools._is_valid_installed_software_products",
+            side_effect=AssertionError("legacy installed-software catalog was consulted"),
+        ):
+            key, publisher, version = materialize_edr_template_group(
+                templates,
+                random.Random(5),
+                host_key="WS-COMPILED-01",
+                deployment_registry=registry,
+            )
+
+        assert registry.ordinals == [0]
+        assert "{" in key and "}" in key
+        assert publisher == "Compiled Software Ltd."
+        assert version == "12.7.4"
 
     def test_materializes_defender_platform_with_product_version_shape(self):
         import random

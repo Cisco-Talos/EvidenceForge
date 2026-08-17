@@ -13,7 +13,7 @@ import yaml
 from pydantic import ValidationError
 
 from evidenceforge.config import get_activity_directory, get_personas_directory
-from evidenceforge.config.schemas import ApplicationEntry
+from evidenceforge.config.schemas import ApplicationCatalogConfig, ApplicationEntry
 from evidenceforge.models.exceptions import PackError
 from evidenceforge.models.scenario import Persona
 from evidenceforge.utils.yaml_loader import load_yaml_text
@@ -58,23 +58,16 @@ def _packaged_builtin_applications() -> list[ApplicationEntry]:
     """Return validated application entries from immutable packaged defaults."""
 
     document = _packaged_yaml_mapping("application_catalog.yaml")
-    applications = document.get("applications")
-    if not isinstance(applications, list):
-        raise PackError("packaged application catalog must define an applications list")
-    entries: list[ApplicationEntry] = []
+    try:
+        catalog = ApplicationCatalogConfig.model_validate(document)
+    except ValidationError as exc:
+        raise PackError(f"invalid packaged application catalog: {exc}") from exc
     identifiers: set[str] = set()
-    for index, raw_entry in enumerate(applications):
-        try:
-            entry = ApplicationEntry.model_validate(raw_entry)
-        except ValidationError as exc:
-            raise PackError(
-                f"invalid packaged application catalog entry applications[{index}]: {exc}"
-            ) from exc
+    for entry in catalog.applications:
         if entry.id in identifiers:
             raise PackError(f"packaged application catalog contains duplicate ID {entry.id!r}")
         identifiers.add(entry.id)
-        entries.append(entry)
-    return entries
+    return catalog.applications
 
 
 def packaged_builtin_application_ids() -> set[str]:
