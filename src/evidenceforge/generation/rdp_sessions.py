@@ -13,17 +13,21 @@ leases, and bounded tombstones are retained.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import secrets
 import sys
 import zlib
 from array import array
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from struct import Struct
 from threading import Condition, Lock, RLock
+from typing import Literal
 
 from evidenceforge.events.application import (
     ApplicationChannelBudget,
@@ -45,7 +49,11 @@ from evidenceforge.events.rdp import (
     RdpWatermarkResult,
 )
 from evidenceforge.generation.application_channels import (
+    ApplicationChannelAdmissionReceipt,
+    ApplicationChannelAdmissionResult,
+    ApplicationChannelAdmissionToken,
     ApplicationChannelCloseToken,
+    ApplicationChannelPreparedCommit,
     ApplicationChannelRegistry,
 )
 from evidenceforge.generation.indexes import (
@@ -75,6 +83,207 @@ _GENERATION_HEADER = Struct(">Iqqqqq2H")
 
 class RdpSessionAdmissionError(StateError):
     """An RDP action cannot fit before its immutable lifecycle/window fence."""
+
+
+@dataclass(frozen=True, slots=True)
+class RdpSessionAdmissionToken:
+    """Opaque reservation for one RDP transport-generation admission."""
+
+    kind: Literal["open", "reconnect"]
+    application_token: ApplicationChannelAdmissionToken = field(repr=False)
+    session: RdpSessionSnapshot
+    operation_id: str
+    transport_ids: tuple[str, ...]
+    expected_generation: int
+    _manager_token: int = field(repr=False, default=0)
+    _reservation_id: int = field(repr=False, default=0)
+    _owner_shard_id: int = field(repr=False, default=0)
+    _affinity_partition_id: int = field(repr=False, default=0)
+    _expected_handle: int | None = field(repr=False, default=None)
+    _integrity_token: str = field(repr=False, default="")
+
+    @property
+    def linearization_time(self) -> datetime:
+        """Return the canonical frontier protected by this admission."""
+
+        return self.application_token.linearization_time
+
+    @property
+    def publication_token(self) -> str:
+        """Return the stable opaque manager capability binding."""
+
+        return self._integrity_token
+
+
+def _rdp_admission_integrity_token(
+    authority_secret: bytes,
+    token: RdpSessionAdmissionToken,
+) -> str:
+    """Authenticate the nested common token and exact RDP sidecar preimage."""
+
+    canonical = repr(
+        (
+            "rdp-session-admission-v1",
+            token.kind,
+            token.application_token.publication_token,
+            token.session,
+            token.operation_id,
+            token.transport_ids,
+            token.expected_generation,
+            token._manager_token,
+            token._reservation_id,
+            token._owner_shard_id,
+            token._affinity_partition_id,
+            token._expected_handle,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class _RdpAdmissionCapability:
+    """Manager-owned trusted locator for one prepared RDP admission."""
+
+    token_id: int
+    reservation_id: int
+    integrity_token: str
+    application_token: ApplicationChannelAdmissionToken
+    trusted_token: RdpSessionAdmissionToken
+    expected_snapshot: RdpSessionSnapshot | None
+    expected_handle: int | None
+    logical_route_key: int
+    affinity_route_key: int
+    linearization_time: datetime
+
+
+def rdp_session_sidecar_result_digest(session: RdpSessionSnapshot) -> str:
+    """Return a stable digest over one exact frozen RDP sidecar outcome."""
+
+    return hashlib.sha256(repr(("rdp-session-sidecar-result-v1", session)).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class RdpSessionAdmissionReceipt:
+    """Authenticated proof of one committed RDP/common-channel admission."""
+
+    manager_kind: Literal["rdp"]
+    manager_id: str
+    kind: Literal["open", "reconnect"]
+    publication_token: str
+    application_receipt: ApplicationChannelAdmissionReceipt
+    application_receipt_token: str
+    logical_session_id: str
+    channel_id: str
+    operation_id: str
+    transport_ids: tuple[str, ...]
+    expected_generation: int
+    session: RdpSessionSnapshot
+    sidecar_result_digest: str
+    _manager_token: int = field(repr=False, default=0)
+    _integrity_token: str = field(repr=False, default="")
+
+    @property
+    def receipt_token(self) -> str:
+        """Return the opaque keyed proof over the coupled result."""
+
+        return self._integrity_token
+
+
+def _rdp_admission_receipt_integrity_token(
+    authority_secret: bytes,
+    receipt: RdpSessionAdmissionReceipt,
+) -> str:
+    """Authenticate exact manager, common receipt, and RDP result membership."""
+
+    canonical = repr(
+        (
+            "rdp-session-admission-receipt-v1",
+            receipt.manager_kind,
+            receipt.manager_id,
+            receipt.kind,
+            receipt.publication_token,
+            receipt.application_receipt,
+            receipt.application_receipt_token,
+            receipt.logical_session_id,
+            receipt.channel_id,
+            receipt.operation_id,
+            receipt.transport_ids,
+            receipt.expected_generation,
+            receipt.session,
+            receipt.sidecar_result_digest,
+            receipt._manager_token,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class RdpSessionAdmissionResult:
+    """Frozen RDP outcome plus authenticated common and manager proofs."""
+
+    session: RdpSessionSnapshot
+    application: ApplicationChannelAdmissionResult
+    receipt: RdpSessionAdmissionReceipt
+
+
+class RdpSessionPreparedCommit:
+    """No-lock-body capability for one final RDP/common-channel commit."""
+
+    __slots__ = (
+        "_active",
+        "_application_commit",
+        "_committed",
+        "_manager",
+        "_result",
+        "_token",
+    )
+
+    def __init__(
+        self,
+        manager: RdpReconnectStateManager,
+        token: RdpSessionAdmissionToken,
+        application_commit: ApplicationChannelPreparedCommit,
+    ) -> None:
+        self._manager = manager
+        self._token = token
+        self._application_commit = application_commit
+        self._active = True
+        self._committed = False
+        self._result: RdpSessionAdmissionResult | None = None
+
+    @property
+    def committed(self) -> bool:
+        """Return whether this exact manager claim has committed."""
+
+        return self._committed
+
+    @property
+    def result(self) -> RdpSessionAdmissionResult | None:
+        """Return the frozen result after commit."""
+
+        return self._result
+
+    def commit_no_fail(self) -> RdpSessionAdmissionResult:
+        """Publish the fully claimed common admission and RDP sidecar mutation."""
+
+        if not self._active:
+            raise StateError("RDP prepared commit is no longer active")
+        if self._committed:
+            raise StateError("RDP prepared admission was already committed")
+        self._result = self._manager._commit_claimed_admission(
+            self._token,
+            self._application_commit,
+        )
+        self._committed = True
+        return self._result
+
+    def commit(self) -> RdpSessionAdmissionResult:
+        """Compatibility alias for :meth:`commit_no_fail`."""
+
+        return self.commit_no_fail()
+
+    def _close(self) -> None:
+        self._active = False
 
 
 def _compress_row(row: bytes) -> bytes:
@@ -141,6 +350,19 @@ def _operation_id(logical_session_id: str, generation: int, ordinal: int) -> str
         f"rdp-operation-v1\0{logical_session_id}\0{generation}\0{ordinal}".encode()
     ).hexdigest()
     return f"rdp-operation-{digest[:32]}"
+
+
+def _transport_operation_id(
+    logical_session_id: str,
+    generation: int,
+    transport_id: str,
+) -> str:
+    """Return the internal common-channel operation for one transport generation."""
+
+    digest = hashlib.sha256(
+        f"rdp-transport-operation-v1\0{logical_session_id}\0{generation}\0{transport_id}".encode()
+    ).hexdigest()
+    return f"rdp-transport-operation-{digest[:32]}"
 
 
 def _transport_affinity_digest(logical_affinity_digest: str, channel_id: str) -> str:
@@ -1067,12 +1289,80 @@ class RdpReconnectStateManager:
         self._route_compaction_cursor = 0
         self._shard_compaction_cursor = 0
         self._expiry_compaction_cursor = 0
+        self._prepared_lock = RLock()
+        self._admission_secret = secrets.token_bytes(32)
+        self._manager_id = f"rdp-manager-{secrets.token_hex(16)}"
+        self._next_prepared_reservation_id = 1
+        self._prepared_admissions: dict[int, RdpSessionAdmissionToken] = {}
+        self._prepared_capabilities: dict[int, _RdpAdmissionCapability] = {}
+        self._claimed_admissions: set[int] = set()
+        self._prepared_logical_session_ids: dict[str, int] = {}
+        self._prepared_affinity_routes: dict[tuple[int, int], int] = {}
+        self._mutating_logical_session_ids: dict[str, int] = {}
 
     @property
     def application_registry(self) -> ApplicationChannelRegistry:
         """Return the injected shared application-channel registry."""
 
         return self._application
+
+    @property
+    def manager_id(self) -> str:
+        """Return the stable opaque identity of this manager instance."""
+
+        return self._manager_id
+
+    def authenticates_admission_token(self, token: RdpSessionAdmissionToken) -> bool:
+        """Return whether one intact RDP/common admission token remains active."""
+
+        if not isinstance(token, RdpSessionAdmissionToken):
+            return False
+        with self._prepared_lock:
+            try:
+                capability = self._active_prepared_admission_locked(token)
+            except StateError:
+                return False
+        return self._application.authenticates_admission_token(capability.application_token)
+
+    def authenticates_admission_receipt(self, receipt: RdpSessionAdmissionReceipt) -> bool:
+        """Return whether this manager issued the exact coupled commit receipt."""
+
+        if not isinstance(receipt, RdpSessionAdmissionReceipt):
+            return False
+        if (
+            receipt.manager_kind != "rdp"
+            or receipt.manager_id != self._manager_id
+            or receipt._manager_token != id(self)
+            or not isinstance(receipt.application_receipt, ApplicationChannelAdmissionReceipt)
+            or not isinstance(receipt.session, RdpSessionSnapshot)
+        ):
+            return False
+        if not self._application.authenticates_admission_receipt(receipt.application_receipt):
+            return False
+        expected = _rdp_admission_receipt_integrity_token(self._admission_secret, receipt)
+        if not hmac.compare_digest(receipt._integrity_token, expected):
+            return False
+        application = receipt.application_receipt
+        current_transport_id = receipt.session.generation.binding.transport_id
+        if receipt.kind == "open" and receipt.transport_ids != (current_transport_id,):
+            return False
+        if receipt.kind == "reconnect" and (
+            len(receipt.transport_ids) != 2 or receipt.transport_ids[0] == receipt.transport_ids[1]
+        ):
+            return False
+        return (
+            receipt.application_receipt_token == application.receipt_token
+            and receipt.logical_session_id == receipt.session.logical_session_id
+            and receipt.channel_id
+            == application.channel_id
+            == receipt.session.generation.channel_id
+            and receipt.operation_id == application.operation_id
+            and receipt.expected_generation == receipt.session.generation.ordinal
+            and receipt.transport_ids[-1]
+            == application.snapshot.identity.binding.transport_id
+            == current_transport_id
+            and receipt.sidecar_result_digest == rdp_session_sidecar_result_digest(receipt.session)
+        )
 
     def _owner_id(self, logical_session_id: str) -> str:
         return f"rdp-logical-session:{logical_session_id.strip()}"
@@ -1195,6 +1485,24 @@ class RdpReconnectStateManager:
             return None
         return handle, snapshot
 
+    @staticmethod
+    def _lookup_prepared_locked(
+        shard: _RdpSessionShard,
+        logical_session_id: str,
+    ) -> tuple[int, RdpSessionSnapshot] | None:
+        """Read one exact preimage without incrementing public lookup telemetry."""
+
+        handle = shard.session_routes.get_digest(
+            RdpReconnectStateManager._logical_route_key(logical_session_id)
+        )
+        if handle is None:
+            return None
+        try:
+            snapshot = shard.sessions.get_by_handle(handle)
+        except KeyError:
+            return None
+        return (handle, snapshot) if snapshot.logical_session_id == logical_session_id else None
+
     def _replace_snapshot_locked(
         self,
         shard: _RdpSessionShard,
@@ -1257,89 +1565,520 @@ class RdpReconnectStateManager:
         ):
             return False
         channel = self._application.get(generation.channel_id)
-        return channel is not None and channel.identity.budget == plan.budget
+        if channel is None:
+            return False
+        common_budget = channel.identity.budget
+        return (
+            common_budget.initiator_bytes == plan.budget.initiator_bytes
+            and common_budget.responder_bytes == plan.budget.responder_bytes
+            and common_budget.operations == plan.budget.operations + 1
+        )
+
+    def _prepared_channel_identity(
+        self,
+        identity: RdpLogicalSessionIdentity,
+        transport: RdpTransportPlan,
+    ) -> ApplicationChannelIdentity:
+        """Build the common identity with one private transport-operation slot."""
+
+        common = self._channel_identity(identity, transport)
+        return replace(
+            common,
+            budget=ApplicationChannelBudget(
+                initiator_bytes=transport.budget.initiator_bytes,
+                responder_bytes=transport.budget.responder_bytes,
+                operations=transport.budget.operations + 1,
+            ),
+        )
+
+    @staticmethod
+    def _transport_reservation(
+        identity: RdpLogicalSessionIdentity,
+        transport: RdpTransportPlan,
+        generation: int,
+    ) -> ApplicationOperationReservation:
+        """Represent one physical generation as a completed common operation."""
+
+        return ApplicationOperationReservation(
+            operation_id=_transport_operation_id(
+                identity.logical_session_id,
+                generation,
+                transport.binding.transport_id,
+            ),
+            channel_id=transport.channel_id,
+            ordinal=0,
+            started_at=transport.connected_at,
+            ended_at=transport.connected_at,
+        )
+
+    @contextmanager
+    def _session_mutation(self, logical_session_id: str) -> Iterator[None]:
+        """Fence ordinary sidecar mutations against prepared admission claims."""
+
+        canonical_id = logical_session_id.strip()
+        with self._gate.mutation():
+            with self._prepared_lock:
+                if canonical_id in self._prepared_logical_session_ids:
+                    raise StateError(
+                        f"RDP logical session {canonical_id!r} has a prepared admission"
+                    )
+                self._mutating_logical_session_ids[canonical_id] = (
+                    self._mutating_logical_session_ids.get(canonical_id, 0) + 1
+                )
+            try:
+                yield
+            finally:
+                with self._prepared_lock:
+                    remaining = self._mutating_logical_session_ids[canonical_id] - 1
+                    if remaining:
+                        self._mutating_logical_session_ids[canonical_id] = remaining
+                    else:
+                        self._mutating_logical_session_ids.pop(canonical_id)
+
+    def _active_prepared_admission_locked(
+        self,
+        token: RdpSessionAdmissionToken,
+    ) -> _RdpAdmissionCapability:
+        """Return the manager-owned capability for one intact active token."""
+
+        capability = self._prepared_capabilities.get(id(token))
+        if capability is None:
+            if token._manager_token != id(self):
+                raise StateError("RDP admission token belongs to another manager")
+            raise StateError("RDP admission token is stale or already consumed")
+        active = self._prepared_admissions.get(capability.reservation_id)
+        if active is not token:
+            raise StateError("RDP admission token is stale or already consumed")
+        if token.application_token is not capability.application_token:
+            raise StateError("RDP token no longer binds its exact common capability")
+        expected = _rdp_admission_integrity_token(self._admission_secret, token)
+        if not hmac.compare_digest(token._integrity_token, capability.integrity_token) or not (
+            hmac.compare_digest(expected, capability.integrity_token)
+        ):
+            raise StateError("RDP admission token integrity validation failed")
+        return capability
+
+    def _release_prepared_capability_locked(
+        self,
+        capability: _RdpAdmissionCapability,
+    ) -> None:
+        """Release sidecar reservations using manager-owned immutable keys."""
+
+        active = self._prepared_admissions.pop(capability.reservation_id, None)
+        retained = self._prepared_capabilities.pop(capability.token_id, None)
+        if active is None or retained is not capability:
+            return
+        self._claimed_admissions.discard(capability.reservation_id)
+        logical_id = capability.trusted_token.session.logical_session_id
+        if self._prepared_logical_session_ids.get(logical_id) == capability.reservation_id:
+            self._prepared_logical_session_ids.pop(logical_id)
+        affinity_key = (
+            capability.trusted_token._affinity_partition_id,
+            capability.affinity_route_key,
+        )
+        if self._prepared_affinity_routes.get(affinity_key) == capability.reservation_id:
+            self._prepared_affinity_routes.pop(affinity_key)
+
+    def _validate_prepared_sidecar_locked(
+        self,
+        capability: _RdpAdmissionCapability,
+    ) -> None:
+        """Verify the exact current RDP state against a trusted preimage."""
+
+        token = capability.trusted_token
+        session = token.session
+        if token.expected_generation != session.generation.ordinal:
+            raise StateError("Prepared RDP result generation changed")
+        if token.operation_id != token.application_token.reservation.operation_id:
+            raise StateError("Prepared RDP transport operation changed")
+        expected_transport_count = 1 if token.kind == "open" else 2
+        if len(token.transport_ids) != expected_transport_count:
+            raise StateError("Prepared RDP transport membership changed")
+        if token.transport_ids[-1] != session.generation.binding.transport_id:
+            raise StateError("Prepared RDP current transport changed")
+        shard = self._shards.get(token._owner_shard_id)
+        affinity_route = self._affinity_partitions[token._affinity_partition_id]
+        if token.kind == "open":
+            if capability.expected_snapshot is not None or capability.expected_handle is not None:
+                raise StateError("Prepared RDP open carries an existing-session preimage")
+            if shard is not None:
+                with shard.lock:
+                    if self._lookup_prepared_locked(shard, session.logical_session_id) is not None:
+                        raise StateError("Prepared RDP logical session became occupied")
+                    if shard.session_routes.get_digest(capability.logical_route_key) is not None:
+                        raise StateError("Prepared RDP logical route became occupied")
+            if affinity_route is not None:
+                with affinity_route.lock:
+                    if affinity_route.routes.get_digest(capability.affinity_route_key) is not None:
+                        raise StateError("Prepared RDP affinity became occupied")
+            return
+
+        if capability.expected_snapshot is None or capability.expected_handle is None:
+            raise StateError("Prepared RDP reconnect lacks its prior snapshot")
+        if (
+            token.transport_ids[0] != capability.expected_snapshot.generation.binding.transport_id
+            or token.transport_ids[0] == token.transport_ids[1]
+            or token._expected_handle != capability.expected_handle
+        ):
+            raise StateError("Prepared RDP reconnect prior transport preimage changed")
+        if shard is None:
+            raise StateError("Prepared RDP reconnect session disappeared")
+        with shard.lock:
+            found = self._lookup_prepared_locked(shard, session.logical_session_id)
+            if found is None:
+                raise StateError("Prepared RDP reconnect session disappeared")
+            handle, current = found
+            if handle != capability.expected_handle or current != capability.expected_snapshot:
+                raise StateError("Prepared RDP reconnect preimage changed")
+
+    def _register_prepared_admission_locked(
+        self,
+        token: RdpSessionAdmissionToken,
+        *,
+        expected_snapshot: RdpSessionSnapshot | None,
+        expected_handle: int | None,
+    ) -> None:
+        """Retain a trusted immutable token after the common reservation succeeds."""
+
+        logical_id = token.session.logical_session_id
+        affinity_key = (
+            token._affinity_partition_id,
+            self._affinity_route_key(token.session.identity.affinity),
+        )
+        if logical_id in self._prepared_logical_session_ids:
+            raise StateError(f"RDP logical session {logical_id!r} already has a prepared admission")
+        if affinity_key in self._prepared_affinity_routes:
+            raise StateError("RDP affinity already has a prepared admission")
+        if logical_id in self._mutating_logical_session_ids:
+            raise StateError(f"RDP logical session {logical_id!r} is being mutated")
+        if token.linearization_time < self._watermark:
+            raise StateError("RDP prepared admission starts behind the canonical watermark")
+        expected = _rdp_admission_integrity_token(self._admission_secret, token)
+        if not hmac.compare_digest(token._integrity_token, expected):
+            raise StateError("RDP admission token integrity validation failed")
+        capability = _RdpAdmissionCapability(
+            token_id=id(token),
+            reservation_id=token._reservation_id,
+            integrity_token=expected,
+            application_token=token.application_token,
+            trusted_token=deepcopy(token),
+            expected_snapshot=expected_snapshot,
+            expected_handle=expected_handle,
+            logical_route_key=self._logical_route_key(logical_id),
+            affinity_route_key=self._affinity_route_key(token.session.identity.affinity),
+            linearization_time=token.linearization_time,
+        )
+        self._validate_prepared_sidecar_locked(capability)
+        self._prepared_admissions[capability.reservation_id] = token
+        self._prepared_capabilities[capability.token_id] = capability
+        self._prepared_logical_session_ids[logical_id] = capability.reservation_id
+        self._prepared_affinity_routes[affinity_key] = capability.reservation_id
 
     def open_session(
         self,
         identity: RdpLogicalSessionIdentity,
         transport: RdpTransportPlan,
     ) -> RdpSessionSnapshot:
-        """Create one logical session and its immutable generation zero."""
+        """Compatibility wrapper that commits one prepared generation-zero admission."""
 
-        with self._gate.mutation():
-            started_at = self._require_window_time(identity.started_at, "RDP started_at")
-            self._reject_behind_watermark(started_at, "session open")
-            if identity.hard_deadline > self._window_end:
-                raise StateError("RDP hard_deadline must be inside the generation window")
-            if transport.connected_at != started_at:
-                raise StateError("Initial RDP transport must connect at logical-session start")
-            shard = self._shard(identity.logical_session_id, create=True)
-            affinity_route = self._affinity_partition(identity.affinity, create=True)
-            assert shard is not None and affinity_route is not None
-            with _acquire_stable_locks(
-                [self._route_lock_entry(affinity_route), self._shard_lock_entry(shard)]
+        existing = self.get(identity.logical_session_id)
+        if existing is not None:
+            if (
+                existing.identity == identity
+                and existing.state is RdpSessionState.CONNECTED
+                and existing.generation.ordinal == 0
+                and self._same_transport_plan(existing.generation, transport)
             ):
-                existing = self._lookup_locked(shard, identity.logical_session_id)
-                logical_route_key = self._logical_route_key(identity.logical_session_id)
-                if (
-                    existing is None
-                    and shard.session_routes.get_digest(logical_route_key) is not None
-                ):
-                    raise StateError("RDP logical-session route token collision")
-                if existing is not None:
-                    _handle, snapshot = existing
-                    if (
-                        snapshot.identity == identity
-                        and snapshot.state is RdpSessionState.CONNECTED
-                        and snapshot.generation.ordinal == 0
-                        and self._same_transport_plan(snapshot.generation, transport)
-                    ):
-                        return snapshot
-                    raise StateError(
-                        f"Duplicate RDP logical_session_id {identity.logical_session_id!r}"
-                    )
-                affinity_route_key = self._affinity_route_key(identity.affinity)
-                routed = affinity_route.routes.get_digest(affinity_route_key)
-                if routed is not None:
-                    raise StateError(
-                        "RDP affinity already belongs to a retained logical session "
-                        "or collided with its compact route token"
-                    )
+                return existing
+            raise StateError(f"Duplicate RDP logical_session_id {identity.logical_session_id!r}")
+        token = self.prepare_open_session(identity, transport)
+        with self.prepared_admission(token) as prepared:
+            return prepared.commit_no_fail().session
 
-                channel, close_token = self._application.open_channel_with_token(
-                    self._channel_identity(identity, transport)
-                )
-                generation = RdpTransportGeneration(
+    def prepare_open_session(
+        self,
+        identity: RdpLogicalSessionIdentity,
+        transport: RdpTransportPlan,
+    ) -> RdpSessionAdmissionToken:
+        """Reserve generation zero without publishing common or RDP state."""
+
+        started_at = self._require_window_time(identity.started_at, "RDP started_at")
+        self._reject_behind_watermark(started_at, "session open")
+        if identity.hard_deadline > self._window_end:
+            raise StateError("RDP hard_deadline must be inside the generation window")
+        if transport.connected_at != started_at:
+            raise StateError("Initial RDP transport must connect at logical-session start")
+        logical_id = identity.logical_session_id
+        logical_route_key = self._logical_route_key(logical_id)
+        owner_shard_id = logical_route_key % self._shard_count
+        affinity_partition_id = self.affinity_partition_id(identity.affinity)
+        affinity_route_key = self._affinity_route_key(identity.affinity)
+        with self._gate.mutation(), self._prepared_lock:
+            if logical_id in self._prepared_logical_session_ids:
+                raise StateError(f"RDP logical session {logical_id!r} has a prepared admission")
+            if logical_id in self._mutating_logical_session_ids:
+                raise StateError(f"RDP logical session {logical_id!r} is being mutated")
+            shard = self._shards.get(owner_shard_id)
+            if shard is not None:
+                with shard.lock:
+                    existing = self._lookup_prepared_locked(shard, logical_id)
+                    if existing is not None:
+                        raise StateError(f"Duplicate RDP logical_session_id {logical_id!r}")
+                    if shard.session_routes.get_digest(logical_route_key) is not None:
+                        raise StateError("RDP logical-session route token collision")
+            affinity_route = self._affinity_partitions[affinity_partition_id]
+            if affinity_route is not None:
+                with affinity_route.lock:
+                    if affinity_route.routes.get_digest(affinity_route_key) is not None:
+                        raise StateError(
+                            "RDP affinity already belongs to a retained logical session "
+                            "or collided with its compact route token"
+                        )
+
+        common_identity = self._prepared_channel_identity(identity, transport)
+        reservation = self._transport_reservation(identity, transport, 0)
+        application_token = self._application.prepare_open_channel_with_completed_operation(
+            common_identity,
+            reservation,
+        )
+        try:
+            session = RdpSessionSnapshot(
+                identity=identity,
+                state=RdpSessionState.CONNECTED,
+                generation=RdpTransportGeneration(
                     ordinal=0,
                     channel_id=transport.channel_id,
                     binding=transport.binding,
                     connected_at=transport.connected_at,
-                    idle_deadline=channel.idle_deadline,
+                    idle_deadline=min(
+                        transport.connected_at + identity.idle_timeout,
+                        common_identity.hard_deadline,
+                    ),
+                ),
+                last_transition_at=started_at,
+            )
+            with self._gate.mutation(), self._prepared_lock:
+                reservation_id = self._next_prepared_reservation_id
+                self._next_prepared_reservation_id += 1
+                token = RdpSessionAdmissionToken(
+                    kind="open",
+                    application_token=application_token,
+                    session=session,
+                    operation_id=reservation.operation_id,
+                    transport_ids=(transport.binding.transport_id,),
+                    expected_generation=0,
+                    _manager_token=id(self),
+                    _reservation_id=reservation_id,
+                    _owner_shard_id=owner_shard_id,
+                    _affinity_partition_id=affinity_partition_id,
                 )
-                snapshot = RdpSessionSnapshot(
-                    identity=identity,
-                    state=RdpSessionState.CONNECTED,
-                    generation=generation,
-                    last_transition_at=started_at,
+                token = replace(
+                    token,
+                    _integrity_token=_rdp_admission_integrity_token(
+                        self._admission_secret,
+                        token,
+                    ),
                 )
-                handle = shard.sessions.insert(snapshot)
+                self._register_prepared_admission_locked(
+                    token,
+                    expected_snapshot=None,
+                    expected_handle=None,
+                )
+                return token
+        except (StateError, ValueError):
+            self._application.cancel_prepared_admission(application_token)
+            raise
+
+    def cancel_prepared_admission(self, token: RdpSessionAdmissionToken) -> bool:
+        """Cancel one intact, unclaimed RDP/common reservation."""
+
+        with self._gate.mutation(), self._prepared_lock:
+            capability = self._prepared_capabilities.get(id(token))
+            if capability is None:
+                return False
+            try:
+                capability = self._active_prepared_admission_locked(token)
+            except StateError:
+                self._application.cancel_prepared_admission(capability.application_token)
+                self._release_prepared_capability_locked(capability)
+                raise
+            if capability.reservation_id in self._claimed_admissions:
+                return False
+            if not self._application.cancel_prepared_admission(capability.application_token):
+                self._release_prepared_capability_locked(capability)
+                raise StateError("RDP/common prepared admission state diverged during cancellation")
+            self._release_prepared_capability_locked(capability)
+            return True
+
+    @contextmanager
+    def prepared_admission(
+        self,
+        token: RdpSessionAdmissionToken,
+    ) -> Iterator[RdpSessionPreparedCommit]:
+        """Claim a coupled RDP/common admission without retaining caller-body locks."""
+
+        capability = self._claim_prepared_admission(token)
+        try:
+            with self._application.prepared_admission(
+                capability.application_token
+            ) as application_commit:
+                prepared = RdpSessionPreparedCommit(self, token, application_commit)
+                try:
+                    yield prepared
+                finally:
+                    prepared._close()
+        finally:
+            with self._gate.mutation(), self._prepared_lock:
+                retained = self._prepared_capabilities.get(capability.token_id)
+                if retained is capability:
+                    self._release_prepared_capability_locked(capability)
+
+    def _claim_prepared_admission(
+        self,
+        token: RdpSessionAdmissionToken,
+    ) -> _RdpAdmissionCapability:
+        """Revalidate and claim one token in a short manager-only section."""
+
+        with self._gate.mutation(), self._prepared_lock:
+            capability = self._prepared_capabilities.get(id(token))
+            try:
+                capability = self._active_prepared_admission_locked(token)
+            except StateError:
+                if capability is not None:
+                    self._application.cancel_prepared_admission(capability.application_token)
+                    self._release_prepared_capability_locked(capability)
+                raise
+            if capability.reservation_id in self._claimed_admissions:
+                raise StateError("RDP admission token is already claimed")
+            if capability.linearization_time < self._watermark:
+                self._application.cancel_prepared_admission(capability.application_token)
+                self._release_prepared_capability_locked(capability)
+                raise StateError("RDP prepared admission starts behind the canonical watermark")
+            logical_id = capability.trusted_token.session.logical_session_id
+            if logical_id in self._mutating_logical_session_ids:
+                raise StateError("RDP logical session is being mutated during admission claim")
+            self._validate_prepared_sidecar_locked(capability)
+            if not self._application.authenticates_admission_token(capability.application_token):
+                self._release_prepared_capability_locked(capability)
+                raise StateError("RDP prepared admission lost its common capability")
+            self._active_prepared_admission_locked(token)
+            self._claimed_admissions.add(capability.reservation_id)
+            return capability
+
+    def _commit_claimed_admission(
+        self,
+        token: RdpSessionAdmissionToken,
+        application_commit: ApplicationChannelPreparedCommit,
+    ) -> RdpSessionAdmissionResult:
+        """Commit one fully claimed common admission and primitive RDP sidecar."""
+
+        with self._gate.mutation(), self._prepared_lock:
+            capability = self._active_prepared_admission_locked(token)
+            if capability.reservation_id not in self._claimed_admissions:
+                raise StateError("RDP admission token is not claimed")
+            trusted = capability.trusted_token
+            self._validate_prepared_sidecar_locked(capability)
+            prepared_common = trusted.application_token._prepared_snapshot
+            if (
+                prepared_common is None
+                or prepared_common.channel_id != trusted.session.generation.channel_id
+                or prepared_common.identity.binding != trusted.session.generation.binding
+                or prepared_common.idle_deadline != trusted.session.generation.idle_deadline
+            ):
+                raise StateError("RDP/common prepared result projection diverged")
+
+            application = application_commit.commit_no_fail()
+            close_token = application.close_token
+            assert close_token is not None
+            session = self._commit_sidecar_no_fail(capability, close_token)
+            application_receipt = application.receipt
+            assert application_receipt is not None
+            receipt = RdpSessionAdmissionReceipt(
+                manager_kind="rdp",
+                manager_id=self._manager_id,
+                kind=trusted.kind,
+                publication_token=capability.integrity_token,
+                application_receipt=application_receipt,
+                application_receipt_token=application_receipt.receipt_token,
+                logical_session_id=session.logical_session_id,
+                channel_id=session.generation.channel_id,
+                operation_id=trusted.operation_id,
+                transport_ids=trusted.transport_ids,
+                expected_generation=trusted.expected_generation,
+                session=session,
+                sidecar_result_digest=rdp_session_sidecar_result_digest(session),
+                _manager_token=id(self),
+            )
+            receipt = replace(
+                receipt,
+                _integrity_token=_rdp_admission_receipt_integrity_token(
+                    self._admission_secret,
+                    receipt,
+                ),
+            )
+            result = RdpSessionAdmissionResult(
+                session=session,
+                application=application,
+                receipt=receipt,
+            )
+            self._release_prepared_capability_locked(capability)
+            return result
+
+    def _commit_sidecar_no_fail(
+        self,
+        capability: _RdpAdmissionCapability,
+        close_token: ApplicationChannelCloseToken,
+    ) -> RdpSessionSnapshot:
+        """Apply prevalidated primitive sidecar writes after common commit."""
+
+        token = capability.trusted_token
+        session = token.session
+        shard = self._shard(session.logical_session_id, create=True)
+        assert shard is not None
+        if token.kind == "open":
+            affinity_route = self._affinity_partition(session.identity.affinity, create=True)
+            assert affinity_route is not None
+            with _acquire_stable_locks(
+                [self._route_lock_entry(affinity_route), self._shard_lock_entry(shard)]
+            ):
+                handle = shard.sessions.insert(session)
                 shard.sessions.set_close_token(handle, close_token)
                 shard.sessions.set_route_metadata(
                     handle,
-                    logical_route_key=logical_route_key,
-                    affinity_route_key=affinity_route_key,
+                    logical_route_key=capability.logical_route_key,
+                    affinity_route_key=capability.affinity_route_key,
                     affinity_partition_id=affinity_route.partition_id,
                 )
-                shard.session_routes.set_digest(logical_route_key, handle)
-                locator = self._pack_locator(shard.shard_id, handle)
-                affinity_route.routes.set_digest(affinity_route_key, locator)
+                shard.session_routes.set_digest(capability.logical_route_key, handle)
+                affinity_route.routes.set_digest(
+                    capability.affinity_route_key,
+                    self._pack_locator(shard.shard_id, handle),
+                )
                 shard.session_expiry.set(
                     handle,
-                    self._effective_generation_deadline(snapshot).timestamp(),
+                    self._effective_generation_deadline(session).timestamp(),
                 )
                 shard.connected_sessions += 1
                 shard.generation_high_water_mark = max(shard.generation_high_water_mark, 1)
-                return snapshot
+                return session
+
+        handle = capability.expected_handle
+        prior = capability.expected_snapshot
+        assert handle is not None and prior is not None
+        with shard.lock:
+            self._replace_snapshot_locked(shard, handle, prior, session)
+            shard.sessions.set_close_token(handle, close_token)
+            shard.disconnected_sessions -= 1
+            shard.connected_sessions += 1
+            shard.generation_high_water_mark = max(
+                shard.generation_high_water_mark,
+                token.expected_generation + 1,
+            )
+            shard.session_expiry.set(
+                handle,
+                self._effective_generation_deadline(session).timestamp(),
+            )
+            return session
 
     def get(self, logical_session_id: str) -> RdpSessionSnapshot | None:
         """Return one retained logical session through its exact owner shard."""
@@ -1392,30 +2131,60 @@ class RdpReconnectStateManager:
         transport: RdpTransportPlan,
         expected_generation: int,
     ) -> RdpSessionSnapshot:
-        """Reconnect one disconnected logical session on a new transport."""
+        """Compatibility wrapper that commits one prepared reconnect admission."""
 
-        with self._gate.mutation():
-            connected_at = self._require_window_time(
-                transport.connected_at,
-                "RDP reconnect connected_at",
-            )
-            self._reject_behind_watermark(connected_at, "reconnect")
-            shard = self._shard(logical_session_id, create=False)
+        existing = self.get(logical_session_id)
+        if existing is not None and existing.state is RdpSessionState.CONNECTED:
+            if (
+                existing.identity.affinity == affinity
+                and existing.generation.ordinal == expected_generation
+                and self._same_transport_plan(existing.generation, transport)
+            ):
+                return existing
+            raise StateError("Connected RDP session must disconnect before reconnect")
+        token = self.prepare_reconnect(
+            logical_session_id,
+            affinity=affinity,
+            transport=transport,
+            expected_generation=expected_generation,
+        )
+        with self.prepared_admission(token) as prepared:
+            return prepared.commit_no_fail().session
+
+    def prepare_reconnect(
+        self,
+        logical_session_id: str,
+        *,
+        affinity: RdpSessionAffinity,
+        transport: RdpTransportPlan,
+        expected_generation: int,
+    ) -> RdpSessionAdmissionToken:
+        """Reserve one exact disconnected→connected transport generation."""
+
+        connected_at = self._require_window_time(
+            transport.connected_at,
+            "RDP reconnect connected_at",
+        )
+        self._reject_behind_watermark(connected_at, "reconnect")
+        owner_shard_id = self.partition_id(logical_session_id)
+        with self._gate.mutation(), self._prepared_lock:
+            if logical_session_id in self._prepared_logical_session_ids:
+                raise StateError(
+                    f"RDP logical session {logical_session_id!r} has a prepared admission"
+                )
+            if logical_session_id in self._mutating_logical_session_ids:
+                raise StateError(f"RDP logical session {logical_session_id!r} is being mutated")
+            shard = self._shards.get(owner_shard_id)
             if shard is None:
                 raise StateError(f"Unknown RDP logical session {logical_session_id!r}")
             with shard.lock:
-                found = self._lookup_locked(shard, logical_session_id)
+                found = self._lookup_prepared_locked(shard, logical_session_id)
                 if found is None:
                     raise StateError(f"Unknown RDP logical session {logical_session_id!r}")
                 handle, snapshot = found
                 if affinity != snapshot.identity.affinity:
                     raise StateError("RDP reconnect affinity does not match the logical session")
                 if snapshot.state is RdpSessionState.CONNECTED:
-                    if (
-                        snapshot.generation.ordinal == expected_generation
-                        and self._same_transport_plan(snapshot.generation, transport)
-                    ):
-                        return snapshot
                     raise StateError("Connected RDP session must disconnect before reconnect")
                 if snapshot.state is RdpSessionState.LOGGED_OUT:
                     raise StateError("Logged-out RDP session cannot reconnect")
@@ -1434,36 +2203,68 @@ class RdpReconnectStateManager:
                 if transport.binding.transport_id == snapshot.generation.binding.transport_id:
                     raise StateError("RDP reconnect requires a new immutable transport")
 
-                channel, close_token = self._application.open_channel_with_token(
-                    self._channel_identity(snapshot.identity, transport)
-                )
-                generation = RdpTransportGeneration(
+        common_identity = self._prepared_channel_identity(snapshot.identity, transport)
+        reservation = self._transport_reservation(
+            snapshot.identity,
+            transport,
+            expected_generation,
+        )
+        application_token = self._application.prepare_open_channel_with_completed_operation(
+            common_identity,
+            reservation,
+        )
+        try:
+            updated = replace(
+                snapshot,
+                state=RdpSessionState.CONNECTED,
+                generation=RdpTransportGeneration(
                     ordinal=expected_generation,
                     channel_id=transport.channel_id,
                     binding=transport.binding,
                     connected_at=connected_at,
-                    idle_deadline=channel.idle_deadline,
+                    idle_deadline=min(
+                        connected_at + snapshot.identity.idle_timeout,
+                        common_identity.hard_deadline,
+                    ),
+                ),
+                last_transition_at=connected_at,
+                reconnect_deadline=None,
+            )
+            with self._gate.mutation(), self._prepared_lock:
+                reservation_id = self._next_prepared_reservation_id
+                self._next_prepared_reservation_id += 1
+                token = RdpSessionAdmissionToken(
+                    kind="reconnect",
+                    application_token=application_token,
+                    session=updated,
+                    operation_id=reservation.operation_id,
+                    transport_ids=(
+                        snapshot.generation.binding.transport_id,
+                        transport.binding.transport_id,
+                    ),
+                    expected_generation=expected_generation,
+                    _manager_token=id(self),
+                    _reservation_id=reservation_id,
+                    _owner_shard_id=owner_shard_id,
+                    _affinity_partition_id=self.affinity_partition_id(affinity),
+                    _expected_handle=handle,
                 )
-                updated = replace(
-                    snapshot,
-                    state=RdpSessionState.CONNECTED,
-                    generation=generation,
-                    last_transition_at=connected_at,
-                    reconnect_deadline=None,
+                token = replace(
+                    token,
+                    _integrity_token=_rdp_admission_integrity_token(
+                        self._admission_secret,
+                        token,
+                    ),
                 )
-                self._replace_snapshot_locked(shard, handle, snapshot, updated)
-                shard.sessions.set_close_token(handle, close_token)
-                shard.disconnected_sessions -= 1
-                shard.connected_sessions += 1
-                shard.generation_high_water_mark = max(
-                    shard.generation_high_water_mark,
-                    expected_generation + 1,
+                self._register_prepared_admission_locked(
+                    token,
+                    expected_snapshot=snapshot,
+                    expected_handle=handle,
                 )
-                shard.session_expiry.set(
-                    handle,
-                    self._effective_generation_deadline(updated).timestamp(),
-                )
-                return updated
+                return token
+        except (StateError, ValueError):
+            self._application.cancel_prepared_admission(application_token)
+            raise
 
     def _close_generation_channel_locked(
         self,
@@ -1494,7 +2295,7 @@ class RdpReconnectStateManager:
     ) -> RdpSessionSnapshot:
         """Close the current transport while preserving token/session identity."""
 
-        with self._gate.mutation():
+        with self._session_mutation(logical_session_id):
             canonical_time = self._require_window_time(
                 disconnected_at,
                 "RDP disconnected_at",
@@ -1558,7 +2359,7 @@ class RdpReconnectStateManager:
     ) -> RdpSessionSnapshot:
         """Finalize the logical session and begin bounded tombstone retention."""
 
-        with self._gate.mutation():
+        with self._session_mutation(logical_session_id):
             canonical_time = self._require_window_time(
                 logged_out_at,
                 "RDP logged_out_at",
@@ -1685,7 +2486,7 @@ class RdpReconnectStateManager:
         admitted_at: datetime,
         member: bool,
     ) -> RdpSessionSnapshot:
-        with self._gate.mutation():
+        with self._session_mutation(logical_session_id):
             canonical_time = self._require_window_time(
                 admitted_at,
                 "RDP relationship admitted_at",
@@ -1726,7 +2527,7 @@ class RdpReconnectStateManager:
     ) -> RdpOperationAdmission:
         """Reserve one operation inside the current logical and transport budget."""
 
-        with self._gate.mutation():
+        with self._session_mutation(logical_session_id):
             canonical_start = self._require_window_time(
                 started_at,
                 "RDP operation started_at",
@@ -1764,11 +2565,11 @@ class RdpReconnectStateManager:
                 channel = self._application.get(snapshot.generation.channel_id)
                 if channel is None or not channel.is_open:
                     raise StateError("RDP current application channel is not open")
-                ordinal = channel.reserved_operations
+                application_ordinal = channel.reserved_operations
                 operation_id = _operation_id(
                     logical_session_id,
                     snapshot.generation.ordinal,
-                    ordinal,
+                    snapshot.reserved_operations,
                 )
                 if operation_id in shard.operations:
                     raise StateError("RDP deterministic operation identity is already active")
@@ -1777,7 +2578,7 @@ class RdpReconnectStateManager:
                 reservation = ApplicationOperationReservation(
                     operation_id=operation_id,
                     channel_id=snapshot.generation.channel_id,
-                    ordinal=ordinal,
+                    ordinal=application_ordinal,
                     started_at=canonical_start,
                     ended_at=canonical_end,
                     initiator_bytes=initiator_bytes,
@@ -1813,7 +2614,7 @@ class RdpReconnectStateManager:
     def finalize_operation(self, logical_session_id: str, operation_id: str) -> bool:
         """Finalize one active operation; repeated finalization is a no-op."""
 
-        with self._gate.mutation():
+        with self._session_mutation(logical_session_id):
             shard = self._shard(logical_session_id, create=False)
             if shard is None:
                 return False
@@ -1850,7 +2651,7 @@ class RdpReconnectStateManager:
     def add_retention_lease(self, lease: RdpRetentionLease) -> RdpRetentionLease:
         """Acquire one exact bounded lease, idempotently for an identical request."""
 
-        with self._gate.mutation():
+        with self._session_mutation(lease.logical_session_id):
             acquired_at = self._require_window_time(
                 lease.acquired_at,
                 "RDP lease acquired_at",
@@ -1927,7 +2728,7 @@ class RdpReconnectStateManager:
     ) -> bool:
         """Release one active lease; repeated release is a no-op."""
 
-        with self._gate.mutation():
+        with self._session_mutation(logical_session_id):
             canonical_time = self._require_retention_time(
                 released_at,
                 "RDP lease released_at",
@@ -2241,6 +3042,20 @@ class RdpReconnectStateManager:
             with self._gate.watermark():
                 if canonical_time < self._watermark:
                     raise StateError("RDP watermarks must be monotonic")
+                with self._prepared_lock:
+                    claimed_frontier = min(
+                        (
+                            capability.linearization_time
+                            for capability in self._prepared_capabilities.values()
+                            if capability.reservation_id in self._claimed_admissions
+                        ),
+                        default=None,
+                    )
+                if claimed_frontier is not None and canonical_time > claimed_frontier:
+                    raise StateError(
+                        "RDP watermark cannot advance past a claimed admission at "
+                        f"{claimed_frontier.isoformat()}"
+                    )
                 with self._directory_lock:
                     shards = tuple(sorted(self._shards.values(), key=lambda item: item.shard_id))
                     routes = tuple(

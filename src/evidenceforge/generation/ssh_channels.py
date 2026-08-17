@@ -14,16 +14,20 @@ records and transferred payloads are never retained here.
 from __future__ import annotations
 
 import hashlib
+import hmac
+import secrets
 import struct
 import sys
 from array import array
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from threading import Condition, Lock, RLock
+from typing import Literal
 
 from evidenceforge.events.application import (
     ApplicationChannelBudget,
@@ -33,7 +37,11 @@ from evidenceforge.events.application import (
     ApplicationTransportBinding,
 )
 from evidenceforge.generation.application_channels import (
+    ApplicationChannelAdmissionReceipt,
+    ApplicationChannelAdmissionResult,
+    ApplicationChannelAdmissionToken,
     ApplicationChannelCloseToken,
+    ApplicationChannelPreparedCommit,
     ApplicationChannelRegistry,
 )
 from evidenceforge.generation.indexes import (
@@ -439,6 +447,224 @@ class SshOperationLease:
     initiator_bytes: int
     responder_bytes: int
     session: SshSessionView
+
+
+@dataclass(frozen=True, slots=True)
+class SshChannelAdmissionToken:
+    """Opaque reservation for one SSH session and synchronous first child."""
+
+    kind: Literal["open_completed"]
+    application_token: ApplicationChannelAdmissionToken = field(repr=False)
+    session: SshSessionView
+    operation: SshOperationLease
+    _manager_token: int = field(repr=False, default=0)
+    _reservation_id: int = field(repr=False, default=0)
+    _owner_shard_id: int = field(repr=False, default=0)
+    _reserved_channel_ids: tuple[str, ...] = field(repr=False, default=())
+    _integrity_token: str = field(repr=False, default="")
+
+    @property
+    def linearization_time(self) -> datetime:
+        """Return the canonical frontier protected while this token is claimed."""
+
+        return self.application_token.linearization_time
+
+    @property
+    def publication_token(self) -> str:
+        """Return the stable opaque manager capability binding."""
+
+        return self._integrity_token
+
+
+def _ssh_admission_integrity_token(
+    authority_secret: bytes,
+    token: SshChannelAdmissionToken,
+) -> str:
+    """Authenticate the nested common capability and exact SSH sidecar preimage."""
+
+    canonical = repr(
+        (
+            "ssh-channel-admission-v1",
+            token.kind,
+            token.application_token.publication_token,
+            token.session,
+            token.operation,
+            token._manager_token,
+            token._reservation_id,
+            token._owner_shard_id,
+            token._reserved_channel_ids,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class _SshAdmissionCapability:
+    """Manager-owned immutable locator and trusted SSH admission preimage."""
+
+    token_id: int
+    reservation_id: int
+    integrity_token: str
+    application_token: ApplicationChannelAdmissionToken
+    trusted_token: SshChannelAdmissionToken
+    owner_shard_id: int
+    reserved_channel_ids: tuple[str, ...]
+    packed_session: bytes
+    channel_route_digest: int
+    linearization_time: datetime
+
+
+def ssh_channel_sidecar_result_digest(
+    session: SshSessionView,
+    operation: SshOperationLease,
+) -> str:
+    """Return a stable digest over one exact frozen SSH sidecar result."""
+
+    semantic = (
+        session.channel_id,
+        session.ssh_session_id,
+        session.affinity,
+        session.transport,
+        session.binding,
+        operation.operation_id,
+        operation.child_channel_id,
+        operation.channel_id,
+        operation.semantic_operation_id,
+        operation.parent_operation_id,
+        operation.kind,
+        operation.ordinal,
+        operation.started_at,
+        operation.ended_at,
+        operation.initiator_bytes,
+        operation.responder_bytes,
+        operation.session,
+    )
+    return hashlib.sha256(repr(("ssh-channel-sidecar-result-v1", semantic)).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class SshChannelAdmissionReceipt:
+    """Authenticated proof of one committed SSH/common-channel admission."""
+
+    manager_kind: Literal["ssh"]
+    manager_id: str
+    kind: Literal["open_completed"]
+    publication_token: str
+    application_receipt: ApplicationChannelAdmissionReceipt
+    application_receipt_token: str
+    channel_id: str
+    ssh_session_id: str
+    operation_id: str
+    transport_ids: tuple[str, ...]
+    session: SshSessionView
+    operation: SshOperationLease
+    sidecar_result_digest: str
+    _manager_token: int = field(repr=False, default=0)
+    _integrity_token: str = field(repr=False, default="")
+
+    @property
+    def receipt_token(self) -> str:
+        """Return the opaque keyed proof over the complete manager result."""
+
+        return self._integrity_token
+
+
+def _ssh_admission_receipt_integrity_token(
+    authority_secret: bytes,
+    receipt: SshChannelAdmissionReceipt,
+) -> str:
+    """Authenticate exact manager, common receipt, and SSH result membership."""
+
+    canonical = repr(
+        (
+            "ssh-channel-admission-receipt-v1",
+            receipt.manager_kind,
+            receipt.manager_id,
+            receipt.kind,
+            receipt.publication_token,
+            receipt.application_receipt,
+            receipt.application_receipt_token,
+            receipt.channel_id,
+            receipt.ssh_session_id,
+            receipt.operation_id,
+            receipt.transport_ids,
+            receipt.session,
+            receipt.operation,
+            receipt.sidecar_result_digest,
+            receipt._manager_token,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class SshChannelAdmissionResult:
+    """Frozen SSH result plus authenticated common and manager proofs."""
+
+    session: SshSessionView
+    operation: SshOperationLease
+    application: ApplicationChannelAdmissionResult
+    receipt: SshChannelAdmissionReceipt
+
+
+class SshChannelPreparedCommit:
+    """No-lock-body capability for one final SSH/common-channel commit."""
+
+    __slots__ = (
+        "_active",
+        "_application_commit",
+        "_committed",
+        "_manager",
+        "_result",
+        "_token",
+    )
+
+    def __init__(
+        self,
+        manager: SshApplicationChannelManager,
+        token: SshChannelAdmissionToken,
+        application_commit: ApplicationChannelPreparedCommit,
+    ) -> None:
+        self._manager = manager
+        self._token = token
+        self._application_commit = application_commit
+        self._active = True
+        self._committed = False
+        self._result: SshChannelAdmissionResult | None = None
+
+    @property
+    def committed(self) -> bool:
+        """Return whether this exact manager claim has committed."""
+
+        return self._committed
+
+    @property
+    def result(self) -> SshChannelAdmissionResult | None:
+        """Return the frozen SSH result after commit."""
+
+        return self._result
+
+    def commit_no_fail(self) -> SshChannelAdmissionResult:
+        """Publish the fully claimed common admission and SSH sidecar mutation."""
+
+        if not self._active:
+            raise StateError("SSH channel prepared commit is no longer active")
+        if self._committed:
+            raise StateError("SSH channel prepared admission was already committed")
+        self._result = self._manager._commit_claimed_admission(
+            self._token,
+            self._application_commit,
+        )
+        self._committed = True
+        return self._result
+
+    def commit(self) -> SshChannelAdmissionResult:
+        """Compatibility alias for :meth:`commit_no_fail`."""
+
+        return self.commit_no_fail()
+
+    def _close(self) -> None:
+        self._active = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1199,12 +1425,72 @@ class SshApplicationChannelManager:
         self._gate = _MutationGate()
         self._watermark_lane = Lock()
         self._watermark = self._window_start
+        self._prepared_lock = RLock()
+        self._admission_secret = secrets.token_bytes(32)
+        self._manager_id = f"ssh-manager-{secrets.token_hex(16)}"
+        self._next_prepared_reservation_id = 1
+        self._prepared_admissions: dict[int, SshChannelAdmissionToken] = {}
+        self._prepared_capabilities: dict[int, _SshAdmissionCapability] = {}
+        self._claimed_admissions: set[int] = set()
+        self._prepared_channel_ids: dict[str, int] = {}
 
     @property
     def application_registry(self) -> ApplicationChannelRegistry:
         """Return the injected engine-owned common registry."""
 
         return self._registry
+
+    @property
+    def manager_id(self) -> str:
+        """Return the stable opaque identity of this manager instance."""
+
+        return self._manager_id
+
+    def authenticates_admission_token(self, token: SshChannelAdmissionToken) -> bool:
+        """Return whether one intact manager/common token pair remains active."""
+
+        if not isinstance(token, SshChannelAdmissionToken):
+            return False
+        with self._prepared_lock:
+            try:
+                capability = self._active_prepared_admission_locked(token)
+            except StateError:
+                return False
+        return self._registry.authenticates_admission_token(capability.application_token)
+
+    def authenticates_admission_receipt(self, receipt: SshChannelAdmissionReceipt) -> bool:
+        """Return whether this manager issued the exact coupled commit receipt."""
+
+        if not isinstance(receipt, SshChannelAdmissionReceipt):
+            return False
+        if (
+            receipt.manager_kind != "ssh"
+            or receipt.manager_id != self._manager_id
+            or receipt._manager_token != id(self)
+            or not isinstance(receipt.application_receipt, ApplicationChannelAdmissionReceipt)
+            or not isinstance(receipt.session, SshSessionView)
+            or not isinstance(receipt.operation, SshOperationLease)
+        ):
+            return False
+        if not self._registry.authenticates_admission_receipt(receipt.application_receipt):
+            return False
+        expected = _ssh_admission_receipt_integrity_token(self._admission_secret, receipt)
+        if not hmac.compare_digest(receipt._integrity_token, expected):
+            return False
+        application = receipt.application_receipt
+        return (
+            receipt.application_receipt_token == application.receipt_token
+            and receipt.channel_id == application.channel_id == receipt.session.channel_id
+            and receipt.ssh_session_id == receipt.session.ssh_session_id
+            and receipt.operation_id == application.operation_id == receipt.operation.operation_id
+            and receipt.operation.channel_id == receipt.channel_id
+            and receipt.operation.session == receipt.session
+            and receipt.transport_ids
+            == (application.snapshot.identity.binding.transport_id,)
+            == (receipt.session.transport.transport_id,)
+            and receipt.sidecar_result_digest
+            == ssh_channel_sidecar_result_digest(receipt.session, receipt.operation)
+        )
 
     @property
     def watermark_time(self) -> datetime:
@@ -1381,6 +1667,107 @@ class SshApplicationChannelManager:
         del semantic_operation_id
         return child_channel_id.replace("ssh-child-channel-", "ssh-operation-", 1)
 
+    def _active_prepared_admission_locked(
+        self,
+        token: SshChannelAdmissionToken,
+    ) -> _SshAdmissionCapability:
+        """Return the manager-owned capability for one intact active token."""
+
+        capability = self._prepared_capabilities.get(id(token))
+        if capability is None:
+            if token._manager_token != id(self):
+                raise StateError("SSH channel admission token belongs to another manager")
+            raise StateError("SSH channel admission token is stale or already consumed")
+        active = self._prepared_admissions.get(capability.reservation_id)
+        if active is not token:
+            raise StateError("SSH channel admission token is stale or already consumed")
+        if token.application_token is not capability.application_token:
+            raise StateError(
+                "SSH channel admission token no longer binds its exact common capability"
+            )
+        expected = _ssh_admission_integrity_token(self._admission_secret, token)
+        if not hmac.compare_digest(token._integrity_token, capability.integrity_token) or not (
+            hmac.compare_digest(expected, capability.integrity_token)
+        ):
+            raise StateError("SSH channel admission token integrity validation failed")
+        return capability
+
+    def _reject_prepared_channel_locked(self, channel_id: str) -> None:
+        """Reject an SSH mutation crossing one reserved channel identity."""
+
+        if channel_id in self._prepared_channel_ids:
+            raise StateError(f"SSH channel identity {channel_id!r} has a prepared admission")
+
+    def _register_prepared_admission_locked(
+        self,
+        token: SshChannelAdmissionToken,
+        *,
+        packed_session: bytes,
+        channel_route_digest: int,
+    ) -> None:
+        """Retain reservation metadata and one trusted immutable SSH preimage."""
+
+        expected = _ssh_admission_integrity_token(self._admission_secret, token)
+        if not hmac.compare_digest(token._integrity_token, expected):
+            raise StateError("SSH channel admission token integrity validation failed")
+        for channel_id in token._reserved_channel_ids:
+            self._reject_prepared_channel_locked(channel_id)
+        capability = _SshAdmissionCapability(
+            token_id=id(token),
+            reservation_id=token._reservation_id,
+            integrity_token=expected,
+            application_token=token.application_token,
+            trusted_token=deepcopy(token),
+            owner_shard_id=token._owner_shard_id,
+            reserved_channel_ids=token._reserved_channel_ids,
+            packed_session=packed_session,
+            channel_route_digest=channel_route_digest,
+            linearization_time=token.linearization_time,
+        )
+        self._prepared_admissions[capability.reservation_id] = token
+        self._prepared_capabilities[capability.token_id] = capability
+        for channel_id in capability.reserved_channel_ids:
+            self._prepared_channel_ids[channel_id] = capability.reservation_id
+
+    def _release_prepared_capability_locked(
+        self,
+        capability: _SshAdmissionCapability,
+    ) -> None:
+        """Release SSH reservations using only manager-owned immutable keys."""
+
+        active = self._prepared_admissions.pop(capability.reservation_id, None)
+        retained = self._prepared_capabilities.pop(capability.token_id, None)
+        if active is None or retained is not capability:
+            return
+        self._claimed_admissions.discard(capability.reservation_id)
+        for channel_id in capability.reserved_channel_ids:
+            if self._prepared_channel_ids.get(channel_id) == capability.reservation_id:
+                self._prepared_channel_ids.pop(channel_id)
+        if not self._prepared_admissions:
+            self._prepared_admissions.clear()
+            self._prepared_capabilities.clear()
+            self._claimed_admissions.clear()
+            self._prepared_channel_ids.clear()
+
+    def _validate_prepared_sidecar_locked(
+        self,
+        capability: _SshAdmissionCapability,
+    ) -> None:
+        """Verify the exact SSH sidecar preimage without changing lookup state."""
+
+        token = capability.trusted_token
+        session = token.session
+        if token.operation.session != session or token.operation.channel_id != session.channel_id:
+            raise StateError("Prepared SSH operation no longer matches its exact session")
+        if self._registry.owner_partition_id(session.owner_id) != capability.owner_shard_id:
+            raise StateError("Prepared SSH owner partition changed before commit")
+        shard = self._shards.get(capability.owner_shard_id)
+        if shard is not None:
+            with shard.lock:
+                occupied = shard.sessions.get(session.channel_id)
+            if occupied is not None:
+                raise StateError("Prepared SSH channel identity became occupied")
+
     def channel_id_for(self, affinity: SshChannelAffinity, transport_id: str) -> str:
         """Return the deterministic channel ID for an immutable transport."""
 
@@ -1507,7 +1894,45 @@ class SshApplicationChannelManager:
         initiator_bytes: int = 0,
         responder_bytes: int = 0,
     ) -> tuple[SshSessionView, SshOperationLease]:
-        """Atomically open SSH and reconcile one synchronous first child.
+        """Compatibility wrapper that commits one prepared SSH admission."""
+
+        token = self.prepare_open_session_with_completed_operation(
+            affinity,
+            transport=transport,
+            binding=binding,
+            idle_timeout=idle_timeout,
+            initiator_budget=initiator_budget,
+            responder_budget=responder_budget,
+            operation_budget=operation_budget,
+            kind=kind,
+            semantic_operation_id=semantic_operation_id,
+            started_at=started_at,
+            ended_at=ended_at,
+            initiator_bytes=initiator_bytes,
+            responder_bytes=responder_bytes,
+        )
+        with self.prepared_admission(token) as prepared:
+            admission = prepared.commit_no_fail()
+        return admission.session, admission.operation
+
+    def prepare_open_session_with_completed_operation(
+        self,
+        affinity: SshChannelAffinity,
+        *,
+        transport: SshTransportPlan,
+        binding: SshSessionBinding,
+        idle_timeout: timedelta,
+        initiator_budget: int,
+        responder_budget: int,
+        operation_budget: int,
+        kind: SshOperationKind,
+        semantic_operation_id: str,
+        started_at: datetime,
+        ended_at: datetime,
+        initiator_bytes: int = 0,
+        responder_bytes: int = 0,
+    ) -> SshChannelAdmissionToken:
+        """Reserve one SSH session and synchronous first child without publishing.
 
         The completed child never enters either the SSH active-operation
         sidecar or the common registry's active-operation store. The common
@@ -1603,29 +2028,213 @@ class SshApplicationChannelManager:
         )
         packed_row = _pack_session(session, channel_digest=channel_digest)
         channel_route_digest = int.from_bytes(channel_digest[:8], "big")
-        with self._gate.mutation():
-            shard = self._shard(affinity.owner_id, create=True)
-            assert shard is not None
-            with shard.lock:
+        owner_shard_id = self._registry.owner_partition_id(affinity.owner_id)
+        with self._gate.mutation(), self._prepared_lock:
+            if self._watermark > ready_at:
+                raise StateError("SSH sessions cannot open before the current watermark")
+            self._reject_prepared_channel_locked(channel_id)
+            shard = self._shards.get(owner_shard_id)
+            if shard is not None:
+                with shard.lock:
+                    if shard.sessions.get(channel_id) is not None:
+                        raise StateError(f"Duplicate SSH channel_id {channel_id!r}")
+
+        application_token = self._registry.prepare_open_channel_with_completed_operation(
+            identity,
+            reservation,
+        )
+        try:
+            with self._gate.mutation(), self._prepared_lock:
                 if self._watermark > ready_at:
                     raise StateError("SSH sessions cannot open before the current watermark")
-                handle = shard.sessions.insert(
-                    session,
-                    packed_row=packed_row,
+                self._reject_prepared_channel_locked(channel_id)
+                shard = self._shards.get(owner_shard_id)
+                if shard is not None:
+                    with shard.lock:
+                        if shard.sessions.get(channel_id) is not None:
+                            raise StateError("SSH sidecar changed during admission preparation")
+                reservation_id = self._next_prepared_reservation_id
+                self._next_prepared_reservation_id += 1
+                token = SshChannelAdmissionToken(
+                    kind="open_completed",
+                    application_token=application_token,
+                    session=session,
+                    operation=lease,
+                    _manager_token=id(self),
+                    _reservation_id=reservation_id,
+                    _owner_shard_id=owner_shard_id,
+                    _reserved_channel_ids=(channel_id,),
+                )
+                token = replace(
+                    token,
+                    _integrity_token=_ssh_admission_integrity_token(
+                        self._admission_secret,
+                        token,
+                    ),
+                )
+                self._register_prepared_admission_locked(
+                    token,
+                    packed_session=packed_row,
                     channel_route_digest=channel_route_digest,
                 )
-                try:
-                    snapshot, close_token = (
-                        self._registry.open_channel_with_completed_operation_and_token(
-                            identity,
-                            reservation,
-                            trusted_owner_partition_id=shard.shard_id,
-                        )
+                return token
+        except (StateError, ValueError):
+            self._registry.cancel_prepared_admission(application_token)
+            raise
+
+    def cancel_prepared_admission(self, token: SshChannelAdmissionToken) -> bool:
+        """Cancel one unclaimed SSH/common reservation without canonical mutation."""
+
+        integrity_error: StateError | None = None
+        with self._gate.mutation(), self._prepared_lock:
+            capability = self._prepared_capabilities.get(id(token))
+            if capability is None:
+                return False
+            try:
+                capability = self._active_prepared_admission_locked(token)
+            except StateError as error:
+                integrity_error = error
+                self._release_prepared_capability_locked(capability)
+            else:
+                if capability.reservation_id in self._claimed_admissions:
+                    return False
+                self._release_prepared_capability_locked(capability)
+        common_error: StateError | None = None
+        try:
+            self._registry.cancel_prepared_admission(capability.application_token)
+        except StateError as error:
+            common_error = error
+        if integrity_error is not None:
+            raise integrity_error
+        if common_error is not None:
+            raise common_error
+        return True
+
+    def _claim_prepared_admission(
+        self,
+        token: SshChannelAdmissionToken,
+    ) -> _SshAdmissionCapability:
+        """Claim and revalidate one manager token without retaining SSH locks."""
+
+        failure: StateError | None = None
+        capability: _SshAdmissionCapability | None = None
+        with self._gate.mutation(), self._prepared_lock:
+            capability = self._prepared_capabilities.get(id(token))
+            try:
+                capability = self._active_prepared_admission_locked(token)
+                if capability.reservation_id in self._claimed_admissions:
+                    raise StateError("SSH channel admission token is already claimed")
+                if capability.linearization_time < self._watermark:
+                    raise StateError("SSH channel admission starts behind the canonical watermark")
+                if not self._registry.authenticates_admission_token(capability.application_token):
+                    raise StateError(
+                        "SSH admission's common application token failed authentication"
                     )
-                except (StateError, ValueError):
-                    shard.sessions.delete(channel_id)
-                    raise
+                self._validate_prepared_sidecar_locked(capability)
+                self._active_prepared_admission_locked(token)
+            except StateError as error:
+                failure = error
+                if capability is not None:
+                    self._release_prepared_capability_locked(capability)
+            else:
+                self._claimed_admissions.add(capability.reservation_id)
+                return capability
+        if capability is not None:
+            try:
+                self._registry.cancel_prepared_admission(capability.application_token)
+            except StateError:
+                pass
+        assert failure is not None
+        raise failure
+
+    @contextmanager
+    def prepared_admission(
+        self,
+        token: SshChannelAdmissionToken,
+    ) -> Iterator[SshChannelPreparedCommit]:
+        """Claim SSH and common tokens while retaining no locks across the body."""
+
+        capability = self._claim_prepared_admission(token)
+        transaction: SshChannelPreparedCommit | None = None
+        try:
+            with self._registry.prepared_admission(
+                capability.application_token
+            ) as application_commit:
+                transaction = SshChannelPreparedCommit(
+                    self,
+                    token,
+                    application_commit,
+                )
+                try:
+                    yield transaction
+                finally:
+                    transaction._close()
+        except BaseException:
+            try:
+                self._registry.cancel_prepared_admission(capability.application_token)
+            except StateError:
+                pass
+            raise
+        finally:
+            if transaction is None or not transaction.committed:
+                self._cancel_claimed_admission(token)
+
+    def _cancel_claimed_admission(self, token: SshChannelAdmissionToken) -> None:
+        """Release one manager claim after its external transaction aborts."""
+
+        with self._gate.mutation(), self._prepared_lock:
+            capability = self._prepared_capabilities.get(id(token))
+            if capability is None:
+                return
+            try:
+                self._active_prepared_admission_locked(token)
+            except StateError:
+                self._release_prepared_capability_locked(capability)
+                return
+            if capability.reservation_id not in self._claimed_admissions:
+                raise StateError("SSH channel admission token is not claimed")
+            self._release_prepared_capability_locked(capability)
+
+    def _commit_claimed_admission(
+        self,
+        token: SshChannelAdmissionToken,
+        application_commit: ApplicationChannelPreparedCommit,
+    ) -> SshChannelAdmissionResult:
+        """Commit one fully validated common admission, then its SSH sidecar."""
+
+        with self._gate.mutation(), self._prepared_lock:
+            capability = self._active_prepared_admission_locked(token)
+            if capability.reservation_id not in self._claimed_admissions:
+                raise StateError("SSH channel admission token is not claimed")
+            if not self._registry.authenticates_admission_token(capability.application_token):
+                raise StateError("SSH admission's common application token failed authentication")
+            self._validate_prepared_sidecar_locked(capability)
+            self._active_prepared_admission_locked(token)
+            trusted_token = capability.trusted_token
+            application_result = application_commit.commit_no_fail()
+            application_receipt = application_result.receipt
+            assert application_receipt is not None
+            assert self._registry.authenticates_admission_receipt(application_receipt)
+            assert (
+                application_receipt.publication_token
+                == trusted_token.application_token.publication_token
+            )
+            assert application_receipt.snapshot == application_result.snapshot
+            assert application_receipt.close_token == application_result.close_token
+            assert application_receipt.channel_id == trusted_token.session.channel_id
+            assert application_receipt.operation_id == trusted_token.operation.operation_id
+            close_token = application_result.close_token
+            assert close_token is not None
+            shard = self._shard(trusted_token.session.owner_id, create=True)
+            assert shard is not None and shard.shard_id == capability.owner_shard_id
+            with shard.lock:
+                handle = shard.sessions.insert(
+                    trusted_token.session,
+                    packed_row=capability.packed_session,
+                    channel_route_digest=capability.channel_route_digest,
+                )
                 shard.sessions.bind_close_token_by_handle(handle, close_token)
+                snapshot = application_result.snapshot
                 shard.expiry.set(
                     handle,
                     min(
@@ -1635,7 +2244,40 @@ class SshApplicationChannelManager:
                     ).timestamp(),
                 )
                 shard.high_water_mark = max(shard.high_water_mark, len(shard.sessions))
-                return session, lease
+            receipt = SshChannelAdmissionReceipt(
+                manager_kind="ssh",
+                manager_id=self._manager_id,
+                kind=trusted_token.kind,
+                publication_token=capability.integrity_token,
+                application_receipt=application_receipt,
+                application_receipt_token=application_receipt.receipt_token,
+                channel_id=application_receipt.channel_id,
+                ssh_session_id=trusted_token.session.ssh_session_id,
+                operation_id=application_receipt.operation_id,
+                transport_ids=(application_receipt.snapshot.identity.binding.transport_id,),
+                session=trusted_token.session,
+                operation=trusted_token.operation,
+                sidecar_result_digest=ssh_channel_sidecar_result_digest(
+                    trusted_token.session,
+                    trusted_token.operation,
+                ),
+                _manager_token=id(self),
+            )
+            receipt = replace(
+                receipt,
+                _integrity_token=_ssh_admission_receipt_integrity_token(
+                    self._admission_secret,
+                    receipt,
+                ),
+            )
+            result = SshChannelAdmissionResult(
+                session=trusted_token.session,
+                operation=trusted_token.operation,
+                application=application_result,
+                receipt=receipt,
+            )
+            self._release_prepared_capability_locked(capability)
+            return result
 
     def session_view(self, channel_id: str) -> SshSessionView | None:
         """Return one immutable open SSH sidecar through exact routing."""
@@ -2078,6 +2720,20 @@ class SshApplicationChannelManager:
         has_more = False
         with self._watermark_lane:
             with self._gate.watermark():
+                with self._prepared_lock:
+                    claimed_frontier = min(
+                        (
+                            capability.linearization_time
+                            for capability in self._prepared_capabilities.values()
+                            if capability.reservation_id in self._claimed_admissions
+                        ),
+                        default=None,
+                    )
+                if claimed_frontier is not None and canonical > claimed_frontier:
+                    raise StateError(
+                        "SSH watermark cannot advance past a claimed admission at "
+                        f"{claimed_frontier.isoformat()}"
+                    )
                 with self._directory_lock:
                     shards = tuple(sorted(self._shards.values(), key=lambda item: item.shard_id))
                 cutoff = canonical.timestamp()
