@@ -833,6 +833,12 @@ class BoundedRuntimeCache(Generic[K, V]):
         return self._lookup_candidates_inspected
 
     @property
+    def watermark_seconds(self) -> float | None:
+        """Return the current logical watermark without scanning retained entries."""
+
+        return self._watermark_seconds
+
+    @property
     def expiry_work(self) -> int:
         """Return cumulative physically reclaimed entries."""
 
@@ -1087,6 +1093,7 @@ _BOUNDED_TEMPORAL_FIELDS = (
     "_bash_history_user_seconds",
     "_top_level_browser_launch_targets",
     "_privileged_auth_occurrences",
+    "_failed_logon_attempt_times",
 )
 _SCENARIO_COMPILED_FIELDS = (
     "sid_registry",
@@ -1111,6 +1118,7 @@ _OCCURRENCE_OR_DRAIN_FIELDS = (
     "_process_close_in_progress",
     "_expanding_types",
     "_postfix_queue_states",
+    "_failed_logon_attempt_pending",
 )
 _SESSION_SCOPED_FIELDS = (
     "_bash_history_next_time",
@@ -1142,7 +1150,6 @@ _BOUNDED_LEGACY_FIELDS = (
 )
 _DEFINITE_GROWING_FIELDS = ("_ssh_source_ports",)
 _CONDITIONAL_GROWING_FIELDS = (
-    "_failed_logon_attempt_times",
     "_tls_seen_server_names",
     "_tls_seen_client_server_pairs",
     "_tls_cert_validity",

@@ -14,6 +14,7 @@ from evidenceforge.generation.process_runtime_cache import (
     ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES,
     PRODUCTION_PROCESS_RUNTIME_CACHE_FAMILIES,
     REMOVED_DEAD_ACTIVITY_GENERATOR_MUTABLE_FIELDS,
+    ActivityGeneratorRetentionDisposition,
     BoundedRuntimeCache,
     EmailArtifactManifestSpool,
     build_production_process_runtime_caches,
@@ -179,6 +180,28 @@ class ActivityGenerator:
         "lazy",
         "set_cache",
     }
+
+
+def test_failed_logon_cadence_fields_have_closed_retention_policies() -> None:
+    """The auth-local cache and transient reservation cannot remain migration debt."""
+
+    from evidenceforge.generation.activity.generator import ActivityGenerator
+
+    discovered = {
+        row.field_name
+        for row in discover_activity_generator_mutable_fields(inspect.getsource(ActivityGenerator))
+    }
+    policies = {
+        policy.field_name: policy for policy in ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES
+    }
+
+    assert {"_failed_logon_attempt_times", "_failed_logon_attempt_pending"} <= discovered
+    assert policies["_failed_logon_attempt_times"].disposition is (
+        ActivityGeneratorRetentionDisposition.BOUNDED
+    )
+    assert policies["_failed_logon_attempt_pending"].disposition is (
+        ActivityGeneratorRetentionDisposition.TRANSIENT
+    )
 
 
 def test_dead_dns_caches_cannot_reenter_generator_retention() -> None:

@@ -41,6 +41,7 @@ import shlex
 import uuid
 import zipfile
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -273,6 +274,7 @@ from evidenceforge.generation.network_runtime import (
     NetworkRuntimePointFamily,
     NetworkTransactionRuntime,
 )
+from evidenceforge.generation.process_runtime_cache import BoundedRuntimeCache, deadline_seconds
 from evidenceforge.generation.proxy_channels import ExplicitProxyChannelManager
 from evidenceforge.generation.source_timing import (
     SourceTimingPlanner,
@@ -4505,6 +4507,75 @@ class EmailCorpusEntry:
     storyline: bool = True
 
 
+_FailedLogonAttemptKey = tuple[str, str, int, str]
+
+
+def _failed_logon_attempt_deadline(
+    times: tuple[datetime, ...],
+    window_end: datetime,
+) -> datetime:
+    """Return the two-second semantic horizon clamped to the generation window."""
+
+    newest = max(times)
+    interactive_gap = timedelta(seconds=2)
+    if newest >= window_end or window_end - newest <= interactive_gap:
+        return window_end
+    return newest + interactive_gap
+
+
+@dataclass(frozen=True, slots=True)
+class _FailedLogonAttemptReservation:
+    """One exact-key cadence update reserved until its primary occurrence publishes."""
+
+    key: _FailedLogonAttemptKey
+    normalized_time: datetime
+    retained_times: tuple[datetime, ...]
+    expires_at: datetime
+
+
+@dataclass(slots=True)
+class _FailedLogonAttemptPending:
+    """Private mutable claim state for one immutable cadence reservation."""
+
+    reservation: _FailedLogonAttemptReservation
+    claimed: bool = False
+
+
+class _FailedLogonAttemptPreparedCommit:
+    """Single-use claim facade for one structurally atomic cadence publication."""
+
+    __slots__ = ("_active", "_committed", "_owner", "_reservation")
+
+    def __init__(
+        self,
+        owner: "ActivityGenerator",
+        reservation: _FailedLogonAttemptReservation,
+    ) -> None:
+        self._owner = owner
+        self._reservation = reservation
+        self._active = True
+        self._committed = False
+
+    @property
+    def committed(self) -> bool:
+        """Return whether this exact claim published its cadence value."""
+
+        return self._committed
+
+    def commit_no_fail(self) -> None:
+        """Publish the prevalidated exact-key cadence update once."""
+
+        if not self._active:
+            raise StateError("Failed-logon cadence claim is no longer active")
+        if self._committed:
+            raise StateError("Failed-logon cadence claim was already committed")
+        self._owner._commit_failed_logon_attempt_no_fail(self._reservation)
+        self._committed = True
+
+    def _close(self) -> None:
+        self._active = False
+
+
 class ActivityGenerator:
     """Generates specific activity events using StateManager and emitters.
 
@@ -4804,7 +4875,19 @@ class ActivityGenerator:
             ExpiringIndex(deadline=lambda seen_at: seen_at)
         )
         self._kerberos_source_port_reservations: dict[tuple[str, str], list[tuple[float, int]]] = {}
-        self._failed_logon_attempt_times: dict[tuple[str, str, int, str], list[datetime]] = {}
+        self._failed_logon_attempt_times: BoundedRuntimeCache[
+            _FailedLogonAttemptKey,
+            tuple[datetime, ...],
+        ] = BoundedRuntimeCache(
+            default_deadline=lambda times: _failed_logon_attempt_deadline(
+                times,
+                proxy_window_end,
+            )
+        )
+        self._failed_logon_attempt_pending: dict[
+            _FailedLogonAttemptKey,
+            _FailedLogonAttemptPending,
+        ] = {}
         self._failed_logon_attempt_lock = Lock()
         self._privileged_auth_occurrences: set[str] = set()
         self._privileged_auth_occurrence_lock = Lock()
@@ -4986,6 +5069,16 @@ class ActivityGenerator:
     def advance_process_state_watermark(self, cutoff: datetime) -> None:
         """Discard process-instance helper state sealed by the engine watermark."""
         normalized_cutoff = ensure_utc(cutoff)
+        with self._failed_logon_attempt_lock:
+            if self._failed_logon_attempt_pending:
+                raise StateError(
+                    "Failed-logon cadence watermark is fenced by an active primary publication"
+                )
+            self._advance_process_state_watermark_unfenced(normalized_cutoff)
+
+    def _advance_process_state_watermark_unfenced(self, normalized_cutoff: datetime) -> None:
+        """Advance process state while holding the failed-logon reservation fence."""
+
         active = {
             (process.system, process.pid, process.start_time)
             for process in self.state_manager.state.running_processes.values()
@@ -5069,6 +5162,15 @@ class ActivityGenerator:
                 for key, mapped_pid in pid_aliases.items()
                 if (key[0], mapped_pid) in self.state_manager.state.running_processes
             }
+        expired_failed_logons = self._failed_logon_attempt_times.advance_watermark(
+            normalized_cutoff,
+            limit=_NETWORK_RUNTIME_WATERMARK_PAGE,
+        )
+        if len(expired_failed_logons) == _NETWORK_RUNTIME_WATERMARK_PAGE:
+            raise StateError(
+                "Failed-logon cadence expiry reached its bounded 4,096-row watermark page; "
+                "the modeled authentication rate exceeds the duration-stability gate"
+            )
 
     def _remember_process_connection_hold(
         self,
@@ -12030,7 +12132,6 @@ class ActivityGenerator:
         logon_type = request.logon_type
         source_ip = request.source_ip
         target_username = request.target_username
-        dc_system = request.dc_system
 
         local_logon = logon_type in (2, 5, 7, 11)
         if source_ip == system.ip:
@@ -12042,14 +12143,14 @@ class ActivityGenerator:
 
         # Use target_username if provided, otherwise use the actor's username
         effective_username = target_username or user.username
-        normalized_time = self._normalize_failed_logon_attempt_time(
+        prepared_attempt = self._prepare_failed_logon_attempt_time(
             hostname=system.hostname,
             username=effective_username,
             logon_type=logon_type,
             source_ip=auth_source_ip,
             requested_time=time,
         )
-        if normalized_time is None:
+        if prepared_attempt is None:
             logger.debug(
                 "Suppressing duplicate failed logon attempt: user=%s host=%s type=%s time=%s",
                 effective_username,
@@ -12058,7 +12159,33 @@ class ActivityGenerator:
                 time,
             )
             return
-        time = normalized_time
+        time, reservation = prepared_attempt
+        with self._claimed_failed_logon_attempt(reservation) as prepared:
+            self._execute_prepared_failed_logon_occurrence(
+                request=request,
+                time=time,
+                source_ip=source_ip,
+                auth_source_ip=auth_source_ip,
+                effective_username=effective_username,
+                prepared_attempt=prepared,
+            )
+
+    def _execute_prepared_failed_logon_occurrence(
+        self,
+        *,
+        request: FailedLogonRequest,
+        time: datetime,
+        source_ip: str,
+        auth_source_ip: str,
+        effective_username: str,
+        prepared_attempt: _FailedLogonAttemptPreparedCommit,
+    ) -> None:
+        """Publish one target failed logon before its committed cadence marker."""
+
+        user = request.user
+        system = request.system
+        logon_type = request.logon_type
+        dc_system = request.dc_system
         self.state_manager.set_current_time(time)
 
         # Determine failure substatus with source-native account-state semantics.
@@ -12250,6 +12377,7 @@ class ActivityGenerator:
             )
 
         self.dispatcher.dispatch_builder(event)
+        prepared_attempt.commit_no_fail()
 
         # Domain controller side: validation evidence only. The failed local logon
         # (4625) belongs to the target workstation/server, not the DC.
@@ -12339,7 +12467,20 @@ class ActivityGenerator:
             return system_subject
         return system_subject
 
-    def _normalize_failed_logon_attempt_time(
+    @staticmethod
+    def _failed_logon_attempt_runtime_times(value: object) -> tuple[datetime, ...]:
+        """Return one exact auth-owned failed-logon cadence window."""
+
+        if (
+            type(value) is not tuple
+            or len(value) > 32
+            or any(type(seen) is not datetime or seen.tzinfo is not UTC for seen in value)
+            or tuple(sorted(value)) != value
+        ):
+            raise StateError("Failed-logon cadence cache contains malformed timestamps")
+        return value
+
+    def _prepare_failed_logon_attempt_time(
         self,
         *,
         hostname: str,
@@ -12347,30 +12488,101 @@ class ActivityGenerator:
         logon_type: int,
         source_ip: str,
         requested_time: datetime,
-    ) -> datetime | None:
-        """Space distinct interactive retries while preserving authored peer attempts."""
-        key = (hostname.lower(), username.lower(), logon_type, source_ip.lower())
+    ) -> tuple[datetime, _FailedLogonAttemptReservation] | None:
+        """Prepare one bounded cadence marker for a target failed-logon occurrence."""
+
+        current = ensure_utc(requested_time)
+        key: _FailedLogonAttemptKey = (
+            hostname.lower().rstrip("."),
+            username.lower(),
+            logon_type,
+            source_ip.lower().removeprefix("::ffff:"),
+        )
         duplicate_window = timedelta(milliseconds=500)
         interactive_gap = timedelta(seconds=2)
         with self._failed_logon_attempt_lock:
-            prior_times = self._failed_logon_attempt_times.setdefault(key, [])
+            watermark = self._failed_logon_attempt_times.watermark_seconds
+            if watermark is not None and deadline_seconds(current) < watermark:
+                raise StateError("Failed-logon cadence preparation starts behind the watermark")
+            if key in self._failed_logon_attempt_pending:
+                raise StateError(
+                    "Failed-logon cadence key already has an active primary publication"
+                )
+            prior_times = self._failed_logon_attempt_runtime_times(
+                self._failed_logon_attempt_times.get(key, ())
+            )
             if any(
-                timedelta(0) < abs(requested_time - prior) <= duplicate_window
-                for prior in prior_times
+                timedelta(0) < abs(current - prior) <= duplicate_window for prior in prior_times
             ):
                 return None
-            normalized_time = requested_time
+            normalized_time = current
             if logon_type in (2, 7, 11):
                 while conflicts := [
                     prior for prior in prior_times if abs(normalized_time - prior) < interactive_gap
                 ]:
                     normalized_time = max(conflicts) + interactive_gap
+            retained_times = tuple(sorted((*prior_times, normalized_time))[-32:])
+            reservation = _FailedLogonAttemptReservation(
+                key=key,
+                normalized_time=normalized_time,
+                retained_times=retained_times,
+                expires_at=_failed_logon_attempt_deadline(
+                    retained_times,
+                    self._scenario_end_time,
+                ),
+            )
+            self._failed_logon_attempt_pending[key] = _FailedLogonAttemptPending(reservation)
+            return normalized_time, reservation
 
-            prior_times.append(normalized_time)
-            prior_times.sort()
-            if len(prior_times) > 32:
-                del prior_times[:-32]
-            return normalized_time
+    @contextmanager
+    def _claimed_failed_logon_attempt(
+        self,
+        reservation: _FailedLogonAttemptReservation,
+    ) -> Iterator[_FailedLogonAttemptPreparedCommit]:
+        """Claim one exact pending cadence update and cancel it unless committed."""
+
+        with self._failed_logon_attempt_lock:
+            pending = self._failed_logon_attempt_pending.get(reservation.key)
+            if pending is None or pending.reservation is not reservation:
+                raise StateError("Failed-logon cadence reservation is stale or foreign")
+            if pending.claimed:
+                raise StateError("Failed-logon cadence reservation is already claimed")
+            pending.claimed = True
+        prepared = _FailedLogonAttemptPreparedCommit(self, reservation)
+        try:
+            yield prepared
+        finally:
+            if not prepared.committed:
+                self._cancel_failed_logon_attempt(reservation)
+            prepared._close()
+
+    def _commit_failed_logon_attempt_no_fail(
+        self,
+        reservation: _FailedLogonAttemptReservation,
+    ) -> None:
+        """Commit one already-claimed cadence value without revisiting caller data."""
+
+        with self._failed_logon_attempt_lock:
+            pending = self._failed_logon_attempt_pending.get(reservation.key)
+            if pending is None or pending.reservation is not reservation or not pending.claimed:
+                raise StateError("Failed-logon cadence claim lost its exact reservation")
+            self._failed_logon_attempt_times.set(
+                reservation.key,
+                reservation.retained_times,
+                deadline=reservation.expires_at,
+            )
+            del self._failed_logon_attempt_pending[reservation.key]
+
+    def _cancel_failed_logon_attempt(
+        self,
+        reservation: _FailedLogonAttemptReservation,
+    ) -> None:
+        """Release one exact uncommitted cadence reservation idempotently."""
+
+        with self._failed_logon_attempt_lock:
+            pending = self._failed_logon_attempt_pending.get(reservation.key)
+            if pending is not None and pending.reservation is reservation:
+                del self._failed_logon_attempt_pending[reservation.key]
 
     def _failed_logon_profile(
         self,
