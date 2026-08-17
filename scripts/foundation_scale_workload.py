@@ -3190,7 +3190,9 @@ def _run_lifecycle_duration(
                 spec.workers,
                 lambda ordinal: registry.get_session(f"duration-session-{ordinal:012d}"),
             )
-        registry.advance_watermark(_START + timedelta(hours=hour + 1))
+        # The lifecycle watermark is an inclusive sealed frontier.  Keep the
+        # exact next-hour boundary available to the next duration bucket.
+        registry.advance_watermark(_START + timedelta(hours=hour + 1) - _ONE_MICROSECOND)
         census = registry.census()
         footprint_samples.append(
             (

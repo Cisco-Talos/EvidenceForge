@@ -9,6 +9,7 @@ import json
 import subprocess
 import sys
 from argparse import Namespace
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from scripts.foundation_scale_workload import (
     _DURATION_REGISTRIES,
     _IMPLEMENTATION_FILES,
     _IMPLEMENTED_PROTOCOLS,
+    _ONE_MICROSECOND,
     _REGISTRIES,
     _RELEASE_CHURN_ENTRIES,
     _RELEASE_DURATIONS,
@@ -29,6 +31,7 @@ from scripts.foundation_scale_workload import (
     _RELEASE_SIZES,
     _RELEASE_WORKERS,
     _RELEASE_WRITE_MODES,
+    _START,
     CaseSpec,
     DurationResult,
     RegistryName,
@@ -46,8 +49,10 @@ from scripts.foundation_scale_workload import (
     _load_mixed_timing_runtime,
     _release_provenance_gates,
     _result_gates,
+    _run_lifecycle_duration,
 )
 
+from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.workload import RETAINED_STATE_FAMILIES
 
 
@@ -249,6 +254,29 @@ def test_final_plateau_hour_rejects_a_never_flat_footprint() -> None:
     """A final sample is not a plateau when retained/backing state never stabilizes."""
 
     assert _final_plateau_hour([(hour, hour * 2) for hour in range(168)]) is None
+
+
+def test_lifecycle_duration_keeps_next_hour_boundary_ahead_of_watermark() -> None:
+    """Adjacent duration buckets must not publish on an already-sealed frontier."""
+
+    spec = CaseSpec(
+        kind="duration",
+        registry="lifecycle",
+        duration_hours=2,
+        rate_per_hour=1,
+    )
+
+    registry, _metrics, _lookups, _late_hour, mutations, _state, _notes = _run_lifecycle_duration(
+        spec
+    )
+
+    assert isinstance(registry, LifecycleRegistry)
+    assert mutations == 2
+    assert registry.census().watermark == _START + timedelta(hours=2) - _ONE_MICROSECOND
+    first = registry.get_session("duration-session-000000000000")
+    second = registry.get_session("duration-session-000000000001")
+    assert first is not None and first.closed_at is not None
+    assert second is not None and second.closed_at is not None
 
 
 def test_final_plateau_hour_requires_an_exact_full_day_suffix() -> None:
