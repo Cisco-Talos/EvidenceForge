@@ -35,7 +35,7 @@ from .files import (
     validate_output_path,
     write_yaml,
 )
-from .ids import generate_zeek_uid
+from .ids import generate_zeek_uid, generate_zeek_uid_from_rng
 from .logging import redact_secrets
 from .time import (
     convert_to_output_timezone,
@@ -48,6 +48,7 @@ from .time import (
 __all__ = [
     # ID utilities
     "generate_zeek_uid",
+    "generate_zeek_uid_from_rng",
     # Logging utilities
     "redact_secrets",
     # Time utilities

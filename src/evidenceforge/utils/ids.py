@@ -62,12 +62,17 @@ def generate_zeek_uid(prefix: str = "C") -> str:
         >>> uid[0]
         'C'
     """
+    return generate_zeek_uid_from_rng(_get_rng(), prefix)
+
+
+def generate_zeek_uid_from_rng(rng: random.Random, prefix: str = "C") -> str:
+    """Generate one Zeek UID from an explicit deterministic RNG stream."""
+
     if len(prefix) != 1:
         raise ValueError(f"Prefix must be a single character, got: {prefix}")
 
     # Real Zeek UIDs vary in length (17-19 chars total including prefix).
     # Weight distribution based on observed real Zeek traffic.
-    rng = _get_rng()
     length = rng.choices([17, 18, 19], weights=[10, 60, 30], k=1)[0]
     uid = prefix + "".join(rng.choices(BASE62_CHARS, k=length - 1))
     while _has_synthetic_marker(uid):
