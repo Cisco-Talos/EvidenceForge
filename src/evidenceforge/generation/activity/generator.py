@@ -287,11 +287,14 @@ from evidenceforge.generation.state_manager import (
 )
 from evidenceforge.generation.timing import (
     ConstantDistribution,
+    DistributionSpec,
+    MixtureDistribution,
     TemporalConstraintGraph,
     TimingRuntime,
     TimingScope,
     TriangularDistribution,
     TruncatedLognormalDistribution,
+    WeightedDistribution,
 )
 from evidenceforge.models.exceptions import GenerationError, PathSafetyError, StateError
 from evidenceforge.models.scenario import (
@@ -3103,6 +3106,35 @@ def _dns_rtt(rng: random.Random, resolver_ip: str | None = None) -> float:
         return rng.uniform(0.010, 0.080)  # Recursive lookup: 10-80ms
     else:
         return rng.uniform(0.080, 0.250)  # Slow/distant: 80-250ms
+
+
+def _dns_inclusive_millisecond_distribution(
+    minimum_ms: int,
+    maximum_ms: int,
+) -> DistributionSpec:
+    """Return a continuous distribution that rounds to a uniform integer-ms support."""
+
+    if minimum_ms > maximum_ms:
+        raise ValueError(
+            "DNS timing support minimum must not exceed maximum: "
+            f"minimum_ms={minimum_ms} maximum_ms={maximum_ms}"
+        )
+    if minimum_ms == maximum_ms:
+        return ConstantDistribution(float(minimum_ms))
+    lower = float(minimum_ms) - 0.5
+    upper = float(maximum_ms) + 0.5
+    return MixtureDistribution(
+        components=(
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=lower, mode=lower, maximum=upper),
+            ),
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=lower, mode=upper, maximum=upper),
+            ),
+        )
+    )
 
 
 def _jitter_default_connection_duration(
@@ -23179,6 +23211,53 @@ class ActivityGenerator:
             start_time=running.start_time,
         )
 
+    def _sample_dns_timing_milliseconds(
+        self,
+        *,
+        relationship_key: str,
+        stable_id: str,
+        host: str,
+        lifecycle_id: str,
+        sample_key: str,
+        minimum_ms: int,
+        maximum_ms: int,
+        ordinal: int = 0,
+    ) -> int:
+        """Sample one integer-millisecond DNS gap through the engine-owned runtime."""
+
+        runtime = self.timing_runtime
+        if type(runtime) not in {TimingRuntime, SourceTimingPlanningRuntime}:
+            raise StateError("DNS timing requires the exact engine-owned runtime")
+        if (
+            type(relationship_key) is not str
+            or not relationship_key
+            or type(stable_id) is not str
+            or not stable_id
+            or type(host) is not str
+            or not host
+            or type(lifecycle_id) is not str
+            or not lifecycle_id
+            or type(sample_key) is not str
+            or not sample_key
+            or type(minimum_ms) is not int
+            or type(maximum_ms) is not int
+            or type(ordinal) is not int
+        ):
+            raise StateError("DNS timing scope and support must use exact built-in values")
+        sampled = runtime.sampler.sample_value(
+            _dns_inclusive_millisecond_distribution(minimum_ms, maximum_ms),
+            relationship_key=relationship_key,
+            scope=TimingScope(
+                stable_id=stable_id,
+                host=host,
+                source="dns_lookup",
+                lifecycle_id=lifecycle_id,
+                ordinal=ordinal,
+            ),
+            sample_key=sample_key,
+        )
+        return int(sampled + 0.5)
+
     def _execute_dns_lookup_bundle(self, request: DnsLookupRequest) -> None:
         """Expand one DNS lookup request into canonical evidence."""
         src_ip = request.src_ip
@@ -23271,9 +23350,21 @@ class ActivityGenerator:
         _src_os = "windows"
         if src_system is not None:
             _src_os = _get_os_category(src_system.os)
-        dns_time = request.planned_query_time or (
-            time - timedelta(milliseconds=rng.randint(900, 1400))
-        )
+        dns_timing_host = src_system.hostname if src_system is not None else src_ip
+        dns_timing_lifecycle = request.parent_action_group_id or request.stable_id
+        if request.planned_query_time is not None:
+            dns_time = request.planned_query_time
+        else:
+            query_lead_ms = self._sample_dns_timing_milliseconds(
+                relationship_key="activity.dns.query_before_request",
+                stable_id=request.stable_id,
+                host=dns_timing_host,
+                lifecycle_id=dns_timing_lifecycle,
+                sample_key="query_lead_ms",
+                minimum_ms=900,
+                maximum_ms=1400,
+            )
+            dns_time = time - timedelta(milliseconds=query_lead_ms)
         query_process = self._dns_query_process_context(request, src_system, dns_time)
         src_port = self._allocate_ephemeral_port(
             src_ip, dns_server_ip, 53, "udp", dns_time, _src_os
@@ -23400,10 +23491,19 @@ class ActivityGenerator:
         is_internal = query_is_internal
 
         if force_address and qtype in (1, 28) and query_is_internal and _is_private_ip(src_ip):
+            srv_discovery_lead_ms = self._sample_dns_timing_milliseconds(
+                relationship_key="activity.dns.ad_srv_discovery_before_address",
+                stable_id=request.stable_id,
+                host=dns_timing_host,
+                lifecycle_id=dns_timing_lifecycle,
+                sample_key="srv_discovery_lead_ms",
+                minimum_ms=180,
+                maximum_ms=420,
+            )
             self._emit_ad_srv_discovery(
                 src_ip=src_ip,
                 dns_server_ip=dns_server_ip,
-                time=dns_time - timedelta(seconds=2, milliseconds=rng.randint(180, 420)),
+                time=dns_time - timedelta(seconds=2, milliseconds=srv_discovery_lead_ms),
                 src_os=_src_os,
                 domain=ad_domain,
                 rng=rng,
@@ -23478,7 +23578,16 @@ class ActivityGenerator:
             companion_choices, companion_weights = _dns_companion_kind_distribution_for_source(
                 src_system
             )
-            companion_time = dns_time + timedelta(milliseconds=rng.randint(1, 30))
+            companion_delay_ms = self._sample_dns_timing_milliseconds(
+                relationship_key="activity.dns.companion_after_query",
+                stable_id=request.stable_id,
+                host=dns_timing_host,
+                lifecycle_id=dns_timing_lifecycle,
+                sample_key="companion_delay_ms",
+                minimum_ms=1,
+                maximum_ms=30,
+            )
+            companion_time = dns_time + timedelta(milliseconds=companion_delay_ms)
             companion_src_port = self._allocate_ephemeral_port(
                 src_ip, dns_server_ip, 53, "udp", companion_time, _src_os
             )
@@ -23592,7 +23701,16 @@ class ActivityGenerator:
                 ]
                 if mx_hosts:
                     mx_host = mx_hosts[0]
-                    mx_a_time = companion_time + timedelta(milliseconds=rng.randint(2, 45))
+                    mx_a_delay_ms = self._sample_dns_timing_milliseconds(
+                        relationship_key="activity.dns.mx_address_after_mx",
+                        stable_id=request.stable_id,
+                        host=dns_timing_host,
+                        lifecycle_id=dns_timing_lifecycle,
+                        sample_key=f"mx_a_delay_ms:{mx_host.lower()}",
+                        minimum_ms=2,
+                        maximum_ms=45,
+                    )
+                    mx_a_time = companion_time + timedelta(milliseconds=mx_a_delay_ms)
                     mx_a_src_port = self._allocate_ephemeral_port(
                         src_ip,
                         dns_server_ip,
@@ -23664,7 +23782,16 @@ class ActivityGenerator:
         if rng.random() < 0.05:
             nxdomain_queries = _dns_nxdomain_companion_queries(hostname, ad_domain)
             nx_query = rng.choice(nxdomain_queries)
-            nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
+            nx_lead_ms = self._sample_dns_timing_milliseconds(
+                relationship_key="activity.dns.nxdomain_before_query",
+                stable_id=request.stable_id,
+                host=dns_timing_host,
+                lifecycle_id=dns_timing_lifecycle,
+                sample_key=f"nxdomain_lead_ms:{nx_query.lower()}",
+                minimum_ms=1,
+                maximum_ms=10,
+            )
+            nx_time = dns_time - timedelta(milliseconds=nx_lead_ms)
             nx_is_internal = _dns_is_internal_name(nx_query, ad_domain) or nx_query in {
                 "wpad",
                 "wpad.local",
@@ -23831,7 +23958,29 @@ class ActivityGenerator:
             port = _SRV_PORT_MAP.get(service_prefix, 389)
             answers = [f"0 100 {port} {hostname}" for hostname in dc_hosts[:2]]
             with self._network_transaction_runtime.claimed_point_batch(token) as prepared:
-                srv_time = time + timedelta(milliseconds=index * rng.randint(35, 95))
+                if index == 0:
+                    query_spacing_ms = 0
+                else:
+                    runtime_key, marker, _ = self._ad_srv_discovery_runtime_identity(
+                        src_ip=src_ip,
+                        domain=domain,
+                        time=time,
+                        query=query,
+                    )
+                    query_spacing_ms = self._sample_dns_timing_milliseconds(
+                        relationship_key="activity.dns.ad_srv_query_spacing",
+                        stable_id=(
+                            f"ad-srv-discovery:{runtime_key[0]}:{runtime_key[1]}:"
+                            f"{runtime_key[2]}:{runtime_key[3]}"
+                        ),
+                        host=src_ip,
+                        lifecycle_id=marker.isoformat(),
+                        sample_key="query_spacing_ms",
+                        minimum_ms=35,
+                        maximum_ms=95,
+                        ordinal=index,
+                    )
+                srv_time = time + timedelta(milliseconds=query_spacing_ms)
                 src_port = self._allocate_ephemeral_port(
                     src_ip,
                     dns_server_ip,

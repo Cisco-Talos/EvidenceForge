@@ -172,7 +172,14 @@ class TestHostnameConsistency:
             conn_state="SF",
         )
 
-        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        conn_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.dst_port == 443
+            and call.args[0].network.hostname == hostname
+            and call.args[0].protocol.ssl is not None
+            and call.args[0].protocol.ssl.server_name == hostname
+        )
         assert conn_event.network.dst_ip in get_domain_ips(hostname)
         assert conn_event.protocol.ssl is not None
         assert conn_event.protocol.ssl.server_name == hostname
@@ -491,7 +498,9 @@ class TestHostnameConsistency:
         dns_events = [
             call.args[0]
             for call in mock_emitters["zeek_dns"].emit.call_args_list
-            if call.args[0].dns and call.args[0].dns.query == "cdn.example.net"
+            if call.args[0].dns
+            and call.args[0].dns.query == "cdn.example.net"
+            and call.args[0].dns.query_type == "A"
         ]
         assert len(dns_events) == 2
         assert {event.network.dst_ip for event in dns_events} == {"10.0.0.1"}
