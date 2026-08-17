@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections import Counter
 from copy import copy
 from dataclasses import replace
+from datetime import datetime, timedelta, tzinfo
 from threading import Thread
 
 import pytest
@@ -22,6 +23,7 @@ from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.command_effects import (
     EffectExecutionOutcome,
     EffectOutcomeStatus,
+    EffectRequirement,
     ExecutionEffectAuditCohortEntry,
     ExecutionEffectAuditCounter,
     ExecutionEffectNode,
@@ -42,6 +44,7 @@ def _effect_entry(
     kind: EffectOccurrenceKind = EffectOccurrenceKind.FILE,
     occurrence_count: int = 1,
     report_occurrence_count: bool = True,
+    completed_at: datetime | None = None,
 ) -> tuple[ExecutionEffectAuditCohortEntry, tuple[EffectOccurrenceProvenance, ...]]:
     anchor = ActionAnchor(
         family="process_execution",
@@ -67,6 +70,7 @@ def _effect_entry(
             EffectExecutionOutcome(
                 node.node_id,
                 EffectOutcomeStatus.REALIZED,
+                completed_at=completed_at,
                 canonical_occurrence_count=(occurrence_count if report_occurrence_count else None),
             ),
         )
@@ -194,6 +198,8 @@ def test_preparation_capacity_counts_claimed_entries_and_reopens_after_cleanup()
     assert census.prepared == 2
     assert census.claimed == 0
     assert census.active == census.capacity == 2
+    assert census.retained_members > 0
+    assert census.retained_bytes > 0
     with pytest.raises(ExecutionEffectPlanError, match=r"capacity \(2\) is exhausted"):
         counter.prepare_action_cohort(
             _ROOT_ACTION_ID,
@@ -224,13 +230,175 @@ def test_preparation_capacity_counts_claimed_entries_and_reopens_after_cleanup()
     assert counter.action_cohort_preparation_census().active == 2
     counter.cancel_action_cohort(second)
     counter.cancel_action_cohort(replacement)
-    assert counter.action_cohort_preparation_census().active == 0
+    final_census = counter.action_cohort_preparation_census()
+    assert final_census.active == 0
+    assert final_census.retained_members == 0
+    assert final_census.retained_bytes == 0
 
 
+@pytest.mark.parametrize(
+    "capacity_name",
+    (
+        "action_cohort_preparation_capacity",
+        "action_cohort_member_capacity",
+        "action_cohort_byte_capacity",
+        "action_cohort_retained_member_capacity",
+        "action_cohort_retained_byte_capacity",
+    ),
+)
 @pytest.mark.parametrize("capacity", (0, -1, True))
-def test_preparation_capacity_must_be_a_positive_integer(capacity: object) -> None:
+def test_all_cohort_capacities_must_be_positive_integers(
+    capacity_name: str,
+    capacity: object,
+) -> None:
     with pytest.raises(ValueError, match="must be a positive integer"):
-        ExecutionEffectAuditCounter(action_cohort_preparation_capacity=capacity)  # type: ignore[arg-type]
+        ExecutionEffectAuditCounter(**{capacity_name: capacity})  # type: ignore[arg-type]
+
+
+def test_per_cohort_member_byte_and_pre_expansion_caps_reject_without_residue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry, provenances = _effect_entry("per-cohort-cap")
+    probe = ExecutionEffectAuditCounter()
+    measured = probe.prepare_action_cohort(
+        _ROOT_ACTION_ID,
+        (entry,),
+        published_provenances=provenances,
+    )
+    usage = probe.action_cohort_preparation_census()
+    probe.cancel_action_cohort(measured)
+
+    member_bounded = ExecutionEffectAuditCounter(
+        action_cohort_member_capacity=usage.retained_members - 1,
+    )
+    with pytest.raises(ExecutionEffectPlanError, match="cohort member capacity"):
+        member_bounded.prepare_action_cohort(
+            _ROOT_ACTION_ID,
+            (entry,),
+            published_provenances=provenances,
+        )
+    assert member_bounded.action_cohort_preparation_census().retained_members == 0
+
+    owned_plan = _owned_plan(occurrence_count=1)
+    owned_provenances = (owned_plan.provenance(0),)
+    owned_member_bounded = ExecutionEffectAuditCounter(action_cohort_member_capacity=1)
+    with pytest.raises(ExecutionEffectPlanError, match="cohort member capacity"):
+        owned_member_bounded.prepare_action_cohort(
+            _ROOT_ACTION_ID,
+            (),
+            owned_plans=(owned_plan,),
+            published_provenances=owned_provenances,
+        )
+    owned_census = owned_member_bounded.action_cohort_preparation_census()
+    assert owned_census.active == 0
+    assert owned_census.retained_members == 0
+    assert owned_census.retained_bytes == 0
+
+    exact_owned_boundary = ExecutionEffectAuditCounter(action_cohort_member_capacity=2)
+    exact_preparation = exact_owned_boundary.prepare_action_cohort(
+        _ROOT_ACTION_ID,
+        (),
+        owned_plans=(owned_plan,),
+        published_provenances=owned_provenances,
+    )
+    _commit(exact_owned_boundary, exact_preparation)
+    assert exact_owned_boundary.action_cohort_preparation_census().active == 0
+    assert exact_owned_boundary.snapshot().complete
+
+    byte_bounded = ExecutionEffectAuditCounter(
+        action_cohort_byte_capacity=usage.retained_bytes - 1,
+    )
+    with pytest.raises(ExecutionEffectPlanError, match="cohort byte capacity"):
+        byte_bounded.prepare_action_cohort(
+            _ROOT_ACTION_ID,
+            (entry,),
+            published_provenances=provenances,
+        )
+    assert byte_bounded.action_cohort_preparation_census().retained_bytes == 0
+
+    expansive_plan = _owned_plan(occurrence_count=33)
+
+    def forbidden_expansion(_self: object, _ordinal: int) -> EffectOccurrenceProvenance:
+        raise AssertionError("member preflight must reject before provenance expansion")
+
+    monkeypatch.setattr(OwnedEffectOccurrencePlan, "provenance", forbidden_expansion)
+    expansion_bounded = ExecutionEffectAuditCounter(action_cohort_member_capacity=32)
+    with pytest.raises(ExecutionEffectPlanError, match="occurrence expansion"):
+        expansion_bounded.prepare_action_cohort(
+            _ROOT_ACTION_ID,
+            (),
+            owned_plans=(expansive_plan,),
+        )
+    expansion_census = expansion_bounded.action_cohort_preparation_census()
+    assert expansion_census.active == 0
+    assert expansion_census.retained_members == 0
+    assert expansion_census.retained_bytes == 0
+
+
+def test_aggregate_member_and_byte_caps_count_claims_then_reopen_after_cleanup() -> None:
+    entry, provenances = _effect_entry("aggregate-cap")
+    probe = ExecutionEffectAuditCounter()
+    measured = probe.prepare_action_cohort(
+        _ROOT_ACTION_ID,
+        (entry,),
+        published_provenances=provenances,
+    )
+    usage = probe.action_cohort_preparation_census()
+    probe.cancel_action_cohort(measured)
+
+    member_bounded = ExecutionEffectAuditCounter(
+        action_cohort_preparation_capacity=2,
+        action_cohort_retained_member_capacity=usage.retained_members,
+    )
+    first = member_bounded.prepare_action_cohort(
+        _ROOT_ACTION_ID,
+        (entry,),
+        published_provenances=provenances,
+    )
+    with member_bounded.claimed_action_cohort(first) as claimed:
+        claimed_census = member_bounded.action_cohort_preparation_census()
+        assert claimed_census.claimed == 1
+        assert claimed_census.retained_members == usage.retained_members
+        with pytest.raises(ExecutionEffectPlanError, match="aggregate retained-member"):
+            member_bounded.prepare_action_cohort(
+                _ROOT_ACTION_ID,
+                (entry,),
+                published_provenances=provenances,
+            )
+        claimed.commit_no_fail()
+    replacement = member_bounded.prepare_action_cohort(
+        _ROOT_ACTION_ID,
+        (entry,),
+        published_provenances=provenances,
+    )
+    member_bounded.cancel_action_cohort(replacement)
+    assert member_bounded.action_cohort_preparation_census().retained_members == 0
+
+    byte_bounded = ExecutionEffectAuditCounter(
+        action_cohort_preparation_capacity=2,
+        action_cohort_retained_byte_capacity=usage.retained_bytes,
+    )
+    first = byte_bounded.prepare_action_cohort(
+        _ROOT_ACTION_ID,
+        (entry,),
+        published_provenances=provenances,
+    )
+    with pytest.raises(ExecutionEffectPlanError, match="aggregate retained-byte"):
+        byte_bounded.prepare_action_cohort(
+            _ROOT_ACTION_ID,
+            (entry,),
+            published_provenances=provenances,
+        )
+    byte_bounded.cancel_action_cohort(first)
+    replacement = byte_bounded.prepare_action_cohort(
+        _ROOT_ACTION_ID,
+        (entry,),
+        published_provenances=provenances,
+    )
+    byte_bounded.cancel_action_cohort(replacement)
+    final_census = byte_bounded.action_cohort_preparation_census()
+    assert final_census.active == 0
+    assert final_census.retained_bytes == 0
 
 
 def test_cohort_delta_matches_direct_paths_and_is_commutative() -> None:
@@ -484,8 +652,144 @@ def test_injected_precommit_failure_is_all_or_none() -> None:
 
 
 @pytest.mark.parametrize(
+    "malformation",
+    ("actor", "dependencies", "linked_outcome", "suppressed_outcome"),
+)
+def test_nested_actor_node_and_outcome_invariants_are_reconstructed(
+    malformation: str,
+) -> None:
+    counter = ExecutionEffectAuditCounter()
+    entry, provenances = _effect_entry(f"nested-{malformation}")
+    node = entry.plan.nodes[0]
+    outcome = entry.reconciliation.outcomes[0]
+
+    if malformation == "actor":
+        isolated_actor = replace(node.actor)
+        object.__setattr__(node, "actor", isolated_actor)
+        object.__setattr__(isolated_actor, "node_id", "forged-root-actor-node")
+    elif malformation == "dependencies":
+        object.__setattr__(node, "depends_on", ("duplicate", "duplicate"))
+    elif malformation == "linked_outcome":
+        object.__setattr__(outcome, "status", EffectOutcomeStatus.LINKED)
+        object.__setattr__(outcome, "child_action_id", "")
+    else:
+        object.__setattr__(node, "requirement", EffectRequirement.OPTIONAL)
+        object.__setattr__(outcome, "status", EffectOutcomeStatus.SUPPRESSED)
+        object.__setattr__(outcome, "reason", "")
+
+    initial = counter.snapshot()
+    with pytest.raises(ExecutionEffectPlanError, match="malformed"):
+        counter.prepare_action_cohort(
+            _ROOT_ACTION_ID,
+            (entry,),
+            published_provenances=provenances,
+        )
+    assert counter.snapshot() == initial
+    census = counter.action_cohort_preparation_census()
+    assert census.active == 0
+    assert census.retained_members == 0
+    assert census.retained_bytes == 0
+
+
+def test_hostile_stateful_timezone_is_canonicalized_once_before_retention() -> None:
+    counter = ExecutionEffectAuditCounter()
+
+    class ReentrantStatefulTimezone(tzinfo):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def utcoffset(self, _value: datetime | None) -> timedelta:
+            assert not counter._lock.locked(), "caller tzinfo ran under the audit lock"
+            counter.snapshot()
+            self.calls += 1
+            return timedelta(minutes=30 + self.calls)
+
+        def dst(self, _value: datetime | None) -> timedelta:
+            return timedelta(0)
+
+        def tzname(self, _value: datetime | None) -> str:
+            return "HOSTILE"
+
+        def __repr__(self) -> str:
+            raise AssertionError("the audit must never repr caller timezone objects")
+
+    callback_timezone = ReentrantStatefulTimezone()
+    completed_at = datetime(2026, 8, 17, 12, 30, tzinfo=callback_timezone)
+    entry, provenances = _effect_entry(
+        "callback-free-time",
+        completed_at=completed_at,
+    )
+    isolated_actor = replace(entry.plan.nodes[0].actor)
+    object.__setattr__(entry.plan.nodes[0], "actor", isolated_actor)
+    preparation = counter.prepare_action_cohort(
+        _ROOT_ACTION_ID,
+        (entry,),
+        published_provenances=provenances,
+    )
+    assert callback_timezone.calls == 1
+    assert type(preparation._binding.canonical_payload) is bytes
+    assert not hasattr(preparation._binding, "entries")
+
+    class ForbiddenLateTimezone(tzinfo):
+        def utcoffset(self, _value: datetime | None) -> timedelta:
+            raise AssertionError("late caller timestamp was consulted after preparation")
+
+        def dst(self, _value: datetime | None) -> timedelta:
+            return timedelta(0)
+
+    late_timestamp = datetime(2030, 1, 1, tzinfo=ForbiddenLateTimezone())
+    object.__setattr__(entry.reconciliation.outcomes[0], "completed_at", late_timestamp)
+    object.__setattr__(isolated_actor, "node_id", "late-forged-actor-node")
+
+    assert counter.authenticates_action_cohort_preparation(
+        preparation,
+        entries=(entry,),
+        published_provenances=provenances,
+    )
+    assert counter.authenticates_action_cohort_binding_token(preparation.binding_token)
+    receipt = _commit(counter, preparation)
+    assert counter.authenticates_action_cohort_receipt(
+        receipt,
+        preparation=preparation,
+        entries=(entry,),
+        published_provenances=provenances,
+    )
+    assert callback_timezone.calls == 1
+    assert counter.snapshot().complete
+
+
+def test_late_caller_graph_replacement_cannot_change_the_sealed_cohort() -> None:
+    counter = ExecutionEffectAuditCounter()
+    entry, provenances = _effect_entry("late-caller-graph")
+    preparation = counter.prepare_action_cohort(
+        _ROOT_ACTION_ID,
+        (entry,),
+        published_provenances=provenances,
+    )
+    copied_node = replace(entry.plan.nodes[0])
+    object.__setattr__(entry.plan, "nodes", (copied_node,))
+
+    assert not counter.authenticates_action_cohort_preparation(
+        preparation,
+        entries=(entry,),
+    )
+    assert counter.authenticates_action_cohort_binding_token(preparation.binding_token)
+    receipt = _commit(counter, preparation)
+    assert counter.authenticates_action_cohort_receipt(
+        receipt,
+        preparation=preparation,
+    )
+    assert not counter.authenticates_action_cohort_receipt(
+        receipt,
+        preparation=preparation,
+        entries=(entry,),
+    )
+    assert counter.snapshot().complete
+
+
+@pytest.mark.parametrize(
     "tamper_target",
-    ("token", "delta", "nested_identity", "nested_value"),
+    ("token", "delta", "canonical_payload", "identity_digest"),
 )
 def test_precommit_tampering_rejects_with_zero_mutation_and_cleanup(
     tamper_target: str,
@@ -510,27 +814,63 @@ def test_precommit_tampering_rejects_with_zero_mutation_and_cleanup(
                 published_occurrence_count=(preparation._delta.published_occurrence_count + 1),
             ),
         )
-    elif tamper_target == "nested_identity":
-        copied_entry = replace(entry)
+    elif tamper_target == "canonical_payload":
         object.__setattr__(
             preparation,
             "_binding",
-            replace(preparation._binding, entries=(copied_entry,)),
+            replace(preparation._binding, canonical_payload=b'{"forged":true}'),
         )
     else:
-
-        class HostileValue:
-            def __repr__(self) -> str:
-                raise AssertionError("an authenticator repr'd a tampered nested value")
-
-        object.__setattr__(entry.plan.nodes[0].intent, "path", HostileValue())
+        object.__setattr__(
+            preparation,
+            "_binding",
+            replace(preparation._binding, entry_identity_digest="0" * 64),
+        )
 
     assert not counter.authenticates_action_cohort_preparation(preparation)
     with pytest.raises(ExecutionEffectPlanError, match="integrity"):
         with counter.claimed_action_cohort(preparation):
             pytest.fail("a tampered capability must never enter the claim body")
     assert counter.snapshot() == initial
-    assert counter.action_cohort_preparation_census().active == 0
+    census = counter.action_cohort_preparation_census()
+    assert census.active == 0
+    assert census.retained_members == 0
+    assert census.retained_bytes == 0
+    assert preparation.receipt is None
+
+
+def test_hostile_retained_member_tamper_rejects_without_callback_or_census_leak() -> None:
+    class HostileRetainedMembers:
+        def __eq__(self, _other: object) -> bool:
+            raise AssertionError("hostile retained-member equality ran under the audit lock")
+
+        def __repr__(self) -> str:
+            raise AssertionError("hostile retained-member repr was invoked")
+
+    counter = ExecutionEffectAuditCounter()
+    entry, provenances = _effect_entry("hostile-retained-members")
+    preparation = counter.prepare_action_cohort(
+        _ROOT_ACTION_ID,
+        (entry,),
+        published_provenances=provenances,
+    )
+    initial = counter.snapshot()
+    object.__setattr__(
+        preparation._binding,
+        "retained_members",
+        HostileRetainedMembers(),
+    )
+
+    assert not counter.authenticates_action_cohort_preparation(preparation)
+    with pytest.raises(ExecutionEffectPlanError, match="integrity"):
+        with counter.claimed_action_cohort(preparation):
+            pytest.fail("a malformed retained-member binding must not be claimable")
+
+    assert counter.snapshot() == initial
+    census = counter.action_cohort_preparation_census()
+    assert census.active == 0
+    assert census.retained_members == 0
+    assert census.retained_bytes == 0
     assert preparation.receipt is None
 
 
@@ -576,6 +916,28 @@ def test_receipt_is_exact_one_shot_and_authenticators_are_total() -> None:
         published_provenances=provenances,
     )
 
+    original_root_action_id = preparation._binding.root_action_id
+    object.__setattr__(preparation._binding, "root_action_id", "tampered-root")
+    assert not counter.authenticates_action_cohort_receipt(
+        receipt,
+        preparation=preparation,
+    )
+    object.__setattr__(preparation._binding, "root_action_id", original_root_action_id)
+    original_retained_members = preparation._binding.retained_members
+    object.__setattr__(
+        preparation._binding,
+        "retained_members",
+        original_retained_members + 1,
+    )
+    assert not counter.authenticates_action_cohort_receipt(
+        receipt,
+        preparation=preparation,
+    )
+    object.__setattr__(
+        preparation._binding,
+        "retained_members",
+        original_retained_members,
+    )
     object.__setattr__(receipt, "_integrity", Hostile())
     assert not counter.authenticates_action_cohort_receipt(
         receipt,

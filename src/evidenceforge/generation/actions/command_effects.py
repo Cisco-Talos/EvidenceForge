@@ -19,7 +19,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from heapq import heapify, heappop, heappush
 from threading import Lock, get_ident
@@ -38,6 +38,10 @@ from evidenceforge.models.exceptions import GenerationError
 from evidenceforge.utils.rng import stable_uuid
 
 DEFAULT_EXECUTION_EFFECT_AUDIT_PREPARATION_CAPACITY = 4096
+DEFAULT_EXECUTION_EFFECT_AUDIT_COHORT_MEMBER_CAPACITY = 16_384
+DEFAULT_EXECUTION_EFFECT_AUDIT_COHORT_BYTE_CAPACITY = 4 * 1024 * 1024
+DEFAULT_EXECUTION_EFFECT_AUDIT_RETAINED_MEMBER_CAPACITY = 262_144
+DEFAULT_EXECUTION_EFFECT_AUDIT_RETAINED_BYTE_CAPACITY = 64 * 1024 * 1024
 
 
 class ExecutionEffectPlanErrorCode(StrEnum):
@@ -1500,6 +1504,12 @@ class ExecutionEffectAuditPreparationCensus:
     prepared: int
     claimed: int
     capacity: int
+    retained_members: int
+    retained_member_capacity: int
+    retained_bytes: int
+    retained_byte_capacity: int
+    cohort_member_capacity: int
+    cohort_byte_capacity: int
 
     @property
     def active(self) -> int:
@@ -1526,14 +1536,35 @@ class _ExecutionEffectAuditDelta:
 
 @dataclass(frozen=True, slots=True)
 class _ExecutionEffectAuditCohortBinding:
-    """Semantic order and exact nested objects retained by one active capability."""
+    """Closed canonical primitives retained by one active capability."""
+
+    root_action_id: str
+    canonical_payload: bytes
+    entry_identity_digest: str
+    owned_plan_identity_digest: str
+    provenance_identity_digest: str
+    cohort_digest: str
+    identity_digest: str
+    retained_members: int
+    retained_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedExecutionEffectAuditCohort:
+    """Ephemeral canonical copies used only while preparing one audit delta."""
 
     root_action_id: str
     entries: tuple[ExecutionEffectAuditCohortEntry, ...]
     owned_plans: tuple[OwnedEffectOccurrencePlan, ...]
     published_provenances: tuple[EffectOccurrenceProvenance, ...]
+    canonical_payload: bytes
+    entry_identity_digest: str
+    owned_plan_identity_digest: str
+    provenance_identity_digest: str
     cohort_digest: str
     identity_digest: str
+    retained_members: int
+    retained_bytes: int
 
 
 class PreparedExecutionEffectAuditCommit:
@@ -1597,18 +1628,107 @@ class _ExecutionEffectAuditPreparationRecord:
     binding: _ExecutionEffectAuditCohortBinding
     token: ExecutionEffectAuditBindingToken
     receipt: ExecutionEffectAuditCommitReceipt
+    retained_members: int
+    retained_bytes: int
     state: str = "prepared"
     claiming_thread: int | None = None
 
 
-def _execution_effect_audit_cohort_digest(
+def _closed_datetime_payload(value: datetime | None) -> object:
+    """Return a callback-free primitive for an already canonical datetime."""
+
+    if value is None:
+        return None
+    if type(value) is not datetime or (
+        value.tzinfo is not None and type(value.tzinfo) is not timezone
+    ):
+        raise TypeError("audit datetime was not canonicalized to a fixed-offset value")
+    offset = value.utcoffset()
+    offset_microseconds = None
+    if offset is not None:
+        offset_microseconds = (
+            offset.days * 86_400 + offset.seconds
+        ) * 1_000_000 + offset.microseconds
+    return (
+        value.year,
+        value.month,
+        value.day,
+        value.hour,
+        value.minute,
+        value.second,
+        value.microsecond,
+        value.fold,
+        value.tzinfo is not None,
+        offset_microseconds,
+    )
+
+
+def _canonical_execution_effect_intent_payload(intent: CommandEffectIntent) -> dict[str, object]:
+    """Return every semantic field of one already reconstructed intent."""
+
+    common: dict[str, object] = {
+        "kind": intent.kind.value,
+        "semantic_key": intent.semantic_key,
+        "occurrence_cardinality": intent.occurrence_cardinality,
+    }
+    if type(intent) is ChildProcessEffectIntent:
+        common.update(image=intent.image, command_line=intent.command_line)
+    elif type(intent) is FileEffectIntent:
+        common.update(action=intent.action.value, path=intent.path)
+    elif type(intent) is RegistryEffectIntent:
+        common.update(
+            action=intent.action.value,
+            key=intent.key,
+            value_name=intent.value_name,
+        )
+    elif type(intent) is NetworkEffectIntent:
+        common.update(
+            destination=intent.destination,
+            destination_port=intent.destination_port,
+            protocol=intent.protocol,
+            service=intent.service,
+        )
+    elif type(intent) is TransferEffectIntent:
+        common.update(
+            protocol=intent.protocol,
+            source_path=intent.source_path,
+            destination=intent.destination,
+            destination_path=intent.destination_path,
+        )
+    elif type(intent) is ScannerEffectIntent:
+        common.update(tool=intent.tool, target=intent.target, probe_count=intent.probe_count)
+    elif type(intent) is ScheduledTaskEffectIntent:
+        common.update(action=intent.action.value, task_name=intent.task_name)
+    elif type(intent) is ServiceEffectIntent:
+        common.update(
+            action=intent.action.value,
+            service_name=intent.service_name,
+            image=intent.image,
+        )
+    elif type(intent) is SessionEffectIntent:
+        common.update(
+            action=intent.action.value,
+            session_kind=intent.session_kind,
+            principal=intent.principal,
+        )
+    elif type(intent) is WindowsAuditEffectIntent:
+        common.update(
+            audit_kind=intent.audit_kind.value,
+            semantic_target=intent.semantic_target,
+        )
+    else:
+        raise TypeError("execution-effect audit intent was not canonically reconstructed")
+    return common
+
+
+def _execution_effect_audit_cohort_payload(
     *,
     root_action_id: str,
     entries: tuple[ExecutionEffectAuditCohortEntry, ...],
     owned_plans: tuple[OwnedEffectOccurrencePlan, ...],
     published_provenances: tuple[EffectOccurrenceProvenance, ...],
-) -> str:
-    """Bind validated cohort values and their caller-supplied semantic order."""
+) -> bytes:
+    """Encode canonical cohort values and caller-supplied semantic order."""
 
     payload = {
         "version": 1,
@@ -1623,9 +1743,7 @@ def _execution_effect_audit_cohort_digest(
                 "nodes": [
                     {
                         "node_id": node.node_id,
-                        "intent_kind": node.intent.kind.value,
-                        "intent_semantic_key": node.intent.semantic_key,
-                        "occurrence_cardinality": node.intent.occurrence_cardinality,
+                        "intent": _canonical_execution_effect_intent_payload(node.intent),
                         "role": node.role.value,
                         "requirement": node.requirement.value,
                         "actor_kind": node.actor.kind.value,
@@ -1642,11 +1760,7 @@ def _execution_effect_audit_cohort_digest(
                             "node_id": outcome.node_id,
                             "status": outcome.status.value,
                             "child_action_id": outcome.child_action_id,
-                            "completed_at": (
-                                outcome.completed_at.isoformat()
-                                if outcome.completed_at is not None
-                                else None
-                            ),
+                            "completed_at": _closed_datetime_payload(outcome.completed_at),
                             "reason": outcome.reason,
                             "canonical_occurrence_count": (outcome.canonical_occurrence_count),
                         }
@@ -1682,8 +1796,7 @@ def _execution_effect_audit_cohort_digest(
             for provenance in published_provenances
         ],
     }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _execution_effect_audit_delta_digest(
@@ -1711,52 +1824,128 @@ def _execution_effect_audit_delta_digest(
     return hashlib.sha256(encoded.encode("ascii")).hexdigest()
 
 
-def _execution_effect_audit_identity_digest(
-    *,
-    entries: tuple[ExecutionEffectAuditCohortEntry, ...],
-    owned_plans: tuple[OwnedEffectOccurrencePlan, ...],
-    published_provenances: tuple[EffectOccurrenceProvenance, ...],
-) -> str:
-    """Bind exact nested capability objects and their caller-supplied order."""
+def _exact_identity_digest(label: str, identities: tuple[int, ...]) -> str:
+    """Hash ordered object identities without invoking caller equality or repr."""
 
-    payload = {
-        "version": 1,
-        "entries": [
-            {
-                "entry": id(entry),
-                "plan": id(entry.plan),
-                "anchor": id(entry.plan.anchor),
-                "nodes": [
-                    {
-                        "node": id(node),
-                        "intent": id(node.intent),
-                        "actor": id(node.actor),
-                    }
-                    for node in entry.plan.nodes
-                ],
-                "reconciliation": id(entry.reconciliation),
-                "outcomes": [id(outcome) for outcome in entry.reconciliation.outcomes],
-                "unplanned_failures": [
-                    id(failure) for failure in entry.reconciliation.unplanned_failures
-                ],
-            }
-            for entry in entries
-        ],
-        "owned_plans": [id(plan) for plan in owned_plans],
-        "published_provenances": [id(provenance) for provenance in published_provenances],
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("ascii")).hexdigest()
+    digest = hashlib.sha256(f"execution-effect-audit-{label}-identity-v2\0".encode("ascii"))
+    for identity in identities:
+        digest.update(str(identity).encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
-def _same_exact_objects(actual: tuple[object, ...], expected: object) -> bool:
-    """Compare ordered nested capabilities by identity without invoking equality."""
+def _is_lower_hex(value: object, *, length: int) -> bool:
+    """Return whether ``value`` is one exact bounded lowercase hexadecimal string."""
 
     return bool(
-        type(expected) is tuple
-        and len(actual) == len(expected)
-        and all(left is right for left, right in zip(actual, expected, strict=True))
+        type(value) is str
+        and len(value) == length
+        and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def _execution_effect_entry_identity_digest(entries: object) -> str | None:
+    """Return the exact nested identity binding for an entry tuple, or ``None``."""
+
+    if type(entries) is not tuple:
+        return None
+    identities: list[int] = []
+    try:
+        for entry in entries:
+            if type(entry) is not ExecutionEffectAuditCohortEntry:
+                return None
+            plan = entry.plan
+            reconciliation = entry.reconciliation
+            if (
+                type(plan) is not ExecutionEffectPlan
+                or type(plan.anchor) is not ActionAnchor
+                or type(plan.nodes) is not tuple
+                or type(plan._ordered_ids) is not tuple
+                or type(reconciliation) is not ExecutionEffectReconciliation
+                or type(reconciliation.plan_summary) is not ExecutionEffectPlanSummary
+                or type(reconciliation.outcomes) is not tuple
+                or type(reconciliation.unplanned_failures) is not tuple
+            ):
+                return None
+            identities.extend(
+                (
+                    id(entry),
+                    id(plan),
+                    id(plan.anchor),
+                    id(plan.nodes),
+                    id(plan._ordered_ids),
+                    id(reconciliation),
+                    id(reconciliation.plan_summary),
+                    id(reconciliation.outcomes),
+                    id(reconciliation.unplanned_failures),
+                )
+            )
+            for node in plan.nodes:
+                if (
+                    type(node) is not ExecutionEffectNode
+                    or type(node.actor) is not EffectActorRef
+                    or type(node.depends_on) is not tuple
+                ):
+                    return None
+                identities.extend(
+                    (
+                        id(node),
+                        id(node.intent),
+                        id(node.actor),
+                        id(node.depends_on),
+                    )
+                )
+            identities.extend(id(outcome) for outcome in reconciliation.outcomes)
+            identities.extend(id(failure) for failure in reconciliation.unplanned_failures)
+            for values in (
+                reconciliation.missing_node_ids,
+                reconciliation.missing_required_node_ids,
+                reconciliation.unexpected_node_ids,
+                reconciliation.invalid_outcome_node_ids,
+                reconciliation.policy_invalid_outcome_node_ids,
+                reconciliation.cardinality_mismatch_node_ids,
+                reconciliation.failed_outcome_node_ids,
+                reconciliation.audited_occurrence_node_ids,
+            ):
+                if type(values) is not tuple:
+                    return None
+                identities.append(id(values))
+    except (AttributeError, TypeError):
+        return None
+    return _exact_identity_digest("entry", tuple(identities))
+
+
+def _flat_exact_identity_digest(
+    label: str,
+    values: object,
+    *,
+    expected_type: type[object],
+) -> str | None:
+    """Return an ordered identity digest for one exact tuple of typed values."""
+
+    if type(values) is not tuple or any(type(value) is not expected_type for value in values):
+        return None
+    return _exact_identity_digest(label, tuple(id(value) for value in values))
+
+
+def _combined_execution_effect_identity_digest(
+    *,
+    root_action_id: str,
+    entry_digest: str,
+    owned_plan_digest: str,
+    provenance_digest: str,
+    retained_members: int,
+    retained_bytes: int,
+) -> str:
+    """Bind all three exact nested capability families into one token field."""
+
+    root_action_digest = hashlib.sha256(root_action_id.encode("utf-8")).hexdigest()
+    payload = (
+        "execution-effect-audit-identity-v2\0"
+        f"{root_action_digest}\0{entry_digest}\0{owned_plan_digest}\0"
+        f"{provenance_digest}\0{retained_members}\0{retained_bytes}"
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _execution_effect_intent_has_safe_shape(intent: object) -> bool:
@@ -1833,11 +2022,17 @@ class ExecutionEffectAuditCounter:
 
     __slots__ = (
         "_action_cohort_capability_locators",
+        "_action_cohort_byte_capacity",
+        "_action_cohort_member_capacity",
         "_action_cohort_owner_id",
         "_action_cohort_preparation_capacity",
         "_action_cohort_prepared_count",
         "_action_cohort_preparation_locators",
         "_action_cohort_preparations",
+        "_action_cohort_retained_byte_capacity",
+        "_action_cohort_retained_bytes",
+        "_action_cohort_retained_member_capacity",
+        "_action_cohort_retained_members",
         "_action_cohort_secret",
         "_action_cohort_claimed_count",
         "_counts",
@@ -1891,15 +2086,37 @@ class ExecutionEffectAuditCounter:
         action_cohort_preparation_capacity: int = (
             DEFAULT_EXECUTION_EFFECT_AUDIT_PREPARATION_CAPACITY
         ),
+        action_cohort_member_capacity: int = (
+            DEFAULT_EXECUTION_EFFECT_AUDIT_COHORT_MEMBER_CAPACITY
+        ),
+        action_cohort_byte_capacity: int = DEFAULT_EXECUTION_EFFECT_AUDIT_COHORT_BYTE_CAPACITY,
+        action_cohort_retained_member_capacity: int = (
+            DEFAULT_EXECUTION_EFFECT_AUDIT_RETAINED_MEMBER_CAPACITY
+        ),
+        action_cohort_retained_byte_capacity: int = (
+            DEFAULT_EXECUTION_EFFECT_AUDIT_RETAINED_BYTE_CAPACITY
+        ),
     ) -> None:
-        if (
-            type(action_cohort_preparation_capacity) is not int
-            or action_cohort_preparation_capacity <= 0
-        ):
-            raise ValueError("action_cohort_preparation_capacity must be a positive integer")
+        capacities = {
+            "action_cohort_preparation_capacity": action_cohort_preparation_capacity,
+            "action_cohort_member_capacity": action_cohort_member_capacity,
+            "action_cohort_byte_capacity": action_cohort_byte_capacity,
+            "action_cohort_retained_member_capacity": action_cohort_retained_member_capacity,
+            "action_cohort_retained_byte_capacity": action_cohort_retained_byte_capacity,
+        }
+        invalid_capacity = next(
+            (name for name, value in capacities.items() if type(value) is not int or value <= 0),
+            None,
+        )
+        if invalid_capacity is not None:
+            raise ValueError(f"{invalid_capacity} must be a positive integer")
         self._action_cohort_owner_id = secrets.token_hex(16)
         self._action_cohort_secret = secrets.token_bytes(32)
         self._action_cohort_preparation_capacity = action_cohort_preparation_capacity
+        self._action_cohort_member_capacity = action_cohort_member_capacity
+        self._action_cohort_byte_capacity = action_cohort_byte_capacity
+        self._action_cohort_retained_member_capacity = action_cohort_retained_member_capacity
+        self._action_cohort_retained_byte_capacity = action_cohort_retained_byte_capacity
         self._action_cohort_preparations: dict[
             str,
             _ExecutionEffectAuditPreparationRecord,
@@ -1908,6 +2125,8 @@ class ExecutionEffectAuditCounter:
         self._action_cohort_capability_locators: dict[int, str] = {}
         self._action_cohort_prepared_count = 0
         self._action_cohort_claimed_count = 0
+        self._action_cohort_retained_members = 0
+        self._action_cohort_retained_bytes = 0
         self._counts: Counter[str] = Counter()
         self._digest_count = 0
         self._digest_xor = 0
@@ -1935,26 +2154,21 @@ class ExecutionEffectAuditCounter:
         required.  A zero-node execution plan remains a valid audited member.
         """
 
-        expected_provenances, cohort_digest = self._validate_action_cohort_inputs(
+        validated = self._validate_action_cohort_inputs(
             root_action_id=root_action_id,
             entries=entries,
             owned_plans=owned_plans,
             published_provenances=published_provenances,
         )
-        if Counter(expected_provenances) != Counter(published_provenances):
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                "published effect provenance does not exactly match the cohort plan",
-            )
 
         # Deliberately derive against an isolated counter.  The main counter is
         # not touched until the exact claimed capability reaches commit_no_fail.
         scratch = ExecutionEffectAuditCounter()
-        for entry in entries:
+        for entry in validated.entries:
             scratch.record(entry.reconciliation)
-        for plan in owned_plans:
+        for plan in validated.owned_plans:
             scratch.record_owned_effect_plan(plan)
-        for provenance in published_provenances:
+        for provenance in validated.published_provenances:
             scratch.record_published_effect_occurrence(
                 provenance,
                 effect_kind=provenance.kind,
@@ -1974,20 +2188,18 @@ class ExecutionEffectAuditCounter:
         )
         delta_digest = _execution_effect_audit_delta_digest(
             delta,
-            cohort_digest=cohort_digest,
-        )
-        identity_digest = _execution_effect_audit_identity_digest(
-            entries=entries,
-            owned_plans=owned_plans,
-            published_provenances=published_provenances,
+            cohort_digest=validated.cohort_digest,
         )
         binding = _ExecutionEffectAuditCohortBinding(
-            root_action_id=root_action_id,
-            entries=entries,
-            owned_plans=owned_plans,
-            published_provenances=published_provenances,
-            cohort_digest=cohort_digest,
-            identity_digest=identity_digest,
+            root_action_id=validated.root_action_id,
+            canonical_payload=validated.canonical_payload,
+            entry_identity_digest=validated.entry_identity_digest,
+            owned_plan_identity_digest=validated.owned_plan_identity_digest,
+            provenance_identity_digest=validated.provenance_identity_digest,
+            cohort_digest=validated.cohort_digest,
+            identity_digest=validated.identity_digest,
+            retained_members=validated.retained_members,
+            retained_bytes=validated.retained_bytes,
         )
 
         with self._lock:
@@ -2001,19 +2213,35 @@ class ExecutionEffectAuditCounter:
                     f"({self._action_cohort_preparation_capacity}) is exhausted. "
                     "Commit or cancel an active cohort before retrying.",
                 )
+            retained_members = self._action_cohort_retained_members + binding.retained_members
+            if retained_members > self._action_cohort_retained_member_capacity:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "Execution-effect audit aggregate retained-member capacity "
+                    f"({self._action_cohort_retained_member_capacity}) would be exceeded. "
+                    "Commit or cancel an active cohort before retrying.",
+                )
+            retained_bytes = self._action_cohort_retained_bytes + binding.retained_bytes
+            if retained_bytes > self._action_cohort_retained_byte_capacity:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "Execution-effect audit aggregate retained-byte capacity "
+                    f"({self._action_cohort_retained_byte_capacity}) would be exceeded. "
+                    "Commit or cancel an active cohort before retrying.",
+                )
             preparation_id = secrets.token_hex(16)
             while preparation_id in self._action_cohort_preparations:
                 preparation_id = secrets.token_hex(16)
             token = ExecutionEffectAuditBindingToken(
                 _owner_id=self._action_cohort_owner_id,
                 _preparation_id=preparation_id,
-                _cohort_digest=cohort_digest,
-                _identity_digest=identity_digest,
+                _cohort_digest=validated.cohort_digest,
+                _identity_digest=validated.identity_digest,
                 _delta_digest=delta_digest,
                 _integrity=self._action_cohort_token_integrity(
                     preparation_id=preparation_id,
-                    cohort_digest=cohort_digest,
-                    identity_digest=identity_digest,
+                    cohort_digest=validated.cohort_digest,
+                    identity_digest=validated.identity_digest,
                     delta_digest=delta_digest,
                 ),
             )
@@ -2027,15 +2255,15 @@ class ExecutionEffectAuditCounter:
             receipt = ExecutionEffectAuditCommitReceipt(
                 _owner_id=self._action_cohort_owner_id,
                 _preparation_id=preparation_id,
-                _cohort_digest=cohort_digest,
-                _identity_digest=identity_digest,
+                _cohort_digest=validated.cohort_digest,
+                _identity_digest=validated.identity_digest,
                 _delta_digest=delta_digest,
                 _receipt_id=receipt_id,
                 _preparation_object_id=id(preparation),
                 _integrity=self._action_cohort_receipt_integrity(
                     preparation_id=preparation_id,
-                    cohort_digest=cohort_digest,
-                    identity_digest=identity_digest,
+                    cohort_digest=validated.cohort_digest,
+                    identity_digest=validated.identity_digest,
                     delta_digest=delta_digest,
                     receipt_id=receipt_id,
                     preparation_object_id=id(preparation),
@@ -2047,11 +2275,15 @@ class ExecutionEffectAuditCounter:
                     binding=binding,
                     token=token,
                     receipt=receipt,
+                    retained_members=binding.retained_members,
+                    retained_bytes=binding.retained_bytes,
                 )
             )
             self._action_cohort_preparation_locators[id(preparation)] = preparation_id
             self._action_cohort_capability_locators[id(token)] = preparation_id
             self._action_cohort_prepared_count += 1
+            self._action_cohort_retained_members = retained_members
+            self._action_cohort_retained_bytes = retained_bytes
         return preparation
 
     def cancel_action_cohort(self, preparation: object) -> None:
@@ -2142,6 +2374,33 @@ class ExecutionEffectAuditCounter:
             return False
         if root_action_id is not None and type(root_action_id) is not str:
             return False
+        entry_identity_digest = (
+            _execution_effect_entry_identity_digest(entries) if entries is not None else None
+        )
+        if entries is not None and entry_identity_digest is None:
+            return False
+        owned_plan_identity_digest = (
+            _flat_exact_identity_digest(
+                "owned-plan",
+                owned_plans,
+                expected_type=OwnedEffectOccurrencePlan,
+            )
+            if owned_plans is not None
+            else None
+        )
+        if owned_plans is not None and owned_plan_identity_digest is None:
+            return False
+        provenance_identity_digest = (
+            _flat_exact_identity_digest(
+                "provenance",
+                published_provenances,
+                expected_type=EffectOccurrenceProvenance,
+            )
+            if published_provenances is not None
+            else None
+        )
+        if published_provenances is not None and provenance_identity_digest is None:
+            return False
         with self._lock:
             record = self._active_action_cohort_record_locked(preparation)
             if record is None or not self._action_cohort_record_authenticates_total_locked(record):
@@ -2149,19 +2408,19 @@ class ExecutionEffectAuditCounter:
             binding = record.binding
             if root_action_id is not None and root_action_id != binding.root_action_id:
                 return False
-            if entries is not None and not _same_exact_objects(binding.entries, entries):
+            if (
+                entry_identity_digest is not None
+                and entry_identity_digest != binding.entry_identity_digest
+            ):
                 return False
-            if owned_plans is not None and not _same_exact_objects(
-                binding.owned_plans,
-                owned_plans,
+            if (
+                owned_plan_identity_digest is not None
+                and owned_plan_identity_digest != binding.owned_plan_identity_digest
             ):
                 return False
             return not (
-                published_provenances is not None
-                and not _same_exact_objects(
-                    binding.published_provenances,
-                    published_provenances,
-                )
+                provenance_identity_digest is not None
+                and provenance_identity_digest != binding.provenance_identity_digest
             )
 
     def authenticates_action_cohort_binding_token(self, token: object) -> bool:
@@ -2200,6 +2459,33 @@ class ExecutionEffectAuditCounter:
             return False
         if root_action_id is not None and type(root_action_id) is not str:
             return False
+        entry_identity_digest = (
+            _execution_effect_entry_identity_digest(entries) if entries is not None else None
+        )
+        if entries is not None and entry_identity_digest is None:
+            return False
+        owned_plan_identity_digest = (
+            _flat_exact_identity_digest(
+                "owned-plan",
+                owned_plans,
+                expected_type=OwnedEffectOccurrencePlan,
+            )
+            if owned_plans is not None
+            else None
+        )
+        if owned_plans is not None and owned_plan_identity_digest is None:
+            return False
+        provenance_identity_digest = (
+            _flat_exact_identity_digest(
+                "provenance",
+                published_provenances,
+                expected_type=EffectOccurrenceProvenance,
+            )
+            if published_provenances is not None
+            else None
+        )
+        if published_provenances is not None and provenance_identity_digest is None:
+            return False
         try:
             if (
                 preparation._counter is not self
@@ -2226,16 +2512,19 @@ class ExecutionEffectAuditCounter:
             return False
         if root_action_id is not None and root_action_id != binding.root_action_id:
             return False
-        if entries is not None and not _same_exact_objects(binding.entries, entries):
+        if (
+            entry_identity_digest is not None
+            and entry_identity_digest != binding.entry_identity_digest
+        ):
             return False
-        if owned_plans is not None and not _same_exact_objects(binding.owned_plans, owned_plans):
+        if (
+            owned_plan_identity_digest is not None
+            and owned_plan_identity_digest != binding.owned_plan_identity_digest
+        ):
             return False
         return not (
-            published_provenances is not None
-            and not _same_exact_objects(
-                binding.published_provenances,
-                published_provenances,
-            )
+            provenance_identity_digest is not None
+            and provenance_identity_digest != binding.provenance_identity_digest
         )
 
     def action_cohort_preparation_census(self) -> ExecutionEffectAuditPreparationCensus:
@@ -2246,6 +2535,12 @@ class ExecutionEffectAuditCounter:
                 prepared=self._action_cohort_prepared_count,
                 claimed=self._action_cohort_claimed_count,
                 capacity=self._action_cohort_preparation_capacity,
+                retained_members=self._action_cohort_retained_members,
+                retained_member_capacity=self._action_cohort_retained_member_capacity,
+                retained_bytes=self._action_cohort_retained_bytes,
+                retained_byte_capacity=self._action_cohort_retained_byte_capacity,
+                cohort_member_capacity=self._action_cohort_member_capacity,
+                cohort_byte_capacity=self._action_cohort_byte_capacity,
             )
 
     @staticmethod
@@ -2259,7 +2554,7 @@ class ExecutionEffectAuditCounter:
         entries: object,
         owned_plans: object,
         published_provenances: object,
-    ) -> tuple[tuple[EffectOccurrenceProvenance, ...], str]:
+    ) -> _ValidatedExecutionEffectAuditCohort:
         if type(root_action_id) is not str or not root_action_id.strip():
             raise self._invalid_action_cohort("audit cohorts require a non-empty root_action_id")
         if type(entries) is not tuple:
@@ -2271,19 +2566,63 @@ class ExecutionEffectAuditCounter:
         if not entries and not owned_plans and not published_provenances:
             raise self._invalid_action_cohort("an execution-effect audit cohort cannot be empty")
 
-        expected_provenances: list[EffectOccurrenceProvenance] = []
-        entry_action_ids: set[str] = set()
+        retained_members = len(owned_plans) + len(published_provenances)
+        if retained_members > self._action_cohort_member_capacity:
+            raise self._invalid_action_cohort(
+                "execution-effect audit cohort member capacity "
+                f"({self._action_cohort_member_capacity}) is exceeded"
+            )
         for entry in entries:
-            if type(entry) is not ExecutionEffectAuditCohortEntry:
+            if (
+                type(entry) is not ExecutionEffectAuditCohortEntry
+                or type(entry.plan) is not ExecutionEffectPlan
+                or type(entry.plan.nodes) is not tuple
+                or type(entry.reconciliation) is not ExecutionEffectReconciliation
+                or type(entry.reconciliation.outcomes) is not tuple
+                or type(entry.reconciliation.unplanned_failures) is not tuple
+            ):
                 raise self._invalid_action_cohort(
                     "audit cohort entries require exact typed plan/reconciliation bindings"
                 )
-            try:
-                self._validate_action_cohort_entry(entry)
-            except ExecutionEffectPlanError:
-                raise
-            except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as error:
-                raise self._invalid_action_cohort("audit cohort entry is malformed") from error
+            # Each encoded entry accounts for its anchor, plan, summary, and
+            # reconciliation; every node accounts for its intent and actor.
+            # Variable dependency and text payloads are independently bounded
+            # by canonical byte size.
+            retained_members += (
+                5
+                + 3 * len(entry.plan.nodes)
+                + len(entry.reconciliation.outcomes)
+                + len(entry.reconciliation.unplanned_failures)
+            )
+            if retained_members > self._action_cohort_member_capacity:
+                raise self._invalid_action_cohort(
+                    "execution-effect audit cohort member capacity "
+                    f"({self._action_cohort_member_capacity}) is exceeded"
+                )
+
+        canonical_entries = tuple(
+            self._canonicalize_action_cohort_entry(entry) for entry in entries
+        )
+        canonical_owned_plans = tuple(
+            self._canonicalize_owned_effect_plan(plan) for plan in owned_plans
+        )
+        canonical_provenances = tuple(
+            self._canonicalize_effect_occurrence_provenance(provenance)
+            for provenance in published_provenances
+        )
+
+        expected_specs: dict[
+            tuple[str, str],
+            tuple[
+                EffectOccurrenceDisposition,
+                EffectOccurrenceKind,
+                EffectOccurrenceOwner | None,
+                int,
+            ],
+        ] = {}
+        expected_occurrence_count = 0
+        entry_action_ids: set[str] = set()
+        for entry in canonical_entries:
             entry.reconciliation.require_complete()
             if entry.plan.action_id in entry_action_ids:
                 raise self._invalid_action_cohort(
@@ -2306,29 +2645,21 @@ class ExecutionEffectAuditCounter:
                     if type(node.intent) is FileEffectIntent
                     else EffectOccurrenceKind.REGISTRY
                 )
-                expected_provenances.extend(
-                    EffectOccurrenceProvenance.planned(
-                        kind=kind,
-                        root_action_id=root_action_id,
-                        plan_action_id=entry.plan.action_id,
-                        node_id=node.node_id,
-                        occurrence_ordinal=ordinal,
+                key = (entry.plan.action_id, node.node_id)
+                if key in expected_specs:
+                    raise self._invalid_action_cohort(
+                        "cohort plans derive duplicate effect occurrence roots"
                     )
-                    for ordinal in range(node.intent.occurrence_cardinality)
+                expected_specs[key] = (
+                    EffectOccurrenceDisposition.PLANNED,
+                    kind,
+                    None,
+                    node.intent.occurrence_cardinality,
                 )
+                expected_occurrence_count += node.intent.occurrence_cardinality
 
         owned_action_ids: set[str] = set()
-        for plan in owned_plans:
-            if type(plan) is not OwnedEffectOccurrencePlan:
-                raise self._invalid_action_cohort(
-                    "owned effect roots require exact OwnedEffectOccurrencePlan values"
-                )
-            try:
-                self._validate_owned_effect_plan(plan)
-            except ExecutionEffectPlanError:
-                raise
-            except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as error:
-                raise self._invalid_action_cohort("owned effect root is malformed") from error
+        for plan in canonical_owned_plans:
             if plan.root_action_id != root_action_id:
                 raise self._invalid_action_cohort(
                     "owned effect root does not belong to the cohort root action"
@@ -2338,28 +2669,31 @@ class ExecutionEffectAuditCounter:
                     "owned effect roots cannot repeat a plan action identity"
                 )
             owned_action_ids.add(plan.plan_action_id)
-            expected_provenances.extend(
-                plan.provenance(ordinal) for ordinal in range(plan.occurrence_count)
+            key = (plan.plan_action_id, plan.node_id)
+            if key in expected_specs:
+                raise self._invalid_action_cohort(
+                    "cohort plans derive duplicate effect occurrence roots"
+                )
+            expected_specs[key] = (
+                EffectOccurrenceDisposition.OWNED_ROOT,
+                plan.kind,
+                plan.owner,
+                plan.occurrence_count,
+            )
+            expected_occurrence_count += plan.occurrence_count
+
+        if expected_occurrence_count > self._action_cohort_member_capacity:
+            raise self._invalid_action_cohort(
+                "execution-effect audit occurrence expansion exceeds per-cohort member capacity "
+                f"({self._action_cohort_member_capacity})"
+            )
+        if expected_occurrence_count != len(canonical_provenances):
+            raise self._invalid_action_cohort(
+                "published effect provenance does not exactly match the cohort plan"
             )
 
-        if len(expected_provenances) != len(set(expected_provenances)):
-            raise self._invalid_action_cohort(
-                "cohort plans derive duplicate effect occurrence provenance"
-            )
-        seen_provenances: set[EffectOccurrenceProvenance] = set()
-        for provenance in published_provenances:
-            if type(provenance) is not EffectOccurrenceProvenance:
-                raise self._invalid_action_cohort(
-                    "published effects require exact EffectOccurrenceProvenance values"
-                )
-            try:
-                self._validate_effect_occurrence_provenance(provenance)
-            except ExecutionEffectPlanError:
-                raise
-            except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as error:
-                raise self._invalid_action_cohort(
-                    "published effect provenance is malformed"
-                ) from error
+        seen_provenances: set[tuple[str, str, int]] = set()
+        for provenance in canonical_provenances:
             if provenance.disposition == EffectOccurrenceDisposition.EXEMPT:
                 raise self._invalid_action_cohort(
                     "audit cohorts cannot publish exempt effect occurrences"
@@ -2368,21 +2702,90 @@ class ExecutionEffectAuditCounter:
                 raise self._invalid_action_cohort(
                     "published effect provenance does not belong to the cohort root action"
                 )
-            if provenance in seen_provenances:
+            occurrence_key = (
+                provenance.plan_action_id,
+                provenance.node_id,
+                provenance.occurrence_ordinal,
+            )
+            if occurrence_key in seen_provenances:
                 raise self._invalid_action_cohort(
                     "audit cohorts cannot publish duplicate effect provenance"
                 )
-            seen_provenances.add(provenance)
+            seen_provenances.add(occurrence_key)
+            expected = expected_specs.get((provenance.plan_action_id, provenance.node_id))
+            if expected is None:
+                raise self._invalid_action_cohort(
+                    "published effect provenance does not match a cohort plan root"
+                )
+            disposition, kind, owner, occurrence_count = expected
+            if (
+                provenance.disposition is not disposition
+                or provenance.kind is not kind
+                or provenance.owner is not owner
+                or not 0 <= provenance.occurrence_ordinal < occurrence_count
+            ):
+                raise self._invalid_action_cohort(
+                    "published effect provenance kind, owner, or ordinal is not canonical"
+                )
 
-        cohort_digest = _execution_effect_audit_cohort_digest(
+        canonical_payload = _execution_effect_audit_cohort_payload(
             root_action_id=root_action_id,
-            entries=entries,
-            owned_plans=owned_plans,
-            published_provenances=published_provenances,
+            entries=canonical_entries,
+            owned_plans=canonical_owned_plans,
+            published_provenances=canonical_provenances,
         )
-        return tuple(expected_provenances), cohort_digest
+        retained_bytes = len(canonical_payload)
+        if retained_bytes > self._action_cohort_byte_capacity:
+            raise self._invalid_action_cohort(
+                "execution-effect audit cohort byte capacity "
+                f"({self._action_cohort_byte_capacity}) is exceeded"
+            )
+        entry_identity_digest = _execution_effect_entry_identity_digest(entries)
+        owned_plan_identity_digest = _flat_exact_identity_digest(
+            "owned-plan",
+            owned_plans,
+            expected_type=OwnedEffectOccurrencePlan,
+        )
+        provenance_identity_digest = _flat_exact_identity_digest(
+            "provenance",
+            published_provenances,
+            expected_type=EffectOccurrenceProvenance,
+        )
+        if (
+            entry_identity_digest is None
+            or owned_plan_identity_digest is None
+            or provenance_identity_digest is None
+        ):
+            raise self._invalid_action_cohort(
+                "audit cohort nested capability identities changed during preparation"
+            )
+        identity_digest = _combined_execution_effect_identity_digest(
+            root_action_id=root_action_id,
+            entry_digest=entry_identity_digest,
+            owned_plan_digest=owned_plan_identity_digest,
+            provenance_digest=provenance_identity_digest,
+            retained_members=retained_members,
+            retained_bytes=retained_bytes,
+        )
+        return _ValidatedExecutionEffectAuditCohort(
+            root_action_id=root_action_id,
+            entries=canonical_entries,
+            owned_plans=canonical_owned_plans,
+            published_provenances=canonical_provenances,
+            canonical_payload=canonical_payload,
+            entry_identity_digest=entry_identity_digest,
+            owned_plan_identity_digest=owned_plan_identity_digest,
+            provenance_identity_digest=provenance_identity_digest,
+            cohort_digest=hashlib.sha256(canonical_payload).hexdigest(),
+            identity_digest=identity_digest,
+            retained_members=retained_members,
+            retained_bytes=retained_bytes,
+        )
 
-    def _validate_action_cohort_entry(self, entry: ExecutionEffectAuditCohortEntry) -> None:
+    def _canonicalize_action_cohort_entry(
+        self,
+        entry: ExecutionEffectAuditCohortEntry,
+    ) -> ExecutionEffectAuditCohortEntry:
         plan = entry.plan
         reconciliation = entry.reconciliation
         if (
@@ -2394,20 +2797,6 @@ class ExecutionEffectAuditCounter:
             or not plan.anchor.stable_id
             or type(plan.anchor.source) is not str
             or type(plan.nodes) is not tuple
-            or any(type(node) is not ExecutionEffectNode for node in plan.nodes)
-            or any(not _execution_effect_intent_has_safe_shape(node.intent) for node in plan.nodes)
-            or any(type(node.actor) is not EffectActorRef for node in plan.nodes)
-            or any(type(node.node_id) is not str for node in plan.nodes)
-            or any(type(node.role) is not OccurrenceRole for node in plan.nodes)
-            or any(type(node.requirement) is not EffectRequirement for node in plan.nodes)
-            or any(type(node.actor.kind) is not EffectActorKind for node in plan.nodes)
-            or any(type(node.actor.node_id) is not str for node in plan.nodes)
-            or any(type(node.depends_on) is not tuple for node in plan.nodes)
-            or any(
-                any(type(dependency) is not str for dependency in node.depends_on)
-                for node in plan.nodes
-            )
-            or any(type(node.instance_key) is not str for node in plan.nodes)
             or type(plan._ordered_ids) is not tuple
             or any(type(node_id) is not str for node_id in plan._ordered_ids)
             or type(reconciliation) is not ExecutionEffectReconciliation
@@ -2471,21 +2860,289 @@ class ExecutionEffectAuditCounter:
         ):
             raise self._invalid_action_cohort("audit cohort entry is malformed")
         try:
-            validated_plan = ExecutionEffectPlan(plan.anchor, plan.nodes)
-            expected = validated_plan.reconcile(
-                reconciliation.outcomes,
-                unplanned_failures=reconciliation.unplanned_failures,
+            canonical_anchor = ActionAnchor(
+                family=plan.anchor.family,
+                stable_id=plan.anchor.stable_id,
+                source=plan.anchor.source,
+            )
+            canonical_nodes = tuple(
+                self._canonicalize_execution_effect_node(node) for node in plan.nodes
+            )
+            canonical_plan = ExecutionEffectPlan(canonical_anchor, canonical_nodes)
+            canonical_outcomes = tuple(
+                self._canonicalize_execution_effect_outcome(outcome)
+                for outcome in reconciliation.outcomes
+            )
+            canonical_failures = tuple(
+                UnplannedEffectFailure(
+                    effect_kind=failure.effect_kind,
+                    canonical_occurrence_count=failure.canonical_occurrence_count,
+                    reason=failure.reason,
+                )
+                for failure in reconciliation.unplanned_failures
+            )
+            if any(
+                original.effect_kind is not canonical.effect_kind
+                or original.canonical_occurrence_count != canonical.canonical_occurrence_count
+                or original.reason != canonical.reason
+                for original, canonical in zip(
+                    reconciliation.unplanned_failures,
+                    canonical_failures,
+                    strict=True,
+                )
+            ):
+                raise self._invalid_action_cohort("audit cohort unplanned failure is not canonical")
+            expected = canonical_plan.reconcile(
+                canonical_outcomes,
+                unplanned_failures=canonical_failures,
             )
         except (ExecutionEffectPlanError, AttributeError, TypeError, ValueError) as error:
             raise self._invalid_action_cohort("audit cohort entry is malformed") from error
-        if validated_plan != plan or expected != reconciliation:
+        if plan._ordered_ids != canonical_plan._ordered_ids:
+            raise self._invalid_action_cohort(
+                "audit cohort plan order does not match its reconstructed graph"
+            )
+        summary = reconciliation.plan_summary
+        expected_summary = expected.plan_summary
+        if (
+            reconciliation.action_id != expected.action_id
+            or summary.action_id != expected_summary.action_id
+            or summary.node_count != expected_summary.node_count
+            or summary.required_count != expected_summary.required_count
+            or summary.optional_count != expected_summary.optional_count
+            or summary.externally_owned_count != expected_summary.externally_owned_count
+            or summary.estimated_occurrences != expected_summary.estimated_occurrences
+            or canonical_outcomes != expected.outcomes
+            or canonical_failures != expected.unplanned_failures
+            or any(
+                actual != canonical
+                for actual, canonical in (
+                    (reconciliation.missing_node_ids, expected.missing_node_ids),
+                    (
+                        reconciliation.missing_required_node_ids,
+                        expected.missing_required_node_ids,
+                    ),
+                    (reconciliation.unexpected_node_ids, expected.unexpected_node_ids),
+                    (
+                        reconciliation.invalid_outcome_node_ids,
+                        expected.invalid_outcome_node_ids,
+                    ),
+                    (
+                        reconciliation.policy_invalid_outcome_node_ids,
+                        expected.policy_invalid_outcome_node_ids,
+                    ),
+                    (
+                        reconciliation.cardinality_mismatch_node_ids,
+                        expected.cardinality_mismatch_node_ids,
+                    ),
+                    (
+                        reconciliation.failed_outcome_node_ids,
+                        expected.failed_outcome_node_ids,
+                    ),
+                    (
+                        reconciliation.audited_occurrence_node_ids,
+                        expected.audited_occurrence_node_ids,
+                    ),
+                )
+            )
+        ):
             raise self._invalid_action_cohort(
                 "audit cohort reconciliation does not exactly match its immutable plan"
             )
+        return ExecutionEffectAuditCohortEntry(canonical_plan, expected)
 
-    def _validate_owned_effect_plan(self, plan: OwnedEffectOccurrencePlan) -> None:
+    def _canonicalize_execution_effect_node(
+        self,
+        node: object,
+    ) -> ExecutionEffectNode:
         if (
-            type(plan.owner) is not EffectOccurrenceOwner
+            type(node) is not ExecutionEffectNode
+            or type(node.node_id) is not str
+            or type(node.role) is not OccurrenceRole
+            or type(node.requirement) is not EffectRequirement
+            or type(node.actor) is not EffectActorRef
+            or type(node.actor.kind) is not EffectActorKind
+            or type(node.actor.node_id) is not str
+            or type(node.depends_on) is not tuple
+            or any(type(dependency) is not str for dependency in node.depends_on)
+            or type(node.instance_key) is not str
+            or not _execution_effect_intent_has_safe_shape(node.intent)
+        ):
+            raise self._invalid_action_cohort("audit cohort effect node is malformed")
+        canonical_actor = EffectActorRef(node.actor.kind, node.actor.node_id)
+        return ExecutionEffectNode(
+            node_id=node.node_id,
+            intent=self._canonicalize_execution_effect_intent(node.intent),
+            role=node.role,
+            requirement=node.requirement,
+            actor=canonical_actor,
+            depends_on=node.depends_on,
+            instance_key=node.instance_key,
+        )
+
+    def _canonicalize_execution_effect_intent(
+        self,
+        intent: object,
+    ) -> CommandEffectIntent:
+        if not _execution_effect_intent_has_safe_shape(intent):
+            raise self._invalid_action_cohort("audit cohort effect intent is malformed")
+        if type(intent) is ChildProcessEffectIntent:
+            return ChildProcessEffectIntent(
+                image=intent.image,
+                command_line=intent.command_line,
+                occurrence_cardinality=intent.occurrence_cardinality,
+            )
+        if type(intent) is FileEffectIntent:
+            return FileEffectIntent(
+                action=intent.action,
+                path=intent.path,
+                occurrence_cardinality=intent.occurrence_cardinality,
+            )
+        if type(intent) is RegistryEffectIntent:
+            return RegistryEffectIntent(
+                action=intent.action,
+                key=intent.key,
+                value_name=intent.value_name,
+                occurrence_cardinality=intent.occurrence_cardinality,
+            )
+        if type(intent) is NetworkEffectIntent:
+            return NetworkEffectIntent(
+                destination=intent.destination,
+                destination_port=intent.destination_port,
+                protocol=intent.protocol,
+                service=intent.service,
+                occurrence_cardinality=intent.occurrence_cardinality,
+            )
+        if type(intent) is TransferEffectIntent:
+            return TransferEffectIntent(
+                protocol=intent.protocol,
+                source_path=intent.source_path,
+                destination=intent.destination,
+                destination_path=intent.destination_path,
+                occurrence_cardinality=intent.occurrence_cardinality,
+            )
+        if type(intent) is ScannerEffectIntent:
+            return ScannerEffectIntent(
+                tool=intent.tool,
+                target=intent.target,
+                probe_count=intent.probe_count,
+            )
+        if type(intent) is ScheduledTaskEffectIntent:
+            return ScheduledTaskEffectIntent(
+                action=intent.action,
+                task_name=intent.task_name,
+                occurrence_cardinality=intent.occurrence_cardinality,
+            )
+        if type(intent) is ServiceEffectIntent:
+            return ServiceEffectIntent(
+                action=intent.action,
+                service_name=intent.service_name,
+                image=intent.image,
+                occurrence_cardinality=intent.occurrence_cardinality,
+            )
+        if type(intent) is SessionEffectIntent:
+            return SessionEffectIntent(
+                action=intent.action,
+                session_kind=intent.session_kind,
+                principal=intent.principal,
+                occurrence_cardinality=intent.occurrence_cardinality,
+            )
+        if type(intent) is WindowsAuditEffectIntent:
+            return WindowsAuditEffectIntent(
+                audit_kind=intent.audit_kind,
+                semantic_target=intent.semantic_target,
+                occurrence_cardinality=intent.occurrence_cardinality,
+            )
+        raise self._invalid_action_cohort("audit cohort effect intent is malformed")
+
+    def _canonicalize_execution_effect_outcome(
+        self,
+        outcome: object,
+    ) -> EffectExecutionOutcome:
+        if (
+            type(outcome) is not EffectExecutionOutcome
+            or type(outcome.node_id) is not str
+            or type(outcome.status) is not EffectOutcomeStatus
+            or type(outcome.child_action_id) is not str
+            or (outcome.completed_at is not None and type(outcome.completed_at) is not datetime)
+            or type(outcome.reason) is not str
+            or (
+                outcome.canonical_occurrence_count is not None
+                and (
+                    type(outcome.canonical_occurrence_count) is not int
+                    or isinstance(outcome.canonical_occurrence_count, bool)
+                )
+            )
+        ):
+            raise self._invalid_action_cohort("audit cohort effect outcome is malformed")
+        canonical = EffectExecutionOutcome(
+            node_id=outcome.node_id,
+            status=outcome.status,
+            child_action_id=outcome.child_action_id,
+            completed_at=self._canonicalize_action_cohort_datetime(outcome.completed_at),
+            reason=outcome.reason,
+            canonical_occurrence_count=outcome.canonical_occurrence_count,
+        )
+        if (
+            outcome.node_id != canonical.node_id
+            or outcome.status is not canonical.status
+            or outcome.child_action_id != canonical.child_action_id
+            or outcome.reason != canonical.reason
+            or outcome.canonical_occurrence_count != canonical.canonical_occurrence_count
+        ):
+            raise self._invalid_action_cohort("audit cohort effect outcome is not canonical")
+        return canonical
+
+    def _canonicalize_action_cohort_datetime(
+        self,
+        value: datetime | None,
+    ) -> datetime | None:
+        if value is None:
+            return None
+        if type(value) is not datetime:
+            raise self._invalid_action_cohort("audit cohort timestamp is malformed")
+        fixed_timezone = None
+        if value.tzinfo is not None:
+            try:
+                offset = value.utcoffset()
+            except (AttributeError, OverflowError, TypeError, ValueError) as error:
+                raise self._invalid_action_cohort(
+                    "audit cohort timestamp offset is malformed"
+                ) from error
+            if type(offset) is not timedelta:
+                raise self._invalid_action_cohort(
+                    "audit cohort aware timestamp requires an exact concrete UTC offset"
+                )
+            safe_offset = timedelta(
+                days=offset.days,
+                seconds=offset.seconds,
+                microseconds=offset.microseconds,
+            )
+            try:
+                fixed_timezone = timezone(safe_offset)
+            except ValueError as error:
+                raise self._invalid_action_cohort(
+                    "audit cohort timestamp offset lies outside datetime bounds"
+                ) from error
+        return datetime(
+            value.year,
+            value.month,
+            value.day,
+            value.hour,
+            value.minute,
+            value.second,
+            value.microsecond,
+            tzinfo=fixed_timezone,
+            fold=value.fold,
+        )
+
+    def _canonicalize_owned_effect_plan(
+        self,
+        plan: object,
+    ) -> OwnedEffectOccurrencePlan:
+        if (
+            type(plan) is not OwnedEffectOccurrencePlan
+            or type(plan.owner) is not EffectOccurrenceOwner
             or type(plan.kind) is not EffectOccurrenceKind
             or type(plan.root_action_id) is not str
             or type(plan.instance_key) is not str
@@ -2496,7 +3153,7 @@ class ExecutionEffectAuditCounter:
         ):
             raise self._invalid_action_cohort("owned effect root is malformed")
         try:
-            expected = OwnedEffectOccurrencePlan(
+            canonical = OwnedEffectOccurrencePlan(
                 owner=plan.owner,
                 kind=plan.kind,
                 root_action_id=plan.root_action_id,
@@ -2507,15 +3164,17 @@ class ExecutionEffectAuditCounter:
             )
         except (AttributeError, TypeError, ValueError) as error:
             raise self._invalid_action_cohort("owned effect root is malformed") from error
-        if expected != plan:
+        if canonical.plan_action_id != plan.plan_action_id or canonical.node_id != plan.node_id:
             raise self._invalid_action_cohort("owned effect root identity is not canonical")
+        return canonical
 
-    def _validate_effect_occurrence_provenance(
+    def _canonicalize_effect_occurrence_provenance(
         self,
-        provenance: EffectOccurrenceProvenance,
-    ) -> None:
+        provenance: object,
+    ) -> EffectOccurrenceProvenance:
         if (
-            type(provenance.kind) is not EffectOccurrenceKind
+            type(provenance) is not EffectOccurrenceProvenance
+            or type(provenance.kind) is not EffectOccurrenceKind
             or type(provenance.disposition) is not EffectOccurrenceDisposition
             or type(provenance.root_action_id) is not str
             or type(provenance.plan_action_id) is not str
@@ -2529,7 +3188,7 @@ class ExecutionEffectAuditCounter:
         ):
             raise self._invalid_action_cohort("published effect provenance is malformed")
         try:
-            expected = EffectOccurrenceProvenance(
+            canonical = EffectOccurrenceProvenance(
                 kind=provenance.kind,
                 disposition=provenance.disposition,
                 root_action_id=provenance.root_action_id,
@@ -2541,10 +3200,7 @@ class ExecutionEffectAuditCounter:
             )
         except (AttributeError, TypeError, ValueError) as error:
             raise self._invalid_action_cohort("published effect provenance is malformed") from error
-        if expected != provenance:
-            raise self._invalid_action_cohort(
-                "published effect provenance identity is not canonical"
-            )
+        return canonical
 
     def _action_cohort_token_integrity(
         self,
@@ -2581,15 +3237,14 @@ class ExecutionEffectAuditCounter:
     def _action_cohort_token_shape_is_valid(self, token: object) -> bool:
         if type(token) is not ExecutionEffectAuditBindingToken:
             return False
-        values = (
-            token._owner_id,
-            token._preparation_id,
-            token._cohort_digest,
-            token._identity_digest,
-            token._delta_digest,
-            token._integrity,
-        )
-        if any(type(value) is not str or not value for value in values):
+        if not (
+            _is_lower_hex(token._owner_id, length=32)
+            and _is_lower_hex(token._preparation_id, length=32)
+            and _is_lower_hex(token._cohort_digest, length=64)
+            and _is_lower_hex(token._identity_digest, length=64)
+            and _is_lower_hex(token._delta_digest, length=64)
+            and _is_lower_hex(token._integrity, length=64)
+        ):
             return False
         if token._owner_id != self._action_cohort_owner_id:
             return False
@@ -2604,18 +3259,16 @@ class ExecutionEffectAuditCounter:
     def _action_cohort_receipt_shape_is_valid(self, receipt: object) -> bool:
         if type(receipt) is not ExecutionEffectAuditCommitReceipt:
             return False
-        values = (
-            receipt._owner_id,
-            receipt._preparation_id,
-            receipt._cohort_digest,
-            receipt._identity_digest,
-            receipt._delta_digest,
-            receipt._receipt_id,
-            receipt._integrity,
-        )
         if (
-            any(type(value) is not str or not value for value in values)
+            not _is_lower_hex(receipt._owner_id, length=32)
+            or not _is_lower_hex(receipt._preparation_id, length=32)
+            or not _is_lower_hex(receipt._cohort_digest, length=64)
+            or not _is_lower_hex(receipt._identity_digest, length=64)
+            or not _is_lower_hex(receipt._delta_digest, length=64)
+            or not _is_lower_hex(receipt._receipt_id, length=32)
+            or not _is_lower_hex(receipt._integrity, length=64)
             or type(receipt._preparation_object_id) is not int
+            or receipt._preparation_object_id <= 0
             or receipt._owner_id != self._action_cohort_owner_id
         ):
             return False
@@ -2635,25 +3288,31 @@ class ExecutionEffectAuditCounter:
     ) -> bool:
         if (
             type(binding) is not _ExecutionEffectAuditCohortBinding
-            or type(binding.cohort_digest) is not str
-            or type(binding.identity_digest) is not str
+            or type(binding.root_action_id) is not str
+            or not binding.root_action_id
+            or type(binding.canonical_payload) is not bytes
+            or not binding.canonical_payload
+            or not _is_lower_hex(binding.entry_identity_digest, length=64)
+            or not _is_lower_hex(binding.owned_plan_identity_digest, length=64)
+            or not _is_lower_hex(binding.provenance_identity_digest, length=64)
+            or not _is_lower_hex(binding.cohort_digest, length=64)
+            or not _is_lower_hex(binding.identity_digest, length=64)
+            or type(binding.retained_members) is not int
+            or type(binding.retained_bytes) is not int
+            or len(binding.root_action_id) > binding.retained_bytes
+            or not 0 < binding.retained_members <= self._action_cohort_member_capacity
+            or binding.retained_bytes != len(binding.canonical_payload)
+            or not 0 < binding.retained_bytes <= self._action_cohort_byte_capacity
         ):
             return False
-        try:
-            expected, cohort_digest = self._validate_action_cohort_inputs(
-                root_action_id=binding.root_action_id,
-                entries=binding.entries,
-                owned_plans=binding.owned_plans,
-                published_provenances=binding.published_provenances,
-            )
-        except (ExecutionEffectPlanError, AttributeError, TypeError, ValueError):
-            return False
-        if Counter(expected) != Counter(binding.published_provenances):
-            return False
-        identity_digest = _execution_effect_audit_identity_digest(
-            entries=binding.entries,
-            owned_plans=binding.owned_plans,
-            published_provenances=binding.published_provenances,
+        cohort_digest = hashlib.sha256(binding.canonical_payload).hexdigest()
+        identity_digest = _combined_execution_effect_identity_digest(
+            root_action_id=binding.root_action_id,
+            entry_digest=binding.entry_identity_digest,
+            owned_plan_digest=binding.owned_plan_identity_digest,
+            provenance_digest=binding.provenance_identity_digest,
+            retained_members=binding.retained_members,
+            retained_bytes=binding.retained_bytes,
         )
         return bool(
             hmac.compare_digest(binding.cohort_digest, cohort_digest)
@@ -2712,7 +3371,9 @@ class ExecutionEffectAuditCounter:
             )
         ):
             return False
-        if type(cohort_digest) is not str or type(expected_digest) is not str:
+        if not (
+            _is_lower_hex(cohort_digest, length=64) and _is_lower_hex(expected_digest, length=64)
+        ):
             return False
         actual_digest = _execution_effect_audit_delta_digest(
             delta,
@@ -2755,6 +3416,13 @@ class ExecutionEffectAuditCounter:
             and type(preparation._cancelled) is bool
             and not preparation._cancelled
             and preparation._receipt is None
+            and self._action_cohort_binding_is_valid(record.binding)
+            and type(record.retained_members) is int
+            and not isinstance(record.retained_members, bool)
+            and record.retained_members == record.binding.retained_members
+            and type(record.retained_bytes) is int
+            and not isinstance(record.retained_bytes, bool)
+            and record.retained_bytes == record.binding.retained_bytes
             and type(record.state) is str
             and record.state in {"prepared", "claimed"}
             and (
@@ -2763,7 +3431,6 @@ class ExecutionEffectAuditCounter:
                 else type(record.claiming_thread) is int
             )
             and self._action_cohort_token_shape_is_valid(token)
-            and self._action_cohort_binding_is_valid(record.binding)
             and token._cohort_digest == record.binding.cohort_digest
             and token._identity_digest == record.binding.identity_digest
             and self._action_cohort_delta_is_valid(
@@ -2805,6 +3472,8 @@ class ExecutionEffectAuditCounter:
             self._action_cohort_prepared_count -= 1
         elif record.state == "claimed":
             self._action_cohort_claimed_count -= 1
+        self._action_cohort_retained_members -= record.retained_members
+        self._action_cohort_retained_bytes -= record.retained_bytes
         record.preparation._cancelled = True
         record.claiming_thread = None
         record.state = "cancelled"
@@ -2879,6 +3548,8 @@ class ExecutionEffectAuditCounter:
             del self._action_cohort_preparations[preparation_id]
             self._action_cohort_capability_locators.pop(id(record.token), None)
             self._action_cohort_claimed_count -= 1
+            self._action_cohort_retained_members -= record.retained_members
+            self._action_cohort_retained_bytes -= record.retained_bytes
             record.claiming_thread = None
             record.state = "committed"
             return receipt
