@@ -24,6 +24,11 @@
 
 from .activity import ActivityGenerator
 from .application_channels import ApplicationChannelRegistry
+from .collection_deployment import (
+    CollectionDeploymentCensus,
+    CompiledCollectionDeployment,
+    SourceInstanceDeployment,
+)
 from .deployment_registry import (
     AssignmentCategoryIndexCensus,
     BinaryPathIndexCensus,
@@ -52,6 +57,8 @@ __all__ = [
     "ApplicationChannelRegistry",
     "AssignmentCategoryIndexCensus",
     "BinaryPathIndexCensus",
+    "CollectionDeploymentCensus",
+    "CompiledCollectionDeployment",
     "DeploymentCompilationCensus",
     "DeploymentContentRegistry",
     "DeploymentContentScaleCensus",
@@ -67,6 +74,7 @@ __all__ = [
     "LocalArtifactRegistryCensus",
     "LocalArtifactVersionRegistry",
     "LocalArtifactVersionPageCursor",
+    "SourceInstanceDeployment",
     "StateManager",
     "UserApplicationAssignment",
     "UserApplicationAssignmentSpec",

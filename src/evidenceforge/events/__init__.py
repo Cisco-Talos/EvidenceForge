@@ -39,6 +39,18 @@ from evidenceforge.events.authentication import (
     RemoteAuthenticationTransportPlan,
 )
 from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder, RawProjectionRequest
+from evidenceforge.events.collection_policy import (
+    CollectionBatchingPolicy,
+    CollectionCapability,
+    CollectionWindow,
+    ProjectionAdmission,
+    ProjectionEnvelope,
+    ProjectionRole,
+    SourceCollectionOverride,
+    SourceCollectionPolicy,
+    SourceInstanceIdentity,
+    normalize_source_collection_policy,
+)
 from evidenceforge.events.content_identity import (
     ApplicationProfileIdentity,
     BinaryReleaseIdentity,
@@ -104,6 +116,16 @@ __all__ = [
     "ApplicationChannelSnapshot",
     "ApplicationOperationReservation",
     "ApplicationTransportBinding",
+    "CollectionBatchingPolicy",
+    "CollectionCapability",
+    "CollectionWindow",
+    "ProjectionAdmission",
+    "ProjectionEnvelope",
+    "ProjectionRole",
+    "SourceCollectionOverride",
+    "SourceCollectionPolicy",
+    "SourceInstanceIdentity",
+    "normalize_source_collection_policy",
     "ApplicationProfileIdentity",
     "BinaryReleaseIdentity",
     "BinaryReleaseKey",
