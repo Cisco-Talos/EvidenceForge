@@ -33,6 +33,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
+from evidenceforge.events.content_identity import (
+    FileContentIdentity,
+    LocalArtifactIdentity,
+    ProcessBinaryIdentity,
+)
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkTrafficLedger,
@@ -139,6 +144,7 @@ class ProcessContext:
     current_directory: str = ""  # Sysmon Event 1 CurrentDirectory / process working dir
     concurrency_group_id: str = ""  # Explicit same-shell concurrency group (for pipelines)
     target_security_context: ProcessTargetSecurityContext | None = None
+    binary_identity: ProcessBinaryIdentity | None = None
 
 
 @dataclass(slots=True)
@@ -412,6 +418,8 @@ class FileContext:
     path: str
     action: str  # "create" | "modify" | "delete" | "read"
     pid: int = 0
+    artifact_identity: LocalArtifactIdentity | None = None
+    content_identity: FileContentIdentity | None = None
 
 
 @dataclass(slots=True)
@@ -435,6 +443,7 @@ class ImageLoadContext:
     signature_status: str = "Valid"  # Valid, Expired, Revoked, Unavailable
     load_phase: Literal["startup", "runtime"] = "runtime"
     load_order: int = 0
+    binary_identity: ProcessBinaryIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -747,6 +756,7 @@ class HttpContext:
     request_entity: HttpRequestEntityContext | None = None
     request_multipart: HttpMultipartEntityContext | None = None
     response_body_len: int = 0
+    response_content_identity: str = ""
     response_multipart: HttpMultipartEntityContext | None = None
     canonical_request_time: datetime | None = None
     flow_request_body_len: int | None = None
@@ -798,6 +808,7 @@ class FileTransferContext:
     source: str = ""  # "HTTP", "SSL", "SMTP"
     depth: int = 0
     filename: str = ""
+    content_identity: str = ""
     analyzers: tuple[str, ...] = ()
     mime_type: str = ""
     duration: float = 0.0
