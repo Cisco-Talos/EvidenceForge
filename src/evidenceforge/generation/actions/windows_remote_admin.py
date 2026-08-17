@@ -25,11 +25,13 @@
 from __future__ import annotations
 
 import ntpath
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from random import Random
 from typing import Any, Protocol
 
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.content_identity import RuntimeServiceDeploymentIdentity
 from evidenceforge.events.contexts import (
     AuthContext,
     FileContext,
@@ -37,13 +39,43 @@ from evidenceforge.events.contexts import (
     ProcessContext,
     ServiceContext,
 )
+from evidenceforge.events.contracts import (
+    EffectOccurrenceKind,
+    EffectOccurrenceProvenance,
+    OccurrenceRole,
+)
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.actions.command_effects import (
+    ChildProcessEffectIntent,
+    EffectActorRef,
+    EffectExecutionOutcome,
+    EffectOutcomeStatus,
+    EffectRequirement,
+    ExecutionEffectAuditCounter,
+    ExecutionEffectNode,
+    ExecutionEffectPlan,
+    ExecutionEffectPlanError,
+    ExecutionEffectPlanErrorCode,
+    FileEffectAction,
+    FileEffectIntent,
+    NetworkEffectIntent,
+    ServiceEffectAction,
+    ServiceEffectIntent,
+)
 from evidenceforge.generation.activity.helpers import _get_os_category
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
+from evidenceforge.generation.lifecycle_production_adapters import (
+    ServiceLifecyclePublicationPlan,
+    installed_service_publication_plan,
+    lifecycle_production_adapter_for,
+)
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 _LINUX_LOCAL_ACCOUNTS = {
@@ -99,6 +131,7 @@ class WindowsServiceInstallRequest:
     service_account: str = "LocalSystem"
     lifecycle_group_id: str = ""
     source: str = "activity_generator"
+    effect_plan: ExecutionEffectPlan | None = field(default=None, compare=False, repr=False)
 
     @property
     def stable_id(self) -> str:
@@ -119,11 +152,111 @@ class WindowsServiceInstallRequest:
         return self.lifecycle_group_id or self.stable_id
 
 
+@dataclass(frozen=True, slots=True)
+class _RemoteServiceControlFlowPlan:
+    """One exact canonical transport occurrence in a service-control sub-plan."""
+
+    destination_port: int
+    service: str
+    timestamp: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _RemoteServiceControlPlan:
+    """Immutable SMB/RPC execution plan shared by preflight and realization."""
+
+    source_system: System | None
+    flows: tuple[_RemoteServiceControlFlowPlan, ...] = ()
+    base_source_port: int = 0
+
+    @property
+    def canonical_occurrence_count(self) -> int:
+        """Return the exact number of connection actions this plan will execute."""
+
+        return len(self.flows)
+
+
+@dataclass(frozen=True, slots=True)
+class _ServicePayloadPlan:
+    """Deterministic file-effect classification for one service image path."""
+
+    path: str
+    emit_create: bool
+    suppression_reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class _WindowsServiceInstallExecutionPlan:
+    """Validated effect graph and its exact allocation-free execution inputs."""
+
+    effects: ExecutionEffectPlan
+    remote_control: _RemoteServiceControlPlan
+    payload: _ServicePayloadPlan
+    lifecycle_publication: ServiceLifecyclePublicationPlan | None = None
+
+
+def _remote_service_ephemeral_port(rng: Random, os_category: str) -> int:
+    """Use the generator's compatibility sampler while it owns legacy port policy."""
+
+    # Imported lazily because ActivityGenerator imports this action module.  Keeping
+    # this compatibility call preserves the existing patched boundary and RNG stream
+    # until ephemeral-port policy moves into a shared planner in a later migration.
+    from evidenceforge.generation.activity.generator import _ephemeral_port
+
+    return _ephemeral_port(rng, os_category)
+
+
+def _validate_exact_effect_plan(
+    candidate: ExecutionEffectPlan,
+    expected: ExecutionEffectPlan,
+    *,
+    action_label: str,
+) -> None:
+    """Reject caller-supplied node or cardinality drift before side effects."""
+
+    if candidate.anchor != expected.anchor:
+        raise ExecutionEffectPlanError(
+            ExecutionEffectPlanErrorCode.INVALID_PLAN,
+            f"{action_label} effect_plan anchor does not match the request anchor",
+        )
+    candidate_by_id = {node.node_id: node for node in candidate.nodes}
+    expected_by_id = {node.node_id: node for node in expected.nodes}
+    missing = expected_by_id.keys() - candidate_by_id.keys()
+    unexpected = candidate_by_id.keys() - expected_by_id.keys()
+    drifted = {
+        node_id
+        for node_id in expected_by_id.keys() & candidate_by_id.keys()
+        if expected_by_id[node_id] != candidate_by_id[node_id]
+    }
+    if not (missing or unexpected or drifted):
+        return
+
+    def _instance_keys(
+        node_ids: set[str],
+        nodes: dict[str, ExecutionEffectNode],
+    ) -> str:
+        rendered = sorted(nodes[node_id].instance_key for node_id in node_ids)[:6]
+        return ", ".join(rendered)
+
+    details = []
+    if missing:
+        details.append(f"missing={_instance_keys(missing, expected_by_id)}")
+    if unexpected:
+        details.append(f"unexpected={_instance_keys(unexpected, candidate_by_id)}")
+    if drifted:
+        details.append(f"drifted={_instance_keys(drifted, expected_by_id)}")
+    raise ExecutionEffectPlanError(
+        ExecutionEffectPlanErrorCode.INVALID_PLAN,
+        f"{action_label} effect_plan does not match the canonical plan: " + "; ".join(details),
+    )
+
+
 class WindowsRemoteAdminExecutor(Protocol):
     """Adapter protocol implemented by the current activity generator."""
 
     dispatcher: EventDispatcher
     state_manager: StateManager
+    timing_runtime: TimingRuntime
 
     def _coerce_windows_explicit_credentials_subject(
         self,
@@ -251,6 +384,10 @@ class WindowsRemoteAdminExecutor(Protocol):
         time: datetime,
     ) -> None:
         """Emit SMB/RPC service-control transport evidence."""
+        ...
+
+    def generate_connection(self, **kwargs: Any) -> str:
+        """Execute one canonical network-connection action bundle."""
         ...
 
     def _get_user_logon_id(
@@ -467,6 +604,12 @@ class ExplicitCredentialUseActionBundle:
 class WindowsServiceInstallActionBundle:
     """Expand one Windows service install into remote-admin evidence."""
 
+    _NETWORK_NODE_KEY = "service-control-network"
+    _PAYLOAD_NODE_KEY = "service-payload-file-create"
+    _SERVICE_NODE_KEY = "service-install"
+    _PROCESS_START_NODE_KEY = "service-process-start"
+    _PROCESS_CLOSE_NODE_KEY = "service-process-close"
+
     def __init__(
         self,
         executor: WindowsRemoteAdminExecutor,
@@ -474,6 +617,17 @@ class WindowsServiceInstallActionBundle:
     ) -> None:
         self._executor = executor
         self._request = request
+
+    def _timing_planner(self) -> BaselineTimingPlanner:
+        """Return the engine planner or one stateless direct-test adapter."""
+
+        runtime = getattr(self._executor, "timing_runtime", None)
+        return BaselineTimingPlanner(
+            runtime
+            if isinstance(runtime, TimingRuntime)
+            else TimingRuntime.compatibility_default(),
+            source="windows-remote-admin",
+        )
 
     @property
     def anchor(self) -> ActionAnchor:
@@ -486,14 +640,69 @@ class WindowsServiceInstallActionBundle:
         )
 
     def execute(self) -> None:
-        """Emit remote service-control, payload, and service-install evidence."""
+        """Execute a validated service-install plan through semantic action bundles."""
 
-        self._executor._emit_remote_service_control_network_evidence(
-            self._request.user,
-            self._request.system,
-            self._request.time,
-        )
-        payload_time = self._emit_payload_file_create()
+        execution_plan = self._preflight_execution_plan()
+        lifecycle_publication = execution_plan.lifecycle_publication
+        if lifecycle_publication is None:
+            self._execute_plan(execution_plan)
+            return
+        adapter = lifecycle_production_adapter_for(self._executor)
+        if adapter is None:
+            raise StateError("Windows service lifecycle authority disappeared after preflight")
+        token = adapter.prepare_service_publication(lifecycle_publication)
+        with adapter.claimed_service_publication(token) as claimed:
+            self._execute_plan(execution_plan)
+            claimed.commit_no_fail()
+
+    def _execute_plan(self, execution_plan: _WindowsServiceInstallExecutionPlan) -> None:
+        """Realize one fully prepared plan inside an optional service claim."""
+
+        nodes_by_key = {node.instance_key: node for node in execution_plan.effects.ordered_nodes}
+        outcomes: list[EffectExecutionOutcome] = []
+
+        network_node = nodes_by_key[self._NETWORK_NODE_KEY]
+        network_count = self._execute_remote_service_control_plan(execution_plan.remote_control)
+        if execution_plan.remote_control.canonical_occurrence_count:
+            outcomes.append(
+                EffectExecutionOutcome(
+                    node_id=network_node.node_id,
+                    status=EffectOutcomeStatus.REALIZED,
+                    completed_at=max(
+                        flow.timestamp for flow in execution_plan.remote_control.flows
+                    ),
+                    canonical_occurrence_count=network_count,
+                )
+            )
+        else:
+            outcomes.append(
+                EffectExecutionOutcome(
+                    node_id=network_node.node_id,
+                    status=EffectOutcomeStatus.SUPPRESSED,
+                    reason="no distinct remote Windows source is available",
+                )
+            )
+
+        payload_node = nodes_by_key[self._PAYLOAD_NODE_KEY]
+        payload_time = self._emit_payload_file_create(execution_plan.payload, payload_node)
+        if payload_time is not None:
+            outcomes.append(
+                EffectExecutionOutcome(
+                    node_id=payload_node.node_id,
+                    status=EffectOutcomeStatus.REALIZED,
+                    completed_at=payload_time,
+                    canonical_occurrence_count=1,
+                )
+            )
+        else:
+            outcomes.append(
+                EffectExecutionOutcome(
+                    node_id=payload_node.node_id,
+                    status=EffectOutcomeStatus.SUPPRESSED,
+                    reason=execution_plan.payload.suppression_reason,
+                )
+            )
+
         lifecycle_start = payload_time or self._request.time
         reporting_pid = self._executor._get_system_pid(
             self._request.system.hostname,
@@ -532,18 +741,347 @@ class WindowsServiceInstallActionBundle:
         )
         self._executor.dispatcher.dispatch_builder(event)
 
+        service_node = nodes_by_key[self._SERVICE_NODE_KEY]
+        outcomes.append(
+            EffectExecutionOutcome(
+                node_id=service_node.node_id,
+                status=EffectOutcomeStatus.REALIZED,
+                completed_at=self._request.time,
+                canonical_occurrence_count=1,
+            )
+        )
+        if self._request.lifecycle_group_id:
+            for instance_key in (
+                self._PROCESS_START_NODE_KEY,
+                self._PROCESS_CLOSE_NODE_KEY,
+            ):
+                process_node = nodes_by_key[instance_key]
+                outcomes.append(
+                    EffectExecutionOutcome(
+                        node_id=process_node.node_id,
+                        status=EffectOutcomeStatus.LINKED,
+                        child_action_id=self._request.lifecycle_group_id,
+                        completed_at=self._request.time,
+                        canonical_occurrence_count=1,
+                    )
+                )
+
+        reconciliation = execution_plan.effects.reconcile(tuple(outcomes))
+        audit_counter = getattr(self._executor, "_execution_effect_audit", None)
+        if isinstance(audit_counter, ExecutionEffectAuditCounter):
+            audit_counter.record(reconciliation)
+        reconciliation.require_complete()
+
+    def plan_effects(self) -> ExecutionEffectPlan:
+        """Return the allocation-free canonical effect graph for this request."""
+
+        remote_source = self._resolve_remote_service_control_source()
+        payload = self._plan_payload_file_effect()
+        return self._build_effect_plan(remote_source=remote_source, payload=payload)
+
+    def _preflight_execution_plan(self) -> _WindowsServiceInstallExecutionPlan:
+        """Validate the exact graph before RNG, transport, PID, or state allocation."""
+
+        remote_source = self._resolve_remote_service_control_source()
+        payload = self._plan_payload_file_effect()
+        expected = self._build_effect_plan(remote_source=remote_source, payload=payload)
+        candidate = self._request.effect_plan
+        if candidate is None:
+            candidate = expected
+        elif not isinstance(candidate, ExecutionEffectPlan):
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "Windows service-install effect_plan must be an ExecutionEffectPlan",
+            )
+        else:
+            _validate_exact_effect_plan(
+                candidate,
+                expected,
+                action_label="Windows service-install",
+            )
+
+        lifecycle_publication: ServiceLifecyclePublicationPlan | None = None
+        lifecycle_adapter = lifecycle_production_adapter_for(self._executor)
+        if lifecycle_adapter is not None:
+            get_boot_time = getattr(self._executor.state_manager, "get_boot_time", None)
+            boot_time = (
+                get_boot_time(self._request.system.hostname) if callable(get_boot_time) else None
+            )
+            if not isinstance(boot_time, datetime):
+                boot_time = self._request.time
+            deployment_identity = self._runtime_service_deployment_identity()
+            lifecycle_publication = installed_service_publication_plan(
+                hostname=self._request.system.hostname,
+                service_name=self._request.service_name,
+                deployment_service_id=deployment_identity.deployment_service_id,
+                boot_time=boot_time,
+                started_at=self._request.time,
+                action_id=self._request.stable_id,
+                deployment_identity=deployment_identity,
+            )
+
+        remote_control = self._materialize_remote_service_control_plan(remote_source)
+        return _WindowsServiceInstallExecutionPlan(
+            effects=candidate,
+            remote_control=remote_control,
+            payload=payload,
+            lifecycle_publication=lifecycle_publication,
+        )
+
+    def _runtime_service_deployment_identity(self) -> RuntimeServiceDeploymentIdentity:
+        """Resolve the exact runtime-only deployment identity for this install."""
+
+        registry = getattr(self._executor.dispatcher, "deployment_registry", None)
+        if registry is None:
+            return RuntimeServiceDeploymentIdentity(
+                hostname=self._request.system.hostname,
+                canonical_name=self._request.service_name,
+                action_id=self._request.stable_id,
+            )
+        resolver = getattr(registry, "runtime_service_deployment_identity", None)
+        if not callable(resolver):
+            raise StateError("Deployment registry cannot resolve runtime service identity")
+        identity = resolver(
+            hostname=self._request.system.hostname,
+            canonical_name=self._request.service_name,
+            action_id=self._request.stable_id,
+        )
+        if not isinstance(identity, RuntimeServiceDeploymentIdentity):
+            raise StateError("Deployment registry returned an invalid runtime service identity")
+        return identity
+
+    def _build_effect_plan(
+        self,
+        *,
+        remote_source: System | None,
+        payload: _ServicePayloadPlan,
+    ) -> ExecutionEffectPlan:
+        """Build the canonical service-control, payload, service, and process DAG."""
+
+        network_node = ExecutionEffectNode.create(
+            self.anchor,
+            NetworkEffectIntent(
+                destination=self._request.system.ip,
+                destination_port=445,
+                protocol="tcp",
+                service="windows_service_control_smb_rpc",
+                occurrence_cardinality=2,
+            ),
+            role=OccurrenceRole.PREREQUISITE,
+            requirement=(
+                EffectRequirement.REQUIRED
+                if remote_source is not None
+                else EffectRequirement.OPTIONAL
+            ),
+            actor=EffectActorRef.session(),
+            instance_key=self._NETWORK_NODE_KEY,
+        )
+        payload_node = ExecutionEffectNode.create(
+            self.anchor,
+            FileEffectIntent(
+                action=FileEffectAction.CREATE,
+                path=payload.path,
+                occurrence_cardinality=1,
+            ),
+            role=OccurrenceRole.PREREQUISITE,
+            requirement=(
+                EffectRequirement.REQUIRED if payload.emit_create else EffectRequirement.OPTIONAL
+            ),
+            actor=EffectActorRef.system(),
+            instance_key=self._PAYLOAD_NODE_KEY,
+        )
+        service_node = ExecutionEffectNode.create(
+            self.anchor,
+            ServiceEffectIntent(
+                action=ServiceEffectAction.INSTALL,
+                service_name=self._request.service_name,
+                image=payload.path,
+                occurrence_cardinality=1,
+            ),
+            role=OccurrenceRole.DEPENDENT,
+            requirement=EffectRequirement.REQUIRED,
+            actor=EffectActorRef.system(),
+            depends_on=(network_node.node_id, payload_node.node_id),
+            instance_key=self._SERVICE_NODE_KEY,
+        )
+        nodes = [network_node, payload_node, service_node]
+        if self._request.lifecycle_group_id:
+            process_intent = ChildProcessEffectIntent(
+                image=payload.path,
+                command_line=payload.path,
+                occurrence_cardinality=1,
+            )
+            process_start_node = ExecutionEffectNode.create(
+                self.anchor,
+                process_intent,
+                role=OccurrenceRole.DEPENDENT,
+                requirement=EffectRequirement.EXTERNALLY_OWNED,
+                actor=EffectActorRef.system(),
+                depends_on=(service_node.node_id,),
+                instance_key=self._PROCESS_START_NODE_KEY,
+            )
+            process_close_node = ExecutionEffectNode.create(
+                self.anchor,
+                process_intent,
+                role=OccurrenceRole.CLOSURE,
+                requirement=EffectRequirement.EXTERNALLY_OWNED,
+                actor=EffectActorRef.system(),
+                depends_on=(process_start_node.node_id,),
+                instance_key=self._PROCESS_CLOSE_NODE_KEY,
+            )
+            nodes.extend((process_start_node, process_close_node))
+        return ExecutionEffectPlan(anchor=self.anchor, nodes=tuple(nodes))
+
+    def _resolve_remote_service_control_source(self) -> System | None:
+        """Resolve the exact existing remote source used by service-control execution."""
+
+        if _get_os_category(self._request.system.os) != "windows":
+            return None
+        world_model = getattr(self._executor, "_world_model", None)
+        source_system = None
+        primary_system_name = getattr(self._request.user, "primary_system", None)
+        if world_model is not None and primary_system_name:
+            source_system = world_model.systems_by_hostname.get(primary_system_name)
+        if source_system is None:
+            sessions = [
+                session
+                for session in self._executor.state_manager.get_sessions_for_user(
+                    self._request.user.username
+                )
+                if session.system != self._request.system.hostname
+            ]
+            if sessions and world_model is not None:
+                newest = max(sessions, key=lambda session: session.start_time)
+                source_system = world_model.systems_by_hostname.get(newest.system)
+        if source_system is None or source_system.ip == self._request.system.ip:
+            return None
+        return source_system
+
+    def _materialize_remote_service_control_plan(
+        self,
+        source_system: System | None,
+    ) -> _RemoteServiceControlPlan:
+        """Sample the exact immutable SMB/RPC plan before transport allocation."""
+
+        if source_system is None:
+            return _RemoteServiceControlPlan(source_system=None)
+        rng = _get_rng()
+        timing = self._timing_planner()
+        timing_id = (
+            f"{source_system.hostname}:{self._request.system.hostname}:"
+            f"{self._request.time.isoformat()}"
+        )
+        flows = (
+            _RemoteServiceControlFlowPlan(
+                destination_port=445,
+                service="smb",
+                timestamp=self._request.time
+                - timedelta(
+                    seconds=timing.right_skew_seconds(
+                        relationship_key="windows_remote_admin.smb_transport_lead",
+                        stable_id=timing_id,
+                        minimum=1.1,
+                        median=1.3,
+                        maximum=1.8,
+                        host=source_system.hostname,
+                        sample_key="lead",
+                    )
+                ),
+            ),
+            _RemoteServiceControlFlowPlan(
+                destination_port=135,
+                service="dce_rpc",
+                timestamp=self._request.time
+                - timedelta(
+                    seconds=timing.right_skew_seconds(
+                        relationship_key="windows_remote_admin.rpc_transport_lead",
+                        stable_id=timing_id,
+                        minimum=0.35,
+                        median=0.5,
+                        maximum=0.9,
+                        host=source_system.hostname,
+                        sample_key="lead",
+                    )
+                ),
+            ),
+        )
+        source_os = _get_os_category(source_system.os)
+        max_ephemeral_port = 60999 if source_os == "linux" else 65535
+        base_source_port = min(
+            _remote_service_ephemeral_port(rng, source_os),
+            max_ephemeral_port - len(flows) + 1,
+        )
+        return _RemoteServiceControlPlan(
+            source_system=source_system,
+            flows=flows,
+            base_source_port=base_source_port,
+        )
+
+    def _execute_remote_service_control_plan(
+        self,
+        plan: _RemoteServiceControlPlan,
+    ) -> int:
+        """Execute the exact preflight transport plan through connection bundles."""
+
+        if plan.source_system is None:
+            return 0
+        rng = _get_rng()
+        timing = self._timing_planner()
+        for index, flow in enumerate(plan.flows):
+            duration = timing.right_skew_seconds(
+                relationship_key="windows_remote_admin.transport_duration",
+                stable_id=(
+                    f"{plan.source_system.hostname}:{self._request.system.hostname}:"
+                    f"{flow.destination_port}:{self._request.time.isoformat()}"
+                ),
+                minimum=0.08,
+                median=0.22,
+                maximum=0.9,
+                host=plan.source_system.hostname,
+                ordinal=index,
+                sample_key="duration",
+            )
+            orig_bytes = (
+                rng.randint(45_000, 160_000)
+                if flow.destination_port == 445
+                else rng.randint(450, 1800)
+            )
+            resp_bytes = (
+                rng.randint(1500, 7000) if flow.destination_port == 445 else rng.randint(350, 2200)
+            )
+            self._executor.generate_connection(
+                src_ip=plan.source_system.ip,
+                dst_ip=self._request.system.ip,
+                time=flow.timestamp,
+                dst_port=flow.destination_port,
+                proto="tcp",
+                service=flow.service,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                src_port=plan.base_source_port + index,
+                emit_dns=False,
+                source_system=plan.source_system,
+                conn_state="SF",
+            )
+        return plan.canonical_occurrence_count
+
     def _expanded_service_path(self) -> str:
         """Return the service image path with SystemRoot expanded."""
 
         service_path = self._request.service_file_name.replace("%SystemRoot%", r"C:\Windows")
         return service_path.replace("%systemroot%", r"C:\Windows")
 
-    def _emit_payload_file_create(self) -> datetime | None:
-        """Emit dropped service binary evidence when the service path is not preexisting."""
+    def _plan_payload_file_effect(self) -> _ServicePayloadPlan:
+        """Classify the service image once for both effect planning and execution."""
 
-        if _get_os_category(self._request.system.os) != "windows":
-            return None
         service_path = self._expanded_service_path()
+        if _get_os_category(self._request.system.os) != "windows":
+            return _ServicePayloadPlan(
+                path=service_path,
+                emit_create=False,
+                suppression_reason="target platform is not Windows",
+            )
         service_path_lower = service_path.lower().replace("/", "\\")
         is_preexisting_binary = (
             service_path_lower.startswith("c:\\windows\\system32\\")
@@ -551,7 +1089,22 @@ class WindowsServiceInstallActionBundle:
             or service_path_lower.startswith("c:\\program files\\")
             or service_path_lower.startswith("c:\\program files (x86)\\")
         )
-        if is_preexisting_binary:
+        return _ServicePayloadPlan(
+            path=service_path,
+            emit_create=not is_preexisting_binary,
+            suppression_reason=(
+                "service image path is classified as preexisting" if is_preexisting_binary else ""
+            ),
+        )
+
+    def _emit_payload_file_create(
+        self,
+        plan: _ServicePayloadPlan,
+        node: ExecutionEffectNode,
+    ) -> datetime | None:
+        """Emit dropped service binary evidence when the service path is not preexisting."""
+
+        if not plan.emit_create:
             return None
         system_pid = 4
         self._executor.state_manager.get_process_object_id(
@@ -573,7 +1126,14 @@ class WindowsServiceInstallActionBundle:
                     username="SYSTEM",
                     logon_id="0x3e7",
                 ),
-                file=FileContext(path=service_path, action="create", pid=system_pid),
+                file=FileContext(path=plan.path, action="create", pid=system_pid),
+                effect_provenance=EffectOccurrenceProvenance.planned(
+                    kind=EffectOccurrenceKind.FILE,
+                    root_action_id=self.anchor.action_id,
+                    plan_action_id=self.anchor.action_id,
+                    node_id=node.node_id,
+                    occurrence_ordinal=0,
+                ),
                 lifecycle=ActionLifecycleContext(
                     group_id=self._request.effective_lifecycle_group_id,
                     canonical_start=file_time,
