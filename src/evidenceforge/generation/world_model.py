@@ -26,6 +26,8 @@ from evidenceforge.generation.activity.ssh_identity import (
     baseline_ssh_auth_method,
     baseline_ssh_client_key,
 )
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -961,6 +963,17 @@ class WorldPlanner:
         self.state_manager = state_manager
         self.activity_generator = activity_generator
 
+    def _timing_planner(self, source: str = "world-planner") -> BaselineTimingPlanner:
+        """Return the engine runtime or one stateless direct-test adapter."""
+
+        runtime = getattr(self.activity_generator, "timing_runtime", None)
+        return BaselineTimingPlanner(
+            runtime
+            if isinstance(runtime, TimingRuntime)
+            else TimingRuntime.compatibility_default(),
+            source=source,
+        )
+
     def ensure_user_session(
         self,
         user: User,
@@ -1594,9 +1607,14 @@ class WorldPlanner:
         ids_alerts: list[IdsAlertPlan] | None = None,
     ) -> SessionBootstrapResult:
         source_pid = -1
-        source_process_time = logon_time - timedelta(milliseconds=rng.randint(1800, 3200))
+        source_process_time = self._rdp_source_process_time(
+            user=user,
+            plan=plan,
+            logon_time=logon_time,
+        )
         source_process_factory = None
         if plan.source_system is not None:
+            assert source_process_time is not None
             aligned_source_time = self._align_rdp_source_after_future_workstation_session(
                 username=user.username,
                 source_system=plan.source_system,
@@ -1616,7 +1634,7 @@ class WorldPlanner:
             source_ip=plan.source_ip,
             source_system=plan.source_system,
             source_pid=source_pid,
-            source_process_time=source_process_time if plan.source_system is not None else None,
+            source_process_time=source_process_time,
             source_process_factory=source_process_factory,
             session_end_plan=session_end_plan,
             ids_alerts=ids_alerts,
@@ -1628,6 +1646,36 @@ class WorldPlanner:
             )
         session.last_activity_time = activity_time
         return SessionBootstrapResult(session=session, network_uid=uid)
+
+    def _rdp_source_process_time(
+        self,
+        *,
+        user: User,
+        plan: SessionPlan,
+        logon_time: datetime,
+    ) -> datetime | None:
+        """Place source-side mstsc.exe through the engine-owned timing runtime."""
+
+        source_system = plan.source_system
+        if source_system is None:
+            return None
+
+        canonical_logon_time = ensure_utc(logon_time)
+        lifecycle_id = (
+            f"rdp:{user.username}:{source_system.hostname}:{plan.target_system.hostname}:"
+            f"{canonical_logon_time.isoformat()}"
+        )
+        lead_seconds = self._timing_planner("rdp-bootstrap").triangular_seconds(
+            relationship_key="world.rdp.source_process_create_lead",
+            stable_id=lifecycle_id,
+            minimum=1.799999,
+            mode=2.5,
+            maximum=3.200001,
+            host=source_system.hostname,
+            lifecycle_id=lifecycle_id,
+            sample_key="source-process-lead",
+        )
+        return logon_time - timedelta(seconds=lead_seconds)
 
     def _rdp_source_process_factory(self, rng: random.Random) -> Callable[..., int]:
         """Return a callback that materializes source-side mstsc.exe inside the bundle."""
