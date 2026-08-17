@@ -564,6 +564,7 @@ def test_uncommitted_cancelled_copied_and_foreign_capabilities_cleanup_exactly()
     copied_preparation = copy(preparation)
     copied_token = copy(token)
 
+    assert preparation.receipt is None
     assert not counter.authenticates_action_cohort_preparation(copied_preparation)
     assert not counter.authenticates_action_cohort_binding_token(copied_token)
     assert not foreign.authenticates_action_cohort_binding_token(token)
@@ -585,6 +586,7 @@ def test_uncommitted_cancelled_copied_and_foreign_capabilities_cleanup_exactly()
         published_provenances=provenances,
     )
     counter.cancel_action_cohort(cancelled)
+    assert cancelled.receipt is None
     assert counter.action_cohort_preparation_census().active == 0
     with pytest.raises(ExecutionEffectPlanError, match="stale"):
         counter.cancel_action_cohort(cancelled)
@@ -901,8 +903,12 @@ def test_receipt_is_exact_one_shot_and_authenticators_are_total() -> None:
     )
 
     receipt = _commit(counter, preparation)
+    assert len(receipt.publication_token) == 64
+    assert all(character in "0123456789abcdef" for character in receipt.publication_token)
+    copied_receipt = copy(receipt)
+    assert copied_receipt.publication_token == receipt.publication_token
     assert not counter.authenticates_action_cohort_receipt(
-        copy(receipt),
+        copied_receipt,
         preparation=preparation,
     )
     assert not counter.authenticates_action_cohort_receipt(
@@ -938,8 +944,92 @@ def test_receipt_is_exact_one_shot_and_authenticators_are_total() -> None:
         "retained_members",
         original_retained_members,
     )
+    original_publication_token = receipt.publication_token
+    tampered_publication_token = (
+        "0" if original_publication_token[0] != "0" else "1"
+    ) + original_publication_token[1:]
+    object.__setattr__(receipt, "_publication_token", tampered_publication_token)
+    assert not counter.authenticates_action_cohort_receipt(
+        receipt,
+        preparation=preparation,
+    )
+    object.__setattr__(receipt, "_publication_token", original_publication_token)
     object.__setattr__(receipt, "_integrity", Hostile())
     assert not counter.authenticates_action_cohort_receipt(
         receipt,
         preparation=preparation,
+    )
+
+
+def test_sequential_equivalent_receipts_have_non_substitutable_publication_tokens() -> None:
+    counter = ExecutionEffectAuditCounter()
+    entry, provenances = _effect_entry("sequential-publication-token")
+    first_preparation = counter.prepare_action_cohort(
+        _ROOT_ACTION_ID,
+        (entry,),
+        published_provenances=provenances,
+    )
+    first_receipt = _commit(counter, first_preparation)
+    second_preparation = counter.prepare_action_cohort(
+        _ROOT_ACTION_ID,
+        (entry,),
+        published_provenances=provenances,
+    )
+    second_receipt = _commit(counter, second_preparation)
+
+    assert first_preparation._binding.cohort_digest == second_preparation._binding.cohort_digest
+    assert first_preparation._binding.identity_digest == second_preparation._binding.identity_digest
+    assert first_receipt.publication_token != second_receipt.publication_token
+    assert counter.authenticates_action_cohort_receipt(
+        first_receipt,
+        preparation=first_preparation,
+        entries=(entry,),
+        published_provenances=provenances,
+    )
+    assert counter.authenticates_action_cohort_receipt(
+        second_receipt,
+        preparation=second_preparation,
+        entries=(entry,),
+        published_provenances=provenances,
+    )
+    assert not counter.authenticates_action_cohort_receipt(
+        first_receipt,
+        preparation=second_preparation,
+    )
+
+    second_values = (
+        second_receipt._receipt_id,
+        second_receipt.publication_token,
+        second_receipt._integrity,
+    )
+    object.__setattr__(second_receipt, "_publication_token", first_receipt.publication_token)
+    assert not counter.authenticates_action_cohort_receipt(
+        second_receipt,
+        preparation=second_preparation,
+    )
+    object.__setattr__(second_receipt, "_receipt_id", first_receipt._receipt_id)
+    object.__setattr__(second_receipt, "_integrity", first_receipt._integrity)
+    assert not counter.authenticates_action_cohort_receipt(
+        second_receipt,
+        preparation=second_preparation,
+    )
+
+    object.__setattr__(second_receipt, "_receipt_id", second_values[0])
+    object.__setattr__(second_receipt, "_publication_token", second_values[1])
+    object.__setattr__(second_receipt, "_integrity", second_values[2])
+    assert counter.authenticates_action_cohort_receipt(
+        second_receipt,
+        preparation=second_preparation,
+    )
+
+    second_binding_token = second_preparation._token
+    object.__setattr__(second_preparation, "_token", first_preparation._token)
+    assert not counter.authenticates_action_cohort_receipt(
+        second_receipt,
+        preparation=second_preparation,
+    )
+    object.__setattr__(second_preparation, "_token", second_binding_token)
+    assert counter.authenticates_action_cohort_receipt(
+        second_receipt,
+        preparation=second_preparation,
     )

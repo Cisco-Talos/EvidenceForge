@@ -1493,8 +1493,15 @@ class ExecutionEffectAuditCommitReceipt:
     _identity_digest: str
     _delta_digest: str
     _receipt_id: str
+    _publication_token: str = field(repr=False)
     _preparation_object_id: int
     _integrity: str = field(repr=False)
+
+    @property
+    def publication_token(self) -> str:
+        """Return the bounded opaque proof suitable for an outer publication receipt."""
+
+        return self._publication_token
 
 
 @dataclass(frozen=True, slots=True)
@@ -2252,6 +2259,7 @@ class ExecutionEffectAuditCounter:
                 token=token,
             )
             receipt_id = secrets.token_hex(16)
+            publication_token = secrets.token_hex(32)
             receipt = ExecutionEffectAuditCommitReceipt(
                 _owner_id=self._action_cohort_owner_id,
                 _preparation_id=preparation_id,
@@ -2259,6 +2267,7 @@ class ExecutionEffectAuditCounter:
                 _identity_digest=validated.identity_digest,
                 _delta_digest=delta_digest,
                 _receipt_id=receipt_id,
+                _publication_token=publication_token,
                 _preparation_object_id=id(preparation),
                 _integrity=self._action_cohort_receipt_integrity(
                     preparation_id=preparation_id,
@@ -2266,6 +2275,7 @@ class ExecutionEffectAuditCounter:
                     identity_digest=validated.identity_digest,
                     delta_digest=delta_digest,
                     receipt_id=receipt_id,
+                    publication_token=publication_token,
                     preparation_object_id=id(preparation),
                 ),
             )
@@ -2495,6 +2505,12 @@ class ExecutionEffectAuditCounter:
                 or preparation._cancelled
                 or preparation._receipt is not receipt
                 or not self._action_cohort_receipt_shape_is_valid(receipt)
+                or not self._action_cohort_token_shape_is_valid(preparation._token)
+                or receipt._owner_id != preparation._token._owner_id
+                or receipt._preparation_id != preparation._token._preparation_id
+                or receipt._cohort_digest != preparation._token._cohort_digest
+                or receipt._identity_digest != preparation._token._identity_digest
+                or receipt._delta_digest != preparation._token._delta_digest
                 or type(preparation._binding) is not _ExecutionEffectAuditCohortBinding
                 or not self._action_cohort_binding_is_valid(preparation._binding)
                 or receipt._preparation_object_id != id(preparation)
@@ -3225,12 +3241,14 @@ class ExecutionEffectAuditCounter:
         identity_digest: str,
         delta_digest: str,
         receipt_id: str,
+        publication_token: str,
         preparation_object_id: int,
     ) -> str:
         payload = (
-            "execution-effect-audit-receipt-v1\0"
+            "execution-effect-audit-receipt-v2\0"
             f"{self._action_cohort_owner_id}\0{preparation_id}\0{cohort_digest}\0"
-            f"{identity_digest}\0{delta_digest}\0{receipt_id}\0{preparation_object_id}"
+            f"{identity_digest}\0{delta_digest}\0{receipt_id}\0{publication_token}\0"
+            f"{preparation_object_id}"
         ).encode("ascii")
         return hmac.new(self._action_cohort_secret, payload, hashlib.sha256).hexdigest()
 
@@ -3266,6 +3284,7 @@ class ExecutionEffectAuditCounter:
             or not _is_lower_hex(receipt._identity_digest, length=64)
             or not _is_lower_hex(receipt._delta_digest, length=64)
             or not _is_lower_hex(receipt._receipt_id, length=32)
+            or not _is_lower_hex(receipt._publication_token, length=64)
             or not _is_lower_hex(receipt._integrity, length=64)
             or type(receipt._preparation_object_id) is not int
             or receipt._preparation_object_id <= 0
@@ -3278,6 +3297,7 @@ class ExecutionEffectAuditCounter:
             identity_digest=receipt._identity_digest,
             delta_digest=receipt._delta_digest,
             receipt_id=receipt._receipt_id,
+            publication_token=receipt._publication_token,
             preparation_object_id=receipt._preparation_object_id,
         )
         return hmac.compare_digest(receipt._integrity, expected)
