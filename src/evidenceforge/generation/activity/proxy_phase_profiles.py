@@ -42,6 +42,7 @@ class ProxyPhaseTiming:
     request_after_connect_ms: MillisecondRange
     inspected_request_after_connect_setup_ms: MillisecondRange
     policy_decision_after_request_ms: MillisecondRange
+    dns_query_after_decision_ms: MillisecondRange
     tls_after_origin_connect_ms: MillisecondRange
     origin_service_ms: MillisecondRange
     client_flush_after_response_ms: MillisecondRange
@@ -166,6 +167,10 @@ def proxy_phase_timing() -> ProxyPhaseTiming:
         policy_decision_after_request_ms=_range(
             timing.get("policy_decision_after_request_ms"),
             (0, 4),
+        ),
+        dns_query_after_decision_ms=_range(
+            timing.get("dns_query_after_decision_ms"),
+            (1, 4),
         ),
         tls_after_origin_connect_ms=_range(
             timing.get("tls_after_origin_connect_ms"),

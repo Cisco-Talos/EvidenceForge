@@ -109,6 +109,7 @@ class NetworkRuntimePointFamily(StrEnum):
     NTP_ASSOCIATION = "ntp_association"
     NTP_SERVER_PROFILE = "ntp_server_profile"
     NTP_PARSER = "ntp_parser"
+    RESPONDER_BINDING = "responder_binding"
 
 
 def _canonical_family(family: NetworkRuntimePointFamily) -> NetworkRuntimePointFamily:

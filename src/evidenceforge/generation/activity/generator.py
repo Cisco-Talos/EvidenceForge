@@ -87,7 +87,12 @@ from evidenceforge.events.cryptography import (
     OcspTransactionPlan,
     TlsCertificatePresentationPlan,
 )
-from evidenceforge.events.dispatcher import EventDispatcher, expand_formats
+from evidenceforge.events.dispatcher import (
+    EventDispatcher,
+    PreparedDispatch,
+    PreparedDispatchStateIntent,
+    expand_formats,
+)
 from evidenceforge.events.identity import EventIdentityPlan, SessionIdentity
 from evidenceforge.events.lifecycle import ActionLifecycleContext, SessionEndPlan
 from evidenceforge.events.network import (
@@ -150,6 +155,7 @@ from evidenceforge.generation.actions import (
     MachineAccountLogonActionBundle,
     MachineAccountLogonRequest,
     NetworkConnectionActionBundle,
+    NetworkConnectionIdentityCapture,
     NetworkConnectionRequest,
     NmapCommandProbeActionBundle,
     NmapCommandProbePlanner,
@@ -248,14 +254,41 @@ from evidenceforge.generation.activity.windows_auth_realism import (
     min_unlock_gap_seconds,
     special_privileges_config,
 )
+from evidenceforge.generation.application_channels import ApplicationChannelRegistry
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
+from evidenceforge.generation.deployment_registry import DeploymentContentRegistry
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
+from evidenceforge.generation.http_channels import HttpApplicationChannelManager
 from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
 from evidenceforge.generation.indexes import ExpiringIndex
-from evidenceforge.generation.source_timing import SourceTimingPlanner
-from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.generation.timing import TemporalConstraintGraph
+from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
+from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+from evidenceforge.generation.network_runtime import (
+    NetworkRuntimePointFamily,
+    NetworkTransactionRuntime,
+)
+from evidenceforge.generation.proxy_channels import ExplicitProxyChannelManager
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanner,
+    SourceTimingPlanningRuntime,
+    SourceTimingPreparation,
+)
+from evidenceforge.generation.state_manager import (
+    MaterializationBatchPlan,
+    ProcessMaterializationPlan,
+    StateManager,
+)
+from evidenceforge.generation.timing import (
+    ConstantDistribution,
+    TemporalConstraintGraph,
+    TimingRuntime,
+    TimingScope,
+    TriangularDistribution,
+    TruncatedLognormalDistribution,
+)
 from evidenceforge.models.exceptions import GenerationError, PathSafetyError, StateError
 from evidenceforge.models.scenario import (
     EmailMessageEventSpec,
@@ -388,9 +421,30 @@ class SmbClientProcessPlan:
     path_style: str
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedSessionBootstrapProcess:
+    """One allocation-free bootstrap process and its frozen source publication."""
+
+    plan: ProcessMaterializationPlan
+    event: OccurrenceBuilder
+    publication: PreparedDispatch
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedNetworkResponder:
+    """One root-owned responder batch and its frozen dependent publications."""
+
+    kind: Literal["ssh", "smb"]
+    batch: MaterializationBatchPlan | None
+    processes: tuple[_PreparedSessionBootstrapProcess, ...]
+    responding_pid: int
+    terminate_pid_after_close: int | None = None
+
+
 _HTTP_PERSISTENT_REUSE_GUARD = timedelta(milliseconds=900)
 _HTTP_PERSISTENT_TRANSACTION_GAP = timedelta(microseconds=1)
 _RECENT_CONNECTION_REUSE_WINDOW_SECONDS = 86_400.0
+_NETWORK_RUNTIME_WATERMARK_PAGE = 4_096
 
 
 _WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
@@ -998,6 +1052,9 @@ def _attach_http_file_transfers(
     *,
     dst_ip: str,
     rng: random.Random,
+    timing_runtime: TimingRuntime | None = None,
+    timing_scope: TimingScope | None = None,
+    deployment_registry: DeploymentContentRegistry | None = None,
 ) -> None:
     """Attach source-native Zeek files.log metadata for visible HTTP entities."""
 
@@ -1007,6 +1064,31 @@ def _attach_http_file_transfers(
         return
     http = event.http
     method = (http.method or "GET").upper()
+    runtime = timing_runtime or TimingRuntime.compatibility_default()
+    scope = timing_scope or TimingScope(
+        stable_id=(
+            f"http-files:{event.network.src_ip}:{event.network.src_port}:"
+            f"{event.network.dst_ip}:{event.network.dst_port}:{http.host}:{http.uri}:"
+            f"{event.timestamp.isoformat()}"
+        ),
+        source="network",
+        lifecycle_id=event.network.conn_id or event.network.zeek_uid,
+    )
+
+    def parent_duration_slack(sample_key: str) -> float:
+        """Return right-skew transfer slack without a fixed floor or ceiling atom."""
+
+        return runtime.sampler.sample_timedelta(
+            TruncatedLognormalDistribution(
+                median=145_000.0,
+                sigma=0.72,
+                minimum=50_000.0,
+                maximum=550_001.0,
+            ),
+            relationship_key="network.http.file_parent_duration_slack",
+            scope=scope,
+            sample_key=sample_key,
+        ).total_seconds()
 
     existing = [
         transfer
@@ -1034,18 +1116,9 @@ def _attach_http_file_transfers(
             )
         request_duration_floor = http_response_parent_duration_floor(http.request_body_len)
         if request_duration_floor > 0:
-            request_floor_rng = random.Random(
-                _stable_seed(
-                    "http_request_file_transfer_parent_duration:"
-                    f"{event.network.src_ip}:{event.network.src_port}:"
-                    f"{event.network.dst_ip}:{event.network.dst_port}:"
-                    f"{http.host}:{http.uri}:{http.request_body_len}:"
-                    f"{event.timestamp.isoformat()}"
-                )
-            )
             event.network.duration = max(
                 event.network.duration or 0.0,
-                request_duration_floor + request_floor_rng.uniform(0.05, 0.55),
+                request_duration_floor + parent_duration_slack("request"),
             )
             if event.proxy is not None:
                 event.proxy = replace(
@@ -1113,16 +1186,7 @@ def _attach_http_file_transfers(
 
     duration_floor = http_response_parent_duration_floor(http.response_body_len)
     if duration_floor > 0:
-        floor_rng = random.Random(
-            _stable_seed(
-                "http_response_file_transfer_parent_duration:"
-                f"{event.network.src_ip}:{event.network.src_port}:"
-                f"{event.network.dst_ip}:{event.network.dst_port}:"
-                f"{http.host}:{http.uri}:{http.response_body_len}:"
-                f"{event.timestamp.isoformat()}"
-            )
-        )
-        min_http_file_duration = duration_floor + floor_rng.uniform(0.05, 0.55)
+        min_http_file_duration = duration_floor + parent_duration_slack("response")
         event.network.duration = max(event.network.duration or 0.0, min_http_file_duration)
         if event.proxy is not None:
             event.proxy = replace(
@@ -1145,6 +1209,7 @@ def _attach_http_file_transfers(
             response_mime_types=list(http.resp_mime_types),
             timestamp=event.timestamp,
             multipart=http.response_multipart,
+            content_identity=http.response_content_identity,
             parent_duration=event.network.duration,
         ),
         rng,
@@ -4190,15 +4255,41 @@ def _ntp_observed_response_fields(
     *,
     dst_ip: str,
     event_time: datetime,
+    timing_runtime: TimingRuntime | None = None,
 ) -> dict[str, float]:
     """Return NTP response fields with stable server traits and per-poll texture."""
     root_delay = float(server_response["root_delay"])
     root_disp = float(server_response["root_disp"])
-    rng = random.Random(_stable_seed(f"ntp_observed_response:{dst_ip}:{event_time.isoformat()}"))
-    observed_delay = root_delay * rng.uniform(0.91, 1.12) + rng.uniform(-0.00025, 0.00035)
-    observed_disp = root_disp * rng.uniform(0.88, 1.16) + rng.uniform(-0.00015, 0.0004)
-    if rng.random() < 0.18:
-        observed_disp += rng.uniform(0.00035, 0.0018)
+    timing = _activity_timing_planner(timing_runtime)
+    stable_id = f"ntp-response:{dst_ip}:{event_time.isoformat()}"
+    observed_delay = timing.centered_seconds(
+        relationship_key="activity.ntp.observed_root_delay",
+        stable_id=stable_id,
+        mean=root_delay,
+        standard_deviation=max(0.00001, root_delay * 0.06),
+        minimum=max(0.000001, root_delay * 0.91 - 0.00025),
+        maximum=max(0.000003, root_delay * 1.12 + 0.00035),
+        sample_key="root_delay",
+    )
+    observed_disp = timing.mixture_seconds(
+        relationship_key="activity.ntp.observed_root_dispersion",
+        stable_id=stable_id,
+        components=(
+            (
+                0.82,
+                max(0.000001, root_disp * 0.88 - 0.00015),
+                max(0.000002, root_disp),
+                max(0.000003, root_disp * 1.16 + 0.0004),
+            ),
+            (
+                0.18,
+                max(0.000001, root_disp * 0.95 + 0.00035),
+                max(0.000002, root_disp * 1.08 + 0.0007),
+                max(0.000003, root_disp * 1.20 + 0.0018),
+            ),
+        ),
+        sample_key="root_dispersion",
+    )
     return {
         "precision": float(server_response["precision"]),
         "root_delay": round(max(0.00025, observed_delay), 6),
@@ -4300,6 +4391,34 @@ def _tls_signature_algorithm_for_issuer(
     )
 
 
+def _activity_timing_planner(timing_runtime: TimingRuntime | None) -> BaselineTimingPlanner:
+    """Return the engine planner or an isolated direct-helper adapter."""
+
+    runtime = timing_runtime if isinstance(timing_runtime, TimingRuntime) else None
+    return BaselineTimingPlanner(
+        runtime or TimingRuntime.compatibility_default(),
+        source="activity",
+    )
+
+
+def _activity_timing_stable_id(
+    family: str,
+    *parts: object,
+    rng: random.Random | None = None,
+) -> str:
+    """Return a stable compatibility scope without continuous RNG timing draws."""
+
+    state_token = ""
+    if rng is not None:
+        state = rng.getstate()[1]
+        adapter_ordinal = int(getattr(rng, "_eforge_activity_timing_ordinal", 0))
+        rng._eforge_activity_timing_ordinal = adapter_ordinal + 1  # type: ignore[attr-defined]
+        state_token = (
+            f"{_stable_seed(':'.join(str(value) for value in state[:8]))}:{adapter_ordinal}"
+        )
+    return ":".join((family, *(str(part) for part in parts), state_token))
+
+
 @dataclass(frozen=True, slots=True)
 class EmailCorpusEntry:
     """Scenario-authored deterministic email content."""
@@ -4326,6 +4445,102 @@ class ActivityGenerator:
         emitters: Dict mapping format name to emitter instance
     """
 
+    @property
+    def _activity_timing_planner(self) -> BaselineTimingPlanner:
+        """Return the engine planner or one cached direct-fixture adapter."""
+
+        planner = self.__dict__.get("_activity_timing_planner_instance")
+        if isinstance(planner, BaselineTimingPlanner):
+            return planner
+        runtime = getattr(self, "timing_runtime", None)
+        planner = _activity_timing_planner(runtime if isinstance(runtime, TimingRuntime) else None)
+        self.__dict__["_activity_timing_planner_instance"] = planner
+        return planner
+
+    @_activity_timing_planner.setter
+    def _activity_timing_planner(self, planner: BaselineTimingPlanner) -> None:
+        self.__dict__["_activity_timing_planner_instance"] = planner
+
+    def _sample_activity_gap(
+        self,
+        *,
+        relationship_key: str,
+        stable_id: str,
+        minimum_ms: float,
+        maximum_ms: float,
+        host: str = "",
+        source: str = "activity",
+        lifecycle_id: str = "",
+        ordinal: int = 0,
+        sample_key: str = "gap",
+        mode_fraction: float = 0.35,
+        timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
+    ) -> timedelta:
+        """Sample one bounded activity gap through the engine timing runtime."""
+
+        minimum_us = minimum_ms * 1_000.0
+        maximum_us = maximum_ms * 1_000.0
+        if maximum_us <= minimum_us:
+            distribution = ConstantDistribution(minimum_us)
+        else:
+            maximum_us += 1.0
+            mode_us = minimum_us + ((maximum_us - minimum_us) * mode_fraction)
+            distribution = TriangularDistribution(
+                minimum=minimum_us,
+                mode=mode_us,
+                maximum=maximum_us,
+            )
+        runtime = (
+            self._activity_timing_planner.runtime if timing_runtime is None else timing_runtime
+        )
+        return runtime.sampler.sample_timedelta(
+            distribution,
+            relationship_key=relationship_key,
+            scope=TimingScope(
+                stable_id=stable_id,
+                host=host,
+                source=source,
+                lifecycle_id=lifecycle_id,
+                ordinal=ordinal,
+            ),
+            sample_key=sample_key,
+        )
+
+    def _sample_profile_activity_gap(
+        self,
+        relationship_key: str,
+        *,
+        stable_id: str,
+        host: str = "",
+        source: str = "activity",
+        lifecycle_id: str = "",
+        ordinal: int = 0,
+        sample_key: str = "gap",
+        mode_fraction: float = 0.35,
+        timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
+    ) -> timedelta:
+        """Sample one configured relationship through a typed runtime scope."""
+
+        window = _activity_get_timing_window(
+            relationship_key,
+            default_min_ms=0,
+            default_max_ms=0,
+            default_position="after",
+        )
+        return self._sample_activity_gap(
+            relationship_key=relationship_key,
+            stable_id=stable_id,
+            minimum_ms=window.min_ms,
+            maximum_ms=window.max_ms,
+            host=host,
+            source=source,
+            lifecycle_id=lifecycle_id,
+            ordinal=ordinal,
+            sample_key=sample_key,
+            mode_fraction=mode_fraction,
+            timing_runtime=timing_runtime,
+        )
+
     def __init__(
         self,
         state_manager: StateManager,
@@ -4336,6 +4551,13 @@ class ActivityGenerator:
         source_timing_profile: str = "complete",
         dispatcher: EventDispatcher | None = None,
         causal_engine: CausalExpansionEngine | None = None,
+        timing_runtime: TimingRuntime | None = None,
+        source_timing_planner: SourceTimingPlanner | None = None,
+        lifecycle_shadow: LifecycleShadow | None = None,
+        lifecycle_authority: GeneratorLifecycleAuthority | None = None,
+        application_channel_registry: ApplicationChannelRegistry | None = None,
+        generation_window_start: datetime | None = None,
+        generation_window_end: datetime | None = None,
     ):
         """Initialize activity generator.
 
@@ -4350,15 +4572,104 @@ class ActivityGenerator:
             causal_engine: Optional CausalExpansionEngine for auto-generating
                 prerequisite events (DNS before connections, Kerberos before
                 logons, etc.)
+            timing_runtime: Optional shared timing runtime. When a dispatcher is
+                supplied, its runtime is reused by default.
+            source_timing_planner: Optional engine-owned source timing planner.
+                When a dispatcher is supplied, its planner is reused by default.
+            lifecycle_shadow: Optional engine-owned lifecycle adapter. The
+                dispatcher's adapter is reused by default.
+            lifecycle_authority: Optional engine-owned lifecycle materialization
+                authority.
+            application_channel_registry: Optional engine-owned common application
+                registry.
+            generation_window_start: Earliest canonical generation time admitted by
+                bounded application registries.
+            generation_window_end: Exclusive canonical generation boundary for
+                bounded application registries.
         """
         self.state_manager = state_manager
+        dispatcher_runtime = getattr(dispatcher, "timing_runtime", None)
+        if timing_runtime is None:
+            timing_runtime = (
+                dispatcher_runtime
+                if isinstance(dispatcher_runtime, TimingRuntime)
+                else TimingRuntime.compatibility_default()
+            )
+        elif (
+            isinstance(dispatcher_runtime, TimingRuntime)
+            and dispatcher_runtime is not timing_runtime
+        ):
+            raise ValueError("dispatcher and activity generator must share one TimingRuntime")
+        dispatcher_source_timing_planner = getattr(dispatcher, "source_timing_planner", None)
+        if source_timing_planner is None:
+            source_timing_planner = dispatcher_source_timing_planner
+        elif (
+            dispatcher_source_timing_planner is not None
+            and dispatcher_source_timing_planner is not source_timing_planner
+        ):
+            raise ValueError("dispatcher and activity generator must share one SourceTimingPlanner")
+        if (
+            source_timing_planner is not None
+            and source_timing_planner.timing_runtime is not timing_runtime
+        ):
+            raise ValueError("source timing planner and activity generator must share one runtime")
+        dispatcher_shadow = (
+            getattr(dispatcher, "lifecycle_shadow", None) if dispatcher is not None else None
+        )
+        if lifecycle_shadow is None:
+            lifecycle_shadow = dispatcher_shadow
+        elif dispatcher_shadow is not None and dispatcher_shadow is not lifecycle_shadow:
+            raise ValueError("dispatcher and activity generator must share one LifecycleShadow")
+        if lifecycle_shadow is None:
+            lifecycle_shadow = LifecycleShadow(state_manager, LifecycleRegistry())
         if dispatcher is None and emitters:
             # Auto-create dispatcher for backward compat with tests
             dispatcher = EventDispatcher(
                 state_manager=state_manager,
                 emitters=emitters,
+                timing_runtime=timing_runtime,
+                source_timing_planner=source_timing_planner,
+                lifecycle_shadow=lifecycle_shadow,
             )
+        elif dispatcher is not None:
+            bind_lifecycle_shadow = getattr(dispatcher, "bind_lifecycle_shadow", None)
+            if callable(bind_lifecycle_shadow):
+                bind_lifecycle_shadow(lifecycle_shadow)
         self.dispatcher = dispatcher
+        self.timing_runtime = timing_runtime
+        self._activity_timing_planner = BaselineTimingPlanner(
+            timing_runtime,
+            source="activity",
+        )
+        if source_timing_planner is None and dispatcher is not None:
+            source_timing_planner = getattr(dispatcher, "source_timing_planner", None)
+        self._source_timing_planner = source_timing_planner or SourceTimingPlanner(
+            clock_profile_name=source_timing_profile,
+            timing_runtime=timing_runtime,
+        )
+        lifecycle_compatibility_fixture_mode = lifecycle_authority is None
+        if lifecycle_authority is None:
+            lifecycle_authority = GeneratorLifecycleAuthority(
+                state_manager,
+                lifecycle_shadow,
+            )
+        elif lifecycle_authority.registry is not lifecycle_shadow.registry:
+            raise ValueError("activity generator and lifecycle authority must share one registry")
+        self._lifecycle_authority = lifecycle_authority
+        if lifecycle_compatibility_fixture_mode:
+            self._lifecycle_authority.enable_fixture_parent_backfill()
+            self._lifecycle_authority.bootstrap_active_state()
+        if dispatcher is not None:
+            bind_lifecycle_authority = getattr(dispatcher, "bind_lifecycle_authority", None)
+            if callable(bind_lifecycle_authority):
+                bind_lifecycle_authority(self._lifecycle_authority)
+            bind_lifecycle_strict_predicate = getattr(
+                dispatcher,
+                "bind_lifecycle_strict_predicate",
+                None,
+            )
+            if callable(bind_lifecycle_strict_predicate):
+                bind_lifecycle_strict_predicate(self._lifecycle_authority.event_is_strict)
         self.sid_registry = sid_registry or {}
         self.identity_directory = identity_directory
 
@@ -4378,6 +4689,34 @@ class ActivityGenerator:
         self._proxy_auth_policy = ProxyAuthPolicyConfig()
         self._proxy_service_accounts: list[str] = []
         self._proxy_auth_session_deadlines: dict[tuple[str, str], datetime] = {}
+        proxy_window_start = ensure_utc(generation_window_start or datetime.min.replace(tzinfo=UTC))
+        proxy_window_end = ensure_utc(generation_window_end or datetime.max.replace(tzinfo=UTC))
+        if application_channel_registry is None:
+            application_channel_registry = ApplicationChannelRegistry(
+                window_start=proxy_window_start,
+                window_end=proxy_window_end,
+            )
+        elif (
+            application_channel_registry.window_start != proxy_window_start
+            or application_channel_registry.window_end != proxy_window_end
+        ):
+            raise ValueError(
+                "ActivityGenerator window must exactly match the shared application registry"
+            )
+        self._application_channel_registry = application_channel_registry
+        self._proxy_channel_manager = ExplicitProxyChannelManager(
+            window_start=proxy_window_start,
+            window_end=proxy_window_end,
+            registry=application_channel_registry,
+            shard_count=application_channel_registry.shard_count,
+        )
+        self._http_channel_manager = HttpApplicationChannelManager(
+            window_start=proxy_window_start,
+            window_end=proxy_window_end,
+            registry=application_channel_registry,
+        )
+        self._proxy_channel_window_start = proxy_window_start
+        self._proxy_channel_watermark = proxy_window_start
         from evidenceforge.generation.actions.proxy_transaction import ActiveProxyTunnel
 
         self._explicit_proxy_tunnels: dict[
@@ -4396,7 +4735,8 @@ class ActivityGenerator:
         self._privileged_auth_occurrences: set[str] = set()
         self._privileged_auth_occurrence_lock = Lock()
         self._software_deployment_key = "default"
-        self._scenario_end_time = datetime.max.replace(tzinfo=UTC)
+        self._scenario_end_time = proxy_window_end
+        self._has_explicit_generation_window_end = generation_window_end is not None
         self._singleton_application_intervals: dict[
             tuple[str, str, str, str], list[tuple[datetime, datetime]]
         ] = {}
@@ -4419,6 +4759,26 @@ class ActivityGenerator:
         self._tls_seen_server_names: set[str] = set()
         self._tls_seen_client_server_pairs: set[tuple[str, str, int, str]] = set()
         self._cryptographic_material_registry = CryptographicMaterialRegistry()
+        network_window_end = (
+            proxy_window_end
+            if proxy_window_end == datetime.max.replace(tzinfo=UTC)
+            else proxy_window_end + timedelta(microseconds=1)
+        )
+        self._network_transaction_runtime = NetworkTransactionRuntime(
+            state_manager=state_manager,
+            cryptographic_material=self._cryptographic_material_registry,
+            window_start=proxy_window_start,
+            window_end=network_window_end,
+        )
+        self._lifecycle_authority.bind_network_transaction_runtime(
+            self._network_transaction_runtime
+        )
+        self._lifecycle_authority.bind_source_timing_planner(self._source_timing_planner)
+        self._lifecycle_authority.bind_application_channel_registry(
+            self._application_channel_registry
+        )
+        self._lifecycle_authority.bind_http_channel_manager(self._http_channel_manager)
+        self._lifecycle_authority.bind_explicit_proxy_manager(self._proxy_channel_manager)
         self._tls_certificate_planner = TlsCertificatePlanner(self._cryptographic_material_registry)
         self._ocsp_transaction_planner = OcspTransactionPlanner(
             self._cryptographic_material_registry,
@@ -4467,8 +4827,6 @@ class ActivityGenerator:
         ] = {}
         self._session_process_source_terminate_times: dict[tuple[str, str], datetime] = {}
         self._process_connection_hold_until: dict[tuple[str, int, datetime | None], datetime] = {}
-        self._source_timing_planner = SourceTimingPlanner(clock_profile_name=source_timing_profile)
-
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
         self._expanding_types: set[str] = set()
@@ -4476,6 +4834,29 @@ class ActivityGenerator:
         self._last_connection_effective_tuple: tuple[str, int, str, int, str] | None = None
         self._last_connection_effective_time: datetime | None = None
         self._last_connection_effective_transaction_id = ""
+        self._last_connection_http_context: HttpContext | None = None
+        self._last_connection_file_transfers: tuple[FileTransferContext, ...] = ()
+
+    def advance_application_channel_watermark(self, cutoff: datetime) -> None:
+        """Advance bounded application and network retention at the canonical frontier."""
+
+        canonical_cutoff = max(ensure_utc(cutoff), self._proxy_channel_window_start)
+        if canonical_cutoff < self._proxy_channel_watermark:
+            raise StateError(
+                "Application-channel watermark cannot move backward: "
+                f"{canonical_cutoff.isoformat()} < {self._proxy_channel_watermark.isoformat()}"
+            )
+        self._proxy_channel_manager.watermark(canonical_cutoff)
+        self._http_channel_manager.watermark(canonical_cutoff)
+        self._application_channel_registry.watermark(canonical_cutoff)
+        while True:
+            network_page = self._network_transaction_runtime.advance_watermark_page(
+                canonical_cutoff,
+                limit=_NETWORK_RUNTIME_WATERMARK_PAGE,
+            )
+            if not network_page.has_more:
+                break
+        self._proxy_channel_watermark = canonical_cutoff
 
     def _process_termination_recorded(
         self,
@@ -5093,12 +5474,27 @@ class ActivityGenerator:
             seed_text=command_line,
         )
 
-    def _ntp_association_profile(self, src_ip: str, dst_ip: str) -> dict[str, float | int]:
+    def _ntp_association_profile(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        *,
+        network_preparation: Any | None = None,
+        expires_at: datetime | None = None,
+    ) -> dict[str, float | int]:
         """Return stable NTP client/server association fields."""
         key = (src_ip, dst_ip)
-        profile = self._ntp_association_profiles.get(key)
+        profile = (
+            self._ntp_association_profiles.get(key)
+            if network_preparation is None
+            else network_preparation.read_point(
+                NetworkRuntimePointFamily.NTP_ASSOCIATION,
+                key,
+                None,
+            )
+        )
         if profile is not None:
-            return profile
+            return dict(profile)
 
         profile_rng = random.Random(_stable_seed(f"ntp_association:{src_ip}:{dst_ip}"))
         version = 3 if profile_rng.random() < 0.08 else 4
@@ -5107,29 +5503,84 @@ class ActivityGenerator:
             "version": version,
             "poll": poll,
         }
-        self._ntp_association_profiles[key] = profile
+        if network_preparation is None:
+            self._ntp_association_profiles[key] = profile
+        else:
+            network_preparation.stage_point(
+                NetworkRuntimePointFamily.NTP_ASSOCIATION,
+                key,
+                profile,
+                expires_at=expires_at,
+            )
         return profile
 
-    def _ntp_server_response_profile(self, dst_ip: str) -> dict[str, float]:
+    def _ntp_server_response_profile(
+        self,
+        dst_ip: str,
+        *,
+        network_preparation: Any | None = None,
+        timing_runtime: Any | None = None,
+        network_point_expires_at: datetime | None = None,
+        expires_at: datetime | None = None,
+    ) -> dict[str, float]:
         """Return NTP response fields owned by the server, not by clients."""
-        profile = self._ntp_server_response_profiles.get(dst_ip)
+        profile = (
+            self._ntp_server_response_profiles.get(dst_ip)
+            if network_preparation is None
+            else network_preparation.read_point(
+                NetworkRuntimePointFamily.NTP_SERVER_PROFILE,
+                dst_ip,
+                None,
+            )
+        )
         if profile is not None:
-            return profile
+            return dict(profile)
 
-        profile_rng = random.Random(_stable_seed(f"ntp_server_response:{dst_ip}"))
         if _is_private_ip(dst_ip):
-            root_delay = profile_rng.uniform(0.006, 0.055)
-            root_disp = profile_rng.uniform(0.004, 0.028)
+            delay_bounds = (0.006, 0.016, 0.055)
+            dispersion_bounds = (0.004, 0.011, 0.028)
         else:
-            root_delay = profile_rng.uniform(0.001, 0.08)
-            root_disp = profile_rng.uniform(0.001, 0.04)
-        precision_exponent = profile_rng.randint(-24, -19)
+            delay_bounds = (0.001, 0.019, 0.08)
+            dispersion_bounds = (0.001, 0.009, 0.04)
+        planner = (
+            self._activity_timing_planner
+            if timing_runtime is None
+            else BaselineTimingPlanner(timing_runtime, source="activity")
+        )
+        root_delay = planner.right_skew_seconds(
+            relationship_key="activity.ntp.server_root_delay",
+            stable_id=f"ntp-server:{dst_ip}",
+            minimum=delay_bounds[0],
+            median=delay_bounds[1],
+            maximum=delay_bounds[2],
+            host=dst_ip,
+            sample_key="root_delay",
+        )
+        root_disp = planner.right_skew_seconds(
+            relationship_key="activity.ntp.server_root_dispersion",
+            stable_id=f"ntp-server:{dst_ip}",
+            minimum=dispersion_bounds[0],
+            median=dispersion_bounds[1],
+            maximum=dispersion_bounds[2],
+            host=dst_ip,
+            sample_key="root_dispersion",
+        )
+        precision_rng = random.Random(_stable_seed(f"ntp_server_precision:{dst_ip}"))
+        precision_exponent = precision_rng.randint(-24, -19)
         profile = {
             "precision": _ntp_precision_interval_seconds(precision_exponent),
             "root_delay": root_delay,
             "root_disp": root_disp,
         }
-        self._ntp_server_response_profiles[dst_ip] = profile
+        if network_preparation is None:
+            self._ntp_server_response_profiles[dst_ip] = profile
+        else:
+            network_preparation.stage_point(
+                NetworkRuntimePointFamily.NTP_SERVER_PROFILE,
+                dst_ip,
+                profile,
+                expires_at=expires_at,
+            )
         return profile
 
     def _build_host_context(self, system: System) -> HostContext:
@@ -9648,6 +10099,10 @@ class ActivityGenerator:
         dst_ip: str,
         rng: random.Random,
         allow_failure: bool = True,
+        timing_stable_id: str = "",
+        network_preparation: Any | None = None,
+        timing_runtime: Any | None = None,
+        network_point_expires_at: datetime | None = None,
     ) -> None:
         """Attach Zeek SSL and x509 contexts to an established TLS connection."""
         from evidenceforge.events.contexts import SslContext
@@ -9759,16 +10214,48 @@ class ActivityGenerator:
         ssl_established = (rng.random() > _SSL_FAILURE_RATE) if allow_failure else True
         ssl_history_roll = rng.random()
         tls_name_key = server_name or dst_ip
-        first_observed_name = tls_name_key not in self._tls_seen_server_names
         pair_key = (net.src_ip, net.dst_ip, net.dst_port, tls_name_key)
-        first_observed_pair = pair_key not in self._tls_seen_client_server_pairs
+        if network_preparation is None:
+            first_observed_name = tls_name_key not in self._tls_seen_server_names
+            first_observed_pair = pair_key not in self._tls_seen_client_server_pairs
+        else:
+            first_observed_name = not bool(
+                network_preparation.read_point(
+                    NetworkRuntimePointFamily.TLS_SERVER_NAME,
+                    tls_name_key,
+                    False,
+                    at=ensure_utc(event.timestamp),
+                )
+            )
+            first_observed_pair = not bool(
+                network_preparation.read_point(
+                    NetworkRuntimePointFamily.TLS_CLIENT_SERVER_PAIR,
+                    pair_key,
+                    False,
+                    at=ensure_utc(event.timestamp),
+                )
+            )
         resumed = (
             rng.random() < 0.45 and not first_observed_name and not first_observed_pair
             if ssl_established
             else False
         )
-        self._tls_seen_server_names.add(tls_name_key)
-        self._tls_seen_client_server_pairs.add(pair_key)
+        if network_preparation is None:
+            self._tls_seen_server_names.add(tls_name_key)
+            self._tls_seen_client_server_pairs.add(pair_key)
+        else:
+            network_preparation.stage_point(
+                NetworkRuntimePointFamily.TLS_SERVER_NAME,
+                tls_name_key,
+                True,
+                expires_at=network_point_expires_at,
+            )
+            network_preparation.stage_point(
+                NetworkRuntimePointFamily.TLS_CLIENT_SERVER_PAIR,
+                pair_key,
+                True,
+                expires_at=network_point_expires_at,
+            )
         ssl_hist = _choose_ssl_history_from_roll(
             ssl_history_roll,
             tls_version=tls_version,
@@ -9796,7 +10283,40 @@ class ActivityGenerator:
             )
             orig_ip_bytes = _tcp_ip_byte_count(orig_bytes, orig_pkts, rng)
             resp_ip_bytes = _tcp_ip_byte_count(resp_bytes, resp_pkts, rng)
-            duration = rng.uniform(0.0, 0.5) if net.duration is not None else None
+            duration = (
+                (timing_runtime or self.timing_runtime)
+                .sampler.sample_timedelta(
+                    TruncatedLognormalDistribution(
+                        median=28_000.0,
+                        sigma=0.88,
+                        minimum=37.0,
+                        maximum=500_001.0,
+                    ),
+                    relationship_key="network.failed_transport.tls_handshake_duration",
+                    scope=TimingScope(
+                        stable_id=(
+                            timing_stable_id
+                            or (
+                                net.transaction.stable_id
+                                if isinstance(net, NetworkTransactionDraft)
+                                and net.transaction is not None
+                                else net.stable_id
+                                if isinstance(net, NetworkTransactionPlan)
+                                else ""
+                            )
+                            or net.conn_id
+                            or net.zeek_uid
+                        ),
+                        host=event.src_host.hostname if event.src_host is not None else "",
+                        source="network",
+                        lifecycle_id=net.conn_id,
+                    ),
+                    sample_key="tls_handshake",
+                )
+                .total_seconds()
+                if net.duration is not None
+                else None
+            )
             if isinstance(net, NetworkTransactionPlan):
                 closed_at = (
                     net.started_at + timedelta(seconds=duration) if duration is not None else None
@@ -9847,7 +10367,12 @@ class ActivityGenerator:
             san_dns_list = list(dict.fromkeys([internal_cert_name, short_name]))
         else:
             san_dns_list = _tls_san_dns_names(cert_name)
-        event.tls_presentation = self._tls_certificate_planner.plan(
+        tls_certificate_planner = (
+            self._tls_certificate_planner
+            if network_preparation is None
+            else TlsCertificatePlanner(network_preparation.cryptographic_material)
+        )
+        event.tls_presentation = tls_certificate_planner.plan(
             backend_identity=cert_name.rstrip(".").lower(),
             cert_name=cert_name,
             issuer_config=issuer_cfg,
@@ -9857,8 +10382,8 @@ class ActivityGenerator:
             key_size=key_length,
             san_dns=tuple(san_dns_list),
         )
-        event.x509_chain = self._tls_certificate_planner.x509_contexts(event.tls_presentation)
-        self._tls_certificate_planner.validate_projection(
+        event.x509_chain = tls_certificate_planner.x509_contexts(event.tls_presentation)
+        tls_certificate_planner.validate_projection(
             event.tls_presentation,
             event.x509_chain,
         )
@@ -9867,7 +10392,7 @@ class ActivityGenerator:
             event.ssl,
             cert_chain_fuids=tuple(cert.fuid for cert in event.x509_chain),
         )
-        self._ensure_tls_conn_covers_certificate_bytes(event)
+        self._ensure_tls_conn_covers_certificate_bytes(event, timing_runtime=timing_runtime)
 
     def _maybe_emit_ocsp_transaction(self, event: OccurrenceBuilder) -> OcspTransactionPlan | None:
         """Emit one action-owned OCSP child only after its TLS parent is finalized."""
@@ -9900,8 +10425,12 @@ class ActivityGenerator:
             ),
         ).execute()
 
-    @staticmethod
-    def _ensure_tls_conn_covers_certificate_bytes(event: OccurrenceBuilder) -> bool:
+    def _ensure_tls_conn_covers_certificate_bytes(
+        self,
+        event: OccurrenceBuilder,
+        *,
+        timing_runtime: Any | None = None,
+    ) -> bool:
         """Keep Zeek SSL certificate file evidence within the same conn budget."""
         net = event.network
         if net is None or not event.x509_chain:
@@ -9930,6 +10459,7 @@ class ActivityGenerator:
                 event_timestamp=event.timestamp,
                 fuid=cert.fuid,
                 position=idx,
+                timing_runtime=timing_runtime or self.timing_runtime,
             )
             for idx, cert in enumerate(event.x509_chain)
         )
@@ -13891,6 +14421,8 @@ class ActivityGenerator:
         pid: int,
         time: datetime,
         relationship_key: str,
+        *,
+        timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
     ) -> datetime:
         """Keep fast same-process dependents after visible Windows process creation."""
         if pid <= 0 or _get_os_category(system.os) != "windows":
@@ -13898,9 +14430,20 @@ class ActivityGenerator:
         visible_create_time = self.process_source_create_time(system.hostname, pid)
         if visible_create_time is None or time > visible_create_time:
             return time
-        return visible_create_time + sample_timing_delta(
+        return visible_create_time + self._sample_profile_activity_gap(
             relationship_key,
-            seed_parts=(system.hostname, pid, visible_create_time, time),
+            stable_id=_activity_timing_stable_id(
+                "windows-visible-process-dependent",
+                system.hostname,
+                pid,
+                visible_create_time,
+                time,
+            ),
+            host=system.hostname,
+            source="endpoint_process",
+            lifecycle_id=str(pid),
+            sample_key="visible_create_gap",
+            timing_runtime=timing_runtime,
         )
 
     def _clamp_after_visible_linux_process_create(
@@ -14299,6 +14842,45 @@ class ActivityGenerator:
     def _smb_responder_tuple_key(source_ip: str, source_port: int, target_ip: str) -> str:
         return f"{source_ip}:{source_port}->{target_ip}:445/tcp"
 
+    @staticmethod
+    def _network_responder_runtime_key(
+        kind: str,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+    ) -> tuple[str, str, int, str]:
+        """Return the exact canonical runtime key for one responder tuple."""
+
+        return (
+            kind,
+            source_ip.removeprefix("::ffff:"),
+            source_port,
+            target_ip.removeprefix("::ffff:"),
+        )
+
+    def _runtime_responder_pid(
+        self,
+        kind: str,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+    ) -> int | None:
+        """Return a committed network-runtime responder PID when one exists."""
+
+        value = self._network_transaction_runtime.get_point(
+            NetworkRuntimePointFamily.RESPONDER_BINDING,
+            self._network_responder_runtime_key(
+                kind,
+                source_ip,
+                source_port,
+                target_ip,
+            ),
+            None,
+        )
+        if type(value) is not tuple or len(value) != 3 or type(value[1]) is not int:
+            return None
+        return value[1] if value[1] > 0 else None
+
     def _remember_smb_responder_pid(
         self,
         source_ip: str,
@@ -14324,6 +14906,14 @@ class ActivityGenerator:
     ) -> int | None:
         """Return the tuple-scoped Samba worker, when one has been resolved."""
 
+        runtime_pid = self._runtime_responder_pid(
+            "smb",
+            source_ip,
+            source_port,
+            target_ip,
+        )
+        if runtime_pid is not None:
+            return runtime_pid
         if not hasattr(self, "_smb_responder_pids"):
             return None
         return self._smb_responder_pids.get(
@@ -14363,11 +14953,406 @@ class ActivityGenerator:
         source_port: int,
         target_ip: str,
     ) -> int | None:
+        runtime_pid = self._runtime_responder_pid(
+            "ssh",
+            source_ip,
+            source_port,
+            target_ip,
+        )
+        if runtime_pid is not None:
+            return runtime_pid
         if not hasattr(self, "_ssh_responder_pids"):
             return None
         return self._ssh_responder_pids.get(
             self._ssh_responder_tuple_key(source_ip, source_port, target_ip)
         )
+
+    def _prepare_network_responder_process_publication(
+        self,
+        *,
+        plan: ProcessMaterializationPlan,
+        system: System,
+        source_timing_preparation: SourceTimingPreparation,
+    ) -> _PreparedSessionBootstrapProcess:
+        """Freeze one root-batch system-process occurrence without publishing it."""
+
+        username = plan.identity.principal
+        sid = self.sid_registry.get(username, "S-1-5-18") if self.sid_registry else "S-1-5-18"
+        parent_pid = plan.identity.parent_pid
+        event = OccurrenceBuilder(
+            timestamp=plan.identity.started_at,
+            event_type="system_process_create",
+            src_host=self._build_host_context(system),
+            auth=AuthContext(
+                username=username,
+                user_sid=sid,
+                logon_id=plan.identity.logon_id,
+                subject_sid=sid,
+                subject_username=username,
+                subject_domain="NT AUTHORITY",
+                subject_logon_id=plan.identity.logon_id,
+            ),
+            process=ProcessContext(
+                pid=plan.identity.pid,
+                parent_pid=parent_pid,
+                image=plan.identity.image,
+                command_line=plan.identity.command_line,
+                username=username,
+                integrity_level="System",
+                logon_id=plan.identity.logon_id,
+                parent_image=self._lookup_parent_image(system.hostname, parent_pid),
+                parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
+                parent_start_time=self._lookup_parent_start_time(system.hostname, parent_pid),
+                token_elevation="%%1936",
+                mandatory_label="S-1-16-16384",
+                start_time=plan.identity.started_at,
+                current_directory=self._derive_current_directory(
+                    system=system,
+                    username=username,
+                    process_name=plan.identity.image,
+                    command_line=plan.identity.command_line,
+                    parent_pid=parent_pid,
+                ),
+            ),
+            identity_plan=EventIdentityPlan(subject=plan.identity),
+            lifecycle=ActionLifecycleContext(
+                group_id=plan.identity.lifecycle_group_id,
+                canonical_start=plan.identity.started_at,
+                phase="start",
+                parent_group_id=plan.identity.parent_lifecycle_group_id or None,
+            ),
+        )
+        prepared = self.dispatcher.prepare_builder(
+            event,
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+            lifecycle_ticket=plan,
+            source_timing_preparation=source_timing_preparation,
+        )
+        return _PreparedSessionBootstrapProcess(
+            plan=plan,
+            event=event,
+            publication=prepared,
+        )
+
+    def prepare_network_responder(
+        self,
+        *,
+        kind: Literal["ssh", "smb"],
+        target_system: System,
+        time: datetime,
+        close_time: datetime | None,
+        source_ip: str,
+        source_port: int,
+        target_user: str | None,
+        responding_pid: int,
+        network_preparation: Any,
+        source_timing_preparation: SourceTimingPreparation,
+        runtime_expires_at: datetime,
+    ) -> _PreparedNetworkResponder:
+        """Plan a tuple-owned Linux responder inside the network root transaction."""
+
+        if kind not in {"ssh", "smb"}:
+            raise ValueError(f"Unsupported network responder kind {kind!r}")
+        if source_port <= 0:
+            raise StateError("Prepared network responder requires a resolved source port")
+        tuple_key = self._network_responder_runtime_key(
+            kind,
+            source_ip,
+            source_port,
+            target_system.ip,
+        )
+        staged = network_preparation.read_point(
+            NetworkRuntimePointFamily.RESPONDER_BINDING,
+            tuple_key,
+            None,
+            at=ensure_utc(time),
+        )
+        staged_pid = (
+            staged[1]
+            if type(staged) is tuple
+            and len(staged) == 3
+            and type(staged[1]) is int
+            and staged[1] > 0
+            else None
+        )
+        candidate_pid = responding_pid if responding_pid > 0 else staged_pid
+        if candidate_pid is None:
+            candidate_pid = (
+                self.ssh_responder_pid_for_tuple(source_ip, source_port, target_system.ip)
+                if kind == "ssh"
+                else self.smb_responder_pid_for_tuple(source_ip, source_port, target_system.ip)
+            )
+        if candidate_pid is not None:
+            identity = self.state_manager.get_process_identity(
+                target_system.hostname,
+                candidate_pid,
+            )
+            if identity is not None:
+                network_preparation.stage_point(
+                    NetworkRuntimePointFamily.RESPONDER_BINDING,
+                    tuple_key,
+                    (target_system.hostname, identity.pid, identity.object_id),
+                    expires_at=runtime_expires_at,
+                )
+                return _PreparedNetworkResponder(
+                    kind=kind,
+                    batch=None,
+                    processes=(),
+                    responding_pid=identity.pid,
+                )
+
+        builder = self.state_manager.begin_materialization_batch()
+        planned: list[ProcessMaterializationPlan] = []
+        close_bound = ensure_utc(close_time) if close_time is not None else None
+
+        def _bounded_start(requested: datetime) -> datetime:
+            requested = ensure_utc(requested)
+            if close_bound is None or requested <= close_bound:
+                return requested
+            return max(ensure_utc(time), close_bound)
+
+        if kind == "ssh":
+            sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
+            global_sshd = int(sys_pids.get("sshd", 0) or 0)
+            parent_pid = (
+                global_sshd
+                if global_sshd > 0
+                and self.state_manager.get_process(target_system.hostname, global_sshd) is not None
+                else 0
+            )
+            sshd_seed = _stable_seed(
+                "ssh_responder_pid:"
+                f"{target_system.hostname}:{source_ip}:{source_port}:"
+                f"{target_system.ip}:{time.isoformat()}"
+            )
+            start_time = _bounded_start(time + timedelta(milliseconds=8 + (sshd_seed % 72)))
+            process_user = target_user or "unknown"
+            responder_plan = builder.plan_process(
+                system=target_system.hostname,
+                parent_pid=parent_pid,
+                image="/usr/sbin/sshd",
+                command_line=f"sshd: {process_user} [priv]",
+                username="root",
+                integrity_level="System",
+                os_category="linux",
+                logon_id="0x3e7",
+                lifecycle_group_id=stable_uuid(
+                    "network-ssh-responder-process",
+                    target_system.hostname,
+                    source_ip,
+                    source_port,
+                    ensure_utc(time).isoformat(),
+                ),
+                start_time=start_time,
+                parent_activity_time=start_time,
+                auth_session_id=0,
+                auth_logon_type=2,
+            )
+            planned.append(responder_plan)
+            terminate_pid = None
+        else:
+            services = tuple(
+                getattr(self, "_system_service_defaults", {}).get(
+                    target_system.hostname,
+                    target_system.services or (),
+                )
+            )
+            profile = select_server_profile("linux", services)
+            sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
+            staged_listener = network_preparation.read_point(
+                NetworkRuntimePointFamily.RESPONDER_BINDING,
+                ("smb_listener", target_system.hostname),
+                None,
+                at=ensure_utc(time),
+            )
+            staged_listener_pid = (
+                staged_listener[1]
+                if type(staged_listener) is tuple
+                and len(staged_listener) == 3
+                and type(staged_listener[1]) is int
+                else 0
+            )
+            master_pid = int(
+                staged_listener_pid
+                or sys_pids.get("smbd", 0)
+                or sys_pids.get("smbd_master", 0)
+                or 0
+            )
+            master_plan: ProcessMaterializationPlan | None = None
+            if (
+                master_pid <= 0
+                or self.state_manager.get_process(
+                    target_system.hostname,
+                    master_pid,
+                )
+                is None
+            ):
+                listener = render_smb_process(profile.listener)
+                listener_seed = _stable_seed(
+                    f"smbd-listener:{target_system.hostname}:{time.isoformat()}"
+                )
+                listener_time = time - timedelta(seconds=30 + (listener_seed % 271))
+                scenario_start = getattr(self, "_scenario_start_time", None)
+                if scenario_start is not None:
+                    listener_time = max(
+                        listener_time,
+                        ensure_utc(scenario_start) + timedelta(milliseconds=100),
+                    )
+                if listener_time >= time:
+                    listener_time = time - timedelta(milliseconds=100)
+                systemd_pid = int(sys_pids.get("systemd", 0) or 0)
+                if self.state_manager.get_process(target_system.hostname, systemd_pid) is None:
+                    systemd_pid = 0
+                master_plan = builder.plan_process(
+                    system=target_system.hostname,
+                    parent_pid=systemd_pid,
+                    image=listener.image,
+                    command_line=listener.command_line,
+                    username=listener.username,
+                    integrity_level="System",
+                    os_category="linux",
+                    logon_id="0x3e7",
+                    lifecycle_group_id=stable_uuid(
+                        "network-smb-listener-process",
+                        target_system.hostname,
+                        ensure_utc(listener_time).isoformat(),
+                    ),
+                    start_time=ensure_utc(listener_time),
+                    parent_activity_time=ensure_utc(listener_time),
+                    auth_session_id=0,
+                    auth_logon_type=2,
+                )
+                planned.append(master_plan)
+                master_pid = master_plan.identity.pid
+                network_preparation.stage_point(
+                    NetworkRuntimePointFamily.RESPONDER_BINDING,
+                    ("smb_listener", target_system.hostname),
+                    (
+                        target_system.hostname,
+                        master_plan.identity.pid,
+                        master_plan.identity.object_id,
+                    ),
+                    expires_at=runtime_expires_at,
+                )
+            if profile.worker is None:
+                responder_plan = master_plan
+                if responder_plan is None:
+                    identity = self.state_manager.get_process_identity(
+                        target_system.hostname,
+                        master_pid,
+                    )
+                    if identity is None:
+                        raise StateError("Prepared SMB responder lost its listener identity")
+                    network_preparation.stage_point(
+                        NetworkRuntimePointFamily.RESPONDER_BINDING,
+                        tuple_key,
+                        (target_system.hostname, identity.pid, identity.object_id),
+                        expires_at=runtime_expires_at,
+                    )
+                    return _PreparedNetworkResponder(
+                        kind="smb",
+                        batch=None,
+                        processes=(),
+                        responding_pid=identity.pid,
+                    )
+                terminate_pid = None
+            else:
+                worker = render_smb_process(
+                    profile.worker,
+                    server=target_system.hostname,
+                    share="",
+                    path="",
+                    client_path="",
+                    username="root",
+                    operation="transport",
+                    client_ip=source_ip,
+                )
+                worker_seed = _stable_seed(
+                    "smbd-worker:"
+                    f"{target_system.hostname}:{source_ip}:{source_port}:"
+                    f"{target_system.ip}:{time.isoformat()}"
+                )
+                worker_time = _bounded_start(time + timedelta(milliseconds=8 + (worker_seed % 72)))
+                responder_plan = builder.plan_process(
+                    system=target_system.hostname,
+                    parent_pid=master_pid,
+                    parent_plan=master_plan,
+                    image=worker.image,
+                    command_line=worker.command_line,
+                    username=worker.username,
+                    integrity_level="System",
+                    os_category="linux",
+                    logon_id="0x3e7",
+                    lifecycle_group_id=stable_uuid(
+                        "network-smb-worker-process",
+                        target_system.hostname,
+                        source_ip,
+                        source_port,
+                        ensure_utc(time).isoformat(),
+                    ),
+                    start_time=worker_time,
+                    parent_activity_time=worker_time,
+                    auth_session_id=0,
+                    auth_logon_type=2,
+                )
+                planned.append(responder_plan)
+                terminate_pid = responder_plan.identity.pid
+
+        if responder_plan is None:
+            raise StateError("Prepared network responder produced no process owner")
+        batch = builder.seal()
+        publications = tuple(
+            self._prepare_network_responder_process_publication(
+                plan=plan,
+                system=target_system,
+                source_timing_preparation=source_timing_preparation,
+            )
+            for plan in planned
+        )
+        network_preparation.stage_point(
+            NetworkRuntimePointFamily.RESPONDER_BINDING,
+            tuple_key,
+            (
+                target_system.hostname,
+                responder_plan.identity.pid,
+                responder_plan.identity.object_id,
+            ),
+            expires_at=runtime_expires_at,
+        )
+        return _PreparedNetworkResponder(
+            kind=kind,
+            batch=batch,
+            processes=publications,
+            responding_pid=responder_plan.identity.pid,
+            terminate_pid_after_close=terminate_pid,
+        )
+
+    def publish_prepared_network_responder(
+        self,
+        prepared: _PreparedNetworkResponder,
+        *,
+        materialization_receipt: object,
+        target_system: System,
+        close_time: datetime | None,
+    ) -> None:
+        """Publish responder observations after the root authority commit succeeds."""
+
+        for process in prepared.processes:
+            self.dispatcher.publish_prepared(
+                process.publication,
+                materialization_receipt=materialization_receipt,
+            )
+            self._record_process_source_create_time(
+                target_system.hostname,
+                process.plan.identity.pid,
+                process.event,
+            )
+        terminate_pid = prepared.terminate_pid_after_close
+        if terminate_pid is None or close_time is None:
+            return
+        running = self.state_manager.get_process(target_system.hostname, terminate_pid)
+        if running is not None:
+            self._plan_linux_smb_worker_end(target_system, running, close_time)
 
     def _remember_ssh_session_ready_time(
         self,
@@ -15536,6 +16521,7 @@ class ActivityGenerator:
         firewall: FirewallContext | None = None,
         hostname: str | None = None,
         proxy_bypass: bool = False,
+        suppress_direct_http_channel: bool = False,
         process_image: str | None = None,
         preserve_dst_ip: bool = False,
         preserve_http_outcome: bool = False,
@@ -15548,6 +16534,8 @@ class ActivityGenerator:
         ssh_attempted_username: str | None = None,
         parent_action_group_id: str | None = None,
         preserve_start_time: bool = False,
+        transport_lifecycle_mode: Literal["network", "deferred_session"] = "network",
+        identity_capture: NetworkConnectionIdentityCapture | None = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -15576,6 +16564,10 @@ class ActivityGenerator:
             preserve_dst_ip: Preserve caller-supplied dst_ip when the scenario or caller
                 intentionally pairs an authored hostname with a specific address. This keeps
                 static-NAT VIPs and explicit egress destinations from being re-resolved.
+            suppress_direct_http_channel: Keep a higher-level protocol manager, such as the
+                explicit-proxy bundle, as the sole application-channel owner for this leg.
+            transport_lifecycle_mode: Publish an ordinary physical transport at the network root,
+                or defer an SSH/RDP transport until its exact session binding is available.
             packet_overhead_bytes: Optional IP packet overhead to preserve source-native
                 packet accounting for canonical firewall/syslog companion events.
 
@@ -15616,6 +16608,7 @@ class ActivityGenerator:
             firewall=firewall,
             hostname=hostname,
             proxy_bypass=proxy_bypass,
+            suppress_direct_http_channel=suppress_direct_http_channel,
             process_image=process_image,
             preserve_dst_ip=preserve_dst_ip,
             preserve_http_outcome=preserve_http_outcome,
@@ -15628,6 +16621,8 @@ class ActivityGenerator:
             ssh_attempted_username=ssh_attempted_username,
             parent_action_group_id=parent_action_group_id,
             preserve_start_time=preserve_start_time,
+            transport_lifecycle_mode=transport_lifecycle_mode,
+            identity_capture=identity_capture,
         )
         return NetworkConnectionActionBundle(
             executor=self,

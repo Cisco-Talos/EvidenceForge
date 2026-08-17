@@ -129,6 +129,8 @@ from evidenceforge.generation.actions.linux_sudo_session import (
 )
 from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionActionBundle,
+    NetworkConnectionIdentityCapture,
+    NetworkConnectionPublicationOutcome,
     NetworkConnectionRequest,
 )
 from evidenceforge.generation.actions.network_transaction_planner import (
@@ -303,6 +305,8 @@ __all__ = [
     "LinuxSudoSessionActionBundle",
     "LinuxSudoSessionRequest",
     "NetworkConnectionActionBundle",
+    "NetworkConnectionIdentityCapture",
+    "NetworkConnectionPublicationOutcome",
     "NetworkConnectionRequest",
     "NetworkTransactionPlanner",
     "NmapCommandProbeActionBundle",

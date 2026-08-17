@@ -1134,6 +1134,19 @@ class GeneratorLifecycleAuthority:
 
         if not self._state_manager.authenticates_materialization_plan(plan):
             return False
+        if (
+            type(plan) is ProcessMaterializationPlan
+            and type(receipt) is LifecyclePreparedNetworkReceipt
+        ):
+            if not self._authenticates_issued_prepared_network_receipt(receipt):
+                return False
+            connection_receipt = receipt.connection_receipt
+            return (
+                connection_receipt.materializes_connection
+                and plan.expected_version == receipt.prior_version
+                and receipt.committed_version == plan.expected_version + 1
+                and plan.publication_token in connection_receipt.start_plan_tokens
+            )
         if isinstance(receipt, LifecycleMaterializationReceipt):
             return (
                 not isinstance(plan, MaterializationBatchPlan)

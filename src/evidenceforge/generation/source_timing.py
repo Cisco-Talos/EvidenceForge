@@ -78,6 +78,56 @@ _SOURCE_TIMING_TRANSPORT_RETENTION = timedelta(minutes=10)
 _SOURCE_TIMING_TICKET_RETENTION = timedelta(seconds=10)
 _MAX_UTC_DATETIME = datetime.max.replace(tzinfo=UTC)
 _CACHE_TOMBSTONE = object()
+
+
+class SourceTimingPlanningRuntime:
+    """Read-only capability for sampling against one open timing preparation.
+
+    The source-timing preparation retains all lifecycle authority. Consumers may
+    use this view to share its sampler, clocks, and audit overlay while planning,
+    but cannot seal, claim, commit, or cancel the underlying runtime transaction.
+    """
+
+    __slots__ = ("_preparation",)
+
+    def __init__(self, preparation: SourceTimingPreparation) -> None:
+        self._preparation = preparation
+
+    def _open_runtime(self) -> TimingRuntimePreparation:
+        if self._preparation._state != "open":
+            raise StateError("Source timing planning runtime is no longer open")
+        return self._preparation._runtime_preparation
+
+    @property
+    def sampler(self) -> Any:
+        """Return the staged sampler while planning remains open."""
+
+        return self._open_runtime().sampler
+
+    @property
+    def clocks(self) -> Any:
+        """Return the staged clock registry while planning remains open."""
+
+        return self._open_runtime().clocks
+
+    @property
+    def source_clock_registry(self) -> Any:
+        """Return the staged source-clock registry while planning remains open."""
+
+        return self._open_runtime().source_clock_registry
+
+    @property
+    def audit(self) -> Any:
+        """Return the staged timing audit while planning remains open."""
+
+        return self._open_runtime().audit
+
+    def census(self, *, estimate_bytes: bool = False) -> TimingRuntimeCensus:
+        """Return staged timing diagnostics while planning remains open."""
+
+        return self._open_runtime().census(estimate_bytes=estimate_bytes)
+
+
 _ACTIVE_SOURCE_TIMING_PREPARATION: ContextVar[Any] = ContextVar(
     "active_source_timing_preparation",
     default=None,
@@ -5039,6 +5089,7 @@ class SourceTimingPreparation:
         "_context_closed",
         "_overlay_planner",
         "_owner",
+        "_planning_runtime",
         "_runtime_preparation",
         "_seal_integrity",
         "_sealed_overlay_digest",
@@ -5050,6 +5101,7 @@ class SourceTimingPreparation:
         self._owner = owner
         self._watermark = owner._watermark
         self._runtime_preparation: TimingRuntimePreparation = owner.timing_runtime.prepared()
+        self._planning_runtime = SourceTimingPlanningRuntime(self)
         cache_overlays: list[tuple[str, _SourceTimingCache, _PreparedSourceTimingCache]] = []
         cache_by_identity: dict[int, _PreparedSourceTimingCache] = {}
         for name, cache in owner._bounded_indexes():
@@ -5087,6 +5139,14 @@ class SourceTimingPreparation:
         """Return the exact planner that issued this preparation."""
 
         return self._owner
+
+    @property
+    def planning_runtime(self) -> SourceTimingPlanningRuntime:
+        """Return a non-owning view of the open staged timing runtime."""
+
+        if self._state != "open":
+            raise StateError("Source timing preparation is not open for planning")
+        return self._planning_runtime
 
     @property
     def binding_token(self) -> SourceTimingPreparationToken:

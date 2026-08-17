@@ -24,9 +24,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from enum import StrEnum
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from evidenceforge.events.contexts import (
     DnsContext,
@@ -46,9 +47,26 @@ from evidenceforge.events.cryptography import (
     OcspTransactionPlan,
     TlsCertificatePresentationPlan,
 )
+from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
+
+if TYPE_CHECKING:
+    from evidenceforge.events.dispatcher import PreparedDispatch
+    from evidenceforge.generation.lifecycle_authority import LifecyclePreparedNetworkReceipt
+    from evidenceforge.generation.network_runtime import PreparedNetworkTransactionRoot
+    from evidenceforge.generation.source_timing import SourceTimingPreparation
+
+TransportLifecycleRequestMode = Literal["network", "deferred_session"]
+TransportLifecyclePlanMode = Literal["network", "deferred_session", "application_child"]
+
+
+class NetworkConnectionPublicationOutcome(StrEnum):
+    """Typed internal disposition of one committed canonical network root."""
+
+    PUBLISHED = "published"
+    COMMITTED_SUPPRESSED = "committed_suppressed"
 
 
 def _context_fingerprint(value: object) -> str:
@@ -76,6 +94,105 @@ def _context_fingerprint(value: object) -> str:
         if hasattr(value, name):
             parts.append(f"{name}={getattr(value, name)}")
     return "|".join(parts) if parts else value.__class__.__name__
+
+
+@dataclass(slots=True)
+class NetworkConnectionIdentityCapture:
+    """Occurrence-local handoff for one frozen transaction and lifecycle disposition."""
+
+    transaction: NetworkTransactionPlan | None = None
+    lifecycle_mode: TransportLifecyclePlanMode | None = None
+    prepared_root: PreparedNetworkTransactionRoot | None = None
+    source_timing_preparation: SourceTimingPreparation | None = None
+    prepared_dispatch: PreparedDispatch | None = None
+    receipt: LifecyclePreparedNetworkReceipt | None = None
+    outcome: NetworkConnectionPublicationOutcome | None = None
+
+    def publish(
+        self,
+        transaction: NetworkTransactionPlan,
+        *,
+        lifecycle_mode: TransportLifecyclePlanMode = "network",
+    ) -> None:
+        """Publish exactly one frozen transaction before subordinate evidence runs."""
+
+        if self.transaction is not None:
+            raise ValueError("Network connection identity capture was already published")
+        if lifecycle_mode not in {"network", "deferred_session", "application_child"}:
+            raise ValueError(f"Unsupported transport lifecycle plan mode {lifecycle_mode!r}")
+        self.lifecycle_mode = lifecycle_mode
+        self.transaction = transaction
+
+    def publish_committed(
+        self,
+        *,
+        root: PreparedNetworkTransactionRoot,
+        receipt: LifecyclePreparedNetworkReceipt,
+        outcome: NetworkConnectionPublicationOutcome,
+    ) -> None:
+        """Publish one authenticated committed root and its internal disposition."""
+
+        if self.transaction is not None:
+            raise ValueError("Network connection identity capture was already published")
+        self.transaction = root.transaction
+        self.lifecycle_mode = root.runtime_token.lifecycle_mode
+        self.prepared_root = root
+        self.receipt = receipt
+        self.outcome = outcome
+
+    def publish_deferred(
+        self,
+        *,
+        root: PreparedNetworkTransactionRoot,
+        source_timing_preparation: SourceTimingPreparation,
+        prepared_dispatch: PreparedDispatch,
+    ) -> None:
+        """Transfer one uncommitted deferred-session root to its composite owner."""
+
+        if self.transaction is not None:
+            raise ValueError("Network connection identity capture was already published")
+        if root.runtime_token.lifecycle_mode != "deferred_session":
+            raise ValueError("Only deferred-session roots may transfer without a receipt")
+        self.transaction = root.transaction
+        self.lifecycle_mode = "deferred_session"
+        self.prepared_root = root
+        self.source_timing_preparation = source_timing_preparation
+        self.prepared_dispatch = prepared_dispatch
+
+    def require(self) -> NetworkTransactionPlan:
+        """Return the captured transport or fail if the requested transport was omitted."""
+
+        if self.transaction is None:
+            raise ValueError("Network connection did not publish a physical transport identity")
+        return self.transaction
+
+    def require_lifecycle_mode(self) -> TransportLifecyclePlanMode:
+        """Return the frozen effective lifecycle mode for the captured transaction."""
+
+        if self.lifecycle_mode is None:
+            raise ValueError("Network connection did not publish a transport lifecycle mode")
+        return self.lifecycle_mode
+
+    def require_prepared_root(self) -> PreparedNetworkTransactionRoot:
+        """Return the exact prepared root retained for receipt authentication."""
+
+        if self.prepared_root is None:
+            raise ValueError("Network connection did not publish a prepared root")
+        return self.prepared_root
+
+    def require_receipt(self) -> LifecyclePreparedNetworkReceipt:
+        """Return the full authenticated receipt after a committed publication."""
+
+        if self.receipt is None:
+            raise ValueError("Network connection did not publish a prepared receipt")
+        return self.receipt
+
+    def require_outcome(self) -> NetworkConnectionPublicationOutcome:
+        """Return the typed committed publication disposition."""
+
+        if self.outcome is None:
+            raise ValueError("Network connection did not publish an outcome")
+        return self.outcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +232,7 @@ class NetworkConnectionRequest:
     firewall: FirewallContext | None = None
     hostname: str | None = None
     proxy_bypass: bool = False
+    suppress_direct_http_channel: bool = False
     process_image: str | None = None
     preserve_dst_ip: bool = False
     preserve_http_outcome: bool = False
@@ -127,7 +245,31 @@ class NetworkConnectionRequest:
     ssh_attempted_username: str | None = None
     parent_action_group_id: str | None = None
     preserve_start_time: bool = False
+    transport_lifecycle_mode: TransportLifecycleRequestMode = "network"
+    identity_capture: NetworkConnectionIdentityCapture | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
     source: str = "activity_generator"
+
+    def __post_init__(self) -> None:
+        """Validate occurrence-local lifecycle routing at the request boundary."""
+
+        if self.transport_lifecycle_mode not in {"network", "deferred_session"}:
+            raise ValueError(
+                f"Unsupported transport lifecycle request mode {self.transport_lifecycle_mode!r}"
+            )
+
+    def lifecycle_plan_mode(
+        self,
+        transaction: NetworkTransactionPlan,
+    ) -> TransportLifecyclePlanMode:
+        """Resolve physical, deferred-session, or application-child publication."""
+
+        if transaction.application_layer_only:
+            return "application_child"
+        return self.transport_lifecycle_mode
 
     @property
     def stable_id(self) -> str:

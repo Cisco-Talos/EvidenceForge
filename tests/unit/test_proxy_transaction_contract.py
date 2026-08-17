@@ -23,6 +23,7 @@ from evidenceforge.generation.actions.proxy_transaction import (
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.activity.proxy_phase_profiles import proxy_resolver_profiles
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models.scenario import System
 from tests.network_factories import network_plan
 
@@ -224,6 +225,46 @@ def test_resolver_mixture_matches_configured_contract_and_has_retry_tail() -> No
     )
     assert any(gap > 500 for gap in lookup_to_connect_gaps_ms)
     assert any(gap < 1000 for gap in lookup_to_connect_gaps_ms)
+
+
+def test_proxy_origin_dns_uses_order_independent_microsecond_timing() -> None:
+    """Resolver phases use shared typed draws without exact-millisecond texture."""
+
+    runtime = TimingRuntime(reference_time=_BASE_TIME)
+    planner = ProxyPhasePlanner(runtime)
+    indices = tuple(range(1600))
+
+    forward = {
+        index: planner.plan(_request(index, duration=0.2), _proxy_context(), _request(index).time)
+        for index in indices
+    }
+    reverse = {
+        index: planner.plan(_request(index, duration=0.2), _proxy_context(), _request(index).time)
+        for index in reversed(indices)
+    }
+
+    assert forward == reverse
+    lookup_plans = [plan for plan in forward.values() if plan.dns_query_at is not None]
+    assert len(lookup_plans) > 400
+    residues: list[int] = []
+    for plan in lookup_plans:
+        assert plan.dns_response_at is not None
+        assert plan.origin_connect_at is not None
+        assert plan.request_at < plan.dns_response_at < plan.origin_connect_at
+        residues.extend(
+            (
+                plan.dns_query_at.microsecond % 1000,
+                plan.dns_response_at.microsecond % 1000,
+                plan.origin_connect_at.microsecond % 1000,
+            )
+        )
+    assert sum(residue == 0 for residue in residues) / len(residues) < 0.02
+
+    audit = runtime.audit.snapshot()
+    expected_draws = len(lookup_plans) * 2
+    assert audit.sample_counts["proxy.dns.query_after_decision"] == expected_draws
+    assert audit.sample_counts["proxy.dns.response_after_request"] == expected_draws
+    assert audit.sample_counts["proxy.origin.connect_after_dns"] == expected_draws
 
 
 def test_proxy_context_separates_body_sizes_from_transfer_totals() -> None:

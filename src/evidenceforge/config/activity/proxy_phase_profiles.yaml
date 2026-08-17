@@ -36,6 +36,9 @@ phase_timing:
   policy_decision_after_request_ms:
     min: 0
     max: 4
+  dns_query_after_decision_ms:
+    min: 1
+    max: 4
   tls_after_origin_connect_ms:
     min: 18
     max: 180

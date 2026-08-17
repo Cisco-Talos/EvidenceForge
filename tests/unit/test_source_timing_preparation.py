@@ -16,14 +16,24 @@ import pytest
 
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.content_identity import UnresolvedBinaryIdentity
-from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+from evidenceforge.events.contexts import (
+    AuthContext,
+    HostContext,
+    HttpContext,
+    ProcessContext,
+    ProxyContext,
+)
 from evidenceforge.events.lifecycle import ActionLifecycleContext
+from evidenceforge.generation.actions.proxy_phase_planner import ProxyPhasePlanner
+from evidenceforge.generation.actions.proxy_transaction import ProxyTransactionRequest
+from evidenceforge.generation.activity.tls_realism import ssl_analyzer_delay_ms
 from evidenceforge.generation.source_timing import (
     SourceTimingPlanner,
     SourceTimingPreparationReceipt,
 )
 from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.scenario import System
 
 T0 = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
 
@@ -223,6 +233,122 @@ def test_direct_source_time_routes_through_active_runtime_overlay() -> None:
     assert staged.state_digest() == direct.state_digest()
     assert staged.census(estimate_bytes=True) == direct.census(estimate_bytes=True)
     assert staged.timing_runtime.audit.snapshot() == direct.timing_runtime.audit.snapshot()
+
+
+def test_planning_runtime_is_non_owning_and_expires_when_preparation_seals() -> None:
+    """The public runtime view exposes planning only while its owner is open."""
+
+    planner = _planner("source-timing-public-planning-runtime")
+    with planner.prepared_planning() as preparation:
+        planning_runtime = preparation.planning_runtime
+        assert planning_runtime.sampler is not planner.timing_runtime.sampler
+        assert planning_runtime.clocks is planning_runtime.source_clock_registry
+        assert not hasattr(planning_runtime, "cancel")
+        assert not hasattr(planning_runtime, "claimed_commit")
+        assert not hasattr(planning_runtime, "commit_no_fail")
+
+    with pytest.raises(StateError, match="not open for planning"):
+        _ = preparation.planning_runtime
+    with pytest.raises(StateError, match="no longer open"):
+        _ = planning_runtime.sampler
+
+    preparation.cancel()
+    with pytest.raises(StateError, match="no longer open"):
+        _ = planning_runtime.audit
+
+
+def test_tls_and_proxy_planners_use_the_exact_non_owning_staged_runtime() -> None:
+    """Network timing consumers stage samples without gaining commit/cancel authority."""
+
+    planner = _planner("source-timing-network-consumers")
+    before_digest = planner.state_digest()
+    before_audit = planner.timing_runtime.audit.snapshot()
+    proxy_system = System(
+        hostname="PROXY-01",
+        ip="10.0.3.10",
+        os="Ubuntu 24.04",
+        type="server",
+        roles=["forward_proxy"],
+    )
+    request = ProxyTransactionRequest(
+        src_ip="10.0.1.10",
+        dst_ip="203.0.113.20",
+        time=T0,
+        dst_port=443,
+        proto="tcp",
+        service="ssl",
+        duration=1.0,
+        orig_bytes=900,
+        resp_bytes=4_000,
+        src_port=50_000,
+        pid=-1,
+        source_system=None,
+        conn_state="SF",
+        dns=None,
+        http=HttpContext(method="GET", host="example.test", uri="/"),
+        file_transfer=None,
+        ocsp=None,
+        proxy=None,
+        firewall=None,
+        hostname="example.test",
+        process_image=None,
+        proxy_chain=[proxy_system],
+        preserve_explicit_proxy_dst_ip=False,
+        caller_provided_conn_state=True,
+        ad_domain="example.test",
+    )
+    proxy_context = ProxyContext(
+        client_ip=request.src_ip,
+        method="GET",
+        url="https://example.test/",
+        host="example.test",
+        status_code=200,
+        sc_bytes=4_000,
+        cs_bytes=900,
+        cache_result="MISS",
+        proxy_fqdn="proxy-01.example.test",
+    )
+
+    with planner.prepared_planning() as preparation:
+        runtime = preparation.planning_runtime
+        tls_delay = ssl_analyzer_delay_ms(
+            zeek_uid="C-network-staged-runtime",
+            event_timestamp=T0,
+            timing_runtime=runtime,
+        )
+        proxy_plan = ProxyPhasePlanner(runtime).plan(request, proxy_context, T0)
+
+        assert tls_delay > 0
+        assert proxy_plan.close_at > proxy_plan.client_connect_at
+        assert preparation.staged_audit_operations > 0
+        assert planner.state_digest() == before_digest
+        assert planner.timing_runtime.audit.snapshot() == before_audit
+        assert not hasattr(runtime, "cancel")
+        assert not hasattr(runtime, "claimed_commit")
+        assert not hasattr(runtime, "commit_no_fail")
+
+    preparation.cancel()
+    assert planner.state_digest() == before_digest
+    assert planner.timing_runtime.audit.snapshot() == before_audit
+
+
+def test_runtime_preparation_private_field_stays_source_timing_internal() -> None:
+    """Production consumers must use the public non-owning planning capability."""
+
+    repository_root = Path(__file__).resolve().parents[2]
+    production_root = repository_root / "src" / "evidenceforge"
+    external_accesses: list[Path] = []
+    for path in production_root.rglob("*.py"):
+        if path.name == "source_timing.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if any(
+            isinstance(node, ast.Attribute) and node.attr == "_runtime_preparation"
+            for node in ast.walk(tree)
+        ):
+            external_accesses.append(path.relative_to(repository_root))
+
+    assert external_accesses == []
 
 
 def test_preparation_tokens_are_admin_only_unique_and_cancellation_is_noncanonical() -> None:

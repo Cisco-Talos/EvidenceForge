@@ -352,7 +352,12 @@ def _generate_rdns_name(rng, ip: str, forward_hostname: str | None = None) -> st
 _HTTP_URI_STATUS_CACHE: dict[tuple[str, str], tuple[int, str]] = {}
 
 
-def _get_http_status(dst_ip: str, uri: str) -> tuple[int, str]:
+def _get_http_status(
+    dst_ip: str,
+    uri: str,
+    *,
+    publish_cache: bool = True,
+) -> tuple[int, str]:
     """Get a deterministic HTTP status for a (dst_ip, uri) pair.
 
     Same URI on same server always returns same status (baseline consistency).
@@ -376,7 +381,8 @@ def _get_http_status(dst_ip: str, uri: str) -> tuple[int, str]:
         result = (304, "Not Modified")
     else:
         result = (200, "OK")
-    _HTTP_URI_STATUS_CACHE[key] = result
+    if publish_cache:
+        _HTTP_URI_STATUS_CACHE[key] = result
     return result
 
 

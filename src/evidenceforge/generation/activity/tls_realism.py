@@ -13,9 +13,14 @@ from urllib.parse import quote
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
-from evidenceforge.generation.activity.timing_profiles import (
-    sample_packet_timing_delta,
-    sample_timing_delta,
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
+from evidenceforge.generation.source_timing import SourceTimingPlanningRuntime
+from evidenceforge.generation.timing import (
+    ConstantDistribution,
+    TimingDistributionError,
+    TimingRuntime,
+    TimingScope,
+    TriangularDistribution,
 )
 from evidenceforge.utils.rng import _stable_seed
 
@@ -244,39 +249,127 @@ def certificate_analyzer_delay_ms(
     event_timestamp: datetime,
     fuid: str,
     position: int,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
 ) -> int:
-    """Return a deterministic, non-uniform Zeek TLS certificate analyzer offset."""
-    del fuid
-    base_delay_ms = ssl_analyzer_delay_ms(zeek_uid=zeek_uid, event_timestamp=event_timestamp)
-    base_delay_ms += int(
-        sample_timing_delta(
-            "source.zeek_x509_analyzer",
-            seed_parts=(zeek_uid, event_timestamp),
-        ).total_seconds()
-        * 1000
+    """Return a typed Zeek TLS certificate analyzer offset."""
+
+    runtime = _required_tls_timing_runtime(timing_runtime)
+    scope = TimingScope(
+        stable_id=f"tls-certificate:{zeek_uid}:{fuid}",
+        source="zeek_tls_analyzer",
+        lifecycle_id=zeek_uid,
+        ordinal=position,
     )
-    if position <= 0:
-        return base_delay_ms
+    delay = ssl_analyzer_delay(
+        zeek_uid=zeek_uid,
+        event_timestamp=event_timestamp,
+        timing_runtime=runtime,
+    )
+    delay += runtime.sampler.sample_timedelta(
+        _tls_window_distribution(
+            "source.zeek_x509_analyzer",
+            default_min_ms=120,
+            default_max_ms=650,
+        ),
+        relationship_key="source.zeek_x509_analyzer",
+        scope=scope,
+        sample_key="certificate_analyzer",
+    )
 
-    gap_ms = 0
     for depth in range(1, position + 1):
-        gap_seed = f"tls_cert_chain_gap:{zeek_uid}:{event_timestamp.isoformat()}:{depth}"
-        rng = random.Random(_stable_seed(gap_seed))
-        gap_ms += rng.randint(3, 45)
-    return base_delay_ms + gap_ms
-
-
-def ssl_analyzer_delay_ms(*, zeek_uid: str, event_timestamp: datetime) -> int:
-    """Return the deterministic Zeek ssl.log analyzer offset for a flow."""
-    delay = ssl_analyzer_delay(zeek_uid=zeek_uid, event_timestamp=event_timestamp)
+        delay += runtime.sampler.sample_timedelta(
+            TriangularDistribution(minimum=3_000.0, mode=12_000.0, maximum=45_000.0),
+            relationship_key="source.zeek_x509_chain_gap",
+            scope=TimingScope(
+                stable_id=f"tls-chain:{zeek_uid}:{fuid}",
+                source="zeek_tls_analyzer",
+                lifecycle_id=zeek_uid,
+                ordinal=depth,
+            ),
+            sample_key=f"chain_gap:{depth}",
+        )
     return int(delay.total_seconds() * 1000)
 
 
-def ssl_analyzer_delay(*, zeek_uid: str, event_timestamp: datetime) -> timedelta:
+def ssl_analyzer_delay_ms(
+    *,
+    zeek_uid: str,
+    event_timestamp: datetime,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
+) -> int:
     """Return the deterministic Zeek ssl.log analyzer offset for a flow."""
-    return sample_packet_timing_delta(
-        "source.zeek_ssl_analyzer",
-        seed_parts=(zeek_uid, event_timestamp),
+    delay = ssl_analyzer_delay(
+        zeek_uid=zeek_uid,
+        event_timestamp=event_timestamp,
+        timing_runtime=timing_runtime,
+    )
+    return int(delay.total_seconds() * 1000)
+
+
+def ssl_analyzer_delay(
+    *,
+    zeek_uid: str,
+    event_timestamp: datetime,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
+) -> timedelta:
+    """Return the runtime-owned Zeek ssl.log analyzer offset for a flow."""
+
+    runtime = _required_tls_timing_runtime(timing_runtime)
+    return runtime.sampler.sample_timedelta(
+        _tls_window_distribution(
+            "source.zeek_ssl_analyzer",
+            default_min_ms=3,
+            default_max_ms=650,
+            packet_microtexture=True,
+        ),
+        relationship_key="source.zeek_ssl_analyzer",
+        scope=TimingScope(
+            stable_id=f"tls-flow:{zeek_uid}:{event_timestamp.isoformat()}",
+            source="zeek_tls_analyzer",
+            lifecycle_id=zeek_uid,
+        ),
+        sample_key="ssl_analyzer",
+    )
+
+
+def _required_tls_timing_runtime(
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None,
+) -> TimingRuntime | SourceTimingPlanningRuntime:
+    """Require explicit runtime ownership for analyzer timing decisions."""
+
+    if not isinstance(timing_runtime, (TimingRuntime, SourceTimingPlanningRuntime)):
+        raise TimingDistributionError(
+            "TLS analyzer timing requires the engine-owned TimingRuntime; "
+            "direct compatibility callers must inject an explicit compatibility runtime"
+        )
+    return timing_runtime
+
+
+def _tls_window_distribution(
+    key: str,
+    *,
+    default_min_ms: int,
+    default_max_ms: int,
+    packet_microtexture: bool = False,
+) -> ConstantDistribution | TriangularDistribution:
+    """Return a typed microsecond distribution for one configured analyzer window."""
+
+    window = get_timing_window(
+        key,
+        default_min_ms=default_min_ms,
+        default_max_ms=default_max_ms,
+        default_position="after",
+        default_class="same_observation",
+    )
+    minimum_us = window.min_ms * 1_000 + (37 if packet_microtexture else 0)
+    maximum_us = window.max_ms * 1_000 + (998 if packet_microtexture else 0)
+    if maximum_us <= minimum_us:
+        return ConstantDistribution(float(minimum_us))
+    mode_us = minimum_us + (maximum_us - minimum_us) * 0.24
+    return TriangularDistribution(
+        minimum=float(minimum_us),
+        mode=float(mode_us),
+        maximum=float(maximum_us),
     )
 
 

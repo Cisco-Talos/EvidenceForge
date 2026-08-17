@@ -16,6 +16,13 @@ from evidenceforge.generation.activity.proxy_phase_profiles import (
     proxy_phase_timing,
     proxy_resolver_profiles,
 )
+from evidenceforge.generation.source_timing import SourceTimingPlanningRuntime
+from evidenceforge.generation.timing import (
+    ConstantDistribution,
+    TimingRuntime,
+    TimingScope,
+    TriangularDistribution,
+)
 from evidenceforge.utils.rng import _stable_seed
 
 if TYPE_CHECKING:
@@ -25,6 +32,18 @@ if TYPE_CHECKING:
 
 class ProxyPhasePlanner:
     """Finalize conditional proxy phases before any child event is constructed."""
+
+    def __init__(
+        self,
+        timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
+    ) -> None:
+        """Initialize the planner with the engine-owned timing runtime."""
+
+        self._timing_runtime = (
+            timing_runtime
+            if isinstance(timing_runtime, (TimingRuntime, SourceTimingPlanningRuntime))
+            else TimingRuntime.compatibility_default()
+        )
 
     def plan(
         self,
@@ -36,20 +55,33 @@ class ProxyPhasePlanner:
 
         rng = random.Random(_stable_seed(f"proxy_phase_plan:{request.stable_id}"))
         timing = proxy_phase_timing()
+        timing_scope = self._timing_scope(request)
         tunnel_request_at: datetime | None = None
-        first_request_at = client_connect_at + self._sample(timing.request_after_connect_ms, rng)
+        first_request_at = client_connect_at + self._sample(
+            timing.request_after_connect_ms,
+            relationship_key="proxy.request_after_connect",
+            scope=timing_scope,
+            sample_key="first_request",
+        )
         if request.dst_port == 443 and proxy.method != "CONNECT":
             tunnel_request_at = first_request_at
             request_at = tunnel_request_at + self._sample(
                 timing.inspected_request_after_connect_setup_ms,
-                rng,
+                relationship_key="proxy.inspected_request_after_connect_setup",
+                scope=timing_scope,
+                sample_key="inspected_request",
             )
         else:
             request_at = first_request_at
             if proxy.method == "CONNECT":
                 tunnel_request_at = request_at
-        decision_at = request_at + self._sample(timing.policy_decision_after_request_ms, rng)
-        terminal_outcome = self._terminal_outcome(proxy)
+        decision_at = request_at + self._sample(
+            timing.policy_decision_after_request_ms,
+            relationship_key="proxy.policy_decision_after_request",
+            scope=timing_scope,
+            sample_key="decision",
+        )
+        terminal_outcome = self.terminal_outcome(proxy)
 
         resolver_profile: ProxyResolverProfile | None = None
         dns_query_at: datetime | None = None
@@ -68,7 +100,9 @@ class ProxyPhasePlanner:
                     raise ValueError("Resolver cache profile requires an origin request gap")
                 origin_connect_at = request_at + self._sample(
                     resolver_profile.origin_after_request_ms,
-                    rng,
+                    relationship_key="proxy.origin.connect_after_cached_resolution",
+                    scope=timing_scope,
+                    sample_key=resolver_profile.name,
                 )
                 origin_connect_at = max(origin_connect_at, decision_at + timedelta(milliseconds=1))
             else:
@@ -77,27 +111,48 @@ class ProxyPhasePlanner:
                     or resolver_profile.origin_after_dns_ms is None
                 ):
                     raise ValueError("Resolver lookup profiles require DNS timing ranges")
-                dns_query_at = decision_at + timedelta(milliseconds=1)
-                dns_response_at = request_at + self._sample(
+                dns_query_at = decision_at + self._sample_microsecond_gap(
+                    timing.dns_query_after_decision_ms,
+                    relationship_key="proxy.dns.query_after_decision",
+                    scope=timing_scope,
+                    sample_key=resolver_profile.name,
+                )
+                dns_response_at = request_at + self._sample_microsecond_gap(
                     resolver_profile.dns_completion_after_request_ms,
-                    rng,
+                    relationship_key="proxy.dns.response_after_request",
+                    scope=timing_scope,
+                    sample_key=resolver_profile.name,
                 )
-                dns_response_at = max(
-                    dns_response_at,
-                    dns_query_at + timedelta(milliseconds=1),
-                )
-                origin_connect_at = dns_response_at + self._sample(
+                if dns_response_at <= dns_query_at:
+                    repair_slack = self._sample_microsecond_gap(
+                        timing.dns_query_after_decision_ms,
+                        relationship_key="proxy.dns.response_repair_slack",
+                        scope=timing_scope,
+                        sample_key=resolver_profile.name,
+                    )
+                    dns_response_at = dns_query_at + repair_slack
+                    self._timing_runtime.audit.record_repair("proxy.dns.response_after_request")
+                origin_connect_at = dns_response_at + self._sample_microsecond_gap(
                     resolver_profile.origin_after_dns_ms,
-                    rng,
+                    relationship_key="proxy.origin.connect_after_dns",
+                    scope=timing_scope,
+                    sample_key=resolver_profile.name,
                 )
 
             if terminal_outcome == "gateway_failure":
                 origin_conn_state = self._gateway_conn_state(proxy.status_code, rng)
-                attempt_duration = self._sample(timing.gateway_attempt_ms, rng)
+                attempt_duration = self._sample(
+                    timing.gateway_attempt_ms,
+                    relationship_key="proxy.gateway.attempt_duration",
+                    scope=timing_scope,
+                    sample_key="gateway_attempt",
+                )
                 origin_close_at = origin_connect_at + attempt_duration
                 client_flush_at = origin_close_at + self._sample(
                     timing.client_flush_after_response_ms,
-                    rng,
+                    relationship_key="proxy.client_flush_after_gateway_response",
+                    scope=timing_scope,
+                    sample_key="gateway_flush",
                 )
             else:
                 origin_conn_state = "SF"
@@ -105,21 +160,28 @@ class ProxyPhasePlanner:
                     request,
                     proxy,
                     timing.origin_service_ms,
-                    rng,
+                    scope=timing_scope,
                 )
                 origin_close_at = origin_connect_at + origin_duration
                 response_anchor = origin_connect_at
                 if request.dst_port == 443:
                     tls_complete_at = origin_connect_at + self._sample(
                         timing.tls_after_origin_connect_ms,
-                        rng,
+                        relationship_key="proxy.tls_after_origin_connect",
+                        scope=timing_scope,
+                        sample_key="tls_complete",
                     )
                     response_anchor = tls_complete_at
                 if proxy.method != "CONNECT":
                     origin_request_at = response_anchor + timedelta(milliseconds=1)
                     response_anchor = origin_request_at
                 response_budget = origin_close_at - response_anchor
-                response_fraction = 0.55 + rng.random() * 0.30
+                response_fraction = self._timing_runtime.sampler.sample_value(
+                    TriangularDistribution(minimum=0.55, mode=0.68, maximum=0.85),
+                    relationship_key="proxy.origin.response_phase_fraction",
+                    scope=timing_scope,
+                    sample_key="response_fraction",
+                )
                 origin_response_at = response_anchor + max(
                     timedelta(milliseconds=1),
                     response_budget * response_fraction,
@@ -130,16 +192,26 @@ class ProxyPhasePlanner:
                 )
                 client_flush_at = origin_response_at + self._sample(
                     timing.client_flush_after_response_ms,
-                    rng,
+                    relationship_key="proxy.client_flush_after_origin_response",
+                    scope=timing_scope,
+                    sample_key="origin_flush",
                 )
         else:
             client_flush_at = decision_at + self._sample(
                 timing.terminal_response_after_decision_ms,
-                rng,
+                relationship_key="proxy.terminal_response_after_decision",
+                scope=timing_scope,
+                sample_key=terminal_outcome,
             )
 
         close_at = max(
-            client_flush_at + self._sample(timing.close_after_flush_ms, rng),
+            client_flush_at
+            + self._sample(
+                timing.close_after_flush_ms,
+                relationship_key="proxy.close_after_flush",
+                scope=timing_scope,
+                sample_key="close",
+            ),
             origin_close_at or client_flush_at,
         )
         setup_cs_bytes, setup_sc_bytes, setup_time_taken_ms = self._tunnel_setup(
@@ -180,22 +252,44 @@ class ProxyPhasePlanner:
     ) -> ProxyTransactionPlan:
         """Plan an application transaction over an already-open proxy tunnel."""
 
-        rng = random.Random(_stable_seed(f"proxy_reused_phase_plan:{request.stable_id}"))
         timing = proxy_phase_timing()
-        decision_at = request_at + self._sample(timing.policy_decision_after_request_ms, rng)
-        service_delay = self._sample(timing.origin_service_ms, rng)
+        timing_scope = self._timing_scope(request)
+        terminal_outcome = self.terminal_outcome(proxy)
+        if terminal_outcome not in {"success", "cache_hit"}:
+            raise ValueError(
+                "Only successful or cache-hit proxy requests can reuse an open transport"
+            )
+        decision_at = request_at + self._sample(
+            timing.policy_decision_after_request_ms,
+            relationship_key="proxy.reused.policy_decision_after_request",
+            scope=timing_scope,
+            sample_key="decision",
+        )
+        service_delay = self._sample(
+            timing.origin_service_ms,
+            relationship_key="proxy.reused.origin_service_duration",
+            scope=timing_scope,
+            sample_key="service",
+        )
         client_flush_at = (
             decision_at
             + service_delay
             + self._sample(
                 timing.client_flush_after_response_ms,
-                rng,
+                relationship_key="proxy.reused.client_flush_after_response",
+                scope=timing_scope,
+                sample_key="flush",
             )
         )
-        close_at = client_flush_at + self._sample(timing.close_after_flush_ms, rng)
+        close_at = client_flush_at + self._sample(
+            timing.close_after_flush_ms,
+            relationship_key="proxy.reused.close_after_flush",
+            scope=timing_scope,
+            sample_key="close",
+        )
         return ProxyTransactionPlan(
             stable_id=request.stable_id,
-            terminal_outcome="success",
+            terminal_outcome=terminal_outcome,
             resolver_mode=None,
             client_connect_at=request_at,
             tunnel_request_at=None,
@@ -214,14 +308,65 @@ class ProxyPhasePlanner:
             reused_transport=True,
         )
 
-    @staticmethod
-    def _sample(bounds: MillisecondRange, rng: random.Random) -> timedelta:
-        """Sample one inclusive data-driven millisecond range."""
+    def _sample(
+        self,
+        bounds: MillisecondRange,
+        *,
+        relationship_key: str,
+        scope: TimingScope,
+        sample_key: str,
+    ) -> timedelta:
+        """Sample one data-driven millisecond range at microsecond precision."""
 
-        return timedelta(milliseconds=rng.randint(bounds.minimum, bounds.maximum))
+        return self._sample_microsecond_gap(
+            bounds,
+            relationship_key=relationship_key,
+            scope=scope,
+            sample_key=sample_key,
+        )
+
+    def _sample_microsecond_gap(
+        self,
+        bounds: MillisecondRange,
+        *,
+        relationship_key: str,
+        scope: TimingScope,
+        sample_key: str,
+    ) -> timedelta:
+        """Sample one data-driven range at native microsecond precision."""
+
+        minimum_us = bounds.minimum * 1_000
+        maximum_us = bounds.maximum * 1_000
+        if minimum_us == maximum_us:
+            distribution = ConstantDistribution(float(minimum_us))
+        else:
+            mode_us = minimum_us + ((maximum_us - minimum_us) * 0.35)
+            distribution = TriangularDistribution(
+                minimum=float(minimum_us),
+                mode=float(mode_us),
+                maximum=float(maximum_us),
+            )
+        return self._timing_runtime.sampler.sample_timedelta(
+            distribution,
+            relationship_key=relationship_key,
+            scope=scope,
+            sample_key=sample_key,
+        )
 
     @staticmethod
-    def _terminal_outcome(proxy: ProxyContext) -> ProxyTerminalOutcome:
+    def _timing_scope(request: ProxyTransactionRequest) -> TimingScope:
+        """Return the stable semantic scope for one proxy transaction."""
+
+        proxy_hostname = request.proxy_chain[0].hostname if request.proxy_chain else ""
+        return TimingScope(
+            stable_id=request.stable_id,
+            host=proxy_hostname,
+            source="explicit_proxy",
+            lifecycle_id=request.parent_action_group_id or request.stable_id,
+        )
+
+    @staticmethod
+    def terminal_outcome(proxy: ProxyContext) -> ProxyTerminalOutcome:
         """Map proxy policy/cache truth to a typed terminal outcome."""
 
         cache_result = proxy.cache_result.upper()
@@ -242,19 +387,25 @@ class ProxyPhasePlanner:
         profiles = proxy_resolver_profiles()
         return rng.choices(profiles, weights=[profile.weight for profile in profiles], k=1)[0]
 
-    @staticmethod
     def _origin_duration(
+        self,
         request: ProxyTransactionRequest,
         proxy: ProxyContext,
         fallback: MillisecondRange,
-        rng: random.Random,
+        *,
+        scope: TimingScope,
     ) -> timedelta:
         """Return a source-compatible origin lifetime owned by the phase graph."""
 
         if request.duration is not None:
             duration_seconds = max(0.04, request.duration)
         else:
-            duration_seconds = rng.randint(fallback.minimum, fallback.maximum) / 1000
+            duration_seconds = self._sample_microsecond_gap(
+                fallback,
+                relationship_key="proxy.origin.service_duration",
+                scope=scope,
+                sample_key="origin_duration",
+            ).total_seconds()
         from evidenceforge.generation.actions.file_transfer import (
             http_response_parent_duration_floor,
         )
