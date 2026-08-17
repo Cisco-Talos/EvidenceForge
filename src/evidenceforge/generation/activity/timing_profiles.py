@@ -8,12 +8,21 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
-from evidenceforge.generation.timing import TimingRuntime
+from evidenceforge.generation.timing import (
+    ConstantDistribution,
+    DistributionSpec,
+    MixtureDistribution,
+    TimingRuntime,
+    TimingSampler,
+    TimingScope,
+    TriangularDistribution,
+    WeightedDistribution,
+)
 from evidenceforge.utils.rng import _stable_seed
 
 _CONFIG_PATH = get_activity_directory() / "timing_profiles.yaml"
@@ -139,6 +148,181 @@ class SshAuthenticationTiming:
     cache_miss_probability: float
     cache_miss_min_ms: int
     cache_miss_max_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class SshAcceptedAuthenticationTiming:
+    """Audited component gaps composing one SSH authentication acceptance."""
+
+    phase_ms: float
+    cache_delay_ms: float
+    route_delay_ms: float
+    receiver_delay_ms: float
+    key_penalty_ms: float
+
+    @property
+    def total_ms(self) -> float:
+        """Return the complete accepted-authentication gap."""
+
+        return (
+            self.phase_ms
+            + self.cache_delay_ms
+            + self.route_delay_ms
+            + self.receiver_delay_ms
+            + self.key_penalty_ms
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class InclusiveMillisecondTimingSupport:
+    """One normalized union of inclusive millisecond timing intervals."""
+
+    intervals: tuple[tuple[float, float], ...]
+
+    def __post_init__(self) -> None:
+        """Validate, sort, and merge overlapping or adjacent intervals."""
+
+        if not self.intervals:
+            raise ValueError("millisecond timing support must contain at least one interval")
+        merged: list[tuple[float, float]] = []
+        for minimum, maximum in sorted(self.intervals):
+            if maximum < minimum:
+                raise ValueError("millisecond timing support maximum must not precede minimum")
+            if merged and minimum <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], maximum))
+            else:
+                merged.append((minimum, maximum))
+        object.__setattr__(self, "intervals", tuple(merged))
+
+    @property
+    def bounds(self) -> tuple[float, float]:
+        """Return the minimum and maximum across the exact interval union."""
+
+        return self.intervals[0][0], self.intervals[-1][1]
+
+    def __contains__(self, value: object) -> bool:
+        """Return whether a millisecond value belongs to any exact support interval."""
+
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and any(minimum <= value <= maximum for minimum, maximum in self.intervals)
+        )
+
+    def __add__(
+        self,
+        other: InclusiveMillisecondTimingSupport,
+    ) -> InclusiveMillisecondTimingSupport:
+        """Return the exact Minkowski sum of two millisecond interval unions."""
+
+        return InclusiveMillisecondTimingSupport(
+            tuple(
+                (left_min + right_min, left_max + right_max)
+                for left_min, left_max in self.intervals
+                for right_min, right_max in other.intervals
+            )
+        )
+
+
+def _millisecond_support(
+    *intervals: tuple[float, float],
+) -> InclusiveMillisecondTimingSupport:
+    """Construct one normalized exact millisecond timing support."""
+
+    return InclusiveMillisecondTimingSupport(intervals)
+
+
+@dataclass(frozen=True, slots=True)
+class SshAcceptedAuthenticationTimingSupport:
+    """Exact millisecond supports for accepted-authentication components."""
+
+    phase_ms: InclusiveMillisecondTimingSupport
+    cache_delay_ms: InclusiveMillisecondTimingSupport
+    route_delay_ms: InclusiveMillisecondTimingSupport
+    receiver_delay_ms: InclusiveMillisecondTimingSupport
+    key_penalty_ms: InclusiveMillisecondTimingSupport
+
+    @property
+    def total_ms(self) -> InclusiveMillisecondTimingSupport:
+        """Return the exact support of the component sum."""
+
+        supports = (
+            self.phase_ms,
+            self.cache_delay_ms,
+            self.route_delay_ms,
+            self.receiver_delay_ms,
+            self.key_penalty_ms,
+        )
+        total = _millisecond_support((0, 0))
+        for support in supports:
+            total += support
+        return total
+
+
+@dataclass(frozen=True, slots=True)
+class SshAuthenticationTimingPlan:
+    """One complete ordered SSH authentication lifecycle timing plan."""
+
+    connection_gap_ms: float
+    accepted: SshAcceptedAuthenticationTiming
+    pam_gap_ms: float
+    logind_gap_ms: float
+
+    @property
+    def accepted_gap_ms(self) -> float:
+        """Return the composed gap between connection and accepted evidence."""
+
+        return self.accepted.total_ms
+
+    @property
+    def lifecycle_gap_ms(self) -> float:
+        """Return the complete transport-to-logind phase-gap sum."""
+
+        return self.connection_gap_ms + self.accepted_gap_ms + self.pam_gap_ms + self.logind_gap_ms
+
+
+@dataclass(frozen=True, slots=True)
+class SshAuthenticationTimingSupport:
+    """Exact millisecond supports for one full SSH authentication plan."""
+
+    connection_gap_ms: InclusiveMillisecondTimingSupport
+    accepted: SshAcceptedAuthenticationTimingSupport
+    pam_gap_ms: InclusiveMillisecondTimingSupport
+    logind_gap_ms: InclusiveMillisecondTimingSupport
+
+    @property
+    def accepted_gap_ms(self) -> InclusiveMillisecondTimingSupport:
+        """Return the exact support of the accepted-authentication sum."""
+
+        return self.accepted.total_ms
+
+    @property
+    def lifecycle_gap_ms(self) -> InclusiveMillisecondTimingSupport:
+        """Return the exact support of every ordered phase gap."""
+
+        supports = (
+            self.connection_gap_ms,
+            self.accepted_gap_ms,
+            self.pam_gap_ms,
+            self.logind_gap_ms,
+        )
+        total = _millisecond_support((0, 0))
+        for support in supports:
+            total += support
+        return total
+
+
+class _SshTimingRuntime(Protocol):
+    """Sampling surface shared by canonical and prepared timing runtimes."""
+
+    @property
+    def sampler(self) -> TimingSampler:
+        """Return the runtime-owned stateless audited sampler."""
+
+
+_SSH_CONNECTION_GAP_MS = (35, 160)
+_SSH_PAM_GAP_MS = (45, 180)
+_SSH_LOGIND_GAP_MS = (420, 760)
 
 
 def load_timing_profiles() -> dict[str, Any]:
@@ -375,29 +559,88 @@ def ssh_authentication_timing(auth_method: str) -> SshAuthenticationTiming:
     )
 
 
-def sample_ssh_authentication_phase_ms(
+def _inclusive_uniform_millisecond_distribution(
+    minimum: float,
+    maximum: float,
+) -> DistributionSpec:
+    """Return an edge-triangular mixture with the exact former millisecond support."""
+
+    if minimum == maximum:
+        return ConstantDistribution(float(minimum * 1_000))
+    lower = float(minimum * 1_000) - 0.5
+    upper = float(maximum * 1_000) + 0.5
+    return MixtureDistribution(
+        (
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=lower, mode=lower, maximum=upper),
+            ),
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=lower, mode=upper, maximum=upper),
+            ),
+        )
+    )
+
+
+def _inclusive_triangular_millisecond_distribution(
+    minimum: float,
+    mode: float,
+    maximum: float,
+) -> DistributionSpec:
+    """Return a triangular distribution with the exact former millisecond support."""
+
+    if minimum == maximum:
+        return ConstantDistribution(float(minimum * 1_000))
+    lower = float(minimum * 1_000) - 0.5
+    upper = float(maximum * 1_000) + 0.5
+    return TriangularDistribution(
+        minimum=lower,
+        mode=min(upper, max(lower, mode * 1_000)),
+        maximum=upper,
+    )
+
+
+def _sample_ssh_milliseconds(
+    planner: BaselineTimingPlanner,
+    distribution: DistributionSpec,
+    *,
+    relationship_key: str,
+    scope: TimingScope,
+    sample_key: str,
+) -> float:
+    """Sample one audited microsecond-quantized component in milliseconds."""
+
+    microseconds = planner.runtime.sampler.sample_microseconds(
+        distribution,
+        relationship_key=relationship_key,
+        scope=scope,
+        sample_key=sample_key,
+    )
+    return microseconds / 1_000
+
+
+def _ssh_authentication_context_support(
     auth_method: str,
     *,
-    public_key_type: str = "",
-    route_class: str = "private",
-    seed_parts: tuple[Any, ...] = (),
-) -> int:
-    """Sample one deterministic SSH auth phase with route, cache, key, and host texture."""
+    public_key_type: str,
+    route_class: str,
+) -> tuple[SshAuthenticationTiming, SshAcceptedAuthenticationTimingSupport]:
+    """Resolve one profile and its exact accepted-authentication component supports."""
 
     profile = ssh_authentication_timing(auth_method)
-    seed_text = ":".join(str(part) for part in seed_parts)
-    rng = random.Random(_stable_seed(f"ssh_authentication_phase:{auth_method}:{seed_text}"))
-    selector = rng.random()
-    if selector < profile.tail_probability:
-        phase_ms = rng.randint(profile.tail_min_ms, profile.tail_max_ms)
-    elif selector < profile.tail_probability + profile.fast_probability:
-        phase_ms = rng.randint(profile.fast_min_ms, profile.fast_max_ms)
-    else:
-        mode = profile.typical_min_ms + (profile.typical_max_ms - profile.typical_min_ms) * 0.35
-        phase_ms = round(rng.triangular(profile.typical_min_ms, profile.typical_max_ms, mode))
-
-    if rng.random() < profile.cache_miss_probability:
-        phase_ms += rng.randint(profile.cache_miss_min_ms, profile.cache_miss_max_ms)
+    tail_weight = min(1.0, profile.tail_probability)
+    fast_weight = min(max(0.0, 1.0 - tail_weight), profile.fast_probability)
+    typical_weight = max(0.0, 1.0 - tail_weight - fast_weight)
+    phase_supports = tuple(
+        support
+        for weight, support in (
+            (tail_weight, (profile.tail_min_ms, profile.tail_max_ms)),
+            (fast_weight, (profile.fast_min_ms, profile.fast_max_ms)),
+            (typical_weight, (profile.typical_min_ms, profile.typical_max_ms)),
+        )
+        if weight > 0
+    )
 
     data = load_timing_profiles().get("ssh_authentication", {})
     if not isinstance(data, dict):
@@ -405,37 +648,256 @@ def sample_ssh_authentication_phase_ms(
     route_profiles = data.get("route_rtt_ms", {})
     if not isinstance(route_profiles, dict):
         route_profiles = {}
-    route_min, route_max = _safe_int_range(
+    route_support = _safe_int_range(
         route_profiles.get(route_class),
         fallback_min=2 if route_class == "private" else 25,
         fallback_max=55 if route_class == "private" else 320,
         minimum=0,
         maximum=10_000,
     )
-    host_min, host_max = _safe_int_range(
+    receiver_support = _safe_int_range(
         data.get("receiver_load_ms"),
         fallback_min=0,
         fallback_max=650,
         minimum=0,
         maximum=10_000,
     )
-    phase_ms += rng.randint(route_min, route_max)
-    phase_ms += round(rng.triangular(host_min, host_max, host_min))
-
     penalties = data.get("public_key_penalty_ms", {})
     if not isinstance(penalties, dict):
         penalties = {}
     key_type = public_key_type.strip().upper()
-    if key_type:
-        penalty_min, penalty_max = _safe_int_range(
+    key_support = (
+        _safe_int_range(
             penalties.get(key_type),
             fallback_min=0,
             fallback_max=0,
             minimum=0,
             maximum=10_000,
         )
-        phase_ms += rng.randint(penalty_min, penalty_max)
-    return max(1, phase_ms)
+        if key_type
+        else (0, 0)
+    )
+    cache_intervals: list[tuple[int, int]] = []
+    if profile.cache_miss_probability < 1.0:
+        cache_intervals.append((0, 0))
+    if profile.cache_miss_probability > 0.0:
+        cache_intervals.append((profile.cache_miss_min_ms, profile.cache_miss_max_ms))
+    return profile, SshAcceptedAuthenticationTimingSupport(
+        phase_ms=_millisecond_support(*phase_supports),
+        cache_delay_ms=_millisecond_support(*cache_intervals),
+        route_delay_ms=_millisecond_support(route_support),
+        receiver_delay_ms=_millisecond_support(receiver_support),
+        key_penalty_ms=_millisecond_support(key_support),
+    )
+
+
+def ssh_authentication_timing_support(
+    auth_method: str,
+    *,
+    public_key_type: str = "",
+    route_class: str = "private",
+) -> SshAuthenticationTimingSupport:
+    """Return exact inclusive component and total supports for one SSH auth plan."""
+
+    _profile, accepted_support = _ssh_authentication_context_support(
+        auth_method,
+        public_key_type=public_key_type,
+        route_class=route_class,
+    )
+    return SshAuthenticationTimingSupport(
+        connection_gap_ms=_millisecond_support(_SSH_CONNECTION_GAP_MS),
+        accepted=accepted_support,
+        pam_gap_ms=_millisecond_support(_SSH_PAM_GAP_MS),
+        logind_gap_ms=_millisecond_support(_SSH_LOGIND_GAP_MS),
+    )
+
+
+def _plan_ssh_accepted_authentication_timing(
+    auth_method: str,
+    *,
+    public_key_type: str,
+    route_class: str,
+    planner: BaselineTimingPlanner,
+    scope: TimingScope,
+) -> SshAcceptedAuthenticationTiming:
+    """Plan every independently stable component of SSH authentication acceptance."""
+
+    profile, support = _ssh_authentication_context_support(
+        auth_method,
+        public_key_type=public_key_type,
+        route_class=route_class,
+    )
+    tail_weight = min(1.0, profile.tail_probability)
+    fast_weight = min(max(0.0, 1.0 - tail_weight), profile.fast_probability)
+    typical_weight = max(0.0, 1.0 - tail_weight - fast_weight)
+    phase_components: list[WeightedDistribution] = []
+    for weight, distribution in (
+        (
+            tail_weight,
+            _inclusive_uniform_millisecond_distribution(
+                profile.tail_min_ms,
+                profile.tail_max_ms,
+            ),
+        ),
+        (
+            fast_weight,
+            _inclusive_uniform_millisecond_distribution(
+                profile.fast_min_ms,
+                profile.fast_max_ms,
+            ),
+        ),
+        (
+            typical_weight,
+            _inclusive_triangular_millisecond_distribution(
+                profile.typical_min_ms,
+                profile.typical_min_ms + (profile.typical_max_ms - profile.typical_min_ms) * 0.35,
+                profile.typical_max_ms,
+            ),
+        ),
+    ):
+        if weight > 0:
+            phase_components.append(WeightedDistribution(weight, distribution))
+    phase_ms = _sample_ssh_milliseconds(
+        planner,
+        MixtureDistribution(tuple(phase_components)),
+        relationship_key="ssh.authentication.phase",
+        scope=scope,
+        sample_key="phase",
+    )
+
+    cache_components: list[WeightedDistribution] = []
+    if profile.cache_miss_probability < 1.0:
+        cache_components.append(
+            WeightedDistribution(
+                1.0 - profile.cache_miss_probability,
+                ConstantDistribution(0.0),
+            )
+        )
+    if profile.cache_miss_probability > 0.0:
+        cache_components.append(
+            WeightedDistribution(
+                profile.cache_miss_probability,
+                _inclusive_uniform_millisecond_distribution(
+                    profile.cache_miss_min_ms,
+                    profile.cache_miss_max_ms,
+                ),
+            )
+        )
+    cache_delay_ms = _sample_ssh_milliseconds(
+        planner,
+        MixtureDistribution(tuple(cache_components)),
+        relationship_key="ssh.authentication.cache_delay",
+        scope=scope,
+        sample_key="cache",
+    )
+    route_delay_ms = _sample_ssh_milliseconds(
+        planner,
+        _inclusive_uniform_millisecond_distribution(*support.route_delay_ms.bounds),
+        relationship_key="ssh.authentication.route_delay",
+        scope=scope,
+        sample_key="route",
+    )
+    receiver_delay_ms = _sample_ssh_milliseconds(
+        planner,
+        _inclusive_triangular_millisecond_distribution(
+            support.receiver_delay_ms.bounds[0],
+            float(support.receiver_delay_ms.bounds[0]),
+            support.receiver_delay_ms.bounds[1],
+        ),
+        relationship_key="ssh.authentication.receiver_delay",
+        scope=scope,
+        sample_key="receiver",
+    )
+    key_type = public_key_type.strip().upper()
+    key_penalty_ms = 0.0
+    if key_type:
+        key_penalty_ms = _sample_ssh_milliseconds(
+            planner,
+            _inclusive_uniform_millisecond_distribution(*support.key_penalty_ms.bounds),
+            relationship_key="ssh.authentication.key_penalty",
+            scope=scope,
+            sample_key=f"key:{key_type}",
+        )
+    return SshAcceptedAuthenticationTiming(
+        phase_ms=phase_ms,
+        cache_delay_ms=cache_delay_ms,
+        route_delay_ms=route_delay_ms,
+        receiver_delay_ms=receiver_delay_ms,
+        key_penalty_ms=key_penalty_ms,
+    )
+
+
+def plan_ssh_authentication_timing(
+    auth_method: str,
+    *,
+    public_key_type: str,
+    route_class: str,
+    timing_runtime: _SshTimingRuntime,
+    scope: TimingScope,
+) -> SshAuthenticationTimingPlan:
+    """Plan all ordered SSH authentication gaps through one exact injected runtime."""
+
+    planner = BaselineTimingPlanner(timing_runtime, source=scope.source)
+    connection_gap_ms = _sample_ssh_milliseconds(
+        planner,
+        _inclusive_uniform_millisecond_distribution(*_SSH_CONNECTION_GAP_MS),
+        relationship_key="ssh.authentication.connection_after_transport",
+        scope=scope,
+        sample_key="connection_gap",
+    )
+    accepted = _plan_ssh_accepted_authentication_timing(
+        auth_method,
+        public_key_type=public_key_type,
+        route_class=route_class,
+        planner=planner,
+        scope=scope,
+    )
+    pam_gap_ms = _sample_ssh_milliseconds(
+        planner,
+        _inclusive_uniform_millisecond_distribution(*_SSH_PAM_GAP_MS),
+        relationship_key="ssh.authentication.pam_after_accepted",
+        scope=scope,
+        sample_key="pam_gap",
+    )
+    logind_gap_ms = _sample_ssh_milliseconds(
+        planner,
+        _inclusive_uniform_millisecond_distribution(*_SSH_LOGIND_GAP_MS),
+        relationship_key="ssh.authentication.logind_after_pam",
+        scope=scope,
+        sample_key="logind_gap",
+    )
+    return SshAuthenticationTimingPlan(
+        connection_gap_ms=connection_gap_ms,
+        accepted=accepted,
+        pam_gap_ms=pam_gap_ms,
+        logind_gap_ms=logind_gap_ms,
+    )
+
+
+def sample_ssh_authentication_phase_ms_compatibility(
+    auth_method: str,
+    *,
+    public_key_type: str = "",
+    route_class: str = "private",
+    seed_parts: tuple[Any, ...] = (),
+) -> float:
+    """Sample accepted-auth timing for direct legacy helper callers only."""
+
+    seed_text = ":".join(str(part) for part in seed_parts)
+    stable_id = f"{auth_method}:{seed_text}"
+    runtime = TimingRuntime.compatibility_default()
+    planner = BaselineTimingPlanner(runtime, source="ssh-auth-compatibility")
+    return _plan_ssh_accepted_authentication_timing(
+        auth_method,
+        public_key_type=public_key_type,
+        route_class=route_class,
+        planner=planner,
+        scope=TimingScope(
+            stable_id=stable_id,
+            source=planner.source,
+            lifecycle_id=stable_id,
+        ),
+    ).total_ms
 
 
 def sysmon_envelope_timing(event_id: int) -> SysmonEnvelopeTiming:

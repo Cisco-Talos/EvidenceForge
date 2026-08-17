@@ -52,46 +52,22 @@ from evidenceforge.generation.actions.base import (
 )
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
 from evidenceforge.generation.activity.timing_profiles import (
+    SshAuthenticationTimingPlan,
     get_timing_window,
-    sample_ssh_authentication_phase_ms,
+    plan_ssh_authentication_timing,
     sample_timing_delta,
 )
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
-from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.generation.source_timing import SourceTimingPlanner, SourceTimingPlanningRuntime
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.generation.timing import TemporalConstraintGraph, TimingRuntime
+from evidenceforge.generation.timing import TemporalConstraintGraph, TimingRuntime, TimingScope
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
-
-
-_SSH_SYSLOG_MICRO_JITTER_BANDS = {
-    "connection": 101,
-    "accepted": 301,
-    "pam": 501,
-    "logind": 701,
-    "closed": 901,
-}
-
-
-def _ssh_syslog_time(
-    base_time: datetime,
-    label: str,
-    milliseconds: int,
-    *seed_parts: Any,
-    before: bool = False,
-) -> datetime:
-    """Return an SSH syslog lifecycle timestamp with non-repeating sub-ms texture."""
-    band_start = _SSH_SYSLOG_MICRO_JITTER_BANDS.get(label, 101)
-    seed = _stable_seed(
-        "ssh_syslog_micro_jitter:" + label + ":" + ":".join(str(part) for part in seed_parts)
-    )
-    delta = timedelta(milliseconds=milliseconds, microseconds=band_start + (seed % 89))
-    return base_time - delta if before else base_time + delta
 
 
 def _linux_uid_for_user(username: str) -> int:
@@ -221,11 +197,34 @@ class _SshLinuxAuthPlan:
     """Linux SSH auth ownership that must be known before transport opens."""
 
     sshd_pid: int
-    conn_delay_ms: int
-    accepted_gap_ms: int
-    pam_gap_ms: int
-    logind_gap_ms: int
+    timing: SshAuthenticationTimingPlan
+    timing_runtime: TimingRuntime
+    timing_scope: TimingScope
     syslog_seed: tuple[Any, ...]
+
+    @property
+    def conn_delay_ms(self) -> float:
+        """Return the transport-to-connection phase gap."""
+
+        return self.timing.connection_gap_ms
+
+    @property
+    def accepted_gap_ms(self) -> float:
+        """Return the complete connection-to-accepted phase gap."""
+
+        return self.timing.accepted_gap_ms
+
+    @property
+    def pam_gap_ms(self) -> float:
+        """Return the accepted-to-PAM phase gap."""
+
+        return self.timing.pam_gap_ms
+
+    @property
+    def logind_gap_ms(self) -> float:
+        """Return the PAM-to-logind phase gap."""
+
+        return self.timing.logind_gap_ms
 
 
 class SshSessionExecutor(Protocol):
@@ -319,7 +318,7 @@ class SshSessionExecutor(Protocol):
         """Return the modeled source-side SSH client for any supported endpoint OS."""
         ...
 
-    def _clamp_after_visible_linux_process_create(
+    def _clamp_after_visible_linux_process_create_with_runtime(
         self,
         system: System,
         pid: int,
@@ -327,8 +326,10 @@ class SshSessionExecutor(Protocol):
         relationship_key: str = "source.ecar_dependent_after_process_create",
         *,
         later_source: str | None = None,
+        timing_runtime: TimingRuntime | SourceTimingPlanningRuntime,
+        timing_scope: TimingScope,
     ) -> datetime:
-        """Keep Linux same-process observations after visible eCAR creation."""
+        """Keep Linux observations visible using one exact injected timing runtime."""
         ...
 
     def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
@@ -877,12 +878,13 @@ class SshSessionActionBundle:
         resolved_times = self._resolve_linux_auth_lifecycle(
             event=event,
             responder_pid=plan.sshd_pid,
-            syslog_seed=plan.syslog_seed,
             conn_delay_ms=plan.conn_delay_ms,
             accepted_gap_ms=plan.accepted_gap_ms,
             pam_gap_ms=plan.pam_gap_ms,
             logind_gap_ms=plan.logind_gap_ms,
             transport_open_time=state.open_time or request.time,
+            timing_runtime=plan.timing_runtime,
+            timing_scope=plan.timing_scope,
         )
         if state.logon_id:
             executor.state_manager.update_session_metadata(
@@ -922,39 +924,34 @@ class SshSessionActionBundle:
         if state.dst_host.os_category != "linux":
             return None
 
-        conn_delay_ms = state.rng.randint(35, 160)
-        # Preserve the established shared generation stream while the rendered
-        # authentication phase is sampled from its action-scoped RNG below.
-        # Later baseline/storyline session planning consumes this same stream,
-        # so removing the historical gap draw would shift unrelated lifecycle
-        # anchors and can place dependent SCP work after its owning SSH close.
-        if request.auth_method == "publickey":
-            state.rng.randint(90, 550)
-        else:
-            state.rng.randint(450, 3500)
+        timing_runtime = getattr(self.executor, "timing_runtime", None)
+        if type(timing_runtime) is not TimingRuntime:
+            raise StateError("SSH authentication planning requires the executor TimingRuntime")
+        execution_id = (
+            state.execution_anchor.stable_id
+            if state.execution_anchor is not None
+            else request.execution_stable_id(state.source_port)
+        )
         route_class = "private" if self._source_system() is not None else "public"
-        accepted_gap_ms = sample_ssh_authentication_phase_ms(
+        timing_scope = TimingScope(
+            stable_id=execution_id,
+            host=request.target_system.hostname,
+            source="ssh",
+            lifecycle_id=execution_id,
+        )
+        timing = plan_ssh_authentication_timing(
             request.auth_method,
             public_key_type=request.public_key_type,
             route_class=route_class,
-            seed_parts=(
-                state.execution_anchor.stable_id if state.execution_anchor is not None else "",
-                request.source_ip,
-                state.source_port,
-                request.target_system.hostname,
-                request.user.username,
-                request.time.isoformat(),
-            ),
+            timing_runtime=timing_runtime,
+            scope=timing_scope,
         )
-        pam_gap_ms = state.rng.randint(45, 180)
-        logind_gap_ms = state.rng.randint(420, 760)
-        sshd_pid = self._resolve_responder_pid(state, conn_delay_ms)
+        sshd_pid = self._resolve_responder_pid(state, timing.connection_gap_ms)
         return _SshLinuxAuthPlan(
             sshd_pid=sshd_pid,
-            conn_delay_ms=conn_delay_ms,
-            accepted_gap_ms=accepted_gap_ms,
-            pam_gap_ms=pam_gap_ms,
-            logind_gap_ms=logind_gap_ms,
+            timing=timing,
+            timing_runtime=timing_runtime,
+            timing_scope=timing_scope,
             syslog_seed=(
                 request.target_system.hostname,
                 request.source_ip,
@@ -969,14 +966,20 @@ class SshSessionActionBundle:
         *,
         event: OccurrenceBuilder,
         responder_pid: int,
-        syslog_seed: tuple[Any, ...],
-        conn_delay_ms: int,
-        accepted_gap_ms: int,
-        pam_gap_ms: int,
-        logind_gap_ms: int,
+        conn_delay_ms: float,
+        accepted_gap_ms: float,
+        pam_gap_ms: float,
+        logind_gap_ms: float,
         transport_open_time: datetime,
+        timing_runtime: TimingRuntime | SourceTimingPlanningRuntime,
+        timing_scope: TimingScope,
     ) -> dict[str, datetime]:
         """Resolve SSH auth/syslog lifecycle times through the temporal graph."""
+
+        if type(timing_runtime) not in {TimingRuntime, SourceTimingPlanningRuntime}:
+            raise StateError("SSH lifecycle resolution requires the exact injected timing runtime")
+        if type(timing_scope) is not TimingScope:
+            raise StateError("SSH lifecycle resolution requires an exact TimingScope")
 
         request = self.request
         flow_window = get_timing_window(
@@ -1007,19 +1010,22 @@ class SshSessionActionBundle:
             canonical_offset_ms + flow_window.max_ms + observation_delay_ms + 25,
         )
         auth_ready_delay_ms = visibility_floor_ms + accepted_gap_ms
-        graph = TemporalConstraintGraph()
-        graph.add_node("transport_open", transport_open_time)
-        preferred_connection_time = _ssh_syslog_time(
-            transport_open_time,
-            "connection",
-            conn_delay_ms,
-            *syslog_seed,
+        graph = TemporalConstraintGraph(
+            timing_runtime=timing_runtime,
+            scope=timing_scope,
+            relationship_key="ssh.authentication.lifecycle_repair",
         )
-        connection_time = self.executor._clamp_after_visible_linux_process_create(
+        graph.add_node("transport_open", canonical_transport_open_time)
+        preferred_connection_time = canonical_transport_open_time + timedelta(
+            milliseconds=conn_delay_ms
+        )
+        connection_time = self.executor._clamp_after_visible_linux_process_create_with_runtime(
             request.target_system,
             responder_pid,
             preferred_connection_time,
             later_source="syslog",
+            timing_runtime=timing_runtime,
+            timing_scope=timing_scope,
         )
         responder_source_shift = connection_time - preferred_connection_time
         graph.add_node(
@@ -1028,32 +1034,20 @@ class SshSessionActionBundle:
         )
         graph.add_node(
             "accepted",
-            _ssh_syslog_time(
-                transport_open_time,
-                "accepted",
-                auth_ready_delay_ms,
-                *syslog_seed,
-            )
+            canonical_transport_open_time
+            + timedelta(milliseconds=auth_ready_delay_ms)
             + responder_source_shift,
         )
         graph.add_node(
             "pam",
-            _ssh_syslog_time(
-                transport_open_time,
-                "pam",
-                auth_ready_delay_ms + pam_gap_ms,
-                *syslog_seed,
-            )
+            canonical_transport_open_time
+            + timedelta(milliseconds=auth_ready_delay_ms + pam_gap_ms)
             + responder_source_shift,
         )
         graph.add_node(
             "logind",
-            _ssh_syslog_time(
-                transport_open_time,
-                "logind",
-                auth_ready_delay_ms + pam_gap_ms + logind_gap_ms,
-                *syslog_seed,
-            )
+            canonical_transport_open_time
+            + timedelta(milliseconds=auth_ready_delay_ms + pam_gap_ms + logind_gap_ms)
             + responder_source_shift,
         )
         graph.constrain_after(
@@ -1145,7 +1139,7 @@ class SshSessionActionBundle:
             sample_key="transport_open",
         )
 
-    def _resolve_responder_pid(self, state: _SshTransportState, conn_delay_ms: int) -> int:
+    def _resolve_responder_pid(self, state: _SshTransportState, conn_delay_ms: float) -> int:
         """Resolve or materialize the destination-side sshd process for this tuple."""
 
         request = self.request

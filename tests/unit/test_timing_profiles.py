@@ -17,7 +17,7 @@ from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
     network_sensor_observation_timing,
     reset_timing_profiles_cache,
-    sample_ssh_authentication_phase_ms,
+    sample_ssh_authentication_phase_ms_compatibility,
     sample_timing_delta,
     ssh_authentication_timing,
     startup_module_observation_timing,
@@ -235,7 +235,7 @@ def test_ssh_authentication_profiles_are_typed_broad_and_deterministic():
     assert password_profile.typical_max_ms <= password_profile.tail_min_ms
 
     public_key_samples = [
-        sample_ssh_authentication_phase_ms(
+        sample_ssh_authentication_phase_ms_compatibility(
             "publickey",
             public_key_type="ED25519",
             route_class="private",
@@ -244,7 +244,7 @@ def test_ssh_authentication_profiles_are_typed_broad_and_deterministic():
         for index in range(500)
     ]
     replay = [
-        sample_ssh_authentication_phase_ms(
+        sample_ssh_authentication_phase_ms_compatibility(
             "publickey",
             public_key_type="ED25519",
             route_class="private",
@@ -253,7 +253,7 @@ def test_ssh_authentication_profiles_are_typed_broad_and_deterministic():
         for index in range(500)
     ]
     password_samples = [
-        sample_ssh_authentication_phase_ms(
+        sample_ssh_authentication_phase_ms_compatibility(
             "password",
             route_class="private",
             seed_parts=("linux01", "admin", index),
@@ -271,7 +271,7 @@ def test_ssh_authentication_profiles_are_typed_broad_and_deterministic():
 def test_ssh_authentication_context_factors_affect_route_and_key_cost():
     seeds = [("linux01", "deploy", index) for index in range(100)]
     private_ed25519 = [
-        sample_ssh_authentication_phase_ms(
+        sample_ssh_authentication_phase_ms_compatibility(
             "publickey",
             public_key_type="ED25519",
             route_class="private",
@@ -280,7 +280,7 @@ def test_ssh_authentication_context_factors_affect_route_and_key_cost():
         for seed in seeds
     ]
     public_rsa = [
-        sample_ssh_authentication_phase_ms(
+        sample_ssh_authentication_phase_ms_compatibility(
             "publickey",
             public_key_type="RSA",
             route_class="public",

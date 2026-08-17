@@ -59,6 +59,7 @@ from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.zeek_files import _bounded_file_transfer_observation
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime, TimingScope
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _thread_local
@@ -584,7 +585,7 @@ class TestSslContextPopulation:
         assert accepted_event.syslog.pid == transport_event.network.responding_pid
         assert pam_event.syslog.pid == transport_event.network.responding_pid
 
-    def test_ssh_session_bundle_graph_orders_collapsed_auth_timestamps(
+    def test_ssh_session_bundle_graph_orders_minimal_auth_plan_gaps(
         self,
         activity_gen,
         monkeypatch,
@@ -600,10 +601,29 @@ class TestSslContextPopulation:
         )
         base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
+        original_plan = ssh_session_module.plan_ssh_authentication_timing
+
+        def collapsed_authentication(*args, **kwargs):
+            timing = original_plan(*args, **kwargs)
+            return replace(
+                timing,
+                connection_gap_ms=1,
+                accepted=replace(
+                    timing.accepted,
+                    phase_ms=1,
+                    cache_delay_ms=0,
+                    route_delay_ms=0,
+                    receiver_delay_ms=0,
+                    key_penalty_ms=0,
+                ),
+                pam_gap_ms=1,
+                logind_gap_ms=1,
+            )
+
         monkeypatch.setattr(
             ssh_session_module,
-            "_ssh_syslog_time",
-            lambda base_time, label, milliseconds, *seed_parts, before=False: base_time,
+            "plan_ssh_authentication_timing",
+            collapsed_authentication,
         )
 
         request = SshSessionRequest(
@@ -680,7 +700,7 @@ class TestSslContextPopulation:
         )
 
         executor = MagicMock()
-        executor._clamp_after_visible_linux_process_create.side_effect = (
+        executor._clamp_after_visible_linux_process_create_with_runtime.side_effect = (
             lambda _system, _pid, requested_time, _relationship_key=("source.ecar_dependent_after_process_create"), **_kwargs: (
                 requested_time
             )
@@ -691,12 +711,21 @@ class TestSslContextPopulation:
         )._resolve_linux_auth_lifecycle(
             event=event,
             responder_pid=4242,
-            syslog_seed=("linux01", "10.0.10.50", 51111, 4242, base_time.isoformat()),
             conn_delay_ms=35,
             accepted_gap_ms=90,
             pam_gap_ms=45,
             logind_gap_ms=420,
             transport_open_time=base_time,
+            timing_runtime=TimingRuntime(
+                reference_time=base_time,
+                namespace="ssh-flow-offset",
+            ),
+            timing_scope=TimingScope(
+                stable_id="ssh-flow-offset",
+                host=target.hostname,
+                source="ssh",
+                lifecycle_id="ssh-flow-offset",
+            ),
         )
 
         assert resolved["accepted"] > EcarEmitter._flow_identity_deadline(event)
@@ -743,7 +772,7 @@ class TestSslContextPopulation:
             ),
         )
         executor = MagicMock()
-        executor._clamp_after_visible_linux_process_create.side_effect = (
+        executor._clamp_after_visible_linux_process_create_with_runtime.side_effect = (
             lambda _system, _pid, requested_time, _relationship_key=("source.ecar_dependent_after_process_create"), **_kwargs: (
                 requested_time
             )
@@ -752,11 +781,20 @@ class TestSslContextPopulation:
         common = {
             "event": event,
             "responder_pid": 4242,
-            "syslog_seed": ("linux01", "10.0.10.50", 51111, 4242, base_time.isoformat()),
             "conn_delay_ms": 35,
             "pam_gap_ms": 45,
             "logind_gap_ms": 420,
             "transport_open_time": base_time,
+            "timing_runtime": TimingRuntime(
+                reference_time=base_time,
+                namespace="ssh-additive-auth",
+            ),
+            "timing_scope": TimingScope(
+                stable_id="ssh-additive-auth",
+                host=target.hostname,
+                source="ssh",
+                lifecycle_id="ssh-additive-auth",
+            ),
         }
 
         fast = bundle._resolve_linux_auth_lifecycle(accepted_gap_ms=100, **common)
@@ -768,25 +806,17 @@ class TestSslContextPopulation:
             assert resolved["connection"] < resolved["accepted"]
             assert resolved["accepted"] < resolved["pam"] < resolved["logind"]
 
-    @pytest.mark.parametrize(
-        ("auth_method", "legacy_bounds"),
-        [("publickey", (90, 550)), ("password", (450, 3500))],
-    )
+    @pytest.mark.parametrize("auth_method", ["publickey", "password"])
     def test_ssh_scoped_auth_timing_preserves_shared_rng_budget(
         self,
         monkeypatch,
         auth_method,
-        legacy_bounds,
     ):
-        """Scoped auth texture must not shift later shared-stream lifecycle planning."""
+        """Runtime-owned auth planning must not consume the shared generation stream."""
 
         seed = 8675309
         rng = random.Random(seed)
-        reference = random.Random(seed)
-        expected_connection = reference.randint(35, 160)
-        reference.randint(*legacy_bounds)
-        expected_pam = reference.randint(45, 180)
-        expected_logind = reference.randint(420, 760)
+        before = rng.getstate()
 
         user = User(username="deploy", full_name="Deploy User", email="deploy@example.com")
         target = System(
@@ -807,6 +837,10 @@ class TestSslContextPopulation:
         )
         executor = MagicMock()
         executor._ip_to_system = {}
+        executor.timing_runtime = TimingRuntime(
+            reference_time=request.time,
+            namespace=f"ssh-shared-rng-{auth_method}",
+        )
         bundle = SshSessionActionBundle(request=request, executor=executor)
         state = ssh_session_module._SshTransportState(
             rng=rng,
@@ -834,20 +868,34 @@ class TestSslContextPopulation:
         plan = bundle._prepare_linux_auth_plan(state)
 
         assert plan is not None
-        assert plan.conn_delay_ms == expected_connection
-        assert plan.pam_gap_ms == expected_pam
-        assert plan.logind_gap_ms == expected_logind
-        assert rng.getstate() == reference.getstate()
+        assert 35 <= plan.conn_delay_ms <= 160
+        assert 45 <= plan.pam_gap_ms <= 180
+        assert 420 <= plan.logind_gap_ms <= 760
+        assert rng.getstate() == before
 
     def test_ssh_long_auth_phase_anchors_session_lifecycle_at_pam(self, activity_gen, monkeypatch):
         """A slow auth phase must not shift visible closure beyond the lifecycle tail."""
 
         gen, events = activity_gen
         gen.dispatcher.observation_policy = ObservationPolicy("enterprise_standard")
+        original_plan = ssh_session_module.plan_ssh_authentication_timing
+
+        def slow_authentication(*args, **kwargs):
+            timing = original_plan(*args, **kwargs)
+            accepted = replace(
+                timing.accepted,
+                phase_ms=20_000,
+                cache_delay_ms=0,
+                route_delay_ms=0,
+                receiver_delay_ms=0,
+                key_penalty_ms=0,
+            )
+            return replace(timing, accepted=accepted)
+
         monkeypatch.setattr(
             ssh_session_module,
-            "sample_ssh_authentication_phase_ms",
-            lambda *_args, **_kwargs: 20_000,
+            "plan_ssh_authentication_timing",
+            slow_authentication,
         )
         user = User(username="deploy", full_name="Deploy User", email="deploy@example.com")
         target = System(
@@ -934,7 +982,7 @@ class TestSslContextPopulation:
         executor.dispatcher.observation_policy.maximum_delay_difference.return_value = timedelta(
             milliseconds=900
         )
-        executor._clamp_after_visible_linux_process_create.side_effect = (
+        executor._clamp_after_visible_linux_process_create_with_runtime.side_effect = (
             lambda _system, _pid, requested_time, _relationship_key="", **_kwargs: max(
                 requested_time,
                 visible_create
@@ -951,12 +999,21 @@ class TestSslContextPopulation:
         )._resolve_linux_auth_lifecycle(
             event=event,
             responder_pid=4242,
-            syslog_seed=("linux01", "10.0.10.50", 51111, 4242, base_time.isoformat()),
             conn_delay_ms=35,
             accepted_gap_ms=90,
             pam_gap_ms=45,
             logind_gap_ms=420,
             transport_open_time=base_time,
+            timing_runtime=TimingRuntime(
+                reference_time=base_time,
+                namespace="ssh-process-clamp",
+            ),
+            timing_scope=TimingScope(
+                stable_id="ssh-process-clamp",
+                host=target.hostname,
+                source="ssh",
+                lifecycle_id="ssh-process-clamp",
+            ),
         )
 
         assert resolved["connection"] >= visible_create + timedelta(milliseconds=925)

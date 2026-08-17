@@ -1736,13 +1736,6 @@ _WINDOWS_WORKSTATION_SESSION_LOGON_TYPES = WINDOWS_WORKSTATION_LOGON_TYPES
 _WINDOWS_REMOTE_SESSION_KINDS = frozenset({"network", "service", "rdp", "ssh"})
 _LINUX_LOCAL_SESSION_LOGON_TYPES = frozenset({2, 11})
 _LINUX_REMOTE_SESSION_KINDS = frozenset({"network", "service", "ssh"})
-_SSH_SYSLOG_MICRO_JITTER_BANDS = {
-    "connection": 101,
-    "accepted": 301,
-    "pam": 501,
-    "logind": 701,
-    "closed": 901,
-}
 
 
 def _is_windows_workstation_session(session: ActiveSession) -> bool:
@@ -1751,22 +1744,6 @@ def _is_windows_workstation_session(session: ActiveSession) -> bool:
         session.logon_type in _WINDOWS_WORKSTATION_SESSION_LOGON_TYPES
         and session.session_kind not in _WINDOWS_REMOTE_SESSION_KINDS
     )
-
-
-def _ssh_syslog_time(
-    base_time: datetime,
-    label: str,
-    milliseconds: int,
-    *seed_parts: Any,
-    before: bool = False,
-) -> datetime:
-    """Return an SSH syslog lifecycle timestamp with non-repeating sub-ms texture."""
-    band_start = _SSH_SYSLOG_MICRO_JITTER_BANDS.get(label, 101)
-    seed = _stable_seed(
-        "ssh_syslog_micro_jitter:" + label + ":" + ":".join(str(part) for part in seed_parts)
-    )
-    delta = timedelta(milliseconds=milliseconds, microseconds=band_start + (seed % 89))
-    return base_time - delta if before else base_time + delta
 
 
 def _zeek_conn_observation_time(
@@ -4600,6 +4577,7 @@ class ActivityGenerator:
         sample_key: str = "gap",
         mode_fraction: float = 0.35,
         timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
+        timing_scope: TimingScope | None = None,
     ) -> timedelta:
         """Sample one bounded activity gap through the engine timing runtime."""
 
@@ -4621,7 +4599,8 @@ class ActivityGenerator:
         return runtime.sampler.sample_timedelta(
             distribution,
             relationship_key=relationship_key,
-            scope=TimingScope(
+            scope=timing_scope
+            or TimingScope(
                 stable_id=stable_id,
                 host=host,
                 source=source,
@@ -4643,6 +4622,7 @@ class ActivityGenerator:
         sample_key: str = "gap",
         mode_fraction: float = 0.35,
         timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
+        timing_scope: TimingScope | None = None,
     ) -> timedelta:
         """Sample one configured relationship through a typed runtime scope."""
 
@@ -4664,6 +4644,7 @@ class ActivityGenerator:
             sample_key=sample_key,
             mode_fraction=mode_fraction,
             timing_runtime=timing_runtime,
+            timing_scope=timing_scope,
         )
 
     def __init__(
@@ -14587,23 +14568,75 @@ class ActivityGenerator:
         later_source: str | None = None,
     ) -> datetime:
         """Keep Linux same-process observations after visible eCAR creation."""
-        if pid <= 0 or _get_os_category(system.os) != "linux":
+        visibility = self._visible_linux_process_create_floor(
+            system,
+            pid,
+            later_source=later_source,
+        )
+        if visibility is None:
             return time
-        visible_create_time = self.process_source_create_time(system.hostname, pid)
-        if visible_create_time is None:
-            return time
-        required_floor = visible_create_time
-        if later_source is not None:
-            required_floor += self.dispatcher.observation_policy.maximum_delay_difference(
-                "ecar",
-                later_source,
-            ) + timedelta(milliseconds=25)
+        visible_create_time, required_floor = visibility
         if time > required_floor:
             return time
         return required_floor + sample_timing_delta(
             relationship_key,
             seed_parts=(system.hostname, pid, visible_create_time, time),
         )
+
+    def _clamp_after_visible_linux_process_create_with_runtime(
+        self,
+        system: System,
+        pid: int,
+        time: datetime,
+        relationship_key: str = "source.ecar_dependent_after_process_create",
+        *,
+        later_source: str | None = None,
+        timing_runtime: TimingRuntime | SourceTimingPlanningRuntime,
+        timing_scope: TimingScope,
+    ) -> datetime:
+        """Keep Linux observations visible using one exact injected timing runtime."""
+        if type(timing_runtime) not in {TimingRuntime, SourceTimingPlanningRuntime}:
+            raise StateError("Linux visibility clamping requires the exact timing runtime")
+        if type(timing_scope) is not TimingScope:
+            raise StateError("Linux visibility clamping requires an exact TimingScope")
+        visibility = self._visible_linux_process_create_floor(
+            system,
+            pid,
+            later_source=later_source,
+        )
+        if visibility is None:
+            return time
+        _visible_create_time, required_floor = visibility
+        if time > required_floor:
+            return time
+        return required_floor + self._sample_profile_activity_gap(
+            relationship_key,
+            stable_id=timing_scope.stable_id,
+            timing_runtime=timing_runtime,
+            timing_scope=timing_scope,
+            sample_key="visible_process_create_gap",
+        )
+
+    def _visible_linux_process_create_floor(
+        self,
+        system: System,
+        pid: int,
+        *,
+        later_source: str | None,
+    ) -> tuple[datetime, datetime] | None:
+        """Return Linux process creation and source-visible dependent floors."""
+        if pid <= 0 or _get_os_category(system.os) != "linux":
+            return None
+        visible_create_time = self.process_source_create_time(system.hostname, pid)
+        if visible_create_time is None:
+            return None
+        required_floor = visible_create_time
+        if later_source is not None:
+            required_floor += self.dispatcher.observation_policy.maximum_delay_difference(
+                "ecar",
+                later_source,
+            ) + timedelta(milliseconds=25)
+        return visible_create_time, required_floor
 
     def _plan_process_source_create_times(
         self,
