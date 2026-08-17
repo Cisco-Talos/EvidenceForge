@@ -31,20 +31,25 @@ host-native path; basename or fleet-wide path guessing is intentionally absent.
 from __future__ import annotations
 
 import hashlib
+import heapq
+import hmac
 import json
 import math
 import ntpath
 import posixpath
+import secrets
 import sys
 import zlib
 from array import array
 from bisect import bisect_right
 from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
-from threading import Condition, Lock, RLock
+from datetime import UTC, datetime, timedelta
+from itertools import islice
+from threading import Condition, Lock, RLock, get_ident
 from typing import Generic, TypeVar, cast
+from weakref import ReferenceType, ref
 
 from evidenceforge.events.content_identity import (
     ApplicationProfileCanonicalKey,
@@ -91,6 +96,7 @@ _ARCHITECTURES = {"x86", "x64", "arm64", "neutral"}
 _DEFAULT_ARTIFACT_RETENTION = timedelta(hours=48)
 _DEFAULT_ARTIFACT_CAPACITY = 100_000
 _DEFAULT_ARTIFACT_SHARDS = 64
+_DEFAULT_ARTIFACT_PREPARED_BYTE_CAPACITY = 512 * 1_024 * 1_024
 _PRIMARY_COMPACTION_BUDGET = 4_096
 _COMPACT_HANDLE_BITS = 32
 _COMPACT_HANDLE_LIMIT = (1 << _COMPACT_HANDLE_BITS) - 1
@@ -1594,6 +1600,12 @@ class LocalArtifactRegistryCensus:
     primary_compaction_rotations: int
     primary_compaction_work: int
     primary_compaction_seconds: float
+    prepared_retained_members: int = 0
+    prepared_member_capacity: int = 0
+    prepared_retained_bytes: int = 0
+    prepared_byte_capacity: int = 0
+    prepared_capability_locators: int = 0
+    committing_publications: int = 0
 
 
 class LocalArtifactCapacityError(StateError):
@@ -1630,12 +1642,13 @@ class LocalArtifactVersionPageCursor:
         self._after_handle = after_handle
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class LocalArtifactPublishToken:
     """Capacity- and identity-reserved local-artifact publication token.
 
-    A token retains no payload bytes. The immutable record remains caller-owned
-    until a prepared publication transaction commits or cancels it.
+    A token retains metadata but no file payload bytes. The registry retains a
+    separately reconstructed canonical record so caller mutation cannot alter
+    either commit truth or reservation cleanup.
     """
 
     record: LocalArtifactVersionRecord
@@ -1647,31 +1660,188 @@ class LocalArtifactPublishToken:
     _reservation_id: int = field(repr=False, default=0)
     _shard_id: int = field(repr=False, default=0)
     _existing_handle: int | None = field(repr=False, default=None)
+    _integrity: str = field(repr=False, default="")
+
+    @property
+    def publication_token(self) -> str:
+        """Return the opaque registry-authenticated publication proof."""
+
+        return self._integrity
+
+
+@dataclass(frozen=True, slots=True)
+class LocalArtifactPublicationReceipt:
+    """Authenticated proof binding one preparation to its committed handle."""
+
+    reservation_id: int
+    artifact_version_id: str
+    shard_id: int
+    handle: int
+    publication_token: str
+    record_digest: str
+    _registry_token: int = field(repr=False, default=0)
+    _integrity: str = field(repr=False, default="")
+
+    @property
+    def receipt_token(self) -> str:
+        """Return the opaque keyed proof over this committed publication."""
+
+        return self._integrity
+
+    @property
+    def packed_locator(self) -> int:
+        """Return the stable shard-qualified committed store locator."""
+
+        return _pack_artifact_locator(self.shard_id, self.handle)
+
+
+@dataclass(frozen=True, slots=True)
+class LocalArtifactPublicationGroupReceipt:
+    """Authenticated ordered proof for one all-or-zero artifact publication group."""
+
+    receipts: tuple[LocalArtifactPublicationReceipt, ...]
+    publication_tokens: tuple[str, ...]
+    _registry_token: int = field(repr=False, default=0)
+    _integrity: str = field(repr=False, default="")
+
+    @property
+    def group_token(self) -> str:
+        """Return the opaque keyed proof over the ordered member receipts."""
+
+        return self._integrity
+
+    @property
+    def handles(self) -> tuple[int, ...]:
+        """Return committed packed handles in preparation order."""
+
+        return tuple(receipt.handle for receipt in self.receipts)
+
+
+@dataclass(slots=True)
+class _LocalArtifactPreparedReservation:
+    """Registry-owned locator and immutable preparation preimage."""
+
+    token_ref: ReferenceType[LocalArtifactPublishToken]
+    token_id: int
+    reservation_id: int
+    canonical_token: LocalArtifactPublishToken
+    record_digest: str
+    retained_bytes: int
+    reserved_handle: int | None = None
+    backing_released: bool = False
+    claimed_by: int | None = None
+    committing: bool = False
+    commit_ref: (
+        ReferenceType[LocalArtifactPreparedCommit | LocalArtifactPreparedGroupCommit] | None
+    ) = None
+    commit_id: int | None = None
+    commit_plan: _LocalArtifactPreparedCommitPlan | None = None
+    group_receipt: LocalArtifactPublicationGroupReceipt | None = None
+
+
+@dataclass(slots=True)
+class _LocalArtifactLeaseSavepoint:
+    """Preallocated pair-local state used to undo one lease acquisition."""
+
+    pair: tuple[str, str]
+    pair_present: bool = False
+    prior_deadline: float | None = None
+    prior_item: bool | None = None
+    prior_order: int | None = None
+    prior_version: int | None = None
+    prior_next_order: int = 0
+    prior_high_water: int = 0
+    prior_leased_key_count: int = 0
+    prior_store_high_water: int = 0
+    prior_store_primary_peak: int = 0
+    prior_store_slots: int = 0
+
+
+@dataclass(slots=True)
+class _LocalArtifactPreparedRollbackSavepoint:
+    """Preallocated rollback state populated at the first commit mutation."""
+
+    lease: _LocalArtifactLeaseSavepoint | None = None
+    captured: bool = False
+    prior_deadline_us: int = _EMPTY_ARTIFACT_DEADLINE
+    prior_pending_expiry: bool = False
+    prior_mutation_version: int = 0
+    prior_live_count: int = 0
+    prior_high_water_mark: int = 0
+    prior_store_next_handle: int = 0
+    prior_store_high_water: int = 0
+    prior_store_compaction_rotations: int = 0
+    prior_store_compaction_work: int = 0
+    prior_deadline_generation: int = 0
+    prior_deadline_order: int = 0
+    prior_deadline_live: int = 0
+    prior_deadline_high_water: int = 0
+    prior_deadline_order_counter: int = 0
+    prior_route_high_water: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _LocalArtifactPreparedCommitPlan:
+    """Fully precomputed primitive tail and preallocated rollback state."""
+
+    expected_handle: int
+    packed_payload: bytes
+    retained_deadline: float
+    lease_deadline: float | None
+    receipt: LocalArtifactPublicationReceipt
+    prior_payload: bytes | None
+    route: _ArtifactRouteShard | None
+    route_key: bytes | None
+    packed_route_locator: int | None
+    rollback: _LocalArtifactPreparedRollbackSavepoint
 
 
 class LocalArtifactPreparedCommit:
-    """One no-fail commit capability valid only inside its registry context.
+    """One rollback-capable artifact-first commit valid only in its context.
 
     Entering the owning context claims the reservation under the artifact
     registry locks, then releases every artifact lock before yielding this
-    capability. The caller may therefore acquire StateManager and lifecycle
-    lanes without creating an artifact-to-state lock edge. ``commit()`` is the
-    only nested artifact acquisition and is deliberately last in the external
-    transaction's State -> Lifecycle -> Artifact order.
+    capability. A composite coordinator first claims and authenticates every
+    owner, then invokes this artifact commit while State, lifecycle, audit,
+    intent, and timing owners remain uncommitted. An artifact-tail exception
+    restores exact local state so the other claimed contexts can cancel; only
+    a successful artifact receipt permits their certified primitive commits.
     """
 
-    __slots__ = ("_active", "_committed", "_handle", "_registry", "_token")
+    __slots__ = (
+        "_active",
+        "_committed",
+        "_claimant_thread_id",
+        "_expected_receipt",
+        "_handle",
+        "_publication_token",
+        "_receipt",
+        "_registry",
+        "__weakref__",
+    )
 
     def __init__(
         self,
         registry: LocalArtifactVersionRegistry,
-        token: LocalArtifactPublishToken,
+        publication_token: str | LocalArtifactPublishToken,
+        claimant_thread_id: int | None = None,
+        expected_receipt: LocalArtifactPublicationReceipt | None = None,
     ) -> None:
         self._registry = registry
-        self._token = token
+        # Preserve the former public constructor shape without granting a
+        # caller-built object authority: the registry's exact object locator is
+        # still required by every commit. Registry claims pass frozen primitives.
+        self._publication_token = (
+            publication_token.publication_token
+            if type(publication_token) is LocalArtifactPublishToken
+            else publication_token
+        )
+        self._claimant_thread_id = get_ident() if claimant_thread_id is None else claimant_thread_id
+        self._expected_receipt = expected_receipt
         self._active = True
         self._committed = False
         self._handle: int | None = None
+        self._receipt: LocalArtifactPublicationReceipt | None = None
 
     @property
     def committed(self) -> bool:
@@ -1685,16 +1855,121 @@ class LocalArtifactPreparedCommit:
 
         return self._handle
 
-    def commit(self) -> int:
-        """Commit the already-validated reservation without another fallible admission."""
+    @property
+    def publication_token(self) -> str:
+        """Return the frozen preparation proof claimed by this transaction."""
+
+        return self._publication_token
+
+    @property
+    def receipt(self) -> LocalArtifactPublicationReceipt | None:
+        """Return the authenticated committed receipt, if available."""
+
+        return self._receipt
+
+    @property
+    def expected_receipt(self) -> LocalArtifactPublicationReceipt | None:
+        """Return the precomputed authenticated receipt for this exact claim."""
+
+        return self._expected_receipt
+
+    def commit_no_fail(self) -> LocalArtifactPublicationReceipt:
+        """Publish the artifact-first tail and return its authenticated receipt."""
 
         if not self._active:
             raise StateError("local artifact prepared commit is no longer active")
         if self._committed:
             raise StateError("local artifact prepared publication was already committed")
-        self._handle = self._registry._commit_claimed(self._token)
+        if get_ident() != self._claimant_thread_id:
+            raise StateError(
+                "local artifact prepared publication must commit on its claiming thread"
+            )
+        self._receipt = self._registry._commit_claimed(self)
+        self._handle = self._receipt.handle
         self._committed = True
-        return self._handle
+        return self._receipt
+
+    def commit(self) -> int:
+        """Compatibility API returning the packed handle after a no-fail commit."""
+
+        return self.commit_no_fail().handle
+
+    def _close(self) -> None:
+        self._active = False
+
+
+class LocalArtifactPreparedGroupCommit:
+    """Exact same-thread capability for one all-or-zero artifact publication group."""
+
+    __slots__ = (
+        "_active",
+        "_claimant_thread_id",
+        "_committed",
+        "_expected_receipt",
+        "_publication_tokens",
+        "_receipt",
+        "_registry",
+        "__weakref__",
+    )
+
+    def __init__(
+        self,
+        registry: LocalArtifactVersionRegistry,
+        publication_tokens: tuple[str, ...],
+        claimant_thread_id: int,
+        expected_receipt: LocalArtifactPublicationGroupReceipt,
+    ) -> None:
+        self._registry = registry
+        self._publication_tokens = publication_tokens
+        self._claimant_thread_id = claimant_thread_id
+        self._expected_receipt = expected_receipt
+        self._active = True
+        self._committed = False
+        self._receipt: LocalArtifactPublicationGroupReceipt | None = None
+
+    @property
+    def committed(self) -> bool:
+        """Return whether every exact group member committed."""
+
+        return self._committed
+
+    @property
+    def publication_tokens(self) -> tuple[str, ...]:
+        """Return frozen preparation proofs in caller-supplied order."""
+
+        return self._publication_tokens
+
+    @property
+    def receipt(self) -> LocalArtifactPublicationGroupReceipt | None:
+        """Return the authenticated ordered group receipt after commit."""
+
+        return self._receipt
+
+    @property
+    def expected_receipt(self) -> LocalArtifactPublicationGroupReceipt:
+        """Return the precomputed authenticated ordered group receipt."""
+
+        return self._expected_receipt
+
+    def commit_no_fail(self) -> LocalArtifactPublicationGroupReceipt:
+        """Publish every member atomically and return one ordered receipt."""
+
+        if not self._active:
+            raise StateError("local artifact prepared group commit is no longer active")
+        if self._committed:
+            raise StateError("local artifact prepared publication group was already committed")
+        if get_ident() != self._claimant_thread_id:
+            raise StateError(
+                "local artifact prepared publication group must commit on its claiming thread"
+            )
+        self._receipt = self._registry._commit_claimed_group(self)
+        self._committed = True
+        return self._receipt
+
+    def commit(self) -> tuple[int, ...]:
+        """Compatibility projection returning committed handles in input order."""
+
+        return self.commit_no_fail().handles
 
     def _close(self) -> None:
         self._active = False
@@ -1832,6 +2107,299 @@ def _pack_artifact_payload(
         separators=(",", ":"),
     ).encode("utf-8")
     return zlib.compress(encoded, level=1)
+
+
+def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
+    """Return a callback-free primitive snapshot or reject a malformed record."""
+
+    if type(record) is not LocalArtifactVersionRecord:
+        raise StateError("local artifact publication record has an invalid type")
+    artifact = record.artifact
+    content = record.content
+    binary = record.binary
+    if type(artifact) is not LocalArtifactIdentity or type(content) is not FileContentIdentity:
+        raise StateError("local artifact publication record has malformed identities")
+    artifact_text = (
+        artifact.hostname,
+        artifact.principal,
+        artifact.platform,
+        artifact.user_profile_id,
+        artifact.application_profile_id,
+        artifact.application_id,
+        artifact.family,
+        artifact.source_object_id,
+        artifact.native_path,
+        artifact.content_id,
+        artifact.slot,
+        artifact.artifact_id,
+        artifact.artifact_version_id,
+    )
+    content_text = (
+        content.file_object_id,
+        content.mime_type,
+        content.seed_ref,
+        content.file_version_id,
+        content.content_id,
+    )
+    if any(type(value) is not str for value in (*artifact_text, *content_text)):
+        raise StateError("local artifact publication record contains malformed text")
+    if (
+        type(artifact.version) is not int
+        or artifact.version < 1
+        or type(content.version) is not int
+        or content.version < 1
+        or type(content.size_bytes) is not int
+        or content.size_bytes < 0
+    ):
+        raise StateError("local artifact publication record contains malformed numbers")
+    digests = content.digests
+    if type(digests) is not ContentDigests:
+        raise StateError("local artifact publication record contains malformed digests")
+    digest_values = (digests.md5, digests.sha1, digests.sha256, digests.imphash)
+    if any(type(value) is not str for value in digest_values):
+        raise StateError("local artifact publication record contains malformed digests")
+
+    binary_values: tuple[object, ...] | None = None
+    if binary is not None:
+        if type(binary) is not LocalArtifactBinaryIdentity:
+            raise StateError("local artifact publication record contains a malformed binary")
+        binary_digests = binary.digests
+        if type(binary_digests) is not ContentDigests:
+            raise StateError("local artifact publication binary contains malformed digests")
+        binary_digest_values = (
+            binary_digests.md5,
+            binary_digests.sha1,
+            binary_digests.sha256,
+            binary_digests.imphash,
+        )
+        binary_text = (
+            binary.artifact_version_id,
+            binary.content_id,
+            binary.platform,
+            binary.architecture,
+            binary.artifact_name,
+            binary.identity_kind,
+            *binary_digest_values,
+        )
+        if any(type(value) is not str for value in binary_text):
+            raise StateError("local artifact publication binary contains malformed text")
+        version_info_values: tuple[str, ...] | None = None
+        if binary.pe_version_info is not None:
+            version_info = binary.pe_version_info
+            if type(version_info) is not PeVersionInfo:
+                raise StateError("local artifact publication binary has malformed version info")
+            version_info_values = (
+                version_info.file_version,
+                version_info.description,
+                version_info.product,
+                version_info.company,
+                version_info.original_filename,
+            )
+            if any(type(value) is not str for value in version_info_values):
+                raise StateError(
+                    "local artifact publication binary has malformed version-info text"
+                )
+        binary_values = (*binary_text, version_info_values)
+
+    return (
+        artifact_text,
+        artifact.version,
+        content_text,
+        content.version,
+        content.size_bytes,
+        digest_values,
+        binary_values,
+    )
+
+
+def _canonical_local_artifact_record(record: object) -> LocalArtifactVersionRecord:
+    """Copy one validated record into an independent registry-owned snapshot."""
+
+    primitive = _local_artifact_record_primitive(record)
+    assert type(record) is LocalArtifactVersionRecord
+    canonical_artifact = replace(record.artifact)
+    canonical_content = replace(record.content)
+    canonical_binary: LocalArtifactBinaryIdentity | None = None
+    if record.binary is not None:
+        version_info = record.binary.pe_version_info
+        canonical_binary = replace(
+            record.binary,
+            digests=replace(record.binary.digests),
+            pe_version_info=None if version_info is None else replace(version_info),
+        )
+    canonical = LocalArtifactVersionRecord(
+        artifact=canonical_artifact,
+        content=canonical_content,
+        binary=canonical_binary,
+    )
+    if _local_artifact_record_primitive(canonical) != primitive:
+        raise StateError("local artifact publication record is not canonically self-consistent")
+    return canonical
+
+
+def _local_artifact_record_preimage(record: object) -> bytes:
+    """Serialize the complete exact record into a stable integrity preimage."""
+
+    return json.dumps(
+        _local_artifact_record_primitive(record),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _local_artifact_publish_token_preimage(token: LocalArtifactPublishToken) -> bytes:
+    """Validate and serialize every caller-visible and private token field."""
+
+    if type(token) is not LocalArtifactPublishToken:
+        raise StateError("local artifact publish token has an invalid type")
+    if (
+        type(token.observed_at) is not datetime
+        or token.observed_at.tzinfo is not UTC
+        or type(token.retained_until) is not datetime
+        or token.retained_until.tzinfo is not UTC
+        or (
+            token.lease_until is not None
+            and (type(token.lease_until) is not datetime or token.lease_until.tzinfo is not UTC)
+        )
+        or type(token.lease_owner) is not str
+        or type(token._registry_token) is not int
+        or type(token._reservation_id) is not int
+        or token._reservation_id <= 0
+        or type(token._shard_id) is not int
+        or token._shard_id < 0
+        or (
+            token._existing_handle is not None
+            and (type(token._existing_handle) is not int or token._existing_handle < 0)
+        )
+        or type(token._integrity) is not str
+    ):
+        raise StateError("local artifact publish token contains malformed fields")
+    return json.dumps(
+        (
+            "local-artifact-prepared-publication-v1",
+            _local_artifact_record_primitive(token.record),
+            token.observed_at.isoformat(),
+            token.retained_until.isoformat(),
+            token.lease_owner,
+            None if token.lease_until is None else token.lease_until.isoformat(),
+            token._registry_token,
+            token._reservation_id,
+            token._shard_id,
+            token._existing_handle,
+        ),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _local_artifact_publish_token_integrity(
+    secret: bytes,
+    token: LocalArtifactPublishToken,
+) -> str:
+    """Authenticate the exact prepared-publication token preimage."""
+
+    return hmac.new(
+        secret, _local_artifact_publish_token_preimage(token), hashlib.sha256
+    ).hexdigest()
+
+
+def _local_artifact_receipt_preimage(receipt: LocalArtifactPublicationReceipt) -> bytes:
+    """Validate and serialize one committed publication receipt."""
+
+    if type(receipt) is not LocalArtifactPublicationReceipt:
+        raise StateError("local artifact publication receipt has an invalid type")
+    if (
+        type(receipt.reservation_id) is not int
+        or receipt.reservation_id <= 0
+        or type(receipt.artifact_version_id) is not str
+        or not receipt.artifact_version_id
+        or type(receipt.shard_id) is not int
+        or receipt.shard_id < 0
+        or type(receipt.handle) is not int
+        or receipt.handle < 0
+        or type(receipt.publication_token) is not str
+        or not receipt.publication_token
+        or type(receipt.record_digest) is not str
+        or type(receipt._registry_token) is not int
+        or type(receipt._integrity) is not str
+    ):
+        raise StateError("local artifact publication receipt contains malformed fields")
+    return json.dumps(
+        (
+            "local-artifact-publication-receipt-v1",
+            receipt.reservation_id,
+            receipt.artifact_version_id,
+            receipt.shard_id,
+            receipt.handle,
+            receipt.publication_token,
+            receipt.record_digest,
+            receipt._registry_token,
+        ),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _local_artifact_receipt_integrity(
+    secret: bytes,
+    receipt: LocalArtifactPublicationReceipt,
+) -> str:
+    """Authenticate one exact committed publication receipt."""
+
+    return hmac.new(secret, _local_artifact_receipt_preimage(receipt), hashlib.sha256).hexdigest()
+
+
+def _local_artifact_group_receipt_preimage(
+    receipt: LocalArtifactPublicationGroupReceipt,
+) -> bytes:
+    """Validate and serialize one ordered publication-group receipt."""
+
+    if type(receipt) is not LocalArtifactPublicationGroupReceipt:
+        raise StateError("local artifact publication group receipt has an invalid type")
+    if (
+        type(receipt.receipts) is not tuple
+        or not receipt.receipts
+        or type(receipt.publication_tokens) is not tuple
+        or len(receipt.receipts) != len(receipt.publication_tokens)
+        or type(receipt._registry_token) is not int
+        or type(receipt._integrity) is not str
+    ):
+        raise StateError("local artifact publication group receipt contains malformed fields")
+    members: list[tuple[str, str]] = []
+    for member, publication_token in zip(
+        receipt.receipts,
+        receipt.publication_tokens,
+        strict=True,
+    ):
+        if type(publication_token) is not str or not publication_token:
+            raise StateError("local artifact publication group receipt contains a malformed token")
+        member_preimage = _local_artifact_receipt_preimage(member).decode("utf-8")
+        if not hmac.compare_digest(member.publication_token, publication_token):
+            raise StateError("local artifact publication group receipt member order is invalid")
+        members.append((member_preimage, member._integrity))
+    return json.dumps(
+        (
+            "local-artifact-publication-group-receipt-v1",
+            members,
+            receipt.publication_tokens,
+            receipt._registry_token,
+        ),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _local_artifact_group_receipt_integrity(
+    secret: bytes,
+    receipt: LocalArtifactPublicationGroupReceipt,
+) -> str:
+    """Authenticate one exact ordered publication-group receipt."""
+
+    return hmac.new(
+        secret,
+        _local_artifact_group_receipt_preimage(receipt),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def _artifact_payload_field(payload: bytes, field_index: int) -> str:
@@ -2246,6 +2814,15 @@ class _PackedInlineEqualityGroups:
             return 0
         work = self._live_groups
         self._rebuild(self._minimum_table_capacity, digest_for_handle)
+        if force and not self._live_groups:
+            self._bucket_heads = array("I")
+            self._bucket_tails = array("I")
+            self._bucket_counts = array("I")
+            self._free_bucket_ids = array("I")
+            self._previous = array("I")
+            self._next = array("I")
+            self._bucket_size_counts = {}
+            self._max_bucket_size = 0
         return work
 
     def _rebuild(self, capacity: int, digest_for_handle: Callable[[int], bytes]) -> None:
@@ -2288,6 +2865,7 @@ class _PackedArtifactStore:
     """Primitive-column artifact storage with lazy frozen-value reconstruction."""
 
     __slots__ = (
+        "_active",
         "_application_profile_index",
         "_artifact_digests",
         "_artifact_index",
@@ -2295,6 +2873,8 @@ class _PackedArtifactStore:
         "_compaction_work",
         "_content_index",
         "_execution_path_index",
+        "_free_handle_count",
+        "_free_handle_positions",
         "_free_handles",
         "_high_water",
         "_live",
@@ -2304,6 +2884,8 @@ class _PackedArtifactStore:
         "_payload_overflow",
         "_platforms",
         "_primary",
+        "_release_pending",
+        "_reserved",
         "_version_digests",
     )
 
@@ -2316,14 +2898,19 @@ class _PackedArtifactStore:
     _FIELD_VERSION = 10
 
     def __init__(self, capacity: int) -> None:
+        self._active = bytearray(capacity)
         self._payload_arena = bytearray(capacity * _ARTIFACT_INLINE_PAYLOAD_BYTES)
         self._payload_lengths = array("I", [0]) * capacity
         self._payload_overflow: dict[int, bytes] = {}
         self._platforms = array("B", [0]) * capacity
         self._artifact_digests = bytearray(capacity * _ARTIFACT_DIGEST_BYTES)
         self._version_digests = bytearray(capacity * _ARTIFACT_DIGEST_BYTES)
-        self._free_handles = array("I")
+        self._free_handle_positions = array("I", [_TOMBSTONE_ARTIFACT_SLOT]) * capacity
+        self._free_handles = array("I", [0]) * capacity
+        self._free_handle_count = 0
         self._primary = _PackedPrimaryIndex(capacity)
+        self._release_pending = bytearray(capacity)
+        self._reserved = bytearray(capacity)
         self._artifact_index = _PackedInlineEqualityGroups(capacity)
         self._application_profile_index = _PackedInlineEqualityGroups(capacity)
         self._content_index = _PackedInlineEqualityGroups(capacity)
@@ -2407,8 +2994,164 @@ class _PackedArtifactStore:
         self,
         artifact: LocalArtifactIdentity,
         record: LocalArtifactVersionRecord | None = None,
+        *,
+        packed_payload: bytes | None = None,
     ) -> int:
         """Insert one immutable artifact into reusable primitive columns."""
+
+        handle = self.reserve_handle()
+        try:
+            self.insert_reserved(
+                handle,
+                artifact,
+                record,
+                packed_payload=packed_payload,
+            )
+        except BaseException:
+            self.release_reserved_handle(handle)
+            raise
+        self.consume_reserved_handle(handle)
+        return handle
+
+    def reserve_handle(self) -> int:
+        """Reserve one exact inactive handle without publishing any index row."""
+
+        if self._free_handle_count:
+            self._free_handle_count -= 1
+            handle = int(self._free_handles[self._free_handle_count])
+            self._free_handle_positions[handle] = _TOMBSTONE_ARTIFACT_SLOT
+        else:
+            handle = self._next_handle
+            if handle >= len(self._payload_lengths):
+                raise StateError("local artifact store exceeded its compiled shard capacity")
+            self._next_handle += 1
+        if self._active[handle] or self._reserved[handle]:  # pragma: no cover - allocator invariant
+            raise StateError("local artifact store selected an occupied reserved handle")
+        self._reserved[handle] = 1
+        return handle
+
+    def _append_free_handle(self, handle: int) -> None:
+        """Append one unique free handle and record its constant-time position."""
+
+        if self._free_handle_positions[handle] != _TOMBSTONE_ARTIFACT_SLOT:
+            raise StateError("local artifact handle was returned to the free pool twice")
+        if self._free_handle_count >= len(self._free_handles):
+            raise StateError("local artifact free-handle pool exceeded shard capacity")
+        self._free_handle_positions[handle] = self._free_handle_count
+        self._free_handles[self._free_handle_count] = handle
+        self._free_handle_count += 1
+
+    def _remove_free_handle(self, handle: int) -> None:
+        """Remove one exact free handle without scanning the allocator stack."""
+
+        position = self._free_handle_positions[handle]
+        if position == _TOMBSTONE_ARTIFACT_SLOT or position >= self._free_handle_count:
+            raise StateError("local artifact free-handle position is stale")
+        self._free_handle_count -= 1
+        final = int(self._free_handles[self._free_handle_count])
+        self._free_handle_positions[handle] = _TOMBSTONE_ARTIFACT_SLOT
+        if position < self._free_handle_count:
+            self._free_handles[position] = final
+            self._free_handle_positions[final] = position
+
+    def _free_handle_is_recorded(self, handle: int) -> bool:
+        """Return whether one inactive handle is exactly present in the free pool."""
+
+        position = self._free_handle_positions[handle]
+        return (
+            position != _TOMBSTONE_ARTIFACT_SLOT
+            and position < self._free_handle_count
+            and self._free_handles[position] == handle
+        )
+
+    def reserved_release_is_complete(self, handle: int, *, was_live: bool) -> bool:
+        """Return whether one reserved-handle transition reached its terminal state."""
+
+        if was_live:
+            return self.is_live_handle(handle) and not self._reserved[handle]
+        return (
+            not self.is_live_handle(handle)
+            and not self._reserved[handle]
+            and not self._release_pending[handle]
+            and (handle >= self._next_handle or self._free_handle_is_recorded(handle))
+        )
+
+    def consume_reserved_handle(self, handle: int) -> None:
+        """Release reservation ownership after its handle became canonical."""
+
+        if not self._reserved[handle] or not self._active[handle]:
+            raise StateError("local artifact handle reservation was not committed")
+        self._reserved[handle] = 0
+
+    def release_reserved_handle(self, handle: int) -> None:
+        """Return one inactive reserved handle through a resumable bounded transition."""
+
+        if self._active[handle]:
+            raise StateError("local artifact handle reservation is not releasable")
+        if self._reserved[handle]:
+            self._release_pending[handle] = 1
+            self._reserved[handle] = 0
+        elif not self._release_pending[handle]:
+            if self.reserved_release_is_complete(handle, was_live=False):
+                return
+            raise StateError("local artifact handle reservation is not releasable")
+
+        # These primitive-column resets are idempotent. The pending marker
+        # remains installed until allocator ownership is terminal, allowing a
+        # caller retaining the exact reservation to resume after BaseException.
+        self._payload_lengths[handle] = 0
+        self._payload_overflow.pop(handle, None)
+        self._platforms[handle] = 0
+        self._write_digest(self._artifact_digests, handle, b"\0" * _ARTIFACT_DIGEST_BYTES)
+        self._write_digest(self._version_digests, handle, b"\0" * _ARTIFACT_DIGEST_BYTES)
+
+        if handle < self._next_handle - 1:
+            if not self._free_handle_is_recorded(handle):
+                try:
+                    self._append_free_handle(handle)
+                except BaseException:
+                    if self._free_handle_is_recorded(handle):
+                        self._release_pending[handle] = 0
+                    raise
+            self._release_pending[handle] = 0
+            return
+
+        if handle == self._next_handle - 1:
+            self._next_handle -= 1
+
+        # Resume tail compaction after a prior failure even when the original
+        # handle is already beyond ``_next_handle``. A candidate marker closes
+        # the after-remove/before-frontier gap without an unbounded side map.
+        while self._next_handle:
+            candidate = self._next_handle - 1
+            if self._active[candidate] or self._reserved[candidate]:
+                break
+            candidate_is_free = self._free_handle_is_recorded(candidate)
+            if not candidate_is_free and self._release_pending[candidate] != 2:
+                break
+            self._release_pending[candidate] = 2
+            try:
+                if candidate_is_free:
+                    self._remove_free_handle(candidate)
+            except BaseException:
+                if not self._free_handle_is_recorded(candidate):
+                    self._next_handle -= 1
+                    self._release_pending[candidate] = 0
+                raise
+            else:
+                self._next_handle -= 1
+                self._release_pending[candidate] = 0
+        self._release_pending[handle] = 0
+
+    def insert_reserved(
+        self,
+        handle: int,
+        artifact: LocalArtifactIdentity,
+        record: LocalArtifactVersionRecord | None = None,
+        *,
+        packed_payload: bytes | None = None,
+    ) -> None:
+        """Publish one reserved handle with rollback-safe index installation."""
 
         artifact_digest = _semantic_artifact_digest(artifact.artifact_id, "artifact-")
         version_digest = _semantic_artifact_digest(
@@ -2419,54 +3162,161 @@ class _PackedArtifactStore:
             artifact_digest is None or version_digest is None
         ):  # pragma: no cover - identity invariant
             raise StateError("local artifact semantic IDs are not canonical 128-bit identifiers")
-        payload = _pack_artifact_payload(artifact, record)
-        if self._free_handles:
-            handle = self._free_handles.pop()
-            self._store_payload(handle, payload)
-            self._platforms[handle] = _ARTIFACT_PLATFORM_CODES[artifact.platform]
-            self._write_digest(self._artifact_digests, handle, artifact_digest)
-            self._write_digest(self._version_digests, handle, version_digest)
-        else:
-            handle = self._next_handle
-            if handle >= len(self._payload_lengths):
-                raise StateError("local artifact store exceeded its compiled shard capacity")
-            self._next_handle += 1
-            self._store_payload(handle, payload)
-            self._platforms[handle] = _ARTIFACT_PLATFORM_CODES[artifact.platform]
-            self._write_digest(self._artifact_digests, handle, artifact_digest)
-            self._write_digest(self._version_digests, handle, version_digest)
-        self._primary.add(version_digest, handle, self._version_digest)
-        self._artifact_index.add(
-            artifact_digest,
-            handle,
-            self._artifact_digest,
-            lambda candidate: self._artifact_digest(candidate) == artifact_digest,
+        payload = (
+            _pack_artifact_payload(artifact, record) if packed_payload is None else packed_payload
         )
-        self._application_profile_index.add(
-            _artifact_text_digest(artifact.application_profile_id),
-            handle,
-            self._application_profile_digest,
-            lambda candidate: (
+        if (
+            type(handle) is not int
+            or handle < 0
+            or handle >= self._next_handle
+            or not self._reserved[handle]
+            or self._active[handle]
+        ):
+            raise StateError("local artifact insertion requires an exact reserved handle")
+        prior_high_water = self._high_water
+        application_digest = _artifact_text_digest(artifact.application_profile_id)
+        content_digest = _artifact_text_digest(artifact.content_id)
+        execution_path_key = "\0".join(
+            (
+                artifact.hostname,
+                artifact.principal,
+                artifact.platform,
+                canonical_native_path(artifact.native_path, artifact.platform),
+            )
+        )
+        execution_digest = _artifact_text_digest(execution_path_key)
+
+        def artifact_equals(candidate: int) -> bool:
+            return self._artifact_digest(candidate) == artifact_digest
+
+        def application_equals(candidate: int) -> bool:
+            return (
                 self._field(candidate, self._FIELD_APPLICATION_PROFILE)
                 == artifact.application_profile_id
-            ),
-        )
-        self._content_index.add(
-            _artifact_text_digest(artifact.content_id),
-            handle,
-            self._content_digest,
-            lambda candidate: self._field(candidate, self._FIELD_CONTENT) == artifact.content_id,
-        )
-        execution_path_key = self._execution_path_key(handle)
-        self._execution_path_index.add(
-            _artifact_text_digest(execution_path_key),
-            handle,
-            self._execution_path_digest,
-            lambda candidate: self._execution_path_key(candidate) == execution_path_key,
-        )
+            )
+
+        def content_equals(candidate: int) -> bool:
+            return self._field(candidate, self._FIELD_CONTENT) == artifact.content_id
+
+        def execution_equals(candidate: int) -> bool:
+            return self._execution_path_key(candidate) == execution_path_key
+
+        started: list[
+            tuple[
+                _PackedPrimaryIndex | _PackedInlineEqualityGroups,
+                bytes,
+                Callable[[int], bytes],
+                Callable[[int], bool] | None,
+            ]
+        ] = []
+        try:
+            self._store_payload(handle, payload)
+            self._platforms[handle] = _ARTIFACT_PLATFORM_CODES[artifact.platform]
+            self._write_digest(self._artifact_digests, handle, artifact_digest)
+            self._write_digest(self._version_digests, handle, version_digest)
+            # The shard lock excludes readers while indexes are installed. Marking
+            # the staged columns active lets exact index callbacks inspect them;
+            # every escaping failure clears the flag before the lock is released.
+            self._active[handle] = 1
+
+            started.append((self._primary, version_digest, self._version_digest, None))
+            self._primary.add(version_digest, handle, self._version_digest)
+            started.append(
+                (
+                    self._artifact_index,
+                    artifact_digest,
+                    self._artifact_digest,
+                    artifact_equals,
+                )
+            )
+            self._artifact_index.add(
+                artifact_digest,
+                handle,
+                self._artifact_digest,
+                cast(Callable[[int], bool], started[-1][3]),
+            )
+            started.append(
+                (
+                    self._application_profile_index,
+                    application_digest,
+                    self._application_profile_digest,
+                    application_equals,
+                )
+            )
+            self._application_profile_index.add(
+                application_digest,
+                handle,
+                self._application_profile_digest,
+                application_equals,
+            )
+            started.append(
+                (
+                    self._content_index,
+                    content_digest,
+                    self._content_digest,
+                    content_equals,
+                )
+            )
+            self._content_index.add(
+                content_digest,
+                handle,
+                self._content_digest,
+                content_equals,
+            )
+            started.append(
+                (
+                    self._execution_path_index,
+                    execution_digest,
+                    self._execution_path_digest,
+                    execution_equals,
+                )
+            )
+            self._execution_path_index.add(
+                execution_digest,
+                handle,
+                self._execution_path_digest,
+                execution_equals,
+            )
+        except BaseException:
+            for index, digest, digest_for_handle, equals_handle in reversed(started):
+                if type(index) is _PackedPrimaryIndex:
+                    index.remove(digest, digest_for_handle)
+                else:
+                    index.remove(
+                        digest,
+                        handle,
+                        digest_for_handle,
+                        cast(Callable[[int], bool], equals_handle),
+                    )
+            self._primary.compact(self._version_digest, force=True)
+            self._artifact_index.compact(self._artifact_digest, force=True)
+            self._application_profile_index.compact(
+                self._application_profile_digest,
+                force=True,
+            )
+            self._content_index.compact(self._content_digest, force=True)
+            self._execution_path_index.compact(self._execution_path_digest, force=True)
+            self._payload_lengths[handle] = 0
+            self._payload_overflow.pop(handle, None)
+            if not self._payload_overflow:
+                self._payload_overflow = {}
+            self._platforms[handle] = 0
+            self._write_digest(self._artifact_digests, handle, b"\0" * _ARTIFACT_DIGEST_BYTES)
+            self._write_digest(self._version_digests, handle, b"\0" * _ARTIFACT_DIGEST_BYTES)
+            self._active[handle] = 0
+            self._high_water = prior_high_water
+            raise
         self._live += 1
         self._high_water = max(self._high_water, self._live)
-        return handle
+
+    def next_insert_handle(self) -> int:
+        """Return the exact handle the next locked insertion will consume."""
+
+        if self._free_handle_count:
+            return int(self._free_handles[self._free_handle_count - 1])
+        if self._next_handle >= len(self._payload_lengths):
+            raise StateError("local artifact store exceeded its compiled shard capacity")
+        return self._next_handle
 
     def delete(self, handle: int) -> LocalArtifactIdentity:
         """Delete one live handle and return its reconstructed immutable value."""
@@ -2509,14 +3359,24 @@ class _PackedArtifactStore:
         self._platforms[handle] = 0
         self._write_digest(self._artifact_digests, handle, b"\0" * _ARTIFACT_DIGEST_BYTES)
         self._write_digest(self._version_digests, handle, b"\0" * _ARTIFACT_DIGEST_BYTES)
-        self._free_handles.append(handle)
+        self._active[handle] = 0
+        self._append_free_handle(handle)
         self._live -= 1
         return artifact
+
+    def rollback_reserved_insert(self, handle: int) -> None:
+        """Remove a committed reserved row while retaining its allocator claim."""
+
+        if not self._reserved[handle] or not self._active[handle]:
+            return
+        self.delete(handle)
+        self._remove_free_handle(handle)
+        self.compact_primary(force=True)
 
     def is_live_handle(self, handle: int) -> bool:
         """Return whether one compact handle currently owns an artifact."""
 
-        return 0 <= handle < self._next_handle and self._payload_lengths[handle] > 0
+        return 0 <= handle < self._next_handle and bool(self._active[handle])
 
     def find_version_handle(self, artifact_version_id: str) -> int | None:
         """Return the exact local handle for one canonical version ID."""
@@ -2611,7 +3471,13 @@ class _PackedArtifactStore:
             binary=binary,
         )
 
-    def bind_record(self, handle: int, record: LocalArtifactVersionRecord) -> None:
+    def bind_record(
+        self,
+        handle: int,
+        record: LocalArtifactVersionRecord,
+        *,
+        packed_payload: bytes | None = None,
+    ) -> None:
         """Attach a prevalidated content record to an existing exact artifact."""
 
         current = self.get_by_handle(handle)
@@ -2621,7 +3487,12 @@ class _PackedArtifactStore:
         if existing is not None and existing != record:
             raise ValueError("local artifact version already has different content descriptors")
         if existing is None:
-            self._store_payload(handle, _pack_artifact_payload(current, record))
+            payload = (
+                _pack_artifact_payload(current, record)
+                if packed_payload is None
+                else packed_payload
+            )
+            self._store_payload(handle, payload)
 
     def artifact_version_id(self, handle: int) -> str:
         """Reconstruct one semantic version ID without materializing the full value."""
@@ -2755,6 +3626,7 @@ class _PackedArtifactStore:
                 sys.getsizeof(value)
                 for value in (
                     self,
+                    self._active,
                     self._payload_arena,
                     self._payload_lengths,
                     self._payload_overflow,
@@ -2762,6 +3634,9 @@ class _PackedArtifactStore:
                     self._artifact_digests,
                     self._version_digests,
                     self._free_handles,
+                    self._free_handle_positions,
+                    self._release_pending,
+                    self._reserved,
                 )
             )
             estimated += self._primary.estimated_bytes()
@@ -2773,7 +3648,7 @@ class _PackedArtifactStore:
         return IndexMetrics(
             live_entries=self._live,
             backing_entries=self._next_handle,
-            stale_entries=len(self._free_handles),
+            stale_entries=self._free_handle_count,
             allocated_slots=len(self._payload_lengths),
             secondary_buckets=sum(len(index) for index in indexes),
             max_bucket_size=max((index.max_bucket_size for index in indexes), default=0),
@@ -2895,6 +3770,7 @@ class _CompactArtifactDeadlines:
         return result
 
     def set(self, handle: int, deadline: float) -> None:
+        self.validate_set(handle, deadline)
         self._ensure_handle(handle)
         if self._deadlines[handle] == _EMPTY_ARTIFACT_DEADLINE:
             self._live += 1
@@ -2910,6 +3786,22 @@ class _CompactArtifactDeadlines:
         self._deadlines[handle] = deadline_us
         self._orders[handle] = self._order_counter
         self._heap_push((deadline_us, self._order_counter, handle, generation))
+
+    def validate_set(self, handle: int, deadline: float) -> None:
+        """Preflight one deadline update without mutating heap or columns."""
+
+        if type(handle) is not int or handle < 0 or handle > _COMPACT_HANDLE_LIMIT:
+            raise StateError("local artifact deadline handle exceeds 32 bits")
+        if not math.isfinite(deadline):
+            raise StateError("local artifact deadline must be finite")
+        generation = 1 if handle >= len(self._generations) else self._generations[handle] + 1
+        if generation > _COMPACT_HANDLE_LIMIT:
+            raise StateError("local artifact deadline generation exhausted 32 bits")
+        if self._order_counter >= (1 << 64) - 1:
+            raise StateError("local artifact deadline insertion order exhausted 64 bits")
+        deadline_us = int(round(deadline * 1_000_000))
+        if not -(1 << 63) <= deadline_us < (1 << 63):
+            raise StateError("local artifact deadline exceeds signed 64-bit microseconds")
 
     def pop(self, handle: int, default: bool | None = None) -> bool | None:
         if (
@@ -5802,13 +6694,19 @@ class LocalArtifactVersionRegistry:
         "_capacity",
         "_capacity_lock",
         "_claimed_reservations",
+        "_committing_reservations",
         "_eviction_cursor",
         "_gate",
         "_high_water_mark",
         "_live_count",
         "_next_reservation_id",
+        "_prepared_byte_capacity",
+        "_prepared_capability_locators",
+        "_prepared_commit_locators",
         "_prepared_counts",
+        "_prepared_retained_bytes",
         "_prepared_reservations",
+        "_prepared_secret",
         "_prepared_versions",
         "_retention",
         "_route_compaction_cursor",
@@ -5825,6 +6723,7 @@ class LocalArtifactVersionRegistry:
         capacity: int = _DEFAULT_ARTIFACT_CAPACITY,
         retention: timedelta = _DEFAULT_ARTIFACT_RETENTION,
         shard_count: int = _DEFAULT_ARTIFACT_SHARDS,
+        prepared_byte_capacity: int = _DEFAULT_ARTIFACT_PREPARED_BYTE_CAPACITY,
     ) -> None:
         """Create a bounded artifact registry with an explicit retention horizon."""
 
@@ -5834,8 +6733,11 @@ class LocalArtifactVersionRegistry:
             raise ValueError("retention must be positive")
         if shard_count < 1:
             raise ValueError("shard_count must be at least 1")
+        if prepared_byte_capacity < 1:
+            raise ValueError("prepared_byte_capacity must be at least 1")
         self._capacity = capacity
         self._retention = retention
+        self._prepared_byte_capacity = prepared_byte_capacity
         # Tiny test/embedded registries keep at least four backing slots per
         # owner lane so a short version history does not spill solely because
         # the configured shard count exceeds useful capacity.
@@ -5853,11 +6755,16 @@ class LocalArtifactVersionRegistry:
         self._gate = _ArtifactRegistryGate()
         self._capacity_lock = RLock()
         self._claimed_reservations: set[int] = set()
+        self._committing_reservations: set[int] = set()
         self._live_count = 0
         self._high_water_mark = 0
         self._next_reservation_id = 1
+        self._prepared_capability_locators: dict[int, int] = {}
+        self._prepared_commit_locators: dict[int, tuple[int, ...]] = {}
         self._prepared_counts = [0] * self._shard_count
-        self._prepared_reservations: dict[int, LocalArtifactPublishToken] = {}
+        self._prepared_reservations: dict[int, _LocalArtifactPreparedReservation] = {}
+        self._prepared_retained_bytes = 0
+        self._prepared_secret = secrets.token_bytes(32)
         self._prepared_versions: dict[str, int] = {}
         self._eviction_cursor = 0
         self._route_compaction_cursor = 0
@@ -5964,6 +6871,10 @@ class LocalArtifactVersionRegistry:
                 f"{self._watermark.isoformat()}"
             )
 
+    def _version_has_claimed_preparation_locked(self, artifact_version_id: str) -> bool:
+        reservation_id = self._prepared_versions.get(artifact_version_id)
+        return reservation_id is not None and reservation_id in self._claimed_reservations
+
     def prepare_publish_version(
         self,
         record: LocalArtifactVersionRecord,
@@ -5984,13 +6895,37 @@ class LocalArtifactVersionRegistry:
 
         if not isinstance(record, LocalArtifactVersionRecord):
             raise TypeError("record must be a LocalArtifactVersionRecord")
-        event_time = ensure_utc(observed_at)
+        normalized_event_time = ensure_utc(observed_at)
+        event_time = datetime(
+            normalized_event_time.year,
+            normalized_event_time.month,
+            normalized_event_time.day,
+            normalized_event_time.hour,
+            normalized_event_time.minute,
+            normalized_event_time.second,
+            normalized_event_time.microsecond,
+            tzinfo=UTC,
+            fold=normalized_event_time.fold,
+        )
         effective_retention = retention or self._retention
         if effective_retention <= timedelta(0):
             raise ValueError("artifact retention must be positive")
         retained_until = event_time + effective_retention
         owner_id = lease_owner.strip()
-        normalized_lease_until = ensure_utc(lease_until) if lease_until is not None else None
+        normalized_lease_until: datetime | None = None
+        if lease_until is not None:
+            lease_time = ensure_utc(lease_until)
+            normalized_lease_until = datetime(
+                lease_time.year,
+                lease_time.month,
+                lease_time.day,
+                lease_time.hour,
+                lease_time.minute,
+                lease_time.second,
+                lease_time.microsecond,
+                tzinfo=UTC,
+                fold=lease_time.fold,
+            )
         if bool(owner_id) != (normalized_lease_until is not None):
             raise ValueError("artifact lease_owner and lease_until must be supplied together")
         if normalized_lease_until is not None and normalized_lease_until <= retained_until:
@@ -6000,14 +6935,22 @@ class LocalArtifactVersionRegistry:
 
         # Force all value validation and payload encoding before capacity or
         # an external lifecycle transaction is reserved.
-        _pack_artifact_payload(record.artifact, record)
-        version_id = record.artifact.artifact_version_id
+        public_record = _canonical_local_artifact_record(record)
+        canonical_record = _canonical_local_artifact_record(public_record)
+        _pack_artifact_payload(canonical_record.artifact, canonical_record)
+        version_id = canonical_record.artifact.artifact_version_id
         with self._gate.mutation(), self._capacity_lock:
             self._require_after_watermark_locked(
                 event_time,
                 "artifact observed_at",
                 allow_boundary=True,
             )
+            if len(self._prepared_reservations) >= self._capacity:
+                raise LocalArtifactCapacityError(
+                    "artifact registry has no free slot: prepared-publication member capacity "
+                    "is exhausted; commit, cancel, or prune an unclaimed preparation before "
+                    "retrying"
+                )
             if version_id in self._prepared_versions:
                 raise StateError(
                     f"artifact version {version_id!r} already has a prepared publication"
@@ -6025,8 +6968,8 @@ class LocalArtifactVersionRegistry:
                     else:
                         current = shard.store.get_by_handle(existing_handle)
                         current_record = shard.store.get_record_by_handle(existing_handle)
-                        if current != record.artifact or (
-                            current_record is not None and current_record != record
+                        if current != canonical_record.artifact or (
+                            current_record is not None and current_record != canonical_record
                         ):
                             raise ValueError(
                                 f"artifact version {version_id!r} was already published with "
@@ -6048,13 +6991,13 @@ class LocalArtifactVersionRegistry:
                                 )
             if located is None:
                 existing_handle = None
-                shard = self._reserve_prepared_capacity_slot_locked(record.artifact.artifact_id)
-                self._prepared_counts[shard.shard_id] += 1
+                shard = self._reserve_prepared_capacity_slot_locked(
+                    canonical_record.artifact.artifact_id
+                )
 
             reservation_id = self._next_reservation_id
-            self._next_reservation_id += 1
             token = LocalArtifactPublishToken(
-                record=record,
+                record=public_record,
                 observed_at=event_time,
                 retained_until=retained_until,
                 lease_owner=owner_id,
@@ -6064,8 +7007,81 @@ class LocalArtifactVersionRegistry:
                 _shard_id=shard.shard_id,
                 _existing_handle=existing_handle,
             )
-            self._prepared_reservations[reservation_id] = token
-            self._prepared_versions[version_id] = reservation_id
+            token = replace(
+                token,
+                _integrity=_local_artifact_publish_token_integrity(
+                    self._prepared_secret,
+                    token,
+                ),
+            )
+            canonical_token = replace(token, record=canonical_record)
+            canonical_preimage = _local_artifact_publish_token_preimage(canonical_token)
+            retained_bytes = len(canonical_preimage)
+            if retained_bytes > self._prepared_byte_capacity:
+                raise LocalArtifactCapacityError(
+                    "artifact prepared-publication request-byte capacity exceeded: "
+                    f"{retained_bytes} > {self._prepared_byte_capacity}"
+                )
+            if self._prepared_retained_bytes + retained_bytes > self._prepared_byte_capacity:
+                raise LocalArtifactCapacityError(
+                    "artifact prepared-publication retained-byte capacity is exhausted; commit, "
+                    "cancel, or prune an unclaimed preparation before retrying"
+                )
+            # Complete every fallible capability allocation before reserving a
+            # backing handle or changing any preparation census.
+            token_reference = ref(token)
+            record_digest = hashlib.sha256(
+                _local_artifact_record_preimage(canonical_record)
+            ).hexdigest()
+            reserved_handle: int | None = None
+            try:
+                if existing_handle is None:
+                    with shard.lock:
+                        reserved_handle = shard.store.reserve_handle()
+                reservation = _LocalArtifactPreparedReservation(
+                    token_ref=token_reference,
+                    token_id=id(token),
+                    reservation_id=reservation_id,
+                    canonical_token=canonical_token,
+                    record_digest=record_digest,
+                    retained_bytes=retained_bytes,
+                    reserved_handle=reserved_handle,
+                )
+            except BaseException:
+                if reserved_handle is not None:
+                    with shard.lock:
+                        shard.store.release_reserved_handle(reserved_handle)
+                raise
+            count_installed = False
+            bytes_installed = False
+            try:
+                self._prepared_reservations[reservation_id] = reservation
+                self._prepared_capability_locators[id(token)] = reservation_id
+                self._prepared_versions[version_id] = reservation_id
+                if existing_handle is None:
+                    self._prepared_counts[shard.shard_id] += 1
+                    count_installed = True
+                self._prepared_retained_bytes += retained_bytes
+                bytes_installed = True
+                self._next_reservation_id += 1
+            except BaseException:
+                self._prepared_reservations.pop(reservation_id, None)
+                self._prepared_capability_locators.pop(id(token), None)
+                if self._prepared_versions.get(version_id) == reservation_id:
+                    self._prepared_versions.pop(version_id, None)
+                if existing_handle is None:
+                    if count_installed:
+                        self._prepared_counts[shard.shard_id] -= 1
+                    if reserved_handle is not None:
+                        with shard.lock:
+                            shard.store.release_reserved_handle(reserved_handle)
+                if bytes_installed:
+                    self._prepared_retained_bytes -= retained_bytes
+                if not self._prepared_reservations:
+                    self._prepared_reservations = {}
+                    self._prepared_capability_locators = {}
+                    self._prepared_versions = {}
+                raise
             return token
 
     def _reserve_prepared_capacity_slot_locked(self, artifact_id: str) -> _LocalArtifactShard:
@@ -6083,33 +7099,153 @@ class LocalArtifactVersionRegistry:
     def _active_prepared_locked(
         self,
         token: LocalArtifactPublishToken,
-    ) -> LocalArtifactPublishToken:
-        if token._registry_token != id(self):
-            raise StateError("local artifact publish token belongs to another registry")
-        active = self._prepared_reservations.get(token._reservation_id)
-        if active is not token:
+    ) -> _LocalArtifactPreparedReservation:
+        if type(token) is not LocalArtifactPublishToken:
+            raise StateError("local artifact publish token has an invalid type")
+        reservation_id = self._prepared_capability_locators.get(id(token))
+        if reservation_id is None:
             raise StateError("local artifact publish token is stale or already consumed")
+        active = self._prepared_reservations.get(reservation_id)
+        if active is None or active.token_ref() is not token:
+            self._prepared_capability_locators.pop(id(token), None)
+            raise StateError("local artifact publish token is stale or already consumed")
+        expected = _local_artifact_publish_token_integrity(self._prepared_secret, token)
+        if not hmac.compare_digest(token._integrity, active.canonical_token._integrity) or not (
+            hmac.compare_digest(expected, active.canonical_token._integrity)
+        ):
+            raise StateError("local artifact publish token integrity validation failed")
         return active
 
-    def _release_prepared_locked(self, token: LocalArtifactPublishToken) -> None:
+    def _release_prepared_locked(
+        self,
+        reservation: _LocalArtifactPreparedReservation,
+        *,
+        allow_committing: bool = False,
+        preserve_commit_locator: bool = False,
+    ) -> bool:
         """Release reservation metadata while the capacity lock is held."""
 
-        active = self._prepared_reservations.pop(token._reservation_id, None)
-        if active is not token:
-            return
-        self._claimed_reservations.discard(token._reservation_id)
+        if reservation.committing and not allow_committing:
+            return False
+        if self._prepared_reservations.get(reservation.reservation_id) is not reservation:
+            return False
+        token = reservation.canonical_token
         version_id = token.record.artifact.artifact_version_id
-        if self._prepared_versions.get(version_id) == token._reservation_id:
-            self._prepared_versions.pop(version_id)
+        if self._prepared_retained_bytes < reservation.retained_bytes:
+            raise StateError("local artifact prepared retained-byte census is inconsistent")
+        remaining_retained_bytes = self._prepared_retained_bytes - reservation.retained_bytes
+        remaining_prepared_count: int | None = None
+        empty_state: (
+            tuple[
+                dict[int, _LocalArtifactPreparedReservation],
+                dict[int, int],
+                dict[int, tuple[int, ...]],
+                dict[str, int],
+                set[int],
+                set[int],
+            ]
+            | None
+        ) = None
+        if len(self._prepared_reservations) == 1:
+            # Allocate replacement containers before the first backing mutation
+            # so locator-last metadata cleanup contains no allocating step.
+            empty_state = ({}, {}, {}, {}, set(), set())
+
+        backing_error: BaseException | None = None
         if token._existing_handle is None:
-            self._prepared_counts[token._shard_id] -= 1
+            if reservation.reserved_handle is None:  # pragma: no cover - reservation invariant
+                raise StateError("local artifact reservation lost its exact backing handle")
+            if self._prepared_counts[token._shard_id] <= 0:
+                raise StateError("local artifact prepared slot census is inconsistent")
+            remaining_prepared_count = self._prepared_counts[token._shard_id] - 1
+            shard = self._shards[token._shard_id]
+            with shard.lock:
+                handle = reservation.reserved_handle
+                if not reservation.backing_released:
+                    was_live = shard.store.is_live_handle(handle)
+                    try:
+                        if was_live:
+                            if shard.store._reserved[handle]:
+                                shard.store.consume_reserved_handle(handle)
+                            elif self._prepared_backing_release_completed(
+                                shard.store,
+                                handle,
+                                was_live=True,
+                            ):
+                                reservation.backing_released = True
+                            else:  # pragma: no cover - store ownership invariant
+                                raise StateError(
+                                    "local artifact committed backing release is incomplete"
+                                )
+                        elif shard.store._reserved[handle]:
+                            shard.store.release_reserved_handle(handle)
+                        elif self._prepared_backing_release_completed(
+                            shard.store,
+                            handle,
+                            was_live=False,
+                        ):
+                            reservation.backing_released = True
+                        else:
+                            shard.store.release_reserved_handle(handle)
+                    except BaseException as error:
+                        if not self._prepared_backing_release_completed(
+                            shard.store,
+                            handle,
+                            was_live=was_live,
+                        ):
+                            raise
+                        reservation.backing_released = True
+                        backing_error = error
+                    else:
+                        reservation.backing_released = True
+
+        # The backing primitive is complete. All following operations are
+        # fixed-size built-in mutations; trusted locators disappear last.
+        if token._existing_handle is None:
+            if remaining_prepared_count is None:  # pragma: no cover - branch invariant
+                raise StateError("local artifact prepared slot release lost its census")
+            self._prepared_counts[token._shard_id] = remaining_prepared_count
+        self._prepared_retained_bytes = remaining_retained_bytes
+        if self._prepared_versions.get(version_id) == reservation.reservation_id:
+            self._prepared_versions.pop(version_id)
+        self._claimed_reservations.discard(reservation.reservation_id)
+        self._committing_reservations.discard(reservation.reservation_id)
+        self._prepared_capability_locators.pop(reservation.token_id, None)
+        if reservation.commit_id is not None and not preserve_commit_locator:
+            self._prepared_commit_locators.pop(reservation.commit_id, None)
+        self._prepared_reservations.pop(reservation.reservation_id, None)
+        if empty_state is not None:
+            (
+                self._prepared_reservations,
+                self._prepared_capability_locators,
+                self._prepared_commit_locators,
+                self._prepared_versions,
+                self._claimed_reservations,
+                self._committing_reservations,
+            ) = empty_state
+            self._prepared_retained_bytes = 0
+        if backing_error is not None:
+            raise backing_error
+        return True
+
+    @staticmethod
+    def _prepared_backing_release_completed(
+        store: _PackedArtifactStore,
+        handle: int,
+        *,
+        was_live: bool,
+    ) -> bool:
+        """Return whether one reserved-handle primitive completed before raising."""
+
+        return store.reserved_release_is_complete(handle, was_live=was_live)
 
     def _pending_after_prepared_release_locked(
         self,
-        token: LocalArtifactPublishToken,
+        reservation: _LocalArtifactPreparedReservation,
     ) -> tuple[_LocalArtifactShard, str] | None:
         """Return a due visible version unblocked by releasing a reservation."""
 
+        token = reservation.canonical_token
         if token._existing_handle is None:
             return None
         shard = self._shards[token._shard_id]
@@ -6119,127 +7255,1330 @@ class LocalArtifactVersionRegistry:
                 return shard, version_id
         return None
 
-    def cancel_prepared(self, token: LocalArtifactPublishToken) -> bool:
-        """Cancel one uncommitted reservation without publishing any record."""
+    def _prune_prepared_publications_locked(self) -> int:
+        """Release ownerless or watermark-stale unclaimed reservations."""
 
-        pending: tuple[_LocalArtifactShard, str] | None = None
+        released = 0
+        for reservation_id in tuple(self._prepared_reservations):
+            reservation = self._prepared_reservations.get(reservation_id)
+            if reservation is None or reservation_id in self._claimed_reservations:
+                continue
+            owner_is_gone = reservation.token_ref() is None
+            observed_at = reservation.canonical_token.observed_at
+            watermark_is_stale = self._watermark is not None and observed_at < self._watermark
+            if not owner_is_gone and not watermark_is_stale:
+                continue
+            self._release_prepared_locked(reservation)
+            pending = self._pending_after_prepared_release_locked(reservation)
+            if pending is not None:
+                self._evict_pending_version(*pending)
+            released += 1
+        return released
+
+    def prune_prepared_publications(self) -> int:
+        """Release ownerless or watermark-stale unclaimed publication capabilities."""
+
         with self._gate.mutation(), self._capacity_lock:
+            return self._prune_prepared_publications_locked()
+
+    def authenticates_prepared_publication(self, token: object) -> bool:
+        """Totally authenticate one exact active prepared-publication capability."""
+
+        if type(token) is not LocalArtifactPublishToken:
+            return False
+        with self._capacity_lock:
             try:
                 self._active_prepared_locked(token)
-            except StateError:
+            except (
+                AssertionError,
+                AttributeError,
+                OverflowError,
+                RecursionError,
+                StateError,
+                TypeError,
+                ValueError,
+            ):
                 return False
-            if token._reservation_id in self._claimed_reservations:
+            return True
+
+    def authenticates_publication_receipt(
+        self,
+        receipt: object,
+        *,
+        publication_token: str | None = None,
+    ) -> bool:
+        """Totally authenticate one committed publication receipt and optional binding."""
+
+        if type(receipt) is not LocalArtifactPublicationReceipt:
+            return False
+        if publication_token is not None and type(publication_token) is not str:
+            return False
+        try:
+            expected = _local_artifact_receipt_integrity(self._prepared_secret, receipt)
+            return (
+                receipt._registry_token == id(self)
+                and hmac.compare_digest(receipt._integrity, expected)
+                and (
+                    publication_token is None
+                    or hmac.compare_digest(receipt.publication_token, publication_token)
+                )
+            )
+        except (
+            AssertionError,
+            AttributeError,
+            OverflowError,
+            RecursionError,
+            StateError,
+            TypeError,
+            ValueError,
+        ):
+            return False
+
+    def authenticates_publication_group_receipt(
+        self,
+        receipt: object,
+        *,
+        publication_tokens: tuple[str, ...] | None = None,
+    ) -> bool:
+        """Totally authenticate an ordered group receipt and optional token binding."""
+
+        if type(receipt) is not LocalArtifactPublicationGroupReceipt:
+            return False
+        if publication_tokens is not None and (
+            type(publication_tokens) is not tuple
+            or any(type(token) is not str for token in publication_tokens)
+        ):
+            return False
+        try:
+            expected = _local_artifact_group_receipt_integrity(self._prepared_secret, receipt)
+            members_authenticate = all(
+                self.authenticates_publication_receipt(
+                    member,
+                    publication_token=token,
+                )
+                for member, token in zip(
+                    receipt.receipts,
+                    receipt.publication_tokens,
+                    strict=True,
+                )
+            )
+            tokens_match = publication_tokens is None or (
+                len(receipt.publication_tokens) == len(publication_tokens)
+                and all(
+                    hmac.compare_digest(actual, requested)
+                    for actual, requested in zip(
+                        receipt.publication_tokens,
+                        publication_tokens,
+                        strict=True,
+                    )
+                )
+            )
+            return (
+                receipt._registry_token == id(self)
+                and hmac.compare_digest(receipt._integrity, expected)
+                and members_authenticate
+                and tokens_match
+            )
+        except (
+            AssertionError,
+            AttributeError,
+            OverflowError,
+            RecursionError,
+            StateError,
+            TypeError,
+            ValueError,
+        ):
+            return False
+
+    def cancel_prepared(self, token: object) -> bool:
+        """Cancel one uncommitted reservation without publishing any record."""
+
+        pending: list[tuple[_LocalArtifactShard, str]] = []
+        cleanup_errors: list[BaseException] = []
+        intact = False
+        with self._gate.mutation(), self._capacity_lock:
+            if type(token) is not LocalArtifactPublishToken:
                 return False
-            self._release_prepared_locked(token)
-            pending = self._pending_after_prepared_release_locked(token)
-        if pending is not None:
-            self._evict_pending_version(*pending)
-        return True
+            reservation_id = self._prepared_capability_locators.get(id(token))
+            reservation = (
+                None if reservation_id is None else self._prepared_reservations.get(reservation_id)
+            )
+            if reservation is None:
+                return False
+            if reservation.token_ref() is not token:
+                if reservation.token_ref() is None:
+                    cleanup_errors.extend(
+                        self._release_failed_claim_locked((reservation,), pending)
+                    )
+                else:
+                    self._prepared_capability_locators.pop(id(token), None)
+                intact = False
+            elif reservation.reservation_id in self._claimed_reservations:
+                return False
+            else:
+                try:
+                    self._active_prepared_locked(token)
+                except (
+                    AssertionError,
+                    AttributeError,
+                    OverflowError,
+                    RecursionError,
+                    StateError,
+                    TypeError,
+                    ValueError,
+                ):
+                    intact = False
+                else:
+                    intact = True
+                cleanup_errors.extend(self._release_failed_claim_locked((reservation,), pending))
+        cleanup_errors.extend(self._evict_failed_claim_pending(pending))
+        if cleanup_errors:
+            primary = cleanup_errors[0]
+            for cleanup_error in cleanup_errors[1:]:
+                primary.add_note(
+                    "local artifact cancellation cleanup also raised "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            raise primary
+        return intact
 
     @contextmanager
     def prepared_publication(
         self,
         token: LocalArtifactPublishToken,
     ) -> Iterator[LocalArtifactPreparedCommit]:
-        """Claim a coupled transaction and yield its no-fail commit capability.
+        """Claim a coupled transaction and yield its artifact-first capability.
 
         Claiming is a short artifact-only critical section. No artifact lock is
-        retained while the caller performs its StateManager/LifecycleRegistry
-        transaction. The caller invokes ``commit()`` last, establishing the
-        only nested order as StateManager -> LifecycleRegistry -> artifact.
-        A stale token is rejected before the context body runs; an exception or
-        omitted commit cancels the claim and publishes nothing.
+        retained while the caller claims and authenticates the other owners.
+        The caller invokes ``commit_no_fail()`` before any irreversible external
+        owner commit. An artifact exception restores local state; a stale token,
+        context exception, or omitted commit cancels the claim and publishes
+        nothing.
         """
 
-        self._claim_prepared(token)
-        transaction = LocalArtifactPreparedCommit(self, token)
+        transaction = self._claim_prepared(token)
         try:
             yield transaction
-        finally:
-            if not transaction.committed:
-                self._cancel_claimed(token)
-            transaction._close()
+        except BaseException as primary_error:
+            # Registry state, not caller-mutable transaction projections, is
+            # authoritative for cleanup. A committed reservation is already
+            # absent; every other claimed reservation is released here.
+            try:
+                self._cancel_claimed(transaction)
+            except BaseException as cleanup_error:
+                primary_error.add_note(
+                    "local artifact claim cleanup also raised "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            try:
+                transaction._close()
+            except BaseException as close_error:  # pragma: no cover - primitive assignment
+                primary_error.add_note(
+                    "local artifact capability close also raised "
+                    f"{type(close_error).__name__}: {close_error}"
+                )
+            raise
+        else:
+            cleanup_error: BaseException | None = None
+            try:
+                self._cancel_claimed(transaction)
+            except BaseException as error:
+                cleanup_error = error
+            try:
+                transaction._close()
+            except BaseException as close_error:  # pragma: no cover - primitive assignment
+                if cleanup_error is not None:
+                    cleanup_error.add_note(
+                        "local artifact capability close also raised "
+                        f"{type(close_error).__name__}: {close_error}"
+                    )
+                else:
+                    raise
+            if cleanup_error is not None:
+                raise cleanup_error
 
-    def _claim_prepared(self, token: LocalArtifactPublishToken) -> None:
-        """Validate and claim one token without retaining locks across the caller."""
+    @contextmanager
+    def prepared_publication_group(
+        self,
+        tokens: Sequence[LocalArtifactPublishToken],
+    ) -> Iterator[LocalArtifactPreparedGroupCommit]:
+        """Claim a nonempty ordered token group and yield its all-or-zero commit."""
 
-        pending: tuple[_LocalArtifactShard, str] | None = None
+        token_tuple = tuple(islice(tokens, self._capacity + 1))
+        if len(token_tuple) > self._capacity:
+            raise LocalArtifactCapacityError(
+                "local artifact publication group exceeds the registry member capacity"
+            )
+        transaction = self._claim_prepared_group(token_tuple)
+        try:
+            yield transaction
+        except BaseException as primary_error:
+            try:
+                self._cancel_claimed_group(transaction)
+            except BaseException as cleanup_error:
+                primary_error.add_note(
+                    "local artifact group cleanup also raised "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            try:
+                transaction._close()
+            except BaseException as close_error:  # pragma: no cover - primitive assignment
+                primary_error.add_note(
+                    "local artifact group capability close also raised "
+                    f"{type(close_error).__name__}: {close_error}"
+                )
+            raise
+        else:
+            cleanup_error: BaseException | None = None
+            try:
+                self._cancel_claimed_group(transaction)
+            except BaseException as error:
+                cleanup_error = error
+            try:
+                transaction._close()
+            except BaseException as close_error:  # pragma: no cover - primitive assignment
+                if cleanup_error is not None:
+                    cleanup_error.add_note(
+                        "local artifact group capability close also raised "
+                        f"{type(close_error).__name__}: {close_error}"
+                    )
+                else:
+                    raise
+            if cleanup_error is not None:
+                raise cleanup_error
+
+    def _release_failed_claim_locked(
+        self,
+        reservations: Sequence[_LocalArtifactPreparedReservation],
+        pending: list[tuple[_LocalArtifactShard, str]],
+    ) -> tuple[BaseException, ...]:
+        """Best-effort every failed pre-yield group release and retain cleanup errors."""
+
+        failures: list[BaseException] = []
+        released_ids: set[int] = set()
+        for reservation in reversed(reservations):
+            try:
+                self._release_prepared_locked(reservation)
+            except BaseException as error:
+                failures.append(error)
+            if self._prepared_reservations.get(reservation.reservation_id) is not reservation:
+                released_ids.add(reservation.reservation_id)
+                try:
+                    due = self._pending_after_prepared_release_locked(reservation)
+                    if due is not None:
+                        pending.append(due)
+                except BaseException as error:
+                    failures.append(error)
+
+        # A one-shot cleanup fault before mutation must not strand a claim that
+        # has no context-manager finalizer yet. Retry only exact live members.
+        for reservation in reversed(reservations):
+            if self._prepared_reservations.get(reservation.reservation_id) is not reservation:
+                continue
+            try:
+                self._release_prepared_locked(reservation)
+            except BaseException as error:
+                failures.append(error)
+            if (
+                self._prepared_reservations.get(reservation.reservation_id) is not reservation
+                and reservation.reservation_id not in released_ids
+            ):
+                released_ids.add(reservation.reservation_id)
+                try:
+                    due = self._pending_after_prepared_release_locked(reservation)
+                    if due is not None:
+                        pending.append(due)
+                except BaseException as error:
+                    failures.append(error)
+        return tuple(failures)
+
+    def _evict_failed_claim_pending(
+        self,
+        pending: Sequence[tuple[_LocalArtifactShard, str]],
+    ) -> tuple[BaseException, ...]:
+        """Attempt every due eviction and retry one-shot cleanup faults once."""
+
+        failures: list[BaseException] = []
+        retry: list[tuple[_LocalArtifactShard, str]] = []
+        for shard, version_id in pending:
+            try:
+                self._evict_pending_version(shard, version_id)
+            except BaseException as error:
+                failures.append(error)
+                retry.append((shard, version_id))
+        for shard, version_id in retry:
+            try:
+                self._evict_pending_version(shard, version_id)
+            except BaseException as error:
+                failures.append(error)
+        return tuple(failures)
+
+    def _claim_prepared_group(
+        self,
+        tokens: tuple[LocalArtifactPublishToken, ...],
+    ) -> LocalArtifactPreparedGroupCommit:
+        """Authenticate and claim every ordered group member under one registry boundary."""
+
+        if not tokens:
+            raise ValueError("local artifact publication group must contain at least one token")
+        if len(tokens) > self._capacity:
+            raise LocalArtifactCapacityError(
+                "local artifact publication group exceeds the registry member capacity"
+            )
+        if any(type(token) is not LocalArtifactPublishToken for token in tokens):
+            raise TypeError("local artifact publication group tokens must be exact publish tokens")
+        token_ids = tuple(id(token) for token in tokens)
+        if len(set(token_ids)) != len(token_ids):
+            raise StateError("local artifact publication group contains a duplicate token")
+
+        pending: list[tuple[_LocalArtifactShard, str]] = []
+        transaction: LocalArtifactPreparedGroupCommit | None = None
+        claimant_thread_id = get_ident()
+        primary_error: BaseException | None = None
         try:
             with self._gate.mutation(), self._capacity_lock:
-                self._active_prepared_locked(token)
-                if token._reservation_id in self._claimed_reservations:
+                reservations: list[_LocalArtifactPreparedReservation] = []
+                for token in tokens:
+                    reservation_id = self._prepared_capability_locators.get(id(token))
+                    reservation = (
+                        None
+                        if reservation_id is None
+                        else self._prepared_reservations.get(reservation_id)
+                    )
+                    if reservation is None or reservation.token_ref() is not token:
+                        raise StateError("local artifact publication group contains a stale token")
+                    if reservation.reservation_id in self._claimed_reservations:
+                        raise StateError(
+                            "local artifact publication group contains an already claimed token"
+                        )
+                    reservations.append(reservation)
+                reservation_ids = tuple(reservation.reservation_id for reservation in reservations)
+                if len(set(reservation_ids)) != len(reservation_ids):
+                    raise StateError(
+                        "local artifact publication group resolves duplicate reservations"
+                    )
+                if (
+                    sum(reservation.retained_bytes for reservation in reservations)
+                    > self._prepared_byte_capacity
+                ):
+                    raise LocalArtifactCapacityError(
+                        "local artifact publication group exceeds retained-byte capacity"
+                    )
+
+                plans: list[_LocalArtifactPreparedCommitPlan] = []
+                try:
+                    for token, reservation in zip(tokens, reservations, strict=True):
+                        self._active_prepared_locked(token)
+                        self._require_after_watermark_locked(
+                            reservation.canonical_token.observed_at,
+                            "artifact observed_at",
+                            allow_boundary=True,
+                        )
+                        trusted_token = reservation.canonical_token
+                        shard = self._shards[trusted_token._shard_id]
+                        with shard.lock:
+                            if trusted_token._existing_handle is not None and (
+                                not shard.store.is_live_handle(trusted_token._existing_handle)
+                                or shard.store.artifact_version_id(trusted_token._existing_handle)
+                                != trusted_token.record.artifact.artifact_version_id
+                            ):
+                                raise StateError(
+                                    "prepared local artifact group member was invalidated"
+                                )
+                            plans.append(self._prepare_claimed_commit_locked(reservation, shard))
+                    publication_tokens = tuple(
+                        reservation.canonical_token.publication_token
+                        for reservation in reservations
+                    )
+                    group_receipt = LocalArtifactPublicationGroupReceipt(
+                        receipts=tuple(plan.receipt for plan in plans),
+                        publication_tokens=publication_tokens,
+                        _registry_token=id(self),
+                    )
+                    group_receipt = replace(
+                        group_receipt,
+                        _integrity=_local_artifact_group_receipt_integrity(
+                            self._prepared_secret,
+                            group_receipt,
+                        ),
+                    )
+                    transaction = LocalArtifactPreparedGroupCommit(
+                        self,
+                        publication_tokens,
+                        claimant_thread_id,
+                        group_receipt,
+                    )
+                    transaction_reference = ref(transaction)
+                except BaseException as error:
+                    for cleanup_error in self._release_failed_claim_locked(
+                        reservations,
+                        pending,
+                    ):
+                        error.add_note(
+                            "local artifact group claim cleanup also raised "
+                            f"{type(cleanup_error).__name__}: {cleanup_error}"
+                        )
+                    raise
+
+                try:
+                    for reservation, plan in zip(reservations, plans, strict=True):
+                        self._claimed_reservations.add(reservation.reservation_id)
+                        reservation.claimed_by = claimant_thread_id
+                        reservation.commit_ref = transaction_reference
+                        reservation.commit_id = id(transaction)
+                        reservation.commit_plan = plan
+                        reservation.group_receipt = group_receipt
+                    self._prepared_commit_locators[id(transaction)] = reservation_ids
+                except BaseException as error:
+                    self._prepared_commit_locators.pop(id(transaction), None)
+                    for reservation in reservations:
+                        self._claimed_reservations.discard(reservation.reservation_id)
+                        reservation.claimed_by = None
+                        reservation.commit_ref = None
+                        reservation.commit_id = None
+                        reservation.commit_plan = None
+                        reservation.group_receipt = None
+                    for cleanup_error in self._release_failed_claim_locked(
+                        reservations,
+                        pending,
+                    ):
+                        error.add_note(
+                            "local artifact group claim cleanup also raised "
+                            f"{type(cleanup_error).__name__}: {cleanup_error}"
+                        )
+                    raise
+        except BaseException as error:
+            primary_error = error
+
+        eviction_errors = self._evict_failed_claim_pending(pending)
+        if primary_error is not None:
+            for cleanup_error in eviction_errors:
+                primary_error.add_note(
+                    "local artifact group pending-eviction cleanup also raised "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            raise primary_error
+        if eviction_errors:
+            primary_eviction_error = eviction_errors[0]
+            for cleanup_error in eviction_errors[1:]:
+                primary_eviction_error.add_note(
+                    "local artifact group pending-eviction cleanup also raised "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            raise primary_eviction_error
+        if transaction is None:  # pragma: no cover - successful claim invariant
+            raise StateError("local artifact group claim produced no commit capability")
+        return transaction
+
+    def _claim_prepared(
+        self,
+        token: LocalArtifactPublishToken,
+    ) -> LocalArtifactPreparedCommit:
+        """Validate and claim one token without retaining locks across the caller."""
+
+        pending: list[tuple[_LocalArtifactShard, str]] = []
+        transaction: LocalArtifactPreparedCommit | None = None
+        claimant_thread_id = get_ident()
+        primary_error: BaseException | None = None
+        try:
+            with self._gate.mutation(), self._capacity_lock:
+                reservation_id = self._prepared_capability_locators.get(id(token))
+                reservation = (
+                    None
+                    if reservation_id is None
+                    else self._prepared_reservations.get(reservation_id)
+                )
+                if reservation is None or reservation.token_ref() is not token:
+                    raise StateError("local artifact publish token is stale or already consumed")
+                if reservation.reservation_id in self._claimed_reservations:
                     raise StateError("local artifact publish token is already claimed")
                 try:
+                    self._active_prepared_locked(token)
                     self._require_after_watermark_locked(
-                        token.observed_at,
+                        reservation.canonical_token.observed_at,
                         "artifact observed_at",
                         allow_boundary=True,
                     )
-                except StateError:
-                    self._release_prepared_locked(token)
-                    pending = self._pending_after_prepared_release_locked(token)
-                    raise
-                shard = self._shards[token._shard_id]
-                with shard.lock:
-                    if token._existing_handle is not None and (
-                        not shard.store.is_live_handle(token._existing_handle)
-                        or shard.store.artifact_version_id(token._existing_handle)
-                        != token.record.artifact.artifact_version_id
+                    trusted_token = reservation.canonical_token
+                    shard = self._shards[trusted_token._shard_id]
+                    with shard.lock:
+                        if trusted_token._existing_handle is not None and (
+                            not shard.store.is_live_handle(trusted_token._existing_handle)
+                            or shard.store.artifact_version_id(trusted_token._existing_handle)
+                            != trusted_token.record.artifact.artifact_version_id
+                        ):
+                            raise StateError("prepared local artifact version was invalidated")
+                        commit_plan = self._prepare_claimed_commit_locked(reservation, shard)
+                    transaction = LocalArtifactPreparedCommit(
+                        self,
+                        trusted_token.publication_token,
+                        claimant_thread_id,
+                        commit_plan.receipt,
+                    )
+                    transaction_reference = ref(transaction)
+                except BaseException as error:
+                    for cleanup_error in self._release_failed_claim_locked(
+                        (reservation,),
+                        pending,
                     ):
-                        self._release_prepared_locked(token)
-                        raise StateError("prepared local artifact version was invalidated")
-                self._claimed_reservations.add(token._reservation_id)
-        finally:
-            if pending is not None:
-                self._evict_pending_version(*pending)
+                        error.add_note(
+                            "local artifact claim cleanup also raised "
+                            f"{type(cleanup_error).__name__}: {cleanup_error}"
+                        )
+                    raise
+                try:
+                    self._claimed_reservations.add(reservation.reservation_id)
+                    reservation.claimed_by = claimant_thread_id
+                    reservation.commit_ref = transaction_reference
+                    reservation.commit_id = id(transaction)
+                    reservation.commit_plan = commit_plan
+                    self._prepared_commit_locators[id(transaction)] = (reservation.reservation_id,)
+                except BaseException as error:
+                    self._prepared_commit_locators.pop(id(transaction), None)
+                    self._claimed_reservations.discard(reservation.reservation_id)
+                    reservation.claimed_by = None
+                    reservation.commit_ref = None
+                    reservation.commit_id = None
+                    reservation.commit_plan = None
+                    for cleanup_error in self._release_failed_claim_locked(
+                        (reservation,),
+                        pending,
+                    ):
+                        error.add_note(
+                            "local artifact claim cleanup also raised "
+                            f"{type(cleanup_error).__name__}: {cleanup_error}"
+                        )
+                    raise
+        except BaseException as error:
+            primary_error = error
 
-    def _cancel_claimed(self, token: LocalArtifactPublishToken) -> None:
+        eviction_errors = self._evict_failed_claim_pending(pending)
+        if primary_error is not None:
+            for cleanup_error in eviction_errors:
+                primary_error.add_note(
+                    "local artifact claim pending-eviction cleanup also raised "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            raise primary_error
+        if eviction_errors:
+            primary_eviction_error = eviction_errors[0]
+            for cleanup_error in eviction_errors[1:]:
+                primary_eviction_error.add_note(
+                    "local artifact claim pending-eviction cleanup also raised "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            raise primary_eviction_error
+        if transaction is None:  # pragma: no cover - successful claim invariant
+            raise StateError("local artifact prepared claim produced no commit capability")
+        return transaction
+
+    def _active_claimed_commit_locked(
+        self,
+        transaction: LocalArtifactPreparedCommit,
+    ) -> _LocalArtifactPreparedReservation:
+        """Resolve one exact context-only commit capability without caller token fields."""
+
+        if type(transaction) is not LocalArtifactPreparedCommit:
+            raise StateError("local artifact prepared commit has an invalid type")
+        reservation_ids = self._prepared_commit_locators.get(id(transaction))
+        reservation_id = (
+            None if reservation_ids is None or len(reservation_ids) != 1 else reservation_ids[0]
+        )
+        reservation = (
+            None if reservation_id is None else self._prepared_reservations.get(reservation_id)
+        )
+        if (
+            reservation is None
+            or reservation.commit_ref is None
+            or reservation.commit_ref() is not transaction
+        ):
+            raise StateError("local artifact prepared commit is stale or already consumed")
+        if reservation.reservation_id not in self._claimed_reservations:
+            raise StateError("local artifact publish token is not claimed")
+        return reservation
+
+    def _active_claimed_group_locked(
+        self,
+        transaction: LocalArtifactPreparedGroupCommit,
+    ) -> tuple[_LocalArtifactPreparedReservation, ...]:
+        """Resolve one exact group capability entirely through registry-owned locators."""
+
+        if type(transaction) is not LocalArtifactPreparedGroupCommit:
+            raise StateError("local artifact prepared group commit has an invalid type")
+        reservation_ids = self._prepared_commit_locators.get(id(transaction))
+        if reservation_ids is None or not reservation_ids:
+            raise StateError("local artifact prepared group commit is stale or already consumed")
+        reservations: list[_LocalArtifactPreparedReservation] = []
+        for reservation_id in reservation_ids:
+            reservation = self._prepared_reservations.get(reservation_id)
+            if (
+                reservation is None
+                or reservation.commit_ref is None
+                or reservation.commit_ref() is not transaction
+                or reservation.reservation_id not in self._claimed_reservations
+            ):
+                raise StateError(
+                    "local artifact prepared group commit is stale or already consumed"
+                )
+            reservations.append(reservation)
+        return tuple(reservations)
+
+    def _remaining_claimed_group_locked(
+        self,
+        transaction: LocalArtifactPreparedGroupCommit,
+    ) -> tuple[_LocalArtifactPreparedReservation, ...]:
+        """Resolve the still-live suffix of a group during failure cleanup."""
+
+        if type(transaction) is not LocalArtifactPreparedGroupCommit:
+            raise StateError("local artifact prepared group commit has an invalid type")
+        reservation_ids = self._prepared_commit_locators.get(id(transaction))
+        if reservation_ids is None:
+            return ()
+        remaining: list[_LocalArtifactPreparedReservation] = []
+        for reservation_id in reservation_ids:
+            reservation = self._prepared_reservations.get(reservation_id)
+            if reservation is None:
+                continue
+            if (
+                reservation.commit_ref is None
+                or reservation.commit_ref() is not transaction
+                or reservation.reservation_id not in self._claimed_reservations
+            ):
+                raise StateError("local artifact prepared group cleanup locator is invalid")
+            remaining.append(reservation)
+        return tuple(remaining)
+
+    def _cancel_claimed(self, transaction: LocalArtifactPreparedCommit) -> None:
         """Release an owned claim after its external transaction aborts."""
 
-        pending: tuple[_LocalArtifactShard, str] | None = None
+        pending: list[tuple[_LocalArtifactShard, str]] = []
+        failures: list[BaseException] = []
         with self._gate.mutation(), self._capacity_lock:
-            active = self._active_prepared_locked(token)
-            if active._reservation_id not in self._claimed_reservations:
-                raise StateError("local artifact publish token is not claimed")
-            self._release_prepared_locked(token)
-            pending = self._pending_after_prepared_release_locked(token)
-        if pending is not None:
-            self._evict_pending_version(*pending)
+            try:
+                reservation = self._active_claimed_commit_locked(transaction)
+            except StateError:
+                return
+            if reservation.claimed_by != get_ident():
+                raise StateError(
+                    "local artifact prepared publication must cancel on its claiming thread"
+                )
+            if reservation.committing:
+                return
+            failures.extend(self._release_failed_claim_locked((reservation,), pending))
+        failures.extend(self._evict_failed_claim_pending(pending))
+        if failures:
+            primary = failures[0]
+            for cleanup_error in failures[1:]:
+                primary.add_note(
+                    "local artifact claim cancellation also raised "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            raise primary
 
-    def _commit_claimed(self, token: LocalArtifactPublishToken) -> int:
+    def _cancel_claimed_group(self, transaction: LocalArtifactPreparedGroupCommit) -> None:
+        """Release every member of an uncommitted exact group claim."""
+
+        pending: list[tuple[_LocalArtifactShard, str]] = []
+        failures: list[BaseException] = []
+        released_ids: set[int] = set()
+        with self._gate.mutation(), self._capacity_lock:
+            reservations = self._remaining_claimed_group_locked(transaction)
+            if not reservations:
+                self._prepared_commit_locators.pop(id(transaction), None)
+                return
+            if any(reservation.claimed_by != get_ident() for reservation in reservations):
+                raise StateError(
+                    "local artifact prepared publication group must cancel on its claiming thread"
+                )
+            if any(reservation.committing for reservation in reservations):
+                return
+            for reservation in reversed(reservations):
+                try:
+                    self._release_prepared_locked(
+                        reservation,
+                        preserve_commit_locator=True,
+                    )
+                except BaseException as error:
+                    failures.append(error)
+                if self._prepared_reservations.get(reservation.reservation_id) is not reservation:
+                    released_ids.add(reservation.reservation_id)
+                    due = self._pending_after_prepared_release_locked(reservation)
+                    if due is not None:
+                        pending.append(due)
+
+            # A one-shot cleanup fault must not strand the group merely because
+            # it fired before the member release. Retry only still-live members.
+            remaining = self._remaining_claimed_group_locked(transaction)
+            for reservation in reversed(remaining):
+                try:
+                    self._release_prepared_locked(
+                        reservation,
+                        preserve_commit_locator=True,
+                    )
+                except BaseException as error:
+                    failures.append(error)
+                if (
+                    self._prepared_reservations.get(reservation.reservation_id) is not reservation
+                    and reservation.reservation_id not in released_ids
+                ):
+                    released_ids.add(reservation.reservation_id)
+                    due = self._pending_after_prepared_release_locked(reservation)
+                    if due is not None:
+                        pending.append(due)
+            if not self._remaining_claimed_group_locked(transaction):
+                self._prepared_commit_locators.pop(id(transaction), None)
+        for shard, version_id in pending:
+            self._evict_pending_version(shard, version_id)
+        if failures:
+            primary = failures[0]
+            for cleanup_error in failures[1:]:
+                primary.add_note(
+                    "local artifact group cleanup also raised "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            raise primary
+
+    def _commit_claimed(
+        self,
+        transaction: LocalArtifactPreparedCommit,
+    ) -> LocalArtifactPublicationReceipt:
         """Commit a claimed reservation in one short artifact-only critical section."""
 
         with self._gate.mutation(), self._capacity_lock:
-            self._active_prepared_locked(token)
-            if token._reservation_id not in self._claimed_reservations:
-                raise StateError("local artifact publish token is not claimed")
-            shard = self._shards[token._shard_id]
+            reservation = self._active_claimed_commit_locked(transaction)
+            if reservation.claimed_by != get_ident():
+                raise StateError(
+                    "local artifact prepared publication must commit on its claiming thread"
+                )
+            if reservation.committing:
+                raise StateError("local artifact prepared publication is already committing")
+            shard = self._shards[reservation.canonical_token._shard_id]
             with shard.lock:
-                return self._commit_prepared_locked(token)
+                plan = reservation.commit_plan
+                if plan is None:
+                    raise StateError("local artifact prepared commit lost its sealed plan")
+                if (
+                    transaction._expected_receipt is not plan.receipt
+                    or type(transaction._publication_token) is not str
+                    or not hmac.compare_digest(
+                        transaction._publication_token,
+                        plan.receipt.publication_token,
+                    )
+                    or not self.authenticates_publication_receipt(
+                        plan.receipt,
+                        publication_token=reservation.canonical_token.publication_token,
+                    )
+                ):
+                    raise StateError("local artifact prepared receipt integrity validation failed")
+                reservation.committing = True
+                self._committing_reservations.add(reservation.reservation_id)
+                try:
+                    self._capture_prepared_rollback_locked(reservation, plan, shard)
+                    receipt = self._commit_prepared_locked(reservation, plan)
+                    if not self._release_prepared_locked(
+                        reservation,
+                        allow_committing=True,
+                    ):
+                        raise StateError(
+                            "local artifact committed reservation could not be finalized"
+                        )
+                except BaseException as error:
+                    rollback_errors = self._rollback_prepared_commit_locked(
+                        reservation,
+                        plan,
+                        shard,
+                    )
+                    released = (
+                        self._prepared_reservations.get(reservation.reservation_id)
+                        is not reservation
+                    )
+                    if not released:
+                        try:
+                            released = self._release_prepared_locked(
+                                reservation,
+                                allow_committing=True,
+                            )
+                        except BaseException as cleanup_error:
+                            rollback_errors += (cleanup_error,)
+                            released = False
+                    for rollback_error in rollback_errors:
+                        error.add_note(
+                            "local artifact rollback cleanup also raised "
+                            f"{type(rollback_error).__name__}: {rollback_error}"
+                        )
+                    if released:
+                        pending = self._pending_after_prepared_release_locked(reservation)
+                        if pending is not None:
+                            self._evict_pending_version(*pending)
+                    raise
+                return receipt
 
-    def _commit_prepared_locked(self, token: LocalArtifactPublishToken) -> int:
+    def _commit_claimed_group(
+        self,
+        transaction: LocalArtifactPreparedGroupCommit,
+    ) -> LocalArtifactPublicationGroupReceipt:
+        """Commit every claimed group member under one reversible artifact boundary."""
+
+        with self._gate.mutation(), self._capacity_lock:
+            reservations = self._active_claimed_group_locked(transaction)
+            if any(reservation.claimed_by != get_ident() for reservation in reservations):
+                raise StateError(
+                    "local artifact prepared publication group must commit on its claiming thread"
+                )
+            if any(reservation.committing for reservation in reservations):
+                raise StateError("local artifact prepared publication group is already committing")
+
+            group_receipt = reservations[0].group_receipt
+            if group_receipt is None or any(
+                reservation.group_receipt is not group_receipt for reservation in reservations
+            ):
+                raise StateError("local artifact prepared publication group lost its receipt")
+            if (
+                transaction._expected_receipt is not group_receipt
+                or transaction._publication_tokens is not group_receipt.publication_tokens
+                or not self.authenticates_publication_group_receipt(
+                    group_receipt,
+                    publication_tokens=group_receipt.publication_tokens,
+                )
+            ):
+                raise StateError(
+                    "local artifact prepared publication group receipt integrity validation failed"
+                )
+            entries: list[
+                tuple[
+                    _LocalArtifactPreparedReservation,
+                    _LocalArtifactPreparedCommitPlan,
+                    _LocalArtifactShard,
+                ]
+            ] = []
+            for reservation in reservations:
+                plan = reservation.commit_plan
+                if plan is None:
+                    raise StateError("local artifact prepared group member lost its sealed plan")
+                entries.append(
+                    (
+                        reservation,
+                        plan,
+                        self._shards[reservation.canonical_token._shard_id],
+                    )
+                )
+            shard_ids = tuple(sorted({shard.shard_id for _, _, shard in entries}))
+            touched = 0
+            with ExitStack() as locks:
+                for shard_id in shard_ids:
+                    locks.enter_context(self._shards[shard_id].lock)
+                for reservation in reservations:
+                    reservation.committing = True
+                    self._committing_reservations.add(reservation.reservation_id)
+                try:
+                    for reservation, plan, shard in entries:
+                        self._capture_prepared_rollback_locked(reservation, plan, shard)
+                        touched += 1
+                        self._commit_prepared_locked(reservation, plan)
+                    for reservation in reversed(reservations):
+                        if not self._release_prepared_locked(
+                            reservation,
+                            allow_committing=True,
+                            preserve_commit_locator=True,
+                        ):
+                            raise StateError(
+                                "local artifact committed group member could not be finalized"
+                            )
+                except BaseException as error:
+                    rollback_errors: list[BaseException] = []
+                    for index in range(touched - 1, -1, -1):
+                        reservation, plan, shard = entries[index]
+                        rollback_errors.extend(
+                            self._rollback_prepared_commit_locked(
+                                reservation,
+                                plan,
+                                shard,
+                            )
+                        )
+                    released_reservations: list[_LocalArtifactPreparedReservation] = []
+                    for reservation in reversed(reservations):
+                        if (
+                            self._prepared_reservations.get(reservation.reservation_id)
+                            is not reservation
+                        ):
+                            released_reservations.append(reservation)
+                            continue
+                        try:
+                            if self._release_prepared_locked(
+                                reservation,
+                                allow_committing=True,
+                                preserve_commit_locator=True,
+                            ):
+                                released_reservations.append(reservation)
+                        except BaseException as cleanup_error:
+                            rollback_errors.append(cleanup_error)
+                    for released in released_reservations:
+                        try:
+                            pending = self._pending_after_prepared_release_locked(released)
+                            if pending is not None:
+                                self._evict_pending_version(*pending)
+                        except BaseException as cleanup_error:
+                            rollback_errors.append(cleanup_error)
+                    for rollback_error in rollback_errors:
+                        error.add_note(
+                            "local artifact group rollback cleanup also raised "
+                            f"{type(rollback_error).__name__}: {rollback_error}"
+                        )
+                    if not any(
+                        self._prepared_reservations.get(reservation.reservation_id) is reservation
+                        for reservation in reservations
+                    ):
+                        self._prepared_commit_locators.pop(id(transaction), None)
+                    else:
+                        for reservation in reservations:
+                            if (
+                                self._prepared_reservations.get(reservation.reservation_id)
+                                is reservation
+                            ):
+                                reservation.committing = False
+                                self._committing_reservations.discard(reservation.reservation_id)
+                    raise
+                self._prepared_commit_locators.pop(id(transaction), None)
+            return group_receipt
+
+    def _prepare_claimed_commit_locked(
+        self,
+        reservation: _LocalArtifactPreparedReservation,
+        shard: _LocalArtifactShard,
+    ) -> _LocalArtifactPreparedCommitPlan:
+        """Precompute every expected-fallible tail primitive before publication."""
+
+        token = reservation.canonical_token
+        version_id = token.record.artifact.artifact_version_id
+        existing_handle = token._existing_handle
+        expected_handle = (
+            reservation.reserved_handle if existing_handle is None else existing_handle
+        )
+        if expected_handle is None:  # pragma: no cover - reservation invariant
+            raise StateError("prepared local artifact reservation lost its exact handle")
+        prior_payload: bytes | None = None
+        route: _ArtifactRouteShard | None = None
+        route_key: bytes | None = None
+        packed_route_locator: int | None = None
+        if existing_handle is not None:
+            if (
+                not shard.store.is_live_handle(existing_handle)
+                or shard.store.artifact_version_id(existing_handle) != version_id
+                or shard.store.get_by_handle(existing_handle) != token.record.artifact
+            ):
+                raise StateError("prepared local artifact version was invalidated")
+            existing_record = shard.store.get_record_by_handle(existing_handle)
+            if existing_record is not None and existing_record != token.record:
+                raise StateError("prepared local artifact content changed before commit")
+            prior_payload = shard.store._payload(existing_handle)
+        else:
+            route_key = _semantic_artifact_digest(version_id, "artifact-version-")
+            if route_key is None:
+                raise StateError("prepared local artifact route key is not canonical")
+            packed_route_locator = _pack_artifact_locator(shard.shard_id, expected_handle)
+            if shard.shard_id == self._shard_id_for(version_id):
+                route_key = None
+                packed_route_locator = None
+            else:
+                route = self._route_partition(version_id)
+
+        packed_payload = _pack_artifact_payload(token.record.artifact, token.record)
+        retained_deadline = token.retained_until.timestamp()
+        if not math.isfinite(retained_deadline):
+            raise StateError("prepared local artifact retention deadline must be finite")
+        prior_deadline = shard.deadlines.deadline(expected_handle)
+        final_deadline = (
+            retained_deadline if prior_deadline is None else max(retained_deadline, prior_deadline)
+        )
+        shard.deadlines.validate_set(expected_handle, final_deadline)
+
+        lease_deadline: float | None = None
+        lease_savepoint: _LocalArtifactLeaseSavepoint | None = None
+        if token.lease_until is not None:
+            lease_deadline = token.lease_until.timestamp()
+            if not math.isfinite(lease_deadline):
+                raise StateError("prepared local artifact lease deadline must be finite")
+            lease_pair = (version_id, token.lease_owner)
+            hash(lease_pair)
+            lease_savepoint = _LocalArtifactLeaseSavepoint(pair=lease_pair)
+
+        receipt = LocalArtifactPublicationReceipt(
+            reservation_id=reservation.reservation_id,
+            artifact_version_id=version_id,
+            shard_id=token._shard_id,
+            handle=expected_handle,
+            publication_token=token.publication_token,
+            record_digest=reservation.record_digest,
+            _registry_token=id(self),
+        )
+        receipt = replace(
+            receipt,
+            _integrity=_local_artifact_receipt_integrity(self._prepared_secret, receipt),
+        )
+        return _LocalArtifactPreparedCommitPlan(
+            expected_handle=expected_handle,
+            packed_payload=packed_payload,
+            retained_deadline=final_deadline,
+            lease_deadline=lease_deadline,
+            receipt=receipt,
+            prior_payload=prior_payload,
+            route=route,
+            route_key=route_key,
+            packed_route_locator=packed_route_locator,
+            rollback=_LocalArtifactPreparedRollbackSavepoint(lease=lease_savepoint),
+        )
+
+    def _capture_prepared_rollback_locked(
+        self,
+        reservation: _LocalArtifactPreparedReservation,
+        plan: _LocalArtifactPreparedCommitPlan,
+        shard: _LocalArtifactShard,
+    ) -> None:
+        """Capture post-interleaving rollback frontiers immediately before mutation."""
+
+        rollback = plan.rollback
+        if rollback.captured:
+            raise StateError("local artifact prepared rollback savepoint was already captured")
+        token = reservation.canonical_token
+        version_id = token.record.artifact.artifact_version_id
+        handle = plan.expected_handle
+        deadlines = shard.deadlines
+        rollback.prior_deadline_us = deadlines._deadlines[handle]
+        rollback.prior_pending_expiry = version_id in shard.pending_expiry
+        rollback.prior_mutation_version = shard.mutation_version
+        rollback.prior_live_count = self._live_count
+        rollback.prior_high_water_mark = self._high_water_mark
+        rollback.prior_store_next_handle = shard.store._next_handle
+        rollback.prior_store_high_water = shard.store._high_water
+        rollback.prior_store_compaction_rotations = shard.store._compaction_rotations
+        rollback.prior_store_compaction_work = shard.store._compaction_work
+        rollback.prior_deadline_generation = deadlines._generations[handle]
+        rollback.prior_deadline_order = deadlines._orders[handle]
+        rollback.prior_deadline_live = deadlines._live
+        rollback.prior_deadline_high_water = deadlines._high_water
+        rollback.prior_deadline_order_counter = deadlines._order_counter
+        if plan.route is not None:
+            with plan.route.lock:
+                rollback.prior_route_high_water = plan.route.high_water
+
+        lease = rollback.lease
+        if lease is not None:
+            lease_store = shard.leases._leases
+            expirations = shard.leases._expirations
+            pair = lease.pair
+            lease.pair_present = pair in lease_store
+            lease.prior_deadline = expirations._deadlines.get(pair)
+            lease.prior_item = expirations._items.get(pair)
+            lease.prior_order = expirations._orders.get(pair)
+            lease.prior_version = expirations._versions.get(pair)
+            lease.prior_next_order = expirations._next_order
+            lease.prior_high_water = expirations._high_water_mark
+            lease.prior_leased_key_count = shard.leases._leased_key_count
+            lease.prior_store_high_water = lease_store._high_water_mark
+            lease.prior_store_primary_peak = lease_store._primary_peak_entries
+            lease.prior_store_slots = len(lease_store._slot_values)
+        rollback.captured = True
+
+    def _rollback_prepared_commit_locked(
+        self,
+        reservation: _LocalArtifactPreparedReservation,
+        plan: _LocalArtifactPreparedCommitPlan,
+        shard: _LocalArtifactShard,
+    ) -> tuple[BaseException, ...]:
+        """Restore every tail component and return any cleanup-only failures."""
+
+        token = reservation.canonical_token
+        version_id = token.record.artifact.artifact_version_id
+        rollback = plan.rollback
+        failures: list[BaseException] = []
+        if not rollback.captured:
+            return ()
+        reservation_is_active = (
+            self._prepared_reservations.get(reservation.reservation_id) is reservation
+        )
+
+        try:
+            if token._existing_handle is None:
+                if (
+                    shard.store.is_live_handle(plan.expected_handle)
+                    and not shard.store._reserved[plan.expected_handle]
+                ):
+                    # Successful reservation cleanup may have consumed the
+                    # allocator claim immediately before an injected failure.
+                    shard.store._reserved[plan.expected_handle] = 1
+                shard.store.rollback_reserved_insert(plan.expected_handle)
+                if (
+                    plan.route is not None
+                    and plan.route_key is not None
+                    and plan.packed_route_locator is not None
+                ):
+                    with plan.route.lock:
+                        if plan.route.routes.get(plan.route_key) == plan.packed_route_locator:
+                            plan.route.routes.pop(plan.route_key)
+                        plan.route.high_water = rollback.prior_route_high_water
+                        if not plan.route.routes:
+                            plan.route.routes = {}
+            else:
+                if plan.prior_payload is None:  # pragma: no cover - existing-handle invariant
+                    raise StateError("prepared local artifact rollback lost its prior payload")
+                shard.store._store_payload(plan.expected_handle, plan.prior_payload)
+            self._live_count = rollback.prior_live_count
+            self._high_water_mark = rollback.prior_high_water_mark
+            shard.store._high_water = rollback.prior_store_high_water
+            shard.store._compaction_rotations = rollback.prior_store_compaction_rotations
+            shard.store._compaction_work = rollback.prior_store_compaction_work
+            if rollback.prior_pending_expiry:
+                shard.pending_expiry.add(version_id)
+            else:
+                shard.pending_expiry.discard(version_id)
+            shard.mutation_version = rollback.prior_mutation_version
+        except BaseException as error:
+            failures.append(error)
+
+        try:
+            deadlines = shard.deadlines
+            deadlines._deadlines[plan.expected_handle] = rollback.prior_deadline_us
+            deadlines._generations[plan.expected_handle] = rollback.prior_deadline_generation
+            deadlines._orders[plan.expected_handle] = rollback.prior_deadline_order
+            deadlines._live = rollback.prior_deadline_live
+            deadlines._high_water = rollback.prior_deadline_high_water
+            deadlines._order_counter = rollback.prior_deadline_order_counter
+            deadlines.compact(force=True)
+        except BaseException as error:
+            failures.append(error)
+
+        try:
+            if rollback.lease is not None:
+                self._restore_prepared_lease_locked(shard, rollback.lease)
+        except BaseException as error:
+            failures.append(error)
+
+        if not reservation_is_active and token._existing_handle is None:
+            try:
+                if shard.store._reserved[plan.expected_handle] and not shard.store.is_live_handle(
+                    plan.expected_handle
+                ):
+                    shard.store.release_reserved_handle(plan.expected_handle)
+            except BaseException as error:
+                failures.append(error)
+
+        return tuple(failures)
+
+    @staticmethod
+    def _restore_prepared_lease_locked(
+        shard: _LocalArtifactShard,
+        savepoint: _LocalArtifactLeaseSavepoint,
+    ) -> None:
+        """Restore one lease pair without traversing caller-controlled capability fields."""
+
+        leases = shard.leases
+        lease_store = leases._leases
+        expirations = leases._expirations
+        pair = savepoint.pair
+
+        inserted_handle: int | None = None
+        if not savepoint.pair_present and pair in lease_store:
+            inserted_handle = lease_store.handle_for(pair)
+            lease_store.pop(pair)
+        if (
+            inserted_handle is not None
+            and inserted_handle == len(lease_store._slot_values) - 1
+            and len(lease_store._slot_values) > savepoint.prior_store_slots
+        ):
+            if lease_store._free_handles[-1] != inserted_handle:
+                raise StateError("local artifact lease rollback lost its inserted free handle")
+            lease_store._free_handles.pop()
+            lease_store._slot_keys.pop()
+            lease_store._slot_values.pop()
+        leases._leased_key_count = savepoint.prior_leased_key_count
+        lease_store._high_water_mark = savepoint.prior_store_high_water
+        lease_store._primary_peak_entries = savepoint.prior_store_primary_peak
+
+        prior_version = savepoint.prior_version
+        expirations._heap = [
+            entry
+            for entry in expirations._heap
+            if entry[3] != pair or (prior_version is not None and entry[2] <= prior_version)
+        ]
+        heapq.heapify(expirations._heap)
+        if expirations._retired_heap is not None:
+            expirations._retired_heap = [
+                entry
+                for entry in expirations._retired_heap
+                if entry[3] != pair or (prior_version is not None and entry[2] <= prior_version)
+            ]
+            heapq.heapify(expirations._retired_heap)
+            if not expirations._retired_heap:
+                expirations._retired_heap = None
+
+        if savepoint.prior_item is None:
+            expirations._items.pop(pair, None)
+        else:
+            expirations._items[pair] = savepoint.prior_item
+        if savepoint.prior_deadline is None:
+            expirations._deadlines.pop(pair, None)
+        else:
+            expirations._deadlines[pair] = savepoint.prior_deadline
+        if savepoint.prior_order is None:
+            expirations._orders.pop(pair, None)
+        else:
+            expirations._orders[pair] = savepoint.prior_order
+        if savepoint.prior_version is None:
+            expirations._versions.pop(pair, None)
+        else:
+            expirations._versions[pair] = savepoint.prior_version
+        expirations._next_order = savepoint.prior_next_order
+        expirations._high_water_mark = savepoint.prior_high_water
+
+        if not lease_store:
+            shard.leases = ReferenceLeaseIndex()
+
+    def _commit_prepared_locked(
+        self,
+        reservation: _LocalArtifactPreparedReservation,
+        plan: _LocalArtifactPreparedCommitPlan,
+    ) -> LocalArtifactPublicationReceipt:
         """Commit one claimed token while gate, capacity, and owner locks are held."""
 
-        self._active_prepared_locked(token)
+        token = reservation.canonical_token
         shard = self._shards[token._shard_id]
-        handle = self._publish_locked(
-            shard,
-            token._existing_handle,
-            token.record.artifact,
-            token.retained_until.timestamp(),
-            record=token.record,
-        )
-        if token._existing_handle is None:
-            self._live_count += 1
-            self._high_water_mark = max(self._high_water_mark, self._live_count)
-        if token.lease_until is not None:
+        shard.deadlines.set(plan.expected_handle, plan.retained_deadline)
+        if plan.lease_deadline is not None:
             shard.leases.acquire(
                 token.record.artifact.artifact_version_id,
                 token.lease_owner,
-                deadline=token.lease_until.timestamp(),
+                deadline=plan.lease_deadline,
             )
-        self._release_prepared_locked(token)
-        return handle
+        if token._existing_handle is None:
+            if (
+                plan.route is not None
+                and plan.route_key is not None
+                and plan.packed_route_locator is not None
+            ):
+                with plan.route.lock:
+                    plan.route.routes[plan.route_key] = plan.packed_route_locator
+                    plan.route.high_water = max(
+                        plan.route.high_water,
+                        len(plan.route.routes),
+                    )
+            shard.store.insert_reserved(
+                plan.expected_handle,
+                token.record.artifact,
+                token.record,
+                packed_payload=plan.packed_payload,
+            )
+            self._live_count += 1
+            self._high_water_mark = max(self._high_water_mark, self._live_count)
+        else:
+            shard.store.bind_record(
+                plan.expected_handle,
+                token.record,
+                packed_payload=plan.packed_payload,
+            )
+        shard.pending_expiry.discard(token.record.artifact.artifact_version_id)
+        shard.mutation_version += 1
+        return plan.receipt
 
     def publish_version(
         self,
@@ -6324,6 +8663,7 @@ class LocalArtifactVersionRegistry:
         deadline: float,
         *,
         record: LocalArtifactVersionRecord | None = None,
+        packed_payload: bytes | None = None,
     ) -> int:
         """Commit one artifact publish while holding its stable owner shard."""
 
@@ -6335,9 +8675,13 @@ class LocalArtifactVersionRegistry:
                     f"artifact version {version_id!r} was already published with different identity"
                 )
             if record is not None:
-                shard.store.bind_record(handle, record)
+                shard.store.bind_record(handle, record, packed_payload=packed_payload)
         else:
-            handle = shard.store.insert(artifact, record)
+            handle = shard.store.insert(
+                artifact,
+                record,
+                packed_payload=packed_payload,
+            )
             self._set_route(version_id, shard.shard_id, handle)
         current_deadline = shard.deadlines.deadline(handle)
         retained_until = (
@@ -6701,7 +9045,11 @@ class LocalArtifactVersionRegistry:
         owner_id = _normalize_name(owner, "owner")
         lease_until = ensure_utc(until)
         deadline = lease_until.timestamp()
-        with self._gate.mutation():
+        with self._gate.mutation(), self._capacity_lock:
+            if self._version_has_claimed_preparation_locked(version_id):
+                raise StateError(
+                    "artifact lease cannot change during an active claimed publication"
+                )
             located = self._existing_locator(version_id)
             if located is None:
                 raise KeyError(version_id)
@@ -6731,7 +9079,11 @@ class LocalArtifactVersionRegistry:
         needs_eviction = False
         shard: _LocalArtifactShard | None = None
         released = False
-        with self._gate.mutation():
+        with self._gate.mutation(), self._capacity_lock:
+            if self._version_has_claimed_preparation_locked(version_id):
+                raise StateError(
+                    "artifact lease cannot change during an active claimed publication"
+                )
             located = self._existing_locator(version_id)
             if located is not None:
                 shard, handle = located
@@ -6756,10 +9108,16 @@ class LocalArtifactVersionRegistry:
         owner_id = owner.strip()
         released: list[str] = []
         pending: list[tuple[_LocalArtifactShard, str]] = []
-        with self._gate.mutation():
+        with self._gate.mutation(), self._capacity_lock:
             for shard in self._shards:
                 with shard.lock:
-                    shard_released = shard.leases.release_owner(owner_id)
+                    owner_versions = tuple(shard.leases.keys_for_owner(owner_id))
+                    shard_released = tuple(
+                        version_id
+                        for version_id in owner_versions
+                        if not self._version_has_claimed_preparation_locked(version_id)
+                        and shard.leases.release(version_id, owner_id)
+                    )
                     released.extend(shard_released)
                     for version_id in shard_released:
                         if self._reconcile_unleased_version_locked(shard, version_id):
@@ -6775,18 +9133,10 @@ class LocalArtifactVersionRegistry:
         with self._gate.watermark(), self._capacity_lock, self._all_shards_locked():
             if self._watermark is not None and cutoff < self._watermark:
                 raise ValueError("artifact registry watermark cannot move backwards")
-            claimed_frontier = min(
-                (
-                    token.observed_at
-                    for reservation_id, token in self._prepared_reservations.items()
-                    if reservation_id in self._claimed_reservations
-                ),
-                default=None,
-            )
-            if claimed_frontier is not None and cutoff > claimed_frontier:
+            if self._claimed_reservations and cutoff != self._watermark:
                 raise StateError(
-                    "artifact registry watermark cannot seal history past an active claimed "
-                    f"publication at {claimed_frontier.isoformat()}"
+                    "artifact registry watermark cannot advance during an active claimed "
+                    "publication"
                 )
             cutoff_timestamp = cutoff.timestamp()
             evicted: list[LocalArtifactIdentity] = []
@@ -7012,13 +9362,24 @@ class LocalArtifactVersionRegistry:
             if estimate_bytes:
                 prepared_bytes = (
                     sys.getsizeof(self._prepared_counts)
+                    + sys.getsizeof(self._prepared_capability_locators)
+                    + sys.getsizeof(self._prepared_commit_locators)
                     + sys.getsizeof(self._prepared_reservations)
                     + sys.getsizeof(self._prepared_versions)
                     + sys.getsizeof(self._claimed_reservations)
+                    + sys.getsizeof(self._committing_reservations)
                     + sum(sys.getsizeof(count) for count in self._prepared_counts)
                     + sum(
-                        sys.getsizeof(reservation_id) + sys.getsizeof(token)
-                        for reservation_id, token in self._prepared_reservations.items()
+                        sys.getsizeof(reservation_id) + _owned_graph_size(reservation)
+                        for reservation_id, reservation in self._prepared_reservations.items()
+                    )
+                    + sum(
+                        sys.getsizeof(token_id) + sys.getsizeof(reservation_id)
+                        for token_id, reservation_id in self._prepared_capability_locators.items()
+                    )
+                    + sum(
+                        sys.getsizeof(commit_id) + sys.getsizeof(reservation_id)
+                        for commit_id, reservation_id in self._prepared_commit_locators.items()
                     )
                     + sum(
                         sys.getsizeof(version_id) + sys.getsizeof(reservation_id)
@@ -7027,6 +9388,10 @@ class LocalArtifactVersionRegistry:
                     + sum(
                         sys.getsizeof(reservation_id)
                         for reservation_id in self._claimed_reservations
+                    )
+                    + sum(
+                        sys.getsizeof(reservation_id)
+                        for reservation_id in self._committing_reservations
                     )
                 )
             estimated_bytes = (
@@ -7064,6 +9429,14 @@ class LocalArtifactVersionRegistry:
                 primary_compaction_rotations=store_metrics.primary_compaction_rotations,
                 primary_compaction_work=store_metrics.primary_compaction_work,
                 primary_compaction_seconds=store_metrics.primary_compaction_seconds,
+                prepared_retained_members=len(self._prepared_reservations),
+                prepared_member_capacity=self._capacity,
+                prepared_retained_bytes=self._prepared_retained_bytes,
+                prepared_byte_capacity=self._prepared_byte_capacity,
+                prepared_capability_locators=(
+                    len(self._prepared_capability_locators) + len(self._prepared_commit_locators)
+                ),
+                committing_publications=len(self._committing_reservations),
             )
 
 
@@ -7079,6 +9452,9 @@ __all__ = [
     "HostDeploymentSpec",
     "LocalArtifactCapacityError",
     "LocalArtifactPreparedCommit",
+    "LocalArtifactPreparedGroupCommit",
+    "LocalArtifactPublicationGroupReceipt",
+    "LocalArtifactPublicationReceipt",
     "LocalArtifactPublishToken",
     "LocalArtifactRegistryCensus",
     "LocalArtifactVersionPageCursor",
