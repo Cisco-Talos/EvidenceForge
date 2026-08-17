@@ -15,37 +15,16 @@ from evidenceforge.config.observation_profiles import (
     observation_profile_exists,
 )
 from evidenceforge.events.base import CanonicalOccurrence, RawProjectionRequest
+from evidenceforge.events.source_catalog import (
+    DEFAULT_SOURCE_CATALOG,
+    source_family_for_format,
+)
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 ObservationStatus = Literal["visible", "delayed", "dropped", "filtered", "out_of_window"]
 
-SOURCE_FAMILIES: frozenset[str] = frozenset(
-    {
-        "windows_security",
-        "sysmon",
-        "ecar",
-        "syslog",
-        "bash_history",
-        "zeek",
-        "proxy",
-        "web",
-        "asa",
-        "ids",
-    }
-)
-
-_FORMAT_TO_SOURCE: dict[str, str] = {
-    "windows_event_security": "windows_security",
-    "windows_event_sysmon": "sysmon",
-    "ecar": "ecar",
-    "syslog": "syslog",
-    "bash_history": "bash_history",
-    "proxy_access": "proxy",
-    "web_access": "web",
-    "cisco_asa": "asa",
-    "snort_alert": "ids",
-}
+SOURCE_FAMILIES: frozenset[str] = frozenset(DEFAULT_SOURCE_CATALOG.family_names)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,13 +64,6 @@ class ObservationSummary:
         }
 
 
-def source_family_for_format(format_name: str) -> str:
-    """Return the observation source family for an emitter format name."""
-    if format_name.startswith("zeek_"):
-        return "zeek"
-    return _FORMAT_TO_SOURCE.get(format_name, format_name)
-
-
 class ObservationPolicy:
     """Applies a named observation profile to rendered source evidence."""
 
@@ -127,6 +99,51 @@ class ObservationPolicy:
             return ObservationDecision(status="dropped")
 
         delay = self._sample_delay(source, event, settings, delay_identity)
+        if delay > timedelta(0):
+            return ObservationDecision(status="delayed", delay=delay)
+        return ObservationDecision(status="visible")
+
+    def decide_projection(
+        self,
+        format_name: str,
+        event: CanonicalOccurrence,
+        *,
+        source_instance: str,
+        source_hostname: str,
+        missingness: float,
+        format_specific: bool = False,
+    ) -> ObservationDecision:
+        """Return one exact-source decision from a compiled collection policy.
+
+        ``missingness`` is already normalized through the catalog/profile/pack/
+        scenario precedence layers. The named profile still owns coherent delay
+        texture and host multipliers, while the exact source ID keeps two sensors
+        from accidentally sharing a loss sample.
+        """
+
+        source = source_family_for_format(format_name)
+        settings = self._settings_for_source(source)
+        probability = self._projection_missingness(
+            source,
+            event,
+            source_hostname,
+            float(missingness),
+            settings,
+        )
+        event_identity = self._event_identity(
+            source,
+            format_name,
+            event,
+            force_format_specific=format_specific,
+        )
+        exact_identity = f"{source_instance}|{event_identity}"
+        drop_rng = random.Random(
+            _stable_seed(f"observation.drop|{self.profile_name}|{exact_identity}")
+        )
+        if probability > 0 and drop_rng.random() < probability:
+            return ObservationDecision(status="dropped")
+
+        delay = self._sample_delay(source, event, settings, exact_identity)
         if delay > timedelta(0):
             return ObservationDecision(status="delayed", delay=delay)
         return ObservationDecision(status="visible")
@@ -192,6 +209,48 @@ class ObservationPolicy:
             return 0.0
         host = self._host_key_for_event(event)
         return self._effective_missingness_for_host(source, host, settings, format_name=format_name)
+
+    def _projection_missingness(
+        self,
+        source: str,
+        event: CanonicalOccurrence,
+        host: str,
+        base: float,
+        settings: dict[str, Any],
+    ) -> float:
+        """Apply lifecycle preservation and host texture to compiled missingness."""
+
+        if self._preserve_ssh_session_lifecycle(source, event):
+            return 0.0
+        if self._preserve_logind_session_lifecycle(source, event):
+            return 0.0
+        if self._preserve_ecar_cron_process_lifecycle(source, event):
+            return 0.0
+        multiplier_range = settings.get("host_missingness_multiplier", {})
+        if not isinstance(multiplier_range, dict):
+            multiplier_range = {}
+        min_mult = _safe_float(
+            multiplier_range.get("min", 1.0),
+            1.0,
+            minimum=0.0,
+            maximum=10.0,
+        )
+        max_mult = _safe_float(
+            multiplier_range.get("max", 1.0),
+            1.0,
+            minimum=0.0,
+            maximum=10.0,
+        )
+        if max_mult < min_mult:
+            min_mult, max_mult = 1.0, 1.0
+        if min_mult == max_mult:
+            multiplier = min_mult
+        else:
+            seed = _stable_seed(
+                f"observation.host-mult|{self.profile_name}|{source}|{host.casefold()}"
+            )
+            multiplier = random.Random(seed).uniform(min_mult, max_mult)
+        return max(0.0, min(base * multiplier, 1.0))
 
     def _effective_missingness_for_host(
         self,

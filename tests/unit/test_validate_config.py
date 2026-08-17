@@ -470,6 +470,7 @@ class TestValidateConfig:
 
         def load_invalid_observation_profiles():
             return {
+                "schema_version": 2,
                 "profiles": {
                     "complete": {
                         "description": "bad",
@@ -480,7 +481,7 @@ class TestValidateConfig:
                         },
                         "sources": {"zeek_http": {"missingness": 0.1}},
                     }
-                }
+                },
             }
 
         monkeypatch.setattr(
@@ -503,6 +504,7 @@ class TestValidateConfig:
 
         def load_invalid_observation_profiles():
             return {
+                "schema_version": 2,
                 "profiles": {
                     "complete": {
                         "description": "bad",
@@ -518,7 +520,7 @@ class TestValidateConfig:
                             }
                         },
                     }
-                }
+                },
             }
 
         monkeypatch.setattr(

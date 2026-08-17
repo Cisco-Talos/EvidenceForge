@@ -292,6 +292,47 @@ def test_actual_emitter_formats_intersect_sensor_catalog_exactly() -> None:
     )
 
 
+def test_four_policy_layers_apply_in_documented_precedence() -> None:
+    profile = {
+        "default": {"missingness": 0.01},
+        "sources": {
+            "sysmon": {
+                "missingness": 0.1,
+                "format_missingness": {"windows_event_sysmon": 0.11},
+            }
+        },
+    }
+    scenario = _scenario(
+        logs=["windows_event_sysmon"],
+        observation_profile="enterprise_standard",
+        observation_overrides=[
+            {
+                "source_instance": "sysmon:win-01",
+                "family": "sysmon",
+                "system": "WIN-01",
+                "missingness": 0.3,
+            }
+        ],
+    )
+
+    result = compile_scenario_source_deployment(
+        scenario,
+        named_profile=profile,
+        project_pack_overrides={
+            "SYSMON:WIN-01": SourceCollectionOverride(
+                missingness=0.2,
+                optional_fields=frozenset({"Hashes"}),
+            )
+        },
+    )
+    source = result.deployment.source_by_instance("sysmon:win-01")
+
+    assert source is not None
+    assert source.policy.missingness == 0.3
+    assert source.policy.format_missingness == {"windows_event_sysmon": 0.11}
+    assert source.policy.optional_fields == frozenset({"Hashes"})
+
+
 def test_default_profile_format_overrides_are_filtered_per_source_family() -> None:
     profile = {
         "default": {
@@ -498,6 +539,25 @@ def test_compiler_requires_a_deployment_for_selected_sensor_formats() -> None:
         compile_scenario_source_deployment(
             _scenario(sensors=[], logs=["zeek_conn"]),
             named_profile=_COMPLETE_PROFILE,
+        )
+
+
+def test_compiler_rejects_undeployed_exact_overrides() -> None:
+    scenario = _scenario(
+        logs=["ecar"],
+        observation_overrides=[
+            {"source_instance": "sysmon:win-01", "enabled": False},
+        ],
+    )
+
+    with pytest.raises(SourceDeploymentCompilationError, match="undeployed sources"):
+        compile_scenario_source_deployment(scenario, named_profile=_COMPLETE_PROFILE)
+
+    with pytest.raises(SourceDeploymentCompilationError, match="undeployed sources"):
+        compile_scenario_source_deployment(
+            _scenario(logs=["ecar"]),
+            named_profile=_COMPLETE_PROFILE,
+            project_pack_overrides={"sysmon:win-01": SourceCollectionOverride(enabled=False)},
         )
 
 

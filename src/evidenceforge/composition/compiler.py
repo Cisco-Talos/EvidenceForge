@@ -69,6 +69,7 @@ _KEYED_LIST_FIELDS: dict[tuple[str, ...], str] = {
     ("environment", "groups"): "name",
     ("environment", "storage", "servers"): "system",
     ("environment", "storage", "mappings"): "id",
+    ("environment", "observation_overrides"): "source_instance",
     ("personas",): "name",
 }
 

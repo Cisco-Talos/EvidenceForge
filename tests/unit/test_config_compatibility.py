@@ -19,6 +19,7 @@ from evidenceforge.config.schemas import (
     ApplicationCatalogConfig,
     ApplicationEntry,
     EdrInstalledSoftwareProduct,
+    ObservationProfilesConfig,
 )
 from evidenceforge.generation.activity.application_catalog import _merge_catalog
 
@@ -35,6 +36,39 @@ def _assert_actionable(records: list[warnings.WarningMessage]) -> None:
         message = str(record.message)
         assert "Replace it with" in message
         assert "in a future release" in message
+
+
+def test_observation_legacy_wrapper_is_typed_and_semantically_equivalent() -> None:
+    profiles = {
+        "complete": {
+            "description": "Complete collection",
+            "default": {
+                "missingness": 0.0,
+                "delay_ms": {"min_ms": 0, "max_ms": 0},
+            },
+            "sources": {},
+        },
+        "branch": {
+            "description": "Branch collection",
+            "default": {
+                "missingness": 0.05,
+                "delay_ms": {"min_ms": 10, "max_ms": 30},
+            },
+            "sources": {},
+        },
+    }
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        legacy = ObservationProfilesConfig.model_validate({"profiles": deepcopy(profiles)})
+    current = ObservationProfilesConfig.model_validate(
+        {"schema_version": 2, "profiles": deepcopy(profiles)}
+    )
+
+    records = _legacy_warnings(caught)
+    assert legacy == current
+    assert len(records) == 2
+    _assert_actionable(records)
 
 
 def test_application_missing_deployments_normalize_once_per_entry() -> None:

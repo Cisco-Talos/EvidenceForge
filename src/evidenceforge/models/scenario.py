@@ -35,7 +35,7 @@ LLM expansion or complex parsing. Phase 2/3 will add:
 import ipaddress
 import math
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 import pytz
@@ -2986,7 +2986,110 @@ class StaleAccount(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+CollectionCapabilityName = Literal[
+    "process",
+    "authentication",
+    "session",
+    "network",
+    "dns",
+    "tls",
+    "http",
+    "file",
+    "registry",
+    "service",
+    "task",
+    "account",
+    "smb",
+    "ssh",
+    "rdp",
+    "ids",
+    "source_endpoint",
+    "destination_endpoint",
+    "coherent_actor",
+    "dns_analyzer",
+    "tls_analyzer",
+    "http_analyzer",
+    "file_analyzer",
+    "smb_analyzer",
+    "optional_fields",
+    "collection_windows",
+    "batching",
+]
+
+ObservationSourceFamily = Literal[
+    "windows_security",
+    "sysmon",
+    "ecar",
+    "syslog",
+    "bash_history",
+    "zeek",
+    "proxy",
+    "web",
+    "asa",
+    "ids",
+]
+
+ObservationFormatName = Literal[
+    "windows_event_security",
+    "windows_event_sysmon",
+    "ecar",
+    "syslog",
+    "bash_history",
+    "zeek_conn",
+    "zeek_dns",
+    "zeek_http",
+    "zeek_smtp",
+    "zeek_ssl",
+    "zeek_files",
+    "zeek_smb_files",
+    "zeek_smb_mapping",
+    "zeek_x509",
+    "zeek_dhcp",
+    "zeek_ntp",
+    "zeek_weird",
+    "zeek_ocsp",
+    "zeek_pe",
+    "zeek_packet_filter",
+    "zeek_reporter",
+    "proxy_access",
+    "web_access",
+    "cisco_asa",
+    "snort_alert",
+]
+
+_OBSERVATION_FORMAT_FAMILIES: dict[str, str] = {
+    "windows_event_security": "windows_security",
+    "windows_event_sysmon": "sysmon",
+    "ecar": "ecar",
+    "syslog": "syslog",
+    "bash_history": "bash_history",
+    "zeek_conn": "zeek",
+    "zeek_dns": "zeek",
+    "zeek_http": "zeek",
+    "zeek_smtp": "zeek",
+    "zeek_ssl": "zeek",
+    "zeek_files": "zeek",
+    "zeek_smb_files": "zeek",
+    "zeek_smb_mapping": "zeek",
+    "zeek_x509": "zeek",
+    "zeek_dhcp": "zeek",
+    "zeek_ntp": "zeek",
+    "zeek_weird": "zeek",
+    "zeek_ocsp": "zeek",
+    "zeek_pe": "zeek",
+    "zeek_packet_filter": "zeek",
+    "zeek_reporter": "zeek",
+    "proxy_access": "proxy",
+    "web_access": "web",
+    "cisco_asa": "asa",
+    "snort_alert": "ids",
+}
+
 _EXACT_DEPLOYMENT_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]*$")
+_EXACT_SOURCE_INSTANCE_RE = re.compile(
+    r"^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*"
+    r"(?::[a-zA-Z0-9][a-zA-Z0-9._-]*)*$"
+)
 
 
 def _normalize_exact_name_list(
@@ -3133,6 +3236,202 @@ class HostDeploymentOverride(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class ObservationCollectionWindowOverride(BaseModel):
+    """One UTC-normalized half-open source collection interval."""
+
+    start: datetime | None = Field(default=None, description="Inclusive interval start.")
+    end: datetime | None = Field(default=None, description="Exclusive interval end.")
+
+    @field_validator("start", "end")
+    @classmethod
+    def normalize_utc(cls, value: datetime | None) -> datetime | None:
+        """Require timezone-aware endpoints and normalize them to UTC."""
+
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("collection window endpoints must be timezone-aware")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def endpoints_are_ordered(self) -> "ObservationCollectionWindowOverride":
+        """Reject empty or inverted half-open intervals."""
+
+        if self.start is not None and self.end is not None and self.start >= self.end:
+            raise ValueError("collection window start must be earlier than end")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class ObservationBatchingOverride(BaseModel):
+    """Complete replacement for one source's collection batching policy."""
+
+    enabled: bool = False
+    interval_us: int = Field(default=0, ge=0)
+    max_records: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def enabled_batching_has_interval(self) -> "ObservationBatchingOverride":
+        """Require a positive interval for enabled batching."""
+
+        if self.enabled and self.interval_us < 1:
+            raise ValueError("enabled observation batching requires a positive interval_us")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class SourceObservationOverride(BaseModel):
+    """Partial scenario-layer observation patch for one exact source instance."""
+
+    source_instance: str = Field(
+        min_length=1,
+        max_length=255,
+        description=(
+            "Globally exact stable source instance ID. Wildcard, family, and host selectors are "
+            "not supported."
+        ),
+    )
+    system: str | None = Field(
+        default=None,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9.-]*$",
+        description="Optional exact system-identity guard; it does not select the source.",
+    )
+    family: ObservationSourceFamily | None = Field(
+        default=None,
+        description="Optional source-family guard; it does not select a family-wide group.",
+    )
+    enabled: bool | None = None
+    capabilities: list[CollectionCapabilityName] | None = Field(
+        default=None,
+        description="Optional replacement capability set; an empty list removes all capabilities.",
+    )
+    missingness: float | None = Field(default=None, ge=0.0, le=1.0)
+    format_missingness: dict[ObservationFormatName, float] | None = Field(
+        default=None,
+        description="Optional replacement per-format missingness probabilities.",
+    )
+    optional_fields: list[str] | None = Field(
+        default=None,
+        description="Optional replacement set of source-native optional field names.",
+    )
+    windows: list[ObservationCollectionWindowOverride] | None = Field(
+        default=None,
+        description=(
+            "Optional replacement collection windows. An explicit empty list means the source "
+            "has no active collection interval."
+        ),
+    )
+    batching: ObservationBatchingOverride | None = None
+
+    @field_validator("source_instance")
+    @classmethod
+    def normalize_source_instance(cls, value: str) -> str:
+        """Canonicalize exact source IDs and reject selector syntax."""
+
+        normalized = value.strip().casefold()
+        if _EXACT_SOURCE_INSTANCE_RE.fullmatch(normalized) is None:
+            raise ValueError(
+                "source_instance must use exact <family>:<owner>[:<local-name>] identity"
+            )
+        return normalized
+
+    @field_validator("capabilities")
+    @classmethod
+    def capabilities_are_unique(
+        cls,
+        value: list[CollectionCapabilityName] | None,
+    ) -> list[CollectionCapabilityName] | None:
+        """Reject duplicate capability words."""
+
+        if value is not None and len(value) != len(set(value)):
+            raise ValueError("observation override capabilities must be unique")
+        return value
+
+    @field_validator("format_missingness")
+    @classmethod
+    def format_probabilities_are_valid(
+        cls,
+        value: dict[ObservationFormatName, float] | None,
+    ) -> dict[ObservationFormatName, float] | None:
+        """Reject invalid source-format probabilities."""
+
+        if value is None:
+            return None
+        invalid = sorted(name for name, probability in value.items() if not 0 <= probability <= 1)
+        if invalid:
+            raise ValueError(
+                "format_missingness probabilities must be between 0 and 1 for: "
+                + ", ".join(invalid)
+            )
+        return value
+
+    @field_validator("optional_fields")
+    @classmethod
+    def optional_field_names_are_exact(cls, value: list[str] | None) -> list[str] | None:
+        """Require unique exact source-native field names."""
+
+        return _normalize_exact_name_list(
+            value,
+            "observation optional_fields",
+            simple_ids=False,
+            case_sensitive=True,
+        )
+
+    @field_validator("windows")
+    @classmethod
+    def windows_are_sorted_and_disjoint(
+        cls,
+        value: list[ObservationCollectionWindowOverride] | None,
+    ) -> list[ObservationCollectionWindowOverride] | None:
+        """Normalize collection windows and reject overlapping intervals."""
+
+        if value is None:
+            return None
+        ordered = sorted(value, key=lambda window: window.start or datetime.min.replace(tzinfo=UTC))
+        previous: ObservationCollectionWindowOverride | None = None
+        for window in ordered:
+            if previous is not None and (
+                previous.end is None or window.start is None or window.start < previous.end
+            ):
+                raise ValueError("observation override collection windows must not overlap")
+            previous = window
+        return ordered
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> "SourceObservationOverride":
+        """Require an effective patch and align guarded format identities."""
+
+        if all(
+            value is None
+            for value in (
+                self.enabled,
+                self.capabilities,
+                self.missingness,
+                self.format_missingness,
+                self.optional_fields,
+                self.windows,
+                self.batching,
+            )
+        ):
+            raise ValueError("observation override must provide at least one patch field")
+        if self.family is not None and self.format_missingness is not None:
+            wrong_family = sorted(
+                format_name
+                for format_name in self.format_missingness
+                if _OBSERVATION_FORMAT_FAMILIES[format_name] != self.family
+            )
+            if wrong_family:
+                raise ValueError(
+                    f"format_missingness entries do not belong to {self.family}: "
+                    + ", ".join(wrong_family)
+                )
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 class Environment(BaseModel):
     """Environment definition.
 
@@ -3149,6 +3448,7 @@ class Environment(BaseModel):
         groups: Optional list of groups
         network: Optional network topology and sensor configuration
         deployment_overrides: Scenario-layer patches selected by exact system hostname
+        observation_overrides: Scenario-layer patches selected by exact source instance
     """
 
     description: str
@@ -3206,6 +3506,13 @@ class Environment(BaseModel):
             "fields inherit from project/organization configuration, named profiles, and defaults."
         ),
     )
+    observation_overrides: list[SourceObservationOverride] = Field(
+        default_factory=list,
+        description=(
+            "Scenario 2.0 observation patches selected by globally exact source_instance. "
+            "Entries never mutate canonical activity."
+        ),
+    )
 
     @field_validator("users")
     @classmethod
@@ -3248,7 +3555,7 @@ class Environment(BaseModel):
 
     @model_validator(mode="after")
     def validate_identity_overrides(self) -> "Environment":
-        """Validate exact deployment targets and optional identity overrides."""
+        """Validate exact override targets and optional identity overrides."""
 
         systems_by_name = {system.hostname.casefold(): system.hostname for system in self.systems}
         deployment_targets = [override.system.casefold() for override in self.deployment_overrides]
@@ -3263,6 +3570,83 @@ class Environment(BaseModel):
             raise ValueError(
                 "environment.deployment_overrides contains unknown systems: "
                 + ", ".join(unknown_deployment_systems)
+            )
+
+        observation_targets = [override.source_instance for override in self.observation_overrides]
+        if len(observation_targets) != len(set(observation_targets)):
+            raise ValueError(
+                "environment.observation_overrides source_instance values must be unique"
+            )
+
+        host_source_families = {
+            "windows_security",
+            "sysmon",
+            "ecar",
+            "syslog",
+            "bash_history",
+            "proxy",
+            "web",
+        }
+        sensor_source_families: dict[str, set[str]] = {}
+        if self.network is not None:
+            for sensor in self.network.sensors:
+                sensor_id = sensor.name.strip().casefold()
+                formats = {source_format.casefold() for source_format in sensor.log_formats}
+                families: set[str] = set()
+                if "zeek" in formats or any(name.startswith("zeek_") for name in formats):
+                    families.add("zeek")
+                if "snort_alert" in formats:
+                    families.add("ids")
+                if "cisco_asa" in formats:
+                    families.add("asa")
+                sensor_source_families.setdefault(sensor_id, set()).update(families)
+
+        invalid_observation_sources: list[str] = []
+        mismatched_observation_guards: list[str] = []
+        for override in self.observation_overrides:
+            source_parts = override.source_instance.split(":")
+            if len(source_parts) < 2:
+                invalid_observation_sources.append(override.source_instance)
+                continue
+            source_family, owner_id = source_parts[:2]
+            if override.family is not None and override.family != source_family:
+                mismatched_observation_guards.append(override.source_instance)
+                continue
+            if source_family in host_source_families:
+                if owner_id not in systems_by_name:
+                    invalid_observation_sources.append(override.source_instance)
+                    continue
+                if (
+                    override.system is not None
+                    and override.system.casefold() in systems_by_name
+                    and override.system.casefold() != owner_id
+                ):
+                    mismatched_observation_guards.append(override.source_instance)
+            elif source_family in {"zeek", "ids", "asa"}:
+                if source_family not in sensor_source_families.get(owner_id, set()):
+                    invalid_observation_sources.append(override.source_instance)
+            else:
+                invalid_observation_sources.append(override.source_instance)
+        if invalid_observation_sources:
+            raise ValueError(
+                "environment.observation_overrides contains unknown source instances: "
+                + ", ".join(sorted(invalid_observation_sources))
+            )
+        if mismatched_observation_guards:
+            raise ValueError(
+                "environment.observation_overrides identity guards do not match source_instance: "
+                + ", ".join(sorted(mismatched_observation_guards))
+            )
+
+        unknown_observation_systems = sorted(
+            override.system
+            for override in self.observation_overrides
+            if override.system is not None and override.system.casefold() not in systems_by_name
+        )
+        if unknown_observation_systems:
+            raise ValueError(
+                "environment.observation_overrides contains unknown system guards: "
+                + ", ".join(unknown_observation_systems)
             )
 
         user_names = {user.username for user in self.users}

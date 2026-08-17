@@ -5,23 +5,57 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.compatibility import warn_legacy_config
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.config.schemas import ObservationProfilesConfig
 
 _CONFIG_PATH = get_activity_directory() / "observation_profiles.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
+
+
+def _normalize_observation_overlay(data: dict[str, Any]) -> dict[str, Any]:
+    """Version one legacy partial overlay before merging it with package defaults."""
+
+    if "schema_version" in data:
+        return deepcopy(data)
+    normalized = deepcopy(data)
+    profiles = normalized.get("profiles")
+    if isinstance(profiles, dict):
+        for profile_name in profiles:
+            warn_legacy_config(
+                f"observation_profiles.profiles[{profile_name}] unversioned named profile",
+                "observation_profiles schema_version: 2 with the same named profile fields",
+                stacklevel=4,
+            )
+        normalized["schema_version"] = 2
+    return normalized
+
+
+def _merge_observation_profiles(
+    default: dict[str, Any],
+    overlay: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize one partial observation overlay before its deep merge."""
+
+    return deep_merge_dict(default, _normalize_observation_overlay(overlay))
 
 
 def load_observation_profiles() -> dict[str, Any]:
     """Load source-observation profiles, merged with project-local overlay."""
     global _CACHED_DATA
     if _CACHED_DATA is None:
-        _CACHED_DATA = load_with_overlay(
+        merged = load_with_overlay(
             _CONFIG_PATH,
             "activity/observation_profiles.yaml",
-            deep_merge_dict,
+            _merge_observation_profiles,
+        )
+        _CACHED_DATA = ObservationProfilesConfig.model_validate(merged).model_dump(
+            mode="python",
+            exclude_unset=True,
         )
     return _CACHED_DATA
 

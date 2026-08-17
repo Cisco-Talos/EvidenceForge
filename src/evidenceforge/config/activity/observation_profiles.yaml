@@ -2,6 +2,8 @@
 # events are planned. The default complete profile preserves training-friendly
 # perfect coverage and correlation.
 
+schema_version: 2
+
 profiles:
   complete:
     description: Perfect source coverage for training-friendly datasets.

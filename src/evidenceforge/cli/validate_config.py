@@ -914,6 +914,7 @@ def validate_config(
         },
         "activity/observation_profiles.yaml": {
             "dict_fields": {"profiles"},
+            "scalar_fields": {"schema_version": int},
         },
         "activity/proxy_phase_profiles.yaml": {
             "list_fields": {"resolver_mixture": "name"},

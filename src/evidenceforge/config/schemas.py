@@ -3467,7 +3467,33 @@ class ObservationProfileEntry(BaseModel, extra="forbid"):
 class ObservationProfilesConfig(BaseModel, extra="forbid"):
     """Root schema for observation_profiles.yaml."""
 
+    schema_version: Literal[2]
     profiles: dict[str, ObservationProfileEntry]
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_profile_document(cls, value: Any) -> Any:
+        """Version the legacy named-profile wrapper without changing profile semantics."""
+
+        if not isinstance(value, dict) or "schema_version" in value:
+            return value
+        normalized = deepcopy(value)
+        normalized["schema_version"] = 2
+        profiles = normalized.get("profiles")
+        if isinstance(profiles, dict):
+            for profile_name in profiles:
+                warn_legacy_config(
+                    f"observation_profiles.profiles[{profile_name}] unversioned named profile",
+                    "observation_profiles schema_version: 2 with the same named profile fields",
+                    stacklevel=4,
+                )
+        else:
+            warn_legacy_config(
+                "observation_profiles unversioned document",
+                "observation_profiles schema_version: 2",
+                stacklevel=4,
+            )
+        return normalized
 
     @field_validator("profiles")
     @classmethod
