@@ -303,7 +303,6 @@ from evidenceforge.models.scenario import (
     User,
 )
 from evidenceforge.models.state import ActiveSession, RunningProcess
-from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.paths import write_exclusive_child_stream
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
@@ -449,6 +448,7 @@ class _PreparedNetworkResponder:
 _HTTP_PERSISTENT_REUSE_GUARD = timedelta(milliseconds=900)
 _HTTP_PERSISTENT_TRANSACTION_GAP = timedelta(microseconds=1)
 _RECENT_CONNECTION_REUSE_WINDOW_SECONDS = 86_400.0
+_TLS_RESUMPTION_STATE_HORIZON = timedelta(hours=24)
 _NETWORK_RUNTIME_WATERMARK_PAGE = 4_096
 
 
@@ -1919,59 +1919,6 @@ def _ldap_base_dn(domain: str) -> str:
     if not labels:
         labels = ["corp", "local"]
     return ",".join(f"dc={label}" for label in labels)
-
-
-def _certificate_validity_window(
-    reference_time: datetime,
-    rng: random.Random,
-    *,
-    validity_days_min: int,
-    validity_days_max: int,
-    not_before_max_days: int,
-    not_before_min_days: int = 1,
-) -> tuple[int, int]:
-    """Create a stable certificate validity window independent of observation seconds."""
-    reference_epoch = int(reference_time.timestamp())
-    validity_days = rng.randint(validity_days_min, max(validity_days_max, validity_days_min))
-    max_back_days = min(not_before_max_days, max(validity_days - 1, not_before_min_days))
-    min_back_days = min(not_before_min_days, max_back_days)
-    not_before_days = rng.randint(min_back_days, max_back_days)
-    issued_day_epoch = ((reference_epoch // 86400) - not_before_days) * 86400
-    not_valid_before = issued_day_epoch + rng.randint(0, 86399)
-    not_valid_after = not_valid_before + validity_days * 86400
-    return not_valid_before, not_valid_after
-
-
-def _bound_certificate_validity_to_issuer_window(
-    validity: tuple[int, int],
-    issuer_name: str,
-    reference_time: datetime,
-) -> tuple[int, int]:
-    """Clamp a child certificate validity window to its configured issuer profile."""
-    from evidenceforge.generation.activity.tls_realism import certificate_authority_profile
-
-    issuer_profile = certificate_authority_profile(issuer_name)
-    if issuer_profile is None:
-        return validity
-
-    issuer_not_before = int(issuer_profile["not_valid_before"])
-    issuer_not_after = int(issuer_profile["not_valid_after"])
-    reference_epoch = int(reference_time.timestamp())
-    if not (issuer_not_before < reference_epoch < issuer_not_after):
-        return validity
-
-    not_valid_before = max(validity[0], issuer_not_before)
-    not_valid_after = min(validity[1], issuer_not_after)
-    if not_valid_before >= reference_epoch:
-        not_valid_before = max(issuer_not_before, reference_epoch - 86400)
-    if not_valid_after <= reference_epoch:
-        not_valid_after = min(issuer_not_after, reference_epoch + 86400)
-    if not_valid_after <= not_valid_before:
-        not_valid_before = max(issuer_not_before, min(reference_epoch - 86400, issuer_not_after))
-        not_valid_after = min(issuer_not_after, max(reference_epoch + 86400, not_valid_before + 1))
-    if not_valid_after <= not_valid_before:
-        return validity
-    return int(not_valid_before), int(not_valid_after)
 
 
 def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
@@ -4909,8 +4856,6 @@ class ActivityGenerator:
             ExpiringIndex(deadline=lambda window: _dns_cache_window(window)[1])
         )
         self._dns_cache_last_prune = 0.0
-        self._tls_seen_server_names: set[str] = set()
-        self._tls_seen_client_server_pairs: set[tuple[str, str, int, str]] = set()
         self._cryptographic_material_registry = CryptographicMaterialRegistry()
         network_window_end = (
             proxy_window_end
@@ -4937,10 +4882,6 @@ class ActivityGenerator:
             self._cryptographic_material_registry,
             self._tls_certificate_planner,
         )
-        self._tls_cert_validity: dict[str, tuple[int, int]] = {}
-        self._tls_intermediate_profiles: dict[tuple[str, str], dict[str, Any]] = {}
-        self._tls_ocsp_windows: dict[tuple[str, str, int], tuple[int, int]] = {}
-        self._tls_ocsp_response_sizes: dict[tuple[str, str, str, float, float, str], int] = {}
         self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
         self._ntp_server_response_profiles: dict[str, dict[str, float]] = {}
         self._ntp_last_parser_times: dict[tuple[str, str], datetime] = {}
@@ -10411,9 +10352,14 @@ class ActivityGenerator:
         ssl_history_roll = rng.random()
         tls_name_key = server_name or dst_ip
         pair_key = (net.src_ip, net.dst_ip, net.dst_port, tls_name_key)
-        if network_preparation is None:
-            first_observed_name = tls_name_key not in self._tls_seen_server_names
-            first_observed_pair = pair_key not in self._tls_seen_client_server_pairs
+        if not ssl_established:
+            resumed = False
+        elif network_preparation is None:
+            # Direct context construction has no authenticated runtime owner.
+            # Treat it as one fresh handshake rather than retaining a second,
+            # unbounded resumption cache beside NetworkTransactionRuntime.
+            _ = rng.random()
+            resumed = False
         else:
             first_observed_name = not bool(
                 network_preparation.read_point(
@@ -10431,26 +10377,24 @@ class ActivityGenerator:
                     at=ensure_utc(event.timestamp),
                 )
             )
-        resumed = (
-            rng.random() < 0.45 and not first_observed_name and not first_observed_pair
-            if ssl_established
-            else False
-        )
-        if network_preparation is None:
-            self._tls_seen_server_names.add(tls_name_key)
-            self._tls_seen_client_server_pairs.add(pair_key)
-        else:
+            resumed = rng.random() < 0.45 and not first_observed_name and not first_observed_pair
+            if network_point_expires_at is None:
+                raise StateError("Prepared TLS resumption state requires an explicit finite expiry")
+            point_expiry = min(
+                ensure_utc(network_point_expires_at),
+                ensure_utc(event.timestamp) + _TLS_RESUMPTION_STATE_HORIZON,
+            )
             network_preparation.stage_point(
                 NetworkRuntimePointFamily.TLS_SERVER_NAME,
                 tls_name_key,
                 True,
-                expires_at=network_point_expires_at,
+                expires_at=point_expiry,
             )
             network_preparation.stage_point(
                 NetworkRuntimePointFamily.TLS_CLIENT_SERVER_PAIR,
                 pair_key,
                 True,
-                expires_at=network_point_expires_at,
+                expires_at=point_expiry,
             )
         ssl_hist = _choose_ssl_history_from_roll(
             ssl_history_roll,
@@ -10730,181 +10674,6 @@ class ActivityGenerator:
             system_type=getattr(resolved_source, "type", None) if resolved_source else None,
             purpose_tags=purpose_tags,
         )
-
-    def _build_tls_certificate_chain(
-        self,
-        *,
-        leaf: Any,
-        cert_name: str,
-        issuer_name: str,
-        event_time: datetime,
-        connection_uid: str,
-        rng: random.Random,
-    ) -> list[Any]:
-        """Build a configured leaf/intermediate certificate chain."""
-        import hashlib
-
-        from evidenceforge.events.contexts import X509Context
-        from evidenceforge.generation.activity.tls_realism import (
-            certificate_authority_profile,
-            certificate_chain_config,
-            certificate_subject_key_profile,
-            chain_template_for_issuer,
-            signature_algorithm_for_issuer,
-        )
-
-        chain = [leaf]
-        if _is_ip_literal(cert_name):
-            return chain
-        config = certificate_chain_config()
-        include_probability = float(config.get("include_intermediate_probability", 0.86))
-        if rng.random() >= include_probability:
-            return chain
-
-        template = chain_template_for_issuer(issuer_name)
-        intermediate_subjects = [
-            str(subject) for subject in template.get("intermediates", []) if subject
-        ]
-        if not intermediate_subjects:
-            return chain
-
-        chain_rng = random.Random(_stable_seed(f"tls_chain:{cert_name}:{issuer_name}"))
-        second_probability = float(config.get("include_second_intermediate_probability", 0.08))
-        issuer_authority_profile = certificate_authority_profile(issuer_name)
-        if issuer_authority_profile is not None:
-            parent_issuer = str(issuer_authority_profile["issuer"])
-        else:
-            parent_issuer = chain_rng.choice(intermediate_subjects)
-
-        selected_certificates = [(issuer_name, parent_issuer)]
-        if parent_issuer != issuer_name and chain_rng.random() < second_probability:
-            selected_certificates.append((parent_issuer, parent_issuer))
-
-        for subject, certificate_issuer in selected_certificates:
-            resolved_issuer = certificate_issuer
-            authority_profile = certificate_authority_profile(subject)
-            if authority_profile is not None:
-                resolved_issuer = str(authority_profile["issuer"])
-            profile_key = (subject, resolved_issuer)
-            profile = self._tls_intermediate_profiles.get(profile_key)
-            if profile is None:
-                profile_rng = random.Random(
-                    _stable_seed(f"tls_intermediate_profile:{subject}:{resolved_issuer}")
-                )
-                if authority_profile is not None:
-                    validity = (
-                        int(authority_profile["not_valid_before"]),
-                        int(authority_profile["not_valid_after"]),
-                    )
-                    key_type = str(authority_profile["key_type"])
-                    key_length = int(authority_profile["key_length"])
-                else:
-                    validity = self._tls_cert_validity.get(subject)
-                    if validity is None:
-                        min_days = int(config.get("intermediate_validity_days_min", 1825))
-                        max_days = int(config.get("intermediate_validity_days_max", 3650))
-                        max_not_before = int(config.get("intermediate_not_before_max_days", 1460))
-                        validity = _certificate_validity_window(
-                            event_time,
-                            profile_rng,
-                            validity_days_min=min_days,
-                            validity_days_max=max_days,
-                            not_before_max_days=max_not_before,
-                            not_before_min_days=30,
-                        )
-                        self._tls_cert_validity[subject] = validity
-
-                    key_types = config.get(
-                        "key_types",
-                        [{"type": "rsa", "length": 2048, "weight": 100}],
-                    )
-                    weights = [int(entry.get("weight", 0)) for entry in key_types]
-                    selected_key = profile_rng.choices(key_types, weights=weights, k=1)[0]
-                    key_type = str(selected_key.get("type", "rsa"))
-                    key_length = int(selected_key.get("length", 2048))
-                    key_type, key_length = certificate_subject_key_profile(
-                        subject,
-                        fallback_type=key_type,
-                        fallback_length=key_length,
-                    )
-                validity = _bound_certificate_validity_to_issuer_window(
-                    validity,
-                    resolved_issuer,
-                    event_time,
-                )
-                self._tls_cert_validity[subject] = validity
-                key_type, key_length = _tls_key_for_certificate_name(subject, key_type, key_length)
-                serial_seed = "|".join(
-                    [
-                        "tls_chain_serial",
-                        subject,
-                        resolved_issuer,
-                        key_type,
-                        str(key_length),
-                        str(validity[0]),
-                        str(validity[1]),
-                    ]
-                )
-                serial = _tls_certificate_serial(serial_seed)
-                cert_hash = hashlib.sha1(
-                    "|".join(
-                        [
-                            "cert_chain",
-                            subject,
-                            serial,
-                            resolved_issuer,
-                            key_type,
-                            str(key_length),
-                            str(validity[0]),
-                            str(validity[1]),
-                        ]
-                    ).encode(),
-                    usedforsecurity=False,
-                ).hexdigest()
-                profile = {
-                    "fingerprint": cert_hash,
-                    "certificate_serial": serial,
-                    "certificate_subject": subject,
-                    "certificate_issuer": resolved_issuer,
-                    "certificate_not_valid_before": validity[0],
-                    "certificate_not_valid_after": validity[1],
-                    "certificate_key_type": key_type,
-                    "certificate_key_length": key_length,
-                }
-                self._tls_intermediate_profiles[profile_key] = profile
-            key_type = str(profile["certificate_key_type"])
-            key_length = int(profile["certificate_key_length"])
-            is_ecdsa = key_type == "ecdsa"
-            signature_alg = signature_algorithm_for_issuer(
-                str(profile["certificate_issuer"]),
-                fallback_type=key_type,
-                fallback_length=key_length,
-            )
-            chain.append(
-                X509Context(
-                    fuid=generate_stable_zeek_uid(
-                        "F",
-                        f"cert_chain_fuid:{subject}:{connection_uid}:{event_time.timestamp()}",
-                    ),
-                    fingerprint=str(profile["fingerprint"]),
-                    certificate_version=3,
-                    certificate_serial=str(profile["certificate_serial"]),
-                    certificate_subject=str(profile["certificate_subject"]),
-                    certificate_issuer=str(profile["certificate_issuer"]),
-                    certificate_not_valid_before=int(profile["certificate_not_valid_before"]),
-                    certificate_not_valid_after=int(profile["certificate_not_valid_after"]),
-                    certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
-                    certificate_sig_alg=signature_alg,
-                    certificate_key_type=key_type,
-                    certificate_key_length=key_length,
-                    certificate_exponent="65537" if not is_ecdsa else "",
-                    san_dns=[],
-                    basic_constraints_ca=True,
-                    host_cert=False,
-                    client_cert=False,
-                )
-            )
-        return chain
 
     def _build_expansion_context(
         self,

@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from evidenceforge.events.cryptography import CertificateIdentityPlan
+from evidenceforge.generation.actions import tls_certificate as tls_certificate_module
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
 from evidenceforge.generation.activity.tls_realism import certificate_authority_profile
 from evidenceforge.generation.cryptographic_material import (
@@ -137,6 +138,77 @@ def test_leaf_issuer_bound_preserves_independent_issuance_seconds() -> None:
     assert issuer_start < first[0] < int(event_time.timestamp())
     assert first[1] <= issuer_end
     assert second[0] != first[0]
+
+
+@pytest.mark.parametrize(
+    ("issuer_name", "authority_key_type", "authority_key_size"),
+    (
+        ("CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US", "ecdsa", 256),
+        ("CN=E1, O=Let's Encrypt, C=US", "ecdsa", 256),
+        (
+            "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE",
+            "rsa",
+            2048,
+        ),
+    ),
+)
+def test_tls_planner_owns_stable_authority_chain_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+    issuer_name: str,
+    authority_key_type: str,
+    authority_key_size: int,
+) -> None:
+    monkeypatch.setattr(
+        tls_certificate_module,
+        "certificate_chain_config",
+        lambda: {
+            "include_intermediate_probability": 1.0,
+            "include_second_intermediate_probability": 0.0,
+            "present_trust_anchor": False,
+        },
+    )
+    registry = CryptographicMaterialRegistry()
+    planner = TlsCertificatePlanner(registry)
+    issuer_config = {
+        "name": issuer_name,
+        "validity_days_min": 90,
+        "validity_days_max": 90,
+        "not_before_max_days": 30,
+    }
+
+    first = planner.plan(
+        backend_identity="first.example",
+        cert_name="first.example",
+        issuer_config=issuer_config,
+        event_time=_EVENT_TIME,
+        connection_identity="CFirstAuthority",
+        key_type="rsa",
+        key_size=2048,
+        san_dns=("first.example",),
+    )
+    second = planner.plan(
+        backend_identity="second.example",
+        cert_name="second.example",
+        issuer_config=issuer_config,
+        event_time=_EVENT_TIME,
+        connection_identity="CSecondAuthority",
+        key_type="rsa",
+        key_size=2048,
+        san_dns=("second.example",),
+    )
+
+    assert len(first.certificates) == len(second.certificates) == 2
+    first_leaf, first_authority = first.certificates
+    _second_leaf, second_authority = second.certificates
+    assert first_authority == second_authority
+    assert first.certificate_fuids[1] != second.certificate_fuids[1]
+    assert first_leaf.issuer_name == first_authority.subject_name
+    assert first_authority.key_type == authority_key_type
+    assert first_authority.key_size == authority_key_size
+    assert first_authority.not_valid_before <= first_leaf.not_valid_before
+    assert first_leaf.not_valid_after <= first_authority.not_valid_after
+    contexts = planner.x509_contexts(first)
+    planner.validate_projection(first, contexts)
 
 
 def test_tls_preparation_cancel_is_exactly_registry_neutral() -> None:

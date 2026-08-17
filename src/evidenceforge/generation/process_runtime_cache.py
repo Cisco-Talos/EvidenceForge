@@ -1141,7 +1141,6 @@ _BOUNDED_LEGACY_FIELDS = (
     "_visible_account_created_at",
     "_visible_account_kerberos_transport_emitted",
     "_next_icmp_observation_ts_us",
-    "_tls_intermediate_profiles",
     "_ntp_association_profiles",
     "_ntp_server_response_profiles",
     "_ntp_last_parser_times",
@@ -1149,18 +1148,18 @@ _BOUNDED_LEGACY_FIELDS = (
     "_postfix_qmgr_pid_cache",
 )
 _DEFINITE_GROWING_FIELDS = ("_ssh_source_ports",)
-_CONDITIONAL_GROWING_FIELDS = (
-    "_tls_seen_server_names",
-    "_tls_seen_client_server_pairs",
-    "_tls_cert_validity",
-)
+_CONDITIONAL_GROWING_FIELDS: tuple[str, ...] = ()
 REMOVED_DEAD_ACTIVITY_GENERATOR_MUTABLE_FIELDS = (
     "_dns_observation_cache",
     "_dns_resolver_rrset_cache",
     "_kerberos_cache",
     "_linux_local_logind_session_ids",
+    "_tls_cert_validity",
+    "_tls_intermediate_profiles",
     "_tls_ocsp_windows",
     "_tls_ocsp_response_sizes",
+    "_tls_seen_client_server_pairs",
+    "_tls_seen_server_names",
 )
 REMOVED_DURATION_SIZED_ACTIVITY_GENERATOR_FIELDS = ("_email_artifact_manifest",)
 

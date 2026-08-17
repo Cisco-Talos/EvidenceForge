@@ -105,13 +105,14 @@ def _make_activity_gen() -> tuple[ActivityGenerator, list[OccurrenceBuilder]]:
     dispatcher = EventDispatcher(state_manager, mock_emitters)
 
     captured_events = []
-    original_dispatch = dispatcher.dispatch
+    original_publish_prepared = dispatcher.publish_prepared
 
-    def capturing_dispatch(event):
-        captured_events.append(event)
-        original_dispatch(event)
+    def capturing_publish_prepared(prepared, *args, **kwargs):
+        result = original_publish_prepared(prepared, *args, **kwargs)
+        captured_events.append(prepared._occurrence)
+        return result
 
-    dispatcher.dispatch = capturing_dispatch
+    dispatcher.publish_prepared = capturing_publish_prepared
 
     gen = ActivityGenerator(state_manager, mock_emitters, dispatcher=dispatcher)
     return gen, captured_events
@@ -3659,7 +3660,6 @@ class TestSslContextPopulation:
                 conn_state="SF",
                 source_system=client,
             )
-            gen._tls_seen_server_names.clear()
 
         ocsp_events = [event for event in events if event.protocol.ocsp is not None]
         assert ocsp_events
@@ -3715,7 +3715,6 @@ class TestSslContextPopulation:
                 conn_state="SF",
                 source_system=proxy,
             )
-            gen._tls_seen_server_names.clear()
 
         ocsp_events = [event for event in events if event.protocol.ocsp is not None]
         assert ocsp_events
@@ -3727,9 +3726,9 @@ class TestSslContextPopulation:
     def test_same_certificate_identity_has_stable_validity_window(self, activity_gen):
         gen, events = activity_gen
 
-        for offset in (0, 3600):
+        for client_offset, offset in enumerate((0, 3600)):
             gen.generate_connection(
-                src_ip="10.0.10.50",
+                src_ip=f"10.0.10.{50 + client_offset}",
                 dst_ip="142.250.72.36",
                 time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC) + timedelta(seconds=offset),
                 dst_port=443,
@@ -3741,7 +3740,6 @@ class TestSslContextPopulation:
                 hostname="pypi.org",
                 conn_state="SF",
             )
-            gen._tls_seen_server_names.clear()
 
         cert_events = [event for event in events if event.protocol.leaf_certificate is not None]
         assert len(cert_events) == 2
