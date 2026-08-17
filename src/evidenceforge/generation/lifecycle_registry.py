@@ -7728,7 +7728,7 @@ class LifecycleActionCohortAdmissionToken:
         return self._integrity
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class LifecycleActionCohortReceipt:
     """Authenticated proof of one complete ordered lifecycle transaction."""
 
@@ -7827,6 +7827,10 @@ class LifecycleActionCohortPreparationCensus:
     committing_reservations: int
     reserved_keys: int
     capability_locators: int
+    claimed_capability_locators: int
+    certified_authorization_locators: int
+    expected_receipt_authorities: int
+    committed_receipt_authorities: int
     retained_request_bytes: int
     committed_provenance: int
     pending_provenance_insertions: int
@@ -7836,6 +7840,7 @@ class LifecycleActionCohortPreparationCensus:
     reserved_key_capacity: int
     request_byte_capacity: int
     committed_provenance_capacity: int
+    receipt_authority_capacity: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -8329,8 +8334,20 @@ class _PreparedActionCohortOperation:
     operation: LifecycleActionCohortOperation
     partition_id: int
     session_start: _PreparedSessionPartitionStart | None = None
+    session_registration: PreparedSessionRegistration | None = None
     process_start: _PreparedProcessPartitionStart | None = None
+    process_registration: PreparedProcessRegistration | None = None
     prior_session_route: object | None = None
+    hold_transition: LifecycleTransition | None = None
+    closure_ticket: LifecycleClosureTicket | None = None
+    closure_transitions: (
+        tuple[
+            LifecycleTransition,
+            LifecycleTransition,
+            LifecycleTransition,
+        ]
+        | None
+    ) = None
     effective_at: datetime | None = None
     already_present: bool = False
 
@@ -8342,10 +8359,15 @@ class _PreparedActionCohortCommitPlan:
     token: LifecycleActionCohortAdmissionToken
     operations: tuple[_PreparedActionCohortOperation, ...]
     partition_ids: tuple[int, ...]
+    route_keys: tuple[tuple[str, str], ...]
     reservation_keys: tuple[tuple[str, str], ...]
     receipt_request_preimage: bytes
     operations_digest: str
     retry_receipt: LifecycleActionCohortReceipt | None = None
+    expected_receipt: LifecycleActionCohortReceipt | None = None
+    terminal_receipt_template: LifecycleActionCohortReceipt | None = None
+    provenance_receipt: LifecycleActionCohortReceipt | None = None
+    provenance_record: _CommittedActionCohortProvenance | None = None
     already_present: bool = False
 
 
@@ -8375,22 +8397,83 @@ class _ActionCohortReservation:
     retry_receipt: LifecycleActionCohortReceipt | None = None
     claimed: bool = False
     committing: bool = False
+    composite_certified: bool = False
+    claim_exhausted: bool = False
+    claimed_capability_id: int | None = None
+    certified_capability_id: int | None = None
+    receipt_authority_id: int | None = None
     claim_thread_id: int | None = None
     commit_plan: _PreparedActionCohortCommitPlan | None = None
 
 
-class PreparedLifecycleActionCohort:
-    """One-shot no-validation commit capability for a claimed action cohort."""
+@dataclass(slots=True)
+class _ActionCohortReceiptAuthority:
+    """Registry-owned exact authority for one claim-local receipt object."""
 
-    __slots__ = ("_active", "_committed", "_registry", "_result", "_token")
+    receipt_ref: ReferenceType[LifecycleActionCohortReceipt]
+    preparation_id: int
+    plan_digest: str
+    state_publication_token: str
+    request_id: int
+    results_id: int
+    committed_digest: str
+    integrity: str
+    committed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortCommitAuthorization:
+    """Private trusted references retained after one complete commit sweep."""
+
+    reservation: _ActionCohortReservation
+    commit_plan: _PreparedActionCohortCommitPlan
+    expected_receipt: LifecycleActionCohortReceipt
+    receipt_authority: _ActionCohortReceiptAuthority
+    provenance_record: _CommittedActionCohortProvenance | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortClaimedCapabilityLocator:
+    """Registry-owned exact wrapper binding for one active claimed reservation."""
+
+    capability_ref: ReferenceType[PreparedLifecycleActionCohort]
+    reservation: _ActionCohortReservation
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortCertifiedAuthorizationLocator:
+    """Registry-owned exact capability binding for one certified authorization."""
+
+    capability_ref: ReferenceType[PreparedLifecycleActionCohort]
+    authorization: _ActionCohortCommitAuthorization
+
+
+class PreparedLifecycleActionCohort:
+    """One-shot claimed action cohort with a preauthenticated expected receipt."""
+
+    __slots__ = (
+        "__weakref__",
+        "_active",
+        "_claim_thread_id",
+        "_committed",
+        "_expected_receipt",
+        "_registry",
+        "_result",
+        "_token",
+    )
 
     def __init__(
         self,
         registry: LifecycleRegistry,
         token: LifecycleActionCohortAdmissionToken,
+        expected_receipt: LifecycleActionCohortReceipt,
+        *,
+        claim_thread_id: int,
     ) -> None:
         self._registry = registry
         self._token = token
+        self._expected_receipt = expected_receipt
+        self._claim_thread_id = claim_thread_id
         self._active = True
         self._committed = False
         self._result: LifecycleActionCohortReceipt | None = None
@@ -8407,6 +8490,37 @@ class PreparedLifecycleActionCohort:
 
         return self._result
 
+    @property
+    def expected_receipt(self) -> LifecycleActionCohortReceipt:
+        """Return the exact immutable receipt authenticated by this active claim."""
+
+        if not self._active:
+            raise StateError("Prepared lifecycle action cohort is no longer active")
+        return self._expected_receipt
+
+    def certify_composite_commit(
+        self,
+        expected_receipt: LifecycleActionCohortReceipt,
+    ) -> None:
+        """Authenticate this exact claim once for a composite commit tail."""
+
+        if not self._active:
+            raise StateError("Prepared lifecycle action cohort is no longer active")
+        if self._committed:
+            raise StateError("Prepared lifecycle action cohort is already committed")
+        if get_ident() != self._claim_thread_id:
+            raise StateError("Lifecycle action cohort must be certified on its claiming thread")
+        if expected_receipt is not self._expected_receipt:
+            raise StateError(
+                "Lifecycle action-cohort composite certification requires its exact "
+                "expected receipt object"
+            )
+        self._registry._certify_claimed_action_cohort(
+            self,
+            self._token,
+            expected_receipt=expected_receipt,
+        )
+
     def commit_no_fail(self) -> LifecycleActionCohortReceipt:
         """Publish every prevalidated primitive exactly once."""
 
@@ -8414,7 +8528,13 @@ class PreparedLifecycleActionCohort:
             raise StateError("Prepared lifecycle action cohort is no longer active")
         if self._committed:
             raise StateError("Prepared lifecycle action cohort is already committed")
-        self._result = self._registry._commit_claimed_action_cohort(self._token)
+        if get_ident() != self._claim_thread_id:
+            raise StateError("Lifecycle action cohort must commit on its claiming thread")
+        self._result = self._registry._commit_prepared_action_cohort(
+            self,
+            token=self._token,
+            expected_receipt=self._expected_receipt,
+        )
         self._committed = True
         return self._result
 
@@ -8481,6 +8601,17 @@ class LifecycleRegistry:
         self._action_cohort_claimed_reservations = 0
         self._action_cohort_committing_reservations = 0
         self._action_cohort_capability_locators: dict[int, int] = {}
+        self._action_cohort_claimed_capabilities: dict[
+            int, _ActionCohortClaimedCapabilityLocator
+        ] = {}
+        self._action_cohort_certified_authorizations: dict[
+            int, _ActionCohortCertifiedAuthorizationLocator
+        ] = {}
+        self._action_cohort_receipt_authorities: OrderedDict[int, _ActionCohortReceiptAuthority] = (
+            OrderedDict()
+        )
+        self._action_cohort_expected_receipt_authorities = 0
+        self._action_cohort_committed_receipt_authorities = 0
         self._action_cohort_reserved_keys: dict[tuple[str, str], int] = {}
         self._action_cohort_retained_request_bytes = 0
         self._action_cohort_operation_capacity = _MAX_ACTION_COHORT_OPERATIONS_PER_REQUEST
@@ -8488,6 +8619,9 @@ class LifecycleRegistry:
         self._action_cohort_reserved_key_capacity = _MAX_ACTION_COHORT_RESERVED_KEYS
         self._action_cohort_request_byte_capacity = _MAX_ACTION_COHORT_REQUEST_BYTES
         self._action_cohort_provenance_capacity = _MAX_ACTION_COHORT_COMMITTED_PROVENANCE
+        self._action_cohort_receipt_authority_capacity = (
+            _MAX_ACTION_COHORT_COMMITTED_PROVENANCE + _MAX_ACTION_COHORT_RESERVATIONS
+        )
         self._action_cohort_committed_provenance: OrderedDict[
             tuple[str, str], _CommittedActionCohortProvenance
         ] = OrderedDict()
@@ -9766,10 +9900,18 @@ class LifecycleRegistry:
             TypeError,
             ValueError,
         ) as exc:
-            self._release_action_cohort_reservation_locked(active)
-            if isinstance(exc, StateError):
+            primary = (
+                exc
+                if isinstance(exc, StateError)
+                else StateError("Lifecycle action-cohort token is malformed")
+            )
+            _cleanup_required, cleanup_failures = self._cleanup_action_cohort_reservation_locked(
+                active
+            )
+            self._add_action_cohort_cleanup_notes(primary, cleanup_failures)
+            if primary is exc:
                 raise
-            raise StateError("Lifecycle action-cohort token is malformed") from exc
+            raise primary from exc
         return active
 
     def _release_action_cohort_reservation_locked(
@@ -9778,32 +9920,78 @@ class LifecycleRegistry:
         *,
         allow_committing: bool = False,
     ) -> bool:
+        """Release one reservation through the ordinary injectable seam."""
+
+        return self._release_action_cohort_reservation_state_locked(
+            reservation,
+            allow_committing=allow_committing,
+        )
+
+    def _release_action_cohort_reservation_state_locked(
+        self,
+        reservation: _ActionCohortReservation,
+        *,
+        allow_committing: bool = False,
+    ) -> bool:
+        """Release exact reservation state for owner-local cleanup reconciliation."""
+
         if reservation.committing and not allow_committing:
             return False
         preparation_id = reservation.canonical_token.preparation_id
-        if self._action_cohort_reservations.pop(preparation_id, None) is not reservation:
+        if self._action_cohort_reservations.get(preparation_id) is not reservation:
             return False
         if reservation.claimed:
             self._action_cohort_claimed_reservations -= 1
+            reservation.claimed = False
         if reservation.committing:
             self._action_cohort_committing_reservations -= 1
+            reservation.committing = False
+        claimed_capability_id = reservation.claimed_capability_id
+        if claimed_capability_id is not None:
+            self._action_cohort_claimed_capabilities.pop(claimed_capability_id, None)
+            reservation.claimed_capability_id = None
+        certified_capability_id = reservation.certified_capability_id
+        if certified_capability_id is not None:
+            self._action_cohort_certified_authorizations.pop(certified_capability_id, None)
+            reservation.certified_capability_id = None
+        receipt_authority_id = reservation.receipt_authority_id
+        if receipt_authority_id is not None:
+            authority = self._action_cohort_receipt_authorities.pop(
+                receipt_authority_id,
+                None,
+            )
+            if authority is not None:
+                if authority.committed:
+                    self._action_cohort_committed_receipt_authorities -= 1
+                else:
+                    self._action_cohort_expected_receipt_authorities -= 1
+            reservation.receipt_authority_id = None
         self._action_cohort_capability_locators.pop(reservation.token_id, None)
-        self._action_cohort_retained_request_bytes -= reservation.request_bytes
+        if reservation.request_bytes:
+            self._action_cohort_retained_request_bytes -= reservation.request_bytes
+            reservation.request_bytes = 0
         if reservation.provenance_new:
             self._action_cohort_pending_provenance_insertions -= 1
             if reservation.provenance_eviction is not None:
                 self._action_cohort_pending_provenance_evictions.discard(
                     reservation.provenance_eviction
                 )
+            reservation.provenance_new = False
+            reservation.provenance_eviction = None
         elif reservation.retry_receipt is not None:
             remaining = self._action_cohort_provenance_pins[reservation.provenance_binding] - 1
             if remaining:
                 self._action_cohort_provenance_pins[reservation.provenance_binding] = remaining
             else:
                 self._action_cohort_provenance_pins.pop(reservation.provenance_binding)
+            reservation.retry_receipt = None
         for key in reservation.keys:
             if self._action_cohort_reserved_keys.get(key) == preparation_id:
                 self._action_cohort_reserved_keys.pop(key)
+        reservation.composite_certified = False
+        reservation.claim_thread_id = None
+        reservation.commit_plan = None
+        self._action_cohort_reservations.pop(preparation_id, None)
         if not self._action_cohort_reservations:
             self._action_cohort_reserved_keys.clear()
         self._closed_transport_preparation_condition.notify_all()
@@ -9877,7 +10065,7 @@ class LifecycleRegistry:
     def _record_action_cohort_provenance_locked(
         self,
         reservation: _ActionCohortReservation,
-        receipt: LifecycleActionCohortReceipt,
+        provenance: _CommittedActionCohortProvenance,
     ) -> None:
         """Apply one already-preflighted FIFO eviction and insert exact commit provenance."""
 
@@ -9890,11 +10078,6 @@ class LifecycleRegistry:
                 == eviction
             ):
                 self._action_cohort_provenance_by_operations.pop(evicted.operations_digest)
-        provenance = _CommittedActionCohortProvenance(
-            binding=reservation.provenance_binding,
-            operations_digest=reservation.operations_digest,
-            receipt=deepcopy(receipt),
-        )
         self._action_cohort_committed_provenance[reservation.provenance_binding] = provenance
         self._action_cohort_provenance_by_operations[reservation.operations_digest] = (
             reservation.provenance_binding
@@ -9903,20 +10086,107 @@ class LifecycleRegistry:
     def _discard_action_cohort_reservation_for_token(
         self,
         token: LifecycleActionCohortAdmissionToken,
-    ) -> None:
+    ) -> bool:
         """Best-effort cleanup keyed only by the exact token object capability."""
 
         with self._gate.mutation(), self._closed_transport_preparation_lock:
             preparation_id = self._action_cohort_capability_locators.get(id(token))
             if preparation_id is None:
-                return
+                return False
             reservation = self._action_cohort_reservations.get(preparation_id)
             if (
                 reservation is not None
                 and reservation.token_ref() is token
                 and not reservation.committing
             ):
-                self._release_action_cohort_reservation_locked(reservation)
+                return self._release_action_cohort_reservation_locked(reservation)
+            return False
+
+    @staticmethod
+    def _add_action_cohort_cleanup_notes(
+        primary: BaseException,
+        failures: tuple[BaseException, ...],
+    ) -> None:
+        """Attach cleanup diagnostics without replacing the initiating exception."""
+
+        for ordinal, failure in enumerate(failures, start=1):
+            try:
+                primary.add_note(
+                    "Lifecycle action-cohort claim cleanup failure "
+                    f"{ordinal}: {type(failure).__name__}"
+                )
+            except BaseException:
+                continue
+
+    def _cleanup_claimed_action_cohort_reservation(
+        self,
+        reservation: _ActionCohortReservation,
+    ) -> tuple[bool, tuple[BaseException, ...]]:
+        """Release one exact owner-local claim with bounded all-attempt fallback."""
+
+        with self._gate.mutation(), self._closed_transport_preparation_lock:
+            return self._cleanup_action_cohort_reservation_locked(reservation)
+
+    def _cleanup_action_cohort_reservation_locked(
+        self,
+        reservation: _ActionCohortReservation,
+    ) -> tuple[bool, tuple[BaseException, ...]]:
+        """Reconcile one exact reservation while its owner locks are already held."""
+
+        failures: list[BaseException] = []
+        cleanup_required = False
+        for attempt in range(3):
+            try:
+                preparation_id = reservation.canonical_token.preparation_id
+                active = self._action_cohort_reservations.get(preparation_id)
+                if active is not reservation:
+                    return cleanup_required, tuple(failures)
+                cleanup_required = True
+                if reservation.committing:
+                    failures.append(
+                        StateError(
+                            "Committing lifecycle action cohort requires primitive rollback "
+                            "before claim cleanup"
+                        )
+                    )
+                    return cleanup_required, tuple(failures)
+                if attempt == 0:
+                    released = self._release_action_cohort_reservation_locked(reservation)
+                else:
+                    released = self._release_action_cohort_reservation_state_locked(reservation)
+                if released:
+                    return cleanup_required, tuple(failures)
+            except BaseException as exc:
+                failures.append(exc)
+        return cleanup_required, tuple(failures)
+
+    def retry_claimed_action_cohort_cleanup(
+        self,
+        capability: PreparedLifecycleActionCohort,
+    ) -> None:
+        """Retry cleanup for an exact exhausted claim whose finalizer could not detach it."""
+
+        with self._closed_transport_preparation_lock:
+            locator = self._action_cohort_claimed_capabilities.get(id(capability))
+            if locator is None or locator.capability_ref() is not capability:
+                raise StateError(
+                    "Lifecycle action cohort has no retryable exact claimed cleanup locator"
+                )
+            reservation = locator.reservation
+        cleanup_required, failures = self._cleanup_claimed_action_cohort_reservation(reservation)
+        with self._closed_transport_preparation_lock:
+            cleanup_complete = (
+                self._action_cohort_reservations.get(reservation.canonical_token.preparation_id)
+                is not reservation
+            )
+        if cleanup_complete:
+            return
+        if failures:
+            primary = failures[0]
+            self._add_action_cohort_cleanup_notes(primary, failures[1:])
+            raise primary
+        if not cleanup_required:
+            raise StateError("Lifecycle action cohort cleanup is already complete")
 
     def _action_cohort_existing_state_locked(
         self,
@@ -10156,6 +10426,12 @@ class LifecycleRegistry:
                         operation=operation,
                         partition_id=partition_id,
                         session_start=prepared,
+                        session_registration=PreparedSessionRegistration(
+                            _registry=self,
+                            _partition_id=partition_id,
+                            _prepared=prepared,
+                            _prior_session_route=prior_session,
+                        ),
                         prior_session_route=prior_session,
                         already_present=already_present,
                     )
@@ -10231,6 +10507,12 @@ class LifecycleRegistry:
                         operation=operation,
                         partition_id=partition_id,
                         process_start=prepared,
+                        process_registration=PreparedProcessRegistration(
+                            _registry=self,
+                            _partition_id=partition_id,
+                            _prepared=prepared,
+                            _membership=operation.membership,
+                        ),
                         already_present=already_present,
                     )
                 )
@@ -10327,6 +10609,7 @@ class LifecycleRegistry:
                     _PreparedActionCohortOperation(
                         operation=operation,
                         partition_id=partition_id,
+                        hold_transition=transition,
                         already_present=already_present,
                     )
                 )
@@ -10372,6 +10655,8 @@ class LifecycleRegistry:
                     _PreparedActionCohortOperation(
                         operation=operation,
                         partition_id=partition_id,
+                        closure_ticket=expected[0],
+                        closure_transitions=expected[1:],
                         effective_at=ticket.effective_at,
                         already_present=True,
                     )
@@ -10449,6 +10734,8 @@ class LifecycleRegistry:
                 _PreparedActionCohortOperation(
                     operation=operation,
                     partition_id=partition_id,
+                    closure_ticket=expected[0],
+                    closure_transitions=expected[1:],
                     effective_at=effective_at,
                 )
             )
@@ -10483,6 +10770,7 @@ class LifecycleRegistry:
             token=token,
             operations=tuple(prepared_operations),
             partition_ids=partition_ids,
+            route_keys=self._action_cohort_route_keys(request),
             reservation_keys=tuple(dict.fromkeys(reservation_keys)),
             receipt_request_preimage=receipt_request_preimage,
             operations_digest=operations_digest,
@@ -10681,6 +10969,10 @@ class LifecycleRegistry:
                 committing_reservations=self._action_cohort_committing_reservations,
                 reserved_keys=len(self._action_cohort_reserved_keys),
                 capability_locators=len(self._action_cohort_capability_locators),
+                claimed_capability_locators=len(self._action_cohort_claimed_capabilities),
+                certified_authorization_locators=len(self._action_cohort_certified_authorizations),
+                expected_receipt_authorities=(self._action_cohort_expected_receipt_authorities),
+                committed_receipt_authorities=(self._action_cohort_committed_receipt_authorities),
                 retained_request_bytes=self._action_cohort_retained_request_bytes,
                 committed_provenance=len(self._action_cohort_committed_provenance),
                 pending_provenance_insertions=(self._action_cohort_pending_provenance_insertions),
@@ -10690,7 +10982,125 @@ class LifecycleRegistry:
                 reserved_key_capacity=self._action_cohort_reserved_key_capacity,
                 request_byte_capacity=self._action_cohort_request_byte_capacity,
                 committed_provenance_capacity=self._action_cohort_provenance_capacity,
+                receipt_authority_capacity=self._action_cohort_receipt_authority_capacity,
             )
+
+    def _prune_action_cohort_receipt_authorities_locked(self) -> int:
+        """Drop dead committed receipt locators without traversing receipt values."""
+
+        pruned = 0
+        for receipt_id, authority in tuple(self._action_cohort_receipt_authorities.items()):
+            if not authority.committed or authority.receipt_ref() is not None:
+                continue
+            if self._action_cohort_receipt_authorities.pop(receipt_id, None) is authority:
+                self._action_cohort_committed_receipt_authorities -= 1
+                pruned += 1
+        return pruned
+
+    def prune_action_cohort_receipt_authorities(self) -> int:
+        """Prune dead exact committed-receipt authorities within their finite cap."""
+
+        with self._closed_transport_preparation_lock:
+            return self._prune_action_cohort_receipt_authorities_locked()
+
+    def _register_action_cohort_expected_receipt_authority_locked(
+        self,
+        receipt: LifecycleActionCohortReceipt,
+        reservation: _ActionCohortReservation,
+    ) -> None:
+        """Pre-register one exact expected receipt before exposing its claim."""
+
+        self._prune_action_cohort_receipt_authorities_locked()
+        receipt_id = id(receipt)
+        prior = self._action_cohort_receipt_authorities.get(receipt_id)
+        if prior is not None:
+            raise StateError("Lifecycle action-cohort receipt authority identity is already in use")
+        while (
+            len(self._action_cohort_receipt_authorities)
+            >= self._action_cohort_receipt_authority_capacity
+        ):
+            eviction_id = next(
+                (
+                    candidate_id
+                    for candidate_id, candidate in self._action_cohort_receipt_authorities.items()
+                    if candidate.committed
+                ),
+                None,
+            )
+            if eviction_id is None:
+                raise StateError(
+                    "Lifecycle action-cohort receipt authority capacity is exhausted by "
+                    "active claims"
+                )
+            self._action_cohort_receipt_authorities.pop(eviction_id)
+            self._action_cohort_committed_receipt_authorities -= 1
+        self._action_cohort_receipt_authorities[receipt_id] = _ActionCohortReceiptAuthority(
+            receipt_ref=ref(receipt),
+            preparation_id=reservation.canonical_token.preparation_id,
+            plan_digest=reservation.canonical_token.plan_digest,
+            state_publication_token=(reservation.canonical_token.request.state_publication_token),
+            request_id=id(receipt.request),
+            results_id=id(receipt.operation_results),
+            committed_digest=receipt.committed_digest,
+            integrity=receipt._integrity,
+        )
+        self._action_cohort_expected_receipt_authorities += 1
+        reservation.receipt_authority_id = receipt_id
+
+    def _register_claimed_action_cohort_capability_locked(
+        self,
+        capability: PreparedLifecycleActionCohort,
+        reservation: _ActionCohortReservation,
+    ) -> None:
+        """Bind one exact yielded wrapper to its registry-owned claimed reservation."""
+
+        capability_id = id(capability)
+        preparation_id = reservation.canonical_token.preparation_id
+        if (
+            self._action_cohort_reservations.get(preparation_id) is not reservation
+            or not reservation.claimed
+            or reservation.claim_exhausted
+            or reservation.claim_thread_id != get_ident()
+            or reservation.claimed_capability_id is not None
+            or capability_id in self._action_cohort_claimed_capabilities
+        ):
+            raise StateError(
+                "Lifecycle action-cohort claim cannot register its exact prepared capability"
+            )
+        self._action_cohort_claimed_capabilities[capability_id] = (
+            _ActionCohortClaimedCapabilityLocator(
+                capability_ref=ref(capability),
+                reservation=reservation,
+            )
+        )
+        reservation.claimed_capability_id = capability_id
+
+    def _claimed_action_cohort_reservation_for_capability_locked(
+        self,
+        capability: PreparedLifecycleActionCohort,
+    ) -> _ActionCohortReservation:
+        """Resolve one active claim by exact registry-owned wrapper identity."""
+
+        capability_id = id(capability)
+        locator = self._action_cohort_claimed_capabilities.get(capability_id)
+        if locator is None:
+            raise StateError(
+                "Lifecycle action cohort is not the exact registered prepared capability"
+            )
+        reservation = locator.reservation
+        preparation_id = reservation.canonical_token.preparation_id
+        if (
+            locator.capability_ref() is not capability
+            or reservation.claimed_capability_id != capability_id
+            or self._action_cohort_reservations.get(preparation_id) is not reservation
+            or not reservation.claimed
+            or reservation.claim_exhausted
+            or reservation.claim_thread_id != get_ident()
+        ):
+            raise StateError(
+                "Lifecycle action cohort is not the exact registered prepared capability"
+            )
+        return reservation
 
     @contextmanager
     def claimed_action_cohort(
@@ -10705,10 +11115,14 @@ class LifecycleRegistry:
             if reservation.claimed:
                 raise StateError("Lifecycle action-cohort token is already claimed")
             if self._watermark != canonical_token.expected_watermark:
-                self._release_action_cohort_reservation_locked(reservation)
-                raise StateError(
+                primary = StateError(
                     "Lifecycle action-cohort admission is stale after watermark advance"
                 )
+                _cleanup_required, cleanup_failures = (
+                    self._cleanup_action_cohort_reservation_locked(reservation)
+                )
+                self._add_action_cohort_cleanup_notes(primary, cleanup_failures)
+                raise primary
             route_keys = self._action_cohort_route_keys(canonical_token.request)
             try:
                 with self._routes.locked(route_keys):
@@ -10722,6 +11136,7 @@ class LifecycleRegistry:
                             canonical_token,
                             partition_ids=partition_ids,
                         )
+                        self._prepare_action_cohort_expected_receipts_locked(commit_plan)
                 if commit_plan.reservation_keys != reservation.keys:
                     raise StateError("Lifecycle action-cohort relationship ownership changed")
                 if (
@@ -10736,27 +11151,71 @@ class LifecycleRegistry:
                     canonical_token,
                 ):
                     raise StateError("Lifecycle action-cohort token was mutated after preparation")
-            except BaseException:
-                self._release_action_cohort_reservation_locked(reservation)
+            except BaseException as primary:
+                _cleanup_required, cleanup_failures = (
+                    self._cleanup_action_cohort_reservation_locked(reservation)
+                )
+                self._add_action_cohort_cleanup_notes(primary, cleanup_failures)
                 raise
             reservation.commit_plan = commit_plan
             reservation.claimed = True
-            reservation.claim_thread_id = get_ident()
+            claim_thread_id = get_ident()
+            reservation.claim_thread_id = claim_thread_id
             self._action_cohort_claimed_reservations += 1
 
-        capability = PreparedLifecycleActionCohort(self, token)
+        expected_receipt = commit_plan.expected_receipt
+        if expected_receipt is None:
+            primary = StateError("Claimed lifecycle action cohort lost its expected receipt")
+            _cleanup_required, cleanup_failures = self._cleanup_claimed_action_cohort_reservation(
+                reservation
+            )
+            self._add_action_cohort_cleanup_notes(primary, cleanup_failures)
+            raise primary
+        capability = PreparedLifecycleActionCohort(
+            self,
+            token,
+            expected_receipt,
+            claim_thread_id=claim_thread_id,
+        )
+        try:
+            with self._gate.mutation(), self._closed_transport_preparation_lock:
+                self._register_action_cohort_expected_receipt_authority_locked(
+                    expected_receipt,
+                    reservation,
+                )
+                self._register_claimed_action_cohort_capability_locked(
+                    capability,
+                    reservation,
+                )
+        except BaseException as primary:
+            _cleanup_required, cleanup_failures = self._cleanup_claimed_action_cohort_reservation(
+                reservation
+            )
+            self._add_action_cohort_cleanup_notes(primary, cleanup_failures)
+            reservation.claim_exhausted = True
+            object.__setattr__(capability, "_active", False)
+            raise
         try:
             yield capability
-        except BaseException:
-            if not capability.committed:
-                self._discard_action_cohort_reservation_for_token(token)
+        except BaseException as primary:
+            _cleanup_required, cleanup_failures = self._cleanup_claimed_action_cohort_reservation(
+                reservation
+            )
+            self._add_action_cohort_cleanup_notes(primary, cleanup_failures)
             raise
         else:
-            if not capability.committed:
-                self._discard_action_cohort_reservation_for_token(token)
-                raise StateError("Claimed lifecycle action cohort exited without commit_no_fail")
+            cleanup_required, cleanup_failures = self._cleanup_claimed_action_cohort_reservation(
+                reservation
+            )
+            if cleanup_required:
+                primary = StateError(
+                    "Claimed lifecycle action cohort exited without commit_no_fail"
+                )
+                self._add_action_cohort_cleanup_notes(primary, cleanup_failures)
+                raise primary
         finally:
-            capability._close()
+            reservation.claim_exhausted = True
+            object.__setattr__(capability, "_active", False)
 
     def _cancel_claimed_action_cohort(
         self,
@@ -10996,14 +11455,277 @@ class LifecycleRegistry:
         digest.update(repr(results).encode("utf-8"))
         return digest.hexdigest()
 
-    def authenticates_action_cohort_receipt(
+    def _action_cohort_expected_transition_snapshot(
+        self,
+        snapshot: ProcessLifecycleSnapshot | SessionLifecycleSnapshot,
+        transition: LifecycleTransition,
+    ) -> ProcessLifecycleSnapshot | SessionLifecycleSnapshot:
+        """Project one already-admitted transition into an immutable result snapshot."""
+
+        transitions = sorted(
+            (*snapshot.transitions, transition),
+            key=lambda item: item.order_key,
+        )
+        if len(transitions) > self._snapshot_history_limit:
+            transitions = transitions[-self._snapshot_history_limit :]
+        visible = tuple(
+            item
+            for item in transitions
+            if self._ledger_floor is None or item.canonical_time > self._ledger_floor
+        )
+        transition_count = snapshot.transition_count + 1
+        transition_digest = int(snapshot.transition_ledger_digest or "0", 16)
+        transition_digest ^= _transition_digest_value(transition)
+        latest_dependent_at = snapshot.latest_dependent_at
+        if transition.kind in _STREAMED_TRANSITION_KINDS and (
+            latest_dependent_at is None or transition.canonical_time > latest_dependent_at
+        ):
+            latest_dependent_at = transition.canonical_time
+        return replace(
+            snapshot,
+            transitions=visible,
+            transition_count=transition_count,
+            compacted_transition_count=transition_count - len(visible),
+            transition_ledger_digest=f"{transition_digest:064x}",
+            latest_dependent_at=latest_dependent_at,
+        )
+
+    def _action_cohort_expected_hold_snapshot(
+        self,
+        snapshot: ProcessLifecycleSnapshot | SessionLifecycleSnapshot,
+        hold: LifecycleHold,
+    ) -> ProcessLifecycleSnapshot | SessionLifecycleSnapshot:
+        """Project one already-admitted hold into an immutable result snapshot."""
+
+        holds = sorted(
+            (*snapshot.holds, hold),
+            key=lambda item: (
+                item.acquired_at,
+                item.action_id,
+                item.transition_ordinal,
+                item.hold_id,
+            ),
+        )
+        if len(holds) > self._snapshot_history_limit:
+            holds = holds[-self._snapshot_history_limit :]
+        visible = tuple(
+            item
+            for item in holds
+            if self._ledger_floor is None or item.acquired_at > self._ledger_floor
+        )
+        hold_count = snapshot.hold_count + 1
+        hold_digest = int(snapshot.hold_ledger_digest or "0", 16)
+        hold_digest ^= _LifecyclePartition._hold_digest(hold)
+        latest_hold_until = snapshot.latest_hold_until
+        if latest_hold_until is None or hold.hold_until > latest_hold_until:
+            latest_hold_until = hold.hold_until
+        projected = replace(
+            snapshot,
+            holds=visible,
+            hold_count=hold_count,
+            compacted_hold_count=hold_count - len(visible),
+            hold_ledger_digest=f"{hold_digest:064x}",
+            latest_hold_until=latest_hold_until,
+        )
+        transition = LifecycleTransition(
+            transition_id=f"{hold.hold_id}:acquired",
+            subject=hold.subject,
+            kind="hold_acquired",
+            canonical_time=hold.acquired_at,
+            action_id=hold.action_id,
+            reason=hold.reason,
+            transition_ordinal=hold.transition_ordinal,
+        )
+        return self._action_cohort_expected_transition_snapshot(projected, transition)
+
+    @staticmethod
+    def _action_cohort_exact_session_snapshot(
+        snapshot: SessionLifecycleSnapshotView,
+    ) -> SessionLifecycleSnapshot:
+        """Materialize one internal packed session view as an exact public snapshot."""
+
+        if type(snapshot) is SessionLifecycleSnapshot:
+            return snapshot
+        if type(snapshot) is _PackedSessionSnapshot:
+            return snapshot._materialized()
+        raise StateError("Lifecycle action cohort resolved an incompatible session snapshot")
+
+    def _action_cohort_expected_results_locked(
+        self,
+        plan: _PreparedActionCohortCommitPlan,
+    ) -> tuple[LifecycleActionCohortOperationResult, ...]:
+        """Build exact final results from the claim-time simulated operation state."""
+
+        snapshots: dict[
+            LifecycleEntityRef,
+            ProcessLifecycleSnapshot | SessionLifecycleSnapshot,
+        ] = {}
+
+        def snapshot_for(
+            prepared: _PreparedActionCohortOperation,
+        ) -> ProcessLifecycleSnapshot | SessionLifecycleSnapshot:
+            operation = prepared.operation
+            subject = self._action_cohort_operation_subject(operation)
+            snapshot = snapshots.get(subject)
+            if snapshot is not None:
+                return snapshot
+            partition = self._partitions[prepared.partition_id]
+            if subject.kind == "process":
+                process = partition.get_process(subject.object_id)
+                if process is None:
+                    raise StateError(
+                        "Lifecycle action cohort lost a process during receipt projection"
+                    )
+                snapshot = process
+            else:
+                session = partition.get_session(subject.object_id)
+                if session is None:
+                    raise StateError(
+                        "Lifecycle action cohort lost a session during receipt projection"
+                    )
+                snapshot = self._action_cohort_exact_session_snapshot(session)
+            snapshots[subject] = snapshot
+            return snapshot
+
+        for prepared in plan.operations:
+            operation = prepared.operation
+            subject = self._action_cohort_operation_subject(operation)
+            if type(operation) is LifecycleSessionStartRequest:
+                session_start = prepared.session_start
+                if session_start is None:
+                    raise StateError("Lifecycle action cohort lost a prepared session start")
+                snapshots[subject] = self._action_cohort_exact_session_snapshot(
+                    session_start.snapshot
+                )
+                continue
+            if type(operation) is LifecycleProcessStartRequest:
+                process_start = prepared.process_start
+                if process_start is None:
+                    raise StateError("Lifecycle action cohort lost a prepared process start")
+                snapshots[subject] = process_start.snapshot
+                continue
+
+            snapshot = snapshot_for(prepared)
+            if type(operation) is LifecycleTransition:
+                snapshots[subject] = self._action_cohort_expected_transition_snapshot(
+                    snapshot,
+                    operation,
+                )
+                continue
+            if type(operation) is LifecycleHold:
+                snapshots[subject] = self._action_cohort_expected_hold_snapshot(
+                    snapshot,
+                    operation,
+                )
+                continue
+
+            ticket = prepared.closure_ticket
+            closure_transitions = prepared.closure_transitions
+            if ticket is None or closure_transitions is None:
+                raise StateError("Lifecycle action cohort lost prepared closure results")
+            requested, scheduled, closed = closure_transitions
+            projected = replace(
+                snapshot,
+                close_barrier=operation.barrier,
+                closure_ticket=ticket,
+                closed_at=ticket.effective_at,
+            )
+            for transition in (requested, scheduled, closed):
+                projected = self._action_cohort_expected_transition_snapshot(
+                    projected,
+                    transition,
+                )
+            snapshots[subject] = projected
+
+        raw_results: list[LifecycleActionCohortOperationResult] = []
+        for prepared in plan.operations:
+            operation = prepared.operation
+            if type(operation) in {LifecycleTransition, LifecycleHold}:
+                raw_results.append(operation)
+            else:
+                raw_results.append(snapshots[self._action_cohort_operation_subject(operation)])
+        return self._normalize_action_cohort_results(
+            plan.token.request,
+            tuple(raw_results),
+        )
+
+    def _prepare_action_cohort_expected_receipts_locked(
+        self,
+        plan: _PreparedActionCohortCommitPlan,
+    ) -> None:
+        """Freeze caller and private provenance receipts before any canonical primitive."""
+
+        request = plan.token.request
+        if plan.already_present:
+            if plan.retry_receipt is None:
+                raise StateError("Exact lifecycle action-cohort retry lost its retained receipt")
+            expected_receipt = deepcopy(plan.retry_receipt)
+            terminal_receipt_template = deepcopy(plan.retry_receipt)
+            provenance_receipt = None
+        else:
+            results = self._action_cohort_expected_results_locked(plan)
+            committed_digest = self._action_cohort_committed_digest(
+                plan.receipt_request_preimage,
+                results,
+            )
+            canonical_receipt = LifecycleActionCohortReceipt(
+                request=request,
+                operation_results=results,
+                registry_id=self._action_cohort_registry_id,
+                plan_digest=plan.token.plan_digest,
+                committed_digest=committed_digest,
+                _integrity=self._action_cohort_receipt_integrity(
+                    plan_digest=plan.token.plan_digest,
+                    committed_digest=committed_digest,
+                ),
+            )
+            expected_receipt = deepcopy(canonical_receipt)
+            terminal_receipt_template = deepcopy(canonical_receipt)
+            provenance_receipt = deepcopy(canonical_receipt)
+        if not self._authenticates_action_cohort_receipt_contents(
+            expected_receipt,
+            request=request,
+            state_publication_token=request.state_publication_token,
+        ):
+            raise StateError("Lifecycle action-cohort expected receipt failed authentication")
+        if not self._authenticates_action_cohort_receipt_contents(
+            terminal_receipt_template,
+            request=request,
+            state_publication_token=request.state_publication_token,
+        ):
+            raise StateError(
+                "Lifecycle action-cohort terminal receipt template failed authentication"
+            )
+        if (
+            provenance_receipt is not None
+            and not self._authenticates_action_cohort_receipt_contents(
+                provenance_receipt,
+                request=request,
+                state_publication_token=request.state_publication_token,
+            )
+        ):
+            raise StateError("Lifecycle action-cohort provenance receipt failed authentication")
+        plan.expected_receipt = expected_receipt
+        plan.terminal_receipt_template = terminal_receipt_template
+        plan.provenance_receipt = provenance_receipt
+        plan.provenance_record = (
+            None
+            if provenance_receipt is None
+            else _CommittedActionCohortProvenance(
+                binding=(request.state_publication_token, plan.token.plan_digest),
+                operations_digest=plan.operations_digest,
+                receipt=provenance_receipt,
+            )
+        )
+
+    def _authenticates_action_cohort_receipt_contents(
         self,
         receipt: object,
         *,
         request: LifecycleActionCohortRequest | None = None,
         state_publication_token: str | None = None,
     ) -> bool:
-        """Totally authenticate one committed cohort receipt and optional bindings."""
+        """Authenticate closed receipt contents before exposing an expected object."""
 
         if type(receipt) is not LifecycleActionCohortReceipt:
             return False
@@ -11068,125 +11790,340 @@ class LifecycleRegistry:
         ):
             return False
 
+    def authenticates_expected_action_cohort_receipt(
+        self,
+        receipt: object,
+        *,
+        state_publication_token: str | None = None,
+    ) -> bool:
+        """Authenticate one exact active claim receipt without traversing caller graphs."""
+
+        if type(receipt) is not LifecycleActionCohortReceipt:
+            return False
+        if state_publication_token is not None and type(state_publication_token) is not str:
+            return False
+        try:
+            registry_id = receipt.registry_id
+            plan_digest = receipt.plan_digest
+            receipt_request = receipt.request
+            operation_results = receipt.operation_results
+            committed_digest = receipt.committed_digest
+            integrity = receipt._integrity
+        except (AttributeError, TypeError):
+            return False
+        if (
+            type(registry_id) is not str
+            or type(plan_digest) is not str
+            or type(receipt_request) is not LifecycleActionCohortRequest
+            or type(operation_results) is not tuple
+            or type(committed_digest) is not str
+            or type(integrity) is not str
+        ):
+            return False
+        with self._closed_transport_preparation_lock:
+            authority = self._action_cohort_receipt_authorities.get(id(receipt))
+            if (
+                authority is None
+                or authority.receipt_ref() is not receipt
+                or authority.committed
+                or authority.preparation_id not in self._action_cohort_reservations
+            ):
+                return False
+            reservation = self._action_cohort_reservations[authority.preparation_id]
+            commit_plan = reservation.commit_plan
+            if (
+                reservation.receipt_authority_id != id(receipt)
+                or not reservation.claimed
+                or reservation.claim_exhausted
+                or reservation.committing
+                or reservation.claim_thread_id != get_ident()
+                or commit_plan is None
+                or commit_plan.expected_receipt is not receipt
+                or authority.plan_digest != reservation.canonical_token.plan_digest
+                or registry_id != self._action_cohort_registry_id
+                or plan_digest != authority.plan_digest
+                or id(receipt_request) != authority.request_id
+                or id(operation_results) != authority.results_id
+                or committed_digest != authority.committed_digest
+                or integrity != authority.integrity
+            ):
+                return False
+            return bool(
+                state_publication_token is None
+                or state_publication_token == authority.state_publication_token
+            )
+
+    def authenticates_action_cohort_receipt(
+        self,
+        receipt: object,
+        *,
+        request: LifecycleActionCohortRequest | None = None,
+        state_publication_token: str | None = None,
+    ) -> bool:
+        """Authenticate one exact committed receipt under bounded owner authority."""
+
+        if type(receipt) is not LifecycleActionCohortReceipt:
+            return False
+        with self._closed_transport_preparation_lock:
+            authority = self._action_cohort_receipt_authorities.get(id(receipt))
+            if (
+                authority is None
+                or authority.receipt_ref() is not receipt
+                or not authority.committed
+            ):
+                return False
+            return self._authenticates_action_cohort_receipt_contents(
+                receipt,
+                request=request,
+                state_publication_token=state_publication_token,
+            )
+
+    def _authorize_action_cohort_commit_locked(
+        self,
+        capability: PreparedLifecycleActionCohort,
+        token: LifecycleActionCohortAdmissionToken,
+        *,
+        expected_receipt: LifecycleActionCohortReceipt,
+        for_composite: bool,
+    ) -> _ActionCohortCommitAuthorization:
+        """Complete every fallible commit check before a trusted primitive tail."""
+
+        claimed_reservation = self._claimed_action_cohort_reservation_for_capability_locked(
+            capability
+        )
+        if for_composite:
+            reservation = claimed_reservation
+        else:
+            reservation = self._active_action_cohort_reservation_locked(token)
+            if reservation is not claimed_reservation:
+                raise StateError(
+                    "Lifecycle action-cohort token does not belong to its exact prepared capability"
+                )
+        canonical_token = reservation.canonical_token
+        commit_plan = reservation.commit_plan
+        if not reservation.claimed or commit_plan is None:
+            raise StateError("Lifecycle action-cohort token is not claimed")
+        if reservation.claim_thread_id != get_ident():
+            raise StateError("Lifecycle action cohort must commit on its claiming thread")
+        if reservation.committing:
+            raise StateError("Lifecycle action cohort is already committing")
+        if reservation.composite_certified:
+            raise StateError("Lifecycle action cohort is already composite-certified")
+        if not for_composite and self._watermark != canonical_token.expected_watermark:
+            raise StateError("Lifecycle action-cohort admission is stale after watermark advance")
+        if expected_receipt is not commit_plan.expected_receipt:
+            raise StateError("Lifecycle action-cohort expected receipt changed before commit")
+        if (
+            commit_plan.token is not canonical_token
+            or commit_plan.partition_ids != reservation.partition_ids
+            or commit_plan.reservation_keys != reservation.keys
+            or commit_plan.operations_digest != reservation.operations_digest
+        ):
+            raise StateError("Lifecycle action-cohort claimed commit plan changed before commit")
+        if not self.authenticates_expected_action_cohort_receipt(expected_receipt):
+            raise StateError("Lifecycle action-cohort expected receipt failed authentication")
+        if not for_composite:
+            request = canonical_token.request
+            if not self._authenticates_action_cohort_receipt_contents(
+                expected_receipt,
+                request=request,
+                state_publication_token=request.state_publication_token,
+            ):
+                raise StateError("Lifecycle action-cohort expected receipt failed authentication")
+
+        receipt_authority = self._action_cohort_receipt_authorities.get(id(expected_receipt))
+        if (
+            receipt_authority is None
+            or receipt_authority.receipt_ref() is not expected_receipt
+            or receipt_authority.committed
+            or reservation.receipt_authority_id != id(expected_receipt)
+        ):
+            raise StateError("Lifecycle action-cohort expected receipt authority is not active")
+
+        provenance = commit_plan.provenance_record
+        if reservation.provenance_new:
+            provenance_receipt = commit_plan.provenance_receipt
+            if (
+                provenance is None
+                or provenance_receipt is None
+                or provenance.binding != reservation.provenance_binding
+                or provenance.operations_digest != reservation.operations_digest
+                or provenance.receipt is not provenance_receipt
+            ):
+                raise StateError("Lifecycle action-cohort provenance changed before commit")
+        elif provenance is not None or commit_plan.provenance_receipt is not None:
+            raise StateError("Lifecycle action-cohort retry retained unexpected provenance")
+
+        authorization = _ActionCohortCommitAuthorization(
+            reservation=reservation,
+            commit_plan=commit_plan,
+            expected_receipt=expected_receipt,
+            receipt_authority=receipt_authority,
+            provenance_record=provenance,
+        )
+        if for_composite:
+            reservation.composite_certified = True
+        return authorization
+
+    def _certify_claimed_action_cohort(
+        self,
+        capability: PreparedLifecycleActionCohort,
+        token: LifecycleActionCohortAdmissionToken,
+        *,
+        expected_receipt: LifecycleActionCohortReceipt,
+    ) -> None:
+        """Authenticate and retain one exact capability's composite authorization."""
+
+        with self._gate.mutation(), self._closed_transport_preparation_lock:
+            authorization = self._authorize_action_cohort_commit_locked(
+                capability,
+                token,
+                expected_receipt=expected_receipt,
+                for_composite=True,
+            )
+            capability_id = id(capability)
+            reservation = authorization.reservation
+            if (
+                reservation.certified_capability_id is not None
+                or capability_id in self._action_cohort_certified_authorizations
+            ):
+                reservation.composite_certified = False
+                raise StateError("Prepared lifecycle action cohort is already composite-certified")
+            self._action_cohort_certified_authorizations[capability_id] = (
+                _ActionCohortCertifiedAuthorizationLocator(
+                    capability_ref=ref(capability),
+                    authorization=authorization,
+                )
+            )
+            reservation.certified_capability_id = capability_id
+
+    def _consume_certified_action_cohort_locked(
+        self,
+        capability: PreparedLifecycleActionCohort,
+    ) -> _ActionCohortCommitAuthorization | None:
+        """Consume one registry-owned authorization by exact capability identity."""
+
+        claimed_reservation = self._claimed_action_cohort_reservation_for_capability_locked(
+            capability
+        )
+        capability_id = id(capability)
+        locator = self._action_cohort_certified_authorizations.get(capability_id)
+        if locator is None:
+            return None
+        authorization = locator.authorization
+        reservation = authorization.reservation
+        commit_plan = authorization.commit_plan
+        if (
+            locator.capability_ref() is not capability
+            or reservation is not claimed_reservation
+            or reservation.certified_capability_id != capability_id
+            or not reservation.composite_certified
+            or reservation.claim_thread_id != get_ident()
+            or reservation.committing
+            or reservation.commit_plan is not commit_plan
+            or commit_plan.expected_receipt is not authorization.expected_receipt
+            or reservation.receipt_authority_id != id(authorization.expected_receipt)
+            or self._action_cohort_receipt_authorities.get(id(authorization.expected_receipt))
+            is not authorization.receipt_authority
+            or authorization.receipt_authority.committed
+        ):
+            raise StateError(
+                "Lifecycle action-cohort certified authorization no longer matches its exact "
+                "prepared capability"
+            )
+        self._action_cohort_certified_authorizations.pop(capability_id)
+        reservation.certified_capability_id = None
+        return authorization
+
     def _commit_action_cohort_closure_locked(
         self,
         prepared: _PreparedActionCohortOperation,
-    ) -> ProcessLifecycleSnapshot | SessionLifecycleSnapshotView:
-        """Publish one prevalidated process/session barrier, ticket, and close."""
+    ) -> None:
+        """Publish one prebuilt process/session barrier, ticket, and close."""
 
         operation = prepared.operation
         assert type(operation) is LifecycleSubjectClosureControl
         effective_at = prepared.effective_at
-        assert effective_at is not None
+        ticket = prepared.closure_ticket
+        transitions = prepared.closure_transitions
+        assert effective_at is not None and ticket is not None and transitions is not None
+
         partition = self._partitions[prepared.partition_id]
-        expected = self._expected_subject_closure_transitions(operation, effective_at)
-        ticket = partition.request_close(
-            operation.barrier,
-            ticket_id=operation.ticket_id,
-        )
-        if ticket != expected[0]:
-            raise StateError("Prepared action-cohort closure ticket changed during commit")
+        subject = operation.barrier.subject
+        entry = partition._entry(subject)
+        assert entry is not None
+        state = partition._ensure_full_state(entry)
+        state.close_barrier = operation.barrier
+        state.closure_ticket = ticket
+        partition._barriers[operation.barrier.barrier_id] = operation.barrier
+        partition._tickets[ticket.ticket_id] = ticket
+        requested, scheduled, closed = transitions
+        partition._append_transition(entry, requested, claim_validated=True)
+        partition._append_transition(entry, scheduled, claim_validated=True)
+        state.closed_at = effective_at
+        partition._append_transition(entry, closed, claim_validated=True)
+        if subject.kind == "process":
+            assert isinstance(entry, _ProcessEntry)
+            partition._record_process_closed(entry, effective_at)
+            partition._live_processes -= 1
+        else:
+            assert subject.kind == "session"
+            partition._live_sessions -= 1
+        partition._schedule_retention(subject, entry)
+
         self._routes.invalidate_subject_snapshot_locked(operation.barrier.subject)
         self._routes.set_locked("barrier", operation.barrier.barrier_id, operation.barrier)
         self._routes.set_locked("ticket", operation.ticket_id, ticket)
-        self._routes.set_locked("transition", expected[1].transition_id, expected[1])
-        self._routes.set_locked("transition", expected[2].transition_id, expected[2])
-        snapshot = partition.close(operation.ticket_id)
-        if not isinstance(snapshot, (ProcessLifecycleSnapshot, SessionLifecycleSnapshot)):
-            raise StateError("Prepared action-cohort close returned an incompatible lifecycle")
-        self._routes.set_locked("transition", expected[3].transition_id, expected[3])
+        for transition in transitions:
+            self._routes.set_locked("transition", transition.transition_id, transition)
         self._promote_session_route_locked(
             operation.barrier.subject,
             prepared.partition_id,
         )
-        return snapshot
-
-    def _action_cohort_result_locked(
-        self,
-        prepared: _PreparedActionCohortOperation,
-    ) -> LifecycleActionCohortOperationResult:
-        """Resolve one final immutable result aligned with the author operation."""
-
-        operation = prepared.operation
-        partition = self._partitions[prepared.partition_id]
-        if type(operation) in {
-            LifecycleSessionStartRequest,
-            LifecycleProcessStartRequest,
-            LifecycleSubjectClosureControl,
-        }:
-            subject = self._action_cohort_operation_subject(operation)
-            if subject.kind == "process":
-                snapshot = partition.get_process(subject.object_id)
-            else:
-                snapshot = partition.get_session(subject.object_id)
-            if snapshot is None:
-                raise StateError("Committed lifecycle action cohort lost a subject snapshot")
-            if type(snapshot) is _PackedSessionSnapshot:
-                snapshot = snapshot._materialized()
-            return snapshot
-        if type(operation) is LifecycleTransition:
-            return operation
-        assert type(operation) is LifecycleHold
-        return operation
 
     def _commit_action_cohort_primitives_locked(
         self,
         plan: _PreparedActionCohortCommitPlan,
-    ) -> LifecycleActionCohortReceipt:
+    ) -> None:
         """Apply only primitive writes covered by the claimed cohort admission."""
 
         if plan.already_present:
-            if plan.retry_receipt is None:
-                raise AssertionError("Exact lifecycle action-cohort retry lost its receipt")
-            return deepcopy(plan.retry_receipt)
+            return
 
         for prepared in plan.operations:
             operation = prepared.operation
             partition = self._partitions[prepared.partition_id]
             if type(operation) is LifecycleSessionStartRequest:
-                assert prepared.session_start is not None
-                PreparedSessionRegistration(
-                    _registry=self,
-                    _partition_id=prepared.partition_id,
-                    _prepared=prepared.session_start,
-                    _prior_session_route=prepared.prior_session_route,
-                ).commit()
+                registration = prepared.session_registration
+                assert registration is not None
+                registration.commit()
             elif type(operation) is LifecycleProcessStartRequest:
-                assert prepared.process_start is not None
-                PreparedProcessRegistration(
-                    _registry=self,
-                    _partition_id=prepared.partition_id,
-                    _prepared=prepared.process_start,
-                    _membership=operation.membership,
-                ).commit()
+                registration = prepared.process_registration
+                assert registration is not None
+                registration.commit()
             elif type(operation) is LifecycleTransition:
                 self._routes.invalidate_subject_snapshot_locked(operation.subject)
-                result = partition.record_dependent(
-                    operation.subject,
-                    transition_id=operation.transition_id,
-                    canonical_time=operation.canonical_time,
-                    action_id=operation.action_id,
-                    reason=operation.reason,
-                    transition_ordinal=operation.transition_ordinal,
+                entry = partition._entry(operation.subject)
+                assert entry is not None
+                partition._append_transition(
+                    entry,
+                    operation,
+                    claim_validated=True,
                 )
-                self._routes.set_locked("transition", operation.transition_id, result)
+                self._routes.set_locked("transition", operation.transition_id, operation)
                 self._promote_session_route_locked(
                     operation.subject,
                     prepared.partition_id,
                 )
             elif type(operation) is LifecycleHold:
-                transition = LifecycleTransition(
-                    transition_id=f"{operation.hold_id}:acquired",
-                    subject=operation.subject,
-                    kind="hold_acquired",
-                    canonical_time=operation.acquired_at,
-                    action_id=operation.action_id,
-                    reason=operation.reason,
-                    transition_ordinal=operation.transition_ordinal,
-                )
+                transition = prepared.hold_transition
+                assert transition is not None
                 self._routes.invalidate_subject_snapshot_locked(operation.subject)
-                result = partition.add_hold(operation)
-                self._routes.set_locked("hold", operation.hold_id, result)
+                entry = partition._entry(operation.subject)
+                assert entry is not None
+                partition._append_hold(entry, operation)
+                partition._append_transition(entry, transition, claim_validated=True)
+                self._routes.set_locked("hold", operation.hold_id, operation)
                 self._routes.set_locked("transition", transition.transition_id, transition)
                 self._promote_session_route_locked(
                     operation.subject,
@@ -11195,71 +12132,131 @@ class LifecycleRegistry:
             else:
                 self._commit_action_cohort_closure_locked(prepared)
 
-        results = self._normalize_action_cohort_results(
-            plan.token.request,
-            tuple(self._action_cohort_result_locked(item) for item in plan.operations),
-        )
-        request = plan.token.request
-        committed_digest = self._action_cohort_committed_digest(
-            plan.receipt_request_preimage,
-            results,
-        )
-        return LifecycleActionCohortReceipt(
-            request=request,
-            operation_results=results,
-            registry_id=self._action_cohort_registry_id,
-            plan_digest=plan.token.plan_digest,
-            committed_digest=committed_digest,
-            _integrity=self._action_cohort_receipt_integrity(
-                plan_digest=plan.token.plan_digest,
-                committed_digest=committed_digest,
-            ),
-        )
+    def _begin_authorized_action_cohort_commit_locked(
+        self,
+        authorization: _ActionCohortCommitAuthorization,
+    ) -> None:
+        """Mark one already-authorized reservation as committing without revalidation."""
+
+        self._restore_action_cohort_terminal_receipt_locked(authorization)
+        authorization.reservation.committing = True
+        self._action_cohort_committing_reservations += 1
+
+    @staticmethod
+    def _restore_action_cohort_terminal_receipt_locked(
+        authorization: _ActionCohortCommitAuthorization,
+    ) -> None:
+        """Restore the exact exposed object from a claim-private closed template."""
+
+        template = authorization.commit_plan.terminal_receipt_template
+        if template is None:
+            raise StateError("Lifecycle action-cohort terminal receipt template is unavailable")
+        receipt = authorization.expected_receipt
+        object.__setattr__(receipt, "request", template.request)
+        object.__setattr__(receipt, "operation_results", template.operation_results)
+        object.__setattr__(receipt, "registry_id", template.registry_id)
+        object.__setattr__(receipt, "plan_digest", template.plan_digest)
+        object.__setattr__(receipt, "committed_digest", template.committed_digest)
+        object.__setattr__(receipt, "_integrity", template._integrity)
+        receipt_authority = authorization.receipt_authority
+        receipt_authority.request_id = id(template.request)
+        receipt_authority.results_id = id(template.operation_results)
+        receipt_authority.plan_digest = template.plan_digest
+        receipt_authority.state_publication_token = template.request.state_publication_token
+        receipt_authority.committed_digest = template.committed_digest
+        receipt_authority.integrity = template._integrity
+
+    def _commit_action_cohort_receipt_authority_locked(
+        self,
+        authorization: _ActionCohortCommitAuthorization,
+    ) -> None:
+        """Flip one prevalidated exact receipt authority without caller traversal."""
+
+        authorization.receipt_authority.committed = True
+        self._action_cohort_expected_receipt_authorities -= 1
+        self._action_cohort_committed_receipt_authorities += 1
+        authorization.reservation.receipt_authority_id = None
+
+    def _publish_authorized_action_cohort(
+        self,
+        authorization: _ActionCohortCommitAuthorization,
+    ) -> LifecycleActionCohortReceipt:
+        """Apply trusted canonical primitives and consume their retained reservation."""
+
+        reservation = authorization.reservation
+        commit_plan = authorization.commit_plan
+        with self._routes.locked(commit_plan.route_keys):
+            with self._locked_partition_ids(reservation.partition_ids):
+                self._commit_action_cohort_primitives_locked(commit_plan)
+        with self._closed_transport_preparation_lock:
+            provenance = authorization.provenance_record
+            if provenance is not None:
+                self._record_action_cohort_provenance_locked(reservation, provenance)
+            self._commit_action_cohort_receipt_authority_locked(authorization)
+            self._release_action_cohort_reservation_locked(
+                reservation,
+                allow_committing=True,
+            )
+        return authorization.expected_receipt
 
     def _commit_claimed_action_cohort(
         self,
+        capability: PreparedLifecycleActionCohort,
         token: LifecycleActionCohortAdmissionToken,
+        *,
+        expected_receipt: LifecycleActionCohortReceipt,
     ) -> LifecycleActionCohortReceipt:
-        """Commit one claimed cohort under sorted locks and consume it once."""
+        """Fully validate and commit one standalone claimed cohort exactly once."""
 
         with self._gate.mutation():
             with self._closed_transport_preparation_lock:
-                reservation = self._active_action_cohort_reservation_locked(token)
-                canonical_token = reservation.canonical_token
-                if not reservation.claimed or reservation.commit_plan is None:
-                    raise StateError("Lifecycle action-cohort token is not claimed")
-                if reservation.claim_thread_id != get_ident():
-                    raise StateError("Lifecycle action cohort must commit on its claiming thread")
-                if reservation.committing:
-                    raise StateError("Lifecycle action cohort is already committing")
-                if self._watermark != canonical_token.expected_watermark:
-                    raise StateError(
-                        "Lifecycle action-cohort admission is stale after watermark advance"
-                    )
-                commit_plan = reservation.commit_plan
-                validated_token = self._validate_action_cohort_token(token)
-                if not self._action_cohort_token_matches_canonical(
-                    validated_token,
-                    canonical_token,
-                ):
-                    raise StateError("Lifecycle action-cohort token was mutated after preparation")
-                reservation.committing = True
-                self._action_cohort_committing_reservations += 1
-            route_keys = self._action_cohort_route_keys(canonical_token.request)
-            with self._routes.locked(route_keys):
-                with self._locked_partition_ids(reservation.partition_ids):
-                    receipt = self._commit_action_cohort_primitives_locked(commit_plan)
-            with self._closed_transport_preparation_lock:
-                active = self._action_cohort_reservations.get(canonical_token.preparation_id)
-                if active is not reservation:
-                    raise StateError("Lifecycle action-cohort token was consumed during commit")
-                if reservation.provenance_new:
-                    self._record_action_cohort_provenance_locked(reservation, receipt)
-                self._release_action_cohort_reservation_locked(
-                    reservation,
-                    allow_committing=True,
+                authorization = self._authorize_action_cohort_commit_locked(
+                    capability,
+                    token,
+                    expected_receipt=expected_receipt,
+                    for_composite=False,
                 )
-            return receipt
+                self._begin_authorized_action_cohort_commit_locked(authorization)
+            return self._publish_authorized_action_cohort(authorization)
+
+    def _commit_prepared_action_cohort(
+        self,
+        capability: PreparedLifecycleActionCohort,
+        *,
+        token: LifecycleActionCohortAdmissionToken,
+        expected_receipt: LifecycleActionCohortReceipt,
+    ) -> LifecycleActionCohortReceipt:
+        """Commit an exact prepared capability through its registry-owned authorization."""
+
+        with self._gate.mutation():
+            with self._closed_transport_preparation_lock:
+                authorization = self._consume_certified_action_cohort_locked(capability)
+                if authorization is None:
+                    authorization = self._authorize_action_cohort_commit_locked(
+                        capability,
+                        token,
+                        expected_receipt=expected_receipt,
+                        for_composite=False,
+                    )
+                self._begin_authorized_action_cohort_commit_locked(authorization)
+            return self._publish_authorized_action_cohort(authorization)
+
+    def _commit_certified_action_cohort(
+        self,
+        capability: PreparedLifecycleActionCohort,
+    ) -> LifecycleActionCohortReceipt:
+        """Commit only a registry-located exact composite-certified capability."""
+
+        with self._gate.mutation():
+            with self._closed_transport_preparation_lock:
+                authorization = self._consume_certified_action_cohort_locked(capability)
+                if authorization is None:
+                    raise StateError(
+                        "Lifecycle action-cohort certified authorization is not registered for "
+                        "this exact prepared capability"
+                    )
+                self._begin_authorized_action_cohort_commit_locked(authorization)
+            return self._publish_authorized_action_cohort(authorization)
 
     def prepare_closed_transport_publication(
         self,
