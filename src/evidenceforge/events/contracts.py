@@ -212,6 +212,227 @@ class OccurrenceRole(StrEnum):
     OBSERVATION = "observation"
 
 
+class EffectOccurrenceKind(StrEnum):
+    """Canonical endpoint mutation/read families covered by the effect audit."""
+
+    FILE = "file"
+    REGISTRY = "registry"
+
+
+class EffectOccurrenceDisposition(StrEnum):
+    """Whether one effect-bearing occurrence is planned or explicitly exempt."""
+
+    PLANNED = "planned"
+    OWNED_ROOT = "owned_root"
+    EXEMPT = "exempt"
+
+
+class EffectOccurrenceOwner(StrEnum):
+    """Finite action owners allowed to publish non-process endpoint-effect roots."""
+
+    HTTP_UPLOAD_LOCAL_READ = "http_upload_local_read"
+    BASELINE_DHCP_REGISTRY_ROOT = "baseline_dhcp_registry_root"
+    BASELINE_AMBIENT_FILE_ROOT = "baseline_ambient_file_root"
+    BASELINE_SYSTEM_PROCESS_REGISTRY_ROOT = "baseline_system_process_registry_root"
+    SMB_PROTOCOL_FILE_PHASE = "smb_protocol_file_phase"
+    EMAIL_ATTACHMENT_FILE_ROOT = "email_attachment_file_root"
+    HTTP_MULTIPART_LOCAL_READ = "http_multipart_local_read"
+
+
+@dataclass(frozen=True, slots=True)
+class EffectOccurrenceProvenance:
+    """Independent publication proof for a reconciled endpoint effect."""
+
+    kind: EffectOccurrenceKind
+    disposition: EffectOccurrenceDisposition
+    root_action_id: str = ""
+    plan_action_id: str = ""
+    node_id: str = ""
+    occurrence_ordinal: int = 0
+    owner: EffectOccurrenceOwner | None = None
+    exemption_reason: str = ""
+
+    def __post_init__(self) -> None:
+        """Reject provenance that cannot be reconciled or audited deterministically."""
+
+        if not isinstance(self.kind, EffectOccurrenceKind) or not isinstance(
+            self.disposition,
+            EffectOccurrenceDisposition,
+        ):
+            raise ValueError("effect occurrence provenance requires typed kind and disposition")
+        if (
+            isinstance(self.occurrence_ordinal, bool)
+            or not isinstance(self.occurrence_ordinal, int)
+            or self.occurrence_ordinal < 0
+        ):
+            raise ValueError("effect occurrence ordinal must be a non-negative integer")
+        if self.disposition == EffectOccurrenceDisposition.PLANNED:
+            if not self.root_action_id or not self.plan_action_id or not self.node_id:
+                raise ValueError(
+                    "planned effect occurrence provenance requires root, plan, and node identity"
+                )
+            if self.owner is not None or self.exemption_reason:
+                raise ValueError(
+                    "planned effect occurrence provenance cannot claim an owner or exemption"
+                )
+            return
+        if self.disposition == EffectOccurrenceDisposition.OWNED_ROOT:
+            if not self.root_action_id or not self.plan_action_id or not self.node_id:
+                raise ValueError(
+                    "owned effect root provenance requires root, plan, and node identity"
+                )
+            if not isinstance(self.owner, EffectOccurrenceOwner):
+                raise ValueError("owned effect root provenance requires a typed finite owner")
+            if self.exemption_reason:
+                raise ValueError("owned effect root provenance cannot claim an exemption")
+            return
+        if self.owner is not None:
+            raise ValueError("exempt effect occurrence provenance cannot claim a typed owner")
+        if not self.exemption_reason.strip():
+            raise ValueError("exempt effect occurrence provenance requires a bounded reason")
+        if self.plan_action_id or self.node_id:
+            raise ValueError("exempt effect occurrence provenance cannot claim a planned node")
+        if len(self.exemption_reason) > 160:
+            raise ValueError("effect occurrence exemption reason cannot exceed 160 characters")
+
+    @classmethod
+    def planned(
+        cls,
+        *,
+        kind: EffectOccurrenceKind,
+        root_action_id: str,
+        plan_action_id: str,
+        node_id: str,
+        occurrence_ordinal: int,
+    ) -> EffectOccurrenceProvenance:
+        """Build exact planned occurrence provenance."""
+
+        return cls(
+            kind=kind,
+            disposition=EffectOccurrenceDisposition.PLANNED,
+            root_action_id=root_action_id,
+            plan_action_id=plan_action_id,
+            node_id=node_id,
+            occurrence_ordinal=occurrence_ordinal,
+        )
+
+    @classmethod
+    def exempt(
+        cls,
+        *,
+        kind: EffectOccurrenceKind,
+        reason: str,
+        root_action_id: str = "",
+    ) -> EffectOccurrenceProvenance:
+        """Build an explicit owner-scoped exemption for a non-plan root occurrence."""
+
+        return cls(
+            kind=kind,
+            disposition=EffectOccurrenceDisposition.EXEMPT,
+            root_action_id=root_action_id,
+            exemption_reason=reason,
+        )
+
+    @classmethod
+    def owned_root(
+        cls,
+        *,
+        kind: EffectOccurrenceKind,
+        owner: EffectOccurrenceOwner,
+        root_action_id: str,
+        plan_action_id: str,
+        node_id: str,
+        occurrence_ordinal: int,
+    ) -> EffectOccurrenceProvenance:
+        """Build one exact occurrence from a registered family-owned root plan."""
+
+        return cls(
+            kind=kind,
+            disposition=EffectOccurrenceDisposition.OWNED_ROOT,
+            root_action_id=root_action_id,
+            plan_action_id=plan_action_id,
+            node_id=node_id,
+            occurrence_ordinal=occurrence_ordinal,
+            owner=owner,
+        )
+
+    @property
+    def reconciliation_key(self) -> str:
+        """Return the compact token shared with a realized plan outcome."""
+
+        return stable_uuid(
+            "execution-effect-occurrence",
+            self.plan_action_id,
+            self.node_id,
+            self.occurrence_ordinal,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OwnedEffectOccurrencePlan:
+    """Exact bounded cardinality for one non-process action-owned effect root."""
+
+    owner: EffectOccurrenceOwner
+    kind: EffectOccurrenceKind
+    root_action_id: str
+    instance_key: str
+    occurrence_count: int
+    plan_action_id: str = ""
+    node_id: str = ""
+
+    def __post_init__(self) -> None:
+        """Freeze stable identities and reject anonymous or unbounded owner plans."""
+
+        if not isinstance(self.owner, EffectOccurrenceOwner):
+            raise ValueError("owned effect occurrence plan requires a typed finite owner")
+        if not isinstance(self.kind, EffectOccurrenceKind):
+            raise ValueError("owned effect occurrence plan requires a typed effect kind")
+        if not self.root_action_id.strip() or not self.instance_key.strip():
+            raise ValueError("owned effect occurrence plan requires root and instance identity")
+        if (
+            isinstance(self.occurrence_count, bool)
+            or not isinstance(self.occurrence_count, int)
+            or self.occurrence_count <= 0
+        ):
+            raise ValueError("owned effect occurrence count must be a positive integer")
+        expected_plan_action_id = stable_uuid(
+            "owned-effect-root-plan",
+            self.owner,
+            self.kind,
+            self.root_action_id,
+            self.instance_key,
+        )
+        expected_node_id = stable_uuid(
+            "owned-effect-root-node",
+            expected_plan_action_id,
+            self.kind,
+        )
+        if self.plan_action_id and self.plan_action_id != expected_plan_action_id:
+            raise ValueError("owned effect occurrence plan action identity is not stable")
+        if self.node_id and self.node_id != expected_node_id:
+            raise ValueError("owned effect occurrence node identity is not stable")
+        object.__setattr__(self, "plan_action_id", expected_plan_action_id)
+        object.__setattr__(self, "node_id", expected_node_id)
+
+    def provenance(self, occurrence_ordinal: int) -> EffectOccurrenceProvenance:
+        """Return exact publication provenance for one planned ordinal."""
+
+        if (
+            isinstance(occurrence_ordinal, bool)
+            or not isinstance(occurrence_ordinal, int)
+            or not 0 <= occurrence_ordinal < self.occurrence_count
+        ):
+            raise ValueError("owned effect occurrence ordinal lies outside its plan")
+        return EffectOccurrenceProvenance.owned_root(
+            kind=self.kind,
+            owner=self.owner,
+            root_action_id=self.root_action_id,
+            plan_action_id=self.plan_action_id,
+            node_id=self.node_id,
+            occurrence_ordinal=occurrence_ordinal,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class SemanticOccurrenceKey:
     """Stable action-relative key for one occurrence.
