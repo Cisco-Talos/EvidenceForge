@@ -281,30 +281,62 @@ registry_ownership_rules:
     executables: ["msiexec.exe"]
 
 installed_software_products:
-  - name: "Microsoft Update Health Tools"
+  - product_id: microsoft-update-health-tools
+    name: "Microsoft Update Health Tools"
     publisher: "Microsoft Corporation"
     version: "5.72.0.0"
-  - name: "Microsoft Edge Update"
+    build: "5.72.0.0"
+    architectures: [neutral]
+    scope: machine
+  - product_id: microsoft-edge-update
+    name: "Microsoft Edge Update"
     publisher: "Microsoft Corporation"
     version: "1.3.187.37"
-  - name: "Microsoft OneDrive"
+    build: "1.3.187.37"
+    architectures: [neutral]
+    scope: machine
+  - product_id: microsoft-onedrive
+    name: "Microsoft OneDrive"
     publisher: "Microsoft Corporation"
     version: "24.045.0303.0002"
-  - name: "Google Chrome"
+    build: "24.045.0303.0002"
+    architectures: [neutral]
+    scope: machine
+  - product_id: google-chrome
+    name: "Google Chrome"
     publisher: "Google LLC"
     version: "123.0.6312.86"
-  - name: "Mozilla Firefox"
+    build: "123.0.6312.86"
+    architectures: [neutral]
+    scope: machine
+  - product_id: mozilla-firefox
+    name: "Mozilla Firefox"
     publisher: "Mozilla Corporation"
     version: "121.0.1"
-  - name: "7-Zip 23.01 (x64)"
+    build: "121.0.1"
+    architectures: [neutral]
+    scope: machine
+  - product_id: 7-zip-23-01-x64
+    name: "7-Zip 23.01 (x64)"
     publisher: "Igor Pavlov"
     version: "23.01"
-  - name: "Adobe Acrobat Reader"
+    build: "23.01"
+    architectures: [x64]
+    scope: machine
+  - product_id: adobe-acrobat-reader
+    name: "Adobe Acrobat Reader"
     publisher: "Adobe Inc."
     version: "24.001.20604"
-  - name: "Cisco Secure Client"
+    build: "24.001.20604"
+    architectures: [neutral]
+    scope: machine
+  - product_id: cisco-secure-client
+    name: "Cisco Secure Client"
     publisher: "Cisco Systems, Inc."
     version: "5.1.8.42"
+    build: "5.1.8.42"
+    architectures: [neutral]
+    scope: machine
 
 file_paths_windows:
   # User documents

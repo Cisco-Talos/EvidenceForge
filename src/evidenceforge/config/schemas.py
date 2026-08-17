@@ -15,6 +15,7 @@ from __future__ import annotations
 import ipaddress
 import math
 import re
+from copy import deepcopy
 from string import Formatter
 from typing import Any, ClassVar, Literal, Self
 from urllib.parse import urlparse
@@ -28,6 +29,7 @@ from pydantic import (
     model_validator,
 )
 
+from evidenceforge.config.compatibility import stable_config_id, warn_legacy_config
 from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
 from evidenceforge.models.http import HttpMultipartEntitySpec
 
@@ -474,16 +476,143 @@ class CommandParameterPoolsConfig(BaseModel, extra="forbid"):
 # --- Application Catalog ---
 
 
+class ApplicationDeploymentEntry(BaseModel, extra="forbid", frozen=True):
+    """Path-independent release and placement policy for one application platform."""
+
+    kind: Literal["managed"]
+    product_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    version: str = Field(min_length=1, max_length=128)
+    build: str = Field(min_length=1, max_length=128)
+    architectures: tuple[Literal["x86", "x64", "arm64", "neutral"], ...] = ("x64",)
+    scope: Literal["machine", "user"]
+    variant: str = Field(default="stable", min_length=1, max_length=64)
+    fleet_prevalence: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_kind(cls, value: Any) -> Any:
+        """Accept the pre-discriminator managed descriptor at the public boundary."""
+
+        if not isinstance(value, dict) or "kind" in value:
+            return value
+        normalized = dict(value)
+        normalized["kind"] = "managed"
+        warn_legacy_config(
+            "application platform deployment without kind",
+            "deployment.kind: managed",
+            stacklevel=4,
+        )
+        return normalized
+
+    @field_validator("version", "build", "variant")
+    @classmethod
+    def deployment_names_are_nonempty(cls, value: str) -> str:
+        """Normalize release dimensions before they become identity keys."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("deployment release fields must not be blank")
+        return normalized
+
+    @field_validator("architectures")
+    @classmethod
+    def architectures_are_unique(
+        cls,
+        value: tuple[Literal["x86", "x64", "arm64", "neutral"], ...],
+    ) -> tuple[Literal["x86", "x64", "arm64", "neutral"], ...]:
+        """Require at least one unique architecture in deterministic order."""
+
+        if not value:
+            raise ValueError("deployment architectures must not be empty")
+        if len(value) != len(set(value)):
+            raise ValueError("deployment architectures must be unique")
+        return tuple(sorted(value))
+
+
+class CatalogApplicationDeploymentEntry(BaseModel, extra="forbid", frozen=True):
+    """Current catalog-owned release policy without an authored package version.
+
+    ``pe_metadata`` takes the exact source-native version from the adjacent
+    platform metadata. ``host_build`` binds an OS-owned/package-manager image
+    to the scenario host build or distribution release. ``unspecified`` keeps
+    a stable explicit legacy-native release dimension without fabricating a
+    version.
+    """
+
+    kind: Literal["catalog"]
+    release_policy: Literal["pe_metadata", "host_build", "unspecified"]
+    scope: Literal["machine", "user"]
+    product_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z0-9][a-z0-9._-]*$",
+    )
+    architectures: tuple[Literal["x86", "x64", "arm64", "neutral"], ...] = ("x64",)
+    variant: str = Field(default="stable", min_length=1, max_length=64)
+    fleet_prevalence: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("architectures")
+    @classmethod
+    def catalog_architectures_are_unique(
+        cls,
+        value: tuple[Literal["x86", "x64", "arm64", "neutral"], ...],
+    ) -> tuple[Literal["x86", "x64", "arm64", "neutral"], ...]:
+        """Require deterministic non-empty architecture eligibility."""
+
+        if not value:
+            raise ValueError("catalog deployment architectures must not be empty")
+        if len(value) != len(set(value)):
+            raise ValueError("catalog deployment architectures must be unique")
+        return tuple(sorted(value))
+
+    @field_validator("variant")
+    @classmethod
+    def catalog_variant_is_nonempty(cls, value: str) -> str:
+        """Normalize the release variant before identity compilation."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("catalog deployment variant must not be blank")
+        return normalized
+
+
+class LegacyStaticApplicationDeploymentEntry(BaseModel, extra="forbid", frozen=True):
+    """Explicit compatibility descriptor for applications not yet release-managed."""
+
+    kind: Literal["legacy_static"]
+
+
 class LoadedModuleEntry(BaseModel, extra="forbid"):
     """A DLL/module entry in a loaded_modules list."""
 
     path: str
+    release_policy: Literal["owner_release", "pe_metadata", "host_build", "unspecified"] | None = (
+        None
+    )
+    product_id: str | None = None
     signed: bool = True
     signature: str = "Microsoft Windows"
     signature_status: str = "Valid"
     pe_metadata: dict[str, str] | None = None
     load_phase: Literal["startup", "runtime"] | None = None
     startup_probability: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_release_policy(cls, value: Any) -> Any:
+        """Upgrade legacy module rows without inventing host/package versions."""
+
+        if not isinstance(value, dict) or "release_policy" in value:
+            return value
+        normalized = dict(value)
+        normalized["release_policy"] = (
+            "owner_release" if isinstance(normalized.get("pe_metadata"), dict) else "unspecified"
+        )
+        warn_legacy_config(
+            f"loaded module {normalized.get('path') or '<unknown>'} without release_policy",
+            "release_policy: owner_release, pe_metadata, host_build, or unspecified",
+            stacklevel=4,
+        )
+        return normalized
 
     @field_validator("startup_probability", mode="before")
     @classmethod
@@ -527,11 +656,28 @@ class LoadedModuleEntry(BaseModel, extra="forbid"):
                 )
         return self
 
+    @model_validator(mode="after")
+    def independent_metadata_has_product_identity(self) -> Self:
+        """Require an explicit product namespace for standalone versioned modules."""
+
+        if self.release_policy == "pe_metadata":
+            if self.pe_metadata is None:
+                raise ValueError("pe_metadata release policy requires exact PE metadata")
+            if not self.product_id or not self.product_id.strip():
+                raise ValueError("pe_metadata release policy requires product_id")
+        return self
+
 
 class PlatformConfig(BaseModel, extra="forbid"):
     """Per-OS platform config within an application entry."""
 
     image_path: str
+    deployment: (
+        ApplicationDeploymentEntry
+        | CatalogApplicationDeploymentEntry
+        | LegacyStaticApplicationDeploymentEntry
+        | None
+    ) = None
     pe_metadata: dict[str, str] | None = None
     command_templates: list[str] | None = None
     command_parameter_pools: dict[str, list[str]] | None = None
@@ -553,6 +699,160 @@ class ApplicationEntry(BaseModel, extra="forbid"):
     compatibility_option: str | None = None
     singleton_per_session: bool = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_deployment_descriptors(cls, value: Any) -> Any:
+        """Normalize one pre-v2 application entry before platform validation."""
+
+        if not isinstance(value, dict):
+            return value
+        normalized = deepcopy(value)
+        raw_platforms = normalized.get("platforms")
+        if not isinstance(raw_platforms, dict):
+            return normalized
+        legacy_platforms: list[str] = []
+        for platform_name, raw_platform in raw_platforms.items():
+            if not isinstance(raw_platform, dict):
+                continue
+            deployment = raw_platform.get("deployment")
+            if deployment is None:
+                raw_platform["deployment"] = {"kind": "legacy_static"}
+                legacy_platforms.append(str(platform_name))
+            elif isinstance(deployment, dict) and "kind" not in deployment:
+                raw_platform["deployment"] = {"kind": "managed", **deployment}
+                legacy_platforms.append(str(platform_name))
+        if legacy_platforms:
+            application_id = str(normalized.get("id") or "<unknown>")
+            platforms = ", ".join(sorted(legacy_platforms))
+            warn_legacy_config(
+                f"application_catalog applications[{application_id}] platforms ({platforms})",
+                "an explicit deployment.kind of managed or legacy_static",
+                stacklevel=4,
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def deployment_metadata_is_content_complete(self) -> Self:
+        """Validate release metadata at the application catalog ownership boundary."""
+
+        required_pe_fields = {
+            "file_version",
+            "description",
+            "product",
+            "company",
+            "original_filename",
+        }
+        for platform_name, platform in self.platforms.items():
+            deployment = platform.deployment
+            if isinstance(deployment, CatalogApplicationDeploymentEntry):
+                if deployment.scope == "machine" and "{username}" in platform.image_path:
+                    raise ValueError(
+                        f"{self.id}.{platform_name} machine deployment cannot use {{username}}"
+                    )
+                if deployment.release_policy == "pe_metadata":
+                    metadata = platform.pe_metadata or {}
+                    missing = sorted(
+                        field for field in required_pe_fields if not metadata.get(field)
+                    )
+                    if missing:
+                        raise ValueError(
+                            f"{self.id}.{platform_name} pe_metadata release policy missing fields: "
+                            f"{', '.join(missing)}"
+                        )
+                elif (
+                    deployment.release_policy == "host_build"
+                    and platform_name == "windows"
+                    and not deployment.product_id
+                ):
+                    raise ValueError(
+                        f"{self.id}.windows host_build deployment requires an explicit "
+                        "OS product_id"
+                    )
+                continue
+            if not isinstance(deployment, ApplicationDeploymentEntry):
+                continue
+            if deployment.scope == "machine" and "{username}" in platform.image_path:
+                raise ValueError(
+                    f"{self.id}.{platform_name} machine deployment cannot use {{username}}"
+                )
+            if platform_name != "windows":
+                continue
+            metadata = platform.pe_metadata or {}
+            missing = sorted(field for field in required_pe_fields if not metadata.get(field))
+            if missing:
+                raise ValueError(
+                    f"{self.id}.windows deployment missing pe_metadata fields: {', '.join(missing)}"
+                )
+            if metadata["file_version"].strip() != deployment.version:
+                raise ValueError(
+                    f"{self.id}.windows deployment version must match pe_metadata.file_version"
+                )
+            for module in platform.loaded_modules or []:
+                if deployment.scope == "machine" and "{username}" in module.path:
+                    raise ValueError(
+                        f"{self.id}.{platform_name} machine module cannot use {{username}}"
+                    )
+                if module.pe_metadata is None:
+                    continue
+                missing = sorted(
+                    field for field in required_pe_fields if not module.pe_metadata.get(field)
+                )
+                if missing:
+                    raise ValueError(
+                        f"{self.id}.windows deployed module {module.path!r} missing "
+                        f"pe_metadata fields: {', '.join(missing)}"
+                    )
+        return self
+
+
+class ApplicationCatalogConfig(BaseModel, extra="forbid"):
+    """Versioned application catalog normalized before legacy dict projection."""
+
+    schema_version: Literal[2]
+    default_deployment: LegacyStaticApplicationDeploymentEntry
+    applications: list[ApplicationEntry]
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_document(cls, value: Any) -> Any:
+        """Upgrade an unversioned catalog and warn once for each legacy app entry."""
+
+        if not isinstance(value, dict):
+            return value
+        normalized = deepcopy(value)
+        legacy_document = "schema_version" not in normalized
+        if legacy_document:
+            normalized["schema_version"] = 2
+        if "default_deployment" not in normalized:
+            normalized["default_deployment"] = {"kind": "legacy_static"}
+
+        default_deployment = normalized.get("default_deployment")
+        applications = normalized.get("applications")
+        if not isinstance(default_deployment, dict) or not isinstance(applications, list):
+            return normalized
+        for application in applications:
+            if not isinstance(application, dict):
+                continue
+            if legacy_document:
+                application_id = str(application.get("id") or "<unknown>")
+                warn_legacy_config(
+                    f"application_catalog applications[{application_id}] unversioned entry",
+                    "schema_version: 2 and an explicit deployment.kind of managed or legacy_static",
+                    stacklevel=4,
+                )
+            platforms = application.get("platforms")
+            if not isinstance(platforms, dict):
+                continue
+            for platform in platforms.values():
+                if not isinstance(platform, dict):
+                    continue
+                deployment = platform.get("deployment")
+                if deployment is None:
+                    platform["deployment"] = deepcopy(default_deployment)
+                elif legacy_document and isinstance(deployment, dict) and "kind" not in deployment:
+                    platform["deployment"] = {"kind": "managed", **deployment}
+        return normalized
+
 
 # --- Persona ---
 
@@ -572,10 +872,14 @@ class PersonaEntry(BaseModel, extra="forbid"):
 # --- Systemd Schedules ---
 
 
-class SystemdScheduleEntry(BaseModel, extra="forbid"):
+class SystemdScheduleEntry(BaseModel, extra="forbid", frozen=True):
     """A single schedule entry in systemd_schedules.yaml."""
 
+    id: str | None = None
     service: str
+    release_policy: Literal["host_build", "unspecified"] | None = None
+    product_id: str | None = None
+    variant: str | None = None
     type: Literal["systemd_timer", "cron"]
     frequency: Literal["daily", "weekly", "30min"]
     typical_hour: int
@@ -600,6 +904,32 @@ class SystemdScheduleEntry(BaseModel, extra="forbid"):
     # Optional fields for cron type
     cron_user: str | None = None
     cron_commands: dict[str, str] | None = None
+    deployment_paths_by_distro: dict[str, list[str]] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_deployment(cls, value: Any) -> Any:
+        """Normalize a legacy timer/cron row to an explicit static deployment."""
+
+        if not isinstance(value, dict) or (
+            value.get("id")
+            and value.get("release_policy")
+            and value.get("product_id")
+            and value.get("variant")
+        ):
+            return value
+        normalized = dict(value)
+        identity = stable_config_id(str(normalized.get("service") or "linux-schedule"))
+        normalized.setdefault("id", f"legacy-linux-task-{identity}")
+        normalized.setdefault("release_policy", "unspecified")
+        normalized.setdefault("product_id", f"legacy-native.linux-task.{identity}")
+        normalized.setdefault("variant", "legacy-native")
+        warn_legacy_config(
+            f"systemd schedule {normalized.get('service') or '<unknown>'}",
+            "id, release_policy, product_id, and variant deployment fields",
+            stacklevel=4,
+        )
+        return normalized
 
 
 # --- Extra Syslog Messages ---
@@ -2788,16 +3118,76 @@ class EdrFileSideEffectProfile(BaseModel, extra="forbid"):
 class EdrInstalledSoftwareProduct(BaseModel, extra="forbid"):
     """A data-driven installed software identity in edr_pools.yaml."""
 
+    product_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")
     name: str
     publisher: str
     version: str
+    build: str
+    architectures: tuple[Literal["x86", "x64", "arm64", "neutral"], ...]
+    scope: Literal["machine", "user"]
 
-    @field_validator("name", "publisher", "version")
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_product(cls, value: Any) -> Any:
+        """Map the legacy display triple to an explicit neutral machine release."""
+
+        if not isinstance(value, dict):
+            return value
+        current_fields = {"product_id", "build", "architectures", "scope"}
+        present = current_fields & set(value)
+        if present and present != current_fields:
+            missing = ", ".join(sorted(current_fields - present))
+            raise ValueError(
+                "installed software mixes legacy and current fields; add all current fields: "
+                + missing
+            )
+        if present:
+            return value
+
+        name = value.get("name")
+        version = value.get("version")
+        if not isinstance(name, str) or not name.strip() or not isinstance(version, str):
+            return value
+        normalized = dict(value)
+        normalized.update(
+            {
+                "product_id": stable_config_id(name),
+                "build": version,
+                "architectures": ("neutral",),
+                "scope": "machine",
+            }
+        )
+        warn_legacy_config(
+            f"edr_pools.installed_software_products[{name}] name/publisher/version triple",
+            "product_id, name, publisher, version, build, architectures, and scope",
+            stacklevel=4,
+        )
+        return normalized
+
+    @field_validator("name", "publisher", "version", "build")
     @classmethod
     def values_non_empty(cls, v: str) -> str:
         if not v:
             raise ValueError("installed software fields must be non-empty")
         return v
+
+    @field_validator("architectures")
+    @classmethod
+    def installed_architectures_are_unique(
+        cls,
+        value: tuple[Literal["x86", "x64", "arm64", "neutral"], ...],
+    ) -> tuple[Literal["x86", "x64", "arm64", "neutral"], ...]:
+        """Require a deterministic non-empty release architecture set."""
+
+        if not value:
+            raise ValueError("installed software architectures must not be empty")
+        if len(value) != len(set(value)):
+            raise ValueError("installed software architectures must be unique")
+        if "neutral" in value and len(value) > 1:
+            raise ValueError(
+                "installed software neutral architecture cannot be combined with exact architectures"
+            )
+        return tuple(sorted(value))
 
 
 # --- Endpoint Noise ---
@@ -3183,11 +3573,13 @@ class SpawnRuleEntry(BaseModel, extra="forbid"):
 # --- System Processes ---
 
 
-class ScheduledTaskEntry(BaseModel, extra="forbid"):
+class ScheduledTaskEntry(BaseModel, extra="forbid", frozen=True):
     """A scheduled task entry in system_processes.yaml."""
 
     id: str | None = None
     image: str
+    release_policy: Literal["host_build", "unspecified"] | None = None
+    product_id: str | None = None
     command_templates: list[str]
     parent: str
     params: dict[str, list[str]] | None = None
@@ -3200,19 +3592,87 @@ class ScheduledTaskEntry(BaseModel, extra="forbid"):
     compatibility_option: str | None = None
     compatibility_scope: Literal["host"] | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_deployment(cls, value: Any) -> Any:
+        """Normalize one legacy task descriptor once at the config boundary."""
 
-class SystemServiceEntry(BaseModel, extra="forbid"):
+        if not isinstance(value, dict) or (
+            value.get("id") and value.get("release_policy") and value.get("product_id")
+        ):
+            return value
+        normalized = dict(value)
+        identity = stable_config_id(str(normalized.get("image") or "scheduled-task"))
+        normalized.setdefault("id", f"legacy-task-{identity}")
+        normalized.setdefault("release_policy", "unspecified")
+        normalized.setdefault("product_id", f"legacy-native.windows.{identity}")
+        warn_legacy_config(
+            f"scheduled task {normalized.get('image') or '<unknown>'}",
+            "id, release_policy, and product_id deployment fields",
+            stacklevel=4,
+        )
+        return normalized
+
+
+class SystemServiceEntry(BaseModel, extra="forbid", frozen=True):
     """A system service entry in system_processes.yaml."""
 
+    id: str | None = None
     image: str
+    release_policy: Literal["host_build", "unspecified"] | None = None
+    product_id: str | None = None
     command_templates: list[str]
     parent: str
     params: dict[str, list[str]] | None = None
     loaded_modules: list[LoadedModuleEntry] | None = None
     singleton: bool = False
+    roles_any: tuple[str, ...] = ()
+    services_any: tuple[str, ...] = ()
     compatibility_group: str | None = None
     compatibility_option: str | None = None
     compatibility_scope: Literal["host"] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_deployment(cls, value: Any) -> Any:
+        """Normalize one legacy service descriptor once at the config boundary."""
+
+        if not isinstance(value, dict) or (
+            value.get("id") and value.get("release_policy") and value.get("product_id")
+        ):
+            return value
+        normalized = dict(value)
+        identity = stable_config_id(str(normalized.get("image") or "system-service"))
+        normalized.setdefault("id", f"legacy-service-{identity}")
+        normalized.setdefault("release_policy", "unspecified")
+        normalized.setdefault("product_id", f"legacy-native.windows.{identity}")
+        warn_legacy_config(
+            f"system service {normalized.get('image') or '<unknown>'}",
+            "id, release_policy, and product_id deployment fields",
+            stacklevel=4,
+        )
+        return normalized
+
+
+class NativeSystemBinaryReleaseEntry(BaseModel, extra="forbid", frozen=True):
+    """Path-independent release metadata for an OS-native system binary."""
+
+    product_id: str = Field(min_length=1)
+    variant: str = Field(default="core-os", min_length=1)
+    description: str = Field(min_length=1)
+    product: str = Field(min_length=1)
+    company: str = Field(min_length=1)
+    original_filename: str = Field(min_length=1)
+
+    @field_validator("original_filename")
+    @classmethod
+    def original_filename_is_not_a_path(cls, value: str) -> str:
+        """Require source-native VERSIONINFO filename identity, not placement."""
+
+        normalized = value.strip()
+        if "/" in normalized or "\\" in normalized:
+            raise ValueError("original_filename must be a filename, not an installation path")
+        return normalized
 
 
 class SystemBinaryEntry(BaseModel, extra="forbid"):
@@ -3220,6 +3680,36 @@ class SystemBinaryEntry(BaseModel, extra="forbid"):
 
     exe: str
     path: str
+    release_policy: Literal["host_build", "unspecified"] | None = None
+    distro: Literal["all", "debian", "rhel"] | None = None
+    system_types: tuple[Literal["workstation", "server", "domain_controller"], ...] = ()
+    roles_any: tuple[str, ...] = ()
+    services_any: tuple[str, ...] = ()
+    native_release: NativeSystemBinaryReleaseEntry | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_release_policy(cls, value: Any) -> Any:
+        """Upgrade legacy binary rows without fabricating package versions."""
+
+        if not isinstance(value, dict) or "release_policy" in value:
+            return value
+        normalized = dict(value)
+        normalized["release_policy"] = "unspecified"
+        warn_legacy_config(
+            f"system binary {normalized.get('path') or normalized.get('exe') or '<unknown>'}",
+            "release_policy: host_build or unspecified",
+            stacklevel=4,
+        )
+        return normalized
+
+    @model_validator(mode="after")
+    def exact_native_release_requires_host_build(self) -> Self:
+        """Keep authored OS VERSIONINFO attached only to its host build."""
+
+        if self.native_release is not None and self.release_policy != "host_build":
+            raise ValueError("native_release requires release_policy: host_build")
+        return self
 
 
 # --- Traffic Rates ---

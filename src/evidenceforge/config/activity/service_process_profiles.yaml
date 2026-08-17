@@ -6,12 +6,18 @@
 families:
   postfix:
     os_category: linux
+    service_id: postfix-resident-workers
+    roles_any: [mail_server]
+    services_any: [postfix, smtp]
     manager:
       key: postfix_master
       image: /usr/lib/postfix/sbin/master
       command_line: /usr/lib/postfix/sbin/master -w
       username: root
       parent_key: systemd
+      release_policy: host_build
+      product_id: linux-host
+      variant: core-os
     workers:
       smtpd:
         key: postfix_smtpd
@@ -19,21 +25,33 @@ families:
         command_line: smtpd -n smtp -t inet -u
         username: postfix
         parent_key: manager
+        release_policy: host_build
+        product_id: linux-host
+        variant: core-os
       smtp:
         key: postfix_smtp
         image: /usr/lib/postfix/sbin/smtp
         command_line: /usr/lib/postfix/sbin/smtp -t unix -u -c
         username: postfix
         parent_key: manager
+        release_policy: host_build
+        product_id: linux-host
+        variant: core-os
 
   iis:
     os_category: windows
+    service_id: iis-resident-workers
+    roles_any: [web_server, mail_server]
+    services_any: [iis, exchange, owa]
     manager:
       key: iis_was
       image: 'C:\Windows\System32\svchost.exe'
       command_line: svchost.exe -k iissvcs -p -s WAS
       username: SYSTEM
       parent_key: services
+      release_policy: host_build
+      product_id: microsoft-windows
+      variant: core-os
     workers:
       owa:
         key: iis_owa_worker
@@ -41,3 +59,6 @@ families:
         command_line: 'C:\Windows\System32\inetsrv\w3wp.exe -ap "MSExchangeOWAAppPool"'
         username: SYSTEM
         parent_key: manager
+        release_policy: host_build
+        product_id: microsoft-windows
+        variant: core-os

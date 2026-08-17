@@ -199,6 +199,20 @@ def _application_graph(effective: Any) -> tuple[list[dict[str, Any]], dict[str, 
                 runtime_id = f"{process_reference}::{builtin_id}"
                 builtin_entry = copy.deepcopy(builtin)
                 builtin_entry["id"] = runtime_id
+                for platform in builtin_entry.get("platforms", {}).values():
+                    if not isinstance(platform, dict):
+                        continue
+                    deployment = platform.get("deployment")
+                    if (
+                        isinstance(deployment, dict)
+                        and deployment.get("kind") == "catalog"
+                        and not deployment.get("product_id")
+                    ):
+                        # The qualified runtime ID is a profile identity, not a new
+                        # software product. Preserve the packaged application's
+                        # release namespace so two pack profiles that reuse Chrome
+                        # resolve to one path-independent content identity.
+                        deployment["product_id"] = builtin_id
                 pools = {
                     os_category: _document_parameter_pools(terms, os_category)
                     for os_category in builtin.get("platforms", {})
@@ -359,7 +373,15 @@ def pack_overlay_document(relative_path: str) -> dict[str, Any] | None:
         return None
     if relative_path == "activity/application_catalog.yaml":
         applications, _runtime = _application_graph(effective)
-        return {"applications": applications} if applications else None
+        return (
+            {
+                "schema_version": 2,
+                "default_deployment": {"kind": "legacy_static"},
+                "applications": applications,
+            }
+            if applications
+            else None
+        )
     if relative_path == "activity/dns_registry.yaml":
         return _destination_overlay(effective)
     if relative_path == "activity/traffic_profiles.yaml":

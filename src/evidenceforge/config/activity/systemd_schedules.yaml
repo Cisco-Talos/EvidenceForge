@@ -39,6 +39,10 @@
 schedules:
   # === Systemd timers ===
   - service: logrotate
+    id: linux-logrotate-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: daily
     typical_hour: 6
@@ -63,6 +67,10 @@ schedules:
         - "rotating /var/log/cron"
 
   - service: fstrim
+    id: linux-fstrim-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: weekly
     typical_day: monday
@@ -75,6 +83,10 @@ schedules:
     timer_message: "fstrim.timer: Triggering fstrim.service..."
 
   - service: man-db
+    id: linux-man-db-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: daily
     typical_hour: 6
@@ -85,6 +97,10 @@ schedules:
     finish_message: "Finished man-db.service - Daily man-db regeneration."
 
   - service: systemd-tmpfiles-clean
+    id: linux-tmpfiles-clean-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: daily
     typical_hour: 6
@@ -96,6 +112,10 @@ schedules:
     timer_message: "systemd-tmpfiles-clean.timer: Triggering systemd-tmpfiles-clean.service..."
 
   - service: apt-daily
+    id: linux-apt-daily-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: daily
     typical_hour: 6
@@ -106,6 +126,10 @@ schedules:
     finish_message: "apt-daily.service: Deactivated successfully."
 
   - service: dnf-automatic
+    id: linux-dnf-automatic-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: daily
     typical_hour: 6
@@ -116,6 +140,10 @@ schedules:
     finish_message: "dnf-automatic.service: Deactivated successfully."
 
   - service: motd-news
+    id: linux-motd-news-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: daily
     typical_hour: 12
@@ -126,6 +154,10 @@ schedules:
     finish_message: "Finished motd-news.service - Message of the Day."
 
   - service: ua-timer
+    id: linux-ua-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: daily
     typical_hour: 7
@@ -136,6 +168,10 @@ schedules:
     finish_message: "Finished ua-timer.service - Ubuntu Advantage Timer."
 
   - service: packagekit-refresh
+    id: linux-packagekit-refresh-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: daily
     typical_hour: 9
@@ -153,6 +189,10 @@ schedules:
         - "resolve transaction completed"
 
   - service: fwupd-refresh
+    id: linux-fwupd-refresh-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: weekly
     typical_day: tuesday
@@ -172,6 +212,10 @@ schedules:
         - "firmware metadata signature verified"
 
   - service: tracker-miner-fs
+    id: linux-tracker-miner-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: daily
     typical_hour: 14
@@ -187,6 +231,10 @@ schedules:
         - "Completed incremental index of user documents"
 
   - service: updatedb
+    id: linux-updatedb-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: daily
     typical_hour: 5
@@ -199,6 +247,10 @@ schedules:
     timer_message: "plocate-updatedb.timer: Triggering plocate-updatedb.service..."
 
   - service: phpsessionclean
+    id: linux-php-session-clean-timer
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: systemd_timer
     frequency: 30min
     typical_hour: 0
@@ -216,6 +268,10 @@ schedules:
 
   # === Cron jobs ===
   - service: cron-daily
+    id: linux-cron-daily
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: cron
     frequency: daily
     typical_hour: 6
@@ -225,8 +281,16 @@ schedules:
     cron_commands:
       rhel: "run-parts /etc/cron.daily"
       debian: "test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )"
+    deployment_paths_by_distro:
+      all: ["/bin/sh"]
+      rhel: ["/bin/run-parts"]
+      debian: ["/usr/bin/run-parts"]
 
   - service: logrotate-cron
+    id: linux-logrotate-cron
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: cron
     frequency: daily
     typical_hour: 6
@@ -235,8 +299,14 @@ schedules:
     cron_user: root
     cron_commands:
       all: "/usr/sbin/logrotate /etc/logrotate.conf"
+    deployment_paths_by_distro:
+      all: ["/bin/sh", "/usr/sbin/logrotate"]
 
   - service: debian-sa1
+    id: linux-debian-sa1-cron
+    release_policy: host_build
+    product_id: linux-host
+    variant: core-os
     type: cron
     frequency: 30min
     typical_hour: 0
@@ -246,3 +316,6 @@ schedules:
     cron_user: sysstat
     cron_commands:
       debian: "command -v debian-sa1 > /dev/null && debian-sa1 1 1"
+    deployment_paths_by_distro:
+      all: ["/bin/sh"]
+      debian: ["/usr/lib/sysstat/debian-sa1"]

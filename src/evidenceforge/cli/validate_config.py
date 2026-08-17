@@ -676,6 +676,8 @@ def validate_config(
         },
         "activity/application_catalog.yaml": {
             "list_fields": {"applications": "id"},
+            "dict_fields": {"default_deployment"},
+            "scalar_fields": {"schema_version": int},
         },
         "activity/traffic_profiles.yaml": {
             "dict_fields": {"role_traffic", "persona_traffic"},

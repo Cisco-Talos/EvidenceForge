@@ -644,6 +644,7 @@ class TestValidateConfig:
             windows["loaded_modules"] = [
                 {
                     "path": r"C:\Program Files\Google\Chrome\Application\chrome_elf.dll",
+                    "release_policy": "owner_release",
                     "signature": "Microsoft Windows",
                 }
             ]

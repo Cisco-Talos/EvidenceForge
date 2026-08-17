@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.compatibility import stable_config_id, warn_legacy_config
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 
 _CONFIG_PATH = get_activity_directory() / "service_process_profiles.yaml"
@@ -25,12 +26,39 @@ class ServiceProcessSpec(BaseModel, extra="forbid", frozen=True):
     command_line: str = Field(min_length=1)
     username: str = Field(min_length=1)
     parent_key: str = Field(min_length=1)
+    release_policy: Literal["host_build", "unspecified"] | None = None
+    product_id: str | None = None
+    variant: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_deployment(cls, value: Any) -> Any:
+        """Normalize legacy process triples to an explicit static deployment."""
+
+        if not isinstance(value, dict) or (
+            value.get("release_policy") and value.get("product_id") and value.get("variant")
+        ):
+            return value
+        normalized = dict(value)
+        identity = stable_config_id(str(normalized.get("key") or "service-process"))
+        normalized.setdefault("release_policy", "unspecified")
+        normalized.setdefault("product_id", f"legacy-native.service-process.{identity}")
+        normalized.setdefault("variant", "legacy-native")
+        warn_legacy_config(
+            f"service process {normalized.get('key') or '<unknown>'}",
+            "release_policy, product_id, and variant deployment fields",
+            stacklevel=4,
+        )
+        return normalized
 
 
 class ServiceProcessFamily(BaseModel, extra="forbid", frozen=True):
     """One OS-native resident manager and its supported worker modes."""
 
     os_category: Literal["linux", "windows"]
+    service_id: str = Field(min_length=1)
+    roles_any: tuple[str, ...] = ()
+    services_any: tuple[str, ...] = ()
     manager: ServiceProcessSpec
     workers: dict[str, ServiceProcessSpec]
 

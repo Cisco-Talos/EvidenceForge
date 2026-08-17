@@ -12,6 +12,9 @@
 
 scheduled_tasks:
   - image: "C:\\Windows\\System32\\svchost.exe"
+    id: windows-scheduled-service-host
+    release_policy: host_build
+    product_id: microsoft-windows
     weight: 8
     command_templates:
       - "svchost.exe -k netsvcs -p -s {service}"
@@ -19,12 +22,18 @@ scheduled_tasks:
       service: [Schedule, BITS, wuauserv, Winmgmt, LanmanServer, CryptSvc, AppXSvc]
     parent: services
   - image: "C:\\Windows\\System32\\taskhostw.exe"
+    id: windows-task-host
+    release_policy: host_build
+    product_id: microsoft-windows
     weight: 7
     command_templates:
       - "taskhostw.exe /Run"
       - "taskhostw.exe"
     parent: svchost_local_system
   - image: "C:\\Windows\\System32\\usoclient.exe"
+    id: windows-update-orchestrator
+    release_policy: host_build
+    product_id: microsoft-windows
     weight: 2
     max_per_host_window: 1
     cooldown_hours: 6
@@ -34,6 +43,9 @@ scheduled_tasks:
       - "usoclient.exe ResumeUpdate"
     parent: svchost_wusvcs
   - image: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_{servicing_stack_version}_none_7c91d6e7c9f7f1f5\\TiWorker.exe"
+    id: windows-trusted-installer-worker
+    release_policy: host_build
+    product_id: microsoft-windows
     weight: 2
     max_per_host_window: 1
     cooldown_hours: 6
@@ -41,6 +53,9 @@ scheduled_tasks:
       - "TiWorker.exe -Embedding"
     parent: svchost_netsvcs
   - image: "C:\\Windows\\System32\\MpCmdRun.exe"
+    id: windows-defender-command
+    release_policy: host_build
+    product_id: microsoft-windows
     weight: 3
     max_per_host_window: 2
     cooldown_hours: 2
@@ -49,6 +64,9 @@ scheduled_tasks:
       - "MpCmdRun.exe -SignatureUpdate"
     parent: services
   - image: "C:\\Windows\\System32\\cleanmgr.exe"
+    id: windows-disk-cleanup
+    release_policy: host_build
+    product_id: microsoft-windows
     system_types: [workstation]
     weight: 1
     max_per_host_window: 1
@@ -57,6 +75,9 @@ scheduled_tasks:
       - "cleanmgr.exe /autoclean /d C:"
     parent: svchost_local_system
   - image: "C:\\Windows\\System32\\wsqmcons.exe"
+    id: windows-customer-experience
+    release_policy: host_build
+    product_id: microsoft-windows
     system_types: [workstation]
     weight: 1
     max_per_host_window: 1
@@ -65,6 +86,9 @@ scheduled_tasks:
       - "wsqmcons.exe"
     parent: svchost_local_system
   - image: "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdate.exe"
+    id: google-update-task
+    release_policy: unspecified
+    product_id: legacy-native.windows.google-update-task
     system_types: [workstation]
     compatibility_group: third_party_updater
     compatibility_option: google
@@ -77,6 +101,9 @@ scheduled_tasks:
       - "GoogleUpdate.exe /c"
     parent: taskhostw
   - image: "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARM.exe"
+    id: adobe-update-task
+    release_policy: unspecified
+    product_id: legacy-native.windows.adobe-update-task
     system_types: [workstation]
     compatibility_group: third_party_updater
     compatibility_option: adobe
@@ -89,6 +116,9 @@ scheduled_tasks:
       - "AdobeARM.exe /NOUAC"
     parent: taskhostw
   - image: "C:\\Program Files (x86)\\Dropbox\\Update\\DropboxUpdate.exe"
+    id: dropbox-update-task
+    release_policy: unspecified
+    product_id: legacy-native.windows.dropbox-update-task
     system_types: [workstation]
     compatibility_group: third_party_updater
     compatibility_option: dropbox
@@ -101,6 +131,9 @@ scheduled_tasks:
       - "DropboxUpdate.exe /c"
     parent: taskhostw
   - image: "C:\\Program Files\\Zoom\\bin\\ZoomUpdate.exe"
+    id: zoom-update-task
+    release_policy: unspecified
+    product_id: legacy-native.windows.zoom-update-task
     system_types: [workstation]
     weight: 1
     max_per_host_window: 1
@@ -110,6 +143,9 @@ scheduled_tasks:
       - "ZoomUpdate.exe --check"
     parent: taskhostw
   - image: "C:\\Program Files\\Microsoft OneDrive\\OneDriveStandaloneUpdater.exe"
+    id: onedrive-update-task
+    release_policy: unspecified
+    product_id: legacy-native.windows.onedrive-update-task
     system_types: [workstation]
     weight: 1
     max_per_host_window: 1
@@ -118,6 +154,9 @@ scheduled_tasks:
       - "OneDriveStandaloneUpdater.exe /silent"
     parent: taskhostw
   - image: "C:\\Program Files\\Dell\\CommandUpdate\\dcu-cli.exe"
+    id: dell-update-task
+    release_policy: unspecified
+    product_id: legacy-native.windows.dell-update-task
     system_types: [workstation]
     weight: 1
     max_per_host_window: 1
@@ -127,6 +166,9 @@ scheduled_tasks:
       - "dcu-cli.exe /applyUpdates -silent"
     parent: taskhostw
   - image: "C:\\Program Files\\HP\\HP Image Assistant\\HPImageAssistant.exe"
+    id: hp-image-assistant-task
+    release_policy: unspecified
+    product_id: legacy-native.windows.hp-image-assistant-task
     system_types: [workstation]
     weight: 1
     max_per_host_window: 1
@@ -135,6 +177,9 @@ scheduled_tasks:
       - "HPImageAssistant.exe /Operation:Analyze /Silent"
     parent: taskhostw
   - image: "C:\\Windows\\System32\\CompatTelRunner.exe"
+    id: windows-compat-telemetry-task
+    release_policy: host_build
+    product_id: microsoft-windows
     system_types: [workstation]
     weight: 1
     max_per_host_window: 1
@@ -146,16 +191,26 @@ scheduled_tasks:
 system_services:
   all:
     - image: "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"
+      id: wmi-provider
+      release_policy: host_build
+      product_id: microsoft-windows
       command_templates:
         - "WmiPrvSE.exe -Embedding"
         - "WmiPrvSE.exe -secured -Embedding"
       parent: svchost_dcom
       loaded_modules:
         - path: "C:\\Windows\\System32\\ole32.dll"
+          release_policy: host_build
         - path: "C:\\Windows\\System32\\framedynos.dll"
+          release_policy: host_build
         - path: "C:\\Windows\\System32\\wbem\\fastprox.dll"
+          release_policy: host_build
         - path: "C:\\Windows\\System32\\wbemsvc.dll"
+          release_policy: host_build
     - image: "C:\\Windows\\System32\\dllhost.exe"
+      id: com-surrogate
+      release_policy: host_build
+      product_id: microsoft-windows
       command_templates:
         - "dllhost.exe /Processid:{guid}"
       params:
@@ -166,44 +221,98 @@ system_services:
       parent: svchost_dcom
       loaded_modules:
         - path: "C:\\Windows\\System32\\combase.dll"
+          release_policy: host_build
         - path: "C:\\Windows\\System32\\ole32.dll"
+          release_policy: host_build
         - path: "C:\\Windows\\System32\\clbcatq.dll"
+          release_policy: host_build
     - image: "C:\\Windows\\System32\\conhost.exe"
+      id: console-host
+      release_policy: host_build
+      product_id: microsoft-windows
       command_templates:
         - "conhost.exe 0x4"
         - "\\??\\C:\\Windows\\system32\\conhost.exe 0xffffffff -ForceV1"
       parent: csrss_s0
     - image: "C:\\Windows\\System32\\spoolsv.exe"
+      id: print-spooler
+      release_policy: host_build
+      product_id: microsoft-windows
       command_templates:
         - "spoolsv.exe"
       parent: services
 
   domain_controller:
     - image: "C:\\Windows\\System32\\dfsr.exe"
+      id: dfs-replication
+      release_policy: host_build
+      product_id: microsoft-windows
       command_templates:
         - "dfsr.exe"
       parent: services
     - image: "C:\\Windows\\System32\\dns.exe"
+      id: dns-server
+      release_policy: host_build
+      product_id: microsoft-windows
       command_templates:
         - "dns.exe"
       parent: services
     - image: "C:\\Windows\\System32\\ismserv.exe"
+      id: intersite-messaging
+      release_policy: host_build
+      product_id: microsoft-windows
       command_templates:
         - "ismserv.exe"
       parent: services
 
   server:
     - image: "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"
+      id: wmi-provider-server
+      release_policy: host_build
+      product_id: microsoft-windows
       command_templates:
         - "WmiPrvSE.exe -secured -Embedding"
       parent: svchost_dcom
     - image: "C:\\Windows\\System32\\msdtc.exe"
+      id: distributed-transaction-coordinator
+      release_policy: host_build
+      product_id: microsoft-windows
       command_templates:
         - "msdtc.exe"
+      parent: services
+    - image: "C:\\Program Files\\Microsoft SQL Server\\MSSQL16.MSSQLSERVER\\MSSQL\\Binn\\sqlservr.exe"
+      id: microsoft-sql-server-engine
+      release_policy: unspecified
+      product_id: microsoft-sql-server
+      roles_any: [database, db_server]
+      services_any: [mssql, mssqlserver, sql_server]
+      command_templates:
+        - "sqlservr.exe -sMSSQLSERVER"
+      parent: services
+    - image: "C:\\Program Files\\Microsoft\\Exchange Server\\V15\\Bin\\EdgeTransport.exe"
+      id: microsoft-exchange-edge-transport
+      release_policy: unspecified
+      product_id: microsoft-exchange-server
+      roles_any: [mail_server]
+      services_any: [edge_transport, exchange, msexchangetransport, smtp]
+      command_templates:
+        - '"C:\\Program Files\\Microsoft\\Exchange Server\\V15\\Bin\\EdgeTransport.exe" -service'
+      parent: services
+    - image: "C:\\Program Files\\Microsoft\\Exchange Server\\V15\\Bin\\Microsoft.Exchange.Imap4.exe"
+      id: microsoft-exchange-imap4
+      release_policy: unspecified
+      product_id: microsoft-exchange-server
+      roles_any: [mail_server]
+      services_any: [exchange, imap, imap4, imaps, msexchangeimap4]
+      command_templates:
+        - '"C:\\Program Files\\Microsoft\\Exchange Server\\V15\\Bin\\Microsoft.Exchange.Imap4.exe"'
       parent: services
 
   workstation:
     - image: "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnagent.exe"
+      id: cisco-secure-client
+      release_policy: unspecified
+      product_id: legacy-native.windows.cisco-secure-client
       compatibility_group: remote_access_stack
       compatibility_option: cisco_secure_client
       command_templates:
@@ -212,6 +321,8 @@ system_services:
       singleton: true
       loaded_modules:
         - path: "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnapi.dll"
+          release_policy: pe_metadata
+          product_id: cisco-secure-client
           signature: "Cisco Systems, Inc."
           pe_metadata:
             file_version: "5.1.4.74"
@@ -220,6 +331,9 @@ system_services:
             company: "Cisco Systems, Inc."
             original_filename: "vpnapi.dll"
     - image: "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGPS.exe"
+      id: globalprotect
+      release_policy: unspecified
+      product_id: legacy-native.windows.globalprotect
       compatibility_group: remote_access_stack
       compatibility_option: globalprotect
       command_templates:
@@ -228,8 +342,12 @@ system_services:
       singleton: true
       loaded_modules:
         - path: "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGpHip.dll"
+          release_policy: unspecified
           signature: "Palo Alto Networks, Inc."
     - image: "C:\\Program Files\\Zscaler\\ZSAService\\ZSAService.exe"
+      id: zscaler-service
+      release_policy: unspecified
+      product_id: legacy-native.windows.zscaler-service
       compatibility_group: remote_access_stack
       compatibility_option: zscaler
       command_templates:
@@ -238,8 +356,12 @@ system_services:
       singleton: true
       loaded_modules:
         - path: "C:\\Program Files\\Zscaler\\ZSAService\\ZSACommon.dll"
+          release_policy: unspecified
           signature: "Zscaler, Inc."
     - image: "C:\\Program Files\\Zscaler\\ZSATunnel\\ZSATunnel.exe"
+      id: zscaler-tunnel
+      release_policy: unspecified
+      product_id: legacy-native.windows.zscaler-tunnel
       compatibility_group: remote_access_stack
       compatibility_option: zscaler
       command_templates:
@@ -248,8 +370,12 @@ system_services:
       singleton: true
       loaded_modules:
         - path: "C:\\Program Files\\Zscaler\\ZSATunnel\\ZSATunnel.dll"
+          release_policy: unspecified
           signature: "Zscaler, Inc."
     - image: "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdater.exe"
+      id: google-updater
+      release_policy: unspecified
+      product_id: legacy-native.windows.google-updater
       compatibility_group: third_party_updater
       compatibility_option: google
       compatibility_scope: host
@@ -257,6 +383,9 @@ system_services:
         - "GoogleUpdater.exe -Embedding"
       parent: services
     - image: "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARMservice.exe"
+      id: adobe-update-service
+      release_policy: unspecified
+      product_id: legacy-native.windows.adobe-update-service
       compatibility_group: third_party_updater
       compatibility_option: adobe
       compatibility_scope: host
@@ -264,6 +393,9 @@ system_services:
         - "AdobeARMservice.exe"
       parent: services
     - image: "C:\\Program Files (x86)\\Dropbox\\Update\\DropboxUpdate.exe"
+      id: dropbox-update-service
+      release_policy: unspecified
+      product_id: legacy-native.windows.dropbox-update-service
       compatibility_group: third_party_updater
       compatibility_option: dropbox
       compatibility_scope: host
@@ -271,6 +403,9 @@ system_services:
         - "DropboxUpdate.exe /svc"
       parent: services
     - image: "C:\\Windows\\System32\\SearchProtocolHost.exe"
+      id: windows-search-protocol
+      release_policy: host_build
+      product_id: microsoft-windows
       command_templates:
         - "SearchProtocolHost.exe {search_pipe_args}"
       params:
@@ -281,6 +416,9 @@ system_services:
           - "Global\\UsGthrFltPipeMssGthrPipe_{host_local_search_sid} Global\\UsGthrCtrlFltPipeMssGthrPipe_{host_local_search_sid} 1"
       parent: search_indexer
     - image: "C:\\Windows\\System32\\SearchFilterHost.exe"
+      id: windows-search-filter
+      release_policy: host_build
+      product_id: microsoft-windows
       command_templates:
         - "SearchFilterHost.exe 0 {filter_id} 0 0 0"
       params:
@@ -296,21 +434,30 @@ system_services:
 common_loaded_modules:
   windows:
     - path: "C:\\Windows\\System32\\ntdll.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\kernel32.dll"
+      release_policy: host_build
       startup_probability: 0.98
     - path: "C:\\Windows\\System32\\kernelbase.dll"
+      release_policy: host_build
       startup_probability: 0.96
     - path: "C:\\Windows\\System32\\msvcrt.dll"
+      release_policy: host_build
       startup_probability: 0.38
     - path: "C:\\Windows\\System32\\ucrtbase.dll"
+      release_policy: host_build
       startup_probability: 0.71
     - path: "C:\\Windows\\System32\\advapi32.dll"
+      release_policy: host_build
       startup_probability: 0.66
     - path: "C:\\Windows\\System32\\sechost.dll"
+      release_policy: host_build
       startup_probability: 0.44
     - path: "C:\\Windows\\System32\\rpcrt4.dll"
+      release_policy: host_build
       startup_probability: 0.52
     - path: "C:\\Windows\\System32\\bcryptprimitives.dll"
+      release_policy: host_build
       startup_probability: 0.47
 
 # Per-process loaded modules for processes not defined in system_services
@@ -318,15 +465,25 @@ common_loaded_modules:
 process_loaded_modules:
   explorer.exe:
     - path: "C:\\Windows\\System32\\shell32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\user32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\gdi32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\ole32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\combase.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\uxtheme.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\SHCore.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\propsys.dll"
+      release_policy: host_build
     # Third-party shell extensions (survive Event 7 exclude filter)
     - path: "C:\\Program Files\\7-Zip\\7-zip.dll"
+      release_policy: pe_metadata
+      product_id: 7-zip
       signed: false
       signature: "-"
       signature_status: "Unavailable"
@@ -337,6 +494,8 @@ process_loaded_modules:
         company: "Igor Pavlov"
         original_filename: "7-zip.dll"
     - path: "C:\\Program Files\\Microsoft OneDrive\\FileSyncShell64.dll"
+      release_policy: pe_metadata
+      product_id: microsoft-onedrive
       signature: "Microsoft Corporation"
       pe_metadata:
         file_version: "24.020.0128.0003"
@@ -347,15 +506,25 @@ process_loaded_modules:
 
   lsass.exe:
     - path: "C:\\Windows\\System32\\msv1_0.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\kerberos.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\wdigest.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\tspkg.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\sspisrv.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\samsrv.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\cryptdll.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\negoext.dll"
+      release_policy: host_build
     # Third-party credential providers
     - path: "C:\\Program Files\\VMware\\VMware Tools\\vmStatsProvider.dll"
+      release_policy: pe_metadata
+      product_id: vmware-inc
       signature: "VMware, Inc."
       pe_metadata:
         file_version: "1.0.0.0"
@@ -366,40 +535,66 @@ process_loaded_modules:
 
   services.exe:
     - path: "C:\\Windows\\System32\\user32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\scesrv.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\authz.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\cryptsp.dll"
+      release_policy: host_build
 
   svchost.exe:
     - path: "C:\\Windows\\System32\\combase.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\ole32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\user32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\cryptsp.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\dnsapi.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\winhttp.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\wintrust.dll"
+      release_policy: host_build
   powershell.exe:
     - path: "C:\\Windows\\System32\\user32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\ole32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\gdi32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\clr.dll"
+      release_policy: host_build
       signature: "Microsoft Corporation"
     - path: "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\clrjit.dll"
+      release_policy: host_build
       signature: "Microsoft Corporation"
 
   cmd.exe:
     - path: "C:\\Windows\\System32\\user32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\gdi32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\shell32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\winbrand.dll"
+      release_policy: host_build
 
   taskhostw.exe:
     - path: "C:\\Windows\\System32\\combase.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\ole32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\user32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\taskschd.dll"
+      release_policy: host_build
     # Third-party task DLLs
     - path: "C:\\Program Files\\Windows Defender\\MpOAV.dll"
+      release_policy: pe_metadata
+      product_id: microsoft-defender-antivirus
       signature: "Microsoft Corporation"
       pe_metadata:
         file_version: "4.18.2301.6"
@@ -410,13 +605,19 @@ process_loaded_modules:
 
   MsMpEng.exe:
     - path: "C:\\Windows\\System32\\ole32.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\wintrust.dll"
+      release_policy: host_build
     - path: "C:\\Windows\\System32\\crypt32.dll"
+      release_policy: host_build
     - path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MpClient.dll"
+      release_policy: unspecified
       signature: "Microsoft Corporation"
 
   SenseCncProxy.exe:
     - path: "C:\\Program Files\\Windows Defender Advanced Threat Protection\\SenseCncProxy.dll"
+      release_policy: pe_metadata
+      product_id: microsoft-defender-for-endpoint
       signature: "Microsoft Corporation"
       load_phase: startup
       pe_metadata:
@@ -437,227 +638,747 @@ process_loaded_modules:
 system_binaries:
   windows:
     # --- Core OS boot / session processes ---
-    - {exe: "smss.exe",                  path: "C:\\Windows\\System32\\smss.exe"}
-    - {exe: "csrss.exe",                 path: "C:\\Windows\\System32\\csrss.exe"}
-    - {exe: "wininit.exe",               path: "C:\\Windows\\System32\\wininit.exe"}
-    - {exe: "winlogon.exe",              path: "C:\\Windows\\System32\\winlogon.exe"}
-    - {exe: "services.exe",              path: "C:\\Windows\\System32\\services.exe"}
-    - {exe: "lsass.exe",                 path: "C:\\Windows\\System32\\lsass.exe"}
-    - {exe: "lsaiso.exe",               path: "C:\\Windows\\System32\\lsaiso.exe"}
-    - {exe: "dwm.exe",                   path: "C:\\Windows\\System32\\dwm.exe"}
+    - exe: "smss.exe"
+      path: "C:\\Windows\\System32\\smss.exe"
+      release_policy: host_build
+    - exe: "csrss.exe"
+      path: "C:\\Windows\\System32\\csrss.exe"
+      release_policy: host_build
+    - exe: "wininit.exe"
+      path: "C:\\Windows\\System32\\wininit.exe"
+      release_policy: host_build
+    - exe: "winlogon.exe"
+      path: "C:\\Windows\\System32\\winlogon.exe"
+      release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Windows Logon Application
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: winlogon.exe
+    - exe: "userinit.exe"
+      path: "C:\\Windows\\System32\\userinit.exe"
+      release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Userinit Logon Application
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: userinit.exe
+    - exe: "services.exe"
+      path: "C:\\Windows\\System32\\services.exe"
+      release_policy: host_build
+    - exe: "lsass.exe"
+      path: "C:\\Windows\\System32\\lsass.exe"
+      release_policy: host_build
+    - exe: "lsaiso.exe"
+      path: "C:\\Windows\\System32\\lsaiso.exe"
+      release_policy: host_build
+    - exe: "dwm.exe"
+      path: "C:\\Windows\\System32\\dwm.exe"
+      release_policy: host_build
 
     # --- Service host and session managers ---
-    - {exe: "svchost.exe",               path: "C:\\Windows\\System32\\svchost.exe"}
-    - {exe: "taskhostw.exe",             path: "C:\\Windows\\System32\\taskhostw.exe"}
-    - {exe: "sihost.exe",                path: "C:\\Windows\\System32\\sihost.exe"}
-    - {exe: "conhost.exe",               path: "C:\\Windows\\System32\\conhost.exe"}
-    - {exe: "dllhost.exe",               path: "C:\\Windows\\System32\\dllhost.exe"}
-    - {exe: "RuntimeBroker.exe",         path: "C:\\Windows\\System32\\RuntimeBroker.exe"}
-    - {exe: "backgroundTaskHost.exe",    path: "C:\\Windows\\System32\\backgroundTaskHost.exe"}
+    - exe: "svchost.exe"
+      path: "C:\\Windows\\System32\\svchost.exe"
+      release_policy: host_build
+    - exe: "taskhostw.exe"
+      path: "C:\\Windows\\System32\\taskhostw.exe"
+      release_policy: host_build
+    - exe: "sihost.exe"
+      path: "C:\\Windows\\System32\\sihost.exe"
+      release_policy: host_build
+    - exe: "conhost.exe"
+      path: "C:\\Windows\\System32\\conhost.exe"
+      release_policy: host_build
+    - exe: "dllhost.exe"
+      path: "C:\\Windows\\System32\\dllhost.exe"
+      release_policy: host_build
+    - exe: "RuntimeBroker.exe"
+      path: "C:\\Windows\\System32\\RuntimeBroker.exe"
+      release_policy: host_build
+    - exe: "backgroundTaskHost.exe"
+      path: "C:\\Windows\\System32\\backgroundTaskHost.exe"
+      release_policy: host_build
 
     # --- Shells and terminals ---
-    - {exe: "cmd.exe",                   path: "C:\\Windows\\System32\\cmd.exe"}
-    - {exe: "powershell.exe",            path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"}
-    - {exe: "pwsh.exe",                  path: "C:\\Program Files\\PowerShell\\7\\pwsh.exe"}
-    - {exe: "WindowsTerminal.exe",       path: "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.19\\WindowsTerminal.exe"}
+    - exe: "cmd.exe"
+      path: "C:\\Windows\\System32\\cmd.exe"
+      release_policy: host_build
+    - exe: "powershell.exe"
+      path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      release_policy: host_build
+    - exe: "pwsh.exe"
+      path: "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+      release_policy: unspecified
+    - exe: "WindowsTerminal.exe"
+      path: "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.19\\WindowsTerminal.exe"
+      release_policy: unspecified
 
     # --- Windows system services / daemons ---
-    - {exe: "spoolsv.exe",              path: "C:\\Windows\\System32\\spoolsv.exe"}
-    - {exe: "WmiPrvSE.exe",             path: "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"}
-    - {exe: "msdtc.exe",                path: "C:\\Windows\\System32\\msdtc.exe"}
-    - {exe: "SearchIndexer.exe",         path: "C:\\Windows\\System32\\SearchIndexer.exe"}
-    - {exe: "SearchProtocolHost.exe",    path: "C:\\Windows\\System32\\SearchProtocolHost.exe"}
-    - {exe: "SearchFilterHost.exe",      path: "C:\\Windows\\System32\\SearchFilterHost.exe"}
+    - exe: "spoolsv.exe"
+      path: "C:\\Windows\\System32\\spoolsv.exe"
+      release_policy: host_build
+    - exe: "WmiPrvSE.exe"
+      path: "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"
+      release_policy: host_build
+    - exe: "msdtc.exe"
+      path: "C:\\Windows\\System32\\msdtc.exe"
+      release_policy: host_build
+    - exe: "SearchIndexer.exe"
+      path: "C:\\Windows\\System32\\SearchIndexer.exe"
+      release_policy: host_build
+    - exe: "SearchProtocolHost.exe"
+      path: "C:\\Windows\\System32\\SearchProtocolHost.exe"
+      release_policy: host_build
+    - exe: "SearchFilterHost.exe"
+      path: "C:\\Windows\\System32\\SearchFilterHost.exe"
+      release_policy: host_build
 
     # --- Windows Update and telemetry ---
-    - {exe: "usoclient.exe",             path: "C:\\Windows\\System32\\usoclient.exe"}
-    - {exe: "TiWorker.exe",             path: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_{servicing_stack_version}_none_7c91d6e7c9f7f1f5\\TiWorker.exe"}
-    - {exe: "cleanmgr.exe",             path: "C:\\Windows\\System32\\cleanmgr.exe"}
-    - {exe: "wsqmcons.exe",             path: "C:\\Windows\\System32\\wsqmcons.exe"}
-    - {exe: "CompatTelRunner.exe",       path: "C:\\Windows\\System32\\CompatTelRunner.exe"}
-    - {exe: "GoogleUpdate.exe",          path: "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdate.exe"}
-    - {exe: "GoogleUpdater.exe",         path: "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdater.exe"}
-    - {exe: "AdobeARM.exe",              path: "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARM.exe"}
-    - {exe: "AdobeARMservice.exe",       path: "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARMservice.exe"}
-    - {exe: "DropboxUpdate.exe",         path: "C:\\Program Files (x86)\\Dropbox\\Update\\DropboxUpdate.exe"}
-    - {exe: "ZoomUpdate.exe",            path: "C:\\Program Files\\Zoom\\bin\\ZoomUpdate.exe"}
-    - {exe: "OneDriveStandaloneUpdater.exe", path: "C:\\Program Files\\Microsoft OneDrive\\OneDriveStandaloneUpdater.exe"}
-    - {exe: "dcu-cli.exe",               path: "C:\\Program Files\\Dell\\CommandUpdate\\dcu-cli.exe"}
-    - {exe: "HPImageAssistant.exe",      path: "C:\\Program Files\\HP\\HP Image Assistant\\HPImageAssistant.exe"}
+    - exe: "usoclient.exe"
+      path: "C:\\Windows\\System32\\usoclient.exe"
+      release_policy: host_build
+    - exe: "TiWorker.exe"
+      path: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_{servicing_stack_version}_none_7c91d6e7c9f7f1f5\\TiWorker.exe"
+      release_policy: host_build
+    - exe: "cleanmgr.exe"
+      path: "C:\\Windows\\System32\\cleanmgr.exe"
+      release_policy: host_build
+    - exe: "wsqmcons.exe"
+      path: "C:\\Windows\\System32\\wsqmcons.exe"
+      release_policy: host_build
+    - exe: "CompatTelRunner.exe"
+      path: "C:\\Windows\\System32\\CompatTelRunner.exe"
+      release_policy: host_build
+    - exe: "GoogleUpdate.exe"
+      path: "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdate.exe"
+      release_policy: unspecified
+    - exe: "GoogleUpdater.exe"
+      path: "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdater.exe"
+      release_policy: unspecified
+    - exe: "AdobeARM.exe"
+      path: "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARM.exe"
+      release_policy: unspecified
+    - exe: "AdobeARMservice.exe"
+      path: "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARMservice.exe"
+      release_policy: unspecified
+    - exe: "DropboxUpdate.exe"
+      path: "C:\\Program Files (x86)\\Dropbox\\Update\\DropboxUpdate.exe"
+      release_policy: unspecified
+    - exe: "ZoomUpdate.exe"
+      path: "C:\\Program Files\\Zoom\\bin\\ZoomUpdate.exe"
+      release_policy: unspecified
+    - exe: "OneDriveStandaloneUpdater.exe"
+      path: "C:\\Program Files\\Microsoft OneDrive\\OneDriveStandaloneUpdater.exe"
+      release_policy: unspecified
+    - exe: "dcu-cli.exe"
+      path: "C:\\Program Files\\Dell\\CommandUpdate\\dcu-cli.exe"
+      release_policy: unspecified
+    - exe: "HPImageAssistant.exe"
+      path: "C:\\Program Files\\HP\\HP Image Assistant\\HPImageAssistant.exe"
+      release_policy: unspecified
 
     # --- Windows Defender / security ---
-    - {exe: "MsMpEng.exe",              path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MsMpEng.exe"}
-    - {exe: "MpCmdRun.exe",             path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MpCmdRun.exe"}
-    - {exe: "SenseCncProxy.exe",        path: "C:\\Program Files\\Windows Defender Advanced Threat Protection\\SenseCncProxy.exe"}
-    - {exe: "vpnagent.exe",              path: "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnagent.exe"}
-    - {exe: "PanGPS.exe",                path: "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGPS.exe"}
-    - {exe: "ZSAService.exe",            path: "C:\\Program Files\\Zscaler\\ZSAService\\ZSAService.exe"}
-    - {exe: "ZSATunnel.exe",             path: "C:\\Program Files\\Zscaler\\ZSATunnel\\ZSATunnel.exe"}
+    - exe: "MsMpEng.exe"
+      path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MsMpEng.exe"
+      release_policy: host_build
+      native_release:
+        product_id: microsoft-defender-antivirus
+        variant: defender-platform
+        description: "Antimalware Service Executable"
+        product: "Microsoft Antimalware"
+        company: "Microsoft Corporation"
+        original_filename: "MsMpEng.exe"
+    - exe: "MpCmdRun.exe"
+      path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MpCmdRun.exe"
+      release_policy: host_build
+      native_release:
+        product_id: microsoft-defender-antivirus
+        variant: defender-platform
+        description: "Microsoft Malware Protection Command Line Utility"
+        product: "Microsoft Antimalware"
+        company: "Microsoft Corporation"
+        original_filename: "MpCmdRun.exe"
+    - exe: "SenseCncProxy.exe"
+      path: "C:\\Program Files\\Windows Defender Advanced Threat Protection\\SenseCncProxy.exe"
+      release_policy: unspecified
+    - exe: "vpnagent.exe"
+      path: "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnagent.exe"
+      release_policy: unspecified
+    - exe: "PanGPS.exe"
+      path: "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGPS.exe"
+      release_policy: unspecified
+    - exe: "ZSAService.exe"
+      path: "C:\\Program Files\\Zscaler\\ZSAService\\ZSAService.exe"
+      release_policy: unspecified
+    - exe: "ZSATunnel.exe"
+      path: "C:\\Program Files\\Zscaler\\ZSATunnel\\ZSATunnel.exe"
+      release_policy: unspecified
 
     # --- Active Directory / domain controller ---
-    - {exe: "dns.exe",                   path: "C:\\Windows\\System32\\dns.exe"}
-    - {exe: "dfsr.exe",                  path: "C:\\Windows\\System32\\dfsr.exe"}
-    - {exe: "ntdsutil.exe",             path: "C:\\Windows\\System32\\ntdsutil.exe"}
-    - {exe: "ismserv.exe",              path: "C:\\Windows\\System32\\ismserv.exe"}
+    - exe: "dns.exe"
+      path: "C:\\Windows\\System32\\dns.exe"
+      release_policy: host_build
+    - exe: "dfsr.exe"
+      path: "C:\\Windows\\System32\\dfsr.exe"
+      release_policy: host_build
+    - exe: "ntdsutil.exe"
+      path: "C:\\Windows\\System32\\ntdsutil.exe"
+      release_policy: host_build
+    - exe: "ismserv.exe"
+      path: "C:\\Windows\\System32\\ismserv.exe"
+      release_policy: host_build
 
     # --- Admin GUI tools ---
-    - {exe: "taskmgr.exe",              path: "C:\\Windows\\System32\\taskmgr.exe"}
-    - {exe: "mmc.exe",                   path: "C:\\Windows\\System32\\mmc.exe"}
-    - {exe: "eventvwr.exe",             path: "C:\\Windows\\System32\\eventvwr.exe"}
-    - {exe: "regedit.exe",              path: "C:\\Windows\\regedit.exe"}
-    - {exe: "notepad.exe",              path: "C:\\Windows\\System32\\notepad.exe"}
+    - exe: "taskmgr.exe"
+      path: "C:\\Windows\\System32\\taskmgr.exe"
+      release_policy: host_build
+    - exe: "mmc.exe"
+      path: "C:\\Windows\\System32\\mmc.exe"
+      release_policy: host_build
+    - exe: "eventvwr.exe"
+      path: "C:\\Windows\\System32\\eventvwr.exe"
+      release_policy: host_build
+    - exe: "regedit.exe"
+      path: "C:\\Windows\\regedit.exe"
+      release_policy: host_build
+    - exe: "notepad.exe"
+      path: "C:\\Windows\\System32\\notepad.exe"
+      release_policy: host_build
 
     # --- Installer / registration utilities ---
-    - {exe: "msiexec.exe",              path: "C:\\Windows\\System32\\msiexec.exe"}
-    - {exe: "regsvr32.exe",             path: "C:\\Windows\\System32\\regsvr32.exe"}
-    - {exe: "rundll32.exe",             path: "C:\\Windows\\System32\\rundll32.exe"}
-    - {exe: "mshta.exe",                path: "C:\\Windows\\System32\\mshta.exe"}
+    - exe: "msiexec.exe"
+      path: "C:\\Windows\\System32\\msiexec.exe"
+      release_policy: host_build
+    - exe: "regsvr32.exe"
+      path: "C:\\Windows\\System32\\regsvr32.exe"
+      release_policy: host_build
+    - exe: "rundll32.exe"
+      path: "C:\\Windows\\System32\\rundll32.exe"
+      release_policy: host_build
+    - exe: "mshta.exe"
+      path: "C:\\Windows\\System32\\mshta.exe"
+      release_policy: host_build
 
     # --- Scripting hosts ---
-    - {exe: "cscript.exe",              path: "C:\\Windows\\System32\\cscript.exe"}
-    - {exe: "wscript.exe",              path: "C:\\Windows\\System32\\wscript.exe"}
+    - exe: "cscript.exe"
+      path: "C:\\Windows\\System32\\cscript.exe"
+      release_policy: host_build
+    - exe: "wscript.exe"
+      path: "C:\\Windows\\System32\\wscript.exe"
+      release_policy: host_build
 
     # --- Command-line admin / diagnostic tools ---
-    - {exe: "sc.exe",                    path: "C:\\Windows\\System32\\sc.exe"}
-    - {exe: "net.exe",                   path: "C:\\Windows\\System32\\net.exe"}
-    - {exe: "net1.exe",                  path: "C:\\Windows\\System32\\net1.exe"}
-    - {exe: "netsh.exe",                path: "C:\\Windows\\System32\\netsh.exe"}
-    - {exe: "reg.exe",                   path: "C:\\Windows\\System32\\reg.exe"}
-    - {exe: "schtasks.exe",             path: "C:\\Windows\\System32\\schtasks.exe"}
-    - {exe: "wevtutil.exe",             path: "C:\\Windows\\System32\\wevtutil.exe"}
-    - {exe: "bcdedit.exe",              path: "C:\\Windows\\System32\\bcdedit.exe"}
-    - {exe: "icacls.exe",               path: "C:\\Windows\\System32\\icacls.exe"}
-    - {exe: "takeown.exe",              path: "C:\\Windows\\System32\\takeown.exe"}
-    - {exe: "fsutil.exe",               path: "C:\\Windows\\System32\\fsutil.exe"}
-    - {exe: "attrib.exe",               path: "C:\\Windows\\System32\\attrib.exe"}
+    - exe: "sc.exe"
+      path: "C:\\Windows\\System32\\sc.exe"
+      release_policy: host_build
+    - exe: "net.exe"
+      path: "C:\\Windows\\System32\\net.exe"
+      release_policy: host_build
+    - exe: "net1.exe"
+      path: "C:\\Windows\\System32\\net1.exe"
+      release_policy: host_build
+    - exe: "netsh.exe"
+      path: "C:\\Windows\\System32\\netsh.exe"
+      release_policy: host_build
+    - exe: "reg.exe"
+      path: "C:\\Windows\\System32\\reg.exe"
+      release_policy: host_build
+    - exe: "schtasks.exe"
+      path: "C:\\Windows\\System32\\schtasks.exe"
+      release_policy: host_build
+    - exe: "wevtutil.exe"
+      path: "C:\\Windows\\System32\\wevtutil.exe"
+      release_policy: host_build
+    - exe: "bcdedit.exe"
+      path: "C:\\Windows\\System32\\bcdedit.exe"
+      release_policy: host_build
+    - exe: "icacls.exe"
+      path: "C:\\Windows\\System32\\icacls.exe"
+      release_policy: host_build
+    - exe: "takeown.exe"
+      path: "C:\\Windows\\System32\\takeown.exe"
+      release_policy: host_build
+    - exe: "fsutil.exe"
+      path: "C:\\Windows\\System32\\fsutil.exe"
+      release_policy: host_build
+    - exe: "attrib.exe"
+      path: "C:\\Windows\\System32\\attrib.exe"
+      release_policy: host_build
 
     # --- Network diagnostic tools ---
-    - {exe: "ipconfig.exe",             path: "C:\\Windows\\System32\\ipconfig.exe"}
-    - {exe: "ping.exe",                  path: "C:\\Windows\\System32\\ping.exe"}
-    - {exe: "tracert.exe",              path: "C:\\Windows\\System32\\tracert.exe"}
-    - {exe: "nslookup.exe",             path: "C:\\Windows\\System32\\nslookup.exe"}
-    - {exe: "netstat.exe",              path: "C:\\Windows\\System32\\netstat.exe"}
-    - {exe: "whoami.exe",               path: "C:\\Windows\\System32\\whoami.exe"}
+    - exe: "ipconfig.exe"
+      path: "C:\\Windows\\System32\\ipconfig.exe"
+      release_policy: host_build
+    - exe: "ping.exe"
+      path: "C:\\Windows\\System32\\ping.exe"
+      release_policy: host_build
+    - exe: "tracert.exe"
+      path: "C:\\Windows\\System32\\tracert.exe"
+      release_policy: host_build
+    - exe: "nslookup.exe"
+      path: "C:\\Windows\\System32\\nslookup.exe"
+      release_policy: host_build
+    - exe: "netstat.exe"
+      path: "C:\\Windows\\System32\\netstat.exe"
+      release_policy: host_build
+    - exe: "whoami.exe"
+      path: "C:\\Windows\\System32\\whoami.exe"
+      release_policy: host_build
 
     # --- Information / enumeration tools ---
-    - {exe: "systeminfo.exe",           path: "C:\\Windows\\System32\\systeminfo.exe"}
-    - {exe: "tasklist.exe",             path: "C:\\Windows\\System32\\tasklist.exe"}
-    - {exe: "findstr.exe",              path: "C:\\Windows\\System32\\findstr.exe"}
+    - exe: "systeminfo.exe"
+      path: "C:\\Windows\\System32\\systeminfo.exe"
+      release_policy: host_build
+    - exe: "tasklist.exe"
+      path: "C:\\Windows\\System32\\tasklist.exe"
+      release_policy: host_build
+    - exe: "findstr.exe"
+      path: "C:\\Windows\\System32\\findstr.exe"
+      release_policy: host_build
 
     # --- File-copy and transfer tools ---
-    - {exe: "xcopy.exe",                path: "C:\\Windows\\System32\\xcopy.exe"}
-    - {exe: "robocopy.exe",             path: "C:\\Windows\\System32\\robocopy.exe"}
-    - {exe: "certutil.exe",             path: "C:\\Windows\\System32\\certutil.exe"}
-    - {exe: "bitsadmin.exe",            path: "C:\\Windows\\System32\\bitsadmin.exe"}
+    - exe: "xcopy.exe"
+      path: "C:\\Windows\\System32\\xcopy.exe"
+      release_policy: host_build
+    - exe: "robocopy.exe"
+      path: "C:\\Windows\\System32\\robocopy.exe"
+      release_policy: host_build
+    - exe: "certutil.exe"
+      path: "C:\\Windows\\System32\\certutil.exe"
+      release_policy: host_build
+    - exe: "bitsadmin.exe"
+      path: "C:\\Windows\\System32\\bitsadmin.exe"
+      release_policy: host_build
 
     # --- WMI provider ---
-    - {exe: "wmic.exe",                  path: "C:\\Windows\\System32\\wbem\\WMIC.exe"}
+    - exe: "wmic.exe"
+      path: "C:\\Windows\\System32\\wbem\\WMIC.exe"
+      release_policy: host_build
 
     # --- Developer runtimes (OS / language installs) ---
-    - {exe: "python.exe",               path: "C:\\Windows\\py.exe"}
-    - {exe: "python3.exe",              path: "C:\\Users\\{username}\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"}
-    - {exe: "pip.exe",                   path: "C:\\Users\\{username}\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\pip.exe"}
-    - {exe: "java.exe",                  path: "C:\\Program Files\\Java\\jdk-21\\bin\\java.exe"}
-    - {exe: "javac.exe",                path: "C:\\Program Files\\Java\\jdk-21\\bin\\javac.exe"}
-    - {exe: "gradle.exe",               path: "C:\\Program Files\\Gradle\\bin\\gradle.bat"}
-    - {exe: "go.exe",                    path: "C:\\Program Files\\Go\\bin\\go.exe"}
-    - {exe: "npm.exe",                   path: "C:\\Program Files\\nodejs\\npm.cmd"}
+    - exe: "python.exe"
+      path: "C:\\Windows\\py.exe"
+      release_policy: host_build
+    - exe: "python3.exe"
+      path: "C:\\Users\\{username}\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
+      release_policy: unspecified
+    - exe: "pip.exe"
+      path: "C:\\Users\\{username}\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\pip.exe"
+      release_policy: unspecified
+    - exe: "java.exe"
+      path: "C:\\Program Files\\Java\\jdk-21\\bin\\java.exe"
+      release_policy: unspecified
+    - exe: "javac.exe"
+      path: "C:\\Program Files\\Java\\jdk-21\\bin\\javac.exe"
+      release_policy: unspecified
+    - exe: "gradle.exe"
+      path: "C:\\Program Files\\Gradle\\bin\\gradle.bat"
+      release_policy: unspecified
+    - exe: "go.exe"
+      path: "C:\\Program Files\\Go\\bin\\go.exe"
+      release_policy: unspecified
+    - exe: "npm.exe"
+      path: "C:\\Program Files\\nodejs\\npm.cmd"
+      release_policy: unspecified
 
     # --- Microsoft Office (not in application catalog as standalone) ---
-    - {exe: "powerpnt.exe",             path: "C:\\Program Files\\Microsoft Office\\root\\Office16\\POWERPNT.EXE"}
+    - exe: "powerpnt.exe"
+      path: "C:\\Program Files\\Microsoft Office\\root\\Office16\\POWERPNT.EXE"
+      release_policy: unspecified
 
     # --- Legacy / built-in browser ---
-    - {exe: "iexplore.exe",             path: "C:\\Program Files\\Internet Explorer\\iexplore.exe"}
+    - exe: "iexplore.exe"
+      path: "C:\\Program Files\\Internet Explorer\\iexplore.exe"
+      release_policy: unspecified
 
     # --- Collaboration helper processes ---
-    - {exe: "CptHost.exe",               path: "C:\\Users\\{username}\\AppData\\Roaming\\Zoom\\bin\\CptHost.exe"}
-    - {exe: "CiscoCollabHost.exe",       path: "C:\\Program Files\\Cisco Spark\\CiscoCollabHost.exe"}
+    - exe: "CptHost.exe"
+      path: "C:\\Users\\{username}\\AppData\\Roaming\\Zoom\\bin\\CptHost.exe"
+      release_policy: unspecified
+    - exe: "CiscoCollabHost.exe"
+      path: "C:\\Program Files\\Cisco Spark\\CiscoCollabHost.exe"
+      release_policy: unspecified
 
   linux:
     # --- Shells ---
-    - {exe: "sh",                        path: "/bin/sh"}
-    - {exe: "bash",                      path: "/bin/bash"}
-    - {exe: "zsh",                       path: "/usr/bin/zsh"}
+    - exe: "sh"
+      path: "/bin/sh"
+      release_policy: host_build
+    - exe: "bash"
+      path: "/bin/bash"
+      release_policy: host_build
+    - exe: "login"
+      path: "/bin/login"
+      release_policy: host_build
+    - exe: "zsh"
+      path: "/usr/bin/zsh"
+      release_policy: host_build
 
     # --- File and text utilities ---
-    - {exe: "ls",                        path: "/usr/bin/ls"}
-    - {exe: "cat",                       path: "/usr/bin/cat"}
-    - {exe: "grep",                      path: "/usr/bin/grep"}
-    - {exe: "find",                      path: "/usr/bin/find"}
-    - {exe: "sort",                      path: "/usr/bin/sort"}
-    - {exe: "head",                      path: "/usr/bin/head"}
-    - {exe: "tail",                      path: "/usr/bin/tail"}
-    - {exe: "less",                      path: "/usr/bin/less"}
-    - {exe: "awk",                       path: "/usr/bin/awk"}
-    - {exe: "sed",                       path: "/usr/bin/sed"}
-    - {exe: "wc",                        path: "/usr/bin/wc"}
+    - exe: "ls"
+      path: "/usr/bin/ls"
+      release_policy: host_build
+    - exe: "cat"
+      path: "/usr/bin/cat"
+      release_policy: host_build
+    - exe: "cut"
+      path: "/usr/bin/cut"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "file"
+      path: "/usr/bin/file"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "grep"
+      path: "/usr/bin/grep"
+      release_policy: host_build
+    - exe: "find"
+      path: "/usr/bin/find"
+      release_policy: host_build
+    - exe: "sort"
+      path: "/usr/bin/sort"
+      release_policy: host_build
+    - exe: "head"
+      path: "/usr/bin/head"
+      release_policy: host_build
+    - exe: "tail"
+      path: "/usr/bin/tail"
+      release_policy: host_build
+    - exe: "less"
+      path: "/usr/bin/less"
+      release_policy: host_build
+    - exe: "awk"
+      path: "/usr/bin/awk"
+      release_policy: host_build
+    - exe: "sed"
+      path: "/usr/bin/sed"
+      release_policy: host_build
+    - exe: "wc"
+      path: "/usr/bin/wc"
+      release_policy: host_build
+    - exe: "stat"
+      path: "/usr/bin/stat"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
 
     # --- File management ---
-    - {exe: "cp",                        path: "/usr/bin/cp"}
-    - {exe: "mv",                        path: "/usr/bin/mv"}
-    - {exe: "rm",                        path: "/usr/bin/rm"}
-    - {exe: "ln",                        path: "/usr/bin/ln"}
-    - {exe: "mkdir",                     path: "/usr/bin/mkdir"}
-    - {exe: "chmod",                     path: "/usr/bin/chmod"}
-    - {exe: "chown",                     path: "/usr/bin/chown"}
+    - exe: "cp"
+      path: "/usr/bin/cp"
+      release_policy: host_build
+    - exe: "mv"
+      path: "/usr/bin/mv"
+      release_policy: host_build
+    - exe: "rm"
+      path: "/usr/bin/rm"
+      release_policy: host_build
+    - exe: "ln"
+      path: "/usr/bin/ln"
+      release_policy: host_build
+    - exe: "mkdir"
+      path: "/usr/bin/mkdir"
+      release_policy: host_build
+    - exe: "chmod"
+      path: "/usr/bin/chmod"
+      release_policy: host_build
+    - exe: "chown"
+      path: "/usr/bin/chown"
+      release_policy: host_build
 
     # --- Archive / compression ---
-    - {exe: "unzip",                     path: "/usr/bin/unzip"}
-    - {exe: "gzip",                      path: "/usr/bin/gzip"}
-    - {exe: "tar",                       path: "/usr/bin/tar"}
-    - {exe: "rsync",                     path: "/usr/bin/rsync"}
+    - exe: "unzip"
+      path: "/usr/bin/unzip"
+      release_policy: host_build
+    - exe: "gzip"
+      path: "/usr/bin/gzip"
+      release_policy: host_build
+    - exe: "tar"
+      path: "/usr/bin/tar"
+      release_policy: host_build
+    - exe: "rsync"
+      path: "/usr/bin/rsync"
+      release_policy: host_build
 
     # --- System information ---
-    - {exe: "df",                        path: "/usr/bin/df"}
-    - {exe: "free",                      path: "/usr/bin/free"}
-    - {exe: "ps",                        path: "/usr/bin/ps"}
-    - {exe: "top",                       path: "/usr/bin/top"}
-    - {exe: "htop",                      path: "/usr/bin/htop"}
-    - {exe: "uptime",                    path: "/usr/bin/uptime"}
+    - exe: "df"
+      path: "/usr/bin/df"
+      release_policy: host_build
+    - exe: "du"
+      path: "/usr/bin/du"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "free"
+      path: "/usr/bin/free"
+      release_policy: host_build
+    - exe: "ps"
+      path: "/usr/bin/ps"
+      release_policy: host_build
+    - exe: "top"
+      path: "/usr/bin/top"
+      release_policy: host_build
+    - exe: "htop"
+      path: "/usr/bin/htop"
+      release_policy: host_build
+    - exe: "uptime"
+      path: "/usr/bin/uptime"
+      release_policy: host_build
+    - exe: "date"
+      path: "/usr/bin/date"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "lsblk"
+      path: "/usr/bin/lsblk"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "vmstat"
+      path: "/usr/bin/vmstat"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
 
     # --- Identity / session info ---
-    - {exe: "id",                        path: "/usr/bin/id"}
-    - {exe: "w",                         path: "/usr/bin/w"}
-    - {exe: "whoami",                    path: "/usr/bin/whoami"}
-    - {exe: "uname",                     path: "/usr/bin/uname"}
-    - {exe: "hostname",                  path: "/usr/bin/hostname"}
+    - exe: "id"
+      path: "/usr/bin/id"
+      release_policy: host_build
+    - exe: "w"
+      path: "/usr/bin/w"
+      release_policy: host_build
+    - exe: "whoami"
+      path: "/usr/bin/whoami"
+      release_policy: host_build
+    - exe: "uname"
+      path: "/usr/bin/uname"
+      release_policy: host_build
+    - exe: "hostname"
+      path: "/usr/bin/hostname"
+      release_policy: host_build
+    - exe: "last"
+      path: "/usr/bin/last"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "who"
+      path: "/usr/bin/who"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "groups"
+      path: "/usr/bin/groups"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "users"
+      path: "/usr/bin/users"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
 
     # --- Network diagnostic tools ---
-    - {exe: "ip",                        path: "/usr/sbin/ip"}
-    - {exe: "ss",                        path: "/usr/sbin/ss"}
-    - {exe: "netstat",                   path: "/usr/bin/netstat"}
-    - {exe: "wget",                      path: "/usr/bin/wget"}
-    - {exe: "scp",                       path: "/usr/bin/scp"}
+    - exe: "ip"
+      path: "/usr/sbin/ip"
+      release_policy: host_build
+    - exe: "ss"
+      path: "/usr/sbin/ss"
+      release_policy: host_build
+    - exe: "netstat"
+      path: "/usr/bin/netstat"
+      release_policy: host_build
+    - exe: "wget"
+      path: "/usr/bin/wget"
+      release_policy: host_build
+    - exe: "scp"
+      path: "/usr/bin/scp"
+      release_policy: host_build
+    - exe: "nmcli"
+      path: "/usr/bin/nmcli"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
 
     # --- Network analysis ---
-    - {exe: "nmap",                      path: "/usr/bin/nmap"}
-    - {exe: "tshark",                    path: "/usr/bin/tshark"}
+    - exe: "nmap"
+      path: "/usr/bin/nmap"
+      release_policy: host_build
+    - exe: "tshark"
+      path: "/usr/bin/tshark"
+      release_policy: host_build
 
     # --- System management (systemd) ---
-    - {exe: "journalctl",               path: "/usr/bin/journalctl"}
-    - {exe: "systemctl",                path: "/usr/bin/systemctl"}
+    - exe: "journalctl"
+      path: "/usr/bin/journalctl"
+      release_policy: host_build
+    - exe: "systemctl"
+      path: "/usr/bin/systemctl"
+      release_policy: host_build
+    - exe: "hostnamectl"
+      path: "/usr/bin/hostnamectl"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "loginctl"
+      path: "/usr/bin/loginctl"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "resolvectl"
+      path: "/usr/bin/resolvectl"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "timedatectl"
+      path: "/usr/bin/timedatectl"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "mount"
+      path: "/usr/bin/mount"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
 
     # --- System daemons ---
-    - {exe: "sshd",                      path: "/usr/sbin/sshd"}
-    - {exe: "nginx",                     path: "/usr/sbin/nginx"}
-    - {exe: "apache2",                   path: "/usr/sbin/apache2"}
-    - {exe: "mysqld",                    path: "/usr/sbin/mysqld"}
-    - {exe: "mysqldump",                path: "/usr/bin/mysqldump"}
-    - {exe: "dockerd",                   path: "/usr/bin/dockerd"}
-    - {exe: "containerd",               path: "/usr/bin/containerd"}
-    - {exe: "runc",                      path: "/usr/bin/runc"}
-    - {exe: "cron",                      path: "/usr/sbin/cron"}
-    - {exe: "rsyslogd",                 path: "/usr/sbin/rsyslogd"}
-    - {exe: "chronyd",                   path: "/usr/sbin/chronyd"}
-    - {exe: "sftp-server",              path: "/usr/lib/openssh/sftp-server"}
+    - exe: "systemd"
+      path: "/usr/lib/systemd/systemd"
+      release_policy: host_build
+    - exe: "systemd-journald"
+      path: "/usr/lib/systemd/systemd-journald"
+      release_policy: host_build
+    - exe: "systemd-udevd"
+      path: "/lib/systemd/systemd-udevd"
+      release_policy: host_build
+      distro: debian
+    - exe: "systemd-udevd"
+      path: "/usr/lib/systemd/systemd-udevd"
+      release_policy: host_build
+      distro: rhel
+    - exe: "dbus-daemon"
+      path: "/usr/bin/dbus-daemon"
+      release_policy: host_build
+    - exe: "sshd"
+      path: "/usr/sbin/sshd"
+      release_policy: host_build
+    - exe: "smbd"
+      path: "/usr/sbin/smbd"
+      release_policy: host_build
+    - exe: "squid"
+      path: "/usr/sbin/squid"
+      release_policy: host_build
+    - exe: "nginx"
+      path: "/usr/sbin/nginx"
+      release_policy: host_build
+      roles_any: [mail_server, web_server]
+      services_any: [nginx]
+    - exe: "dovecot"
+      path: "/usr/sbin/dovecot"
+      release_policy: unspecified
+      roles_any: [mail_server]
+      services_any: [dovecot, imap, imaps]
+    - exe: "apache2"
+      path: "/usr/sbin/apache2"
+      release_policy: host_build
+      distro: debian
+    - exe: "httpd"
+      path: "/usr/sbin/httpd"
+      release_policy: host_build
+      distro: rhel
+    - exe: "mysqld"
+      path: "/usr/sbin/mysqld"
+      release_policy: host_build
+    - exe: "postgres"
+      path: "/usr/bin/postgres"
+      release_policy: host_build
+    - exe: "mysqldump"
+      path: "/usr/bin/mysqldump"
+      release_policy: host_build
+    - exe: "dockerd"
+      path: "/usr/bin/dockerd"
+      release_policy: host_build
+    - exe: "containerd"
+      path: "/usr/bin/containerd"
+      release_policy: host_build
+    - exe: "runc"
+      path: "/usr/bin/runc"
+      release_policy: host_build
+    - exe: "cron"
+      path: "/usr/sbin/cron"
+      release_policy: host_build
+      distro: debian
+    - exe: "crond"
+      path: "/usr/sbin/crond"
+      release_policy: host_build
+      distro: rhel
+    - exe: "agetty"
+      path: "/sbin/agetty"
+      release_policy: host_build
+    - exe: "snapd"
+      path: "/usr/lib/snapd/snapd"
+      release_policy: host_build
+      distro: debian
+    - exe: "rsyslogd"
+      path: "/usr/sbin/rsyslogd"
+      release_policy: host_build
+    - exe: "chronyd"
+      path: "/usr/sbin/chronyd"
+      release_policy: host_build
+    - exe: "sftp-server"
+      path: "/usr/lib/openssh/sftp-server"
+      release_policy: host_build
 
     # --- systemd helper daemons ---
-    - {exe: "NetworkManager",            path: "/usr/sbin/NetworkManager"}
-    - {exe: "systemd-resolved",          path: "/usr/lib/systemd/systemd-resolved"}
-    - {exe: "systemd-logind",            path: "/usr/lib/systemd/systemd-logind"}
-    - {exe: "systemd-timesyncd",         path: "/usr/lib/systemd/systemd-timesyncd"}
+    - exe: "NetworkManager"
+      path: "/usr/sbin/NetworkManager"
+      release_policy: host_build
+    - exe: "systemd-resolved"
+      path: "/usr/lib/systemd/systemd-resolved"
+      release_policy: host_build
+    - exe: "systemd-logind"
+      path: "/usr/lib/systemd/systemd-logind"
+      release_policy: host_build
+    - exe: "systemd-timesyncd"
+      path: "/usr/lib/systemd/systemd-timesyncd"
+      release_policy: host_build
+    - exe: "gnome-terminal-server"
+      path: "/usr/libexec/gnome-terminal-server"
+      release_policy: host_build
+      system_types: [workstation]
+
+    # --- Role-owned application/service runtimes ---
+    # These custom rows deliberately preserve an unknown package version. Their
+    # explicit host placement is the installation fact; no OS/package version is
+    # inferred from the executable path.
+    - exe: "gunicorn"
+      path: "/opt/meridian/venv/bin/gunicorn"
+      release_policy: unspecified
+      roles_any: [app_server, web_server]
+    - exe: "service-healthcheck"
+      path: "/usr/local/bin/service-healthcheck"
+      release_policy: unspecified
+      system_types: [workstation, server, domain_controller]
+    - exe: "document-sync"
+      path: "/opt/meridian/bin/document-sync"
+      release_policy: unspecified
+      roles_any: [app_server]
+    - exe: "database-backup-agent"
+      path: "/usr/local/sbin/database-backup-agent"
+      release_policy: unspecified
+      roles_any: [database]
+    - exe: "attachment-archive"
+      path: "/usr/libexec/meridian/attachment-archive"
+      release_policy: unspecified
+      roles_any: [mail_server]
+    - exe: "content-publisher"
+      path: "/opt/meridian/bin/content-publisher"
+      release_policy: unspecified
+      roles_any: [web_server]
 
     # --- Developer runtimes (OS / language installs) ---
-    - {exe: "python3",                   path: "/usr/bin/python3"}
-    - {exe: "pip",                       path: "/usr/bin/pip"}
-    - {exe: "pip3",                      path: "/usr/bin/pip3"}
+    - exe: "python3"
+      path: "/usr/bin/python3"
+      release_policy: host_build
+    - exe: "java"
+      path: "/usr/bin/java"
+      release_policy: host_build
+    - exe: "mysqladmin"
+      path: "/usr/bin/mysqladmin"
+      release_policy: host_build
+    - exe: "sssd"
+      path: "/usr/sbin/sssd"
+      release_policy: host_build
+    - exe: "pip"
+      path: "/usr/bin/pip"
+      release_policy: host_build
+    - exe: "pip3"
+      path: "/usr/bin/pip3"
+      release_policy: host_build

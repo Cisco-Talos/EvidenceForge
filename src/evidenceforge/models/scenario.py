@@ -273,6 +273,8 @@ class System(BaseModel):
         ip: IPv4 or IPv6 address
         os: Operating system name/version (e.g., "Windows 10", "Linux Ubuntu 20.04")
         type: System type (workstation|server|domain_controller)
+        os_build: Optional exact OS build identity
+        architecture: Optional host CPU architecture
         assigned_user: Username of assigned user (for workstations)
         services: List of running services (e.g., ["IIS", "SSH", "SQL Server"])
     """
@@ -280,6 +282,18 @@ class System(BaseModel):
     hostname: str = Field(..., pattern="^[a-zA-Z0-9][a-zA-Z0-9.-]*$")
     ip: str
     os: str
+    os_build: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description=(
+            "Optional exact OS build identity, such as '10.0.22631.3880' or '6.8.0-45-generic'."
+        ),
+    )
+    architecture: Literal["x86", "x64", "arm64"] | None = Field(
+        default=None,
+        description="Optional host CPU architecture used for deployment and binary identity.",
+    )
     type: str = Field(..., pattern="^(workstation|server|domain_controller)$")
     assigned_user: str | None = None
     services: list[str] = Field(default_factory=list)
@@ -308,6 +322,18 @@ class System(BaseModel):
     def validate_public_hostnames(cls, v: list[str]) -> list[str]:
         """Validate each public hostname is a bare FQDN."""
         return [_validate_hostname(h, "public_hostnames") for h in v]
+
+    @field_validator("os_build")
+    @classmethod
+    def normalize_os_build(cls, value: str | None) -> str | None:
+        """Normalize an optional exact build without interpreting vendor syntax."""
+
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("os_build must not be empty")
+        return normalized
 
 
 class Group(BaseModel):
@@ -2960,6 +2986,153 @@ class StaleAccount(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+_EXACT_DEPLOYMENT_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]*$")
+
+
+def _normalize_exact_name_list(
+    values: list[str] | None,
+    field_name: str,
+    *,
+    simple_ids: bool,
+    case_sensitive: bool = False,
+) -> list[str] | None:
+    """Normalize one optional replacement list and reject aliases or patterns."""
+
+    if values is None:
+        return None
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        value = raw_value.strip()
+        if not value:
+            raise ValueError(f"{field_name} entries must not be empty")
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError(f"{field_name} entries must not contain control characters")
+        if simple_ids and _EXACT_DEPLOYMENT_ID_RE.fullmatch(value) is None:
+            raise ValueError(
+                f"{field_name} entries must be exact IDs using letters, digits, '.', '_', ':', "
+                "or '-'"
+            )
+        if not simple_ids and any(character in value for character in "*?[]"):
+            raise ValueError(f"{field_name} entries must be exact names, not patterns")
+        identity = value if case_sensitive else value.casefold()
+        if identity in seen:
+            raise ValueError(f"{field_name} entries must be unique")
+        seen.add(identity)
+        normalized.append(value)
+    return normalized
+
+
+class DeploymentApplicationAssignmentOverride(BaseModel):
+    """Exact per-user application eligibility inside one host deployment patch."""
+
+    user: str = Field(pattern=r"^[a-zA-Z0-9._$-]+$")
+    applications: list[str] = Field(
+        description=(
+            "Exact replacement application IDs available to this user on the target system. "
+            "An empty list explicitly removes application eligibility at this layer."
+        )
+    )
+
+    @field_validator("applications")
+    @classmethod
+    def normalize_applications(cls, value: list[str]) -> list[str]:
+        """Require unique exact application catalog IDs."""
+
+        return (
+            _normalize_exact_name_list(
+                value,
+                "user application assignment applications",
+                simple_ids=True,
+            )
+            or []
+        )
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class HostDeploymentOverride(BaseModel):
+    """Partial scenario-layer deployment patch for one exact system."""
+
+    system: str = Field(
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9.-]*$",
+        description="Exact environment.systems hostname; wildcard selectors are not supported.",
+    )
+    applications: list[str] | None = Field(
+        default=None,
+        description="Optional replacement list of installed application catalog IDs.",
+    )
+    services: list[str] | None = Field(
+        default=None,
+        description="Optional replacement list of deployed service identities.",
+    )
+    tasks: list[str] | None = Field(
+        default=None,
+        description="Optional replacement list of deployed scheduled-task identities.",
+    )
+    modules: list[str] | None = Field(
+        default=None,
+        description="Optional replacement list of deployed module identities.",
+    )
+    cohorts: list[str] | None = Field(
+        default=None,
+        description="Optional replacement list of stable deployment cohort IDs.",
+    )
+    user_applications: list[DeploymentApplicationAssignmentOverride] | None = Field(
+        default=None,
+        description="Optional exact per-user application eligibility replacements.",
+    )
+
+    @field_validator("applications", "cohorts")
+    @classmethod
+    def normalize_catalog_ids(cls, value: list[str] | None) -> list[str] | None:
+        """Require exact catalog or cohort identifiers."""
+
+        return _normalize_exact_name_list(value, "deployment IDs", simple_ids=True)
+
+    @field_validator("services", "tasks", "modules")
+    @classmethod
+    def normalize_deployment_names(cls, value: list[str] | None) -> list[str] | None:
+        """Allow source-native names while forbidding wildcard selectors."""
+
+        return _normalize_exact_name_list(value, "deployment names", simple_ids=False)
+
+    @field_validator("user_applications")
+    @classmethod
+    def assignment_users_are_unique(
+        cls,
+        value: list[DeploymentApplicationAssignmentOverride] | None,
+    ) -> list[DeploymentApplicationAssignmentOverride] | None:
+        """Reject two replacement assignments for one logical user."""
+
+        if value is None:
+            return None
+        users = [assignment.user.casefold() for assignment in value]
+        if len(users) != len(set(users)):
+            raise ValueError("deployment user_applications users must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def require_patch_field(self) -> "HostDeploymentOverride":
+        """Reject a target-only entry that cannot affect deployment."""
+
+        if all(
+            value is None
+            for value in (
+                self.applications,
+                self.services,
+                self.tasks,
+                self.modules,
+                self.cohorts,
+                self.user_applications,
+            )
+        ):
+            raise ValueError("deployment override must provide at least one patch field")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 class Environment(BaseModel):
     """Environment definition.
 
@@ -2975,6 +3148,7 @@ class Environment(BaseModel):
         stale_accounts: Optional list of inactive accounts that generate failed logon noise
         groups: Optional list of groups
         network: Optional network topology and sensor configuration
+        deployment_overrides: Scenario-layer patches selected by exact system hostname
     """
 
     description: str
@@ -3025,6 +3199,13 @@ class Environment(BaseModel):
             "use deterministic defaults and existing scenario users remain valid."
         ),
     )
+    deployment_overrides: list[HostDeploymentOverride] = Field(
+        default_factory=list,
+        description=(
+            "Scenario 2.0 deployment patches selected by exact system hostname. Omitted patch "
+            "fields inherit from project/organization configuration, named profiles, and defaults."
+        ),
+    )
 
     @field_validator("users")
     @classmethod
@@ -3067,8 +3248,37 @@ class Environment(BaseModel):
 
     @model_validator(mode="after")
     def validate_identity_overrides(self) -> "Environment":
-        """Validate optional identity overrides against the environment."""
+        """Validate exact deployment targets and optional identity overrides."""
+
+        systems_by_name = {system.hostname.casefold(): system.hostname for system in self.systems}
+        deployment_targets = [override.system.casefold() for override in self.deployment_overrides]
+        if len(deployment_targets) != len(set(deployment_targets)):
+            raise ValueError("environment.deployment_overrides systems must be unique")
+        unknown_deployment_systems = sorted(
+            override.system
+            for override in self.deployment_overrides
+            if override.system.casefold() not in systems_by_name
+        )
+        if unknown_deployment_systems:
+            raise ValueError(
+                "environment.deployment_overrides contains unknown systems: "
+                + ", ".join(unknown_deployment_systems)
+            )
+
         user_names = {user.username for user in self.users}
+        user_names_casefold = {name.casefold(): name for name in user_names}
+        unknown_assignment_users = sorted(
+            assignment.user
+            for override in self.deployment_overrides
+            for assignment in override.user_applications or []
+            if assignment.user.casefold() not in user_names_casefold
+        )
+        if unknown_assignment_users:
+            raise ValueError(
+                "environment.deployment_overrides contains unknown user application assignments: "
+                + ", ".join(unknown_assignment_users)
+            )
+
         unknown = sorted(set(self.identity.users) - user_names)
         if unknown:
             raise ValueError(

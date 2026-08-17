@@ -30,9 +30,9 @@ tools:
       - {port: 389, service: ldap}
       - {port: 135, service: rpc}
     loaded_modules:
-      - {path: 'C:\Windows\System32\dsadmin.dll', signature: "Microsoft Corporation"}
-      - {path: 'C:\Windows\System32\activeds.dll', signature: "Microsoft Corporation"}
-      - {path: 'C:\Windows\System32\adsldpc.dll', signature: "Microsoft Corporation"}
+      - {path: 'C:\Windows\System32\dsadmin.dll', signature: "Microsoft Corporation", release_policy: host_build, product_id: microsoft-windows}
+      - {path: 'C:\Windows\System32\activeds.dll', signature: "Microsoft Corporation", release_policy: host_build, product_id: microsoft-windows}
+      - {path: 'C:\Windows\System32\adsldpc.dll', signature: "Microsoft Corporation", release_policy: host_build, product_id: microsoft-windows}
     weight: 40
 
   - id: dns_mgr
@@ -42,7 +42,7 @@ tools:
     target_ports:
       - {port: 135, service: rpc}
     loaded_modules:
-      - {path: 'C:\Windows\System32\dnsmgr.dll', signature: "Microsoft Corporation"}
+      - {path: 'C:\Windows\System32\dnsmgr.dll', signature: "Microsoft Corporation", release_policy: host_build, product_id: microsoft-windows}
     weight: 20
 
   - id: gpmc
@@ -54,8 +54,8 @@ tools:
       - {port: 135, service: rpc}
       - {port: 445, service: smb}
     loaded_modules:
-      - {path: 'C:\Windows\System32\gpmgmt.dll', signature: "Microsoft Corporation"}
-      - {path: 'C:\Windows\System32\activeds.dll', signature: "Microsoft Corporation"}
+      - {path: 'C:\Windows\System32\gpmgmt.dll', signature: "Microsoft Corporation", release_policy: host_build, product_id: microsoft-windows}
+      - {path: 'C:\Windows\System32\activeds.dll', signature: "Microsoft Corporation", release_policy: host_build, product_id: microsoft-windows}
     weight: 25
 
   - id: dhcp_mgr
@@ -65,7 +65,7 @@ tools:
     target_ports:
       - {port: 135, service: rpc}
     loaded_modules:
-      - {path: 'C:\Windows\System32\dhcpsnap.dll', signature: "Microsoft Corporation"}
+      - {path: 'C:\Windows\System32\dhcpsnap.dll', signature: "Microsoft Corporation", release_policy: host_build, product_id: microsoft-windows}
     weight: 10
 
   - id: dfs_mgr
@@ -76,5 +76,5 @@ tools:
       - {port: 445, service: smb}
       - {port: 135, service: rpc}
     loaded_modules:
-      - {path: 'C:\Windows\System32\dfsgui.dll', signature: "Microsoft Corporation"}
+      - {path: 'C:\Windows\System32\dfsgui.dll', signature: "Microsoft Corporation", release_policy: host_build, product_id: microsoft-windows}
     weight: 5
