@@ -36,7 +36,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import datetime, timedelta
 from enum import Enum, StrEnum
-from threading import RLock
+from threading import RLock, get_ident
 
 from evidenceforge.events.authentication import windows_logon_can_own_desktop
 from evidenceforge.events.base import CanonicalOccurrence
@@ -164,6 +164,7 @@ _WINDOWS_PID_MAX = 65_532
 _WINDOWS_PID_STEP = 4
 _MINUTES_PER_WEEK = 7 * 24 * 60
 _ENDED_IDENTITY_RETENTION = timedelta(hours=48)
+_MAX_RETAINED_SESSION_IDENTITIES = 500_000
 _MAX_RETAINED_PROCESS_IDENTITIES = 500_000
 _MAX_RETAINED_THREAD_IDENTITIES = 1_000_000
 _MAX_SMB_MUTATION_OVERLAY = 100_000
@@ -1050,6 +1051,619 @@ class ConnectionCompositeMaterializationResult:
     processes: tuple[RunningProcess, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ActionCohortSessionMetadataState:
+    """Closed mutable-session projection owned by one action cohort.
+
+    Identity-bearing session fields remain immutable.  This projection contains
+    only the bounded runtime metadata that action bundles may transition as part
+    of the same authoritative State publication as their starts and closes.
+    """
+
+    source_ready_time: datetime | None = None
+    network_close_time: datetime | None = None
+    closure_owned_by_bundle: bool = False
+    login_occurrence_emitted: bool = False
+    storyline_protected: bool = False
+    end_plan: SessionEndPlan | None = None
+
+    def __post_init__(self) -> None:
+        """Normalize every canonical timestamp in the closed projection."""
+
+        if self.source_ready_time is not None:
+            if type(self.source_ready_time) is not datetime:
+                raise TypeError("Action cohort session readiness requires an exact datetime")
+            object.__setattr__(self, "source_ready_time", ensure_utc(self.source_ready_time))
+        if self.network_close_time is not None:
+            if type(self.network_close_time) is not datetime:
+                raise TypeError("Action cohort session network close requires an exact datetime")
+            object.__setattr__(self, "network_close_time", ensure_utc(self.network_close_time))
+        for name in (
+            "closure_owned_by_bundle",
+            "login_occurrence_emitted",
+            "storyline_protected",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"Action cohort session metadata {name} requires an exact bool")
+        if self.end_plan is not None and type(self.end_plan) is not SessionEndPlan:
+            raise TypeError("Action cohort session metadata requires an exact SessionEndPlan")
+        if self.end_plan is not None:
+            object.__setattr__(
+                self,
+                "end_plan",
+                replace(
+                    self.end_plan,
+                    canonical_end=ensure_utc(self.end_plan.canonical_end),
+                ),
+            )
+
+
+class _ActionCohortCapability:
+    """Unforgeable process-local identity for one ephemeral HMAC member."""
+
+    __slots__ = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ActionCohortSessionMetadataPatch:
+    """Exact before/after metadata transition for one staged or live session."""
+
+    target: SessionMaterializationPlan | SessionIdentity
+    before: ActionCohortSessionMetadataState
+    after: ActionCohortSessionMetadataState
+    _capability: _ActionCohortCapability = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ActionCohortProcessActivityPatch:
+    """Exact activity frontier for one staged or live process."""
+
+    target: ProcessMaterializationPlan | ProcessIdentity
+    activity_time: datetime
+    _capability: _ActionCohortCapability = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Normalize the canonical activity time."""
+
+        if type(self.activity_time) is not datetime:
+            raise TypeError("Action cohort process activity requires an exact datetime")
+        object.__setattr__(self, "activity_time", ensure_utc(self.activity_time))
+
+
+@dataclass(frozen=True, slots=True)
+class ActionCohortSessionActivityPatch:
+    """Exact activity frontier for one staged or live session."""
+
+    target: SessionMaterializationPlan | SessionIdentity
+    activity_time: datetime
+    _capability: _ActionCohortCapability = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Normalize the canonical activity time."""
+
+        if type(self.activity_time) is not datetime:
+            raise TypeError("Action cohort session activity requires an exact datetime")
+        object.__setattr__(self, "activity_time", ensure_utc(self.activity_time))
+
+
+@dataclass(frozen=True, slots=True)
+class ActionCohortProcessTermination:
+    """Exact live or same-cohort process terminalization member."""
+
+    target: ProcessTerminationMaterializationPlan | ProcessMaterializationPlan
+    end_time: datetime
+    parent_activity: ActionCohortProcessActivityPatch | None
+    staged_session_references: tuple[_ProcessTerminationSessionReference, ...]
+    _capability: _ActionCohortCapability = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Normalize the canonical terminal time."""
+
+        if type(self.end_time) is not datetime:
+            raise TypeError("Action cohort process close requires an exact datetime")
+        object.__setattr__(self, "end_time", ensure_utc(self.end_time))
+
+    @property
+    def identity(self) -> ProcessIdentity:
+        """Return the exact process identity being terminalized."""
+
+        return self.target.identity
+
+
+@dataclass(frozen=True, slots=True)
+class ActionCohortSessionTerminalization:
+    """Exact live or same-cohort session terminalization member."""
+
+    target: SessionMaterializationPlan | SessionIdentity
+    end_time: datetime
+    _capability: _ActionCohortCapability = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Normalize the canonical terminal time."""
+
+        if type(self.end_time) is not datetime:
+            raise TypeError("Action cohort session close requires an exact datetime")
+        object.__setattr__(self, "end_time", ensure_utc(self.end_time))
+
+    @property
+    def identity(self) -> SessionIdentity:
+        """Return the exact session identity being terminalized."""
+
+        if type(self.target) is SessionMaterializationPlan:
+            return self.target.identity
+        return self.target
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortSessionProcessLinks:
+    """Exact per-session role bindings into the ordered process-start tuple."""
+
+    session_index: int
+    links: _SessionProcessMaterializationLinks
+
+
+@dataclass(frozen=True, slots=True)
+class ActionCohortMaterializationPlan:
+    """Authenticated State-only transaction for one complete action cohort."""
+
+    _expected_version: int
+    _expected_state_time: datetime | None
+    _final_state_time: datetime
+    _sessions: tuple[SessionMaterializationPlan, ...]
+    _processes: tuple[ProcessMaterializationPlan, ...]
+    _session_process_links: tuple[_ActionCohortSessionProcessLinks, ...]
+    _session_metadata: tuple[ActionCohortSessionMetadataPatch, ...]
+    _process_activity: tuple[ActionCohortProcessActivityPatch, ...]
+    _session_activity: tuple[ActionCohortSessionActivityPatch, ...]
+    _process_terminations: tuple[ActionCohortProcessTermination, ...]
+    _session_terminalizations: tuple[ActionCohortSessionTerminalization, ...]
+    _semantic_id: str
+    _capability: _ActionCohortCapability = field(repr=False, compare=False)
+    _integrity_token: str = field(repr=False, compare=False)
+
+    @property
+    def expected_version(self) -> int:
+        """Return the single State version consumed by this cohort."""
+
+        return self._expected_version
+
+    @property
+    def final_state_time(self) -> datetime:
+        """Return the authenticated post-commit State time frontier."""
+
+        return self._final_state_time
+
+    @property
+    def sessions(self) -> tuple[SessionMaterializationPlan, ...]:
+        """Return exact session starts in canonical publication order."""
+
+        return self._sessions
+
+    @property
+    def processes(self) -> tuple[ProcessMaterializationPlan, ...]:
+        """Return exact parent-before-child process starts."""
+
+        return self._processes
+
+    @property
+    def process_terminations(self) -> tuple[ActionCohortProcessTermination, ...]:
+        """Return exact child-before-parent process terminalizations."""
+
+        return self._process_terminations
+
+    @property
+    def session_terminalizations(self) -> tuple[ActionCohortSessionTerminalization, ...]:
+        """Return exact session terminalizations."""
+
+        return self._session_terminalizations
+
+    @property
+    def semantic_id(self) -> str:
+        """Return the deterministic public identity of the semantic transaction."""
+
+        return self._semantic_id
+
+    @property
+    def publication_token(self) -> str:
+        """Return the manager-issued ephemeral HMAC capability."""
+
+        return self._integrity_token
+
+
+@dataclass(frozen=True, slots=True)
+class ActionCohortMaterializationResult:
+    """Immutable identity-only result from one action cohort commit."""
+
+    semantic_id: str
+    prior_version: int
+    committed_version: int
+    started_sessions: tuple[SessionIdentity, ...]
+    started_processes: tuple[ProcessIdentity, ...]
+    terminated_processes: tuple[ProcessIdentity, ...]
+    terminalized_sessions: tuple[SessionIdentity, ...]
+
+
+class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
+    """Allocation-free builder for one ordered multi-session action cohort."""
+
+    def __init__(self, manager: "StateManager", expected_version: int) -> None:
+        super().__init__(manager, expected_version)
+        self._action_sessions: list[SessionMaterializationPlan] = []
+        self._action_session_process_plans: dict[int, dict[str, ProcessMaterializationPlan]] = {}
+        self._session_metadata_patches: list[ActionCohortSessionMetadataPatch] = []
+        self._process_activity_patches: list[ActionCohortProcessActivityPatch] = []
+        self._session_activity_patches: list[ActionCohortSessionActivityPatch] = []
+        self._process_termination_drafts: list[ActionCohortProcessTermination] = []
+        self._session_terminalization_drafts: list[ActionCohortSessionTerminalization] = []
+        self._cancelled = False
+        self._planned_host_bases: dict[str, int] = {}
+        self._planned_host_epochs: dict[str, datetime] = {}
+        self._planned_logon_ordinals: dict[tuple[str, int, int], int] = {}
+        self._planned_logon_ids: set[str] = set()
+        self._planned_logon_luids: set[int] = set()
+        self._planned_windows_session_ids: dict[str, set[int]] = {}
+        self._planned_windows_session_counters: dict[str, int] = {}
+
+    def _require_open(self) -> None:
+        if self._cancelled:
+            raise StateError("Action cohort materialization builder is cancelled")
+        if self._sealed:
+            raise StateError("Action cohort materialization builder is already sealed")
+
+    def cancel(self) -> None:
+        """Idempotently discard an open builder without changing StateManager."""
+
+        if self._sealed:
+            raise StateError("Sealed action cohort materialization cannot be cancelled")
+        if self._cancelled:
+            return
+        self._cancelled = True
+        self._action_sessions.clear()
+        self._processes.clear()
+        self._action_session_process_plans.clear()
+        self._session_metadata_patches.clear()
+        self._process_activity_patches.clear()
+        self._session_activity_patches.clear()
+        self._process_termination_drafts.clear()
+        self._session_terminalization_drafts.clear()
+        self._session_process_plans.clear()
+
+    def plan_session(
+        self,
+        *,
+        username: str,
+        system: str,
+        logon_type: int,
+        source_ip: str,
+        source_port: int = 0,
+        session_kind: str = "logon",
+        transport_pid: int | None = None,
+        start_time: datetime | None = None,
+        logon_id: str | None = None,
+        logon_guid: str = "",
+        logon_guid_required: bool | None = None,
+        session_id: int | None = None,
+        lifecycle_group_id: str = "",
+        parent_lifecycle_group_id: str = "",
+        auth_protocol: str = "",
+        smb_principal: str = "",
+        account_scope: str = "",
+        auth_session_ref: str = "",
+        effective_uid: int | None = None,
+        effective_gid: int | None = None,
+    ) -> SessionMaterializationPlan:
+        """Plan one exact session using this builder's private allocator overlay."""
+
+        self._require_open()
+        plan = self._manager._plan_action_cohort_session(
+            self,
+            username=username,
+            system=system,
+            logon_type=logon_type,
+            source_ip=source_ip,
+            source_port=source_port,
+            session_kind=session_kind,
+            transport_pid=transport_pid,
+            start_time=start_time,
+            logon_id=logon_id,
+            logon_guid=logon_guid,
+            logon_guid_required=logon_guid_required,
+            session_id=session_id,
+            lifecycle_group_id=lifecycle_group_id,
+            parent_lifecycle_group_id=parent_lifecycle_group_id,
+            auth_protocol=auth_protocol,
+            smb_principal=smb_principal,
+            account_scope=account_scope,
+            auth_session_ref=auth_session_ref,
+            effective_uid=effective_uid,
+            effective_gid=effective_gid,
+        )
+        self._action_sessions.append(plan)
+        return plan
+
+    def plan_process(
+        self,
+        *,
+        system: str,
+        parent_pid: int,
+        image: str,
+        command_line: str,
+        username: str,
+        integrity_level: str,
+        os_category: str,
+        logon_id: str = "",
+        lifecycle_group_id: str = "",
+        parent_lifecycle_group_id: str = "",
+        concurrency_group_id: str = "",
+        start_time: datetime | None = None,
+        fixed_pid: int | None = None,
+        require_session: bool = False,
+        parent_activity_time: datetime | None = None,
+        auth_session_id: int | None = None,
+        auth_logon_type: int | None = None,
+        parent_plan: ProcessMaterializationPlan | None = None,
+        session_plan: SessionMaterializationPlan | None = None,
+    ) -> ProcessMaterializationPlan:
+        """Plan one parent-ordered process against live or staged owners."""
+
+        self._require_open()
+        if parent_plan is not None and not any(
+            parent_plan is candidate for candidate in self._processes
+        ):
+            raise StateError("Action cohort process parent belongs to another builder")
+        resolved_session = session_plan
+        if resolved_session is None and logon_id:
+            matches = [
+                candidate
+                for candidate in self._action_sessions
+                if candidate.identity.logon_id == logon_id and candidate.identity.hostname == system
+            ]
+            if len(matches) > 1:
+                raise StateError("Action cohort process has an ambiguous staged session owner")
+            resolved_session = matches[0] if matches else None
+        if resolved_session is not None and not any(
+            resolved_session is candidate for candidate in self._action_sessions
+        ):
+            raise StateError("Action cohort process session belongs to another builder")
+
+        previous_session = self._session
+        self._session = resolved_session
+        try:
+            return super().plan_process(
+                system=system,
+                parent_pid=parent_pid,
+                image=image,
+                command_line=command_line,
+                username=username,
+                integrity_level=integrity_level,
+                os_category=os_category,
+                logon_id=logon_id,
+                lifecycle_group_id=lifecycle_group_id,
+                parent_lifecycle_group_id=parent_lifecycle_group_id,
+                concurrency_group_id=concurrency_group_id,
+                start_time=start_time,
+                fixed_pid=fixed_pid,
+                require_session=require_session,
+                parent_activity_time=parent_activity_time,
+                auth_session_id=auth_session_id,
+                auth_logon_type=auth_logon_type,
+                parent_plan=parent_plan,
+                session_plan=resolved_session,
+            )
+        finally:
+            self._session = previous_session
+
+    def bind_session_processes(
+        self,
+        session: SessionMaterializationPlan,
+        *,
+        transport_plan: ProcessMaterializationPlan | None = None,
+        shell_plan: ProcessMaterializationPlan | None = None,
+        user_manager_plan: ProcessMaterializationPlan | None = None,
+        winlogon_plan: ProcessMaterializationPlan | None = None,
+        explorer_plan: ProcessMaterializationPlan | None = None,
+        process_tree_root_plan: ProcessMaterializationPlan | None = None,
+    ) -> None:
+        """Bind exact process roles to any staged session in this cohort."""
+
+        self._require_open()
+        if not any(session is candidate for candidate in self._action_sessions):
+            raise StateError("Action cohort session process links use another builder")
+        values = {
+            "transport": transport_plan,
+            "shell": shell_plan,
+            "user_manager": user_manager_plan,
+            "winlogon": winlogon_plan,
+            "explorer": explorer_plan,
+            "process_tree_root": process_tree_root_plan,
+        }
+        links = self._action_session_process_plans.setdefault(id(session), {})
+        for role, process in values.items():
+            if process is None:
+                continue
+            if not any(process is candidate for candidate in self._processes):
+                raise StateError(f"Action cohort session {role} uses another process builder")
+            current = links.get(role)
+            if current is not None and current is not process:
+                raise StateError(f"Action cohort session {role} is already bound")
+            links[role] = process
+
+    def session_metadata(
+        self,
+        target: SessionMaterializationPlan | SessionIdentity,
+    ) -> ActionCohortSessionMetadataState:
+        """Return the exact current staged/live metadata projection."""
+
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_session_target(self, target)
+        for patch in reversed(self._session_metadata_patches):
+            if self._manager._action_session_target_key(patch.target) == (
+                self._manager._action_session_target_key(normalized)
+            ):
+                return patch.after
+        return self._manager._action_cohort_session_metadata(normalized)
+
+    def transition_session_metadata(
+        self,
+        target: SessionMaterializationPlan | SessionIdentity,
+        after: ActionCohortSessionMetadataState,
+    ) -> None:
+        """Stage one exact closed metadata transition for a session."""
+
+        self._require_open()
+        if type(after) is not ActionCohortSessionMetadataState:
+            raise TypeError("Action cohort metadata transition requires an exact state")
+        normalized = self._manager._normalize_action_cohort_session_target(self, target)
+        key = self._manager._action_session_target_key(normalized)
+        if any(
+            self._manager._action_session_target_key(patch.target) == key
+            for patch in self._session_metadata_patches
+        ):
+            raise StateError("Action cohort repeats a session metadata transition")
+        before = self._manager._action_cohort_session_metadata(normalized)
+        self._session_metadata_patches.append(
+            ActionCohortSessionMetadataPatch(
+                target=normalized,
+                before=before,
+                after=after,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+
+    def patch_process_activity(
+        self,
+        target: ProcessMaterializationPlan | ProcessIdentity,
+        activity_time: datetime,
+    ) -> None:
+        """Stage one exact process activity frontier."""
+
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        key = self._manager._action_process_target_key(normalized)
+        if any(
+            self._manager._action_process_target_key(patch.target) == key
+            for patch in self._process_activity_patches
+        ):
+            raise StateError("Action cohort repeats a process activity patch")
+        self._process_activity_patches.append(
+            ActionCohortProcessActivityPatch(
+                target=normalized,
+                activity_time=activity_time,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+
+    def patch_session_activity(
+        self,
+        target: SessionMaterializationPlan | SessionIdentity,
+        activity_time: datetime,
+    ) -> None:
+        """Stage one exact session activity frontier."""
+
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_session_target(self, target)
+        key = self._manager._action_session_target_key(normalized)
+        if any(
+            self._manager._action_session_target_key(patch.target) == key
+            for patch in self._session_activity_patches
+        ):
+            raise StateError("Action cohort repeats a session activity patch")
+        self._session_activity_patches.append(
+            ActionCohortSessionActivityPatch(
+                target=normalized,
+                activity_time=activity_time,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+
+    def terminate_process(
+        self,
+        target: ProcessMaterializationPlan | ProcessIdentity,
+        *,
+        end_time: datetime,
+        parent_activity_time: datetime | None = None,
+    ) -> None:
+        """Stage one live or same-cohort process terminalization."""
+
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        key = self._manager._action_process_target_key(normalized)
+        if any(
+            self._manager._action_process_target_key(termination.target) == key
+            for termination in self._process_termination_drafts
+        ):
+            raise StateError("Action cohort repeats a process terminalization")
+        if type(normalized) is ProcessIdentity:
+            close_plan = self._manager.plan_process_termination_materialization(
+                system=normalized.hostname,
+                pid=normalized.pid,
+                end_time=end_time,
+                parent_activity_time=parent_activity_time,
+            )
+            if close_plan.identity != normalized:
+                raise StateError("Action cohort live process identity drifted before close")
+            target_plan: ProcessTerminationMaterializationPlan | ProcessMaterializationPlan = (
+                close_plan
+            )
+            parent_activity = None
+            effective_end = close_plan.end_time
+        else:
+            target_plan = normalized
+            effective_end = ensure_utc(end_time)
+            parent_activity = None
+            if parent_activity_time is not None:
+                parent_target = self._manager._action_cohort_process_parent_target(
+                    self,
+                    normalized,
+                )
+                parent_activity = ActionCohortProcessActivityPatch(
+                    target=parent_target,
+                    activity_time=parent_activity_time,
+                    _capability=_ActionCohortCapability(),
+                )
+        self._process_termination_drafts.append(
+            ActionCohortProcessTermination(
+                target=target_plan,
+                end_time=effective_end,
+                parent_activity=parent_activity,
+                staged_session_references=(),
+                _capability=_ActionCohortCapability(),
+            )
+        )
+
+    def terminalize_session(
+        self,
+        target: SessionMaterializationPlan | SessionIdentity,
+        *,
+        end_time: datetime,
+    ) -> None:
+        """Stage one live or same-cohort session terminalization."""
+
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_session_target(self, target)
+        key = self._manager._action_session_target_key(normalized)
+        if any(
+            self._manager._action_session_target_key(terminalization.target) == key
+            for terminalization in self._session_terminalization_drafts
+        ):
+            raise StateError("Action cohort repeats a session terminalization")
+        self._session_terminalization_drafts.append(
+            ActionCohortSessionTerminalization(
+                target=normalized,
+                end_time=end_time,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+
+    def seal(self) -> ActionCohortMaterializationPlan:
+        """Freeze and authenticate the complete allocation-free cohort."""
+
+        self._require_open()
+        plan = self._manager._seal_action_cohort_materialization(self)
+        self._sealed = True
+        return plan
+
+
 _MaterializationPlan = (
     SessionMaterializationPlan
     | ProcessMaterializationPlan
@@ -1057,6 +1671,7 @@ _MaterializationPlan = (
     | ConnectionMaterializationPlan
     | MaterializationBatchPlan
     | ConnectionCompositeMaterializationPlan
+    | ActionCohortMaterializationPlan
 )
 
 
@@ -1260,6 +1875,268 @@ def _materialization_batch_integrity_token(
     return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
 
 
+_ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
+    {
+        SessionIdentity,
+        ProcessIdentity,
+        ThreadIdentity,
+        SessionEndPlan,
+        _LinuxLogindAllocatorPatch,
+        _SessionAllocatorPatch,
+        _SessionMaterializationPayload,
+        SessionMaterializationPlan,
+        _ProcessAllocatorPatch,
+        _ProcessMaterializationPayload,
+        ProcessMaterializationPlan,
+        _ProcessTerminationSessionReference,
+        _ProcessTerminationMaterializationPayload,
+        ProcessTerminationMaterializationPlan,
+        _SessionProcessMaterializationLinks,
+        ActionCohortSessionMetadataState,
+        ActionCohortSessionMetadataPatch,
+        ActionCohortProcessActivityPatch,
+        ActionCohortSessionActivityPatch,
+        ActionCohortProcessTermination,
+        ActionCohortSessionTerminalization,
+        _ActionCohortSessionProcessLinks,
+    }
+)
+
+
+def _validate_action_cohort_safe_value(value: object, active: set[int]) -> None:
+    """Reject values that could run caller code during cohort authentication."""
+
+    if value is None or type(value) in {bool, int, float, str, bytes, datetime}:
+        return
+    if type(value) is _ActionCohortCapability:
+        return
+    if type(value) is tuple:
+        object_id = id(value)
+        if object_id in active:
+            raise StateError("Action cohort capability contains a recursive tuple")
+        active.add(object_id)
+        try:
+            for item in value:
+                _validate_action_cohort_safe_value(item, active)
+        finally:
+            active.remove(object_id)
+        return
+    if type(value) in _ACTION_COHORT_SAFE_RECORD_TYPES:
+        object_id = id(value)
+        if object_id in active:
+            raise StateError("Action cohort capability contains a recursive record")
+        active.add(object_id)
+        try:
+            for item in fields(value):
+                _validate_action_cohort_safe_value(getattr(value, item.name), active)
+        finally:
+            active.remove(object_id)
+        return
+    raise StateError(
+        "Action cohort capability contains an unsupported value type: "
+        f"{type(value).__module__}.{type(value).__qualname__}"
+    )
+
+
+def _action_cohort_session_target_semantic(
+    target: SessionMaterializationPlan | SessionIdentity,
+) -> tuple[object, ...]:
+    """Return semantic-only State truth for one session target."""
+
+    if type(target) is SessionMaterializationPlan:
+        return (
+            "staged-session",
+            target._expected_version,
+            target._identity,
+            target._payload,
+            target._allocator_patch,
+        )
+    return ("live-session", target)
+
+
+def _action_cohort_process_target_semantic(
+    target: ProcessMaterializationPlan | ProcessIdentity,
+) -> tuple[object, ...]:
+    """Return semantic-only State truth for one process target."""
+
+    if type(target) is ProcessMaterializationPlan:
+        return (
+            "staged-process",
+            target._expected_version,
+            target._identity,
+            target._payload,
+            target._allocator_patch,
+        )
+    return ("live-process", target)
+
+
+def _action_cohort_semantic_preimage(
+    *,
+    expected_version: int,
+    expected_state_time: datetime | None,
+    final_state_time: datetime,
+    sessions: tuple[SessionMaterializationPlan, ...],
+    processes: tuple[ProcessMaterializationPlan, ...],
+    session_process_links: tuple[_ActionCohortSessionProcessLinks, ...],
+    session_metadata: tuple[ActionCohortSessionMetadataPatch, ...],
+    process_activity: tuple[ActionCohortProcessActivityPatch, ...],
+    session_activity: tuple[ActionCohortSessionActivityPatch, ...],
+    process_terminations: tuple[ActionCohortProcessTermination, ...],
+    session_terminalizations: tuple[ActionCohortSessionTerminalization, ...],
+) -> tuple[object, ...]:
+    """Return deterministic semantics without secrets or object addresses."""
+
+    return (
+        "action-cohort-materialization-v1",
+        expected_version,
+        expected_state_time,
+        final_state_time,
+        tuple(_action_cohort_session_target_semantic(plan) for plan in sessions),
+        tuple(_action_cohort_process_target_semantic(plan) for plan in processes),
+        session_process_links,
+        tuple(
+            (
+                _action_cohort_session_target_semantic(patch.target),
+                patch.before,
+                patch.after,
+            )
+            for patch in session_metadata
+        ),
+        tuple(
+            (_action_cohort_process_target_semantic(patch.target), patch.activity_time)
+            for patch in process_activity
+        ),
+        tuple(
+            (_action_cohort_session_target_semantic(patch.target), patch.activity_time)
+            for patch in session_activity
+        ),
+        tuple(
+            (
+                (
+                    "live-process-termination",
+                    termination.target._expected_version,
+                    termination.target._identity,
+                    termination.target._payload,
+                )
+                if type(termination.target) is ProcessTerminationMaterializationPlan
+                else _action_cohort_process_target_semantic(termination.target),
+                termination.end_time,
+                (
+                    (
+                        _action_cohort_process_target_semantic(termination.parent_activity.target),
+                        termination.parent_activity.activity_time,
+                    )
+                    if termination.parent_activity is not None
+                    else None
+                ),
+                termination.staged_session_references,
+            )
+            for termination in process_terminations
+        ),
+        tuple(
+            (
+                _action_cohort_session_target_semantic(terminalization.target),
+                terminalization.end_time,
+            )
+            for terminalization in session_terminalizations
+        ),
+    )
+
+
+def _action_cohort_semantic_id(**kwargs: object) -> str:
+    """Hash one safe, exact action-cohort semantic preimage."""
+
+    frozen = _freeze_materialization_digest_value(
+        _action_cohort_semantic_preimage(**kwargs),  # type: ignore[arg-type]
+        set(),
+    )
+    return hashlib.sha256(repr(frozen).encode()).hexdigest()
+
+
+def _action_cohort_target_capability(
+    target: SessionMaterializationPlan
+    | ProcessMaterializationPlan
+    | ProcessTerminationMaterializationPlan
+    | SessionIdentity
+    | ProcessIdentity,
+) -> tuple[object, ...]:
+    """Bind only ephemeral manager-issued plan objects by Python identity."""
+
+    if type(target) in {
+        SessionMaterializationPlan,
+        ProcessMaterializationPlan,
+        ProcessTerminationMaterializationPlan,
+    }:
+        return (id(target), target.publication_token)
+    return ()
+
+
+def _action_cohort_integrity_token(
+    authority_secret: bytes,
+    *,
+    semantic_id: str,
+    capability: _ActionCohortCapability,
+    sessions: tuple[SessionMaterializationPlan, ...],
+    processes: tuple[ProcessMaterializationPlan, ...],
+    session_metadata: tuple[ActionCohortSessionMetadataPatch, ...],
+    process_activity: tuple[ActionCohortProcessActivityPatch, ...],
+    session_activity: tuple[ActionCohortSessionActivityPatch, ...],
+    process_terminations: tuple[ActionCohortProcessTermination, ...],
+    session_terminalizations: tuple[ActionCohortSessionTerminalization, ...],
+) -> str:
+    """Authenticate the exact ephemeral capabilities and their tuple order."""
+
+    canonical = (
+        "action-cohort-capability-v1",
+        semantic_id,
+        id(capability),
+        tuple((id(plan), plan.publication_token) for plan in sessions),
+        tuple((id(plan), plan.publication_token) for plan in processes),
+        tuple(
+            (
+                id(patch._capability),
+                _action_cohort_target_capability(patch.target),
+            )
+            for patch in session_metadata
+        ),
+        tuple(
+            (
+                id(patch._capability),
+                _action_cohort_target_capability(patch.target),
+            )
+            for patch in process_activity
+        ),
+        tuple(
+            (
+                id(patch._capability),
+                _action_cohort_target_capability(patch.target),
+            )
+            for patch in session_activity
+        ),
+        tuple(
+            (
+                id(termination._capability),
+                _action_cohort_target_capability(termination.target),
+                (
+                    id(termination.parent_activity._capability),
+                    _action_cohort_target_capability(termination.parent_activity.target),
+                )
+                if termination.parent_activity is not None
+                else (),
+            )
+            for termination in process_terminations
+        ),
+        tuple(
+            (
+                id(terminalization._capability),
+                _action_cohort_target_capability(terminalization.target),
+            )
+            for terminalization in session_terminalizations
+        ),
+    )
+    return hmac.new(authority_secret, repr(canonical).encode(), hashlib.sha256).hexdigest()
+
+
 def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
     """Return whether a session can own visible activity at cutoff."""
     if ensure_utc(session.start_time) > cutoff:
@@ -1342,6 +2219,44 @@ class PreparedConnectionCompositeMaterialization:
         return self._result
 
 
+@dataclass(slots=True)
+class PreparedActionCohortMaterialization:
+    """State-guard-scoped one-shot action-cohort commit capability."""
+
+    _manager: "StateManager"
+    _plan: ActionCohortMaterializationPlan
+    _claim_thread_id: int
+    _active: bool = True
+    _committed: bool = False
+    _result: ActionCohortMaterializationResult | None = None
+
+    @property
+    def committed(self) -> bool:
+        """Return whether the complete State cohort was published."""
+
+        return self._committed
+
+    def commit_no_fail(self) -> ActionCohortMaterializationResult:
+        """Publish the fully prevalidated primitive transaction exactly once."""
+
+        if not self._active:
+            raise StateError("Prepared action cohort materialization is no longer active")
+        if self._committed:
+            raise StateError("Prepared action cohort materialization is already committed")
+        if get_ident() != self._claim_thread_id:
+            raise StateError(
+                "Prepared action cohort materialization must commit on its claiming thread"
+            )
+        self._result = self._manager._commit_prevalidated_action_cohort(self._plan)
+        self._committed = True
+        return self._result
+
+    def commit(self) -> ActionCohortMaterializationResult:
+        """Compatibility alias for :meth:`commit_no_fail`."""
+
+        return self.commit_no_fail()
+
+
 def _normalize_generated_logon_luid(value: int) -> int:
     """Keep generated Windows LogonIDs in the ordinary rendered LUID range."""
     return _MIN_GENERATED_LOGON_LUID + (
@@ -1415,6 +2330,7 @@ class StateManager:
         self._logon_id_block_offsets: dict[str, dict[int, int]] = {}
         self._used_logon_ids: set[int] = set()
         self._logon_id_aliases: dict[str, str] = {}
+        self._logon_id_aliases_by_target: dict[str, set[str]] = {}
         # Well-known LogonIDs to avoid (SYSTEM=0x3e7, LOCAL SERVICE=0x3e5, NETWORK SERVICE=0x3e4)
         self._reserved_logon_ids = {0x3E4, 0x3E5, 0x3E6, 0x3E7}
         self._pid_counters: dict[str, int] = {}  # Per-system PID counters
@@ -1449,11 +2365,8 @@ class StateManager:
 
         # Entity lifecycle: per-system boot times for temporal validation
         self._system_boot_times: dict[str, datetime] = {}
-        self._ended_sessions: IndexedEntityStore[str, tuple[ActiveSession, datetime]] = (
-            IndexedEntityStore(
-                username=lambda ended: ended[0].username,
-                system=lambda ended: ended[0].system,
-            )
+        self._ended_sessions: ExpiringIndex[str, tuple[ActiveSession, datetime]] = ExpiringIndex(
+            deadline=lambda ended: (ensure_utc(ended[1]) + _ENDED_IDENTITY_RETENTION).timestamp()
         )
         self._ended_sessions_by_username_end: GroupedTemporalIndex[str, str] = (
             GroupedTemporalIndex()
@@ -1496,9 +2409,23 @@ class StateManager:
                     self._validate_materialization_batch_plan(plan)
                 elif isinstance(plan, ConnectionCompositeMaterializationPlan):
                     self._validate_connection_composite_plan_integrity(plan)
+                elif type(plan) is ActionCohortMaterializationPlan:
+                    self._validate_action_cohort_plan_integrity(plan)
                 else:
                     return False
             except StateError:
+                return False
+            return True
+
+    def authenticates_action_cohort_plan(self, plan: object) -> bool:
+        """Totally verify one exact action-cohort HMAC capability."""
+
+        if type(plan) is not ActionCohortMaterializationPlan:
+            return False
+        with self._lock:
+            try:
+                self._validate_action_cohort_plan_integrity(plan)
+            except (AttributeError, RecursionError, StateError, TypeError, ValueError):
                 return False
             return True
 
@@ -1581,6 +2508,8 @@ class StateManager:
                 self._validate_materialization_batch_plan(plan)
             elif isinstance(plan, ConnectionCompositeMaterializationPlan):
                 self._validate_connection_composite_plan_integrity(plan)
+            elif type(plan) is ActionCohortMaterializationPlan:
+                self._validate_action_cohort_plan_integrity(plan)
             yield
 
     @contextmanager
@@ -1723,11 +2652,751 @@ class StateManager:
         if not hmac.compare_digest(plan._integrity_token, expected):
             raise StateError("Materialization batch plan integrity validation failed")
 
+    def _validate_action_cohort_plan_integrity(
+        self,
+        plan: ActionCohortMaterializationPlan,
+    ) -> None:
+        """Validate exact structure and every nested action-cohort capability."""
+
+        if type(plan) is not ActionCohortMaterializationPlan:
+            raise StateError("Action cohort materialization requires an exact plan type")
+        if type(plan._expected_version) is not int:
+            raise StateError("Action cohort materialization version is malformed")
+        if (
+            plan._expected_state_time is not None
+            and type(plan._expected_state_time) is not datetime
+        ):
+            raise StateError("Action cohort materialization state-time fence is malformed")
+        if type(plan._final_state_time) is not datetime:
+            raise StateError("Action cohort materialization final time is malformed")
+        if type(plan._semantic_id) is not str or len(plan._semantic_id) != 64:
+            raise StateError("Action cohort materialization semantic identity is malformed")
+        if type(plan._integrity_token) is not str or len(plan._integrity_token) != 64:
+            raise StateError("Action cohort materialization integrity token is malformed")
+        if type(plan._capability) is not _ActionCohortCapability:
+            raise StateError("Action cohort materialization capability is malformed")
+
+        tuple_fields = (
+            plan._sessions,
+            plan._processes,
+            plan._session_process_links,
+            plan._session_metadata,
+            plan._process_activity,
+            plan._session_activity,
+            plan._process_terminations,
+            plan._session_terminalizations,
+        )
+        if any(type(value) is not tuple for value in tuple_fields):
+            raise StateError("Action cohort materialization members must be exact tuples")
+        expected_types = (
+            (plan._sessions, SessionMaterializationPlan),
+            (plan._processes, ProcessMaterializationPlan),
+            (plan._session_process_links, _ActionCohortSessionProcessLinks),
+            (plan._session_metadata, ActionCohortSessionMetadataPatch),
+            (plan._process_activity, ActionCohortProcessActivityPatch),
+            (plan._session_activity, ActionCohortSessionActivityPatch),
+            (plan._process_terminations, ActionCohortProcessTermination),
+            (plan._session_terminalizations, ActionCohortSessionTerminalization),
+        )
+        for values, expected_type in expected_types:
+            if any(type(value) is not expected_type for value in values):
+                raise StateError(
+                    "Action cohort materialization contains an unsupported exact member type"
+                )
+        _validate_action_cohort_safe_value(
+            (
+                plan._sessions,
+                plan._processes,
+                plan._session_process_links,
+                plan._session_metadata,
+                plan._process_activity,
+                plan._session_activity,
+                plan._process_terminations,
+                plan._session_terminalizations,
+            ),
+            set(),
+        )
+
+        for session in plan._sessions:
+            self._validate_session_materialization_plan(session)
+            if session.expected_version != plan.expected_version:
+                raise StateError("Action cohort session uses another State version")
+        for process in plan._processes:
+            self._validate_process_materialization_plan(process)
+            if process.expected_version != plan.expected_version:
+                raise StateError("Action cohort process uses another State version")
+        for termination in plan._process_terminations:
+            if type(termination._capability) is not _ActionCohortCapability:
+                raise StateError("Action cohort process termination capability is malformed")
+            if type(termination.target) is ProcessTerminationMaterializationPlan:
+                self._validate_process_termination_materialization_plan(termination.target)
+                if termination.target.expected_version != plan.expected_version:
+                    raise StateError("Action cohort process close uses another State version")
+                if termination.end_time != termination.target.end_time:
+                    raise StateError("Action cohort live process close time drifted")
+                if termination.parent_activity is not None:
+                    raise StateError("Action cohort live process close duplicates parent activity")
+                if termination.staged_session_references:
+                    raise StateError("Action cohort live process close has staged references")
+            elif type(termination.target) is ProcessMaterializationPlan:
+                if not any(termination.target is member for member in plan._processes):
+                    raise StateError("Action cohort staged process close replaced its start plan")
+                if (
+                    termination.parent_activity is not None
+                    and type(termination.parent_activity) is not ActionCohortProcessActivityPatch
+                ):
+                    raise StateError("Action cohort process parent activity is malformed")
+            else:
+                raise StateError("Action cohort process close target type is unsupported")
+            if type(termination.staged_session_references) is not tuple or any(
+                type(reference) is not _ProcessTerminationSessionReference
+                for reference in termination.staged_session_references
+            ):
+                raise StateError("Action cohort staged session references are malformed")
+        for patch in (
+            *plan._session_metadata,
+            *plan._process_activity,
+            *plan._session_activity,
+        ):
+            if type(patch._capability) is not _ActionCohortCapability:
+                raise StateError("Action cohort patch capability is malformed")
+        for terminalization in plan._session_terminalizations:
+            if type(terminalization._capability) is not _ActionCohortCapability:
+                raise StateError("Action cohort session terminalization capability is malformed")
+            if type(terminalization.target) is SessionMaterializationPlan and not any(
+                terminalization.target is member for member in plan._sessions
+            ):
+                raise StateError("Action cohort staged session close replaced its start plan")
+            if type(terminalization.target) not in {
+                SessionMaterializationPlan,
+                SessionIdentity,
+            }:
+                raise StateError("Action cohort session close target type is unsupported")
+
+        semantic_kwargs = {
+            "expected_version": plan._expected_version,
+            "expected_state_time": plan._expected_state_time,
+            "final_state_time": plan._final_state_time,
+            "sessions": plan._sessions,
+            "processes": plan._processes,
+            "session_process_links": plan._session_process_links,
+            "session_metadata": plan._session_metadata,
+            "process_activity": plan._process_activity,
+            "session_activity": plan._session_activity,
+            "process_terminations": plan._process_terminations,
+            "session_terminalizations": plan._session_terminalizations,
+        }
+        semantic_id = _action_cohort_semantic_id(**semantic_kwargs)
+        if not hmac.compare_digest(plan._semantic_id, semantic_id):
+            raise StateError("Action cohort materialization semantic identity validation failed")
+        integrity = _action_cohort_integrity_token(
+            self._materialization_secret,
+            semantic_id=semantic_id,
+            capability=plan._capability,
+            sessions=plan._sessions,
+            processes=plan._processes,
+            session_metadata=plan._session_metadata,
+            process_activity=plan._process_activity,
+            session_activity=plan._session_activity,
+            process_terminations=plan._process_terminations,
+            session_terminalizations=plan._session_terminalizations,
+        )
+        if not hmac.compare_digest(plan._integrity_token, integrity):
+            raise StateError("Action cohort materialization integrity validation failed")
+
     def begin_materialization_batch(self) -> MaterializationBatchBuilder:
         """Return an allocation-free builder bound to the current state fence."""
 
         with self._lock:
             return MaterializationBatchBuilder(self, self._materialization_version)
+
+    def begin_action_cohort_materialization(self) -> ActionCohortMaterializationBuilder:
+        """Return an allocation-free multi-session action-cohort builder."""
+
+        with self._lock:
+            return ActionCohortMaterializationBuilder(self, self._materialization_version)
+
+    def _action_cohort_preview_host_base(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        system: str,
+    ) -> tuple[int, tuple[str, int] | None]:
+        existing = self._logon_id_host_bases.get(system)
+        if existing is not None:
+            return existing, None
+        planned = builder._planned_host_bases.get(system)
+        if planned is not None:
+            return planned, None
+        occupied = self._logon_id_used_host_bases | set(builder._planned_host_bases.values())
+        bucket = _stable_seed(f"logon_luid_host_{system}") % _HOST_LOGON_BUCKET_SPACE
+        salt = 0
+        while True:
+            candidate = _MIN_GENERATED_LOGON_LUID + (
+                (bucket + (salt * _HOST_LOGON_BUCKET_STEP)) % _HOST_LOGON_BUCKET_SPACE
+            )
+            if candidate not in occupied:
+                builder._planned_host_bases[system] = candidate
+                return candidate, (system, candidate)
+            salt += 1
+
+    def _action_cohort_preview_host_epoch(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        system: str,
+        current_time: datetime,
+    ) -> tuple[datetime, tuple[str, datetime] | None]:
+        boot_time = self._system_boot_times.get(system)
+        if boot_time is not None:
+            return ensure_utc(boot_time), None
+        existing = self._logon_id_epochs.get(system)
+        if existing is not None:
+            return existing, None
+        planned = builder._planned_host_epochs.get(system)
+        if planned is not None:
+            return planned, None
+        uptime_seconds = 3600 + (_stable_seed(f"logon_luid_uptime_{system}") % (3 * 86400))
+        epoch = ensure_utc(current_time) - timedelta(seconds=uptime_seconds)
+        builder._planned_host_epochs[system] = epoch
+        return epoch, (system, epoch)
+
+    def _action_cohort_preview_logon_luid(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        system: str,
+        event_time: datetime,
+    ) -> tuple[
+        int,
+        tuple[str, int] | None,
+        tuple[str, datetime] | None,
+        tuple[tuple[str, int, int], int],
+    ]:
+        current_time = ensure_utc(event_time)
+        base, host_base_patch = self._action_cohort_preview_host_base(builder, system)
+        epoch, host_epoch_patch = self._action_cohort_preview_host_epoch(
+            builder,
+            system,
+            current_time,
+        )
+        elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
+        block = elapsed_seconds // 60
+        second_in_block = elapsed_seconds % 60
+        subsecond_bucket = min(15, current_time.microsecond // 62500)
+        ordinal_key = (system, elapsed_seconds, subsecond_bucket)
+        ordinal = builder._planned_logon_ordinals.get(
+            ordinal_key,
+            self._logon_id_second_ordinals.get(ordinal_key, 0),
+        )
+        stride = self._logon_luid_block_stride(system, block)
+        candidate = base + self._logon_luid_block_offset(system, block)
+        candidate += (second_in_block * stride) + (subsecond_bucket * 3) + ordinal
+        candidate += (
+            _stable_seed(f"logon_luid_low:{system}:{current_time.isoformat()}:{ordinal}") % 3
+        )
+        candidate = _normalize_generated_logon_luid(candidate)
+        occupied = self._used_logon_ids | self._reserved_logon_ids | builder._planned_logon_luids
+        while candidate in occupied:
+            candidate = _normalize_generated_logon_luid(candidate + 1)
+        builder._planned_logon_ordinals[ordinal_key] = ordinal + 1
+        builder._planned_logon_luids.add(candidate)
+        return candidate, host_base_patch, host_epoch_patch, (ordinal_key, ordinal + 1)
+
+    def _action_cohort_preview_windows_session_id(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        *,
+        system: str,
+        username: str,
+        logon_type: int,
+        session_kind: str,
+    ) -> tuple[int, tuple[str, int] | None]:
+        if not windows_logon_can_own_desktop(logon_type) or session_kind in {
+            "network",
+            "new_credentials",
+            "service",
+            "ssh",
+        }:
+            return 0, None
+        used_ids = {
+            session.session_id
+            for session in self._active_sessions.find("system", system)
+            if session.session_id > 0
+        }
+        used_ids.update(builder._planned_windows_session_ids.get(system, ()))
+        if logon_type in {2, 11} and session_kind in {"interactive", "logon"}:
+            preferred = 1 + (_stable_seed(f"windows_console_session:{system}") % 2)
+            if preferred not in used_ids:
+                builder._planned_windows_session_ids.setdefault(system, set()).add(preferred)
+                return preferred, None
+        initial = builder._planned_windows_session_counters.get(
+            system,
+            self._windows_session_id_counters.get(
+                system,
+                3 + (_stable_seed(f"windows_session_initial:{system}") % 3),
+            ),
+        )
+        candidate = initial
+        while candidate in used_ids or candidate <= 0:
+            candidate += 1 + (_stable_seed(f"windows_session_gap:{system}:{candidate}") % 2)
+        successor = candidate + 1
+        builder._planned_windows_session_counters[system] = successor
+        builder._planned_windows_session_ids.setdefault(system, set()).add(candidate)
+        return candidate, (system, successor)
+
+    def _plan_action_cohort_session(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        *,
+        username: str,
+        system: str,
+        logon_type: int,
+        source_ip: str,
+        source_port: int,
+        session_kind: str,
+        transport_pid: int | None,
+        start_time: datetime | None,
+        logon_id: str | None,
+        logon_guid: str,
+        logon_guid_required: bool | None,
+        session_id: int | None,
+        lifecycle_group_id: str,
+        parent_lifecycle_group_id: str,
+        auth_protocol: str,
+        smb_principal: str,
+        account_scope: str,
+        auth_session_ref: str,
+        effective_uid: int | None,
+        effective_gid: int | None,
+    ) -> SessionMaterializationPlan:
+        """Plan one session against a private cohort-local allocator overlay."""
+
+        with self._lock:
+            if builder._manager is not self:
+                raise StateError("Action cohort builder belongs to another StateManager")
+            if builder.expected_version != self._materialization_version:
+                raise StateError("Action cohort builder became stale during session planning")
+            if self.state.current_time != builder._expected_state_time:
+                raise StateError("Action cohort State time changed during session planning")
+            if start_time is None and self.state.current_time is None:
+                raise StateError("Cannot plan action cohort session: current_time not set")
+            session_start = ensure_utc(start_time or self.state.current_time)
+            provided_logon_id = logon_id is not None
+            host_base_patch: tuple[str, int] | None = None
+            host_epoch_patch: tuple[str, datetime] | None = None
+            ordinal_patch: tuple[tuple[str, int, int], int] | None = None
+            used_logon_id: int | None = None
+            if logon_id is None:
+                (
+                    used_logon_id,
+                    host_base_patch,
+                    host_epoch_patch,
+                    ordinal_patch,
+                ) = self._action_cohort_preview_logon_luid(builder, system, session_start)
+                logon_id = f"0x{used_logon_id:x}"
+            else:
+                resolved = self._resolve_logon_id(logon_id)
+                if (
+                    logon_id in builder._planned_logon_ids
+                    or resolved in builder._planned_logon_ids
+                    or logon_id in self._ended_sessions
+                    or resolved in self._ended_sessions
+                    or resolved in self.state.active_sessions
+                ):
+                    raise StateError(f"Action cohort session LogonID is already used: {logon_id}")
+                try:
+                    used_logon_id = int(logon_id, 16)
+                except (TypeError, ValueError):
+                    used_logon_id = None
+                if used_logon_id is not None:
+                    if (
+                        used_logon_id in self._used_logon_ids
+                        or used_logon_id in builder._planned_logon_luids
+                    ):
+                        raise StateError(
+                            f"Action cohort session LogonID is already used: {logon_id}"
+                        )
+                    builder._planned_logon_luids.add(used_logon_id)
+            builder._planned_logon_ids.add(logon_id)
+
+            if session_id is None:
+                session_id, session_counter_patch = self._action_cohort_preview_windows_session_id(
+                    builder,
+                    system=system,
+                    username=username,
+                    logon_type=logon_type,
+                    session_kind=session_kind,
+                )
+            else:
+                if session_id > 0:
+                    used_session_ids = builder._planned_windows_session_ids.setdefault(
+                        system,
+                        set(),
+                    )
+                    if session_id in used_session_ids or any(
+                        current.session_id == session_id
+                        for current in self._active_sessions.find("system", system)
+                    ):
+                        raise StateError(
+                            f"Action cohort Windows session ID is already live: {session_id}"
+                        )
+                    used_session_ids.add(session_id)
+                session_counter_patch = None
+            object_id = stable_uuid(
+                "registered-session" if provided_logon_id else "session",
+                system,
+                username,
+                logon_type,
+                session_kind,
+                source_ip,
+                source_port,
+                session_start.isoformat(),
+                logon_id,
+                session_id,
+            )
+            if logon_guid_required is not None:
+                logon_guid = (
+                    self._stable_logon_guid(system, logon_id)
+                    if logon_guid_required
+                    else _NULL_LOGON_GUID
+                )
+            lifecycle_id = lifecycle_group_id or stable_uuid("session-lifecycle", object_id)
+            identity = SessionIdentity(
+                hostname=system,
+                object_id=object_id,
+                logon_id=logon_id,
+                session_id=session_id,
+                principal=username,
+                session_kind=session_kind,
+                started_at=session_start,
+                lifecycle_group_id=lifecycle_id,
+                logon_guid=logon_guid,
+                parent_lifecycle_group_id=parent_lifecycle_group_id,
+            )
+            payload = _SessionMaterializationPayload(
+                logon_type=logon_type,
+                source_ip=source_ip,
+                source_port=source_port,
+                transport_pid=transport_pid,
+                auth_protocol=auth_protocol,
+                smb_principal=smb_principal,
+                account_scope=account_scope,
+                auth_session_ref=auth_session_ref,
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
+                state_time=session_start,
+            )
+            allocator_patch = _SessionAllocatorPatch(
+                host_base=host_base_patch,
+                host_epoch=host_epoch_patch,
+                ordinal=ordinal_patch,
+                used_logon_id=used_logon_id,
+                windows_session_counter=session_counter_patch,
+                linux_logind=None,
+            )
+            return SessionMaterializationPlan(
+                _expected_version=builder.expected_version,
+                _identity=identity,
+                _payload=payload,
+                _allocator_patch=allocator_patch,
+                _integrity_token=_materialization_integrity_token(
+                    self._materialization_secret,
+                    "session",
+                    builder.expected_version,
+                    identity,
+                    payload,
+                    allocator_patch,
+                ),
+            )
+
+    @staticmethod
+    def _action_session_target_key(
+        target: SessionMaterializationPlan | SessionIdentity,
+    ) -> tuple[str, str]:
+        identity = target.identity if type(target) is SessionMaterializationPlan else target
+        return (identity.hostname, identity.object_id)
+
+    @staticmethod
+    def _action_process_target_key(
+        target: ProcessMaterializationPlan
+        | ProcessTerminationMaterializationPlan
+        | ProcessIdentity,
+    ) -> tuple[str, str]:
+        identity = (
+            target.identity
+            if type(target) in {ProcessMaterializationPlan, ProcessTerminationMaterializationPlan}
+            else target
+        )
+        return (identity.hostname, identity.object_id)
+
+    def _normalize_action_cohort_session_target(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        target: SessionMaterializationPlan | SessionIdentity,
+    ) -> SessionMaterializationPlan | SessionIdentity:
+        """Require an exact staged member or exact currently live session identity."""
+
+        with self._lock:
+            if (
+                builder._manager is not self
+                or builder.expected_version != self._materialization_version
+            ):
+                raise StateError("Action cohort session target uses a stale or foreign builder")
+            if type(target) is SessionMaterializationPlan:
+                if not any(target is member for member in builder._action_sessions):
+                    raise StateError(
+                        "Action cohort staged session target belongs to another builder"
+                    )
+                return target
+            if type(target) is not SessionIdentity:
+                raise TypeError("Action cohort session target has an unsupported exact type")
+            session = self._active_sessions.get(self._resolve_logon_id(target.logon_id))
+            if session is None or self.get_session_identity(session.logon_id) != target:
+                raise StateError("Action cohort live session target is absent or drifted")
+            return target
+
+    def _normalize_action_cohort_process_target(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        target: ProcessMaterializationPlan | ProcessIdentity,
+    ) -> ProcessMaterializationPlan | ProcessIdentity:
+        """Require an exact staged member or exact currently live process identity."""
+
+        with self._lock:
+            if (
+                builder._manager is not self
+                or builder.expected_version != self._materialization_version
+            ):
+                raise StateError("Action cohort process target uses a stale or foreign builder")
+            if type(target) is ProcessMaterializationPlan:
+                if not any(target is member for member in builder._processes):
+                    raise StateError(
+                        "Action cohort staged process target belongs to another builder"
+                    )
+                return target
+            if type(target) is not ProcessIdentity:
+                raise TypeError("Action cohort process target has an unsupported exact type")
+            process = self._processes_by_object_id.get(target.object_id)
+            if (
+                process is None
+                or self.state.running_processes.get((target.hostname, target.pid)) is not process
+                or self._process_identity(process) != target
+            ):
+                raise StateError("Action cohort live process target is absent or drifted")
+            return target
+
+    def _action_cohort_session_metadata(
+        self,
+        target: SessionMaterializationPlan | SessionIdentity,
+    ) -> ActionCohortSessionMetadataState:
+        """Snapshot the closed metadata projection for a staged or live target."""
+
+        if type(target) is SessionMaterializationPlan:
+            return ActionCohortSessionMetadataState()
+        session = self._active_sessions.get(self._resolve_logon_id(target.logon_id))
+        if session is None or self.get_session_identity(session.logon_id) != target:
+            raise StateError("Action cohort session metadata target drifted")
+        return ActionCohortSessionMetadataState(
+            source_ready_time=session.source_ready_time,
+            network_close_time=session.network_close_time,
+            closure_owned_by_bundle=session.closure_owned_by_bundle,
+            login_occurrence_emitted=session.login_occurrence_emitted,
+            storyline_protected=session.storyline_protected,
+            end_plan=session.end_plan,
+        )
+
+    def _action_cohort_process_parent_target(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        process: ProcessMaterializationPlan,
+    ) -> ProcessMaterializationPlan | ProcessIdentity:
+        """Resolve the exact staged or live parent of one staged process."""
+
+        identity = process.identity
+        if identity.parent_pid in {0, 4} or identity.parent_pid == identity.pid:
+            raise StateError("Action cohort parent activity requires a distinct modeled parent")
+        for candidate in reversed(builder._processes):
+            if candidate is process:
+                continue
+            parent = candidate.identity
+            if parent.hostname == identity.hostname and parent.pid == identity.parent_pid:
+                return candidate
+        live = self.state.running_processes.get((identity.hostname, identity.parent_pid))
+        if live is None:
+            raise StateError("Action cohort parent activity requires an exact live parent")
+        return self._process_identity(live)
+
+    def _action_cohort_staged_session_references(
+        self,
+        *,
+        process_index: int,
+        sessions: tuple[SessionMaterializationPlan, ...],
+        links: tuple[_ActionCohortSessionProcessLinks, ...],
+    ) -> tuple[_ProcessTerminationSessionReference, ...]:
+        """Return exact staged-session role pointers cleared by one staged close."""
+
+        role_fields = {
+            "transport": "transport_pid",
+            "shell": "session_shell_pid",
+            "user_manager": "session_user_manager_pid",
+            "winlogon": "session_winlogon_pid",
+            "explorer": "explorer_pid",
+            "process_tree_root": "process_tree_root",
+        }
+        references: list[_ProcessTerminationSessionReference] = []
+        for session_links in links:
+            fields_for_session = tuple(
+                field_name
+                for role, field_name in role_fields.items()
+                if getattr(session_links.links, role) == process_index
+            )
+            if not fields_for_session:
+                continue
+            identity = sessions[session_links.session_index].identity
+            references.append(
+                _ProcessTerminationSessionReference(
+                    logon_id=identity.logon_id,
+                    object_id=identity.object_id,
+                    fields=fields_for_session,
+                )
+            )
+        return tuple(references)
+
+    def _seal_action_cohort_materialization(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+    ) -> ActionCohortMaterializationPlan:
+        """Freeze and authenticate one exact builder without retaining it."""
+
+        with self._lock:
+            if builder._manager is not self:
+                raise StateError("Action cohort builder belongs to another StateManager")
+            if builder.expected_version != self._materialization_version:
+                raise StateError("Action cohort builder became stale before sealing")
+            if self.state.current_time != builder._expected_state_time:
+                raise StateError("Action cohort State time changed before sealing")
+            sessions = tuple(builder._action_sessions)
+            processes = tuple(builder._processes)
+            if not any(
+                (
+                    sessions,
+                    processes,
+                    builder._session_metadata_patches,
+                    builder._process_activity_patches,
+                    builder._session_activity_patches,
+                    builder._process_termination_drafts,
+                    builder._session_terminalization_drafts,
+                )
+            ):
+                raise StateError("Action cohort materialization cannot be empty")
+
+            process_indexes = {id(process): index for index, process in enumerate(processes)}
+            session_links: list[_ActionCohortSessionProcessLinks] = []
+            for session_index, session in enumerate(sessions):
+                role_plans = builder._action_session_process_plans.get(id(session), {})
+                session_links.append(
+                    _ActionCohortSessionProcessLinks(
+                        session_index=session_index,
+                        links=_SessionProcessMaterializationLinks(
+                            **{
+                                role: process_indexes[id(process)]
+                                for role, process in role_plans.items()
+                            }
+                        ),
+                    )
+                )
+            frozen_links = tuple(session_links)
+
+            process_terminations: list[ActionCohortProcessTermination] = []
+            for termination in builder._process_termination_drafts:
+                if type(termination.target) is ProcessMaterializationPlan:
+                    process_index = process_indexes.get(id(termination.target))
+                    if process_index is None:
+                        raise StateError(
+                            "Action cohort staged close target is not a process member"
+                        )
+                    references = self._action_cohort_staged_session_references(
+                        process_index=process_index,
+                        sessions=sessions,
+                        links=frozen_links,
+                    )
+                    termination = replace(
+                        termination,
+                        staged_session_references=references,
+                    )
+                process_terminations.append(termination)
+
+            times: list[datetime] = []
+            if builder._expected_state_time is not None:
+                times.append(ensure_utc(builder._expected_state_time))
+            times.extend(session.identity.started_at for session in sessions)
+            times.extend(process.identity.started_at for process in processes)
+            times.extend(
+                process._payload.parent_activity_time
+                for process in processes
+                if process._payload.parent_activity_time is not None
+            )
+            for patch in builder._session_metadata_patches:
+                for value in (
+                    patch.after.source_ready_time,
+                    patch.after.network_close_time,
+                ):
+                    if value is not None:
+                        times.append(value)
+            times.extend(patch.activity_time for patch in builder._process_activity_patches)
+            times.extend(patch.activity_time for patch in builder._session_activity_patches)
+            times.extend(termination.end_time for termination in process_terminations)
+            times.extend(
+                terminalization.end_time
+                for terminalization in builder._session_terminalization_drafts
+            )
+            final_state_time = max(times)
+            capability = _ActionCohortCapability()
+            semantic_kwargs = {
+                "expected_version": builder.expected_version,
+                "expected_state_time": builder._expected_state_time,
+                "final_state_time": final_state_time,
+                "sessions": sessions,
+                "processes": processes,
+                "session_process_links": frozen_links,
+                "session_metadata": tuple(builder._session_metadata_patches),
+                "process_activity": tuple(builder._process_activity_patches),
+                "session_activity": tuple(builder._session_activity_patches),
+                "process_terminations": tuple(process_terminations),
+                "session_terminalizations": tuple(builder._session_terminalization_drafts),
+            }
+            semantic_id = _action_cohort_semantic_id(**semantic_kwargs)
+            plan = ActionCohortMaterializationPlan(
+                _expected_version=builder.expected_version,
+                _expected_state_time=builder._expected_state_time,
+                _final_state_time=final_state_time,
+                _sessions=sessions,
+                _processes=processes,
+                _session_process_links=frozen_links,
+                _session_metadata=tuple(builder._session_metadata_patches),
+                _process_activity=tuple(builder._process_activity_patches),
+                _session_activity=tuple(builder._session_activity_patches),
+                _process_terminations=tuple(process_terminations),
+                _session_terminalizations=tuple(builder._session_terminalization_drafts),
+                _semantic_id=semantic_id,
+                _capability=capability,
+                _integrity_token="",
+            )
+            plan = replace(
+                plan,
+                _integrity_token=_action_cohort_integrity_token(
+                    self._materialization_secret,
+                    semantic_id=semantic_id,
+                    capability=capability,
+                    sessions=sessions,
+                    processes=processes,
+                    session_metadata=plan._session_metadata,
+                    process_activity=plan._process_activity,
+                    session_activity=plan._session_activity,
+                    process_terminations=plan._process_terminations,
+                    session_terminalizations=plan._session_terminalizations,
+                ),
+            )
+            self.validate_action_cohort_materialization(plan)
+            return plan
 
     def _plan_batch_session(
         self,
@@ -2182,7 +3851,7 @@ class StateManager:
             effective_gid=payload.effective_gid,
         )
         self.state.active_sessions[session.logon_id] = session
-        self._logon_id_aliases.pop(session.logon_id, None)
+        self._remove_logon_id_alias(session.logon_id)
         self._remove_ended_session(session.logon_id)
         if advance_version:
             self._materialization_version += 1
@@ -2385,16 +4054,59 @@ class StateManager:
         """Resolve a preplanned session LogonID to its final rendered value."""
         return self._logon_id_aliases.get(logon_id, logon_id)
 
+    def _record_logon_id_alias(self, alias: str, target: str) -> None:
+        """Install one alias and its bounded reverse ownership entry."""
+
+        prior = self._logon_id_aliases.get(alias)
+        if prior == target:
+            return
+        if prior is not None:
+            prior_aliases = self._logon_id_aliases_by_target.get(prior)
+            if prior_aliases is not None:
+                prior_aliases.discard(alias)
+                if not prior_aliases:
+                    self._logon_id_aliases_by_target.pop(prior, None)
+        self._logon_id_aliases[alias] = target
+        self._logon_id_aliases_by_target.setdefault(target, set()).add(alias)
+
+    def _remove_logon_id_alias(self, alias: str) -> None:
+        """Remove one alias and its reverse ownership entry."""
+
+        target = self._logon_id_aliases.pop(alias, None)
+        if target is None:
+            return
+        aliases = self._logon_id_aliases_by_target.get(target)
+        if aliases is None:
+            return
+        aliases.discard(alias)
+        if not aliases:
+            self._logon_id_aliases_by_target.pop(target, None)
+
+    def _cleanup_ended_session_retention_entry(
+        self,
+        logon_id: str,
+        ended: tuple[ActiveSession, datetime],
+    ) -> None:
+        """Remove every reverse/index entry owned by one retained-session key."""
+
+        session, _end_time = ended
+        if logon_id != session.logon_id:
+            self._remove_logon_id_alias(logon_id)
+            return
+        self._ended_sessions_by_username_end.remove(logon_id)
+        self._ended_sessions_by_system_end.remove(logon_id)
+        self._authoritative_session_ends.remove(logon_id)
+        aliases = tuple(self._logon_id_aliases_by_target.pop(logon_id, ()))
+        for alias in aliases:
+            self._logon_id_aliases.pop(alias, None)
+            self._ended_sessions.pop(alias, None)
+
     def _remove_ended_session(self, logon_id: str) -> None:
         """Remove ended-session state and its canonical temporal indexes."""
         ended = self._ended_sessions.pop(logon_id, None)
         if ended is None:
             return
-        session, _end_time = ended
-        if logon_id != session.logon_id:
-            return
-        self._ended_sessions_by_username_end.remove(logon_id)
-        self._ended_sessions_by_system_end.remove(logon_id)
+        self._cleanup_ended_session_retention_entry(logon_id, ended)
 
     def _index_ended_session(
         self,
@@ -2405,6 +4117,12 @@ class StateManager:
         """Index one canonical ended session by owner and visible end time."""
         self._ended_sessions_by_username_end.add(logon_id, session.username, end_time)
         self._ended_sessions_by_system_end.add(logon_id, session.system, end_time)
+
+    def _trim_retained_session_identities(self) -> None:
+        """Enforce the hard cap while preserving newest ended session identities."""
+
+        for logon_id, ended in self._ended_sessions.trim_earliest(_MAX_RETAINED_SESSION_IDENTITIES):
+            self._cleanup_ended_session_retention_entry(logon_id, ended)
 
     def _index_authoritative_session_end(self, session: ActiveSession) -> None:
         """Index an authoritative end plan for constant-time rebootstrap checks."""
@@ -2917,9 +4635,9 @@ class StateManager:
             self._active_sessions[new_logon_id] = session
             self._authoritative_session_ends.remove(logon_id)
             self._index_authoritative_session_end(session)
-            self._logon_id_aliases[logon_id] = new_logon_id
             self._remove_ended_session(logon_id)
             self._remove_ended_session(new_logon_id)
+            self._record_logon_id_alias(logon_id, new_logon_id)
             self._materialization_version += 1
             return new_logon_id
 
@@ -2949,6 +4667,7 @@ class StateManager:
                     )
                     if resolved_logon_id != logon_id:
                         self._ended_sessions[logon_id] = ended
+                    self._trim_retained_session_identities()
                 logger.debug("Ended session %s", resolved_logon_id)
                 return True
             return False
@@ -4093,6 +5812,11 @@ class StateManager:
             if self._process_identity(process) != identity:
                 raise StateError("Process termination materialization target identity drifted")
             if (
+                process.last_activity_time is not None
+                and process.last_activity_time > plan.end_time
+            ):
+                raise StateError("Process termination materialization precedes retained activity")
+            if (
                 self._process_object_ids.get(key) != identity.object_id
                 or self._processes_by_object_id.get(identity.object_id) is not process
             ):
@@ -4138,6 +5862,8 @@ class StateManager:
     def _commit_prevalidated_process_termination_materialization(
         self,
         plan: ProcessTerminationMaterializationPlan,
+        *,
+        advance_version: bool = True,
     ) -> ProcessIdentity:
         """Perform primitive process-termination writes after guarded validation."""
 
@@ -4191,7 +5917,8 @@ class StateManager:
 
         self._trim_retained_thread_identities()
         self._trim_retained_process_identities()
-        self._materialization_version += 1
+        if advance_version:
+            self._materialization_version += 1
         logger.debug("Ended process %s on %s", identity.pid, identity.hostname)
         return identity
 
@@ -4203,6 +5930,618 @@ class StateManager:
 
         with self.process_termination_materialization_guard(plan):
             return self._commit_prevalidated_process_termination_materialization(plan)
+
+    @staticmethod
+    def _action_session_identity(
+        target: SessionMaterializationPlan | SessionIdentity,
+    ) -> SessionIdentity:
+        return target.identity if type(target) is SessionMaterializationPlan else target
+
+    @staticmethod
+    def _action_process_identity(
+        target: ProcessMaterializationPlan
+        | ProcessTerminationMaterializationPlan
+        | ProcessIdentity,
+    ) -> ProcessIdentity:
+        return (
+            target.identity
+            if type(target) in {ProcessMaterializationPlan, ProcessTerminationMaterializationPlan}
+            else target
+        )
+
+    def _validate_action_live_session_identity(self, identity: SessionIdentity) -> ActiveSession:
+        session = self._active_sessions.get(self._resolve_logon_id(identity.logon_id))
+        if session is None or self.get_session_identity(session.logon_id) != identity:
+            raise StateError("Action cohort live session identity is absent or drifted")
+        return session
+
+    def _validate_action_live_process_identity(self, identity: ProcessIdentity) -> RunningProcess:
+        process = self._processes_by_object_id.get(identity.object_id)
+        if (
+            process is None
+            or self.state.running_processes.get((identity.hostname, identity.pid)) is not process
+            or self._process_identity(process) != identity
+        ):
+            raise StateError("Action cohort live process identity is absent or drifted")
+        return process
+
+    def _validate_action_cohort_session_metadata_transition(
+        self,
+        patch: ActionCohortSessionMetadataPatch,
+        *,
+        sessions: dict[str, SessionMaterializationPlan],
+    ) -> SessionIdentity:
+        identity = self._action_session_identity(patch.target)
+        if type(patch.target) is SessionMaterializationPlan:
+            if sessions.get(identity.object_id) is not patch.target:
+                raise StateError("Action cohort metadata replaced its staged session capability")
+            current = ActionCohortSessionMetadataState()
+        else:
+            self._validate_action_live_session_identity(identity)
+            current = self._action_cohort_session_metadata(identity)
+        if patch.before != current:
+            raise StateError("Action cohort session metadata before-state drifted")
+        after = patch.after
+        if after.source_ready_time is not None and after.source_ready_time < identity.started_at:
+            raise StateError("Action cohort session readiness precedes session start")
+        if after.network_close_time is not None and after.network_close_time < identity.started_at:
+            raise StateError("Action cohort session network close precedes session start")
+        if (
+            after.source_ready_time is not None
+            and after.network_close_time is not None
+            and after.source_ready_time > after.network_close_time
+        ):
+            raise StateError("Action cohort session readiness follows network close")
+        end_plan = after.end_plan
+        if end_plan is not None and ensure_utc(end_plan.canonical_end) < identity.started_at:
+            raise StateError("Action cohort session end plan precedes session start")
+        if (
+            current.end_plan is not None
+            and current.end_plan.is_hard_deadline
+            and current.end_plan != end_plan
+        ):
+            raise StateError("Action cohort cannot replace a hard session end plan")
+        return identity
+
+    def validate_action_cohort_materialization(
+        self,
+        plan: ActionCohortMaterializationPlan,
+    ) -> None:
+        """Validate every fallible action-cohort condition without mutation."""
+
+        with self._lock:
+            self._validate_action_cohort_plan_integrity(plan)
+            if plan.expected_version != self._materialization_version:
+                raise StateError("Action cohort materialization plan is stale")
+            if self.state.current_time != plan._expected_state_time:
+                raise StateError("Action cohort materialization State time changed")
+
+            sessions: dict[str, SessionMaterializationPlan] = {}
+            session_logons: set[str] = set()
+            host_session_ids: set[tuple[str, int]] = set()
+            for session in plan.sessions:
+                identity = session.identity
+                if identity.object_id in sessions or identity.logon_id in session_logons:
+                    raise StateError("Action cohort repeats a session start identity")
+                if (
+                    identity.logon_id in self._active_sessions
+                    or identity.logon_id in self._ended_sessions
+                ):
+                    raise StateError(
+                        f"Action cohort session LogonID is already retained: {identity.logon_id}"
+                    )
+                if identity.session_id > 0:
+                    session_id_key = (identity.hostname, identity.session_id)
+                    if session_id_key in host_session_ids or any(
+                        existing.session_id == identity.session_id
+                        for existing in self._active_sessions.find("system", identity.hostname)
+                    ):
+                        raise StateError("Action cohort repeats a live host session ID")
+                    host_session_ids.add(session_id_key)
+                sessions[identity.object_id] = session
+                session_logons.add(identity.logon_id)
+
+            process_indexes = {id(process): index for index, process in enumerate(plan.processes)}
+            processes: dict[str, ProcessMaterializationPlan] = {}
+            processes_by_pid: dict[tuple[str, int], ProcessMaterializationPlan] = {}
+            thread_keys: set[tuple[str, str, int]] = set()
+            sessions_by_host_logon = {
+                (session.identity.hostname, session.identity.logon_id): session
+                for session in plan.sessions
+            }
+            for index, process in enumerate(plan.processes):
+                identity = process.identity
+                primary_thread = identity.primary_thread
+                if primary_thread is None:
+                    raise StateError("Action cohort process start has no primary thread")
+                key = (identity.hostname, identity.pid)
+                thread_key = (
+                    primary_thread.hostname,
+                    primary_thread.process_object_id,
+                    primary_thread.tid,
+                )
+                if (
+                    identity.object_id in processes
+                    or key in processes_by_pid
+                    or key in self.state.running_processes
+                    or identity.object_id in self._processes_by_object_id
+                    or thread_key in thread_keys
+                    or thread_key in self.state.running_threads
+                ):
+                    raise StateError("Action cohort repeats a live process or thread identity")
+                if (
+                    primary_thread.hostname != identity.hostname
+                    or primary_thread.process_object_id != identity.object_id
+                    or primary_thread.pid != identity.pid
+                    or primary_thread.started_at != identity.started_at
+                ):
+                    raise StateError("Action cohort primary thread disagrees with its process")
+                if identity.parent_pid not in {0, 4}:
+                    parent = processes_by_pid.get((identity.hostname, identity.parent_pid))
+                    if parent is not None and process_indexes[id(parent)] >= index:
+                        raise StateError("Action cohort process parent is not ordered first")
+                    if parent is None and not self.is_process_active_at(
+                        identity.hostname,
+                        identity.parent_pid,
+                        identity.started_at,
+                    ):
+                        raise StateError("Action cohort process parent is not active at start")
+                    if parent is not None and parent.identity.started_at > identity.started_at:
+                        raise StateError("Action cohort process parent starts after its child")
+                staged_session = sessions_by_host_logon.get((identity.hostname, identity.logon_id))
+                live_session = (
+                    self.get_session_at(identity.logon_id, identity.started_at)
+                    if identity.logon_id and staged_session is None
+                    else None
+                )
+                if (
+                    process._payload.require_session
+                    and staged_session is None
+                    and live_session is None
+                ):
+                    raise StateError("Action cohort process has no exact owning session")
+                expected_session_id = (
+                    staged_session.identity.session_id
+                    if staged_session is not None
+                    else live_session.session_id
+                    if live_session is not None
+                    else None
+                )
+                expected_logon_type = (
+                    staged_session.logon_type
+                    if staged_session is not None
+                    else live_session.logon_type
+                    if live_session is not None
+                    else None
+                )
+                if (staged_session is not None or live_session is not None) and (
+                    process.auth_session_id != expected_session_id
+                    or process.auth_logon_type != expected_logon_type
+                ):
+                    raise StateError("Action cohort process auth identity drifted")
+                if process._payload.parent_activity_time is not None:
+                    if identity.parent_pid in {0, 4}:
+                        raise StateError("Action cohort process start has no activity parent")
+                    parent_identity = (
+                        processes_by_pid[(identity.hostname, identity.parent_pid)].identity
+                        if (identity.hostname, identity.parent_pid) in processes_by_pid
+                        else self.get_process_identity(identity.hostname, identity.parent_pid)
+                    )
+                    if (
+                        parent_identity is None
+                        or process._payload.parent_activity_time < parent_identity.started_at
+                    ):
+                        raise StateError("Action cohort process parent activity is invalid")
+                processes[identity.object_id] = process
+                processes_by_pid[key] = process
+                thread_keys.add(thread_key)
+
+            if len(plan._session_process_links) != len(plan.sessions):
+                raise StateError("Action cohort session process links are incomplete")
+            for expected_index, session_links in enumerate(plan._session_process_links):
+                if session_links.session_index != expected_index:
+                    raise StateError("Action cohort session process link order drifted")
+                session = plan.sessions[expected_index]
+                for role in (
+                    "transport",
+                    "shell",
+                    "user_manager",
+                    "winlogon",
+                    "explorer",
+                    "process_tree_root",
+                ):
+                    process_index = getattr(session_links.links, role)
+                    if process_index < 0:
+                        continue
+                    if process_index >= len(plan.processes):
+                        raise StateError("Action cohort session role points outside the cohort")
+                    process_identity = plan.processes[process_index].identity
+                    if (
+                        role != "transport"
+                        and process_identity.hostname != session.identity.hostname
+                    ):
+                        raise StateError("Action cohort session role crosses host boundaries")
+                    if role in {"shell", "user_manager", "explorer"} and (
+                        process_identity.logon_id != session.identity.logon_id
+                    ):
+                        raise StateError("Action cohort session role crosses session boundaries")
+
+            metadata_by_session: dict[str, ActionCohortSessionMetadataPatch] = {}
+            for patch in plan._session_metadata:
+                identity = self._validate_action_cohort_session_metadata_transition(
+                    patch,
+                    sessions=sessions,
+                )
+                if identity.object_id in metadata_by_session:
+                    raise StateError("Action cohort repeats a session metadata target")
+                metadata_by_session[identity.object_id] = patch
+
+            process_activity: dict[str, ActionCohortProcessActivityPatch] = {}
+            for patch in plan._process_activity:
+                identity = self._action_process_identity(patch.target)
+                if type(patch.target) is ProcessMaterializationPlan:
+                    if processes.get(identity.object_id) is not patch.target:
+                        raise StateError("Action cohort process activity replaced its staged plan")
+                else:
+                    self._validate_action_live_process_identity(identity)
+                if identity.object_id in process_activity:
+                    raise StateError("Action cohort repeats a process activity target")
+                if patch.activity_time < identity.started_at:
+                    raise StateError("Action cohort process activity precedes process start")
+                process_activity[identity.object_id] = patch
+
+            session_activity: dict[str, ActionCohortSessionActivityPatch] = {}
+            for patch in plan._session_activity:
+                identity = self._action_session_identity(patch.target)
+                if type(patch.target) is SessionMaterializationPlan:
+                    if sessions.get(identity.object_id) is not patch.target:
+                        raise StateError("Action cohort session activity replaced its staged plan")
+                else:
+                    self._validate_action_live_session_identity(identity)
+                if identity.object_id in session_activity:
+                    raise StateError("Action cohort repeats a session activity target")
+                if patch.activity_time < identity.started_at:
+                    raise StateError("Action cohort session activity precedes session start")
+                session_activity[identity.object_id] = patch
+
+            termination_by_process: dict[str, tuple[int, ActionCohortProcessTermination]] = {}
+            for index, termination in enumerate(plan.process_terminations):
+                identity = termination.identity
+                if identity.object_id in termination_by_process:
+                    raise StateError("Action cohort repeats a process terminalization")
+                if termination.end_time < identity.started_at:
+                    raise StateError("Action cohort process close precedes process start")
+                if type(termination.target) is ProcessTerminationMaterializationPlan:
+                    self.validate_process_termination_materialization(termination.target)
+                else:
+                    if processes.get(identity.object_id) is not termination.target:
+                        raise StateError("Action cohort staged close replaced its process start")
+                    expected_references = self._action_cohort_staged_session_references(
+                        process_index=process_indexes[id(termination.target)],
+                        sessions=plan.sessions,
+                        links=plan._session_process_links,
+                    )
+                    if termination.staged_session_references != expected_references:
+                        raise StateError("Action cohort staged process session references drifted")
+                if termination.parent_activity is not None:
+                    parent_identity = self._action_process_identity(
+                        termination.parent_activity.target
+                    )
+                    if (
+                        parent_identity.hostname != identity.hostname
+                        or parent_identity.pid != identity.parent_pid
+                        or termination.parent_activity.activity_time < parent_identity.started_at
+                        or termination.parent_activity.activity_time > termination.end_time
+                    ):
+                        raise StateError("Action cohort process-close parent activity is invalid")
+                termination_by_process[identity.object_id] = (index, termination)
+
+            for object_id, (index, termination) in termination_by_process.items():
+                identity = termination.identity
+                parent = processes_by_pid.get((identity.hostname, identity.parent_pid))
+                if parent is None:
+                    live_parent = self.state.running_processes.get(
+                        (identity.hostname, identity.parent_pid)
+                    )
+                    parent_object_id = live_parent.ecar_object_id if live_parent is not None else ""
+                else:
+                    parent_object_id = parent.identity.object_id
+                parent_close = termination_by_process.get(parent_object_id)
+                if parent_close is not None:
+                    parent_index, parent_termination = parent_close
+                    if index >= parent_index:
+                        raise StateError("Action cohort process closes are not child-before-parent")
+                    if termination.end_time > parent_termination.end_time:
+                        raise StateError("Action cohort child process outlives its closing parent")
+                activity = process_activity.get(object_id)
+                if activity is not None and activity.activity_time > termination.end_time:
+                    raise StateError("Action cohort process activity follows process close")
+
+            for process in plan.processes:
+                parent_activity_time = process._payload.parent_activity_time
+                identity = process.identity
+                if parent_activity_time is None or identity.parent_pid in {0, 4}:
+                    continue
+                parent = processes_by_pid.get((identity.hostname, identity.parent_pid))
+                parent_identity = (
+                    parent.identity
+                    if parent is not None
+                    else self.get_process_identity(identity.hostname, identity.parent_pid)
+                )
+                if parent_identity is None:
+                    raise StateError("Action cohort process activity parent disappeared")
+                parent_close = termination_by_process.get(parent_identity.object_id)
+                if parent_close is not None and parent_activity_time > parent_close[1].end_time:
+                    raise StateError("Action cohort parent activity follows parent close")
+
+            terminalization_by_session: dict[str, ActionCohortSessionTerminalization] = {}
+            for terminalization in plan.session_terminalizations:
+                identity = terminalization.identity
+                if identity.object_id in terminalization_by_session:
+                    raise StateError("Action cohort repeats a session terminalization")
+                if type(terminalization.target) is SessionMaterializationPlan:
+                    if sessions.get(identity.object_id) is not terminalization.target:
+                        raise StateError("Action cohort staged session close replaced its start")
+                    current_session = None
+                else:
+                    current_session = self._validate_action_live_session_identity(identity)
+                if terminalization.end_time < identity.started_at:
+                    raise StateError("Action cohort session close precedes session start")
+                metadata = metadata_by_session.get(identity.object_id)
+                metadata_state = (
+                    metadata.after
+                    if metadata is not None
+                    else self._action_cohort_session_metadata(terminalization.target)
+                )
+                end_plan = metadata_state.end_plan
+                if end_plan is not None:
+                    canonical_end = ensure_utc(end_plan.canonical_end)
+                    if end_plan.is_authoritative and terminalization.end_time != canonical_end:
+                        raise StateError("Action cohort violates an authoritative session end")
+                    if end_plan.is_hard_deadline and terminalization.end_time > canonical_end:
+                        raise StateError("Action cohort session close exceeds its hard deadline")
+                if any(
+                    timestamp is not None and timestamp > terminalization.end_time
+                    for timestamp in (
+                        metadata_state.source_ready_time,
+                        metadata_state.network_close_time,
+                    )
+                ):
+                    raise StateError("Action cohort session metadata follows session close")
+                activity = session_activity.get(identity.object_id)
+                if activity is not None and activity.activity_time > terminalization.end_time:
+                    raise StateError("Action cohort session activity follows session close")
+                if (
+                    current_session is not None
+                    and current_session.last_activity_time is not None
+                    and current_session.last_activity_time > terminalization.end_time
+                ):
+                    raise StateError("Action cohort session close precedes retained activity")
+                terminalization_by_session[identity.object_id] = terminalization
+
+                owned_processes = [
+                    self._process_identity(process)
+                    for process in self._running_processes.find("logon_id", identity.logon_id)
+                    if process.system == identity.hostname
+                ]
+                owned_processes.extend(
+                    process.identity
+                    for process in plan.processes
+                    if process.identity.hostname == identity.hostname
+                    and process.identity.logon_id == identity.logon_id
+                )
+                for owned in owned_processes:
+                    close = termination_by_process.get(owned.object_id)
+                    if close is None or close[1].end_time > terminalization.end_time:
+                        raise StateError(
+                            "Action cohort terminalized session retains a live owned process"
+                        )
+
+            member_frontiers = [
+                value
+                for value in (
+                    plan._expected_state_time,
+                    *(session.identity.started_at for session in plan.sessions),
+                    *(process.identity.started_at for process in plan.processes),
+                    *(process._payload.parent_activity_time for process in plan.processes),
+                    *(patch.after.source_ready_time for patch in plan._session_metadata),
+                    *(patch.after.network_close_time for patch in plan._session_metadata),
+                    *(patch.activity_time for patch in plan._process_activity),
+                    *(patch.activity_time for patch in plan._session_activity),
+                    *(termination.end_time for termination in plan.process_terminations),
+                    *(
+                        terminalization.end_time
+                        for terminalization in plan.session_terminalizations
+                    ),
+                )
+                if value is not None
+            ]
+            if not member_frontiers or plan.final_state_time != max(member_frontiers):
+                raise StateError("Action cohort final State time drifted from its member frontier")
+
+    @contextmanager
+    def prepared_action_cohort_materialization(
+        self,
+        plan: ActionCohortMaterializationPlan,
+    ) -> Iterator[PreparedActionCohortMaterialization]:
+        """Retain the State guard after all cohort validation succeeds."""
+
+        with self._lock:
+            self.validate_action_cohort_materialization(plan)
+            prepared = PreparedActionCohortMaterialization(
+                _manager=self,
+                _plan=plan,
+                _claim_thread_id=get_ident(),
+            )
+            try:
+                yield prepared
+            finally:
+                prepared._active = False
+
+    def materialize_action_cohort(
+        self,
+        plan: ActionCohortMaterializationPlan,
+    ) -> ActionCohortMaterializationResult:
+        """Compatibility commit for one fully prepared action cohort."""
+
+        with self.prepared_action_cohort_materialization(plan) as prepared:
+            return prepared.commit_no_fail()
+
+    def _commit_action_cohort_session_metadata(
+        self,
+        patch: ActionCohortSessionMetadataPatch,
+    ) -> None:
+        identity = self._action_session_identity(patch.target)
+        session = self._active_sessions[self._resolve_logon_id(identity.logon_id)]
+        after = patch.after
+        session.source_ready_time = after.source_ready_time
+        session.network_close_time = after.network_close_time
+        session.closure_owned_by_bundle = after.closure_owned_by_bundle
+        session.login_occurrence_emitted = after.login_occurrence_emitted
+        session.storyline_protected = after.storyline_protected
+        if session.end_plan != after.end_plan:
+            self._authoritative_session_ends.remove(session.logon_id)
+            session.end_plan = after.end_plan
+            self._index_authoritative_session_end(session)
+
+    def _commit_action_cohort_staged_process_termination(
+        self,
+        termination: ActionCohortProcessTermination,
+    ) -> ProcessIdentity:
+        target = termination.target
+        assert type(target) is ProcessMaterializationPlan
+        identity = target.identity
+        parent_activity = termination.parent_activity
+        parent_identity = (
+            self._action_process_identity(parent_activity.target)
+            if parent_activity is not None
+            else None
+        )
+        primary_thread = identity.primary_thread
+        assert primary_thread is not None
+        payload = _ProcessTerminationMaterializationPayload(
+            end_time=termination.end_time,
+            threads=(primary_thread,),
+            parent_identity=parent_identity,
+            parent_activity_time=(
+                parent_activity.activity_time if parent_activity is not None else None
+            ),
+            session_references=termination.staged_session_references,
+        )
+        primitive = ProcessTerminationMaterializationPlan(
+            _expected_version=target.expected_version,
+            _identity=identity,
+            _payload=payload,
+            _integrity_token="",
+        )
+        return self._commit_prevalidated_process_termination_materialization(
+            primitive,
+            advance_version=False,
+        )
+
+    def _commit_action_cohort_session_terminalization(
+        self,
+        terminalization: ActionCohortSessionTerminalization,
+    ) -> SessionIdentity:
+        identity = terminalization.identity
+        resolved = self._resolve_logon_id(identity.logon_id)
+        session = self._active_sessions.pop(resolved)
+        ended = (session, terminalization.end_time)
+        self._ended_sessions[resolved] = ended
+        self._index_ended_session(resolved, session, terminalization.end_time)
+        if resolved != identity.logon_id:
+            self._ended_sessions[identity.logon_id] = ended
+        self._trim_retained_session_identities()
+        return identity
+
+    def _commit_prevalidated_action_cohort(
+        self,
+        plan: ActionCohortMaterializationPlan,
+    ) -> ActionCohortMaterializationResult:
+        """Apply one prevalidated cohort using only primitive no-fail writes."""
+
+        prior_version = self._materialization_version
+        sessions = tuple(
+            self._commit_prevalidated_session_materialization(
+                session,
+                advance_version=False,
+                update_state_time=False,
+            )
+            for session in plan.sessions
+        )
+        processes = tuple(
+            self._commit_prevalidated_process_materialization(
+                process,
+                advance_version=False,
+                update_state_time=False,
+            )
+            for process in plan.processes
+        )
+        for session_links in plan._session_process_links:
+            session = sessions[session_links.session_index]
+            links = session_links.links
+
+            def _linked_pid(index: int) -> int | None:
+                return processes[index].pid if index >= 0 else None
+
+            session.transport_pid = _linked_pid(links.transport) or session.transport_pid
+            session.session_shell_pid = _linked_pid(links.shell)
+            session.session_user_manager_pid = _linked_pid(links.user_manager)
+            session.session_winlogon_pid = _linked_pid(links.winlogon)
+            session.process_tree_root = _linked_pid(links.process_tree_root)
+            explorer_pid = _linked_pid(links.explorer)
+            if explorer_pid is not None:
+                session.explorer_pid = explorer_pid
+                session.initial_explorer_pid = explorer_pid
+                session.windows_shell_bootstrapped = True
+
+        for patch in plan._session_metadata:
+            self._commit_action_cohort_session_metadata(patch)
+        for patch in plan._process_activity:
+            identity = self._action_process_identity(patch.target)
+            process = self._processes_by_object_id[identity.object_id]
+            if (
+                process.last_activity_time is None
+                or process.last_activity_time < patch.activity_time
+            ):
+                process.last_activity_time = patch.activity_time
+        for patch in plan._session_activity:
+            identity = self._action_session_identity(patch.target)
+            session = self._active_sessions[self._resolve_logon_id(identity.logon_id)]
+            if (
+                session.last_activity_time is None
+                or session.last_activity_time < patch.activity_time
+            ):
+                session.last_activity_time = patch.activity_time
+
+        terminated: list[ProcessIdentity] = []
+        for termination in plan.process_terminations:
+            if type(termination.target) is ProcessTerminationMaterializationPlan:
+                terminated.append(
+                    self._commit_prevalidated_process_termination_materialization(
+                        termination.target,
+                        advance_version=False,
+                    )
+                )
+            else:
+                terminated.append(
+                    self._commit_action_cohort_staged_process_termination(termination)
+                )
+        terminalized = tuple(
+            self._commit_action_cohort_session_terminalization(terminalization)
+            for terminalization in plan.session_terminalizations
+        )
+        self.state.current_time = plan.final_state_time
+        self._materialization_version = prior_version + 1
+        return ActionCohortMaterializationResult(
+            semantic_id=plan.semantic_id,
+            prior_version=prior_version,
+            committed_version=self._materialization_version,
+            started_sessions=tuple(session.identity for session in plan.sessions),
+            started_processes=tuple(process.identity for process in plan.processes),
+            terminated_processes=tuple(terminated),
+            terminalized_sessions=terminalized,
+        )
 
     def validate_materialization_batch(self, plan: MaterializationBatchPlan) -> None:
         """Validate every batch member and dependency without publishing state."""
@@ -5573,6 +7912,8 @@ class StateManager:
         """Expire ended identity snapshots outside the explicit late-reference window."""
 
         cutoff = ensure_utc(current_time).timestamp()
+        for logon_id, ended in self._ended_sessions.expire_before(cutoff, inclusive=True):
+            self._cleanup_ended_session_retention_entry(logon_id, ended)
         expired = self._ended_processes_by_object_id.expire_before(cutoff, inclusive=True)
         for _object_id, process in expired:
             key = (process.system, process.pid)
