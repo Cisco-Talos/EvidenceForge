@@ -4892,7 +4892,10 @@ class ActivityGenerator:
         )
         self._lifecycle_authority.bind_http_channel_manager(self._http_channel_manager)
         self._lifecycle_authority.bind_explicit_proxy_manager(self._proxy_channel_manager)
-        self._tls_certificate_planner = TlsCertificatePlanner(self._cryptographic_material_registry)
+        self._tls_certificate_planner = TlsCertificatePlanner(
+            self._cryptographic_material_registry,
+            timing_runtime=self.timing_runtime,
+        )
         self._ocsp_transaction_planner = OcspTransactionPlanner(
             self._cryptographic_material_registry,
             self._tls_certificate_planner,
@@ -10534,7 +10537,12 @@ class ActivityGenerator:
         tls_certificate_planner = (
             self._tls_certificate_planner
             if network_preparation is None
-            else TlsCertificatePlanner(network_preparation.cryptographic_material)
+            else TlsCertificatePlanner(
+                network_preparation.cryptographic_material,
+                timing_runtime=(
+                    timing_runtime if timing_runtime is not None else self.timing_runtime
+                ),
+            )
         )
         event.tls_presentation = tls_certificate_planner.plan(
             backend_identity=cert_name.rstrip(".").lower(),
