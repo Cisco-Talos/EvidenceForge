@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from threading import Lock
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from evidenceforge.events.contexts import (
@@ -54,6 +55,10 @@ from evidenceforge.utils.rng import _stable_seed
 
 if TYPE_CHECKING:
     from evidenceforge.events.dispatcher import PreparedDispatch
+    from evidenceforge.generation.actions.proxy_transaction import (
+        ExplicitProxyOpenPreparation,
+        ExplicitProxyRequestPreparation,
+    )
     from evidenceforge.generation.lifecycle_authority import LifecyclePreparedNetworkReceipt
     from evidenceforge.generation.network_runtime import PreparedNetworkTransactionRoot
     from evidenceforge.generation.source_timing import SourceTimingPreparation
@@ -96,17 +101,138 @@ def _context_fingerprint(value: object) -> str:
     return "|".join(parts) if parts else value.__class__.__name__
 
 
-@dataclass(slots=True)
+class _NetworkConnectionIdentityCaptureClaim:
+    """Exact private one-shot capability for one empty identity capture."""
+
+    __slots__ = ("_active", "_capture", "_nonce")
+
+    def __init__(self, capture: NetworkConnectionIdentityCapture) -> None:
+        self._capture = capture
+        self._nonce = object()
+        self._active = True
+
+
 class NetworkConnectionIdentityCapture:
     """Occurrence-local handoff for one frozen transaction and lifecycle disposition."""
 
-    transaction: NetworkTransactionPlan | None = None
-    lifecycle_mode: TransportLifecyclePlanMode | None = None
-    prepared_root: PreparedNetworkTransactionRoot | None = None
-    source_timing_preparation: SourceTimingPreparation | None = None
-    prepared_dispatch: PreparedDispatch | None = None
-    receipt: LifecyclePreparedNetworkReceipt | None = None
-    outcome: NetworkConnectionPublicationOutcome | None = None
+    __slots__ = (
+        "_application_receipt",
+        "_claim",
+        "_lifecycle_mode",
+        "_lock",
+        "_outcome",
+        "_prepared_dispatch",
+        "_prepared_root",
+        "_receipt",
+        "_source_timing_preparation",
+        "_transaction",
+    )
+
+    def __init__(self) -> None:
+        self._transaction: NetworkTransactionPlan | None = None
+        self._lifecycle_mode: TransportLifecyclePlanMode | None = None
+        self._prepared_root: PreparedNetworkTransactionRoot | None = None
+        self._source_timing_preparation: SourceTimingPreparation | None = None
+        self._prepared_dispatch: PreparedDispatch | None = None
+        self._receipt: LifecyclePreparedNetworkReceipt | None = None
+        self._application_receipt: object | None = None
+        self._outcome: NetworkConnectionPublicationOutcome | None = None
+        self._claim: _NetworkConnectionIdentityCaptureClaim | None = None
+        self._lock = Lock()
+
+    @property
+    def transaction(self) -> NetworkTransactionPlan | None:
+        """Return the captured canonical transaction, if publication succeeded."""
+
+        return self._transaction
+
+    @property
+    def lifecycle_mode(self) -> TransportLifecyclePlanMode | None:
+        """Return the captured lifecycle disposition, if publication succeeded."""
+
+        return self._lifecycle_mode
+
+    @property
+    def prepared_root(self) -> PreparedNetworkTransactionRoot | None:
+        """Return the captured prepared root, if one was published."""
+
+        return self._prepared_root
+
+    @property
+    def source_timing_preparation(self) -> SourceTimingPreparation | None:
+        """Return the transferred deferred timing preparation, if any."""
+
+        return self._source_timing_preparation
+
+    @property
+    def prepared_dispatch(self) -> PreparedDispatch | None:
+        """Return the transferred deferred transport dispatch, if any."""
+
+        return self._prepared_dispatch
+
+    @property
+    def receipt(self) -> LifecyclePreparedNetworkReceipt | None:
+        """Return the full committed network receipt, if any."""
+
+        return self._receipt
+
+    @property
+    def application_receipt(self) -> object | None:
+        """Return the committed application-manager receipt, if any."""
+
+        return self._application_receipt
+
+    @property
+    def outcome(self) -> NetworkConnectionPublicationOutcome | None:
+        """Return the internal publication disposition, if any."""
+
+        return self._outcome
+
+    def _claim_empty(self) -> _NetworkConnectionIdentityCaptureClaim:
+        """Claim this exact empty carrier before any prerequisite or planning effect."""
+
+        if type(self) is not NetworkConnectionIdentityCapture:
+            raise TypeError("Network identity capture must be the exact built-in carrier type")
+        with self._lock:
+            if self._claim is not None:
+                raise ValueError("Network connection identity capture is already claimed")
+            if self._transaction is not None:
+                raise ValueError("Network connection identity capture was already published")
+            claim = _NetworkConnectionIdentityCaptureClaim(self)
+            self._claim = claim
+            return claim
+
+    def _authenticates_claim(self, claim: _NetworkConnectionIdentityCaptureClaim) -> bool:
+        """Return whether this capture still owns the exact active private claim."""
+
+        if type(claim) is not _NetworkConnectionIdentityCaptureClaim:
+            return False
+        with self._lock:
+            return self._claim is claim and claim._capture is self and claim._active
+
+    def _release_claim(self, claim: _NetworkConnectionIdentityCaptureClaim) -> None:
+        """Release an uncommitted planner claim so the same empty carrier may retry."""
+
+        with self._lock:
+            if self._claim is claim and claim._capture is self:
+                claim._active = False
+                self._claim = None
+
+    def _publish_claimed(
+        self,
+        claim: _NetworkConnectionIdentityCaptureClaim,
+        transaction: NetworkTransactionPlan,
+        *,
+        lifecycle_mode: TransportLifecyclePlanMode,
+    ) -> None:
+        """Populate one prevalidated private claim as a no-fail final assignment."""
+
+        with self._lock:
+            assert self._claim is claim and claim._capture is self and claim._active
+            self._transaction = transaction
+            self._lifecycle_mode = lifecycle_mode
+            claim._active = False
+            self._claim = None
 
     def publish(
         self,
@@ -120,28 +246,34 @@ class NetworkConnectionIdentityCapture:
             raise ValueError("Network connection identity capture was already published")
         if lifecycle_mode not in {"network", "deferred_session", "application_child"}:
             raise ValueError(f"Unsupported transport lifecycle plan mode {lifecycle_mode!r}")
-        self.lifecycle_mode = lifecycle_mode
-        self.transaction = transaction
+        claim = self._claim_empty()
+        self._publish_claimed(claim, transaction, lifecycle_mode=lifecycle_mode)
 
-    def publish_committed(
+    def _publish_committed_claimed(
         self,
+        claim: _NetworkConnectionIdentityCaptureClaim,
         *,
         root: PreparedNetworkTransactionRoot,
         receipt: LifecyclePreparedNetworkReceipt,
+        application_receipt: object | None = None,
         outcome: NetworkConnectionPublicationOutcome,
     ) -> None:
         """Publish one authenticated committed root and its internal disposition."""
 
-        if self.transaction is not None:
-            raise ValueError("Network connection identity capture was already published")
-        self.transaction = root.transaction
-        self.lifecycle_mode = root.runtime_token.lifecycle_mode
-        self.prepared_root = root
-        self.receipt = receipt
-        self.outcome = outcome
+        with self._lock:
+            assert self._claim is claim and claim._capture is self and claim._active
+            self._transaction = root.transaction
+            self._lifecycle_mode = root.runtime_token.lifecycle_mode
+            self._prepared_root = root
+            self._receipt = receipt
+            self._application_receipt = application_receipt
+            self._outcome = outcome
+            claim._active = False
+            self._claim = None
 
-    def publish_deferred(
+    def _publish_deferred_claimed(
         self,
+        claim: _NetworkConnectionIdentityCaptureClaim,
         *,
         root: PreparedNetworkTransactionRoot,
         source_timing_preparation: SourceTimingPreparation,
@@ -149,15 +281,16 @@ class NetworkConnectionIdentityCapture:
     ) -> None:
         """Transfer one uncommitted deferred-session root to its composite owner."""
 
-        if self.transaction is not None:
-            raise ValueError("Network connection identity capture was already published")
-        if root.runtime_token.lifecycle_mode != "deferred_session":
-            raise ValueError("Only deferred-session roots may transfer without a receipt")
-        self.transaction = root.transaction
-        self.lifecycle_mode = "deferred_session"
-        self.prepared_root = root
-        self.source_timing_preparation = source_timing_preparation
-        self.prepared_dispatch = prepared_dispatch
+        with self._lock:
+            assert self._claim is claim and claim._capture is self and claim._active
+            assert root.runtime_token.lifecycle_mode == "deferred_session"
+            self._transaction = root.transaction
+            self._lifecycle_mode = "deferred_session"
+            self._prepared_root = root
+            self._source_timing_preparation = source_timing_preparation
+            self._prepared_dispatch = prepared_dispatch
+            claim._active = False
+            self._claim = None
 
     def require(self) -> NetworkTransactionPlan:
         """Return the captured transport or fail if the requested transport was omitted."""
@@ -186,6 +319,13 @@ class NetworkConnectionIdentityCapture:
         if self.receipt is None:
             raise ValueError("Network connection did not publish a prepared receipt")
         return self.receipt
+
+    def require_application_receipt(self) -> object:
+        """Return the exact signed manager receipt committed with this root."""
+
+        if self.application_receipt is None:
+            raise ValueError("Network connection did not publish an application receipt")
+        return self.application_receipt
 
     def require_outcome(self) -> NetworkConnectionPublicationOutcome:
         """Return the typed committed publication disposition."""
@@ -251,6 +391,21 @@ class NetworkConnectionRequest:
         compare=False,
         repr=False,
     )
+    prepared_application_token: object | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    explicit_proxy_open_preparation: ExplicitProxyOpenPreparation | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    explicit_proxy_request_preparation: ExplicitProxyRequestPreparation | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
     source: str = "activity_generator"
 
     def __post_init__(self) -> None:
@@ -259,6 +414,23 @@ class NetworkConnectionRequest:
         if self.transport_lifecycle_mode not in {"network", "deferred_session"}:
             raise ValueError(
                 f"Unsupported transport lifecycle request mode {self.transport_lifecycle_mode!r}"
+            )
+        application_preparation_count = sum(
+            value is not None
+            for value in (
+                self.prepared_application_token,
+                self.explicit_proxy_open_preparation,
+                self.explicit_proxy_request_preparation,
+            )
+        )
+        if application_preparation_count > 1:
+            raise ValueError("Network request cannot own two application preparations")
+        if (
+            self.explicit_proxy_open_preparation is not None
+            or self.explicit_proxy_request_preparation is not None
+        ) and not self.suppress_direct_http_channel:
+            raise ValueError(
+                "Explicit-proxy open preparation must suppress the direct HTTP channel"
             )
 
     def lifecycle_plan_mode(

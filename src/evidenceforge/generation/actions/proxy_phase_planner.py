@@ -252,13 +252,34 @@ class ProxyPhasePlanner:
     ) -> ProxyTransactionPlan:
         """Plan an application transaction over an already-open proxy tunnel."""
 
+        proxy_hostname = request.proxy_chain[0].hostname if request.proxy_chain else ""
+        return self.plan_reused_intent(
+            stable_id=request.stable_id,
+            parent_action_group_id=request.parent_action_group_id,
+            proxy_hostname=proxy_hostname,
+            proxy=proxy,
+            request_at=request_at,
+        )
+
+    def plan_reused_intent(
+        self,
+        *,
+        stable_id: str,
+        parent_action_group_id: str | None,
+        proxy_hostname: str,
+        proxy: ProxyContext,
+        request_at: datetime,
+    ) -> ProxyTransactionPlan:
+        """Plan reused phases from immutable request-scope primitives."""
+
         timing = proxy_phase_timing()
-        timing_scope = self._timing_scope(request)
+        timing_scope = TimingScope(
+            stable_id=stable_id,
+            host=proxy_hostname,
+            source="explicit_proxy",
+            lifecycle_id=parent_action_group_id or stable_id,
+        )
         terminal_outcome = self.terminal_outcome(proxy)
-        if terminal_outcome not in {"success", "cache_hit"}:
-            raise ValueError(
-                "Only successful or cache-hit proxy requests can reuse an open transport"
-            )
         decision_at = request_at + self._sample(
             timing.policy_decision_after_request_ms,
             relationship_key="proxy.reused.policy_decision_after_request",
@@ -288,7 +309,7 @@ class ProxyPhasePlanner:
             sample_key="close",
         )
         return ProxyTransactionPlan(
-            stable_id=request.stable_id,
+            stable_id=stable_id,
             terminal_outcome=terminal_outcome,
             resolver_mode=None,
             client_connect_at=request_at,

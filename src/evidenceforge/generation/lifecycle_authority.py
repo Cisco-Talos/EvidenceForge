@@ -1429,7 +1429,11 @@ class GeneratorLifecycleAuthority:
                 raise StateError("Connection composite has no authentic proxy admission token")
             self._common_application_token_identity(token.application_token)
             tunnel = token.result.tunnel
-            return tunnel.origin_transport_id, (tunnel.client_transport_id,)
+            if token.kind == "open":
+                return tunnel.origin_transport_id, (tunnel.client_transport_id,)
+            if token.kind == "request":
+                return tunnel.client_transport_id, ()
+            raise StateError(f"Unsupported explicit-proxy admission kind {token.kind!r}")
         identity = self._common_application_token_identity(token)
         if identity.protocol in {"http", "explicit-proxy", "smb", "ssh", "rdp"}:
             raise StateError(

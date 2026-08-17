@@ -35,6 +35,7 @@ import logging
 import secrets
 from collections import Counter
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -61,9 +62,13 @@ from evidenceforge.events.content_identity import (
     canonical_native_path,
 )
 from evidenceforge.events.contracts import (
+    EffectOccurrenceDisposition,
     EffectOccurrenceKind,
+    EffectOccurrenceOwner,
+    EffectOccurrenceProvenance,
     EventKind,
     OccurrenceRole,
+    OwnedEffectOccurrencePlan,
     SemanticOccurrenceKey,
     shadow_seal,
 )
@@ -80,7 +85,10 @@ from evidenceforge.models.exceptions import EventContractError, StateError
 from evidenceforge.utils.rng import stable_uuid
 
 if TYPE_CHECKING:
-    from evidenceforge.generation.actions.command_effects import ExecutionEffectAuditCounter
+    from evidenceforge.generation.actions.command_effects import (
+        ExecutionEffectAuditCounter,
+        PreparedExecutionEffectAuditCommit,
+    )
     from evidenceforge.generation.collection_deployment import CompiledCollectionDeployment
     from evidenceforge.generation.deployment_registry import (
         DeploymentContentRegistry,
@@ -161,6 +169,7 @@ class PreparedDispatchStateIntent(StrEnum):
     EXTERNAL_MATERIALIZED_START = "external_materialized_start"
     EXTERNAL_MATERIALIZED_CLOSE = "external_materialized_close"
     EXTERNAL_DEPENDENT = "external_dependent"
+    EXTERNAL_NETWORK_DEPENDENT = "external_network_dependent"
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +199,7 @@ class PreparedDispatch:
         "_integrity_token",
         "_lifecycle_ticket",
         "_lock",
+        "_network_dependent_batch_id",
         "_occurrence",
         "_projection",
         "_source_timing_preparation",
@@ -214,6 +224,7 @@ class PreparedDispatch:
         self._expected_state_version = expected_state_version
         self._state_intent = state_intent
         self._lifecycle_ticket = lifecycle_ticket
+        self._network_dependent_batch_id: int | None = None
         self._binary_identity_kind = binary_identity_kind
         self._artifact_publications = artifact_publications
         self._source_timing_preparation = source_timing_preparation
@@ -234,6 +245,64 @@ class PreparedDispatch:
             if self._consumed:
                 raise EventContractError("Prepared dispatch was already published")
             self._consumed = True
+
+
+class PreparedNetworkDependentBatch:
+    """Opaque claimed batch of projection-only dependents for one network root."""
+
+    __slots__ = (
+        "_consumed",
+        "_audit_binding_token",
+        "_dispatcher_token",
+        "_dispatches",
+        "_integrity_token",
+        "_plan",
+        "_root",
+        "_source_timing_preparation",
+    )
+
+    def __init__(
+        self,
+        *,
+        dispatcher_token: int,
+        audit_binding_token: object,
+        root: object,
+        plan: OwnedEffectOccurrencePlan,
+        dispatches: tuple[PreparedDispatch, ...],
+        source_timing_preparation: SourceTimingPreparation,
+    ) -> None:
+        self._dispatcher_token = dispatcher_token
+        self._audit_binding_token = audit_binding_token
+        self._root = root
+        self._plan = plan
+        self._dispatches = dispatches
+        self._source_timing_preparation = source_timing_preparation
+        self._integrity_token = ""
+        self._consumed = False
+
+    @property
+    def occurrence_count(self) -> int:
+        """Return the exact bounded cardinality claimed by this batch."""
+
+        return len(self._dispatches)
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedNetworkDependentBatchCapability:
+    """Dispatcher-owned trusted preimage for one claimed network-dependent batch."""
+
+    batch_id: int
+    integrity_token: str
+    root: object
+    plan: OwnedEffectOccurrencePlan
+    dispatches: tuple[PreparedDispatch, ...]
+    source_timing_preparation: SourceTimingPreparation
+    execution_effect_audit: ExecutionEffectAuditCounter
+    audit_preparation: PreparedExecutionEffectAuditCommit
+    published_provenances: tuple[EffectOccurrenceProvenance, ...]
+    audit_claim_context: AbstractContextManager[PreparedExecutionEffectAuditCommit] | None = None
+    audit_claimed: PreparedExecutionEffectAuditCommit | None = None
+    precommit_authenticated: bool = False
 
 
 def expand_formats(formats: list[str] | set[str]) -> set[str]:
@@ -320,6 +389,11 @@ class EventDispatcher:
         self._contract_violation_counts: Counter[str] = Counter()
         self._contract_violations_by_event: Counter[tuple[str, str]] = Counter()
         self._prepared_dispatch_secret = secrets.token_bytes(32)
+        self._network_dependent_batch_lock = Lock()
+        self._network_dependent_batches: dict[
+            int,
+            _PreparedNetworkDependentBatchCapability,
+        ] = {}
         self.storyline_cluster_id: str | None = None
         self.authored_intent_id: str | None = None
         self.intent_execution_ledger = intent_execution_ledger
@@ -618,7 +692,20 @@ class EventDispatcher:
             raise EventContractError(
                 "Only the immediate compatibility wrapper may defer source projection"
             )
-        if state_intent is PreparedDispatchStateIntent.EXTERNAL_TRANSPORT:
+        if state_intent is PreparedDispatchStateIntent.EXTERNAL_NETWORK_DEPENDENT:
+            if source_timing_preparation is None:
+                raise EventContractError(
+                    "Prepared network dependent requires source timing authority"
+                )
+            version = self._validate_external_network_dependent_binding(
+                event,
+                lifecycle_ticket,
+            )
+            if expected_state_version is not None and expected_state_version != version:
+                raise EventContractError(
+                    "Prepared network dependent version contradicts its network root"
+                )
+        elif state_intent is PreparedDispatchStateIntent.EXTERNAL_TRANSPORT:
             if source_timing_preparation is None:
                 raise EventContractError(
                     "Prepared external transport requires source timing authority"
@@ -792,6 +879,71 @@ class EventDispatcher:
                 "Prepared external transport requires authenticated State/runtime plans"
             )
         return version
+
+    @staticmethod
+    def _validate_external_network_dependent_binding(
+        event: CanonicalOccurrence,
+        lifecycle_ticket: object,
+    ) -> int:
+        """Bind one projection-only file read to an exact network-root activity patch."""
+
+        from evidenceforge.events.identity import ProcessIdentity
+        from evidenceforge.generation.network_runtime import (
+            NetworkTransactionPreparationToken,
+            PreparedNetworkTransactionRoot,
+        )
+        from evidenceforge.generation.state_manager import (
+            ConnectionCompositeMaterializationPlan,
+        )
+
+        if type(lifecycle_ticket) is not PreparedNetworkTransactionRoot:
+            raise EventContractError(
+                "Prepared network dependent requires an exact prepared network root"
+            )
+        root = lifecycle_ticket
+        state_plan = root.state_plan
+        runtime_token = root.runtime_token
+        if (
+            type(state_plan) is not ConnectionCompositeMaterializationPlan
+            or type(runtime_token) is not NetworkTransactionPreparationToken
+            or root.transaction != state_plan.transaction
+            or runtime_token.transaction_id != root.transaction.stable_id
+            or runtime_token.state_publication_token != state_plan.publication_token
+        ):
+            raise EventContractError("Prepared network dependent root is malformed")
+        provenance = event.effect_provenance
+        if (
+            event.event_type is not EventKind.FILE_READ
+            or event.file is None
+            or event.file.action != "read"
+            or provenance is None
+            or provenance.kind is not EffectOccurrenceKind.FILE
+            or provenance.disposition is not EffectOccurrenceDisposition.OWNED_ROOT
+            or provenance.owner is not EffectOccurrenceOwner.HTTP_MULTIPART_LOCAL_READ
+            or provenance.root_action_id != root.transaction.stable_id
+        ):
+            raise EventContractError(
+                "Prepared network dependent must be one owned HTTP multipart file read"
+            )
+        identity_plan = event.identity_plan
+        actor = identity_plan.actor if identity_plan is not None else None
+        if not isinstance(actor, ProcessIdentity):
+            raise EventContractError(
+                "Prepared network dependent requires an exact process actor identity"
+            )
+        matching_patches = tuple(
+            patch for patch in state_plan.process_activity if patch.identity == actor
+        )
+        if len(matching_patches) != 1:
+            raise EventContractError(
+                "Prepared network dependent actor is not an exact root activity member"
+            )
+        patch = matching_patches[0]
+        if event.timestamp < actor.started_at or event.timestamp > patch.activity_time:
+            raise EventContractError(
+                "Prepared network dependent timestamp lies outside its root activity frontier"
+            )
+        return state_plan.expected_version
 
     def _state_materialization_version(self) -> int:
         """Read the monotonic StateManager fence without changing allocation state."""
@@ -1207,6 +1359,12 @@ class EventDispatcher:
 
         if not isinstance(prepared, PreparedDispatch):
             raise TypeError("publish_prepared() requires an opaque PreparedDispatch")
+        if prepared._state_intent is PreparedDispatchStateIntent.EXTERNAL_NETWORK_DEPENDENT:
+            raise EventContractError(
+                "Network-dependent dispatches require their claimed ordered batch"
+            )
+        if prepared._network_dependent_batch_id is not None:
+            raise EventContractError("Prepared dispatch is claimed by a network-dependent batch")
         self.validate_prepared(prepared, before_materialization=False)
         timing_preparation = prepared._source_timing_preparation
         if timing_preparation is not None and (
@@ -1364,6 +1522,381 @@ class EventDispatcher:
                     f"expected {prepared._expected_state_version}, current {current_version}"
                 )
 
+    def _network_dependent_batch_integrity(
+        self,
+        batch: PreparedNetworkDependentBatch,
+    ) -> str:
+        """Authenticate one ordered plan/root/timing/dispatch batch preimage."""
+
+        timing_token = batch._source_timing_preparation.binding_token
+        audit_token = batch._audit_binding_token
+        payload = repr(
+            (
+                "prepared-network-dependent-batch-v2",
+                batch._dispatcher_token,
+                self._lifecycle_ticket_signature(batch._root),
+                batch._plan,
+                (
+                    type(timing_token).__module__,
+                    type(timing_token).__qualname__,
+                    getattr(timing_token, "preparation_id", None),
+                    getattr(timing_token, "base_state_digest", None),
+                    getattr(timing_token, "_integrity", None),
+                ),
+                (
+                    id(audit_token),
+                    type(audit_token).__module__,
+                    type(audit_token).__qualname__,
+                    getattr(audit_token, "_owner_id", None),
+                    getattr(audit_token, "_preparation_id", None),
+                    getattr(audit_token, "_cohort_digest", None),
+                    getattr(audit_token, "_identity_digest", None),
+                    getattr(audit_token, "_delta_digest", None),
+                    getattr(audit_token, "_integrity", None),
+                ),
+                tuple(
+                    (
+                        id(prepared),
+                        prepared.occurrence_id,
+                        prepared._integrity_token,
+                        self._prepared_dispatch_integrity(prepared),
+                        prepared._consumed,
+                        prepared._network_dependent_batch_id,
+                    )
+                    for prepared in batch._dispatches
+                ),
+            )
+        ).encode()
+        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+
+    def _active_network_dependent_batch_locked(
+        self,
+        batch: PreparedNetworkDependentBatch,
+    ) -> _PreparedNetworkDependentBatchCapability:
+        """Return one intact active batch or reject copied, foreign, or consumed carriers."""
+
+        if type(batch) is not PreparedNetworkDependentBatch:
+            raise EventContractError("Network-dependent batch must be the exact opaque type")
+        if batch._dispatcher_token != id(self):
+            raise EventContractError("Network-dependent batch belongs to another dispatcher")
+        capability = self._network_dependent_batches.get(id(batch))
+        if capability is None or batch._consumed:
+            raise EventContractError("Network-dependent batch is stale or already consumed")
+        expected = self._network_dependent_batch_integrity(batch)
+        if (
+            not hmac.compare_digest(batch._integrity_token, expected)
+            or not hmac.compare_digest(capability.integrity_token, expected)
+            or batch._root is not capability.root
+            or batch._plan != capability.plan
+            or batch._dispatches != capability.dispatches
+            or batch._source_timing_preparation is not capability.source_timing_preparation
+            or batch._audit_binding_token is not capability.audit_preparation.binding_token
+        ):
+            raise EventContractError("Network-dependent batch integrity validation failed")
+        return capability
+
+    def authenticates_prepared_network_dependent_batch(
+        self,
+        batch: PreparedNetworkDependentBatch,
+    ) -> bool:
+        """Authenticate every claimed member at the final precommit barrier."""
+
+        from evidenceforge.generation.actions.command_effects import ExecutionEffectPlanError
+
+        with self._network_dependent_batch_lock:
+            try:
+                capability = self._active_network_dependent_batch_locked(batch)
+                audit = capability.execution_effect_audit
+                audit_preparation = capability.audit_preparation
+                if (
+                    self._execution_effect_audit is not audit
+                    or audit_preparation.binding_token is not batch._audit_binding_token
+                    or not audit.authenticates_action_cohort_binding_token(
+                        batch._audit_binding_token
+                    )
+                    or not audit.authenticates_action_cohort_preparation(
+                        audit_preparation,
+                        root_action_id=capability.root.transaction.stable_id,
+                        entries=(),
+                        owned_plans=(capability.plan,),
+                        published_provenances=capability.published_provenances,
+                    )
+                ):
+                    raise EventContractError(
+                        "Network-dependent batch audit preparation failed authentication"
+                    )
+                for prepared in capability.dispatches:
+                    self.validate_prepared(prepared)
+                    with prepared._lock:
+                        if prepared._consumed or prepared._network_dependent_batch_id != id(batch):
+                            raise EventContractError(
+                                "Network-dependent batch member is not exactly claimed"
+                            )
+                if capability.precommit_authenticated:
+                    if (
+                        capability.audit_claim_context is None
+                        or capability.audit_claimed is not audit_preparation
+                    ):
+                        raise EventContractError(
+                            "Network-dependent batch lost its claimed audit capability"
+                        )
+                    return True
+                audit_claim_context = audit.claimed_action_cohort(audit_preparation)
+                audit_claimed = audit_claim_context.__enter__()
+                if audit_claimed is not audit_preparation:
+                    claim_error = EventContractError(
+                        "Network-dependent batch claimed a different audit preparation"
+                    )
+                    audit_claim_context.__exit__(
+                        type(claim_error),
+                        claim_error,
+                        claim_error.__traceback__,
+                    )
+                    raise claim_error
+            except (
+                AttributeError,
+                EventContractError,
+                ExecutionEffectPlanError,
+                StateError,
+                TypeError,
+                ValueError,
+            ) as error:
+                capability = self._network_dependent_batches.get(id(batch))
+                if capability is not None and capability.audit_claim_context is not None:
+                    capability.audit_claim_context.__exit__(
+                        type(error),
+                        error,
+                        error.__traceback__,
+                    )
+                    self._network_dependent_batches[id(batch)] = replace(
+                        capability,
+                        audit_claim_context=None,
+                        audit_claimed=None,
+                        precommit_authenticated=False,
+                    )
+                return False
+            self._network_dependent_batches[id(batch)] = replace(
+                capability,
+                audit_claim_context=audit_claim_context,
+                audit_claimed=audit_claimed,
+                precommit_authenticated=True,
+            )
+            return True
+
+    def prepare_network_dependent_batch(
+        self,
+        root: object,
+        plan: OwnedEffectOccurrencePlan,
+        dispatches: tuple[PreparedDispatch, ...],
+    ) -> PreparedNetworkDependentBatch:
+        """Validate and claim one exact ordered HTTP multipart dependent batch."""
+
+        from evidenceforge.generation.network_runtime import PreparedNetworkTransactionRoot
+
+        publications = tuple(dispatches)
+        if type(root) is not PreparedNetworkTransactionRoot:
+            raise EventContractError(
+                "Network-dependent batch requires an exact prepared network root"
+            )
+        if (
+            type(plan) is not OwnedEffectOccurrencePlan
+            or plan.owner is not EffectOccurrenceOwner.HTTP_MULTIPART_LOCAL_READ
+            or plan.kind is not EffectOccurrenceKind.FILE
+            or plan.root_action_id != root.transaction.stable_id
+            or plan.occurrence_count != len(publications)
+            or not publications
+        ):
+            raise EventContractError(
+                "Network-dependent batch plan does not match its exact multipart cardinality"
+            )
+        timing_preparation = publications[0]._source_timing_preparation
+        if timing_preparation is None:
+            raise EventContractError("Network-dependent batch requires shared source timing")
+        occurrence_ids: set[str] = set()
+        for ordinal, prepared in enumerate(publications):
+            if not isinstance(prepared, PreparedDispatch):
+                raise TypeError("Network-dependent batch contains a non-dispatch member")
+            if (
+                prepared._state_intent is not PreparedDispatchStateIntent.EXTERNAL_NETWORK_DEPENDENT
+                or prepared._lifecycle_ticket is not root
+                or prepared._source_timing_preparation is not timing_preparation
+                or prepared._artifact_publications
+                or prepared._projection.mode == "deferred"
+                or prepared._occurrence.effect_provenance != plan.provenance(ordinal)
+                or prepared.occurrence_id in occurrence_ids
+            ):
+                raise EventContractError(
+                    "Network-dependent batch member changed root, timing, order, or provenance"
+                )
+            occurrence_ids.add(prepared.occurrence_id)
+            self.validate_prepared(prepared)
+
+        execution_effect_audit = self._execution_effect_audit
+        if execution_effect_audit is None:
+            raise EventContractError(
+                "Network-dependent batch requires the engine-owned execution-effect audit"
+            )
+        published_provenances = tuple(
+            cast(EffectOccurrenceProvenance, prepared._occurrence.effect_provenance)
+            for prepared in publications
+        )
+        audit_preparation = execution_effect_audit.prepare_action_cohort(
+            root.transaction.stable_id,
+            (),
+            owned_plans=(plan,),
+            published_provenances=published_provenances,
+        )
+        batch = PreparedNetworkDependentBatch(
+            dispatcher_token=id(self),
+            audit_binding_token=audit_preparation.binding_token,
+            root=root,
+            plan=plan,
+            dispatches=publications,
+            source_timing_preparation=timing_preparation,
+        )
+        claimed: list[PreparedDispatch] = []
+        with self._network_dependent_batch_lock:
+            try:
+                for prepared in publications:
+                    with prepared._lock:
+                        if prepared._consumed or prepared._network_dependent_batch_id is not None:
+                            raise EventContractError(
+                                "Network-dependent dispatch is already claimed or published"
+                            )
+                        prepared._network_dependent_batch_id = id(batch)
+                        claimed.append(prepared)
+                batch._integrity_token = self._network_dependent_batch_integrity(batch)
+                capability = _PreparedNetworkDependentBatchCapability(
+                    batch_id=id(batch),
+                    integrity_token=batch._integrity_token,
+                    root=root,
+                    plan=plan,
+                    dispatches=publications,
+                    source_timing_preparation=timing_preparation,
+                    execution_effect_audit=execution_effect_audit,
+                    audit_preparation=audit_preparation,
+                    published_provenances=published_provenances,
+                )
+                self._network_dependent_batches[id(batch)] = capability
+            except BaseException:
+                for prepared in claimed:
+                    with prepared._lock:
+                        if prepared._network_dependent_batch_id == id(batch):
+                            prepared._network_dependent_batch_id = None
+                execution_effect_audit.cancel_action_cohort(audit_preparation)
+                raise
+        return batch
+
+    def cancel_prepared_network_dependent_batch(
+        self,
+        batch: PreparedNetworkDependentBatch,
+    ) -> bool:
+        """Release one uncommitted dependent batch without audit or projection residue."""
+
+        from evidenceforge.generation.actions.command_effects import ExecutionEffectPlanError
+
+        if type(batch) is not PreparedNetworkDependentBatch:
+            raise TypeError("Network-dependent cancellation requires the exact opaque batch")
+        with self._network_dependent_batch_lock:
+            capability = self._network_dependent_batches.pop(id(batch), None)
+            if capability is None:
+                if batch._dispatcher_token != id(self):
+                    raise EventContractError(
+                        "Network-dependent batch belongs to another dispatcher"
+                    )
+                return False
+            for prepared in capability.dispatches:
+                with prepared._lock:
+                    if prepared._network_dependent_batch_id == id(batch):
+                        prepared._network_dependent_batch_id = None
+            if capability.audit_claim_context is not None:
+                cancellation = StateError("Network-dependent batch cancelled before root commit")
+                capability.audit_claim_context.__exit__(
+                    type(cancellation),
+                    cancellation,
+                    cancellation.__traceback__,
+                )
+            else:
+                try:
+                    capability.execution_effect_audit.cancel_action_cohort(
+                        capability.audit_preparation
+                    )
+                except ExecutionEffectPlanError:
+                    # An authenticated preparation releases itself before reporting
+                    # integrity drift; the batch must still release every member.
+                    pass
+            batch._consumed = True
+            return True
+
+    def publish_prepared_network_dependent_batch(
+        self,
+        batch: PreparedNetworkDependentBatch,
+        *,
+        materialization_receipt: object,
+    ) -> tuple[dict[str, str], ...]:
+        """Authenticate the outer root receipt, then publish one no-State dependent batch."""
+
+        from evidenceforge.generation.lifecycle_authority import (
+            LifecyclePreparedNetworkReceipt,
+        )
+
+        with self._network_dependent_batch_lock:
+            if type(batch) is not PreparedNetworkDependentBatch:
+                raise TypeError("Network-dependent publication requires the exact opaque batch")
+            capability = self._network_dependent_batches.get(id(batch))
+            if capability is None or not capability.precommit_authenticated:
+                raise EventContractError(
+                    "Network-dependent batch lacks its final precommit authentication"
+                )
+        timing_preparation = capability.source_timing_preparation
+        timing_receipt = timing_preparation.receipt
+        authority = self._lifecycle_authority
+        if (
+            authority is None
+            or type(materialization_receipt) is not LifecyclePreparedNetworkReceipt
+            or not timing_preparation.committed
+            or timing_receipt is None
+            or not self.source_timing_planner.authenticates_preparation_receipt(timing_receipt)
+            or materialization_receipt.timing_binding_token != timing_preparation.binding_token
+            or materialization_receipt.timing_receipt != timing_receipt
+            or not authority.authenticates_prepared_network_receipt(
+                capability.root,
+                materialization_receipt,
+            )
+        ):
+            raise EventContractError(
+                "Network-dependent batch requires its authentic full network/timing receipt"
+            )
+        audit_claimed = cast(
+            "PreparedExecutionEffectAuditCommit",
+            capability.audit_claimed,
+        )
+        audit_claim_context = cast(
+            "AbstractContextManager[PreparedExecutionEffectAuditCommit]",
+            capability.audit_claim_context,
+        )
+        audit_claimed.commit_no_fail()
+        audit_claim_context.__exit__(None, None, None)
+        with self._network_dependent_batch_lock:
+            self._network_dependent_batches.pop(id(batch), None)
+            for prepared in capability.dispatches:
+                with prepared._lock:
+                    prepared._network_dependent_batch_id = None
+                    prepared._consumed = True
+            batch._consumed = True
+
+        # Every fallible builder, State binding, timing decision, and receipt check is above.
+        # The claimed audit cohort committed the exact plan/publication parity in one fixed-size
+        # update. The root already owns every process frontier, so this tail is projection-only.
+        results: list[dict[str, str]] = []
+        for prepared in capability.dispatches:
+            event = prepared._occurrence
+            if prepared._binary_identity_kind:
+                self._binary_identity_counts[prepared._binary_identity_kind] += 1
+            self._record_intent_occurrence(event)
+            results.append(self._publish_prepared_projection(prepared._projection))
+        return tuple(results)
+
     def _apply_prepared_state_and_lifecycle(self, event: CanonicalOccurrence) -> None:
         """Apply one compatibility state intent after every preparation gate has passed."""
 
@@ -1427,9 +1960,26 @@ class EventDispatcher:
                 event.timestamp,
             )
 
+    @staticmethod
+    def _source_native_network_occurrence(event: CanonicalOccurrence) -> CanonicalOccurrence:
+        """Hide an internal failed-attempt close from source-native duration fields."""
+
+        network = event.network
+        if network is None or network.conn_state not in {"REJ", "S0"} or network.duration is None:
+            return event
+        return replace(
+            event,
+            network=replace(
+                network,
+                duration=None,
+                closed_at=None,
+            ),
+        )
+
     def _prepare_projection(self, event: CanonicalOccurrence) -> _PreparedProjection:
         """Freeze every observation, timing, and projection decision without rendering."""
 
+        event = self._source_native_network_occurrence(event)
         if self._is_suppressed(event.timestamp):
             return _PreparedProjection(
                 mode="suppressed",

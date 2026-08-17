@@ -326,6 +326,7 @@ def _validate_proxy_phase_profiles(result: ValidationResult, data: dict[str, Any
         "request_after_connect_ms",
         "inspected_request_after_connect_setup_ms",
         "policy_decision_after_request_ms",
+        "dns_query_after_decision_ms",
         "tls_after_origin_connect_ms",
         "origin_service_ms",
         "client_flush_after_response_ms",

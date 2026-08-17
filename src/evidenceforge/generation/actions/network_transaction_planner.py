@@ -49,8 +49,8 @@ from evidenceforge.generation.timing import (
     TruncatedLognormalDistribution,
     WeightedDistribution,
 )
-from evidenceforge.models.exceptions import StateError
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.models.exceptions import EventContractError, StateError
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 if TYPE_CHECKING:
@@ -77,11 +77,86 @@ class _PreparedNetworkBoundary:
     root: Any = None
     application_manager: Any = None
     application_token: Any = None
+    prerequisite_receipts: tuple[Any, ...] = ()
     lifecycle_adapter: Any = None
     lifecycle_token: Any = None
+    identity_capture: Any = None
+    identity_capture_claim: Any = None
+    network_dependent_dispatcher: Any = None
+    network_dependent_batch: Any = None
     transferred: bool = False
 
-    def track_application(self, manager: Any, token: Any) -> None:
+    def claim_identity_capture(self, capture: Any) -> None:
+        """Claim one exact empty handoff before any prerequisite can mutate truth."""
+
+        if capture is None:
+            return
+        from evidenceforge.generation.actions.network_connection import (
+            NetworkConnectionIdentityCapture,
+        )
+
+        if type(capture) is not NetworkConnectionIdentityCapture:
+            raise TypeError("Network request identity capture must be the exact carrier type")
+        self.identity_capture = capture
+        self.identity_capture_claim = capture._claim_empty()
+
+    def validate_identity_capture_claim(self) -> None:
+        """Authenticate the exact private handoff at the final precommit barrier."""
+
+        if self.identity_capture is None:
+            return
+        if not self.identity_capture._authenticates_claim(self.identity_capture_claim):
+            raise StateError("Network identity capture claim changed before publication")
+
+    def publish_committed_capture_no_fail(
+        self,
+        *,
+        root: Any,
+        receipt: Any,
+        application_receipt: Any,
+        outcome: Any,
+    ) -> None:
+        """Populate the prevalidated occurrence-local capture after authority success."""
+
+        if self.identity_capture is None:
+            return
+        capture = self.identity_capture
+        claim = self.identity_capture_claim
+        capture._publish_committed_claimed(
+            claim,
+            root=root,
+            receipt=receipt,
+            application_receipt=application_receipt,
+            outcome=outcome,
+        )
+        self.identity_capture = None
+        self.identity_capture_claim = None
+
+    def track_network_dependent_batch(self, dispatcher: Any, batch: Any) -> None:
+        """Own one claimed projection-only dependent batch until root acceptance."""
+
+        if self.network_dependent_batch is not None:
+            raise StateError("Network root cannot own multiple dependent dispatch batches")
+        self.network_dependent_dispatcher = dispatcher
+        self.network_dependent_batch = batch
+
+    def validate_network_dependent_batch(self) -> None:
+        """Authenticate the exact claimed dependent batch at the final precommit barrier."""
+
+        if self.network_dependent_batch is None:
+            return
+        if not self.network_dependent_dispatcher.authenticates_prepared_network_dependent_batch(
+            self.network_dependent_batch
+        ):
+            raise StateError("Network-dependent dispatch batch changed before publication")
+
+    def track_application(
+        self,
+        manager: Any,
+        token: Any,
+        *,
+        prerequisite_receipts: tuple[Any, ...] = (),
+    ) -> None:
         """Retain at most one application admission for cancellation or transfer."""
 
         if token is None:
@@ -90,6 +165,7 @@ class _PreparedNetworkBoundary:
             raise StateError("Network root cannot own multiple application admissions")
         self.application_manager = manager
         self.application_token = token
+        self.prerequisite_receipts = prerequisite_receipts
 
     def begin(
         self,
@@ -137,6 +213,19 @@ class _PreparedNetworkBoundary:
     def cancel(self, error: BaseException) -> None:
         """Best-effort exact cancellation without masking the planner failure."""
 
+        if self.identity_capture is not None and self.identity_capture_claim is not None:
+            self.identity_capture._release_claim(self.identity_capture_claim)
+            self.identity_capture = None
+            self.identity_capture_claim = None
+        if self.network_dependent_batch is not None:
+            try:
+                self.network_dependent_dispatcher.cancel_prepared_network_dependent_batch(
+                    self.network_dependent_batch
+                )
+            except (AttributeError, EventContractError, StateError, TypeError, ValueError):
+                pass
+            self.network_dependent_dispatcher = None
+            self.network_dependent_batch = None
         if self.transferred:
             return
         if self.lifecycle_token is not None and self.lifecycle_adapter is not None:
@@ -262,6 +351,15 @@ class _NetworkOccurrenceDraft:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _HttpMultipartEndpointReadPlan:
+    """One exact ordered owned-effect plan and its prebuilt projection members."""
+
+    plan: Any
+    builders: tuple[Any, ...]
+    process_activity: tuple[Any, ...]
+
+
 class NetworkTransactionPlanner:
     """Expand one network intent into a finalized canonical transaction."""
 
@@ -310,11 +408,15 @@ class NetworkTransactionPlanner:
             windows.sort()
             windows = windows[-32:]
             latest_end = max(old_end for _old_start, old_end in windows)
+            retained_until = min(
+                datetime.fromtimestamp(latest_end, tz=UTC),
+                self._executor._network_transaction_runtime.window_end,
+            )
             preparation.stage_point(
                 NetworkRuntimePointFamily.DNS_OBSERVATION,
                 cache_key,
                 tuple(windows),
-                expires_at=datetime.fromtimestamp(latest_end, tz=UTC),
+                expires_at=retained_until,
             )
         return duplicate
 
@@ -883,7 +985,7 @@ class NetworkTransactionPlanner:
         )
         return True
 
-    def _emit_http_multipart_endpoint_reads(
+    def _plan_http_multipart_endpoint_reads(
         self,
         event: Any,
         source_system: Any | None,
@@ -891,20 +993,22 @@ class NetworkTransactionPlanner:
         source_pid: int,
         source_process: Any | None,
         endpoint_time: datetime,
-    ) -> None:
-        """Emit source-native file reads for locally owned transmitting multipart parts."""
+    ) -> _HttpMultipartEndpointReadPlan | None:
+        """Freeze exact endpoint-read builders and State activity patches before commit."""
 
         http = event.protocol.http
         network = event.network
         if http is None or network is None:
-            return
+            return None
 
         from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, FileContext, ProcessContext
         from evidenceforge.events.contracts import (
             EffectOccurrenceKind,
-            EffectOccurrenceProvenance,
+            EffectOccurrenceOwner,
+            OwnedEffectOccurrencePlan,
         )
+        from evidenceforge.generation.state_manager import ProcessActivityPatch
 
         effective_source_pid = (
             source_pid if source_pid > 0 else int(getattr(source_process, "pid", -1) or -1)
@@ -913,6 +1017,7 @@ class NetworkTransactionPlanner:
             (http.request_multipart, source_system, effective_source_pid, source_process),
             (http.response_multipart, target_system, network.responding_pid, None),
         )
+        reads: list[tuple[Any, int, Any, Any, Any, Any, datetime, str, str]] = []
         for multipart, system, pid, canonical_process in directions:
             if multipart is None or system is None or pid <= 0:
                 continue
@@ -921,6 +1026,14 @@ class NetworkTransactionPlanner:
             running = self._executor.state_manager.get_process(system.hostname, pid)
             if running is None and canonical_process is None:
                 continue
+            process_identity = self._executor.state_manager.get_process_identity(
+                system.hostname,
+                pid,
+            )
+            if process_identity is None:
+                raise StateError(
+                    "HTTP multipart local read has no exact State process actor before root seal"
+                )
             local_parts = [part for part in multipart.leaf_parts() if part.local_source_path]
             for index, part in enumerate(local_parts):
                 transfer_anchor = endpoint_time
@@ -951,51 +1064,129 @@ class NetworkTransactionPlanner:
                     if canonical_process is not None
                     else ""
                 )
-                self._executor.dispatcher.dispatch_builder(
-                    OccurrenceBuilder(
-                        timestamp=read_time,
-                        event_type="file_read",
-                        src_host=self._executor._build_host_context(system),
-                        auth=AuthContext(
-                            username=username,
-                            logon_id=logon_id,
-                        ),
-                        process=ProcessContext(
-                            pid=pid,
-                            parent_pid=(
-                                running.parent_pid
-                                if running is not None
-                                else canonical_process.parent_pid
-                            ),
-                            image=(
-                                running.image if running is not None else canonical_process.image
-                            ),
-                            command_line=(
-                                running.command_line
-                                if running is not None
-                                else canonical_process.command_line
-                            ),
-                            username=username,
-                            logon_id=logon_id,
-                            start_time=process_start,
-                        ),
-                        file=FileContext(path=part.local_source_path, action="read", pid=pid),
-                        effect_provenance=EffectOccurrenceProvenance.exempt(
-                            kind=EffectOccurrenceKind.FILE,
-                            reason="http_multipart_transaction_owns_local_read",
-                        ),
+                reads.append(
+                    (
+                        system,
+                        pid,
+                        running,
+                        canonical_process,
+                        process_identity,
+                        part,
+                        read_time,
+                        username,
+                        logon_id,
                     )
                 )
+
+        if not reads:
+            return None
+        plan = OwnedEffectOccurrencePlan(
+            owner=EffectOccurrenceOwner.HTTP_MULTIPART_LOCAL_READ,
+            kind=EffectOccurrenceKind.FILE,
+            root_action_id=network.stable_id,
+            instance_key=stable_uuid(
+                "http-multipart-local-read-instance",
+                network.stable_id,
+                *(
+                    f"{system.hostname.casefold()}:{pid}:{part.local_source_path.casefold()}:"
+                    f"{read_time.isoformat()}"
+                    for system, pid, _running, _canonical, _identity, part, read_time, _user, _logon in reads
+                ),
+            ),
+            occurrence_count=len(reads),
+        )
+        builders: list[OccurrenceBuilder] = []
+        activity_by_object_id: dict[str, ProcessActivityPatch] = {}
+        for ordinal, (
+            system,
+            pid,
+            running,
+            canonical_process,
+            process_identity,
+            part,
+            read_time,
+            username,
+            logon_id,
+        ) in enumerate(reads):
+            builders.append(
+                OccurrenceBuilder(
+                    timestamp=read_time,
+                    event_type="file_read",
+                    src_host=self._executor._build_host_context(system),
+                    auth=AuthContext(
+                        username=username,
+                        logon_id=logon_id,
+                    ),
+                    process=ProcessContext(
+                        pid=pid,
+                        parent_pid=(
+                            running.parent_pid
+                            if running is not None
+                            else canonical_process.parent_pid
+                        ),
+                        image=(running.image if running is not None else canonical_process.image),
+                        command_line=(
+                            running.command_line
+                            if running is not None
+                            else canonical_process.command_line
+                        ),
+                        username=username,
+                        logon_id=logon_id,
+                        start_time=(
+                            running.start_time
+                            if running is not None
+                            else canonical_process.start_time
+                        ),
+                    ),
+                    file=FileContext(path=part.local_source_path, action="read", pid=pid),
+                    effect_provenance=plan.provenance(ordinal),
+                )
+            )
+            prior = activity_by_object_id.get(process_identity.object_id)
+            if prior is not None and prior.identity != process_identity:
+                raise StateError("HTTP multipart process actor identity changed during planning")
+            activity_frontier = network.closed_at or network.started_at
+            if prior is None or activity_frontier > prior.activity_time:
+                activity_by_object_id[process_identity.object_id] = ProcessActivityPatch(
+                    process_identity,
+                    activity_frontier,
+                )
+        return _HttpMultipartEndpointReadPlan(
+            plan=plan,
+            builders=tuple(builders),
+            process_activity=tuple(activity_by_object_id.values()),
+        )
+
+    @staticmethod
+    def _merge_process_activity_patches(
+        existing: tuple[Any, ...],
+        additions: tuple[Any, ...],
+    ) -> tuple[Any, ...]:
+        """Merge exact actor frontiers without changing first-occurrence ordering."""
+
+        merged: dict[str, Any] = {}
+        for patch in (*existing, *additions):
+            object_id = patch.identity.object_id
+            prior = merged.get(object_id)
+            if prior is not None and prior.identity != patch.identity:
+                raise StateError("Network process activity actor identity changed during merge")
+            if prior is None or patch.activity_time > prior.activity_time:
+                merged[object_id] = patch
+        return tuple(merged.values())
 
     def execute(self, request: NetworkConnectionRequest) -> str:
         """Expand one request while retaining exact cancellation ownership."""
 
         boundary = _PreparedNetworkBoundary()
         try:
-            return self._execute(request, boundary)
+            boundary.claim_identity_capture(request.identity_capture)
+            result = self._execute(request, boundary)
         except BaseException as error:
             boundary.cancel(error)
             raise
+        if not boundary.transferred:
+            boundary.cancel(StateError("Network request ended before prepared publication"))
+        return result
 
     def _execute(
         self,
@@ -1004,12 +1195,45 @@ class NetworkTransactionPlanner:
     ) -> str:
         """Plan and publish one canonical network transaction."""
         from evidenceforge.generation.actions.proxy_transaction import (
+            ExplicitProxyOpenPreparation,
+            ExplicitProxyRequestPreparation,
             ProxyTransactionActionBundle,
             ProxyTransactionRequest,
         )
         from evidenceforge.generation.activity import generator as generator_module
 
         executor = self._executor
+        prepared_application_token = request.prepared_application_token
+        explicit_proxy_request_preparation = request.explicit_proxy_request_preparation
+        if prepared_application_token is not None:
+            from evidenceforge.generation.proxy_channels import ExplicitProxyAdmissionToken
+
+            if not isinstance(prepared_application_token, ExplicitProxyAdmissionToken):
+                raise StateError("Network request has no authentic proxy request admission")
+            boundary.track_application(
+                executor._proxy_channel_manager,
+                prepared_application_token,
+            )
+            if (
+                prepared_application_token.kind != "request"
+                or not executor._proxy_channel_manager.authenticates_admission_token(
+                    prepared_application_token
+                )
+            ):
+                raise StateError("Network request has no authentic proxy request admission")
+        elif explicit_proxy_request_preparation is not None:
+            if (
+                not isinstance(
+                    explicit_proxy_request_preparation,
+                    ExplicitProxyRequestPreparation,
+                )
+                or not executor._proxy_channel_manager.authenticates_request_snapshot(
+                    explicit_proxy_request_preparation.snapshot
+                )
+                or explicit_proxy_request_preparation.affinity.digest
+                != explicit_proxy_request_preparation.snapshot.affinity_digest
+            ):
+                raise StateError("Network request has no authentic proxy request snapshot")
         src_ip = request.src_ip
         dst_ip = request.dst_ip
         time = request.time
@@ -1373,6 +1597,10 @@ class NetworkTransactionPlanner:
             and dst_port in (80, 443)
             and proxyable_external_destination
             and conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
+            and (
+                getattr(executor, "_scenario_end_time", None) is None
+                or ensure_utc(time) < ensure_utc(executor._scenario_end_time)
+            )
         )
 
         if http is not None and not preserve_http_outcome and not will_route_explicit_proxy:
@@ -1479,6 +1707,55 @@ class NetworkTransactionPlanner:
         reused_http_uid = ""
         reused_http_conn_id = ""
         http_channel_affinity: HttpChannelAffinity | None = None
+        if prepared_application_token is not None:
+            from evidenceforge.generation.proxy_channels import (
+                ExplicitProxyRequestReuse,
+                ExplicitProxyTerminalRequest,
+            )
+
+            reuse = prepared_application_token.result
+            if not isinstance(reuse, (ExplicitProxyRequestReuse, ExplicitProxyTerminalRequest)):
+                raise StateError("Proxy request admission has no reusable transport")
+            parent = executor.state_manager.get_connection_by_transaction_id(
+                reuse.tunnel.client_transport_id
+            )
+            if parent is None:
+                raise StateError("Proxy request admission references no canonical client transport")
+            if (
+                src_ip != parent.src_ip
+                or src_port != parent.src_port
+                or dst_ip != parent.dst_ip
+                or dst_port != parent.dst_port
+                or proto != parent.protocol
+            ):
+                raise StateError("Proxy request admission changed its client transport tuple")
+            time = reuse.canonical_request_time
+            duration = (
+                reuse.canonical_complete_time - reuse.canonical_request_time
+            ).total_seconds()
+            reused_http_uid = parent.zeek_uid
+            reused_http_conn_id = parent.conn_id
+            http_application_layer_only = True
+            preserve_start_time = True
+        elif explicit_proxy_request_preparation is not None:
+            tunnel = explicit_proxy_request_preparation.snapshot.tunnel
+            parent = executor.state_manager.get_connection_by_transaction_id(
+                tunnel.client_transport_id
+            )
+            if parent is None:
+                raise StateError("Proxy request snapshot references no canonical client transport")
+            if (
+                src_ip != parent.src_ip
+                or src_port != parent.src_port
+                or dst_ip != parent.dst_ip
+                or dst_port != parent.dst_port
+                or proto != parent.protocol
+            ):
+                raise StateError("Proxy request snapshot changed its client transport tuple")
+            reused_http_uid = parent.zeek_uid
+            reused_http_conn_id = parent.conn_id
+            http_application_layer_only = True
+            preserve_start_time = True
         if (
             http is not None
             and proxy is None
@@ -1699,6 +1976,55 @@ class NetworkTransactionPlanner:
             if drop_explicit_pid_without_inference:
                 suppress_source_pid_inference = True
 
+        if (
+            resolved_source_system is not None
+            and http is not None
+            and not suppress_source_pid_inference
+        ):
+            # Direct client-to-proxy listener traffic owns a real client process
+            # prerequisite (for example curl/wget/browser), independent of whether
+            # the later transport root is admitted. Resolve or start that process
+            # before NetworkRuntime.begin(), then carry only its stable identity
+            # into the prepared root. The existing helper remains the sole owner of
+            # source-native UA/process compatibility and prerequisite publication.
+            attribution = _NetworkOccurrenceDraft(
+                timestamp=time,
+                http=http,
+                network=NetworkTransactionDraft(
+                    src_ip=src_ip,
+                    src_port=src_port or 0,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    protocol=proto,
+                    service=service or "",
+                    duration=duration,
+                    initiating_pid=pid,
+                ),
+            )
+            if pid > 0:
+                executor._set_connection_process_context(
+                    attribution,
+                    source_system=resolved_source_system,
+                    pid=pid,
+                    image=process_image,
+                )
+            executor._repair_explicit_proxy_listener_process_attribution(
+                attribution,
+                source_system=resolved_source_system,
+                time=time,
+            )
+            if attribution.network.initiating_pid != pid:
+                pid = attribution.network.initiating_pid
+                process_image = (
+                    attribution.process.image if attribution.process is not None else None
+                )
+                resolved_process = (
+                    executor.state_manager.get_process(resolved_source_system.hostname, pid)
+                    if pid > 0
+                    else None
+                )
+            http = attribution.http
+
         if pid <= 0 and resolved_source_system is not None and not suppress_source_pid_inference:
             pid, process_image = executor._ensure_high_confidence_connection_owner(
                 source_system=resolved_source_system,
@@ -1825,6 +2151,30 @@ class NetworkTransactionPlanner:
             action_group_id=parent_action_group_id or request.stable_id,
         )
         rng = network_preparation.rng
+        if explicit_proxy_request_preparation is not None:
+            prepared_application_token, proxy = explicit_proxy_request_preparation.prepare(
+                manager=executor._proxy_channel_manager,
+                timing_runtime=boundary.timing_preparation.planning_runtime,
+            )
+            boundary.track_application(
+                executor._proxy_channel_manager,
+                prepared_application_token,
+            )
+            from evidenceforge.generation.proxy_channels import (
+                ExplicitProxyRequestReuse,
+                ExplicitProxyTerminalRequest,
+            )
+
+            deferred_reuse = prepared_application_token.result
+            if not isinstance(
+                deferred_reuse,
+                (ExplicitProxyRequestReuse, ExplicitProxyTerminalRequest),
+            ):
+                raise StateError("Deferred proxy request has no reusable transport result")
+            time = deferred_reuse.canonical_request_time
+            duration = (
+                deferred_reuse.canonical_complete_time - deferred_reuse.canonical_request_time
+            ).total_seconds()
 
         # Root-only sizing and duration draws start here so a rejected root can
         # cancel them with the network/timing preparation. The earlier DNS,
@@ -2004,6 +2354,12 @@ class NetworkTransactionPlanner:
             uid = identity.zeek_uid
 
         # Protocol-aware connection state selection
+
+        # REJ/S0 are source-native observations with no rendered duration, but the
+        # canonical physical transaction still needs a terminal interval for State
+        # and lifecycle authority. Preserve the already planned attempt budget so
+        # finalization can close internal truth without inventing a second draw.
+        canonical_terminal_duration = duration
 
         dns_has_response = (
             proto == "udp"
@@ -3044,6 +3400,8 @@ class NetworkTransactionPlanner:
                         method=proxy_method,
                         status_code=proxy_status_code,
                         cache_result=cache_result,
+                        timing_runtime=self._timing_runtime,
+                        stable_id=f"{request.stable_id}:proxy-context",
                     ),
                     user_agent=user_agent,
                     content_type=proxy_content_type,
@@ -3530,9 +3888,12 @@ class NetworkTransactionPlanner:
         # payload, and process-visibility adjustment has settled. Dispatch creates
         # source-local event copies with collection delay, so the immutable interval
         # must live on the finalized transaction rather than be re-derived from those copies.
+        canonical_duration = event.network.duration
+        if canonical_duration is None and event.network.conn_state in {"REJ", "S0"}:
+            canonical_duration = max(0.000001, canonical_terminal_duration or 0.000001)
         event.network.duration = self._cap_to_owning_session(
             start=event.timestamp,
-            duration=event.network.duration,
+            duration=canonical_duration,
             source_system=resolved_source_system,
             pid=pid,
             stable_id=request.stable_id,
@@ -3706,6 +4067,34 @@ class NetworkTransactionPlanner:
             )
             boundary.track_application(executor._http_channel_manager, http_open_token)
 
+        explicit_proxy_open = request.explicit_proxy_open_preparation
+        if explicit_proxy_open is not None:
+            if not isinstance(explicit_proxy_open, ExplicitProxyOpenPreparation):
+                raise StateError("Network request has an invalid explicit-proxy open preparation")
+            if event.network.application_layer_only:
+                raise StateError("Explicit-proxy open requires a physical origin transport")
+            client_root = explicit_proxy_open.client_root
+            client_receipt = explicit_proxy_open.client_receipt
+            if not executor._lifecycle_authority.authenticates_prepared_network_receipt(
+                client_root,
+                client_receipt,
+            ):
+                raise StateError("Explicit-proxy open has no authentic client prerequisite")
+            client = client_root.result.transaction
+            if client.stable_id != explicit_proxy_open.client_transport_id:
+                raise StateError("Explicit-proxy open changed its client prerequisite identity")
+            proxy_open_token = explicit_proxy_open.prepare_token(
+                manager=executor._proxy_channel_manager,
+                origin_transaction=event.network,
+            )
+            if proxy_open_token is None:
+                raise StateError("Explicit-proxy manager rejected the prepared origin transport")
+            boundary.track_application(
+                executor._proxy_channel_manager,
+                proxy_open_token,
+                prerequisite_receipts=(client_receipt,),
+            )
+
         lifecycle_mode = request.lifecycle_plan_mode(event.network)
         materialization_mode = (
             ConnectionMaterializationMode.APPLICATION_CHILD
@@ -3731,7 +4120,16 @@ class NetworkTransactionPlanner:
                 pid,
             )
             activity_time = event.network.closed_at or event.network.started_at
-            if process_identity is not None:
+            lifecycle_process = (
+                None
+                if process_identity is None
+                else executor._lifecycle_authority.registry.get_process(process_identity.object_id)
+            )
+            if (
+                process_identity is not None
+                and lifecycle_process is not None
+                and lifecycle_process.closed_at is None
+            ):
                 session_identity = (
                     executor.state_manager.get_session_identity(process_identity.logon_id)
                     if process_identity.logon_id
@@ -3763,6 +4161,49 @@ class NetworkTransactionPlanner:
                             reason="canonical_transport_close",
                         ),
                     )
+
+        multipart_reads = self._plan_http_multipart_endpoint_reads(
+            event,
+            resolved_source_system or source_system,
+            target_system,
+            pid,
+            process_ctx,
+            request.time,
+        )
+        if multipart_reads is not None:
+            process_activity = self._merge_process_activity_patches(
+                process_activity,
+                multipart_reads.process_activity,
+            )
+            if materialization_mode is ConnectionMaterializationMode.PHYSICAL:
+                from evidenceforge.events.lifecycle import LifecycleEntityRef, LifecycleHold
+
+                held_object_ids = {hold.subject.object_id for hold in process_holds}
+                additional_holds = []
+                for patch in process_activity:
+                    if patch.identity.object_id in held_object_ids:
+                        continue
+                    held_object_ids.add(patch.identity.object_id)
+                    hold_action_id = generator_module.stable_uuid(
+                        "network-multipart-process-hold-action",
+                        event.network.stable_id,
+                        patch.identity.object_id,
+                    )
+                    additional_holds.append(
+                        LifecycleHold(
+                            hold_id=generator_module.stable_uuid(
+                                "network-multipart-process-hold",
+                                event.network.stable_id,
+                                patch.identity.object_id,
+                            ),
+                            subject=LifecycleEntityRef("process", patch.identity.object_id),
+                            acquired_at=event.network.started_at,
+                            hold_until=event.network.closed_at or event.network.started_at,
+                            action_id=hold_action_id,
+                            reason="http_multipart_local_read",
+                        )
+                    )
+                process_holds = (*process_holds, *additional_holds)
 
         if (
             materialization_mode is ConnectionMaterializationMode.PHYSICAL
@@ -3849,14 +4290,31 @@ class NetworkTransactionPlanner:
             boundary.lifecycle_token = lifecycle_token
 
         prepared_dispatch = None
-        if lifecycle_mode != "deferred_session" and not committed_suppressed:
+        prepared_multipart_dispatches = ()
+        if lifecycle_mode != "deferred_session" and (
+            not committed_suppressed or multipart_reads is not None
+        ):
             from evidenceforge.events.dispatcher import PreparedDispatchStateIntent
 
-            prepared_dispatch = executor.dispatcher.prepare_builder(
-                event,
-                state_intent=PreparedDispatchStateIntent.EXTERNAL_TRANSPORT,
-                lifecycle_ticket=root,
-                source_timing_preparation=boundary.timing_preparation,
+            if not committed_suppressed:
+                prepared_dispatch = executor.dispatcher.prepare_builder(
+                    event,
+                    state_intent=PreparedDispatchStateIntent.EXTERNAL_TRANSPORT,
+                    lifecycle_ticket=root,
+                    source_timing_preparation=boundary.timing_preparation,
+                )
+            prepared_multipart_dispatches = (
+                ()
+                if multipart_reads is None
+                else tuple(
+                    executor.dispatcher.prepare_builder(
+                        builder,
+                        state_intent=PreparedDispatchStateIntent.EXTERNAL_NETWORK_DEPENDENT,
+                        lifecycle_ticket=root,
+                        source_timing_preparation=boundary.timing_preparation,
+                    )
+                    for builder in multipart_reads.builders
+                )
             )
 
         boundary.seal_timing()
@@ -3865,6 +4323,19 @@ class NetworkTransactionPlanner:
         if prepared_responder is not None:
             for responder_process in prepared_responder.processes:
                 executor.dispatcher.validate_prepared(responder_process.publication)
+        prepared_multipart_batch = None
+        if multipart_reads is not None:
+            prepared_multipart_batch = executor.dispatcher.prepare_network_dependent_batch(
+                root,
+                multipart_reads.plan,
+                prepared_multipart_dispatches,
+            )
+            boundary.track_network_dependent_batch(
+                executor.dispatcher,
+                prepared_multipart_batch,
+            )
+        boundary.validate_network_dependent_batch()
+        boundary.validate_identity_capture_claim()
         boundary.transfer()
         materialized = executor._lifecycle_authority.materialize_prepared_network_transaction(
             root,
@@ -3872,6 +4343,7 @@ class NetworkTransactionPlanner:
             source_timing_preparation=boundary.timing_preparation,
             lifecycle_token=lifecycle_token,
             application_token=boundary.application_token,
+            prerequisite_receipts=boundary.prerequisite_receipts,
         )
         if not executor._lifecycle_authority.authenticates_prepared_network_receipt(
             root,
@@ -3888,12 +4360,17 @@ class NetworkTransactionPlanner:
             if committed_suppressed
             else NetworkConnectionPublicationOutcome.PUBLISHED
         )
-        if request.identity_capture is not None:
-            request.identity_capture.publish_committed(
-                root=root,
-                receipt=materialized.receipt,
-                outcome=outcome,
-            )
+        application_result = materialized.connection.application
+        boundary.publish_committed_capture_no_fail(
+            root=root,
+            receipt=materialized.receipt,
+            application_receipt=(
+                getattr(application_result, "receipt", None)
+                if application_result is not None
+                else None
+            ),
+            outcome=outcome,
+        )
 
         executor._last_connection_effective_dst_ip = event.network.dst_ip
         executor._last_connection_effective_tuple = None
@@ -3912,6 +4389,11 @@ class NetworkTransactionPlanner:
             executor._last_connection_http_context = event.protocol.http
             executor._last_connection_file_transfers = event.protocol.file_transfers
         if committed_suppressed:
+            if prepared_multipart_batch is not None:
+                executor.dispatcher.publish_prepared_network_dependent_batch(
+                    prepared_multipart_batch,
+                    materialization_receipt=materialized.receipt,
+                )
             # The typed capture exposes the committed internal root, while the
             # long-standing public compatibility contract reports no emitted
             # connection identity for a suppressed observation.
@@ -3932,14 +4414,11 @@ class NetworkTransactionPlanner:
             )
             or {}
         )
-        self._emit_http_multipart_endpoint_reads(
-            event,
-            resolved_source_system or source_system,
-            target_system,
-            pid,
-            process_ctx,
-            request.time,
-        )
+        if prepared_multipart_batch is not None:
+            executor.dispatcher.publish_prepared_network_dependent_batch(
+                prepared_multipart_batch,
+                materialization_receipt=materialized.receipt,
+            )
         executor._maybe_emit_ocsp_transaction(event)
         if generic_ssh_preauth_pid is not None and target_system is not None:
             executor._emit_generic_ssh_preauth_failure_syslog(

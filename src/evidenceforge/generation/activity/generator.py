@@ -120,6 +120,8 @@ from evidenceforge.generation.actions import (
     EmailDeliveryActionBundle,
     EmailDeliveryRequest,
     EmailDeliveryResult,
+    ExecutionEffectAuditCounter,
+    ExecutionEffectAuditSnapshot,
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
     FailedLogonActionBundle,
@@ -3952,47 +3954,115 @@ def _proxy_time_taken_ms(
     status_code: int,
     cache_result: str = "",
     minimum_ms: int = 1,
+    timing_runtime: TimingRuntime | None = None,
+    stable_id: str = "",
 ) -> int:
     """Return proxy-side service time without mirroring wire duration exactly."""
     base_ms = max(1, int((duration or 0.0) * 1000))
     method_upper = method.upper()
     cache_upper = cache_result.upper()
-    uniform = getattr(rng, "uniform", None)
-    lognormvariate = getattr(rng, "lognormvariate", None)
-
-    def _uniform(low: float, high: float) -> float:
-        if callable(uniform):
-            return float(uniform(low, high))
-        return low + ((high - low) * rng.random())
-
-    def _lognormvariate(mu: float, sigma: float) -> float:
-        if callable(lognormvariate):
-            return float(lognormvariate(mu, sigma))
-        return random.Random(
-            _stable_seed(f"proxy_time_lognorm:{base_ms}:{mu}:{sigma}")
-        ).lognormvariate(mu, sigma)
+    planner = _activity_timing_planner(timing_runtime)
+    timing_id = stable_id or _activity_timing_stable_id(
+        "proxy-time",
+        base_ms,
+        method_upper,
+        status_code,
+        cache_upper,
+        rng=rng,
+    )
 
     if status_code >= 400:
-        if method_upper == "CONNECT":
-            sampled_ms = rng.randint(20, 1500)
-        else:
-            sampled_ms = rng.randint(35, 2400)
+        minimum, median, maximum = (
+            (20.0, 140.0, 1500.0) if method_upper == "CONNECT" else (35.0, 210.0, 2400.0)
+        )
+        sampled_ms = round(
+            planner.right_skew_seconds(
+                relationship_key="activity.proxy.error_service_time_ms",
+                stable_id=timing_id,
+                minimum=minimum,
+                median=median,
+                maximum=maximum,
+                sample_key="milliseconds",
+            )
+        )
     elif cache_upper == "HIT":
-        sampled_ms = max(8, int(base_ms * _uniform(0.08, 0.42))) + rng.randint(3, 95)
+        ratio = planner.right_skew_seconds(
+            relationship_key="activity.proxy.cache_hit_ratio",
+            stable_id=timing_id,
+            minimum=0.08,
+            median=0.16,
+            maximum=0.42,
+            sample_key="ratio",
+        )
+        overhead_ms = planner.right_skew_seconds(
+            relationship_key="activity.proxy.cache_hit_overhead_ms",
+            stable_id=timing_id,
+            minimum=3.0,
+            median=12.0,
+            maximum=95.0,
+            sample_key="overhead",
+        )
+        sampled_ms = round(max(8.0, base_ms * ratio) + overhead_ms)
     elif method_upper == "CONNECT":
-        overhead_ms = rng.randint(19, 420)
+        overhead_ms = planner.right_skew_seconds(
+            relationship_key="activity.proxy.connect_overhead_ms",
+            stable_id=timing_id,
+            minimum=19.0,
+            median=72.0,
+            maximum=420.0,
+            sample_key="overhead",
+        )
         if base_ms > 10_000:
-            overhead_ms += min(950, int(_lognormvariate(4.1, 0.55)))
-        sampled_ms = base_ms + overhead_ms + rng.randint(-11, 47)
+            overhead_ms += planner.right_skew_seconds(
+                relationship_key="activity.proxy.connect_long_tail_ms",
+                stable_id=timing_id,
+                minimum=1.0,
+                median=60.0,
+                maximum=950.0,
+                sample_key="tail",
+            )
+        jitter_ms = planner.centered_seconds(
+            relationship_key="activity.proxy.connect_jitter_ms",
+            stable_id=timing_id,
+            mean=8.0,
+            standard_deviation=15.0,
+            minimum=-11.0,
+            maximum=47.0,
+            sample_key="jitter",
+        )
+        sampled_ms = round(base_ms + overhead_ms + jitter_ms)
     else:
-        overhead_ms = rng.randint(7, 180)
+        overhead_ms = planner.right_skew_seconds(
+            relationship_key="activity.proxy.request_overhead_ms",
+            stable_id=timing_id,
+            minimum=7.0,
+            median=34.0,
+            maximum=180.0,
+            sample_key="overhead",
+        )
         if base_ms > 5000:
-            overhead_ms += min(500, int(_lognormvariate(3.2, 0.5)))
-        sampled_ms = base_ms + overhead_ms + rng.randint(-9, 35)
+            overhead_ms += planner.right_skew_seconds(
+                relationship_key="activity.proxy.request_long_tail_ms",
+                stable_id=timing_id,
+                minimum=1.0,
+                median=28.0,
+                maximum=500.0,
+                sample_key="tail",
+            )
+        jitter_ms = planner.centered_seconds(
+            relationship_key="activity.proxy.request_jitter_ms",
+            stable_id=timing_id,
+            mean=6.0,
+            standard_deviation=12.0,
+            minimum=-9.0,
+            maximum=35.0,
+            sample_key="jitter",
+        )
+        sampled_ms = round(base_ms + overhead_ms + jitter_ms)
 
     sampled_ms = max(minimum_ms, sampled_ms)
     if duration is not None and sampled_ms == base_ms:
-        sampled_ms += rng.choice((-7, 11, 17))
+        sampled_ms += 11
     return max(minimum_ms, sampled_ms)
 
 
@@ -4589,6 +4659,7 @@ class ActivityGenerator:
                 bounded application registries.
         """
         self.state_manager = state_manager
+        self._execution_effect_audit = ExecutionEffectAuditCounter()
         dispatcher_runtime = getattr(dispatcher, "timing_runtime", None)
         if timing_runtime is None:
             timing_runtime = (
@@ -4637,6 +4708,14 @@ class ActivityGenerator:
             if callable(bind_lifecycle_shadow):
                 bind_lifecycle_shadow(lifecycle_shadow)
         self.dispatcher = dispatcher
+        if dispatcher is not None:
+            bind_execution_effect_audit = getattr(
+                dispatcher,
+                "bind_execution_effect_audit",
+                None,
+            )
+            if callable(bind_execution_effect_audit):
+                bind_execution_effect_audit(self._execution_effect_audit)
         self.timing_runtime = timing_runtime
         self._activity_timing_planner = BaselineTimingPlanner(
             timing_runtime,
@@ -4718,11 +4797,6 @@ class ActivityGenerator:
         )
         self._proxy_channel_window_start = proxy_window_start
         self._proxy_channel_watermark = proxy_window_start
-        from evidenceforge.generation.actions.proxy_transaction import ActiveProxyTunnel
-
-        self._explicit_proxy_tunnels: dict[
-            tuple[str, str, str, str, int, str], ActiveProxyTunnel
-        ] = {}
         self._http_persistent_connections: dict[
             tuple[str, str, int, str, str], _HttpPersistentConnection
         ] = {}
@@ -4835,6 +4909,11 @@ class ActivityGenerator:
         self._last_connection_effective_transaction_id = ""
         self._last_connection_http_context: HttpContext | None = None
         self._last_connection_file_transfers: tuple[FileTransferContext, ...] = ()
+
+    def execution_effect_audit_snapshot(self) -> ExecutionEffectAuditSnapshot:
+        """Return bounded count-only command-effect audit totals."""
+
+        return self._execution_effect_audit.snapshot()
 
     def advance_application_channel_watermark(self, cutoff: datetime) -> None:
         """Advance bounded application and network retention at the canonical frontier."""
@@ -8658,6 +8737,11 @@ class ActivityGenerator:
             method=proxy_method,
             status_code=status_code,
             cache_result=cache_result,
+            timing_runtime=self.timing_runtime,
+            stable_id=(
+                f"{source_system.hostname if source_system is not None else src_ip}:"
+                f"{proxy_hostname}:{proxy_method}:{status_code}:{url}"
+            ),
         )
         request_body_bytes = 0
         if proxy_method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}:

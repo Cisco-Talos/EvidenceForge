@@ -36,6 +36,7 @@ from evidenceforge.generation.application_channels import (
     ApplicationChannelAdmissionReceipt,
     ApplicationChannelAdmissionResult,
     ApplicationChannelAdmissionToken,
+    ApplicationChannelCloseToken,
     ApplicationChannelPreparedCommit,
     ApplicationChannelRegistry,
 )
@@ -365,7 +366,68 @@ class ExplicitProxyRequestReuse:
         object.__setattr__(self, "canonical_complete_time", complete_time)
 
 
-ProxyAdmissionResult = ExplicitProxyTunnelOpen | ExplicitProxyRequestReuse
+@dataclass(frozen=True, slots=True)
+class ExplicitProxyTerminalRequest:
+    """Frozen terminal request and exact channel-retirement intent."""
+
+    tunnel: ExplicitProxyTunnelIdentity
+    operation_id: str
+    ordinal: int
+    outcome: Literal["denied", "authentication_required", "gateway_failure"]
+    canonical_request_time: datetime
+    canonical_complete_time: datetime
+    close_at: datetime
+    close_reason: str
+
+    def __post_init__(self) -> None:
+        """Normalize and validate the terminal request interval."""
+
+        request_time = ensure_utc(self.canonical_request_time)
+        complete_time = ensure_utc(self.canonical_complete_time)
+        close_at = ensure_utc(self.close_at)
+        if complete_time < request_time:
+            raise ValueError("Explicit-proxy terminal completion cannot precede its request")
+        if close_at < complete_time:
+            raise ValueError("Explicit-proxy terminal close cannot precede its completion")
+        if not self.close_reason.strip():
+            raise ValueError("Explicit-proxy terminal request requires a close reason")
+        object.__setattr__(self, "canonical_request_time", request_time)
+        object.__setattr__(self, "canonical_complete_time", complete_time)
+        object.__setattr__(self, "close_at", close_at)
+
+
+ProxyAdmissionResult = (
+    ExplicitProxyTunnelOpen | ExplicitProxyRequestReuse | ExplicitProxyTerminalRequest
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ExplicitProxyRequestSnapshot:
+    """Authenticated immutable view used before a deferred request preparation."""
+
+    manager_id: str
+    affinity_digest: str
+    requested_at: datetime
+    tunnel: ExplicitProxyTunnelIdentity
+    application_snapshot: ApplicationChannelSnapshot
+    generation_token: ApplicationChannelCloseToken
+    _manager_token: int = field(repr=False, default=0)
+    _integrity_token: str = field(repr=False, default="")
+
+    def __post_init__(self) -> None:
+        """Normalize request time and require exact sidecar/common agreement."""
+
+        object.__setattr__(self, "requested_at", ensure_utc(self.requested_at))
+        if self.affinity_digest != self.tunnel.affinity_digest:
+            raise ValueError("Explicit-proxy request snapshot changed affinity")
+        if self.application_snapshot.channel_id != self.tunnel.channel_id:
+            raise ValueError("Explicit-proxy request snapshot changed channel identity")
+
+    @property
+    def snapshot_token(self) -> str:
+        """Return the opaque keyed proof over this exact current tunnel view."""
+
+        return self._integrity_token
 
 
 @dataclass(frozen=True, slots=True)
@@ -510,10 +572,12 @@ class ExplicitProxyAdmissionReceipt:
 def _proxy_admission_transport_legs(
     result: ProxyAdmissionResult,
 ) -> tuple[str, tuple[str, ...]]:
-    """Return the current origin leg and prerequisite client leg for success."""
+    """Return the exact transport owned by each proxy admission kind."""
 
     tunnel = result.tunnel
-    return tunnel.origin_transport_id, (tunnel.client_transport_id,)
+    if isinstance(result, ExplicitProxyTunnelOpen):
+        return tunnel.origin_transport_id, (tunnel.client_transport_id,)
+    return tunnel.client_transport_id, ()
 
 
 def _proxy_admission_operation_id(result: ProxyAdmissionResult) -> str:
@@ -528,6 +592,27 @@ def explicit_proxy_sidecar_result_digest(result: ProxyAdmissionResult) -> str:
     """Return a stable digest of one exact frozen proxy sidecar result."""
 
     return hashlib.sha256(repr(("explicit-proxy-admission-result-v1", result)).encode()).hexdigest()
+
+
+def _proxy_request_snapshot_integrity_token(
+    authority_secret: bytes,
+    snapshot: ExplicitProxyRequestSnapshot,
+) -> str:
+    """Authenticate one manager-issued immutable current-tunnel projection."""
+
+    canonical = repr(
+        (
+            "explicit-proxy-request-snapshot-v1",
+            snapshot.manager_id,
+            snapshot.affinity_digest,
+            snapshot.requested_at,
+            snapshot.tunnel,
+            snapshot.application_snapshot,
+            snapshot.generation_token,
+            snapshot._manager_token,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
 
 
 def _proxy_admission_receipt_integrity_token(
@@ -1271,6 +1356,71 @@ class ExplicitProxyChannelManager:
                 return False
         return self._registry.authenticates_admission_token(token.application_token)
 
+    def authenticates_request_snapshot(self, snapshot: ExplicitProxyRequestSnapshot) -> bool:
+        """Return whether this manager issued one intact current-tunnel snapshot."""
+
+        if (
+            not isinstance(snapshot, ExplicitProxyRequestSnapshot)
+            or snapshot._manager_token != id(self)
+            or not hmac.compare_digest(snapshot.manager_id, self._manager_id)
+        ):
+            return False
+        expected = _proxy_request_snapshot_integrity_token(
+            self._admission_secret,
+            snapshot,
+        )
+        return hmac.compare_digest(snapshot._integrity_token, expected)
+
+    def snapshot_request(
+        self,
+        affinity: ExplicitProxyChannelAffinity,
+        *,
+        requested_at: datetime,
+    ) -> ExplicitProxyRequestSnapshot | None:
+        """Return a signed nonmutating view of the exact reusable tunnel."""
+
+        canonical_request = ensure_utc(requested_at)
+        affinity_digest = affinity.digest
+        with self._locked_sidecar_prepared(affinity.owner_id, create=False) as shard:
+            if shard is None:
+                return None
+            tunnel = shard.tunnels.find_affinity(affinity_digest)
+            if tunnel is None:
+                return None
+            self._reject_proxy_reservation_conflict_locked(
+                channel_ids=(tunnel.channel_id,),
+                affinity_key=(affinity.owner_id, affinity_digest),
+                origin_transport_ids=(tunnel.origin_transport_id,),
+            )
+            application_snapshot = self._registry.find_reusable(
+                affinity_digest=affinity_digest,
+                owner_id=affinity.owner_id,
+                at=canonical_request,
+            )
+            if application_snapshot is None:
+                return None
+            if application_snapshot.channel_id != tunnel.channel_id:
+                raise StateError("Explicit-proxy affinity resolved to the wrong channel")
+            generation_token = self._registry.channel_close_token(tunnel.channel_id)
+            if generation_token is None:
+                raise StateError("Explicit-proxy reusable tunnel has no exact generation token")
+            snapshot = ExplicitProxyRequestSnapshot(
+                manager_id=self._manager_id,
+                affinity_digest=affinity_digest,
+                requested_at=canonical_request,
+                tunnel=tunnel,
+                application_snapshot=application_snapshot,
+                generation_token=generation_token,
+                _manager_token=id(self),
+            )
+            return replace(
+                snapshot,
+                _integrity_token=_proxy_request_snapshot_integrity_token(
+                    self._admission_secret,
+                    snapshot,
+                ),
+            )
+
     def authenticates_admission_receipt(
         self,
         receipt: ExplicitProxyAdmissionReceipt,
@@ -1281,7 +1431,11 @@ class ExplicitProxyChannelManager:
             return False
         if not isinstance(
             receipt.sidecar_result,
-            (ExplicitProxyTunnelOpen, ExplicitProxyRequestReuse),
+            (
+                ExplicitProxyTunnelOpen,
+                ExplicitProxyRequestReuse,
+                ExplicitProxyTerminalRequest,
+            ),
         ) or not isinstance(receipt.application_receipt, ApplicationChannelAdmissionReceipt):
             return False
         if (
@@ -1304,6 +1458,7 @@ class ExplicitProxyChannelManager:
         result = receipt.sidecar_result
         expected_current, expected_prerequisites = _proxy_admission_transport_legs(result)
         application_receipt = receipt.application_receipt
+        application_transport_id = application_receipt.snapshot.identity.binding.transport_id
         return (
             receipt.application_receipt_token == application_receipt.receipt_token
             and receipt.channel_id == application_receipt.channel_id
@@ -1312,8 +1467,48 @@ class ExplicitProxyChannelManager:
             and receipt.operation_id == _proxy_admission_operation_id(result)
             and receipt.current_transport_id == expected_current
             and receipt.prerequisite_transport_ids == expected_prerequisites
-            and receipt.prerequisite_transport_ids
-            == (application_receipt.snapshot.identity.binding.transport_id,)
+            and (
+                (
+                    isinstance(result, ExplicitProxyTunnelOpen)
+                    and expected_prerequisites == (application_transport_id,)
+                )
+                or (
+                    isinstance(
+                        result,
+                        (ExplicitProxyRequestReuse, ExplicitProxyTerminalRequest),
+                    )
+                    and expected_current == application_transport_id
+                    and not expected_prerequisites
+                )
+            )
+            and (
+                (
+                    isinstance(result, ExplicitProxyTerminalRequest)
+                    and application_receipt.snapshot.closed_at == result.close_at
+                    and application_receipt.snapshot.close_reason == result.close_reason
+                )
+                or (
+                    isinstance(result, ExplicitProxyTunnelOpen)
+                    and not result.tunnel.planned_request_count
+                    and application_receipt.kind == "open_completed_close"
+                    and application_receipt.snapshot.closed_at
+                    == application_receipt.snapshot.last_activity_at
+                    and application_receipt.snapshot.close_reason == "setup-only"
+                )
+                or (
+                    not isinstance(
+                        result,
+                        (ExplicitProxyTerminalRequest, ExplicitProxyTunnelOpen),
+                    )
+                    and application_receipt.snapshot.is_open
+                )
+                or (
+                    isinstance(result, ExplicitProxyTunnelOpen)
+                    and bool(result.tunnel.planned_request_count)
+                    and application_receipt.kind == "open_completed"
+                    and application_receipt.snapshot.is_open
+                )
+            )
             and receipt.origin_affinity_digest == result.tunnel.affinity_digest
             and receipt.sidecar_result_digest == explicit_proxy_sidecar_result_digest(result)
         )
@@ -1744,9 +1939,20 @@ class ExplicitProxyChannelManager:
                 responder_bytes=setup_response_wire_bytes,
             )
             try:
-                application_token = self._registry.prepare_open_channel_with_completed_operation(
+                prepare_open = (
+                    self._registry.prepare_open_channel_with_completed_operation
+                    if planned_request_count
+                    else self._registry.prepare_open_channel_with_completed_operation_and_close
+                )
+                close_options = (
+                    {}
+                    if planned_request_count
+                    else {"closed_at": setup_complete, "reason": "setup-only"}
+                )
+                application_token = prepare_open(
                     identity,
                     reservation,
+                    **close_options,
                     replacement_channel_id=replacement_channel_id,
                     replacement_closed_at=replacement_closed_at,
                     replacement_reason=("replaced" if replacement_channel_id else ""),
@@ -1799,10 +2005,30 @@ class ExplicitProxyChannelManager:
             retained = shard.tunnels.peek(expected.channel_id)
             if retained != expected:
                 raise StateError("prepared explicit-proxy request tunnel changed")
+            if isinstance(token.result, ExplicitProxyTerminalRequest):
+                if (
+                    token.application_token.kind != "completed_operation_close"
+                    or token.application_token.channel_closed_at != token.result.close_at
+                    or token.application_token.channel_close_reason != token.result.close_reason
+                ):
+                    raise StateError("prepared explicit-proxy terminal close preimage changed")
+            elif token.application_token.kind != "completed_operation":
+                raise StateError("non-terminal proxy request carries a terminal close")
             return
 
         result = token.result
         assert isinstance(result, ExplicitProxyTunnelOpen)
+        expected_common_kind = (
+            "open_completed" if result.tunnel.planned_request_count else "open_completed_close"
+        )
+        if token.application_token.kind != expected_common_kind:
+            raise StateError("prepared explicit-proxy open changed its common close disposition")
+        if not result.tunnel.planned_request_count and (
+            token.application_token.channel_closed_at
+            != token.application_token.reservation.ended_at
+            or token.application_token.channel_close_reason != "setup-only"
+        ):
+            raise StateError("prepared explicit-proxy setup-only close preimage changed")
         retained_channel = None if shard is None else shard.tunnels.peek(result.tunnel.channel_id)
         if retained_channel is not None:
             raise StateError("prepared explicit-proxy channel identity became occupied")
@@ -1951,6 +2177,16 @@ class ExplicitProxyChannelManager:
                     )
                 return
 
+            if isinstance(result, ExplicitProxyTerminalRequest):
+                try:
+                    tunnel_handle = shard.tunnels.handle_for(result.tunnel.channel_id)
+                except KeyError:
+                    tunnel_handle = None
+                shard.tunnels.delete(result.tunnel.channel_id)
+                if tunnel_handle is not None:
+                    shard.expiry.pop(tunnel_handle, None)
+                return
+
             assert isinstance(result, ExplicitProxyRequestReuse)
             self._set_tunnel_expiry(shard, result.tunnel, application_result.snapshot)
 
@@ -1982,19 +2218,26 @@ class ExplicitProxyChannelManager:
             if application_result.snapshot.channel_id != result.tunnel.channel_id:
                 raise StateError("prepared explicit-proxy common result changed identity")
             if not result.tunnel.planned_request_count:
-                close_token = application_result.close_token
-                if close_token is None:
-                    raise StateError("prepared explicit-proxy setup-only channel lacks close token")
-                self._registry.close_channel_by_token(
-                    result.tunnel.channel_id,
-                    token=close_token,
-                    closed_at=token.application_token.reservation.ended_at,
-                    reason="setup-only",
-                )
+                if (
+                    token.application_token.kind != "open_completed_close"
+                    or application_result.snapshot.closed_at
+                    != token.application_token.reservation.ended_at
+                    or application_result.snapshot.close_reason != "setup-only"
+                    or application_result.close_token is not None
+                ):
+                    raise StateError("prepared explicit-proxy setup-only close changed result")
+            elif token.application_token.kind != "open_completed":
+                raise StateError("prepared explicit-proxy reusable open carries a terminal close")
         else:
-            assert isinstance(result, ExplicitProxyRequestReuse)
+            assert isinstance(result, (ExplicitProxyRequestReuse, ExplicitProxyTerminalRequest))
             if application_result.snapshot.channel_id != result.tunnel.channel_id:
                 raise StateError("prepared explicit-proxy request changed channel identity")
+            if isinstance(result, ExplicitProxyTerminalRequest):
+                if (
+                    application_result.snapshot.closed_at != result.close_at
+                    or application_result.snapshot.close_reason != result.close_reason
+                ):
+                    raise StateError("prepared explicit-proxy terminal close changed result")
 
         with self._locked_sidecar_prepared(token._owner_id, create=True):
             capability = self._active_admission_locked(token)
@@ -2002,6 +2245,7 @@ class ExplicitProxyChannelManager:
                 raise StateError("explicit-proxy admission token is not claimed")
             self._commit_proxy_sidecar_locked(token, application_result)
             self._release_admission_locked(capability)
+        current_transport_id, prerequisite_transport_ids = _proxy_admission_transport_legs(result)
         receipt = ExplicitProxyAdmissionReceipt(
             manager_kind=_PROXY_MANAGER_KIND,
             manager_id=self._manager_id,
@@ -2011,8 +2255,8 @@ class ExplicitProxyChannelManager:
             application_receipt_token=application_receipt.receipt_token,
             channel_id=application_receipt.channel_id,
             operation_id=application_receipt.operation_id,
-            current_transport_id=result.tunnel.origin_transport_id,
-            prerequisite_transport_ids=(result.tunnel.client_transport_id,),
+            current_transport_id=current_transport_id,
+            prerequisite_transport_ids=prerequisite_transport_ids,
             origin_affinity_digest=result.tunnel.affinity_digest,
             sidecar_result=result,
             sidecar_result_digest=explicit_proxy_sidecar_result_digest(result),
@@ -2093,6 +2337,7 @@ class ExplicitProxyChannelManager:
         expected_client_transport_id: str = "",
         expected_origin_transport_id: str = "",
         expected_client_source_port: int | None = None,
+        expected_snapshot: ExplicitProxyRequestSnapshot | None = None,
         retire_on_rejection: bool,
     ) -> ExplicitProxyAdmissionToken | None:
         """Prepare one exact child request or return ``None`` for a new path.
@@ -2117,8 +2362,16 @@ class ExplicitProxyChannelManager:
         canonical_complete = ensure_utc(completed_at)
         if canonical_complete < canonical_request:
             raise StateError("Explicit-proxy request completion cannot precede its request")
-
         affinity_digest = affinity.digest
+        if expected_snapshot is not None:
+            if not self.authenticates_request_snapshot(expected_snapshot):
+                raise StateError("Explicit-proxy request has no authentic current-tunnel snapshot")
+            if (
+                expected_snapshot.affinity_digest != affinity_digest
+                or expected_snapshot.requested_at != canonical_request
+            ):
+                raise StateError("Explicit-proxy request changed its current-tunnel snapshot")
+
         with self._locked_sidecar_prepared(affinity.owner_id, create=False) as shard:
             if shard is None:
                 return None
@@ -2144,6 +2397,14 @@ class ExplicitProxyChannelManager:
                     raise StateError(
                         f"Explicit-proxy tunnel view {tunnel.channel_id!r} is not open"
                     )
+                if expected_snapshot is not None:
+                    current_generation = self._registry.channel_close_token(tunnel.channel_id)
+                    if (
+                        tunnel != expected_snapshot.tunnel
+                        or snapshot != expected_snapshot.application_snapshot
+                        or current_generation != expected_snapshot.generation_token
+                    ):
+                        raise StateError("Explicit-proxy current-tunnel snapshot is stale")
                 if canonical_request < tunnel.opened_at:
                     raise StateError("Explicit-proxy child request cannot precede tunnel open")
                 reusable = self._registry.find_reusable(
@@ -2173,16 +2434,6 @@ class ExplicitProxyChannelManager:
                 if reusable.channel_id != tunnel.channel_id:
                     raise StateError("Explicit-proxy affinity resolved to the wrong channel")
                 snapshot = reusable
-                if outcome != "success":
-                    if retire_on_rejection:
-                        self._retire_locked(
-                            shard,
-                            tunnel.channel_id,
-                            at=max(canonical_request, snapshot.last_activity_at),
-                            reason=f"terminal {outcome.replace('_', ' ')}",
-                        )
-                    return None
-
                 duration = canonical_complete - canonical_request
                 ordered_request = max(
                     canonical_request,
@@ -2234,25 +2485,45 @@ class ExplicitProxyChannelManager:
                     initiator_bytes=request_wire_bytes,
                     responder_bytes=response_wire_bytes,
                 )
-                application_token = self._registry.prepare_completed_operation(reservation)
-                result = ExplicitProxyRequestReuse(
-                    tunnel=tunnel,
-                    operation_id=operation_id,
-                    ordinal=ordinal,
-                    canonical_request_time=ordered_request,
-                    canonical_complete_time=ordered_complete,
-                    remaining_request_count=(budget.operations - snapshot.reserved_operations - 1),
-                    remaining_request_wire_bytes=(
-                        budget.initiator_bytes
-                        - snapshot.reserved_initiator_bytes
-                        - request_wire_bytes
-                    ),
-                    remaining_response_wire_bytes=(
-                        budget.responder_bytes
-                        - snapshot.reserved_responder_bytes
-                        - response_wire_bytes
-                    ),
-                )
+                if outcome == "success":
+                    application_token = self._registry.prepare_completed_operation(reservation)
+                    result: ProxyAdmissionResult = ExplicitProxyRequestReuse(
+                        tunnel=tunnel,
+                        operation_id=operation_id,
+                        ordinal=ordinal,
+                        canonical_request_time=ordered_request,
+                        canonical_complete_time=ordered_complete,
+                        remaining_request_count=(
+                            budget.operations - snapshot.reserved_operations - 1
+                        ),
+                        remaining_request_wire_bytes=(
+                            budget.initiator_bytes
+                            - snapshot.reserved_initiator_bytes
+                            - request_wire_bytes
+                        ),
+                        remaining_response_wire_bytes=(
+                            budget.responder_bytes
+                            - snapshot.reserved_responder_bytes
+                            - response_wire_bytes
+                        ),
+                    )
+                else:
+                    close_reason = f"terminal {outcome.replace('_', ' ')}"
+                    application_token = self._registry.prepare_completed_operation_and_close(
+                        reservation,
+                        closed_at=ordered_complete,
+                        reason=close_reason,
+                    )
+                    result = ExplicitProxyTerminalRequest(
+                        tunnel=tunnel,
+                        operation_id=operation_id,
+                        ordinal=ordinal,
+                        outcome=outcome,
+                        canonical_request_time=ordered_request,
+                        canonical_complete_time=ordered_complete,
+                        close_at=ordered_complete,
+                        close_reason=close_reason,
+                    )
                 try:
                     return self._new_admission_token(
                         kind="request",
@@ -2282,6 +2553,7 @@ class ExplicitProxyChannelManager:
         expected_client_transport_id: str = "",
         expected_origin_transport_id: str = "",
         expected_client_source_port: int | None = None,
+        expected_snapshot: ExplicitProxyRequestSnapshot | None = None,
     ) -> ExplicitProxyAdmissionToken | None:
         """Prepare a request without retiring or mutating its existing tunnel."""
 
@@ -2297,6 +2569,7 @@ class ExplicitProxyChannelManager:
             expected_client_transport_id=expected_client_transport_id,
             expected_origin_transport_id=expected_origin_transport_id,
             expected_client_source_port=expected_client_source_port,
+            expected_snapshot=expected_snapshot,
             retire_on_rejection=False,
         )
 
@@ -2329,6 +2602,7 @@ class ExplicitProxyChannelManager:
             expected_client_transport_id=expected_client_transport_id,
             expected_origin_transport_id=expected_origin_transport_id,
             expected_client_source_port=expected_client_source_port,
+            expected_snapshot=None,
             retire_on_rejection=True,
         )
         if token is None:
@@ -2336,6 +2610,8 @@ class ExplicitProxyChannelManager:
         with self.prepared_admission(token) as transaction:
             committed = transaction.commit_no_fail()
         result = committed.result
+        if isinstance(result, ExplicitProxyTerminalRequest):
+            return None
         assert isinstance(result, ExplicitProxyRequestReuse)
         return result
 

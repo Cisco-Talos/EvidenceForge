@@ -3,6 +3,7 @@
 
 """Regression test: eforge validate-config must ship 100% clean."""
 
+import copy
 import random
 
 from evidenceforge.cli.validate_config import validate_config
@@ -14,6 +15,25 @@ class TestValidateConfig:
         assert result.issues == [], (
             f"validate-config has {len(result.issues)} issues:\n"
             + "\n".join(f"  [{i.severity}] {i.file}: {i.message}" for i in result.issues)
+        )
+
+    def test_validate_config_accepts_proxy_dns_query_after_decision_timing(self, monkeypatch):
+        from evidenceforge.generation.activity import proxy_phase_profiles
+
+        profiles = copy.deepcopy(proxy_phase_profiles.load_proxy_phase_profiles())
+        profiles["phase_timing"]["dns_query_after_decision_ms"] = {"min": 7, "max": 47}
+        monkeypatch.setattr(
+            proxy_phase_profiles,
+            "load_proxy_phase_profiles",
+            lambda: profiles,
+        )
+
+        result = validate_config()
+
+        assert not any(
+            issue.file == "proxy_phase_profiles.yaml"
+            and "dns_query_after_decision_ms" in issue.message
+            for issue in result.issues
         )
 
     def test_validate_config_rejects_invalid_beacon_profile(self, monkeypatch):
@@ -1260,8 +1280,8 @@ class TestValidateConfig:
                     "default_profile": "well_synced",
                     "profiles": {
                         "well_synced": {
-                            "clock_skew_us": {"min": -4000, "max": 4000},
-                            "path_delay_us": {"min": 250, "max": 8000},
+                            "clock_offset_us": {"min": -4000, "max": 4000},
+                            "route_delay_us": {"min": 250, "max": 8000},
                         }
                     },
                 },

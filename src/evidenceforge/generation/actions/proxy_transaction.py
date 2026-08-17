@@ -27,9 +27,8 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     DnsContext,
     FileTransferContext,
@@ -41,16 +40,40 @@ from evidenceforge.events.contexts import (
     ProxyContext,
 )
 from evidenceforge.events.cryptography import OcspTransactionPlan
-from evidenceforge.events.network import NetworkTrafficLedger, NetworkTransactionPlan
+from evidenceforge.events.network import NetworkTransactionPlan
+from evidenceforge.events.proxy import ProxyTerminalOutcome, ProxyTransactionPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.file_transfer import (
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
 )
+from evidenceforge.generation.actions.network_connection import (
+    NetworkConnectionActionBundle,
+    NetworkConnectionIdentityCapture,
+    NetworkConnectionRequest,
+)
 from evidenceforge.generation.activity.network_params import proxy_connect_status_message
+from evidenceforge.generation.proxy_channels import (
+    ExplicitProxyAdmissionReceipt,
+    ExplicitProxyAdmissionToken,
+    ExplicitProxyChannelAffinity,
+    ExplicitProxyChannelManager,
+    ExplicitProxyRequestReuse,
+    ExplicitProxyRequestSnapshot,
+    ExplicitProxyTerminalRequest,
+    ProxyChannelOutcome,
+)
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.time import ensure_utc
+
+if TYPE_CHECKING:
+    from evidenceforge.generation.lifecycle_authority import LifecyclePreparedNetworkReceipt
+    from evidenceforge.generation.network_runtime import PreparedNetworkTransactionRoot
+    from evidenceforge.generation.source_timing import SourceTimingPlanningRuntime
+    from evidenceforge.generation.timing import TimingRuntime
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,18 +130,213 @@ class ProxyTransactionRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class ActiveProxyTunnel:
-    """Canonical client transport available for bounded application reuse."""
+class ExplicitProxyOpenPreparation:
+    """Pure inputs for coupling one proxy open to its prepared origin root."""
 
-    last_activity_at: datetime
-    uid: str
+    affinity: ExplicitProxyChannelAffinity
+    client_root: PreparedNetworkTransactionRoot
+    client_receipt: LifecyclePreparedNetworkReceipt
+    phase_plan: ProxyTransactionPlan
+    proxy_context: ProxyContext
     tunnel_group_id: str
-    origin_uid: str
-    closes_at: datetime
-    source_port: int
-    remaining_requests: int
-    remaining_cs_bytes: int
-    remaining_sc_bytes: int
+    planned_request_count: int
+
+    @property
+    def client_transport_id(self) -> str:
+        """Return the exact committed client prerequisite transport identity."""
+
+        return self.client_root.result.transaction.stable_id
+
+    def prepare_token(
+        self,
+        *,
+        manager: ExplicitProxyChannelManager,
+        origin_transaction: NetworkTransactionPlan,
+    ) -> ExplicitProxyAdmissionToken | None:
+        """Prepare the manager token consumed by the origin network authority."""
+
+        client = self.client_root.result.transaction
+        if client.closed_at is None or origin_transaction.closed_at is None:
+            raise ValueError("Explicit-proxy transports must have closed canonical intervals")
+        owns_initial_request = (
+            self.planned_request_count > 0 and self.proxy_context.method != "CONNECT"
+        )
+        if owns_initial_request:
+            setup_started_at = (
+                self.phase_plan.tunnel_request_at or self.phase_plan.client_connect_at
+            )
+            setup_completed_at = self.phase_plan.client_flush_at
+            setup_request_bytes = self.phase_plan.tunnel_setup_cs_bytes + max(
+                0,
+                int(self.proxy_context.cs_bytes or 0),
+            )
+            setup_response_bytes = self.phase_plan.tunnel_setup_sc_bytes + max(
+                0,
+                int(self.proxy_context.sc_bytes or 0),
+            )
+            future_request_count = max(0, self.planned_request_count - 1)
+        else:
+            setup_started_at = self.phase_plan.client_connect_at
+            setup_completed_at = client.closed_at
+            setup_request_bytes = max(0, client.orig_bytes or 0)
+            setup_response_bytes = max(0, client.resp_bytes or 0)
+            future_request_count = 0
+        aggregate_request_bytes = (
+            max(0, (client.orig_bytes or 0) - setup_request_bytes) if future_request_count else 0
+        )
+        aggregate_response_bytes = (
+            max(0, (client.resp_bytes or 0) - setup_response_bytes) if future_request_count else 0
+        )
+        return manager.prepare_open_tunnel(
+            replace(self.affinity, origin_ip=origin_transaction.dst_ip),
+            client_transport_id=client.stable_id,
+            origin_transport_id=origin_transaction.stable_id,
+            client_zeek_uid=client.zeek_uid,
+            origin_zeek_uid=origin_transaction.zeek_uid,
+            tunnel_group_id=self.tunnel_group_id,
+            client_source_port=client.src_port,
+            origin_source_port=origin_transaction.src_port,
+            opened_at=client.started_at,
+            closes_at=client.closed_at,
+            setup_started_at=setup_started_at,
+            setup_completed_at=setup_completed_at,
+            setup_request_wire_bytes=setup_request_bytes,
+            setup_response_wire_bytes=setup_response_bytes,
+            planned_request_count=future_request_count,
+            aggregate_request_wire_bytes=aggregate_request_bytes,
+            aggregate_response_wire_bytes=aggregate_response_bytes,
+        )
+
+
+class ProxyReuseUnavailableError(StateError):
+    """The snapshotted tunnel cannot accept the deferred reused request."""
+
+
+def _proxy_manager_outcome(terminal_outcome: ProxyTerminalOutcome) -> ProxyChannelOutcome:
+    """Map proxy terminal truth to the manager's reuse/retirement contract."""
+
+    if terminal_outcome in {"success", "cache_hit"}:
+        return "success"
+    if terminal_outcome == "denied":
+        return "denied"
+    if terminal_outcome == "authentication_required":
+        return "authentication_required"
+    return "gateway_failure"
+
+
+def _aligned_reused_plan(
+    plan: ProxyTransactionPlan,
+    reuse: ExplicitProxyRequestReuse | ExplicitProxyTerminalRequest,
+) -> ProxyTransactionPlan:
+    """Align every reused phase to the manager's deterministic commit time."""
+
+    delta = reuse.canonical_request_time - plan.request_at
+    if not delta:
+        return plan
+
+    def shifted(value: datetime | None) -> datetime | None:
+        return value + delta if value is not None else None
+
+    return replace(
+        plan,
+        client_connect_at=plan.client_connect_at + delta,
+        tunnel_request_at=shifted(plan.tunnel_request_at),
+        request_at=plan.request_at + delta,
+        decision_at=plan.decision_at + delta,
+        dns_query_at=shifted(plan.dns_query_at),
+        dns_response_at=shifted(plan.dns_response_at),
+        origin_connect_at=shifted(plan.origin_connect_at),
+        tls_complete_at=shifted(plan.tls_complete_at),
+        origin_request_at=shifted(plan.origin_request_at),
+        origin_response_at=shifted(plan.origin_response_at),
+        origin_close_at=shifted(plan.origin_close_at),
+        client_flush_at=plan.client_flush_at + delta,
+        close_at=plan.close_at + delta,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ExplicitProxyRequestPreparation:
+    """Immutable pre-boundary inputs for one deferred reused request."""
+
+    affinity: ExplicitProxyChannelAffinity
+    snapshot: ExplicitProxyRequestSnapshot
+    stable_id: str
+    parent_action_group_id: str | None
+    proxy_hostname: str
+    request_time: datetime
+    proxy_context: ProxyContext
+    request_wire_bytes: int
+    response_wire_bytes: int
+    upload_body_bytes: int
+    scenario_end: datetime | None
+
+    def __post_init__(self) -> None:
+        """Normalize immutable times and validate directional request accounting."""
+
+        if not self.stable_id.strip():
+            raise ValueError("Explicit-proxy request preparation requires a stable_id")
+        if (
+            min(
+                self.request_wire_bytes,
+                self.response_wire_bytes,
+                self.upload_body_bytes,
+            )
+            < 0
+        ):
+            raise ValueError("Explicit-proxy request preparation bytes must be non-negative")
+        object.__setattr__(self, "request_time", ensure_utc(self.request_time))
+        if self.scenario_end is not None:
+            object.__setattr__(self, "scenario_end", ensure_utc(self.scenario_end))
+
+    def prepare(
+        self,
+        *,
+        manager: ExplicitProxyChannelManager,
+        timing_runtime: SourceTimingPlanningRuntime,
+    ) -> tuple[ExplicitProxyAdmissionToken, ProxyContext]:
+        """Plan phases and reserve the exact request inside the active root boundary."""
+
+        from evidenceforge.generation.actions.proxy_phase_planner import ProxyPhasePlanner
+
+        if not manager.authenticates_request_snapshot(self.snapshot):
+            raise StateError("Deferred proxy request has no authentic current-tunnel snapshot")
+        plan = ProxyPhasePlanner(timing_runtime).plan_reused_intent(
+            stable_id=self.stable_id,
+            parent_action_group_id=self.parent_action_group_id,
+            proxy_hostname=self.proxy_hostname,
+            proxy=self.proxy_context,
+            request_at=self.request_time,
+        )
+        if self.scenario_end is not None and plan.close_at > self.scenario_end:
+            raise ProxyReuseUnavailableError("Deferred proxy request exceeds the generation window")
+        token = manager.prepare_request(
+            self.affinity,
+            requested_at=plan.request_at,
+            completed_at=plan.close_at,
+            request_wire_bytes=self.request_wire_bytes,
+            response_wire_bytes=self.response_wire_bytes,
+            upload_body_bytes=self.upload_body_bytes,
+            outcome=_proxy_manager_outcome(plan.terminal_outcome),
+            expected_snapshot=self.snapshot,
+        )
+        if token is None:
+            raise ProxyReuseUnavailableError(
+                "Deferred proxy request no longer fits its exact tunnel"
+            )
+        if not manager.authenticates_admission_token(token):
+            manager.cancel_prepared_admission(token)
+            raise StateError("Deferred proxy request returned no authentic manager token")
+        reuse = token.result
+        if not isinstance(reuse, (ExplicitProxyRequestReuse, ExplicitProxyTerminalRequest)):
+            manager.cancel_prepared_admission(token)
+            raise StateError("Deferred proxy request returned an incompatible result")
+        aligned = _aligned_reused_plan(plan, reuse)
+        return token, replace(
+            self.proxy_context,
+            transaction=aligned,
+            time_taken=aligned.time_taken_ms,
+        )
 
 
 class ProxyTransactionExecutor(Protocol):
@@ -126,7 +344,10 @@ class ProxyTransactionExecutor(Protocol):
 
     state_manager: StateManager
     dispatcher: Any
-    _explicit_proxy_tunnels: dict[tuple[str, str, str, str, int, str], ActiveProxyTunnel]
+    timing_runtime: TimingRuntime
+    _proxy_channel_manager: ExplicitProxyChannelManager
+    _proxy_auth_policy: Any
+    _scenario_end_time: datetime
 
     def _build_proxy_context(
         self,
@@ -252,10 +473,12 @@ class ProxyTransactionExecutor(Protocol):
         firewall: FirewallContext | None = None,
         hostname: str | None = None,
         proxy_bypass: bool = False,
+        suppress_direct_http_channel: bool = False,
         preserve_http_outcome: bool = False,
         process_image: str | None = None,
         parent_action_group_id: str | None = None,
         preserve_start_time: bool = False,
+        identity_capture: NetworkConnectionIdentityCapture | None = None,
     ) -> str:
         """Generate a canonical connection event."""
         ...
@@ -332,73 +555,6 @@ class ProxyTransactionActionBundle:
         if proxy_context.method == "CONNECT" and proxy_context.status_code >= 400:
             proxy_context = self._shape_failed_connect(proxy_context)
         proxy_context = self._finalize_proxy_byte_semantics(proxy_context)
-        tunnel_key = (
-            request.src_ip,
-            proxy_sys.ip,
-            proxy_context.host,
-            dst_ip,
-            request.dst_port,
-            " ".join((proxy_context.user_agent or "").lower().split()),
-        )
-        reuse_safe = (
-            request.dst_port == 443
-            and request.http is not None
-            and request.http.trans_depth > 1
-            and request.dns is None
-            and not any(alert.origin == "built_in" for alert in request.ids_alerts)
-            and request.firewall is None
-            and request.proxy is None
-            and proxy_context.status_code < 400
-        )
-        if reuse_safe:
-            active_tunnel = executor._explicit_proxy_tunnels.get(tunnel_key)
-            if active_tunnel is not None:
-                elapsed = (request.time - active_tunnel.last_activity_at).total_seconds()
-                if 0 <= elapsed < generator_utils._EXPLICIT_PROXY_TUNNEL_TIMEOUT_S:
-                    from evidenceforge.generation.actions.proxy_phase_planner import (
-                        ProxyPhasePlanner,
-                    )
-
-                    reused_transaction = ProxyPhasePlanner().plan_reused(
-                        request,
-                        proxy_context,
-                        request.time,
-                    )
-                    child_cs_bytes = max(0, int(proxy_context.cs_bytes or 0))
-                    child_sc_bytes = max(0, int(proxy_context.sc_bytes or 0))
-                    has_payload_capacity = (
-                        child_cs_bytes <= active_tunnel.remaining_cs_bytes
-                        and child_sc_bytes <= active_tunnel.remaining_sc_bytes
-                    )
-                    if (
-                        active_tunnel.remaining_requests > 0
-                        and reused_transaction.close_at <= active_tunnel.closes_at
-                        and has_payload_capacity
-                    ):
-                        proxy_context = replace(
-                            proxy_context,
-                            transaction=reused_transaction,
-                            time_taken=reused_transaction.time_taken_ms,
-                        )
-                        executor._explicit_proxy_tunnels[tunnel_key] = ActiveProxyTunnel(
-                            last_activity_at=request.time,
-                            uid=active_tunnel.uid,
-                            tunnel_group_id=active_tunnel.tunnel_group_id,
-                            origin_uid=active_tunnel.origin_uid,
-                            closes_at=active_tunnel.closes_at,
-                            source_port=active_tunnel.source_port,
-                            remaining_requests=active_tunnel.remaining_requests - 1,
-                            remaining_cs_bytes=(active_tunnel.remaining_cs_bytes - child_cs_bytes),
-                            remaining_sc_bytes=(active_tunnel.remaining_sc_bytes - child_sc_bytes),
-                        )
-                        self._dispatch_reused_tunnel_proxy_request(
-                            proxy_context=proxy_context,
-                            proxy_sys=proxy_sys,
-                            active_tunnel=active_tunnel,
-                            listener_port=listener_port,
-                        )
-                        return active_tunnel.uid
-
         if (
             proxy_context.host
             and "." in proxy_context.host
@@ -424,6 +580,37 @@ class ProxyTransactionActionBundle:
                         dst_ip = resolved.ip or dst_ip
                 elif not request.preserve_explicit_proxy_dst_ip:
                     dst_ip = resolve_domain_ip(proxy_context.host, src_host=proxy_sys.hostname)
+
+        affinity = self._channel_affinity(
+            proxy_context=proxy_context,
+            proxy_sys=proxy_sys,
+            listener_port=listener_port,
+            origin_ip=dst_ip,
+        )
+        reuse_safe = (
+            request.dst_port == 443
+            and request.http is not None
+            and request.http.trans_depth > 1
+            and proxy_context.method != "CONNECT"
+            and request.dns is None
+            and not any(alert.origin == "built_in" for alert in request.ids_alerts)
+            and request.firewall is None
+            and request.proxy is None
+        )
+        if reuse_safe:
+            reused = self._prepare_reused_tunnel(
+                affinity=affinity,
+                proxy_context=proxy_context,
+            )
+            if reused is not None:
+                try:
+                    return self._publish_reused_tunnel_proxy_request(
+                        preparation=reused,
+                        proxy_sys=proxy_sys,
+                        listener_port=listener_port,
+                    )
+                except ProxyReuseUnavailableError:
+                    pass
 
         client_pid, client_process_image = self._resolve_client_process(proxy_context, proxy_sys)
         suppress_client_pid_inference = request.suppress_source_pid_inference or (
@@ -464,7 +651,11 @@ class ProxyTransactionActionBundle:
                 client_time = process_visible_time
         from evidenceforge.generation.actions.proxy_phase_planner import ProxyPhasePlanner
 
-        phase_plan = ProxyPhasePlanner().plan(request, proxy_context, client_time)
+        phase_plan = ProxyPhasePlanner(getattr(executor, "timing_runtime", None)).plan(
+            request,
+            proxy_context,
+            client_time,
+        )
         proxy_context = replace(
             proxy_context,
             transaction=phase_plan,
@@ -553,6 +744,7 @@ class ProxyTransactionActionBundle:
                 proxy_context=proxy_context,
             )
 
+        client_identity = NetworkConnectionIdentityCapture()
         client_uid = executor.generate_connection(
             src_ip=request.src_ip,
             dst_ip=proxy_sys.ip,
@@ -575,13 +767,19 @@ class ProxyTransactionActionBundle:
             proxy=proxy_context,
             hostname="",
             proxy_bypass=True,
+            suppress_direct_http_channel=True,
             preserve_http_outcome=True,
             process_image=client_process_image,
             suppress_source_pid_inference=suppress_client_pid_inference,
             parent_action_group_id=self.anchor.stable_id,
             preserve_start_time=True,
+            identity_capture=client_identity,
         )
-        client_leg_file_transfers = tuple(getattr(executor, "_last_connection_file_transfers", ()))
+        client_transaction = client_identity.require()
+        client_root = client_identity.require_prepared_root()
+        client_receipt = client_identity.require_receipt()
+        client_transport_id = client_transaction.stable_id
+        client_leg_file_transfers = client_root.result.file_transfers
 
         if egress_time is None or egress_duration is None:
             return client_uid
@@ -608,114 +806,203 @@ class ProxyTransactionActionBundle:
                 parent_action_group_id=self.anchor.stable_id,
             )
 
-        origin_uid = executor.generate_connection(
-            src_ip=proxy_sys.ip,
-            dst_ip=dst_ip,
-            time=egress_time,
-            dst_port=request.dst_port,
-            proto=request.proto,
-            service=request.service,
-            duration=egress_duration,
-            orig_bytes=request.orig_bytes,
-            resp_bytes=egress_resp_bytes,
-            emit_dns=False,
-            pid=-1,
-            source_system=proxy_sys,
-            conn_state=phase_plan.origin_conn_state,
-            dns=request.dns,
-            ids_alerts=list(request.ids_alerts),
-            http=egress_http,
-            file_transfer=egress_file_transfer,
-            file_transfers=egress_file_transfers,
-            pe_analyses=egress_pes,
-            ocsp=request.ocsp,
-            ocsp_transaction=request.ocsp_transaction,
-            firewall=request.firewall,
-            hostname=proxy_context.host,
-            proxy_bypass=True,
-            preserve_http_outcome=True,
-            suppress_prereq_dns=True,
-            parent_action_group_id=self.anchor.stable_id,
-            preserve_start_time=True,
-        )
-        egress_leg_file_transfers = tuple(getattr(executor, "_last_connection_file_transfers", ()))
+        explicit_proxy_open_preparation = None
+        scenario_end = getattr(executor, "_scenario_end_time", None)
+        if (
+            request.dst_port == 443
+            and phase_plan.terminal_outcome == "success"
+            and (scenario_end is None or phase_plan.close_at <= ensure_utc(scenario_end))
+        ):
+            explicit_proxy_open_preparation = ExplicitProxyOpenPreparation(
+                affinity=affinity,
+                client_root=client_root,
+                client_receipt=client_receipt,
+                phase_plan=phase_plan,
+                proxy_context=proxy_context,
+                tunnel_group_id=self.anchor.stable_id,
+                planned_request_count=planned_request_count,
+            )
+
+        origin_identity = NetworkConnectionIdentityCapture()
+        _origin_uid = NetworkConnectionActionBundle(
+            executor,
+            NetworkConnectionRequest(
+                src_ip=proxy_sys.ip,
+                dst_ip=dst_ip,
+                time=egress_time,
+                dst_port=request.dst_port,
+                proto=request.proto,
+                service=request.service,
+                duration=egress_duration,
+                orig_bytes=request.orig_bytes,
+                resp_bytes=egress_resp_bytes,
+                emit_dns=False,
+                pid=-1,
+                source_system=proxy_sys,
+                conn_state=phase_plan.origin_conn_state,
+                dns=request.dns,
+                ids_alerts=request.ids_alerts,
+                http=egress_http,
+                file_transfer=egress_file_transfer,
+                file_transfers=egress_file_transfers,
+                pe_analyses=egress_pes,
+                ocsp=request.ocsp,
+                ocsp_transaction=request.ocsp_transaction,
+                firewall=request.firewall,
+                hostname=proxy_context.host,
+                proxy_bypass=True,
+                suppress_direct_http_channel=True,
+                preserve_http_outcome=True,
+                suppress_prereq_dns=True,
+                parent_action_group_id=self.anchor.stable_id,
+                preserve_start_time=True,
+                identity_capture=origin_identity,
+                explicit_proxy_open_preparation=explicit_proxy_open_preparation,
+            ),
+        ).execute()
+        origin_transaction = origin_identity.require()
+        origin_root = origin_identity.require_prepared_root()
+        egress_leg_file_transfers = origin_root.result.file_transfers
         executor._last_connection_file_transfers = (
             client_leg_file_transfers + egress_leg_file_transfers
         )
-        if request.dst_port == 443 and phase_plan.terminal_outcome == "success":
-            executor._explicit_proxy_tunnels[tunnel_key] = ActiveProxyTunnel(
-                last_activity_at=client_time,
-                uid=client_uid,
-                tunnel_group_id=self.anchor.stable_id,
-                origin_uid=origin_uid,
-                closes_at=client_time + timedelta(seconds=client_duration),
-                source_port=src_port,
-                remaining_requests=planned_request_count - 1,
-                remaining_cs_bytes=max(
-                    0,
-                    client_orig_bytes
-                    - phase_plan.tunnel_setup_cs_bytes
-                    - max(0, int(proxy_context.cs_bytes or 0)),
-                ),
-                remaining_sc_bytes=max(
-                    0,
-                    client_resp_bytes
-                    - phase_plan.tunnel_setup_sc_bytes
-                    - max(0, int(proxy_context.sc_bytes or 0)),
-                ),
-            )
+        executor._last_connection_effective_dst_ip = origin_root.result.effective_dst_ip
+        if explicit_proxy_open_preparation is not None:
+            application_receipt = origin_identity.require_application_receipt()
+            if (
+                not isinstance(application_receipt, ExplicitProxyAdmissionReceipt)
+                or not executor._proxy_channel_manager.authenticates_admission_receipt(
+                    application_receipt
+                )
+                or application_receipt.current_transport_id != origin_transaction.stable_id
+                or application_receipt.prerequisite_transport_ids != (client_transport_id,)
+            ):
+                raise AssertionError("Prepared proxy origin returned no authentic manager receipt")
         return client_uid
 
-    def _dispatch_reused_tunnel_proxy_request(
+    def _channel_affinity(
         self,
         *,
         proxy_context: ProxyContext,
         proxy_sys: System,
-        active_tunnel: ActiveProxyTunnel,
         listener_port: int,
-    ) -> None:
-        """Dispatch one proxy-visible request on an already-open CONNECT tunnel."""
+        origin_ip: str,
+    ) -> ExplicitProxyChannelAffinity:
+        """Return the exact semantic boundary for permitted tunnel reuse."""
 
-        from evidenceforge.events.lifecycle import ActionLifecycleContext
+        policy = getattr(self.executor, "_proxy_auth_policy", None)
+        if policy is not None and hasattr(policy, "model_dump_json"):
+            policy_shape = str(policy.model_dump_json(exclude_none=False))
+        else:
+            policy_shape = type(policy).__qualname__ if policy is not None else "default"
+        policy_id = (
+            f"{policy_shape}|action={proxy_context.proxy_action}|proxy={proxy_context.proxy_fqdn}"
+        )
+        return ExplicitProxyChannelAffinity(
+            client_ip=self.request.src_ip,
+            proxy_ip=proxy_sys.ip,
+            proxy_port=listener_port,
+            origin_host=proxy_context.host or origin_ip,
+            origin_ip=origin_ip,
+            origin_port=self.request.dst_port,
+            user_agent=proxy_context.user_agent,
+            auth_identity=proxy_context.username,
+            policy_id=policy_id,
+        )
+
+    def _prepare_reused_tunnel(
+        self,
+        *,
+        affinity: ExplicitProxyChannelAffinity,
+        proxy_context: ProxyContext,
+    ) -> ExplicitProxyRequestPreparation | None:
+        """Capture immutable current-tunnel truth without timing or reservation mutation."""
+
+        scenario_end = getattr(self.executor, "_scenario_end_time", None)
+        if scenario_end is not None and ensure_utc(self.request.time) >= ensure_utc(scenario_end):
+            return None
+        snapshot = self.executor._proxy_channel_manager.snapshot_request(
+            affinity,
+            requested_at=self.request.time,
+        )
+        if snapshot is None:
+            return None
+        child_cs_bytes = max(0, int(proxy_context.cs_bytes or 0))
+        child_sc_bytes = max(0, int(proxy_context.sc_bytes or 0))
+        proxy_hostname = self.request.proxy_chain[0].hostname if self.request.proxy_chain else ""
+        return ExplicitProxyRequestPreparation(
+            affinity=affinity,
+            snapshot=snapshot,
+            stable_id=self.request.stable_id,
+            parent_action_group_id=self.request.parent_action_group_id,
+            proxy_hostname=proxy_hostname,
+            request_time=self.request.time,
+            proxy_context=proxy_context,
+            request_wire_bytes=child_cs_bytes,
+            response_wire_bytes=child_sc_bytes,
+            upload_body_bytes=max(0, int(proxy_context.request_body_bytes or 0)),
+            scenario_end=scenario_end,
+        )
+
+    def _publish_reused_tunnel_proxy_request(
+        self,
+        *,
+        preparation: ExplicitProxyRequestPreparation,
+        proxy_sys: System,
+        listener_port: int,
+    ) -> str:
+        """Publish one proxy request as an authority-owned application child root."""
 
         request = self.request
-        transaction = proxy_context.transaction
-        event_time = transaction.request_at if transaction is not None else request.time
-        reused_event = OccurrenceBuilder(
-            timestamp=event_time,
-            event_type="connection",
-            network=NetworkTransactionPlan(
-                stable_id=self.anchor.stable_id,
-                hostname=proxy_context.host,
-                outcome="success",
-                phase_times=(("application_request", event_time),),
-                started_at=event_time,
-                closed_at=None,
-                src_ip=request.src_ip,
-                src_port=active_tunnel.source_port,
-                dst_ip=proxy_sys.ip,
-                dst_port=listener_port,
-                protocol="tcp",
-                service="http",
-                zeek_uid=active_tunnel.uid,
-                conn_id="",
-                duration=None,
-                conn_state="SF",
-                history="",
-                traffic=NetworkTrafficLedger(),
-                local_orig=True,
-                local_resp=True,
-                application_layer_only=True,
-            ),
-            proxy=proxy_context,
-            lifecycle=ActionLifecycleContext(
-                group_id=self.anchor.stable_id,
-                canonical_start=event_time,
-                phase="dependent",
-                parent_group_id=active_tunnel.tunnel_group_id,
-            ),
+        tunnel = preparation.snapshot.tunnel
+        parent = self.executor.state_manager.get_connection_by_transaction_id(
+            tunnel.client_transport_id
         )
-        self.executor.dispatcher.dispatch_builder(reused_event)
+        if parent is None:
+            raise StateError("Deferred explicit-proxy request has no canonical client parent")
+        capture = NetworkConnectionIdentityCapture()
+        uid = NetworkConnectionActionBundle(
+            self.executor,
+            NetworkConnectionRequest(
+                src_ip=parent.src_ip,
+                dst_ip=parent.dst_ip,
+                time=preparation.request_time,
+                dst_port=parent.dst_port or listener_port,
+                proto=parent.protocol,
+                service="http",
+                duration=max(0.000001, float(request.duration or 0.000001)),
+                orig_bytes=preparation.request_wire_bytes,
+                resp_bytes=preparation.response_wire_bytes,
+                src_port=parent.src_port,
+                pid=-1,
+                source_system=request.source_system,
+                conn_state="SF",
+                proxy=preparation.proxy_context,
+                hostname="",
+                proxy_bypass=True,
+                suppress_direct_http_channel=True,
+                preserve_http_outcome=True,
+                suppress_application_side_effects=True,
+                suppress_source_pid_inference=True,
+                preserve_explicit_payload=True,
+                parent_action_group_id=tunnel.tunnel_group_id,
+                preserve_start_time=True,
+                identity_capture=capture,
+                explicit_proxy_request_preparation=preparation,
+            ),
+        ).execute()
+        application_receipt = capture.require_application_receipt()
+        if (
+            uid != tunnel.client_zeek_uid
+            or not isinstance(application_receipt, ExplicitProxyAdmissionReceipt)
+            or not self.executor._proxy_channel_manager.authenticates_admission_receipt(
+                application_receipt
+            )
+            or application_receipt.current_transport_id != tunnel.client_transport_id
+            or application_receipt.prerequisite_transport_ids
+        ):
+            raise AssertionError("Prepared proxy request returned no authentic manager receipt")
+        return uid
 
     def _build_client_http(self, proxy_context: ProxyContext) -> HttpContext:
         """Build the client-to-proxy HTTP context."""

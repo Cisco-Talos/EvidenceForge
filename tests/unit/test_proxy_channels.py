@@ -18,6 +18,7 @@ from evidenceforge.generation.proxy_channels import (
     ExplicitProxyChannelAffinity,
     ExplicitProxyChannelManager,
     ExplicitProxyRequestReuse,
+    ExplicitProxyTerminalRequest,
     ExplicitProxyTunnelOpen,
 )
 from evidenceforge.models.exceptions import StateError
@@ -216,12 +217,246 @@ def test_prepared_open_and_request_commit_exact_frozen_results() -> None:
     assert isinstance(request, ExplicitProxyRequestReuse)
     assert request.tunnel == opened.tunnel
     assert committed_request.receipt.operation_id == request.operation_id
-    assert committed_request.receipt.current_transport_id == request.tunnel.origin_transport_id
-    assert committed_request.receipt.prerequisite_transport_ids == (
-        request.tunnel.client_transport_id,
+    assert committed_request.receipt.current_transport_id == request.tunnel.client_transport_id
+    assert committed_request.receipt.prerequisite_transport_ids == ()
+    request_swapped = replace(
+        committed_request.receipt,
+        current_transport_id=request.tunnel.origin_transport_id,
+        prerequisite_transport_ids=(request.tunnel.client_transport_id,),
     )
+    request_missing = replace(committed_request.receipt, current_transport_id="")
+    request_foreign = replace(
+        committed_request.receipt,
+        current_transport_id="foreign-client-transport",
+    )
+    assert not manager.authenticates_admission_receipt(request_swapped)
+    assert not manager.authenticates_admission_receipt(request_missing)
+    assert not manager.authenticates_admission_receipt(request_foreign)
     after = manager.channel_snapshot(opened.tunnel.channel_id)
     assert after is not None and after.reserved_operations == 2
+
+
+def test_prepared_terminal_request_is_atomic_cancelable_and_receipted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Terminal preparation keeps the tunnel open until one atomic common/proxy commit."""
+
+    manager = _manager()
+    opened = _open(manager, request_count=2)
+    assert opened is not None
+    before = manager.channel_snapshot(opened.tunnel.channel_id)
+    assert before is not None and before.is_open
+
+    cancelled = manager.prepare_request(
+        _affinity(),
+        requested_at=_START + timedelta(seconds=1),
+        completed_at=_START + timedelta(seconds=1, milliseconds=25),
+        request_wire_bytes=100,
+        response_wire_bytes=200,
+        outcome="denied",
+    )
+    assert cancelled is not None
+    assert isinstance(cancelled.result, ExplicitProxyTerminalRequest)
+    prepared = manager.census()
+    assert prepared.prepared_admissions == 1
+    assert prepared.application.prepared_admissions == 1
+    assert manager.channel_snapshot(opened.tunnel.channel_id) == before
+    assert manager.get_tunnel(opened.tunnel.channel_id) == opened.tunnel
+    assert manager.cancel_prepared_admission(cancelled)
+    assert manager.census().prepared_admissions == 0
+    assert manager.census().application.prepared_admissions == 0
+    assert manager.channel_snapshot(opened.tunnel.channel_id) == before
+
+    aborted = manager.prepare_request(
+        _affinity(),
+        requested_at=_START + timedelta(seconds=1),
+        completed_at=_START + timedelta(seconds=1, milliseconds=25),
+        request_wire_bytes=100,
+        response_wire_bytes=200,
+        outcome="denied",
+    )
+    assert aborted is not None
+    with manager.prepared_admission(aborted):
+        assert manager.channel_snapshot(opened.tunnel.channel_id) == before
+    assert manager.census().prepared_admissions == 0
+    assert manager.census().application.prepared_admissions == 0
+    assert manager.channel_snapshot(opened.tunnel.channel_id) == before
+
+    token = manager.prepare_request(
+        _affinity(),
+        requested_at=_START + timedelta(seconds=1),
+        completed_at=_START + timedelta(seconds=1, milliseconds=25),
+        request_wire_bytes=100,
+        response_wire_bytes=200,
+        outcome="denied",
+    )
+    assert token is not None
+
+    def fail_public_close(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("terminal proxy commit called the non-atomic public close API")
+
+    monkeypatch.setattr(ApplicationChannelRegistry, "close_channel_by_token", fail_public_close)
+    with manager.prepared_admission(token) as transaction:
+        committed = transaction.commit_no_fail()
+
+    terminal = committed.result
+    assert isinstance(terminal, ExplicitProxyTerminalRequest)
+    assert terminal.outcome == "denied"
+    assert terminal.close_reason == "terminal denied"
+    assert manager.authenticates_admission_receipt(committed.receipt)
+    assert committed.receipt.current_transport_id == terminal.tunnel.client_transport_id
+    assert committed.receipt.prerequisite_transport_ids == ()
+    assert committed.receipt.sidecar_result == terminal
+    assert committed.receipt.application_receipt.snapshot.closed_at == terminal.close_at
+    assert committed.receipt.application_receipt.snapshot.close_reason == terminal.close_reason
+    assert manager.get_tunnel(terminal.tunnel.channel_id) is None
+    closed = manager.channel_snapshot(terminal.tunnel.channel_id)
+    assert closed is not None
+    assert closed.reserved_operations == 2
+    assert closed.completed_operations == 2
+    assert closed.closed_at == terminal.close_at
+    assert closed.close_reason == terminal.close_reason
+    assert manager.census().prepared_admissions == 0
+    assert manager.census().application.prepared_admissions == 0
+    changed_outcome = replace(
+        committed.receipt,
+        sidecar_result=replace(terminal, outcome="gateway_failure"),
+    )
+    changed_reason = replace(
+        committed.receipt,
+        sidecar_result=replace(terminal, close_reason="retargeted close"),
+    )
+    changed_time = replace(
+        committed.receipt,
+        sidecar_result=replace(terminal, close_at=terminal.close_at + timedelta(microseconds=1)),
+    )
+    assert not manager.authenticates_admission_receipt(changed_outcome)
+    assert not manager.authenticates_admission_receipt(changed_reason)
+    assert not manager.authenticates_admission_receipt(changed_time)
+
+
+def test_prepared_terminal_request_tamper_foreign_stale_and_overflow_preserve_tunnel() -> None:
+    """Every failed terminal capability path retains the exact live tunnel unchanged."""
+
+    manager = _manager()
+    foreign = _manager()
+    opened = _open(manager)
+    assert opened is not None
+    before = manager.channel_snapshot(opened.tunnel.channel_id)
+    assert before is not None
+    token = manager.prepare_request(
+        _affinity(),
+        requested_at=_START + timedelta(seconds=1),
+        completed_at=_START + timedelta(seconds=1),
+        request_wire_bytes=100,
+        response_wire_bytes=200,
+        outcome="denied",
+    )
+    assert token is not None
+    with pytest.raises(StateError, match="another manager"):
+        with foreign.prepared_admission(token):
+            pytest.fail("foreign manager unexpectedly claimed a terminal request")
+    assert manager.cancel_prepared_admission(token)
+    with pytest.raises(StateError, match="stale or already consumed"):
+        with manager.prepared_admission(token):
+            pytest.fail("cancelled terminal request unexpectedly entered a claim")
+    assert manager.channel_snapshot(opened.tunnel.channel_id) == before
+
+    tampered = manager.prepare_request(
+        _affinity(),
+        requested_at=_START + timedelta(seconds=1),
+        completed_at=_START + timedelta(seconds=1),
+        request_wire_bytes=100,
+        response_wire_bytes=200,
+        outcome="denied",
+    )
+    assert tampered is not None
+    object.__setattr__(tampered.application_token, "channel_close_reason", "retargeted close")
+    with pytest.raises(StateError, match="integrity validation failed"):
+        with manager.prepared_admission(tampered):
+            pytest.fail("tampered terminal request unexpectedly entered a claim")
+    assert manager.census().prepared_admissions == 0
+    assert manager.census().application.prepared_admissions == 0
+    assert manager.channel_snapshot(opened.tunnel.channel_id) == before
+    assert manager.get_tunnel(opened.tunnel.channel_id) == opened.tunnel
+
+
+def test_request_snapshot_is_signed_nonmutating_and_fences_generation_drift() -> None:
+    """Deferred request snapshots authenticate exact affinity, state, and ABA generation."""
+
+    manager = _manager()
+    foreign = _manager()
+    opened = _open(manager, request_count=2)
+    assert opened is not None
+    before = manager.channel_snapshot(opened.tunnel.channel_id)
+    snapshot = manager.snapshot_request(
+        _affinity(),
+        requested_at=_START + timedelta(seconds=1),
+    )
+    assert snapshot is not None
+    assert snapshot.tunnel == opened.tunnel
+    assert snapshot.application_snapshot == before
+    assert manager.authenticates_request_snapshot(snapshot)
+    assert not foreign.authenticates_request_snapshot(snapshot)
+    assert manager.census().prepared_admissions == 0
+    assert manager.census().application.prepared_admissions == 0
+
+    changed_time = replace(snapshot, requested_at=snapshot.requested_at + timedelta(microseconds=1))
+    changed_generation = replace(
+        snapshot,
+        generation_token=replace(
+            snapshot.generation_token,
+            generation=snapshot.generation_token.generation + 1,
+        ),
+    )
+    assert not manager.authenticates_request_snapshot(changed_time)
+    assert not manager.authenticates_request_snapshot(changed_generation)
+    with pytest.raises(StateError, match="authentic current-tunnel snapshot"):
+        manager.prepare_request(
+            _affinity(),
+            requested_at=snapshot.requested_at,
+            completed_at=snapshot.requested_at + timedelta(milliseconds=25),
+            request_wire_bytes=100,
+            response_wire_bytes=200,
+            expected_snapshot=changed_generation,
+        )
+    assert manager.channel_snapshot(opened.tunnel.channel_id) == before
+
+    registry = manager.application_registry
+    routed = registry._channel_route(opened.tunnel.channel_id)
+    assert routed is not None
+    _route, shard_id, channel_handle = routed
+    shard = registry._owner_shard(shard_id, create=False)
+    assert shard is not None
+    with shard.lock:
+        retained = shard.channels.delete(channel_handle)
+        assert shard.channels.insert(retained) == channel_handle
+    assert manager.authenticates_request_snapshot(snapshot)
+    with pytest.raises(StateError, match="snapshot is stale"):
+        manager.prepare_request(
+            _affinity(),
+            requested_at=snapshot.requested_at,
+            completed_at=snapshot.requested_at + timedelta(milliseconds=25),
+            request_wire_bytes=100,
+            response_wire_bytes=200,
+            expected_snapshot=snapshot,
+        )
+    assert manager.census().prepared_admissions == 0
+    assert manager.census().application.prepared_admissions == 0
+    assert manager.channel_snapshot(opened.tunnel.channel_id) == before
+    assert manager.get_tunnel(opened.tunnel.channel_id) == opened.tunnel
+
+    overflow = manager.prepare_request(
+        _affinity(),
+        requested_at=_START + timedelta(seconds=1),
+        completed_at=_START + timedelta(seconds=1),
+        request_wire_bytes=1_001,
+        response_wire_bytes=0,
+        outcome="denied",
+    )
+    assert overflow is None
+    assert manager.channel_snapshot(opened.tunnel.channel_id) == before
+    assert manager.get_tunnel(opened.tunnel.channel_id) == opened.tunnel
 
 
 def test_prepared_claim_body_holds_no_proxy_or_common_lock() -> None:
@@ -286,6 +521,8 @@ def test_prepared_commit_receipt_rejects_wrong_manager_and_nested_tamper() -> No
     assert not manager.authenticates_admission_receipt(swapped_legs)
     missing_prerequisite = replace(committed.receipt, prerequisite_transport_ids=())
     assert not manager.authenticates_admission_receipt(missing_prerequisite)
+    foreign_origin = replace(committed.receipt, current_transport_id="foreign-origin-transport")
+    assert not manager.authenticates_admission_receipt(foreign_origin)
 
     changed_result = replace(
         committed.receipt,
@@ -417,18 +654,30 @@ def test_prepared_replacement_and_overflow_abort_preserve_existing_tunnel() -> N
     assert manager.get_tunnel(replacement_result.tunnel.channel_id) == replacement_result.tunnel
 
 
-def test_setup_only_tunnel_summarizes_setup_without_open_reuse_state() -> None:
+def test_setup_only_tunnel_summarizes_setup_without_open_reuse_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A successful CONNECT setup may have zero request children."""
 
     manager = _manager()
-    opened = _open(
+
+    def fail_public_close(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("setup-only proxy commit called the non-atomic public close API")
+
+    monkeypatch.setattr(ApplicationChannelRegistry, "close_channel_by_token", fail_public_close)
+    token = _prepare_open(
         manager,
         request_count=0,
         aggregate_request_bytes=0,
         aggregate_response_bytes=0,
     )
+    assert token is not None
+    with manager.prepared_admission(token) as prepared:
+        committed = prepared.commit_no_fail()
+    assert manager.authenticates_admission_receipt(committed.receipt)
+    opened = committed.result
 
-    assert opened is not None
+    assert isinstance(opened, ExplicitProxyTunnelOpen)
     assert opened.remaining_request_count == 0
     assert manager.get_tunnel(opened.tunnel.channel_id) is None
     snapshot = manager.channel_snapshot(opened.tunnel.channel_id)
@@ -439,6 +688,11 @@ def test_setup_only_tunnel_summarizes_setup_without_open_reuse_state() -> None:
     assert snapshot.completed_operations == 1
     assert snapshot.reserved_initiator_bytes == 120
     assert snapshot.reserved_responder_bytes == 240
+    census = manager.census()
+    assert census.open_tunnel_views == 0
+    assert census.prepared_admissions == 0
+    assert census.application.open_channels == 0
+    assert census.application.prepared_admissions == 0
 
 
 def test_one_child_reuses_exact_identity_and_does_not_double_count_upload() -> None:
@@ -788,7 +1042,8 @@ def test_setup_and_child_error_outcomes_never_leave_reusable_state() -> None:
     )
     snapshot = child_error_manager.channel_snapshot(opened.tunnel.channel_id)
     assert snapshot is not None
-    assert snapshot.reserved_operations == 1
+    assert snapshot.reserved_operations == 2
+    assert snapshot.completed_operations == 2
     assert snapshot.close_reason == "terminal denied"
     assert child_error_manager.census().open_tunnel_views == 0
 

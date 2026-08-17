@@ -27,9 +27,11 @@ from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.generation.actions.proxy_phase_planner import ProxyPhasePlanner
 from evidenceforge.generation.actions.proxy_transaction import ProxyTransactionRequest
 from evidenceforge.generation.activity.tls_realism import ssl_analyzer_delay_ms
+from evidenceforge.generation.network_observation import NetworkObservationPlanner
 from evidenceforge.generation.source_timing import (
     SourceTimingPlanner,
     SourceTimingPreparationReceipt,
+    active_source_timing_planning_runtime,
 )
 from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models.exceptions import StateError
@@ -255,6 +257,36 @@ def test_planning_runtime_is_non_owning_and_expires_when_preparation_seals() -> 
     preparation.cancel()
     with pytest.raises(StateError, match="no longer open"):
         _ = planning_runtime.audit
+
+
+def test_active_planning_runtime_is_total_and_exact_owner_only() -> None:
+    """Only the active open exact owner can recover the non-owning planning view."""
+
+    planner = _planner("source-timing-active-owner")
+    foreign = _planner("source-timing-foreign-owner")
+    assert active_source_timing_planning_runtime(planner.timing_runtime) is None
+
+    with planner.prepared_planning() as preparation:
+        planning_runtime = active_source_timing_planning_runtime(planner.timing_runtime)
+        assert planning_runtime is preparation.planning_runtime
+        assert active_source_timing_planning_runtime(foreign.timing_runtime) is None
+        observation_planner = NetworkObservationPlanner(
+            None,
+            timing_runtime=planner.timing_runtime,
+        )
+        assert observation_planner._runtime_for_event(T0) is planning_runtime
+        assert not hasattr(planning_runtime, "cancel")
+        assert not hasattr(planning_runtime, "claimed_commit")
+        assert not hasattr(planning_runtime, "commit_no_fail")
+
+        preparation.seal()
+        assert active_source_timing_planning_runtime(planner.timing_runtime) is None
+        assert observation_planner._runtime_for_event(T0) is planner.timing_runtime
+        with pytest.raises(StateError, match="no longer open"):
+            _ = planning_runtime.sampler
+
+    assert active_source_timing_planning_runtime(planner.timing_runtime) is None
+    preparation.cancel()
 
 
 def test_tls_and_proxy_planners_use_the_exact_non_owning_staged_runtime() -> None:

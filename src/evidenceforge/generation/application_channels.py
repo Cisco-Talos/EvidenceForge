@@ -1375,12 +1375,19 @@ class ApplicationChannelAdmissionToken:
     cancelled or claimed by :meth:`ApplicationChannelRegistry.prepared_admission`.
     """
 
-    kind: Literal["open_completed", "completed_operation"]
+    kind: Literal[
+        "open_completed",
+        "open_completed_close",
+        "completed_operation",
+        "completed_operation_close",
+    ]
     reservation: ApplicationOperationReservation
     identity: ApplicationChannelIdentity | None = None
     replacement_channel_id: str = ""
     replacement_closed_at: datetime | None = None
     replacement_reason: str = ""
+    channel_closed_at: datetime | None = None
+    channel_close_reason: str = ""
     _registry_token: int = field(repr=False, default=0)
     _reservation_id: int = field(repr=False, default=0)
     _owner_shard_id: int = field(repr=False, default=0)
@@ -1401,6 +1408,8 @@ class ApplicationChannelAdmissionToken:
             candidates.append(self.identity.opened_at)
         if self.replacement_closed_at is not None:
             candidates.append(self.replacement_closed_at)
+        if self.channel_closed_at is not None:
+            candidates.append(self.channel_closed_at)
         return min(candidates)
 
     @property
@@ -1425,6 +1434,8 @@ def _application_channel_admission_integrity_token(
             token.replacement_channel_id,
             token.replacement_closed_at,
             token.replacement_reason,
+            token.channel_closed_at,
+            token.channel_close_reason,
             token._registry_token,
             token._reservation_id,
             token._owner_shard_id,
@@ -1458,7 +1469,12 @@ class _ApplicationChannelAdmissionCapability:
 class ApplicationChannelAdmissionReceipt:
     """Authenticated proof of one committed prepared channel admission."""
 
-    kind: Literal["open_completed", "completed_operation"]
+    kind: Literal[
+        "open_completed",
+        "open_completed_close",
+        "completed_operation",
+        "completed_operation_close",
+    ]
     publication_token: str
     channel_id: str
     operation_id: str
@@ -2435,6 +2451,50 @@ class ApplicationChannelRegistry:
         replacement_closed_at: datetime | None = None,
         replacement_reason: str = "",
     ) -> ApplicationChannelAdmissionToken:
+        """Reserve a fresh channel and first completed operation without publishing them."""
+
+        return self._prepare_open_channel_with_completed_operation(
+            identity,
+            reservation,
+            replacement_channel_id=replacement_channel_id,
+            replacement_closed_at=replacement_closed_at,
+            replacement_reason=replacement_reason,
+        )
+
+    def prepare_open_channel_with_completed_operation_and_close(
+        self,
+        identity: ApplicationChannelIdentity,
+        reservation: ApplicationOperationReservation,
+        *,
+        closed_at: datetime,
+        reason: str,
+        replacement_channel_id: str = "",
+        replacement_closed_at: datetime | None = None,
+        replacement_reason: str = "",
+    ) -> ApplicationChannelAdmissionToken:
+        """Reserve one fresh channel, completed operation, and exact atomic close."""
+
+        return self._prepare_open_channel_with_completed_operation(
+            identity,
+            reservation,
+            channel_closed_at=closed_at,
+            channel_close_reason=reason,
+            replacement_channel_id=replacement_channel_id,
+            replacement_closed_at=replacement_closed_at,
+            replacement_reason=replacement_reason,
+        )
+
+    def _prepare_open_channel_with_completed_operation(
+        self,
+        identity: ApplicationChannelIdentity,
+        reservation: ApplicationOperationReservation,
+        *,
+        channel_closed_at: datetime | None = None,
+        channel_close_reason: str = "",
+        replacement_channel_id: str = "",
+        replacement_closed_at: datetime | None = None,
+        replacement_reason: str = "",
+    ) -> ApplicationChannelAdmissionToken:
         """Reserve a fresh channel and first completed operation without publishing them.
 
         An optional exact replacement is validated and reserved as part of the
@@ -2455,6 +2515,9 @@ class ApplicationChannelRegistry:
         reason = replacement_reason.strip()
         if replacement_id and not reason:
             raise ValueError("A prepared application-channel replacement requires a reason")
+        close_reason = channel_close_reason.strip()
+        if (channel_closed_at is None) != (not close_reason):
+            raise ValueError("channel closed_at and close reason must be supplied together")
         prepared_identity = _PackedChannelStore.prepare_identity(identity)
 
         with self._gate.mutation(), self._prepared_lock:
@@ -2568,10 +2631,39 @@ class ApplicationChannelRegistry:
                     f"{self._max_reusable_per_affinity}"
                 )
             completed = self._initial_completed_snapshot(identity, reservation)
+            canonical_channel_close: datetime | None = None
+            if channel_closed_at is not None:
+                canonical_channel_close = self._require_window_time(
+                    channel_closed_at,
+                    "channel closed_at",
+                    allow_end_boundary=True,
+                )
+                if canonical_channel_close < self._watermark:
+                    raise StateError(
+                        "Application channels cannot close before the current watermark"
+                    )
+                if canonical_channel_close < completed.last_activity_at:
+                    raise StateError(
+                        "Prepared application channel close cannot precede its operation"
+                    )
+                if canonical_channel_close > self._effective_deadline(completed):
+                    raise StateError(
+                        "Application channel cannot close after its idle, hard, or "
+                        "transport deadline"
+                    )
+                completed = replace(
+                    completed,
+                    closed_at=canonical_channel_close,
+                    close_reason=close_reason,
+                )
             reservation_id = self._next_prepared_reservation_id
             self._next_prepared_reservation_id += 1
             token = ApplicationChannelAdmissionToken(
-                kind="open_completed",
+                kind=(
+                    "open_completed_close"
+                    if canonical_channel_close is not None
+                    else "open_completed"
+                ),
                 reservation=reservation,
                 identity=identity,
                 replacement_channel_id=replacement_id,
@@ -2579,6 +2671,8 @@ class ApplicationChannelRegistry:
                     ensure_utc(replacement_closed_at) if replacement_closed_at is not None else None
                 ),
                 replacement_reason=reason,
+                channel_closed_at=canonical_channel_close,
+                channel_close_reason=close_reason,
                 _registry_token=id(self),
                 _reservation_id=reservation_id,
                 _owner_shard_id=owner_shard_id,
@@ -2607,7 +2701,48 @@ class ApplicationChannelRegistry:
     ) -> ApplicationChannelAdmissionToken:
         """Reserve one immediate operation without consuming channel budget."""
 
+        return self._prepare_completed_operation(reservation)
+
+    def prepare_completed_operation_and_close(
+        self,
+        reservation: ApplicationOperationReservation,
+        *,
+        closed_at: datetime,
+        reason: str,
+    ) -> ApplicationChannelAdmissionToken:
+        """Reserve one immediate operation and its exact atomic channel close."""
+
+        return self._prepare_completed_operation(
+            reservation,
+            closed_at=closed_at,
+            close_reason=reason,
+        )
+
+    def _prepare_completed_operation(
+        self,
+        reservation: ApplicationOperationReservation,
+        *,
+        closed_at: datetime | None = None,
+        close_reason: str = "",
+    ) -> ApplicationChannelAdmissionToken:
+        """Build one sealed immediate-operation token with an optional close."""
+
+        reason = close_reason.strip()
+        if (closed_at is None) != (not reason):
+            raise ValueError("closed_at and close reason must be supplied together")
+
         with self._gate.mutation(), self._prepared_lock:
+            canonical_close: datetime | None = None
+            if closed_at is not None:
+                canonical_close = self._require_window_time(
+                    closed_at,
+                    "channel closed_at",
+                    allow_end_boundary=True,
+                )
+                if canonical_close < self._watermark:
+                    raise StateError(
+                        "Application channels cannot close before the current watermark"
+                    )
             self._reject_prepared_conflict_locked(
                 channel_ids=(reservation.channel_id,),
                 operation_ids=(reservation.operation_id,),
@@ -2670,11 +2805,38 @@ class ApplicationChannelRegistry:
                     reservation,
                     completes_immediately=True,
                 )
+                if canonical_close is not None:
+                    if canonical_close < updated.last_activity_at:
+                        raise StateError(
+                            "Prepared application channel close cannot precede its operation"
+                        )
+                    if canonical_close > self._effective_deadline(updated):
+                        raise StateError(
+                            "Application channel cannot close after its idle, hard, or "
+                            "transport deadline"
+                        )
+                    active_count = shard.operations.count("channel", reservation.channel_id)
+                    if active_count:
+                        raise StateError(
+                            f"Application channel {reservation.channel_id!r} cannot close with "
+                            f"{active_count} active operations"
+                        )
+                    updated = replace(
+                        updated,
+                        closed_at=canonical_close,
+                        close_reason=reason,
+                    )
             reservation_id = self._next_prepared_reservation_id
             self._next_prepared_reservation_id += 1
             token = ApplicationChannelAdmissionToken(
-                kind="completed_operation",
+                kind=(
+                    "completed_operation_close"
+                    if canonical_close is not None
+                    else "completed_operation"
+                ),
                 reservation=reservation,
+                channel_closed_at=canonical_close,
+                channel_close_reason=reason,
                 _registry_token=id(self),
                 _reservation_id=reservation_id,
                 _owner_shard_id=shard_id,
@@ -2745,8 +2907,12 @@ class ApplicationChannelRegistry:
                 raise StateError(
                     "application channel admission starts behind the canonical watermark"
                 )
-            self._validate_prepared_admission_state_locked(capability.trusted_token)
-            self._active_prepared_admission_locked(token)
+            try:
+                self._validate_prepared_admission_state_locked(capability.trusted_token)
+                self._active_prepared_admission_locked(token)
+            except StateError:
+                self._release_prepared_capability_locked(capability)
+                raise
             self._claimed_reservations.add(capability.reservation_id)
 
     def _validate_prepared_admission_state_locked(
@@ -2755,7 +2921,7 @@ class ApplicationChannelRegistry:
     ) -> None:
         """Verify that visible state still matches one reserved token."""
 
-        if token.kind == "open_completed":
+        if token.kind in {"open_completed", "open_completed_close"}:
             assert token.identity is not None
             if self.get(token.identity.channel_id) is not None:
                 raise StateError("prepared application channel identity became occupied")
@@ -2836,7 +3002,7 @@ class ApplicationChannelRegistry:
             trusted_token = capability.trusted_token
             self._validate_prepared_admission_state_locked(trusted_token)
             self._active_prepared_admission_locked(token)
-            if trusted_token.kind == "open_completed":
+            if trusted_token.kind in {"open_completed", "open_completed_close"}:
                 result = self._commit_prepared_open_locked(trusted_token)
             else:
                 result = self._commit_prepared_operation_locked(trusted_token)
@@ -2934,16 +3100,27 @@ class ApplicationChannelRegistry:
                 channel_handle
             ) + _used_id_estimated_bytes(used_id_key)
             shard.mutation_version += 1
-            self._set_active_deadline(shard, channel_handle, completed)
-            shard.open_channels += 1
+            if token.kind == "open_completed_close":
+                assert token.channel_closed_at is not None and completed.closed_at is not None
+                shard.closed_expiry.set(
+                    channel_handle,
+                    (completed.closed_at + self._closed_grace).timestamp(),
+                )
+            else:
+                self._set_active_deadline(shard, channel_handle, completed)
+                shard.open_channels += 1
             shard.maximum_affinity_bucket = max(
                 shard.maximum_affinity_bucket,
                 affinity_size + 1,
             )
             shard.high_water_mark = max(shard.high_water_mark, len(shard.channels))
-            close_token = ApplicationChannelCloseToken(
-                locator=locator,
-                generation=shard.channels.generation(channel_handle),
+            close_token = (
+                None
+                if token.kind == "open_completed_close"
+                else ApplicationChannelCloseToken(
+                    locator=locator,
+                    generation=shard.channels.generation(channel_handle),
+                )
             )
             return ApplicationChannelAdmissionResult(completed, close_token)
 
@@ -2986,14 +3163,24 @@ class ApplicationChannelRegistry:
                 + _used_id_estimated_bytes(used_id_key)
             )
             shard.mutation_version += 1
-            self._set_active_deadline(shard, channel_handle, updated)
-            if updated.active_operations:
-                shard.operation_blocker_expiry.set(
-                    channel_handle,
-                    self._effective_deadline(updated).timestamp(),
-                )
-            else:
+            if token.kind == "completed_operation_close":
+                assert token.channel_closed_at is not None and updated.closed_at is not None
+                shard.active_expiry.pop(channel_handle, None)
                 shard.operation_blocker_expiry.pop(channel_handle, None)
+                shard.closed_expiry.set(
+                    channel_handle,
+                    (updated.closed_at + self._closed_grace).timestamp(),
+                )
+                shard.open_channels -= 1
+            else:
+                self._set_active_deadline(shard, channel_handle, updated)
+                if updated.active_operations:
+                    shard.operation_blocker_expiry.set(
+                        channel_handle,
+                        self._effective_deadline(updated).timestamp(),
+                    )
+                else:
+                    shard.operation_blocker_expiry.pop(channel_handle, None)
             return ApplicationChannelAdmissionResult(updated)
 
     def open_channel(self, identity: ApplicationChannelIdentity) -> ApplicationChannelSnapshot:

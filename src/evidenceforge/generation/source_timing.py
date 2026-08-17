@@ -134,6 +134,27 @@ _ACTIVE_SOURCE_TIMING_PREPARATION: ContextVar[Any] = ContextVar(
 )
 
 
+def active_source_timing_planning_runtime(
+    owner_runtime: TimingRuntime,
+) -> SourceTimingPlanningRuntime | None:
+    """Return the exact owner's active non-owning planning view, if any.
+
+    The lookup is total and read-only: foreign owners, inactive contexts, and
+    preparations that have already sealed all return ``None``.
+    """
+
+    preparation = _ACTIVE_SOURCE_TIMING_PREPARATION.get()
+    if (
+        type(preparation) is not SourceTimingPreparation
+        or preparation.owner.timing_runtime is not owner_runtime
+    ):
+        return None
+    try:
+        return preparation.planning_runtime
+    except StateError:
+        return None
+
+
 @dataclass(slots=True)
 class SourceTimingPlan:
     """Planned source-native timestamps for one canonical event."""

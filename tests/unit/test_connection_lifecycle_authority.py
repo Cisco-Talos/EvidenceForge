@@ -57,6 +57,7 @@ from evidenceforge.generation.proxy_channels import (
     ExplicitProxyAdmissionToken,
     ExplicitProxyChannelAffinity,
     ExplicitProxyChannelManager,
+    ExplicitProxyTerminalRequest,
 )
 from evidenceforge.generation.source_timing import (
     SourceTimingPlanner,
@@ -983,6 +984,8 @@ def _proxy_token(
     manager: ExplicitProxyChannelManager,
     client_plan: ConnectionCompositeMaterializationPlan,
     origin_plan: ConnectionCompositeMaterializationPlan,
+    *,
+    request_count: int = 1,
 ) -> ExplicitProxyAdmissionToken:
     origin = origin_plan.transaction
     assert origin.closed_at is not None
@@ -1011,9 +1014,9 @@ def _proxy_token(
         setup_completed_at=origin.started_at + timedelta(milliseconds=30),
         setup_request_wire_bytes=120,
         setup_response_wire_bytes=240,
-        planned_request_count=1,
-        aggregate_request_wire_bytes=1_000,
-        aggregate_response_wire_bytes=5_000,
+        planned_request_count=request_count,
+        aggregate_request_wire_bytes=(1_000 if request_count else 0),
+        aggregate_response_wire_bytes=(5_000 if request_count else 0),
     )
     assert token is not None
     return token
@@ -1441,3 +1444,179 @@ def test_prepared_proxy_origin_requires_full_prepared_prerequisite_receipt() -> 
     assert authority.authenticates_prepared_network_receipt(origin_root, origin.receipt)
     forged = replace(origin.receipt, _result_digest="forged-result")
     assert not authority.authenticates_prepared_network_receipt(origin_root, forged)
+
+
+def test_prepared_proxy_setup_only_origin_commits_one_closed_authenticated_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setup-only proxy common state is atomically born closed before authority proofing."""
+
+    authority, state, _registry, adapter, runtime, _crypto, timing = _prepared_authority()
+    proxy = _proxy_manager(authority)
+    client_rng = random.Random(107)
+    client_root, client_lifecycle = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        client_rng,
+        stable_id="prepared-proxy-setup-only-client",
+        dst_ip="10.0.3.10",
+        dst_port=8080,
+    )
+    client = authority.materialize_prepared_network_transaction(
+        client_root,
+        client_rng,
+        source_timing_preparation=_sealed_source_timing(timing),
+        lifecycle_token=client_lifecycle,
+    )
+    origin_rng = random.Random(108)
+    origin_root, origin_lifecycle = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        origin_rng,
+        stable_id="prepared-proxy-setup-only-origin",
+        src_ip="10.0.3.10",
+        src_port=40_001,
+    )
+
+    def fail_public_close(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("setup-only authority path called public common close")
+
+    monkeypatch.setattr(ApplicationChannelRegistry, "close_channel_by_token", fail_public_close)
+    origin = authority.materialize_prepared_network_transaction(
+        origin_root,
+        origin_rng,
+        source_timing_preparation=_sealed_source_timing(timing),
+        lifecycle_token=origin_lifecycle,
+        application_token=_proxy_token(
+            proxy,
+            client_root.state_plan,
+            origin_root.state_plan,
+            request_count=0,
+        ),
+        prerequisite_receipts=(client.receipt,),
+    )
+
+    application = origin.connection.application
+    assert application is not None
+    assert proxy.authenticates_admission_receipt(application.receipt)
+    assert application.receipt.application_receipt.kind == "open_completed_close"
+    assert application.receipt.application_receipt.snapshot.close_reason == "setup-only"
+    assert proxy.census().open_tunnel_views == 0
+    assert proxy.census().application.open_channels == 0
+    assert authority.authenticates_prepared_network_receipt(origin_root, origin.receipt)
+
+
+@pytest.mark.parametrize("outcome", ["success", "denied"])
+def test_prepared_proxy_request_commits_on_client_application_child_only(
+    outcome: str,
+) -> None:
+    """A request token owns the client child root and requires no repeated prerequisite."""
+
+    authority, state, registry, adapter, runtime, _crypto, timing = _prepared_authority()
+    proxy = _proxy_manager(authority)
+    client_rng = random.Random(109)
+    client_root, client_lifecycle = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        client_rng,
+        stable_id="prepared-proxy-request-client",
+        dst_ip="10.0.3.10",
+        dst_port=8080,
+    )
+    client = authority.materialize_prepared_network_transaction(
+        client_root,
+        client_rng,
+        source_timing_preparation=_sealed_source_timing(timing),
+        lifecycle_token=client_lifecycle,
+    )
+    origin_rng = random.Random(110)
+    origin_root, origin_lifecycle = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        origin_rng,
+        stable_id="prepared-proxy-request-origin",
+        src_ip="10.0.3.10",
+        src_port=40_001,
+    )
+    origin = authority.materialize_prepared_network_transaction(
+        origin_root,
+        origin_rng,
+        source_timing_preparation=_sealed_source_timing(timing),
+        lifecycle_token=origin_lifecycle,
+        application_token=_proxy_token(proxy, client_root.state_plan, origin_root.state_plan),
+        prerequisite_receipts=(client.receipt,),
+    )
+    request_token = proxy.prepare_request(
+        ExplicitProxyChannelAffinity(
+            client_ip="10.0.0.10",
+            proxy_ip="10.0.3.10",
+            proxy_port=8080,
+            origin_host="portal.example.test",
+            origin_ip="203.0.113.20",
+            origin_port=443,
+            user_agent="Mozilla/5.0",
+            auth_identity="EXAMPLE\\analyst",
+            policy_id="TLS-Bump-Standard",
+        ),
+        requested_at=_START + timedelta(seconds=1),
+        completed_at=_START + timedelta(seconds=1, milliseconds=100),
+        request_wire_bytes=100,
+        response_wire_bytes=200,
+        outcome=outcome,  # type: ignore[arg-type]
+    )
+    assert request_token is not None
+    child_rng = random.Random(111)
+    child_preparation = runtime.begin(
+        owner_rng=child_rng,
+        stable_id=request_token.result.operation_id,
+        linearization_time=request_token.result.canonical_request_time,
+    )
+    child_transaction = _transaction(
+        conn_id=client_root.transaction.conn_id,
+        zeek_uid=client_root.transaction.zeek_uid,
+        stable_id=request_token.result.operation_id,
+        started_at=request_token.result.canonical_request_time,
+        duration=0.1,
+        application_layer_only=True,
+        src_ip=client_root.transaction.src_ip,
+        src_port=client_root.transaction.src_port,
+        dst_ip=client_root.transaction.dst_ip,
+        dst_port=client_root.transaction.dst_port,
+    )
+    child_root = child_preparation.seal(
+        transaction=child_transaction,
+        lifecycle_mode="application_child",
+        materialization_mode=ConnectionMaterializationMode.APPLICATION_CHILD,
+    )
+    transport_count = registry.stats().live_transports
+
+    child = authority.materialize_prepared_network_transaction(
+        child_root,
+        child_rng,
+        source_timing_preparation=_sealed_source_timing(timing),
+        application_token=request_token,
+    )
+
+    proof = child.connection.receipt.application_proof
+    assert proof is not None
+    assert proof.current_transport_id == client_root.transaction.stable_id
+    assert proof.prerequisite_transport_ids == ()
+    assert child.connection.state.connection is client.connection.state.connection
+    assert child.connection.lifecycle is None
+    assert child.receipt.physical_transport_id == client.receipt.physical_transport_id
+    assert child.connection.receipt.prerequisite_proofs == ()
+    assert registry.stats().live_transports == transport_count
+    assert authority.authenticates_prepared_network_receipt(child_root, child.receipt)
+    assert origin.receipt.materializes_connection
+    if outcome == "denied":
+        assert child.connection.application is not None
+        assert isinstance(child.connection.application.result, ExplicitProxyTerminalRequest)
+        assert proxy.get_tunnel(request_token.result.tunnel.channel_id) is None
+    else:
+        assert (
+            proxy.get_tunnel(request_token.result.tunnel.channel_id) == request_token.result.tunnel
+        )

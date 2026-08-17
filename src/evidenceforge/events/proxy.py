@@ -109,11 +109,9 @@ class ProxyTransactionPlan:
             if self.resolver_mode is not None or self.origin_connect_at is not None:
                 raise ValueError("Terminal proxy-only outcomes cannot contain origin activity")
         if self.reused_transport and (
-            self.terminal_outcome != "success"
-            or self.resolver_mode is not None
-            or self.origin_connect_at is not None
+            self.resolver_mode is not None or self.origin_connect_at is not None
         ):
-            raise ValueError("Reused proxy transports cannot open another origin transport")
+            raise ValueError("Reused proxy transports cannot resolve or open an origin")
         if self.terminal_outcome == "gateway_failure" and self.origin_response_at is not None:
             raise ValueError("Gateway failures cannot claim an origin response")
         if (

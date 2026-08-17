@@ -28,6 +28,10 @@ from evidenceforge.generation.activity.timing_profiles import (
     network_sensor_observation_timing,
 )
 from evidenceforge.generation.activity.tls_realism import certificate_file_size
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanningRuntime,
+    active_source_timing_planning_runtime,
+)
 from evidenceforge.generation.timing import (
     ClockWanderSpec,
     ConstantDistribution,
@@ -466,7 +470,7 @@ class NetworkObservationPlanner:
         observed_close: datetime | None,
         *,
         scope: TimingScope,
-        runtime: TimingRuntime,
+        runtime: TimingRuntime | SourceTimingPlanningRuntime,
     ) -> tuple[str, datetime | None]:
         """Plan source-native ASA teardown time from canonical state and policy."""
 
@@ -640,11 +644,14 @@ class NetworkObservationPlanner:
             values.extend(uid for uid in event.dhcp.uids if uid and uid not in values)
         return tuple(values)
 
-    def _runtime_for_event(self, canonical_time: datetime) -> TimingRuntime:
+    def _runtime_for_event(
+        self,
+        canonical_time: datetime,
+    ) -> TimingRuntime | SourceTimingPlanningRuntime:
         """Return the injected runtime or a deterministic direct-caller adapter."""
 
         if self._runtime_injected:
-            return self.timing_runtime
+            return active_source_timing_planning_runtime(self.timing_runtime) or self.timing_runtime
         # Low-level callers historically constructed this planner directly. A
         # day-local adapter avoids applying decades of compatibility-epoch drift
         # while production always uses the engine-owned scenario runtime.
@@ -660,7 +667,7 @@ class NetworkObservationPlanner:
         sensor_identity: str,
         path_role: str,
         transaction_id: str,
-        runtime: TimingRuntime,
+        runtime: TimingRuntime | SourceTimingPlanningRuntime,
     ) -> tuple[datetime, datetime | None]:
         """Project one canonical interval through a physical sensor clock and route."""
 
@@ -780,7 +787,7 @@ class NetworkObservationPlanner:
         path_role: str,
         visible_formats: set[str],
         timing: NetworkSensorObservationTiming,
-        runtime: TimingRuntime,
+        runtime: TimingRuntime | SourceTimingPlanningRuntime,
     ) -> tuple[tuple[tuple[str, datetime], ...], tuple[tuple[str, float], ...]]:
         """Freeze Zeek connection, analyzer, and file timing before rendering."""
 
@@ -1160,7 +1167,7 @@ class NetworkObservationPlanner:
         observed_start: datetime,
         sensor_identity: str,
         timing: NetworkSensorObservationTiming,
-        runtime: TimingRuntime,
+        runtime: TimingRuntime | SourceTimingPlanningRuntime,
     ) -> datetime:
         """Project a canonical child phase through the owning sensor clock."""
 
@@ -1181,7 +1188,7 @@ class NetworkObservationPlanner:
         relationship_key: str,
         scope: TimingScope,
         sample_key: str,
-        runtime: TimingRuntime,
+        runtime: TimingRuntime | SourceTimingPlanningRuntime,
     ) -> datetime:
         """Sample right-skew analyzer slack inside the available interval."""
 
@@ -1229,7 +1236,7 @@ class NetworkObservationPlanner:
         close: datetime | None,
         scope: TimingScope,
         sample_key: str,
-        runtime: TimingRuntime,
+        runtime: TimingRuntime | SourceTimingPlanningRuntime,
     ) -> float:
         """Sample a file-analysis duration with interior transport-close slack."""
 

@@ -1211,6 +1211,43 @@ def test_prepared_open_claim_commits_once_and_returns_close_token() -> None:
     assert not registry.cancel_prepared_admission(token)
 
 
+def test_prepared_open_completed_and_close_is_one_atomic_common_mutation() -> None:
+    """A setup-only channel is born closed without any externally visible open state."""
+
+    registry = _registry()
+    identity = _identity()
+    reservation = _operation("prepared-setup-only", ordinal=0)
+    shard_id = registry.owner_partition_id(identity.owner_id)
+    token = registry.prepare_open_channel_with_completed_operation_and_close(
+        identity,
+        reservation,
+        closed_at=reservation.ended_at,
+        reason="setup-only",
+    )
+
+    assert token.kind == "open_completed_close"
+    assert registry.get(identity.channel_id) is None
+    with registry.prepared_admission(token) as prepared:
+        result = prepared.commit_no_fail()
+
+    snapshot = result.snapshot
+    assert snapshot.closed_at == reservation.ended_at
+    assert snapshot.close_reason == "setup-only"
+    assert snapshot.completed_operations == 1
+    assert snapshot.reserved_operations == 1
+    assert result.close_token is None
+    assert result.receipt is not None
+    assert result.receipt.kind == "open_completed_close"
+    assert registry.authenticates_admission_receipt(result.receipt)
+    assert registry.get(identity.channel_id) == snapshot
+    census = registry.census()
+    assert census.open_channels == 0
+    assert census.prepared_admissions == 0
+    shard = registry._owner_shard(shard_id, create=False)
+    assert shard is not None
+    assert shard.mutation_version == 1
+
+
 def test_prepared_claim_abort_is_census_neutral() -> None:
     """Leaving a claim uncommitted cancels every reservation and allocation."""
 
@@ -1253,6 +1290,132 @@ def test_prepared_completed_operation_defers_budget_until_commit() -> None:
     assert committed.reserved_initiator_bytes == reservation.initiator_bytes
     assert committed.reserved_responder_bytes == reservation.responder_bytes
     assert registry.census().used_operation_ids == before.used_operation_ids + 1
+
+
+def test_prepared_completed_operation_and_close_is_one_atomic_mutation() -> None:
+    """The common claim publishes the completed child and exact close with no open interim."""
+
+    registry = _registry()
+    opened = registry.open_channel(_identity())
+    reservation = _operation("terminal-operation", ordinal=0)
+    shard = registry._owner_shard(
+        registry.owner_partition_id(opened.identity.owner_id), create=False
+    )
+    assert shard is not None
+    before_version = shard.mutation_version
+    before_used = registry.census().used_operation_ids
+    token = registry.prepare_completed_operation_and_close(
+        reservation,
+        closed_at=reservation.ended_at,
+        reason="terminal denied",
+    )
+
+    assert token.kind == "completed_operation_close"
+    assert registry.get(opened.channel_id) == opened
+    assert registry.census().open_channels == 1
+    with registry.prepared_admission(token) as admission:
+        assert registry.get(opened.channel_id) == opened
+        result = admission.commit_no_fail()
+        with pytest.raises(StateError, match="already committed"):
+            admission.commit_no_fail()
+
+    assert result.snapshot.completed_operations == 1
+    assert result.snapshot.reserved_operations == 1
+    assert result.snapshot.closed_at == reservation.ended_at
+    assert result.snapshot.close_reason == "terminal denied"
+    assert result.close_token is None
+    assert registry.get(opened.channel_id) == result.snapshot
+    assert registry.census().open_channels == 0
+    assert registry.census().used_operation_ids == before_used + 1
+    assert shard.mutation_version == before_version + 1
+    receipt = result.receipt
+    assert receipt is not None
+    assert receipt.kind == "completed_operation_close"
+    assert receipt.snapshot == result.snapshot
+    assert registry.authenticates_admission_receipt(receipt)
+    assert not registry.authenticates_admission_receipt(
+        replace(receipt, operation_id="retargeted-operation")
+    )
+    assert not registry.authenticates_admission_token(token)
+
+
+def test_prepared_completed_operation_and_close_cancel_copy_foreign_and_tamper() -> None:
+    """Terminal common capabilities are exact, registry-bound, sealed, and cancel-neutral."""
+
+    registry = _registry()
+    foreign = _registry()
+    opened = registry.open_channel(_identity())
+    reservation = _operation("terminal-operation", ordinal=0)
+    before = registry.census()
+    token = registry.prepare_completed_operation_and_close(
+        reservation,
+        closed_at=reservation.ended_at,
+        reason="terminal denied",
+    )
+    copied = replace(token)
+
+    with pytest.raises(StateError, match="stale or already consumed"):
+        with registry.prepared_admission(copied):
+            pytest.fail("copied terminal token unexpectedly entered a claim")
+    with pytest.raises(StateError, match="another registry"):
+        with foreign.prepared_admission(token):
+            pytest.fail("foreign registry unexpectedly claimed a terminal token")
+    assert registry.get(opened.channel_id) == opened
+    assert registry.cancel_prepared_admission(token)
+    cancelled = registry.census()
+    assert cancelled.prepared_admissions == 0
+    assert cancelled.claimed_admissions == 0
+    assert cancelled.used_operation_ids == before.used_operation_ids
+    assert cancelled.open_channels == before.open_channels
+    assert cancelled.retained_channels == before.retained_channels
+    with pytest.raises(StateError, match="stale or already consumed"):
+        with registry.prepared_admission(token):
+            pytest.fail("cancelled terminal token unexpectedly entered a claim")
+
+    tampered = registry.prepare_completed_operation_and_close(
+        reservation,
+        closed_at=reservation.ended_at,
+        reason="terminal denied",
+    )
+    object.__setattr__(tampered, "channel_close_reason", "retargeted close")
+    assert not registry.authenticates_admission_token(tampered)
+    with pytest.raises(StateError, match="integrity validation failed"):
+        with registry.prepared_admission(tampered):
+            pytest.fail("tampered terminal token unexpectedly entered a claim")
+    assert registry.get(opened.channel_id) == opened
+    rejected = registry.census()
+    assert rejected.prepared_admissions == 0
+    assert rejected.claimed_admissions == 0
+    assert rejected.used_operation_ids == before.used_operation_ids
+    assert rejected.open_channels == before.open_channels
+    assert rejected.retained_channels == before.retained_channels
+
+
+def test_prepared_completed_operation_and_close_rejects_generation_drift() -> None:
+    """An ABA generation change invalidates the frozen common preimage before commit."""
+
+    registry = _registry()
+    opened = registry.open_channel(_identity())
+    reservation = _operation("terminal-operation", ordinal=0)
+    token = registry.prepare_completed_operation_and_close(
+        reservation,
+        closed_at=reservation.ended_at,
+        reason="terminal denied",
+    )
+    routed = registry._channel_route(opened.channel_id)
+    assert routed is not None
+    _route, shard_id, channel_handle = routed
+    shard = registry._owner_shard(shard_id, create=False)
+    assert shard is not None
+    with shard.lock:
+        retained = shard.channels.delete(channel_handle)
+        assert shard.channels.insert(retained) == channel_handle
+
+    with pytest.raises(StateError, match="invalidated"):
+        with registry.prepared_admission(token):
+            pytest.fail("generation-drifted token unexpectedly entered a claim")
+    assert registry.get(opened.channel_id) == opened
+    assert registry.census().prepared_admissions == 0
 
 
 def test_claimed_admission_fences_watermark_until_commit_or_abort() -> None:

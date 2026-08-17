@@ -23,6 +23,7 @@
 """Production integration tests for prepared canonical network publication."""
 
 import ast
+import copy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,17 +32,31 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.contexts import DnsContext, HttpContext
-from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.contracts import (
+    EffectOccurrenceProvenance,
+    OwnedEffectOccurrencePlan,
+)
+from evidenceforge.events.dispatcher import (
+    EventDispatcher,
+    PreparedDispatch,
+    PreparedDispatchStateIntent,
+    PreparedNetworkDependentBatch,
+)
 from evidenceforge.generation.actions import network_transaction_planner as planner_module
+from evidenceforge.generation.actions.command_effects import (
+    PreparedExecutionEffectAuditCommit,
+)
 from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionIdentityCapture,
     NetworkConnectionPublicationOutcome,
 )
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity import generator as generator_module
+from evidenceforge.generation.activity.http_multipart import build_http_multipart_context
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models.exceptions import StateError
-from evidenceforge.models.scenario import System
+from evidenceforge.models.exceptions import EventContractError, StateError
+from evidenceforge.models.http import HttpMultipartEntitySpec
+from evidenceforge.models.scenario import System, User
 
 _START = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
 
@@ -81,6 +96,143 @@ def _generate(
         suppress_application_side_effects=True,
         suppress_source_pid_inference=True,
         preserve_explicit_payload=True,
+        identity_capture=capture,
+    )
+
+
+def _multipart_environment() -> tuple[
+    ActivityGenerator,
+    StateManager,
+    dict[str, Mock],
+    System,
+    int,
+    int,
+    HttpContext,
+]:
+    """Return exact live client/server actors and four ordered multipart local reads."""
+
+    state = StateManager()
+    state.set_current_time(_START)
+    emitters = {"zeek_conn": Mock(), "ecar": Mock()}
+    emitters["zeek_conn"].can_handle.side_effect = lambda event: event.network is not None
+    emitters["ecar"].can_handle.side_effect = lambda event: event.file is not None
+    generator = ActivityGenerator(
+        state,
+        emitters,
+        generation_window_start=_START - timedelta(hours=1),
+        generation_window_end=_START + timedelta(hours=1),
+    )
+    source = System(
+        hostname="MULTIPART-CLIENT",
+        ip="10.0.0.10",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+    target = System(
+        hostname="MULTIPART-SERVER",
+        ip="10.0.0.20",
+        os="Ubuntu 24.04",
+        type="server",
+        roles=["app_server"],
+        services=["http"],
+    )
+    generator._ip_to_system = {source.ip: source, target.ip: target}
+    generator._all_system_ips = [source.ip, target.ip]
+    client_pid = generator.generate_process(
+        user=User(username="analyst", full_name="Analyst", email="analyst@example.test"),
+        system=source,
+        time=_START,
+        logon_id="",
+        process_name="/usr/bin/curl",
+        command_line="curl -F left=@/tmp/left.bin -F right=@/tmp/right.bin server/upload",
+        parent_pid=0,
+        suppress_command_file_effect=True,
+    )
+    server_pid = generator.generate_process(
+        user=User(username="www-data", full_name="Web Service", email="www@example.test"),
+        system=target,
+        time=_START,
+        logon_id="",
+        process_name="/usr/sbin/nginx",
+        command_line="nginx: worker process",
+        parent_pid=0,
+        suppress_command_file_effect=True,
+    )
+    for emitter in emitters.values():
+        emitter.reset_mock()
+    request_multipart = build_http_multipart_context(
+        HttpMultipartEntitySpec.model_validate(
+            {
+                "media_type": "multipart/form-data",
+                "parts": [
+                    {"name": "left", "body_len": 11, "local_source_path": "/tmp/left.bin"},
+                    {"name": "right", "body_len": 13, "local_source_path": "/tmp/right.bin"},
+                ],
+            }
+        ),
+        stable_key="prepared-request-multipart",
+    )
+    response_multipart = build_http_multipart_context(
+        HttpMultipartEntitySpec.model_validate(
+            {
+                "media_type": "multipart/mixed",
+                "parts": [
+                    {"body_len": 17, "local_source_path": "/srv/first.bin"},
+                    {"body_len": 19, "local_source_path": "/srv/second.bin"},
+                ],
+            }
+        ),
+        stable_key="prepared-response-multipart",
+    )
+    http = HttpContext(
+        method="POST",
+        host="multipart.example.test",
+        uri="/upload",
+        request_body_len=request_multipart.body_len,
+        request_multipart=request_multipart,
+        response_body_len=response_multipart.body_len,
+        response_multipart=response_multipart,
+        status_code=200,
+        status_msg="OK",
+    )
+    return generator, state, emitters, source, client_pid, server_pid, http
+
+
+def _generate_multipart(
+    generator: ActivityGenerator,
+    source: System,
+    client_pid: int,
+    server_pid: int,
+    http: HttpContext,
+    capture: NetworkConnectionIdentityCapture,
+    *,
+    time: datetime = _START,
+    src_port: int = 50_020,
+    dns: DnsContext | None = None,
+) -> str:
+    """Publish the exact prepared multipart transaction used by focused tests."""
+
+    return generator.generate_connection(
+        src_ip=source.ip,
+        src_port=src_port,
+        dst_ip="10.0.0.20",
+        time=time,
+        dst_port=80,
+        proto="tcp",
+        service="http",
+        duration=1.0,
+        orig_bytes=500,
+        resp_bytes=700,
+        conn_state="SF",
+        hostname="multipart.example.test",
+        pid=client_pid,
+        responding_pid=server_pid,
+        source_system=source,
+        dns=dns,
+        http=http,
+        preserve_start_time=True,
+        preserve_explicit_payload=True,
+        suppress_prereq_dns=True,
         identity_capture=capture,
     )
 
@@ -161,6 +313,530 @@ def test_normal_network_root_commits_one_authenticated_prepared_receipt() -> Non
     emitter.emit.assert_called_once()
 
 
+def test_failed_transport_keeps_internal_close_but_source_native_duration_missing() -> None:
+    """S0 remains source-native durationless while State/lifecycle receive a closed root."""
+
+    generator, state, emitter = _generator()
+    capture = NetworkConnectionIdentityCapture()
+
+    result = generator.generate_connection(
+        src_ip="10.0.0.10",
+        src_port=50_019,
+        dst_ip="203.0.113.20",
+        time=_START,
+        dst_port=443,
+        proto="tcp",
+        service="ssl",
+        duration=0.25,
+        orig_bytes=0,
+        resp_bytes=0,
+        conn_state="S0",
+        suppress_prereq_dns=True,
+        identity_capture=capture,
+    )
+
+    canonical = capture.require()
+    assert result == canonical.zeek_uid
+    assert canonical.conn_state == "S0"
+    assert canonical.duration == pytest.approx(0.25)
+    assert canonical.closed_at == canonical.started_at + timedelta(seconds=0.25)
+    assert state.get_connection_by_transaction_id(canonical.stable_id) is not None
+    assert generator._lifecycle_authority.authenticates_prepared_network_receipt(
+        capture.require_prepared_root(),
+        capture.require_receipt(),
+    )
+    projected = emitter.emit.call_args.args[0]
+    assert projected.network.conn_state == "S0"
+    assert projected.network.duration is None
+    assert projected.network.closed_at is None
+
+
+def test_network_process_activity_and_hold_require_live_lifecycle_identity() -> None:
+    """Compatibility State-only actors omit holds; production actors retain them."""
+
+    system = System(
+        hostname="NETWORK-HOLD-CLIENT",
+        ip="10.0.0.10",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+
+    legacy_generator, legacy_state, legacy_emitter = _generator()
+    legacy_generator._ip_to_system = {system.ip: system}
+    legacy_pid = legacy_state.create_process(
+        system=system.hostname,
+        parent_pid=0,
+        image="/usr/bin/curl",
+        command_line="curl https://example.test/",
+        username="analyst",
+        integrity_level="Medium",
+    )
+    legacy_capture = NetworkConnectionIdentityCapture()
+    legacy_generator.generate_connection(
+        src_ip=system.ip,
+        src_port=50_017,
+        dst_ip="203.0.113.20",
+        time=_START,
+        dst_port=8443,
+        proto="tcp",
+        service="",
+        duration=0.25,
+        orig_bytes=100,
+        resp_bytes=200,
+        conn_state="SF",
+        pid=legacy_pid,
+        source_system=system,
+        suppress_prereq_dns=True,
+        identity_capture=legacy_capture,
+    )
+    assert legacy_capture.require_prepared_root().state_plan.process_activity == ()
+    assert legacy_capture.require_receipt().connection_receipt.process_holds == ()
+    assert legacy_emitter.emit.call_args.args[0].process.pid == legacy_pid
+
+    generator, state, emitter = _generator()
+    generator._ip_to_system = {system.ip: system}
+    pid = generator.generate_process(
+        user=User(username="analyst", full_name="Analyst", email="analyst@example.test"),
+        system=system,
+        time=_START,
+        logon_id="",
+        process_name="/usr/bin/curl",
+        command_line="curl https://example.test/",
+        parent_pid=0,
+        suppress_command_file_effect=True,
+    )
+    emitter.reset_mock()
+    capture = NetworkConnectionIdentityCapture()
+    generator.generate_connection(
+        src_ip=system.ip,
+        src_port=50_018,
+        dst_ip="203.0.113.20",
+        time=_START,
+        dst_port=8443,
+        proto="tcp",
+        service="",
+        duration=0.25,
+        orig_bytes=100,
+        resp_bytes=200,
+        conn_state="SF",
+        pid=pid,
+        source_system=system,
+        suppress_prereq_dns=True,
+        identity_capture=capture,
+    )
+    process_identity = state.get_process_identity(system.hostname, pid)
+    assert process_identity is not None
+    root = capture.require_prepared_root()
+    assert tuple(patch.identity for patch in root.state_plan.process_activity) == (
+        process_identity,
+    )
+    holds = capture.require_receipt().connection_receipt.process_holds
+    assert tuple(hold.subject.object_id for hold in holds) == (process_identity.object_id,)
+    assert emitter.emit.call_args.args[0].process.pid == pid
+
+
+def test_http_multipart_reads_publish_one_exact_owned_projection_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Request then response leaves consume one bounded plan with exact ordered ordinals."""
+
+    generator, state, emitters, source, client_pid, server_pid, http = _multipart_environment()
+    capture = NetworkConnectionIdentityCapture()
+    state_apply = Mock(side_effect=AssertionError("multipart projection reapplied State"))
+    monkeypatch.setattr(state, "apply", state_apply)
+    audit_counter = generator._execution_effect_audit
+    prepare_audit = audit_counter.prepare_action_cohort
+    prepared_audits: list[
+        tuple[
+            PreparedExecutionEffectAuditCommit,
+            str,
+            tuple[object, ...],
+            tuple[OwnedEffectOccurrencePlan, ...],
+            tuple[EffectOccurrenceProvenance, ...],
+        ]
+    ] = []
+
+    def capture_audit_preparation(
+        _audit: object,
+        root_action_id: str,
+        entries: tuple[object, ...],
+        *,
+        owned_plans: tuple[OwnedEffectOccurrencePlan, ...] = (),
+        published_provenances: tuple[EffectOccurrenceProvenance, ...] = (),
+    ) -> PreparedExecutionEffectAuditCommit:
+        preparation = prepare_audit(
+            root_action_id,
+            entries,
+            owned_plans=owned_plans,
+            published_provenances=published_provenances,
+        )
+        prepared_audits.append(
+            (
+                preparation,
+                root_action_id,
+                entries,
+                owned_plans,
+                published_provenances,
+            )
+        )
+        return preparation
+
+    monkeypatch.setattr(
+        type(audit_counter),
+        "prepare_action_cohort",
+        capture_audit_preparation,
+    )
+    root_committed = False
+    materialize = generator._lifecycle_authority.materialize_prepared_network_transaction
+    validate_prepared = generator.dispatcher.validate_prepared
+    publish_batch = generator.dispatcher.publish_prepared_network_dependent_batch
+    published_batches: list[tuple[PreparedNetworkDependentBatch, object]] = []
+
+    def commit_then_forbid_dependent_revalidation(*args: object, **kwargs: object) -> object:
+        nonlocal root_committed
+        result = materialize(*args, **kwargs)
+        root_committed = True
+        return result
+
+    def reject_post_root_dependent_validation(
+        prepared: PreparedDispatch,
+        **kwargs: object,
+    ) -> None:
+        if (
+            root_committed
+            and prepared._state_intent is PreparedDispatchStateIntent.EXTERNAL_NETWORK_DEPENDENT
+        ):
+            raise AssertionError("multipart member was revalidated after root commit")
+        validate_prepared(prepared, **kwargs)
+
+    def capture_batch_publication(
+        batch: PreparedNetworkDependentBatch,
+        *,
+        materialization_receipt: object,
+    ) -> tuple[dict[str, str], ...]:
+        published_batches.append((batch, materialization_receipt))
+        return publish_batch(
+            batch,
+            materialization_receipt=materialization_receipt,
+        )
+
+    monkeypatch.setattr(
+        generator._lifecycle_authority,
+        "materialize_prepared_network_transaction",
+        commit_then_forbid_dependent_revalidation,
+    )
+    monkeypatch.setattr(
+        generator.dispatcher,
+        "validate_prepared",
+        reject_post_root_dependent_validation,
+    )
+    monkeypatch.setattr(
+        generator.dispatcher,
+        "publish_prepared_network_dependent_batch",
+        capture_batch_publication,
+    )
+
+    _generate_multipart(
+        generator,
+        source,
+        client_pid,
+        server_pid,
+        http,
+        capture,
+    )
+
+    file_reads = [call.args[0] for call in emitters["ecar"].emit.call_args_list]
+    assert [event.file.path for event in file_reads] == [
+        "/tmp/left.bin",
+        "/tmp/right.bin",
+        "/srv/first.bin",
+        "/srv/second.bin",
+    ]
+    provenances = [event.effect_provenance for event in file_reads]
+    assert [provenance.occurrence_ordinal for provenance in provenances] == [0, 1, 2, 3]
+    assert len({provenance.plan_action_id for provenance in provenances}) == 1
+    assert len({provenance.node_id for provenance in provenances}) == 1
+    assert {provenance.root_action_id for provenance in provenances} == {
+        capture.require().stable_id
+    }
+    audit = generator.execution_effect_audit_snapshot()
+    assert audit.owned_effect_plan_count == 1
+    assert audit.owned_effect_expected_occurrence_count == 4
+    assert audit.owned_effect_published_occurrence_count == 4
+    assert audit.exempt_effect_occurrence_count == 0
+    assert audit.effect_publication_mismatch_count == 0
+    assert audit.complete
+    assert len(prepared_audits) == 1
+    audit_preparation, root_action_id, entries, owned_plans, provenances = prepared_audits[0]
+    audit_receipt = audit_preparation.receipt
+    assert audit_counter.authenticates_action_cohort_receipt(
+        audit_receipt,
+        preparation=audit_preparation,
+        root_action_id=root_action_id,
+        entries=entries,
+        owned_plans=owned_plans,
+        published_provenances=provenances,
+    )
+    assert audit_counter.action_cohort_preparation_census().active == 0
+    assert generator.dispatcher._network_dependent_batches == {}
+    state_apply.assert_not_called()
+    assert len(published_batches) == 1
+    batch, materialization_receipt = published_batches[0]
+    audit_after = generator.execution_effect_audit_snapshot()
+    with pytest.raises(EventContractError, match="lacks its final precommit authentication"):
+        publish_batch(
+            batch,
+            materialization_receipt=materialization_receipt,
+        )
+    assert generator.execution_effect_audit_snapshot() == audit_after
+
+
+def test_committed_suppressed_http_multipart_publishes_claimed_read_batch() -> None:
+    """A duplicate DNS observation suppresses only the root projection, not owned reads."""
+
+    generator, _state, emitters, source, client_pid, server_pid, http = _multipart_environment()
+    dns = DnsContext(
+        query="multipart.example.test",
+        query_type="A",
+        answers=["10.0.0.20"],
+        TTLs=[300],
+        rtt=0.002,
+    )
+    first_capture = NetworkConnectionIdentityCapture()
+    second_capture = NetworkConnectionIdentityCapture()
+
+    first_result = _generate_multipart(
+        generator,
+        source,
+        client_pid,
+        server_pid,
+        http,
+        first_capture,
+        dns=dns,
+    )
+    second_result = _generate_multipart(
+        generator,
+        source,
+        client_pid,
+        server_pid,
+        http,
+        second_capture,
+        time=_START + timedelta(seconds=1),
+        src_port=50_021,
+        dns=dns,
+    )
+
+    assert first_result == first_capture.require().zeek_uid
+    assert second_result == ""
+    assert (
+        second_capture.require_outcome() is NetworkConnectionPublicationOutcome.COMMITTED_SUPPRESSED
+    )
+    assert emitters["zeek_conn"].emit.call_count == 1
+    file_reads = [call.args[0] for call in emitters["ecar"].emit.call_args_list]
+    assert len(file_reads) == 8
+    assert [event.effect_provenance.occurrence_ordinal for event in file_reads] == [
+        0,
+        1,
+        2,
+        3,
+        0,
+        1,
+        2,
+        3,
+    ]
+    audit = generator.execution_effect_audit_snapshot()
+    assert audit.owned_effect_plan_count == 2
+    assert audit.owned_effect_expected_occurrence_count == 8
+    assert audit.owned_effect_published_occurrence_count == 8
+    assert audit.complete
+    assert generator._execution_effect_audit.action_cohort_preparation_census().active == 0
+    assert generator.dispatcher._network_dependent_batches == {}
+
+
+def test_http_multipart_tampered_batch_owner_rejects_and_releases_every_member(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A locally tampered owner field cannot strand the trusted batch capability."""
+
+    generator, state, emitters, source, client_pid, server_pid, http = _multipart_environment()
+    capture = NetworkConnectionIdentityCapture()
+    owner_rng = generator_module._get_rng()
+    state_before = state.materialization_digest()
+    rng_before = owner_rng.getstate()
+    runtime_before = generator._network_transaction_runtime.state_digest()
+    timing_before = generator._source_timing_planner.state_digest()
+    audit_before = generator.execution_effect_audit_snapshot()
+    authenticate = generator.dispatcher.authenticates_prepared_network_dependent_batch
+    claimed_members: list[PreparedDispatch] = []
+
+    def tamper_owner(batch: PreparedNetworkDependentBatch) -> bool:
+        claimed_members.extend(batch._dispatches)
+        batch._dispatcher_token = -1
+        return authenticate(batch)
+
+    monkeypatch.setattr(
+        generator.dispatcher,
+        "authenticates_prepared_network_dependent_batch",
+        tamper_owner,
+    )
+
+    with pytest.raises(StateError, match="batch changed before publication"):
+        _generate_multipart(
+            generator,
+            source,
+            client_pid,
+            server_pid,
+            http,
+            capture,
+        )
+
+    assert claimed_members
+    assert generator.dispatcher._network_dependent_batches == {}
+    assert all(
+        member._network_dependent_batch_id is None and not member._consumed
+        for member in claimed_members
+    )
+    assert state.materialization_digest() == state_before
+    assert owner_rng.getstate() == rng_before
+    assert generator._network_transaction_runtime.state_digest() == runtime_before
+    assert generator._source_timing_planner.state_digest() == timing_before
+    assert generator.execution_effect_audit_snapshot() == audit_before
+    assert generator._execution_effect_audit.action_cohort_preparation_census().active == 0
+    assert capture.transaction is None
+    assert all(emitter.emit.call_count == 0 for emitter in emitters.values())
+
+
+def test_http_multipart_member_content_tamper_rejects_before_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batch authentication recomputes the full member projection preimage."""
+
+    generator, state, emitters, source, client_pid, server_pid, http = _multipart_environment()
+    capture = NetworkConnectionIdentityCapture()
+    authenticate = generator.dispatcher.authenticates_prepared_network_dependent_batch
+    materialize = Mock(side_effect=AssertionError("multipart root committed after member tamper"))
+    monkeypatch.setattr(
+        generator._lifecycle_authority,
+        "materialize_prepared_network_transaction",
+        materialize,
+    )
+
+    def tamper_projection(batch: PreparedNetworkDependentBatch) -> bool:
+        member = batch._dispatches[0]
+        member._projection = replace(
+            member._projection,
+            initial_statuses=(*member._projection.initial_statuses, ("ecar", "filtered")),
+        )
+        return authenticate(batch)
+
+    monkeypatch.setattr(
+        generator.dispatcher,
+        "authenticates_prepared_network_dependent_batch",
+        tamper_projection,
+    )
+
+    with pytest.raises(StateError, match="batch changed before publication"):
+        _generate_multipart(
+            generator,
+            source,
+            client_pid,
+            server_pid,
+            http,
+            capture,
+        )
+
+    materialize.assert_not_called()
+    assert generator.dispatcher._network_dependent_batches == {}
+    assert generator.execution_effect_audit_snapshot().owned_effect_plan_count == 0
+    assert generator._execution_effect_audit.action_cohort_preparation_census().active == 0
+    assert capture.transaction is None
+    assert all(emitter.emit.call_count == 0 for emitter in emitters.values())
+
+
+def test_http_multipart_copied_audit_binding_rejects_and_releases_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A copied audit token cannot authenticate or strand the trusted preparation."""
+
+    generator, state, emitters, source, client_pid, server_pid, http = _multipart_environment()
+    capture = NetworkConnectionIdentityCapture()
+    authenticate = generator.dispatcher.authenticates_prepared_network_dependent_batch
+    materialize = Mock(side_effect=AssertionError("multipart root committed after audit tamper"))
+    state_before = state.materialization_digest()
+    audit_before = generator.execution_effect_audit_snapshot()
+    monkeypatch.setattr(
+        generator._lifecycle_authority,
+        "materialize_prepared_network_transaction",
+        materialize,
+    )
+
+    def replace_audit_binding(batch: PreparedNetworkDependentBatch) -> bool:
+        batch._audit_binding_token = copy.copy(batch._audit_binding_token)
+        return authenticate(batch)
+
+    monkeypatch.setattr(
+        generator.dispatcher,
+        "authenticates_prepared_network_dependent_batch",
+        replace_audit_binding,
+    )
+
+    with pytest.raises(StateError, match="batch changed before publication"):
+        _generate_multipart(
+            generator,
+            source,
+            client_pid,
+            server_pid,
+            http,
+            capture,
+        )
+
+    materialize.assert_not_called()
+    assert state.materialization_digest() == state_before
+    assert generator.execution_effect_audit_snapshot() == audit_before
+    assert generator._execution_effect_audit.action_cohort_preparation_census().active == 0
+    assert generator.dispatcher._network_dependent_batches == {}
+    assert capture.transaction is None
+    assert all(emitter.emit.call_count == 0 for emitter in emitters.values())
+
+
+def test_http_multipart_last_precommit_rejection_is_globally_neutral() -> None:
+    """A claimed four-read batch leaves no State, timing, audit, or output residue on reject."""
+
+    generator, state, emitters, source, client_pid, server_pid, http = _multipart_environment()
+    capture = NetworkConnectionIdentityCapture()
+    owner_rng = generator_module._get_rng()
+    state_before = state.materialization_digest()
+    rng_before = owner_rng.getstate()
+    runtime_before = generator._network_transaction_runtime.state_digest()
+    timing_before = generator._source_timing_planner.state_digest()
+    audit_before = generator.execution_effect_audit_snapshot()
+
+    def reject_after_all_preparation() -> None:
+        assert len(generator.dispatcher._network_dependent_batches) == 1
+        raise StateError("injected multipart last-precommit rejection")
+
+    generator._lifecycle_authority._materialization_precommit_hook = reject_after_all_preparation
+    with pytest.raises(StateError, match="injected multipart last-precommit rejection"):
+        _generate_multipart(
+            generator,
+            source,
+            client_pid,
+            server_pid,
+            http,
+            capture,
+        )
+
+    assert state.materialization_digest() == state_before
+    assert owner_rng.getstate() == rng_before
+    assert generator._network_transaction_runtime.state_digest() == runtime_before
+    assert generator._source_timing_planner.state_digest() == timing_before
+    assert generator.execution_effect_audit_snapshot() == audit_before
+    assert generator._execution_effect_audit.action_cohort_preparation_census().active == 0
+    assert generator.dispatcher._network_dependent_batches == {}
+    assert capture.transaction is None
+    assert all(emitter.emit.call_count == 0 for emitter in emitters.values())
+
+
 def test_rejected_network_preparation_is_globally_neutral() -> None:
     """A last-precommit rejection leaves no State, RNG, timing, channel, or output residue."""
 
@@ -198,6 +874,58 @@ def test_rejected_network_preparation_is_globally_neutral() -> None:
     assert capture.outcome is None
     assert generator.dispatcher.source_evidence_status == {}
     emitter.emit.assert_not_called()
+
+    generator._lifecycle_authority._materialization_precommit_hook = None
+    uid = _generate(generator, capture)
+    assert uid == capture.require().zeek_uid
+    assert capture._claim is None
+
+
+def test_network_identity_capture_preflight_is_exact_one_shot_and_retryable() -> None:
+    """Wrong, copied, tampered, claimed, and reused handoffs fail before planning effects."""
+
+    generator, state, emitter = _generator()
+    owner_rng = generator_module._get_rng()
+
+    class DerivedCapture(NetworkConnectionIdentityCapture):
+        pass
+
+    def assert_neutral_rejection(capture: object, message: str) -> None:
+        state_before = state.materialization_digest()
+        rng_before = owner_rng.getstate()
+        runtime_before = generator._network_transaction_runtime.state_digest()
+        timing_before = generator._source_timing_planner.state_digest()
+        output_before = emitter.emit.call_count
+        with pytest.raises((TypeError, ValueError), match=message):
+            _generate(generator, capture)  # type: ignore[arg-type]
+        assert state.materialization_digest() == state_before
+        assert owner_rng.getstate() == rng_before
+        assert generator._network_transaction_runtime.state_digest() == runtime_before
+        assert generator._source_timing_planner.state_digest() == timing_before
+        assert emitter.emit.call_count == output_before
+
+    assert_neutral_rejection(DerivedCapture(), "exact carrier type")
+
+    capture = NetworkConnectionIdentityCapture()
+    claim = capture._claim_empty()
+    copied_claim = copy.copy(claim)
+    assert not capture._authenticates_claim(copied_claim)
+    assert capture._authenticates_claim(claim)
+    object.__setattr__(copied_claim, "_active", False)
+    assert capture._authenticates_claim(claim)
+    assert_neutral_rejection(capture, "already claimed")
+    capture._release_claim(claim)
+
+    tampered_claim = capture._claim_empty()
+    object.__setattr__(tampered_claim, "_active", False)
+    assert not capture._authenticates_claim(tampered_claim)
+    assert_neutral_rejection(capture, "already claimed")
+    capture._release_claim(tampered_claim)
+
+    uid = _generate(generator, capture)
+    assert uid == capture.require().zeek_uid
+    assert capture._claim is None
+    assert_neutral_rejection(capture, "already published")
 
 
 def test_rejected_http_file_identity_draw_uses_the_prepared_rng() -> None:
