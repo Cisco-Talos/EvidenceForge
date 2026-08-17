@@ -131,6 +131,7 @@ _OBSERVATION_STATUS_PRECEDENCE: dict[ObservationStatus, int] = {
     "delayed": 3,
     "visible": 4,
 }
+_CURRENT_AUTHORED_INTENT = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +193,8 @@ class PreparedDispatch:
     """
 
     __slots__ = (
+        "_action_cohort_batch_id",
+        "_authored_intent_id",
         "_consumed",
         "_binary_identity_kind",
         "_artifact_publications",
@@ -217,6 +220,7 @@ class PreparedDispatch:
         binary_identity_kind: str,
         artifact_publications: tuple[LocalArtifactPublishToken, ...],
         source_timing_preparation: SourceTimingPreparation | None,
+        authored_intent_id: str | None,
         integrity_token: str,
     ) -> None:
         self._occurrence = occurrence
@@ -224,6 +228,8 @@ class PreparedDispatch:
         self._expected_state_version = expected_state_version
         self._state_intent = state_intent
         self._lifecycle_ticket = lifecycle_ticket
+        self._action_cohort_batch_id: int | None = None
+        self._authored_intent_id = authored_intent_id
         self._network_dependent_batch_id: int | None = None
         self._binary_identity_kind = binary_identity_kind
         self._artifact_publications = artifact_publications
@@ -615,6 +621,19 @@ class EventDispatcher:
 
         return self.publish_prepared(self.prepare_builder(event, _defer_projection=True))
 
+    def _freeze_authored_intent_id(
+        self,
+        value: object = _CURRENT_AUTHORED_INTENT,
+    ) -> str | None:
+        """Return one exact intent attribution snapshot for prepared publication."""
+
+        candidate = self.authored_intent_id if value is _CURRENT_AUTHORED_INTENT else value
+        if candidate is None or type(candidate) is str:
+            return candidate or None
+        raise EventContractError(
+            "Prepared dispatch authored intent ID must be an exact str or None"
+        )
+
     def prepare_builder(
         self,
         event: OccurrenceBuilder,
@@ -633,6 +652,7 @@ class EventDispatcher:
         State/Lifecycle coordinator commits that preparation.
         """
 
+        authored_intent_id = self._freeze_authored_intent_id()
         artifact_publications = tuple(artifact_publications)
         if self.storyline_cluster_id and event.storyline_cluster_id is None:
             event.storyline_cluster_id = self.storyline_cluster_id
@@ -645,7 +665,10 @@ class EventDispatcher:
         self._attach_image_load_binary_identity(event)
         self.identity_lifecycle_planner.plan(event)
         if event.occurrence_key is None:
-            event.occurrence_key = self._derive_occurrence_key(event)
+            event.occurrence_key = self._derive_occurrence_key(
+                event,
+                authored_intent_id=authored_intent_id,
+            )
         event.contract_seal = shadow_seal(event)
         if event.contract_seal.violations:
             details = "; ".join(violation.message for violation in event.contract_seal.violations)
@@ -658,6 +681,7 @@ class EventDispatcher:
             binary_identity_kind=binary_identity_kind,
             artifact_publications=artifact_publications,
             source_timing_preparation=source_timing_preparation,
+            _authored_intent_id=authored_intent_id,
             _defer_projection=_defer_projection,
         )
 
@@ -671,10 +695,12 @@ class EventDispatcher:
         binary_identity_kind: str = "",
         artifact_publications: tuple[LocalArtifactPublishToken, ...] = (),
         source_timing_preparation: SourceTimingPreparation | None = None,
+        _authored_intent_id: object = _CURRENT_AUTHORED_INTENT,
         _defer_projection: bool = False,
     ) -> PreparedDispatch:
         """Freeze source projection and an exact state/lifecycle publication intent."""
 
+        authored_intent_id = self._freeze_authored_intent_id(_authored_intent_id)
         artifact_publications = tuple(artifact_publications)
         if not isinstance(event, CanonicalOccurrence):
             raise TypeError("prepare_occurrence() requires a sealed CanonicalOccurrence")
@@ -791,6 +817,7 @@ class EventDispatcher:
             binary_identity_kind=binary_identity_kind,
             artifact_publications=artifact_publications,
             source_timing_preparation=source_timing_preparation,
+            authored_intent_id=authored_intent_id,
             integrity_token="",
         )
         prepared._integrity_token = self._prepared_dispatch_integrity(prepared)
@@ -1000,6 +1027,18 @@ class EventDispatcher:
     def _prepared_dispatch_integrity(self, prepared: PreparedDispatch) -> str:
         """Authenticate every immutable occurrence/projection/publication field."""
 
+        if type(prepared) is not PreparedDispatch:
+            raise EventContractError("Prepared dispatch must be the exact opaque type")
+        if prepared._authored_intent_id is not None and (
+            type(prepared._authored_intent_id) is not str or not prepared._authored_intent_id
+        ):
+            raise EventContractError("Prepared dispatch authored intent binding is malformed")
+        if prepared._action_cohort_batch_id is not None and (
+            type(prepared._action_cohort_batch_id) is not int
+            or prepared._action_cohort_batch_id <= 0
+        ):
+            raise EventContractError("Prepared dispatch action-cohort binding is malformed")
+
         legacy_signature = tuple(
             (
                 target.format_name,
@@ -1052,6 +1091,9 @@ class EventDispatcher:
         )
         payload = repr(
             (
+                id(prepared),
+                prepared._action_cohort_batch_id,
+                prepared._authored_intent_id,
                 prepared._expected_state_version,
                 prepared._state_intent,
                 lifecycle_ticket_signature,
@@ -1363,6 +1405,8 @@ class EventDispatcher:
             raise EventContractError(
                 "Network-dependent dispatches require their claimed ordered batch"
             )
+        if prepared._action_cohort_batch_id is not None:
+            raise EventContractError("Action-cohort dispatches require their claimed ordered batch")
         if prepared._network_dependent_batch_id is not None:
             raise EventContractError("Prepared dispatch is claimed by a network-dependent batch")
         self.validate_prepared(prepared, before_materialization=False)
@@ -1481,7 +1525,10 @@ class EventDispatcher:
         if prepared._binary_identity_kind:
             self._binary_identity_counts[prepared._binary_identity_kind] += 1
         self._record_effect_publication(event)
-        self._record_intent_occurrence(event)
+        self._record_intent_occurrence(
+            event,
+            authored_intent_id=prepared._authored_intent_id,
+        )
         if event.network is not None and not event.network.application_layer_only:
             self._latest_network_plan = event.network
         projection = prepared._projection
@@ -1491,7 +1538,10 @@ class EventDispatcher:
                     "Only a compatibility state publication may defer source projection"
                 )
             projection = self._prepare_projection(event)
-        return self._publish_prepared_projection(projection)
+        return self._publish_prepared_projection(
+            projection,
+            authored_intent_id=prepared._authored_intent_id,
+        )
 
     def validate_prepared(
         self,
@@ -1501,7 +1551,7 @@ class EventDispatcher:
     ) -> None:
         """Authenticate one prepared dispatch at the coordinator's precommit barrier."""
 
-        if not isinstance(prepared, PreparedDispatch):
+        if type(prepared) is not PreparedDispatch:
             raise TypeError("validate_prepared() requires an opaque PreparedDispatch")
         expected_integrity = self._prepared_dispatch_integrity(prepared)
         if not hmac.compare_digest(prepared._integrity_token, expected_integrity):
@@ -1720,6 +1770,7 @@ class EventDispatcher:
                 prepared._state_intent is not PreparedDispatchStateIntent.EXTERNAL_NETWORK_DEPENDENT
                 or prepared._lifecycle_ticket is not root
                 or prepared._source_timing_preparation is not timing_preparation
+                or prepared._action_cohort_batch_id is not None
                 or prepared._artifact_publications
                 or prepared._projection.mode == "deferred"
                 or prepared._occurrence.effect_provenance != plan.provenance(ordinal)
@@ -1759,7 +1810,11 @@ class EventDispatcher:
             try:
                 for prepared in publications:
                     with prepared._lock:
-                        if prepared._consumed or prepared._network_dependent_batch_id is not None:
+                        if (
+                            prepared._consumed
+                            or prepared._network_dependent_batch_id is not None
+                            or prepared._action_cohort_batch_id is not None
+                        ):
                             raise EventContractError(
                                 "Network-dependent dispatch is already claimed or published"
                             )
@@ -1893,8 +1948,16 @@ class EventDispatcher:
             event = prepared._occurrence
             if prepared._binary_identity_kind:
                 self._binary_identity_counts[prepared._binary_identity_kind] += 1
-            self._record_intent_occurrence(event)
-            results.append(self._publish_prepared_projection(prepared._projection))
+            self._record_intent_occurrence(
+                event,
+                authored_intent_id=prepared._authored_intent_id,
+            )
+            results.append(
+                self._publish_prepared_projection(
+                    prepared._projection,
+                    authored_intent_id=prepared._authored_intent_id,
+                )
+            )
         return tuple(results)
 
     def _apply_prepared_state_and_lifecycle(self, event: CanonicalOccurrence) -> None:
@@ -1945,17 +2008,23 @@ class EventDispatcher:
                     effect_kind=EffectOccurrenceKind.REGISTRY,
                 )
 
-    def _record_intent_occurrence(self, event: CanonicalOccurrence) -> None:
+    def _record_intent_occurrence(
+        self,
+        event: CanonicalOccurrence,
+        *,
+        authored_intent_id: object = _CURRENT_AUTHORED_INTENT,
+    ) -> None:
         """Record one accepted authored occurrence before source suppression/projection."""
 
-        if self.authored_intent_id and self.intent_execution_ledger is not None:
+        intent_id = self._freeze_authored_intent_id(authored_intent_id)
+        if intent_id and self.intent_execution_ledger is not None:
             occurrence_key = (
                 event.contract_seal.occurrence.occurrence_key
                 if event.contract_seal.occurrence is not None
                 else None
             )
             self.intent_execution_ledger.record_occurrence(
-                self.authored_intent_id,
+                intent_id,
                 occurrence_key,
                 event.timestamp,
             )
@@ -2106,6 +2175,8 @@ class EventDispatcher:
     def _publish_prepared_projection(
         self,
         projection: _PreparedProjection,
+        *,
+        authored_intent_id: object = _CURRENT_AUTHORED_INTENT,
     ) -> dict[str, str]:
         """Render an exact frozen projection and record only accepted publication truth."""
 
@@ -2116,7 +2187,12 @@ class EventDispatcher:
             self._latest_network_observations = event.network_observations
             self._latest_network_plan = event.network
         for format_name, status in projection.initial_statuses:
-            self._record_observation(event, format_name, status)
+            self._record_observation(
+                event,
+                format_name,
+                status,
+                authored_intent_id=authored_intent_id,
+            )
         if projection.mode == "suppressed":
             return identifiers_by_format
         if projection.mode == "compiled":
@@ -2124,6 +2200,7 @@ class EventDispatcher:
                 event,
                 list(projection.compiled_targets),
                 identifiers_by_format,
+                authored_intent_id=authored_intent_id,
             )
             return identifiers_by_format
         if projection.mode != "legacy":
@@ -2138,7 +2215,12 @@ class EventDispatcher:
         )
         for target in projection.legacy_targets:
             if target.occurrence is None:
-                self._record_observation(event, target.format_name, target.status)
+                self._record_observation(
+                    event,
+                    target.format_name,
+                    target.status,
+                    authored_intent_id=authored_intent_id,
+                )
                 continue
             self.source_timing_planner.record_admitted_source_event(
                 target.occurrence,
@@ -2149,7 +2231,12 @@ class EventDispatcher:
                 target.format_name,
                 identifiers_by_format,
             )
-            self._record_observation(event, target.format_name, target.status)
+            self._record_observation(
+                event,
+                target.format_name,
+                target.status,
+                authored_intent_id=authored_intent_id,
+            )
             target.emitter.emit(target.occurrence)
         return identifiers_by_format
 
@@ -2824,6 +2911,8 @@ class EventDispatcher:
         event: CanonicalOccurrence,
         targets: list[_ProjectionTarget],
         identifiers_by_format: dict[str, str],
+        *,
+        authored_intent_id: object = _CURRENT_AUTHORED_INTENT,
     ) -> None:
         """Render finalized envelopes; emitters receive no mutable registry handle."""
 
@@ -2891,7 +2980,12 @@ class EventDispatcher:
             self._merge_projection_status(statuses, target.format_name, status)
 
         for format_name, status in statuses.items():
-            self._record_observation(event, format_name, status)
+            self._record_observation(
+                event,
+                format_name,
+                status,
+                authored_intent_id=authored_intent_id,
+            )
 
     @staticmethod
     def _merge_projection_status(
@@ -3040,7 +3134,12 @@ class EventDispatcher:
             nat=nat,
         )
 
-    def _derive_occurrence_key(self, event: OccurrenceBuilder) -> SemanticOccurrenceKey:
+    def _derive_occurrence_key(
+        self,
+        event: OccurrenceBuilder,
+        *,
+        authored_intent_id: str | None,
+    ) -> SemanticOccurrenceKey:
         """Derive stable action-relative identity without dispatch-order state."""
 
         identity = event.identity_plan
@@ -3061,7 +3160,7 @@ class EventDispatcher:
             else identity.actor_id
             if identity is not None and identity.actor_id
             else event.storyline_cluster_id
-            or self.authored_intent_id
+            or authored_intent_id
             or stable_uuid(
                 "canonical-action-owner",
                 event.event_type,
@@ -3454,6 +3553,8 @@ class EventDispatcher:
         event: CanonicalOccurrence,
         format_name: str,
         status: ObservationStatus,
+        *,
+        authored_intent_id: object = _CURRENT_AUTHORED_INTENT,
     ) -> None:
         """Record source evidence status for storyline/red-herring ground truth."""
         cluster_id = event.storyline_cluster_id
@@ -3464,6 +3565,7 @@ class EventDispatcher:
             status,
             cluster_id=cluster_id,
             timestamp=event.timestamp,
+            authored_intent_id=authored_intent_id,
         )
 
     def _record_cluster_observation(
@@ -3473,6 +3575,7 @@ class EventDispatcher:
         *,
         cluster_id: str | None = None,
         timestamp: datetime | None = None,
+        authored_intent_id: object = _CURRENT_AUTHORED_INTENT,
     ) -> None:
         """Record source evidence status for the active or supplied cluster."""
         cluster_id = cluster_id or self.storyline_cluster_id
@@ -3482,9 +3585,10 @@ class EventDispatcher:
         cluster = self._source_evidence_status.setdefault(cluster_id, {})
         source_counts = cluster.setdefault(source, ObservationSummary())
         source_counts.record(status)
-        if self.authored_intent_id and self.intent_execution_ledger is not None:
+        intent_id = self._freeze_authored_intent_id(authored_intent_id)
+        if intent_id and self.intent_execution_ledger is not None:
             self.intent_execution_ledger.record_observation(
-                self.authored_intent_id,
+                intent_id,
                 source,
                 status,
                 timestamp,

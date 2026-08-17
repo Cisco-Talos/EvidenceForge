@@ -23,6 +23,7 @@
 """Tests for EventDispatcher routing, visibility filtering, and StateManager.apply()."""
 
 import random
+from copy import copy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -2485,6 +2486,100 @@ class TestPreparedDispatch:
         assert dispatcher.source_evidence_status == source_status
         emitter.emit.assert_called_once()
 
+    def test_prepared_publication_freezes_intent_occurrence_and_observation_attribution(self):
+        """Later dispatcher intent changes cannot reattribute a prepared occurrence."""
+
+        state, _registry, authority, dispatcher, emitter, plan = self._environment()
+        ledger = IntentExecutionLedger(AuthoredIntentLedger("prepared-intent-freeze", ()))
+        dispatcher.intent_execution_ledger = ledger
+        dispatcher.authored_intent_id = "intent-at-prepare"
+        builder = _process_start_builder(plan)
+        builder.storyline_cluster_id = "prepared-intent-cluster"
+        prepared = dispatcher.prepare_builder(
+            builder,
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+            lifecycle_ticket=plan,
+        )
+
+        dispatcher.authored_intent_id = "intent-after-prepare"
+        process, receipt = authority.materialize_process(plan)
+        dispatcher.publish_prepared(prepared, materialization_receipt=receipt)
+
+        assert state.get_process(plan.identity.hostname, plan.identity.pid) is process
+        snapshots = {item.intent_id: item for item in ledger.snapshot()}
+        assert set(snapshots) == {"intent-at-prepare"}
+        assert snapshots["intent-at-prepare"].occurrence_reference_count == 1
+        assert snapshots["intent-at-prepare"].source_status == {"ecar": {"visible": 1}}
+        assert prepared._authored_intent_id == "intent-at-prepare"
+        emitter.emit.assert_called_once()
+        with pytest.raises(EventContractError, match="already published"):
+            dispatcher.publish_prepared(prepared, materialization_receipt=receipt)
+        assert ledger.snapshot() == tuple(snapshots.values())
+
+    def test_prepared_without_intent_cannot_adopt_later_dispatcher_attribution(self):
+        """A prepared unattributed occurrence stays unattributed through publication."""
+
+        _state, _registry, authority, dispatcher, emitter, plan = self._environment()
+        ledger = IntentExecutionLedger(AuthoredIntentLedger("prepared-no-intent", ()))
+        dispatcher.intent_execution_ledger = ledger
+        builder = _process_start_builder(plan)
+        builder.storyline_cluster_id = "prepared-no-intent-cluster"
+        prepared = dispatcher.prepare_builder(
+            builder,
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+            lifecycle_ticket=plan,
+        )
+
+        dispatcher.authored_intent_id = "late-intent"
+        _process, receipt = authority.materialize_process(plan)
+        dispatcher.publish_prepared(prepared, materialization_receipt=receipt)
+
+        assert prepared._authored_intent_id is None
+        assert ledger.snapshot() == ()
+        assert dispatcher.source_evidence_status == {
+            "prepared-no-intent-cluster": {"ecar": {"visible": 1}}
+        }
+        emitter.emit.assert_called_once()
+
+    def test_prepared_identity_intent_and_action_cohort_bindings_reject_forgery(self):
+        """Copies, foreign dispatchers, and attribution/claim tampering fail authentication."""
+
+        state, _registry, _authority, dispatcher, emitter, plan = self._environment()
+        dispatcher.authored_intent_id = "bound-intent"
+        prepared = dispatcher.prepare_builder(
+            _process_start_builder(plan),
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+            lifecycle_ticket=plan,
+        )
+
+        copied = copy(prepared)
+        with pytest.raises(EventContractError, match="integrity validation failed"):
+            dispatcher.validate_prepared(copied)
+
+        foreign = EventDispatcher(state_manager=state, emitters={})
+        with pytest.raises(EventContractError, match="integrity validation failed"):
+            foreign.validate_prepared(prepared)
+
+        prepared._authored_intent_id = "forged-intent"
+        with pytest.raises(EventContractError, match="integrity validation failed"):
+            dispatcher.validate_prepared(prepared)
+        prepared._authored_intent_id = "bound-intent"
+        dispatcher.validate_prepared(prepared)
+
+        prepared._action_cohort_batch_id = 41
+        with pytest.raises(EventContractError, match="integrity validation failed"):
+            dispatcher.validate_prepared(prepared)
+        prepared._integrity_token = dispatcher._prepared_dispatch_integrity(prepared)
+        with pytest.raises(EventContractError, match="require their claimed ordered batch"):
+            dispatcher.publish_prepared(prepared)
+        prepared._action_cohort_batch_id = None
+        prepared._integrity_token = dispatcher._prepared_dispatch_integrity(prepared)
+        dispatcher.validate_prepared(prepared)
+
+        assert plan.expected_version == state.materialization_version
+        assert state.get_process(plan.identity.hostname, plan.identity.pid) is None
+        emitter.emit.assert_not_called()
+
     def test_public_same_field_receipt_forgery_cannot_publish_or_materialize(self):
         """Public plan fields and SHA256 cannot forge an authority-issued receipt."""
 
@@ -2567,6 +2662,8 @@ class TestPreparedDispatch:
 
         direct_ids = direct.dispatch_builder(_syslog_event())
         prepared = explicit.prepare_builder(_syslog_event())
+        assert prepared._authored_intent_id is None
+        assert prepared._action_cohort_batch_id is None
         explicit_ids = explicit.publish_prepared(prepared)
 
         direct_occurrence = direct_emitter.emit.call_args.args[0]
