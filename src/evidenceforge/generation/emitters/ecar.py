@@ -23,23 +23,24 @@
 """Emitter for EDR/XDR host telemetry in eCAR format."""
 
 import json
-import random
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
+from evidenceforge.events.collection_policy import CollectionCapability, ProjectionRole
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.identity import ProcessIdentity, ThreadIdentity
 from evidenceforge.events.network import NetworkTransactionPlan
-from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.generation.source_timing import (
-    SourceTimingPlanner,
+    compatibility_ecar_flow_identity_deadline,
+    compatibility_endpoint_event_times,
     ecar_flow_identity_key,
     ecar_flow_render_key,
-    ecar_session_render_key,
+    ecar_process_render_key,
+    finalized_endpoint_event_times,
 )
-from evidenceforge.utils.rng import _stable_seed, stable_uuid
+from evidenceforge.utils.rng import stable_uuid
 
 _ECAR_SORT_PRIORITY = {
     ("USER_SESSION", "LOGIN"): 0,
@@ -68,8 +69,6 @@ _ECAR_FAILURE_REASON_BY_WINDOWS_CODE = {
     "%%2307": "account_disabled",
     "%%2313": "bad_password",
 }
-
-_SOURCE_TIMING = SourceTimingPlanner()
 
 _PORT_BEARING_PROTOCOLS = {"tcp", "udp", "sctp"}
 
@@ -302,6 +301,20 @@ class EcarEmitter(HostMultiplexEmitter):
         return host.hostname if host else ""
 
     @staticmethod
+    def _render_timestamp(
+        event: CanonicalOccurrence,
+        host: HostContext | None,
+        phase: str = "base",
+    ) -> datetime:
+        """Return the frozen eCAR time, with isolated direct-emitter compatibility."""
+
+        hostname = host.hostname if host is not None else ""
+        finalized = finalized_endpoint_event_times(event, "ecar", hostname, phase)
+        if finalized is None:
+            finalized = compatibility_endpoint_event_times(event, "ecar", hostname, phase)
+        return finalized[1]
+
+    @staticmethod
     def _apply_edr_context(event_data: dict[str, Any], event: CanonicalOccurrence) -> None:
         """Project canonical identity roles into eCAR."""
         plan = event.identity_plan
@@ -530,25 +543,11 @@ class EcarEmitter(HostMultiplexEmitter):
         if not source_is_client and not destination_is_client and not mounted_operation:
             return
         if mounted_operation:
-            local_timestamp = event.timestamp
+            local_timestamp = self._render_timestamp(event, host, "client_file")
             action = mounted_action
             file_path = smb.client_path
         else:
-            timing_rng = random.Random(
-                _stable_seed(
-                    f"ecar-smb-client-file:{event.occurrence_id}:"
-                    f"{smb.file_id}:{smb.content_version}"
-                )
-            )
-            offset = timedelta(milliseconds=timing_rng.randint(7, 63))
-            local_timestamp = (
-                event.timestamp - offset if source_is_client else event.timestamp + offset
-            )
-            if source_is_client and event.lifecycle is not None:
-                local_timestamp = max(
-                    local_timestamp,
-                    event.lifecycle.canonical_start + timedelta(milliseconds=1),
-                )
+            local_timestamp = self._render_timestamp(event, host, "client_file")
             action = "READ" if source_is_client else "CREATE"
             file_path = smb.local_path
         if local_process is not None and local_process.username:
@@ -608,7 +607,7 @@ class EcarEmitter(HostMultiplexEmitter):
         if source_is_client and smb.operation == "move":
             delete_event = {
                 **local_event,
-                "timestamp": local_timestamp + timedelta(milliseconds=1),
+                "timestamp": self._render_timestamp(event, host, "client_delete"),
                 "action": "DELETE",
             }
             self._emit_canonical_event(delete_event, event)
@@ -670,13 +669,8 @@ class EcarEmitter(HostMultiplexEmitter):
         lifecycle: str,
     ) -> datetime:
         """Return the eCAR render timestamp for a user-session observation."""
-        plan = event.source_timing
-        if plan is None:
-            return event.timestamp
-        return plan.finalized_times.get(
-            ecar_session_render_key(lifecycle),
-            event.timestamp,
-        )
+        del lifecycle
+        return self._render_timestamp(event, host)
 
     def _render_process_create(self, event: CanonicalOccurrence) -> None:
         """Render eCAR PROCESS/CREATE event (logged on src_host)."""
@@ -687,22 +681,6 @@ class EcarEmitter(HostMultiplexEmitter):
             plan.subject if plan is not None and isinstance(plan.subject, ProcessIdentity) else proc
         )
         event_ts = self._process_create_timestamp(event, process_identity)
-        parent_identity = (
-            plan.actor if plan is not None and isinstance(plan.actor, ProcessIdentity) else None
-        )
-        if parent_identity is not None:
-            dependent_times = getattr(self, "_process_dependent_source_times", None)
-            if dependent_times is None:
-                dependent_times = {}
-                self._process_dependent_source_times = dependent_times
-            parent_key = (
-                self._host_name(host),
-                parent_identity.pid,
-                parent_identity.started_at,
-            )
-            previous = dependent_times.get(parent_key)
-            if previous is None or event_ts > previous:
-                dependent_times[parent_key] = event_ts
         event_data = {
             "timestamp": event_ts,
             "hostname": self._host_name(host),
@@ -784,7 +762,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "smb_file_delete": "DELETE",
         }
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._render_timestamp(event, host),
             "hostname": self._host_name(host),
             "object": "FILE",
             "action": action_map[event.event_type],
@@ -932,6 +910,18 @@ class EcarEmitter(HostMultiplexEmitter):
         For internal-to-external, emits only the OUTBOUND on src_host.
         """
         net = event.network
+        envelope = event._projection_envelope
+        render_source = envelope is None or envelope.role in {
+            ProjectionRole.HOST,
+            ProjectionRole.SOURCE_ENDPOINT,
+        }
+        render_destination = envelope is None or envelope.role in {
+            ProjectionRole.HOST,
+            ProjectionRole.DESTINATION_ENDPOINT,
+        }
+        actor_enrichment = envelope is None or envelope.effective_capabilities.covers(
+            CollectionCapability.COHERENT_ACTOR
+        )
         plan = event.identity_plan
         source_identity = (
             plan.actor if plan is not None and isinstance(plan.actor, ProcessIdentity) else None
@@ -939,13 +929,18 @@ class EcarEmitter(HostMultiplexEmitter):
         target_identity = (
             plan.target if plan is not None and isinstance(plan.target, ProcessIdentity) else None
         )
-        source_proc = source_identity
+        source_proc = source_identity if actor_enrichment else None
 
         # OUTBOUND FLOW on source host (if source is internal/known)
-        if event.src_host:
+        if event.src_host and render_source:
+            outbound_key = ecar_flow_render_key("outbound", event.src_host.hostname)
+            flow_finalized = bool(
+                event.source_timing is not None
+                and outbound_key in event.source_timing.finalized_times
+            )
             not_before = (
                 self._process_identity_not_before_timestamp(event, source_proc)
-                if source_proc is not None
+                if source_proc is not None and not flow_finalized
                 else None
             )
             outbound_seed = (
@@ -996,9 +991,14 @@ class EcarEmitter(HostMultiplexEmitter):
             self._emit_canonical_event(event_data, event)
 
         # INBOUND FLOW on destination host (if destination is internal/known)
-        if event.dst_host:
+        if event.dst_host and render_destination:
+            inbound_key = ecar_flow_render_key("inbound", event.dst_host.hostname)
+            flow_finalized = bool(
+                event.source_timing is not None
+                and inbound_key in event.source_timing.finalized_times
+            )
             listener_observed = self._inbound_listener_observed(event)
-            inbound_proc = target_identity if listener_observed else None
+            inbound_proc = target_identity if listener_observed and actor_enrichment else None
             inbound_pid = target_identity.pid if inbound_proc is not None else -1
             inbound_seed = (
                 "inbound",
@@ -1035,9 +1035,13 @@ class EcarEmitter(HostMultiplexEmitter):
                 event_ts, process_identity_safe = self._flow_source_time(
                     event,
                     seed_parts=inbound_seed,
-                    not_before=self._process_identity_not_before_timestamp(
-                        event,
-                        inbound_proc,
+                    not_before=(
+                        None
+                        if flow_finalized
+                        else self._process_identity_not_before_timestamp(
+                            event,
+                            inbound_proc,
+                        )
                     ),
                     drop_late_process_identity=(
                         net.protocol == "tcp" and net.dst_port in {22, 3389}
@@ -1090,16 +1094,9 @@ class EcarEmitter(HostMultiplexEmitter):
 
     @staticmethod
     def _flow_identity_deadline(event: CanonicalOccurrence) -> datetime:
-        """Return the latest normal FLOW source time before process identity should be omitted."""
+        """Return the stateless legacy SSH identity bound for direct callers."""
 
-        window = get_timing_window(
-            "source.ecar_flow",
-            default_min_ms=40,
-            default_max_ms=300,
-            default_position="after",
-            default_class="source_latency",
-        )
-        return event.timestamp + timedelta(milliseconds=window.max_ms + 1)
+        return compatibility_ecar_flow_identity_deadline(event)
 
     @staticmethod
     def _flow_connection_failed(net: NetworkTransactionPlan | None) -> bool:
@@ -1157,21 +1154,7 @@ class EcarEmitter(HostMultiplexEmitter):
             if auth and auth.source_port
             else -1
         )
-        event_ts = _SOURCE_TIMING.source_time(
-            event,
-            "source.ecar_remote_thread",
-            seed_parts=(
-                self._host_name(host),
-                proc.pid if proc is not None else -1,
-                target_pid,
-                remote_thread.new_thread_id if remote_thread else 0,
-                event.timestamp,
-            ),
-            not_before=self._after_process_create_timestamp(
-                event,
-                source_identity if source_identity is not None else proc,
-            ),
-        )
+        event_ts = self._render_timestamp(event, host)
         event_data = {
             "timestamp": event_ts,
             "hostname": self._host_name(host),
@@ -1271,64 +1254,31 @@ class EcarEmitter(HostMultiplexEmitter):
     ) -> datetime:
         """Return the eCAR render timestamp for a process-create observation."""
         if proc is None:
-            return event.timestamp
+            return self._render_timestamp(event, event.src_host, "process_create")
         host = event.src_host
         hostname = host.hostname if host is not None else ""
-        start_time = (
-            getattr(proc, "started_at", None)
-            or getattr(proc, "start_time", None)
-            or event.timestamp
-        )
-        not_before = start_time
-        identity_hostname = str(getattr(proc, "hostname", "") or "")
-        identity_pid = int(getattr(proc, "pid", -1))
-        return _SOURCE_TIMING.source_time(
+        finalized_event = finalized_endpoint_event_times(
             event,
-            "source.ecar_process_create",
-            seed_parts=(identity_hostname or hostname, identity_pid, start_time),
-            not_before=not_before,
+            "ecar",
+            hostname,
+            "process_create",
         )
+        if finalized_event is not None:
+            return finalized_event[1]
+        finalized = self._finalized_process_timestamp(event, "create", hostname)
+        if finalized is not None:
+            return finalized
+        return self._render_timestamp(event, host, "process_create")
 
     def _after_process_create_timestamp(
         self,
         event: CanonicalOccurrence,
         proc: Any,
     ) -> datetime:
-        """Clamp dependent eCAR observations after their PROCESS/CREATE record."""
-        start_time = getattr(proc, "started_at", None) or getattr(proc, "start_time", None)
-        if proc is None or start_time is None:
-            return event.timestamp
-        if event.image_load is not None:
-            process_create_ts = self._process_create_timestamp(event, proc)
-            return _SOURCE_TIMING.process_module_source_time(
-                event,
-                "ecar",
-                process_create_ts,
-            )
-        if event.timestamp - start_time >= timedelta(seconds=5):
-            return _SOURCE_TIMING.source_time(
-                event,
-                "source.ecar_dependent_after_process_create",
-                seed_parts=(
-                    event.event_type,
-                    self._host_name(event.src_host),
-                    getattr(proc, "pid", -1),
-                    event.timestamp,
-                ),
-                not_before=event.timestamp,
-            )
-        process_create_ts = self._process_create_timestamp(event, proc)
-        return _SOURCE_TIMING.source_time(
-            event,
-            "source.ecar_dependent_after_process_create",
-            seed_parts=(
-                event.event_type,
-                self._host_name(event.src_host),
-                getattr(proc, "pid", -1),
-                event.timestamp,
-            ),
-            not_before=process_create_ts + timedelta(milliseconds=1),
-        )
+        """Return the engine-finalized dependent observation timestamp."""
+
+        del proc
+        return self._render_timestamp(event, event.src_host)
 
     def _process_identity_not_before_timestamp(
         self,
@@ -1336,12 +1286,9 @@ class EcarEmitter(HostMultiplexEmitter):
         proc: Any,
     ) -> datetime:
         """Return the earliest eCAR time that can safely claim a process identity."""
-        start_time = getattr(proc, "started_at", None) or getattr(proc, "start_time", None)
-        if proc is None or start_time is None:
-            return event.timestamp
-        if event.timestamp - start_time >= timedelta(seconds=5):
-            return start_time
-        return self._process_create_timestamp(event, proc) + timedelta(milliseconds=1)
+        if proc is None:
+            return self._render_timestamp(event, event.src_host)
+        return self._process_create_timestamp(event, proc)
 
     def _process_terminate_timestamp(
         self,
@@ -1349,39 +1296,41 @@ class EcarEmitter(HostMultiplexEmitter):
         proc: Any,
     ) -> datetime:
         """Return an eCAR terminate timestamp preserving rendered process lifetime."""
-        start_time = getattr(proc, "started_at", None) or getattr(proc, "start_time", None)
-        if proc is None or start_time is None:
-            return event.timestamp
-        canonical_lifetime = max(timedelta(milliseconds=100), event.timestamp - start_time)
-        process_create_ts = (
-            self._process_create_timestamp(event, proc)
-            if isinstance(proc, ProcessIdentity)
-            else start_time
-        )
-        dependent_floor = getattr(self, "_process_dependent_source_times", {}).get(
-            (self._host_name(event.src_host), getattr(proc, "pid", -1), start_time)
-        )
-        not_before = max(event.timestamp, process_create_ts + canonical_lifetime)
-        if dependent_floor is not None:
-            not_before = max(not_before, dependent_floor + timedelta(milliseconds=1))
-        return _SOURCE_TIMING.source_time(
+        if proc is None:
+            return self._render_timestamp(event, event.src_host, "process_terminate")
+        hostname = self._host_name(event.src_host)
+        finalized_event = finalized_endpoint_event_times(
             event,
-            "source.ecar_process_terminate",
-            seed_parts=(
-                self._host_name(event.src_host),
-                getattr(proc, "pid", -1),
-                start_time,
-                event.timestamp,
-            ),
-            not_before=not_before,
+            "ecar",
+            hostname,
+            "process_terminate",
         )
+        if finalized_event is not None:
+            return finalized_event[1]
+        finalized = self._finalized_process_timestamp(event, "terminate", hostname)
+        if finalized is not None:
+            return finalized
+        return event.timestamp
+
+    @staticmethod
+    def _finalized_process_timestamp(
+        event: CanonicalOccurrence,
+        lifecycle: str,
+        hostname: str,
+    ) -> datetime | None:
+        """Return an engine-finalized eCAR PROCESS timestamp when available."""
+
+        plan = event.source_timing
+        if plan is None or not hostname:
+            return None
+        return plan.finalized_times.get(ecar_process_render_key(lifecycle, hostname))
 
     def _render_service_installed(self, event: CanonicalOccurrence) -> None:
         """Render eCAR SERVICE/CREATE event (logged on src_host)."""
         host = event.src_host
         service = event.service
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._render_timestamp(event, host),
             "hostname": self._host_name(host),
             "object": "SERVICE",
             "action": "CREATE",

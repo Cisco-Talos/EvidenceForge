@@ -805,8 +805,8 @@ def test_snort_consumes_planned_sensor_timestamp_and_tuple(tmp_path) -> None:
     assert "198.51.100.25:62000 -> 10.0.2.40:53" in line
 
 
-def test_firewall_observation_owns_fixed_syn_timeout_policy() -> None:
-    """One firewall policy supplies the SYN timeout instead of per-flow emitter jitter."""
+def test_firewall_observation_owns_syn_timeout_with_processing_texture() -> None:
+    """One firewall policy supplies the timeout plus typed source processing."""
 
     config = NetworkConfig(
         segments=[
@@ -853,9 +853,8 @@ def test_firewall_observation_owns_fixed_syn_timeout_policy() -> None:
 
     assert observation.firewall_teardown_reason == "SYN Timeout"
     assert observation.firewall_teardown_time is not None
-    assert observation.firewall_teardown_time - observation.observed_start_time == timedelta(
-        seconds=30
-    )
+    teardown_delay = observation.firewall_teardown_time - observation.observed_start_time
+    assert timedelta(seconds=30) < teardown_delay < timedelta(seconds=30.019)
 
 
 def test_firewall_observation_keeps_dynamic_pat_alive_through_syn_timeout() -> None:
@@ -919,7 +918,8 @@ def test_firewall_observation_keeps_dynamic_pat_alive_through_syn_timeout() -> N
     assert observation.nat.local_ip == "10.0.2.40"
     assert observation.nat.global_ip == "203.0.113.10"
     assert observation.nat.teardown_time == observation.firewall_teardown_time
-    assert observation.nat.teardown_time == observation.observed_start_time + timedelta(seconds=30)
+    teardown_delay = observation.nat.teardown_time - observation.observed_start_time
+    assert timedelta(seconds=30) < teardown_delay < timedelta(seconds=30.019)
 
 
 def test_firewall_observation_owns_inbound_static_nat_address_roles() -> None:
@@ -1028,7 +1028,10 @@ def test_subsecond_midstream_fragment_is_not_labeled_connection_timeout() -> Non
 
     assert observation.firewall_teardown_reason == "TCP Reset-O"
     assert observation.firewall_teardown_reason != "Conn-timeout"
-    assert observation.firewall_teardown_time == observation.observed_close_time
+    assert observation.observed_close_time < observation.firewall_teardown_time
+    assert observation.firewall_teardown_time - observation.observed_close_time < timedelta(
+        milliseconds=12.5
+    )
 
 
 def test_firewall_teardown_after_export_window_is_marked_unobserved() -> None:

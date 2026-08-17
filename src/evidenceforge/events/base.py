@@ -81,6 +81,7 @@ from evidenceforge.events.network import NetworkSensorObservation, NetworkTransa
 from evidenceforge.events.protocol import ProtocolTransactionPlan
 
 if TYPE_CHECKING:
+    from evidenceforge.events.collection_policy import ProjectionEnvelope
     from evidenceforge.generation.source_timing import SourceTimingPlan
 
 
@@ -185,6 +186,8 @@ class OccurrenceBuilder:
     # rows that the same observation profile intentionally dropped.
     _observed_formats: set[str] = field(default_factory=set)
     _source_observation_status: str = "visible"
+    # Frozen source identity and policy decision supplied to one emitter call.
+    _projection_envelope: ProjectionEnvelope | None = None
 
     @property
     def occurrence_id(self) -> str:
@@ -295,6 +298,7 @@ class CanonicalOccurrence:
     _visible_network_formats: frozenset[str] = frozenset()
     _observed_formats: frozenset[str] = frozenset()
     _source_observation_status: str = "visible"
+    _projection_envelope: ProjectionEnvelope | None = None
 
     def __post_init__(self) -> None:
         """Reject construction that bypassed the validated builder boundary."""

@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import random
 import string
+from collections.abc import Collection, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -23,11 +24,24 @@ from evidenceforge.generation.activity.timing_profiles import (
     FirewallObservationTiming,
     NetworkSensorObservationTiming,
     firewall_observation_timing,
+    get_timing_window,
     network_sensor_observation_timing,
 )
 from evidenceforge.generation.activity.tls_realism import certificate_file_size
+from evidenceforge.generation.timing import (
+    ClockWanderSpec,
+    ConstantDistribution,
+    SourceClockKey,
+    SourceClockSpec,
+    TimingDistributionError,
+    TimingRuntime,
+    TimingScope,
+    TriangularDistribution,
+    TruncatedLognormalDistribution,
+)
 from evidenceforge.utils.ids import _has_synthetic_marker
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.time import ensure_utc
 
 if TYPE_CHECKING:
     from evidenceforge.events.base import CanonicalOccurrence
@@ -53,6 +67,12 @@ def derive_sensor_identifier(canonical_id: str, sensor_identity: str) -> str:
     return candidate
 
 
+def network_source_timing_key(format_name: str, object_id: str = "") -> str:
+    """Return the immutable key for one sensor-native network row."""
+
+    return format_name if not object_id else f"{format_name}:{object_id}"
+
+
 class NetworkObservationPlanner:
     """Project canonical network truth through configured sensor behavior."""
 
@@ -60,14 +80,19 @@ class NetworkObservationPlanner:
         self,
         visibility_engine: NetworkVisibilityEngine | None,
         output_end_time: datetime | None = None,
+        timing_runtime: TimingRuntime | None = None,
     ) -> None:
         self.visibility_engine = visibility_engine
         self.output_end_time = output_end_time
+        self._runtime_injected = timing_runtime is not None
+        self.timing_runtime = timing_runtime or TimingRuntime.compatibility_default()
 
     def plan(
         self,
         event: CanonicalOccurrence,
         visible_formats: set[str],
+        *,
+        sensor_formats: Mapping[str, Collection[str]] | None = None,
     ) -> tuple[NetworkSensorObservation, ...]:
         """Return deterministic observations for every visible network sensor."""
 
@@ -75,11 +100,20 @@ class NetworkObservationPlanner:
         if network is None:
             return ()
         transaction = network
-        sensor_formats = self._sensor_formats(event, visible_formats)
+        planned_sensor_formats = (
+            {
+                sensor_identity: set(formats) & visible_formats
+                for sensor_identity, formats in sensor_formats.items()
+                if set(formats) & visible_formats
+            }
+            if sensor_formats is not None
+            else self._sensor_formats(event, visible_formats)
+        )
         canonical_file_ids = self._canonical_file_ids(event)
         canonical_connection_ids = self._canonical_connection_ids(event)
+        runtime = self._runtime_for_event(transaction.started_at)
         observations: list[NetworkSensorObservation] = []
-        for sensor_identity, formats in sorted(sensor_formats.items()):
+        for sensor_identity, formats in sorted(planned_sensor_formats.items()):
             sensor = (
                 self.visibility_engine.get_sensor(sensor_identity)
                 if self.visibility_engine is not None
@@ -98,34 +132,28 @@ class NetworkObservationPlanner:
                 else "unspecified"
             )
             tuple_view, local_orig, local_resp = self._sensor_view(event, sensor)
-            observed_start = self._observed_time(
+            observed_start, observed_close = self._observed_interval(
                 transaction.started_at,
+                transaction.closed_at,
                 timing,
                 sensor_identity,
                 path_role,
+                transaction.conn_id or transaction.zeek_uid or transaction.stable_id,
+                runtime,
             )
-            observed_close = (
-                self._observed_time(
-                    transaction.closed_at,
-                    timing,
-                    sensor_identity,
-                    path_role,
-                )
-                if transaction.closed_at is not None
-                else None
+            observation_scope = TimingScope(
+                stable_id=transaction.stable_id or transaction.zeek_uid,
+                source=sensor_identity.casefold(),
+                lifecycle_id=path_role,
             )
-            if observed_close is not None:
-                canonical_duration = transaction.closed_at - transaction.started_at
-                observed_close = max(
-                    observed_close,
-                    observed_start + canonical_duration,
-                )
             firewall_reason, firewall_teardown = self._firewall_teardown_plan(
                 event,
                 formats,
                 sensor_identity,
                 observed_start,
                 observed_close,
+                scope=observation_scope,
+                runtime=runtime,
             )
             firewall_teardown_observed = self._before_output_end(firewall_teardown)
             observed_traffic = self._observed_traffic(
@@ -137,6 +165,22 @@ class NetworkObservationPlanner:
             )
             history, file_observations, request_body_len, response_body_len = (
                 self._observed_protocol(event, observed_traffic)
+            )
+            source_times, source_durations = self._source_native_protocol_timing(
+                event,
+                canonical_start=ensure_utc(transaction.started_at),
+                observed_start=observed_start,
+                observed_close=observed_close,
+                sensor_identity=sensor_identity,
+                path_role=path_role,
+                visible_formats=formats,
+                timing=timing,
+                runtime=runtime,
+            )
+            admitted_formats = self._admitted_source_formats(
+                formats,
+                source_times=source_times,
+                observed_start=observed_start,
             )
             observations.append(
                 NetworkSensorObservation(
@@ -161,7 +205,7 @@ class NetworkObservationPlanner:
                     observed_start_time=observed_start,
                     observed_close_time=observed_close,
                     traffic=observed_traffic,
-                    visible_formats=frozenset(formats),
+                    visible_formats=frozenset(admitted_formats),
                     history=history,
                     file_observations=file_observations,
                     http_request_body_len=request_body_len,
@@ -175,9 +219,35 @@ class NetworkObservationPlanner:
                         observed_close,
                         firewall_teardown,
                     ),
+                    source_times=source_times,
+                    source_durations=source_durations,
                 )
             )
         return tuple(observations)
+
+    def _admitted_source_formats(
+        self,
+        formats: set[str],
+        *,
+        source_times: tuple[tuple[str, datetime], ...],
+        observed_start: datetime,
+    ) -> set[str]:
+        """Apply the half-open output window to every frozen row in a format."""
+
+        if self.output_end_time is None:
+            return set(formats)
+        admitted: set[str] = set()
+        for format_name in formats:
+            prefix = f"{format_name}:"
+            row_times = [
+                timestamp
+                for key, timestamp in source_times
+                if key == format_name or key.startswith(prefix)
+            ]
+            final_time = max(row_times) if row_times else observed_start
+            if self._before_output_end(final_time):
+                admitted.add(format_name)
+        return admitted
 
     def _before_output_end(self, timestamp: datetime | None) -> bool:
         """Return whether a source-local fan-out row is inside the export window."""
@@ -386,29 +456,54 @@ class NetworkObservationPlanner:
             )
         return None
 
-    @staticmethod
+    @classmethod
     def _firewall_teardown_plan(
+        cls,
         event: CanonicalOccurrence,
         formats: set[str],
         sensor_identity: str,
         observed_start: datetime,
         observed_close: datetime | None,
+        *,
+        scope: TimingScope,
+        runtime: TimingRuntime,
     ) -> tuple[str, datetime | None]:
-        """Plan ASA lifecycle semantics from canonical state and device policy."""
+        """Plan source-native ASA teardown time from canonical state and policy."""
 
         if "cisco_asa" not in formats:
             return "", None
         network = event.network
-        if network is None or network.protocol != "tcp":
-            return "", observed_close or observed_start
+        if network is None:
+            return "", None
+        if network.protocol != "tcp":
+            anchor = observed_close or observed_start
+            return (
+                "",
+                runtime.sampler.after(
+                    anchor,
+                    cls._right_skew_distribution(83, 8_500),
+                    relationship_key="source.firewall.datagram_teardown",
+                    scope=scope,
+                    sample_key="datagram",
+                ),
+            )
         timing: FirewallObservationTiming = firewall_observation_timing(sensor_identity)
         state = network.conn_state
         traffic = network.traffic
         payload_bytes = traffic.orig.payload_bytes + traffic.resp.payload_bytes
         if state in {"S0", "S1", "SH", "SHR"} and payload_bytes == 0:
+            timeout_anchor = observed_start + timedelta(
+                seconds=timing.tcp_embryonic_timeout_seconds
+            )
             return (
                 "SYN Timeout",
-                observed_start + timedelta(seconds=timing.tcp_embryonic_timeout_seconds),
+                runtime.sampler.after(
+                    timeout_anchor,
+                    cls._right_skew_distribution(137, 18_500),
+                    relationship_key="source.firewall.syn_timeout_processing",
+                    scope=scope,
+                    sample_key="syn-timeout",
+                ),
             )
         reason = {
             "REJ": "TCP Reset-O",
@@ -416,7 +511,22 @@ class NetworkObservationPlanner:
             "RSTR": "TCP Reset-I",
             "OTH": "TCP Reset-O",
         }.get(state, "TCP FINs")
-        return reason, observed_close or observed_start
+        if observed_close is not None:
+            anchor = observed_close
+            minimum_us, maximum_us = (91, 12_500)
+        else:
+            anchor = observed_start
+            minimum_us, maximum_us = (1_500, 280_000)
+        return (
+            reason,
+            runtime.sampler.after(
+                anchor,
+                cls._right_skew_distribution(minimum_us, maximum_us),
+                relationship_key="source.firewall.connection_teardown",
+                scope=scope,
+                sample_key=f"teardown:{state or 'unknown'}",
+            ),
+        )
 
     @staticmethod
     def _sensor_formats(
@@ -530,87 +640,647 @@ class NetworkObservationPlanner:
             values.extend(uid for uid in event.dhcp.uids if uid and uid not in values)
         return tuple(values)
 
+    def _runtime_for_event(self, canonical_time: datetime) -> TimingRuntime:
+        """Return the injected runtime or a deterministic direct-caller adapter."""
+
+        if self._runtime_injected:
+            return self.timing_runtime
+        # Low-level callers historically constructed this planner directly. A
+        # day-local adapter avoids applying decades of compatibility-epoch drift
+        # while production always uses the engine-owned scenario runtime.
+        reference = ensure_utc(canonical_time).replace(hour=0, minute=0, second=0, microsecond=0)
+        return TimingRuntime(reference_time=reference)
+
     @classmethod
-    def _observed_time(
+    def _observed_interval(
         cls,
-        canonical_time: datetime,
+        canonical_start: datetime,
+        canonical_close: datetime | None,
         timing: NetworkSensorObservationTiming,
         sensor_identity: str,
         path_role: str,
-    ) -> datetime:
-        offset_us = cls._bounded_int(
-            "clock-offset",
-            timing.clock_offset_min_us,
-            timing.clock_offset_max_us,
-            sensor_identity,
+        transaction_id: str,
+        runtime: TimingRuntime,
+    ) -> tuple[datetime, datetime | None]:
+        """Project one canonical interval through a physical sensor clock and route."""
+
+        clock_key = cls._sensor_clock_key(sensor_identity, timing.profile_name)
+        clock_spec = cls._sensor_clock_spec(timing)
+        scope = TimingScope(
+            stable_id=transaction_id,
+            source=sensor_identity.casefold(),
+            lifecycle_id=path_role,
         )
-        drift_ppm = cls._bounded_int(
-            "clock-drift",
-            timing.clock_drift_min_ppm,
-            timing.clock_drift_max_ppm,
-            sensor_identity,
+        route_delay = runtime.sampler.sample_timedelta(
+            cls._right_skew_distribution(
+                timing.route_delay_min_us,
+                timing.route_delay_max_us,
+            ),
+            relationship_key="network.sensor.route_delay",
+            scope=scope,
+            sample_key="route",
         )
-        day_start = canonical_time.replace(hour=0, minute=0, second=0, microsecond=0)
-        drift_us = int((canonical_time - day_start).total_seconds() * drift_ppm)
-        route_delay_us = cls._bounded_int(
-            "route-delay",
-            timing.route_delay_min_us,
-            timing.route_delay_max_us,
-            sensor_identity,
-            path_role,
+        observed_start = (
+            runtime.clocks.project(
+                ensure_utc(canonical_start),
+                key=clock_key,
+                spec=clock_spec,
+            )
+            + route_delay
         )
-        clock_wander_us = cls._clock_wander_us(
-            canonical_time,
-            timing.event_jitter_min_us,
-            timing.event_jitter_max_us,
-            sensor_identity,
+        if canonical_close is None:
+            return observed_start, None
+        observed_close = (
+            runtime.clocks.project(
+                ensure_utc(canonical_close),
+                key=clock_key,
+                spec=clock_spec,
+            )
+            + route_delay
         )
-        return canonical_time + timedelta(
-            microseconds=offset_us + drift_us + route_delay_us + clock_wander_us
+        observed_close += runtime.sampler.sample_timedelta(
+            cls._right_skew_distribution(73, 1_800),
+            relationship_key="network.sensor.close_processing",
+            scope=scope,
+            sample_key="close",
+        )
+        if observed_close < observed_start:
+            runtime.audit.record_saturation("network.sensor.clock_interval")
+            raise TimingDistributionError(
+                "sensor clock projection inverted a canonical network interval: "
+                f"sensor={sensor_identity!r} transaction={transaction_id!r}"
+            )
+        return observed_start, observed_close
+
+    @staticmethod
+    def _sensor_clock_key(sensor_identity: str, profile_name: str) -> SourceClockKey:
+        return SourceClockKey(
+            kind="network_sensor",
+            identity=sensor_identity.casefold(),
+            profile=profile_name,
         )
 
     @classmethod
-    def _clock_wander_us(
+    def _sensor_clock_spec(
         cls,
-        canonical_time: datetime,
-        minimum: int,
-        maximum: int,
-        sensor_identity: str,
-    ) -> int:
-        """Return slowly varying sensor clock noise, never per-flow timestamp jitter."""
-
-        if maximum <= minimum:
-            return minimum
-        bucket_seconds = 300
-        day_start = canonical_time.replace(hour=0, minute=0, second=0, microsecond=0)
-        seconds_since_day_start = (canonical_time - day_start).total_seconds()
-        bucket = int(seconds_since_day_start // bucket_seconds)
-        fraction = (seconds_since_day_start % bucket_seconds) / bucket_seconds
-        day_key = day_start.date().isoformat()
-        current = cls._bounded_int(
-            "clock-wander",
-            minimum,
-            maximum,
-            sensor_identity,
-            day_key,
-            str(bucket),
+        timing: NetworkSensorObservationTiming,
+    ) -> SourceClockSpec:
+        return SourceClockSpec(
+            offset_microseconds=cls._clock_distribution(
+                timing.clock_offset_min_us,
+                timing.clock_offset_max_us,
+            ),
+            drift_ppm=cls._clock_distribution(
+                timing.clock_drift_min_ppm,
+                timing.clock_drift_max_ppm,
+            ),
+            wander=ClockWanderSpec(
+                knot_distribution_microseconds=cls._clock_distribution(
+                    timing.event_jitter_min_us,
+                    timing.event_jitter_max_us,
+                ),
+                knot_interval=timedelta(minutes=5),
+            ),
         )
-        following = cls._bounded_int(
-            "clock-wander",
-            minimum,
-            maximum,
-            sensor_identity,
-            day_key,
-            str(bucket + 1),
-        )
-        return round(current + ((following - current) * fraction))
 
     @staticmethod
-    def _bounded_int(label: str, minimum: int, maximum: int, *parts: str) -> int:
+    def _clock_distribution(
+        minimum: int, maximum: int
+    ) -> ConstantDistribution | TriangularDistribution:
         if maximum <= minimum:
-            return minimum
-        seed = _stable_seed(":".join((label, *parts)))
-        return minimum + (seed % (maximum - minimum + 1))
+            return ConstantDistribution(float(minimum))
+        mode = min(float(maximum), max(float(minimum), 0.0))
+        return TriangularDistribution(float(minimum), mode, float(maximum))
+
+    @staticmethod
+    def _right_skew_distribution(
+        minimum_us: int,
+        maximum_us: int,
+    ) -> ConstantDistribution | TruncatedLognormalDistribution:
+        if maximum_us <= minimum_us + 2:
+            return ConstantDistribution(float(max(minimum_us, maximum_us)))
+        span = maximum_us - minimum_us
+        median = max(1.0, minimum_us + span * 0.18)
+        return TruncatedLognormalDistribution(
+            median=median,
+            sigma=0.78,
+            minimum=float(minimum_us),
+            maximum=float(maximum_us),
+        )
+
+    @classmethod
+    def _source_native_protocol_timing(
+        cls,
+        event: CanonicalOccurrence,
+        *,
+        canonical_start: datetime,
+        observed_start: datetime,
+        observed_close: datetime | None,
+        sensor_identity: str,
+        path_role: str,
+        visible_formats: set[str],
+        timing: NetworkSensorObservationTiming,
+        runtime: TimingRuntime,
+    ) -> tuple[tuple[tuple[str, datetime], ...], tuple[tuple[str, float], ...]]:
+        """Freeze Zeek connection, analyzer, and file timing before rendering."""
+
+        network = event.network
+        if network is None:
+            return (), ()
+        source_times: dict[str, datetime] = {}
+        source_durations: dict[str, float] = {}
+        scope = TimingScope(
+            stable_id=network.stable_id or network.zeek_uid,
+            source=sensor_identity.casefold(),
+            lifecycle_id=path_role,
+        )
+        if "zeek_conn" in visible_formats:
+            conn_key = network_source_timing_key("zeek_conn")
+            source_times[conn_key] = observed_start
+            if observed_close is not None:
+                source_durations[conn_key] = (observed_close - observed_start).total_seconds()
+
+        for format_name in ("zeek_smb_files", "zeek_smb_mapping", "zeek_weird"):
+            if format_name in visible_formats:
+                source_times[network_source_timing_key(format_name)] = observed_start
+
+        dns = event.dns
+        if dns is not None and "zeek_dns" in visible_formats:
+            dns_key = network_source_timing_key("zeek_dns")
+            source_rtt_us = max(0, round(float(dns.rtt or 0.0) * 1_000_000))
+            dns_upper = observed_close
+            if observed_close is not None and source_rtt_us > 0:
+                observed_duration_us = round(
+                    (observed_close - observed_start).total_seconds() * 1_000_000
+                )
+                if observed_duration_us <= 8:
+                    runtime.audit.record_saturation("source.zeek_dns.admissible_window")
+                    raise TimingDistributionError(
+                        "source.zeek_dns has no microsecond interior inside its transport"
+                    )
+                query_reserve_us = (
+                    min(
+                        observed_duration_us - 4,
+                        max(1_004, min(10_000, observed_duration_us // 8)),
+                    )
+                    if observed_duration_us > 1_008
+                    else max(4, observed_duration_us // 3)
+                )
+                maximum_rtt_us = observed_duration_us - query_reserve_us - 1
+                if source_rtt_us > maximum_rtt_us:
+                    minimum_rtt_us = max(0, min(maximum_rtt_us - 2, round(maximum_rtt_us * 0.72)))
+                    source_rtt_us = runtime.sampler.sample_microseconds(
+                        cls._right_skew_distribution(minimum_rtt_us, maximum_rtt_us + 1),
+                        relationship_key="source.zeek_dns.rtt_projection",
+                        scope=scope,
+                        sample_key=f"rtt:{observed_duration_us}",
+                    )
+                dns_upper = observed_close - timedelta(microseconds=source_rtt_us + 1)
+            dns_window = get_timing_window(
+                "source.zeek_dns_query",
+                default_min_ms=1,
+                default_max_ms=95,
+                default_position="after",
+                default_class="same_observation",
+            )
+            dns_time = cls._sample_after_within(
+                observed_start,
+                dns_upper,
+                minimum_us=dns_window.min_ms * 1_000,
+                maximum_us=dns_window.max_ms * 1_000,
+                relationship_key="source.zeek_dns_query",
+                scope=scope,
+                sample_key=f"dns:{dns.trans_id}:{dns.query}",
+                runtime=runtime,
+            )
+            source_times[dns_key] = dns_time
+            if source_rtt_us > 0:
+                response_time = dns_time + timedelta(microseconds=source_rtt_us)
+                source_times[network_source_timing_key("zeek_dns", "response")] = response_time
+                source_durations[dns_key] = source_rtt_us / 1_000_000
+
+        if event.dhcp is not None and "zeek_dhcp" in visible_formats:
+            dhcp_key = network_source_timing_key("zeek_dhcp")
+            source_times[dhcp_key] = observed_start
+            if observed_close is not None:
+                dhcp_duration = (observed_close - observed_start).total_seconds()
+                source_times[network_source_timing_key("zeek_dhcp", "close")] = observed_close
+                source_durations[dhcp_key] = dhcp_duration
+
+        if event.smtp is not None and "zeek_smtp" in visible_formats:
+            smtp_key = network_source_timing_key("zeek_smtp")
+            source_times[smtp_key] = cls._sample_after_within(
+                observed_start,
+                observed_close,
+                minimum_us=1_300,
+                maximum_us=180_000,
+                relationship_key="source.zeek_smtp_transaction",
+                scope=scope,
+                sample_key=f"smtp:{event.smtp.trans_depth}:{event.smtp.msg_id}",
+                runtime=runtime,
+            )
+
+        if event.ntp is not None and "zeek_ntp" in visible_formats:
+            ntp_key = network_source_timing_key("zeek_ntp")
+            ntp_time = cls._sample_after_within(
+                observed_start,
+                observed_close,
+                minimum_us=100,
+                maximum_us=120_000,
+                relationship_key="source.zeek_ntp_response",
+                scope=scope,
+                sample_key=f"ntp:{event.ntp.stratum}:{event.ntp.xmt_ts}",
+                runtime=runtime,
+            )
+            source_times[ntp_key] = ntp_time
+
+        ssl_time: datetime | None = None
+        needs_tls_timing = bool(
+            event.protocol.ssl is not None
+            or event.protocol.x509_chain
+            or event.protocol.leaf_certificate is not None
+        )
+        if needs_tls_timing:
+            ssl_window = get_timing_window(
+                "source.zeek_ssl_analyzer",
+                default_min_ms=3,
+                default_max_ms=650,
+                default_position="after",
+                default_class="same_observation",
+            )
+            ssl_time = cls._sample_after_within(
+                observed_start,
+                observed_close,
+                minimum_us=ssl_window.min_ms * 1_000,
+                maximum_us=ssl_window.max_ms * 1_000,
+                relationship_key="source.zeek_ssl_analyzer",
+                scope=scope,
+                sample_key="ssl",
+                runtime=runtime,
+            )
+            if "zeek_ssl" in visible_formats and event.protocol.ssl is not None:
+                source_times[network_source_timing_key("zeek_ssl")] = ssl_time
+
+        file_window = get_timing_window(
+            "source.zeek_file_analyzer",
+            default_min_ms=25,
+            default_max_ms=250,
+            default_position="after",
+            default_class="same_observation",
+        )
+        ocsp = event.protocol.ocsp
+        ocsp_transfer = (
+            next(
+                (
+                    transfer
+                    for transfer in event.protocol.file_transfers
+                    if ocsp is not None and transfer.fuid == ocsp.id
+                ),
+                None,
+            )
+            if ocsp is not None
+            else None
+        )
+        ocsp_duration_floor_us = (
+            max(4, round(max(0.0, ocsp_transfer.duration) * 0.55 * 1_000_000))
+            if ocsp_transfer is not None
+            else 0
+        )
+        http_time: datetime | None = None
+        http = event.protocol.http
+        if http is not None:
+            canonical_request = http.canonical_request_time
+            request_anchor = (
+                max(observed_start, ssl_time) if ssl_time is not None else observed_start
+            )
+            if canonical_request is not None:
+                request_anchor = max(
+                    request_anchor,
+                    cls._project_phase_time(
+                        ensure_utc(canonical_request),
+                        canonical_start=canonical_start,
+                        observed_start=observed_start,
+                        sensor_identity=sensor_identity,
+                        timing=timing,
+                        runtime=runtime,
+                    ),
+                )
+            http_window = get_timing_window(
+                "source.zeek_http_request",
+                default_min_ms=1,
+                default_max_ms=450,
+                default_position="after",
+                default_class="same_observation",
+            )
+            http_upper = observed_close
+            if observed_close is not None and ocsp_duration_floor_us:
+                downstream_reserve_us = file_window.min_ms * 1_000 + ocsp_duration_floor_us + 3
+                http_upper = observed_close - timedelta(microseconds=downstream_reserve_us)
+            http_time = cls._sample_after_within(
+                request_anchor,
+                http_upper,
+                minimum_us=http_window.min_ms * 1_000,
+                maximum_us=http_window.max_ms * 1_000,
+                relationship_key="source.zeek_http_request",
+                scope=scope,
+                sample_key=f"http:{http.trans_depth}",
+                runtime=runtime,
+            )
+            if "zeek_http" in visible_formats:
+                source_times[network_source_timing_key("zeek_http")] = http_time
+
+        file_times: dict[str, datetime] = {}
+        file_durations: dict[str, float] = {}
+        previous_file_time: datetime | None = None
+        transfers = sorted(event.protocol.file_transfers, key=lambda transfer: not transfer.is_orig)
+        for ordinal, transfer in enumerate(transfers):
+            anchor = observed_start
+            if http_time is not None and transfer.fuid in (*http.orig_fuids, *http.resp_fuids):
+                anchor = http_time
+            elif ssl_time is not None and transfer.source.upper() == "SSL":
+                anchor = ssl_time
+            if transfer.observation_not_before is not None:
+                projected_not_before = cls._project_phase_time(
+                    ensure_utc(transfer.observation_not_before),
+                    canonical_start=canonical_start,
+                    observed_start=observed_start,
+                    sensor_identity=sensor_identity,
+                    timing=timing,
+                    runtime=runtime,
+                )
+                if observed_close is None or projected_not_before < observed_close:
+                    anchor = max(anchor, projected_not_before)
+                else:
+                    runtime.audit.record_saturation(
+                        "source.zeek_file.observation_not_before_window"
+                    )
+            file_upper = observed_close
+            if (
+                observed_close is not None
+                and ocsp is not None
+                and transfer.fuid == ocsp.id
+                and ocsp_duration_floor_us
+            ):
+                file_upper = observed_close - timedelta(microseconds=ocsp_duration_floor_us)
+            if previous_file_time is not None:
+                anchor = cls._sample_after_within(
+                    max(anchor, previous_file_time),
+                    file_upper,
+                    minimum_us=113,
+                    maximum_us=8_500,
+                    relationship_key="source.zeek_file.inter_row_gap",
+                    scope=scope,
+                    sample_key=f"file-gap:{ordinal}:{transfer.fuid}",
+                    runtime=runtime,
+                )
+                minimum_us = 0
+            else:
+                minimum_us = file_window.min_ms * 1_000
+            file_time = cls._sample_after_within(
+                anchor,
+                file_upper,
+                minimum_us=minimum_us,
+                maximum_us=file_window.max_ms * 1_000,
+                relationship_key="source.zeek_file_analyzer",
+                scope=scope,
+                sample_key=f"file:{ordinal}:{transfer.fuid}",
+                runtime=runtime,
+            )
+            duration = cls._sample_file_duration(
+                transfer.duration,
+                source=transfer.source,
+                start=file_time,
+                close=observed_close,
+                scope=scope,
+                sample_key=f"duration:{ordinal}:{transfer.fuid}",
+                runtime=runtime,
+            )
+            file_times[transfer.fuid] = file_time
+            file_durations[transfer.fuid] = duration
+            previous_file_time = file_time
+            if "zeek_files" in visible_formats:
+                key = network_source_timing_key("zeek_files", transfer.fuid)
+                source_times[key] = file_time
+                source_durations[key] = duration
+
+        certificates = event.protocol.x509_chain or (
+            (event.protocol.leaf_certificate,)
+            if event.protocol.leaf_certificate is not None
+            else ()
+        )
+        previous_certificate_file: datetime | None = None
+        previous_x509: datetime | None = None
+        for position, certificate in enumerate(certificates):
+            anchor = ssl_time or observed_start
+            if previous_certificate_file is not None:
+                anchor = max(anchor, previous_certificate_file)
+            certificate_file_time = cls._sample_after_within(
+                anchor,
+                observed_close,
+                minimum_us=2_103,
+                maximum_us=24_853,
+                relationship_key="source.zeek_tls_certificate_file",
+                scope=scope,
+                sample_key=f"cert-file:{position}:{certificate.fuid}",
+                runtime=runtime,
+            )
+            file_times[certificate.fuid] = certificate_file_time
+            previous_certificate_file = certificate_file_time
+            if "zeek_files" in visible_formats:
+                source_times[network_source_timing_key("zeek_files", certificate.fuid)] = (
+                    certificate_file_time
+                )
+
+            x509_anchor = certificate_file_time
+            if previous_x509 is not None:
+                x509_anchor = max(x509_anchor, previous_x509)
+            x509_time = cls._sample_after_within(
+                x509_anchor,
+                observed_close,
+                minimum_us=2_137,
+                maximum_us=24_919,
+                relationship_key="source.zeek_x509_analyzer",
+                scope=scope,
+                sample_key=f"x509:{position}:{certificate.fuid}",
+                runtime=runtime,
+            )
+            previous_x509 = x509_time
+            if "zeek_x509" in visible_formats:
+                source_times[network_source_timing_key("zeek_x509", certificate.fuid)] = x509_time
+
+        if ocsp is not None and "zeek_ocsp" in visible_formats:
+            anchor = file_times.get(ocsp.id, ssl_time or observed_start)
+            file_duration = file_durations.get(ocsp.id, 0.0)
+            ocsp_close = (
+                anchor + timedelta(seconds=file_duration) if file_duration > 0 else observed_close
+            )
+            source_times[network_source_timing_key("zeek_ocsp", ocsp.id)] = (
+                cls._sample_after_within(
+                    anchor,
+                    ocsp_close,
+                    minimum_us=37,
+                    maximum_us=250_000,
+                    relationship_key="source.zeek_ocsp_analyzer",
+                    scope=scope,
+                    sample_key=f"ocsp:{ocsp.id}",
+                    runtime=runtime,
+                )
+            )
+
+        if "zeek_pe" in visible_formats:
+            for ordinal, pe in enumerate(event.protocol.pe_analyses):
+                anchor = file_times.get(pe.id, observed_start)
+                file_duration = file_durations.get(pe.id, 0.0)
+                pe_close = (
+                    anchor + timedelta(seconds=file_duration)
+                    if file_duration > 0
+                    else observed_close
+                )
+                source_times[network_source_timing_key("zeek_pe", pe.id)] = (
+                    cls._sample_after_within(
+                        anchor,
+                        pe_close,
+                        minimum_us=43,
+                        maximum_us=250_000,
+                        relationship_key="source.zeek_pe_analyzer",
+                        scope=scope,
+                        sample_key=f"pe:{ordinal}:{pe.id}",
+                        runtime=runtime,
+                    )
+                )
+
+        return tuple(sorted(source_times.items())), tuple(sorted(source_durations.items()))
+
+    @classmethod
+    def _project_phase_time(
+        cls,
+        canonical_time: datetime,
+        *,
+        canonical_start: datetime,
+        observed_start: datetime,
+        sensor_identity: str,
+        timing: NetworkSensorObservationTiming,
+        runtime: TimingRuntime,
+    ) -> datetime:
+        """Project a canonical child phase through the owning sensor clock."""
+
+        key = cls._sensor_clock_key(sensor_identity, timing.profile_name)
+        spec = cls._sensor_clock_spec(timing)
+        projected_start = runtime.clocks.project(canonical_start, key=key, spec=spec)
+        route_delay = observed_start - projected_start
+        return runtime.clocks.project(canonical_time, key=key, spec=spec) + route_delay
+
+    @classmethod
+    def _sample_after_within(
+        cls,
+        anchor: datetime,
+        upper_bound: datetime | None,
+        *,
+        minimum_us: int,
+        maximum_us: int,
+        relationship_key: str,
+        scope: TimingScope,
+        sample_key: str,
+        runtime: TimingRuntime,
+    ) -> datetime:
+        """Sample right-skew analyzer slack inside the available interval."""
+
+        minimum_us = max(0, minimum_us)
+        maximum_us = max(minimum_us + 3, maximum_us)
+        if upper_bound is None:
+            return runtime.sampler.after(
+                anchor,
+                cls._right_skew_distribution(minimum_us, maximum_us),
+                relationship_key=relationship_key,
+                scope=scope,
+                sample_key=sample_key,
+            )
+        available_us = round((upper_bound - anchor).total_seconds() * 1_000_000)
+        if available_us <= 2:
+            runtime.audit.record_saturation(f"{relationship_key}.admissible_window")
+            raise TimingDistributionError(
+                f"{relationship_key} has no microsecond interior before its owning close: "
+                f"anchor={anchor.isoformat()} close={upper_bound.isoformat()} "
+                f"available_us={available_us}"
+            )
+        sampled_maximum = min(maximum_us, available_us)
+        sampled_minimum = min(minimum_us, max(0, sampled_maximum - 3))
+        if sampled_maximum <= sampled_minimum + 2:
+            sampled_minimum = 0
+        try:
+            return runtime.sampler.after(
+                anchor,
+                cls._right_skew_distribution(sampled_minimum, sampled_maximum),
+                relationship_key=relationship_key,
+                scope=scope,
+                sample_key=f"{sample_key}:{available_us}",
+            )
+        except TimingDistributionError:
+            runtime.audit.record_saturation(f"{relationship_key}.admissible_window")
+            raise
+
+    @classmethod
+    def _sample_file_duration(
+        cls,
+        canonical_duration: float,
+        *,
+        source: str,
+        start: datetime,
+        close: datetime | None,
+        scope: TimingScope,
+        sample_key: str,
+        runtime: TimingRuntime,
+    ) -> float:
+        """Sample a file-analysis duration with interior transport-close slack."""
+
+        if canonical_duration <= 0:
+            return 0.0
+        canonical_us = max(1, round(canonical_duration * 1_000_000))
+        if close is None:
+            maximum_us = max(canonical_us + 3, round(canonical_us * 1.45))
+        else:
+            available_us = round((close - start).total_seconds() * 1_000_000)
+            if available_us <= 3:
+                runtime.audit.record_saturation("source.zeek_file.duration_window")
+                return 0.0
+            cap_us = {
+                "HTTP": 120_000,
+                "SMB": 160_000,
+                "SMTP": 280_000,
+            }.get(source.upper(), 100_000)
+            margin_maximum = min(cap_us, max(3, available_us // 3))
+            margin = runtime.sampler.sample_microseconds(
+                cls._right_skew_distribution(1, margin_maximum),
+                relationship_key="source.zeek_file.close_slack",
+                scope=scope,
+                sample_key=f"{sample_key}:close",
+            )
+            maximum_us = available_us - margin
+            if maximum_us <= 2:
+                runtime.audit.record_saturation("source.zeek_file.duration_window")
+                return 0.0
+        lower_us = max(0, min(maximum_us - 2, round(canonical_us * 0.55)))
+        preferred_us = min(canonical_us, max(1, round(maximum_us * 0.82)))
+        upper_us = min(maximum_us, max(preferred_us + 3, round(canonical_us * 1.55)))
+        if upper_us <= lower_us + 2:
+            lower_us = 0
+            upper_us = maximum_us
+        try:
+            duration_us = runtime.sampler.sample_microseconds(
+                TruncatedLognormalDistribution(
+                    median=float(max(1, preferred_us)),
+                    sigma=0.42,
+                    minimum=float(lower_us),
+                    maximum=float(upper_us),
+                ),
+                relationship_key="source.zeek_file.duration",
+                scope=scope,
+                sample_key=sample_key,
+            )
+        except TimingDistributionError:
+            runtime.audit.record_saturation("source.zeek_file.duration_window")
+            duration_us = max(1, maximum_us // 2)
+        return duration_us / 1_000_000
 
     @classmethod
     def _observed_traffic(
@@ -699,3 +1369,179 @@ class NetworkObservationPlanner:
         if ip_bytes > 0 and packets == 0:
             packets = 1
         return DirectionalTrafficLedger(payload, packets, max(payload, ip_bytes)), missed
+
+
+RUNTIME_OWNED_ZEEK_FORMATS = frozenset(
+    {
+        "zeek_conn",
+        "zeek_dhcp",
+        "zeek_dns",
+        "zeek_files",
+        "zeek_http",
+        "zeek_ntp",
+        "zeek_ocsp",
+        "zeek_pe",
+        "zeek_smtp",
+        "zeek_ssl",
+        "zeek_x509",
+    }
+)
+
+
+def compatibility_network_source_time(
+    event: CanonicalOccurrence,
+    key: str,
+) -> datetime:
+    """Plan one direct-caller source time outside an emitter instance.
+
+    Production dispatch always attaches sensor observations. This adapter keeps
+    low-level emitter APIs deterministic without restoring module-global
+    planners or mutable emitter timing state.
+    """
+
+    if event.network is None:
+        return _compatibility_context_source_time(event, key)
+    source_times, _source_durations = _compatibility_protocol_timing(event)
+    return dict(source_times).get(key, ensure_utc(event.timestamp))
+
+
+def compatibility_network_source_duration(
+    event: CanonicalOccurrence,
+    key: str,
+) -> float | None:
+    """Plan one direct-caller source duration outside an emitter instance."""
+
+    _source_times, source_durations = _compatibility_protocol_timing(event)
+    duration = dict(source_durations).get(key)
+    network = event.network
+    if (
+        key == network_source_timing_key("zeek_conn")
+        and network is not None
+        and network.protocol == "tcp"
+        and network.dst_port == 443
+        and network.conn_state == "SF"
+        and (event.protocol.ssl is not None or network.service == "ssl")
+    ):
+        canonical = max(0.0, float(network.duration or 0.0))
+        window = get_timing_window(
+            "network.tls_completed_min_duration",
+            default_min_ms=800,
+            default_max_ms=2500,
+            default_position="after",
+            default_class="same_observation",
+        )
+        floor_seconds = window.min_ms / 1_000
+        if canonical <= floor_seconds or abs(canonical - 1.2) < 0.000001:
+            runtime = _compatibility_runtime(event)
+            scope = _compatibility_scope(event)
+            slack_us = runtime.sampler.sample_microseconds(
+                NetworkObservationPlanner._right_skew_distribution(15_000, 650_000),
+                relationship_key="network.tls_completed.duration_slack",
+                scope=scope,
+                sample_key="direct",
+            )
+            return max(canonical, floor_seconds) + slack_us / 1_000_000
+    return duration
+
+
+def _compatibility_protocol_timing(
+    event: CanonicalOccurrence,
+) -> tuple[tuple[tuple[str, datetime], ...], tuple[tuple[str, float], ...]]:
+    """Return one stateless direct-emitter protocol timing plan."""
+
+    network = event.network
+    if network is None:
+        return (), ()
+    canonical_start = ensure_utc(event.timestamp)
+    observed_close = (
+        canonical_start + timedelta(seconds=network.duration)
+        if network.duration is not None
+        else None
+    )
+    runtime = _compatibility_runtime(event)
+    timing = network_sensor_observation_timing("well_synced")
+    return NetworkObservationPlanner._source_native_protocol_timing(
+        event,
+        canonical_start=canonical_start,
+        observed_start=canonical_start,
+        observed_close=observed_close,
+        sensor_identity="__direct__",
+        path_role="direct",
+        visible_formats=set(RUNTIME_OWNED_ZEEK_FORMATS),
+        timing=timing,
+        runtime=runtime,
+    )
+
+
+def _compatibility_context_source_time(
+    event: CanonicalOccurrence,
+    key: str,
+) -> datetime:
+    """Plan direct protocol-context timing when no transport was supplied."""
+
+    runtime = _compatibility_runtime(event)
+    scope = _compatibility_scope(event)
+    anchor = ensure_utc(event.timestamp)
+    ssl_time = NetworkObservationPlanner._sample_after_within(
+        anchor,
+        None,
+        minimum_us=3_000,
+        maximum_us=650_000,
+        relationship_key="source.zeek_ssl_analyzer",
+        scope=scope,
+        sample_key="ssl",
+        runtime=runtime,
+    )
+    if key == network_source_timing_key("zeek_ssl"):
+        return ssl_time
+    certificates = event.protocol.x509_chain or (
+        (event.protocol.leaf_certificate,) if event.protocol.leaf_certificate is not None else ()
+    )
+    previous_file = ssl_time
+    previous_x509 = ssl_time
+    for position, certificate in enumerate(certificates):
+        file_time = NetworkObservationPlanner._sample_after_within(
+            previous_file,
+            None,
+            minimum_us=2_103,
+            maximum_us=24_853,
+            relationship_key="source.zeek_tls_certificate_file",
+            scope=scope,
+            sample_key=f"cert-file:{position}:{certificate.fuid}",
+            runtime=runtime,
+        )
+        x509_time = NetworkObservationPlanner._sample_after_within(
+            max(file_time, previous_x509),
+            None,
+            minimum_us=2_137,
+            maximum_us=24_919,
+            relationship_key="source.zeek_x509_analyzer",
+            scope=scope,
+            sample_key=f"x509:{position}:{certificate.fuid}",
+            runtime=runtime,
+        )
+        if key == network_source_timing_key("zeek_files", certificate.fuid):
+            return file_time
+        if key == network_source_timing_key("zeek_x509", certificate.fuid):
+            return x509_time
+        previous_file = file_time
+        previous_x509 = x509_time
+    return anchor
+
+
+def _compatibility_runtime(event: CanonicalOccurrence) -> TimingRuntime:
+    reference = ensure_utc(event.timestamp).replace(hour=0, minute=0, second=0, microsecond=0)
+    return TimingRuntime(reference_time=reference)
+
+
+def _compatibility_scope(event: CanonicalOccurrence) -> TimingScope:
+    network = event.network
+    return TimingScope(
+        stable_id=(
+            network.stable_id or network.zeek_uid
+            if network is not None
+            else event.timestamp.isoformat()
+        ),
+        source="__direct__",
+        lifecycle_id="direct",
+    )

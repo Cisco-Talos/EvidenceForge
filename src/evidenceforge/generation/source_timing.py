@@ -10,44 +10,78 @@ profiles and explicit constraints instead of independent emitter-local jitter.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import math
-import random
+import secrets
+import sys
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from threading import RLock
 from typing import Any, TypeAlias
 
 from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.generation.activity.timing_profiles import (
-    TimingWindow,
     endpoint_clock_timing,
     get_timing_window,
     network_sensor_observation_timing,
-    sample_timing_delta,
     startup_module_observation_timing,
     sysmon_envelope_timing,
 )
-from evidenceforge.generation.timing import TemporalConstraintGraph
+from evidenceforge.generation.process_runtime_cache import BoundedRuntimeCache, deadline_seconds
+from evidenceforge.generation.timing import (
+    ConstantDistribution,
+    MixtureDistribution,
+    SourceClockKey,
+    SourceClockSpec,
+    TemporalConstraintGraph,
+    TimingDistributionError,
+    TimingRuntime,
+    TimingRuntimeCensus,
+    TimingRuntimePreparation,
+    TimingScope,
+    TriangularDistribution,
+    TruncatedLognormalDistribution,
+    WeightedDistribution,
+)
 from evidenceforge.models.exceptions import StateError
-from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 TimingOccurrence: TypeAlias = OccurrenceBuilder | CanonicalOccurrence
 
 _SOURCE_EPSILON = timedelta(milliseconds=1)
-_OBSERVATION_NOISE_US = 997
 _PROCESS_CREATE_SOURCE_KEYS = {
     "source.windows_security_process_create",
     "source.sysmon_process_create",
     "source.ecar_process_create",
 }
 _PROCESS_START_EVENT_TYPES = {"process_create", "system_process_create"}
+_PROCESS_END_EVENT_TYPES = {"process_terminate"}
 _SESSION_CLOSURE_SOURCE_KEYS = {
     "ecar": "source.ecar_session_logout",
     "windows_security": "source.windows_security_session_logout",
     "windows_event_security": "source.windows_security_session_logout",
     "syslog": "source.syslog_session_logout",
 }
+_SESSION_CLOSURE_TAILS = {
+    "ecar": timedelta(seconds=15),
+    "windows_security": timedelta(seconds=15),
+    "windows_event_security": timedelta(seconds=15),
+    "syslog": timedelta(seconds=4),
+}
+_SOURCE_TIMING_LIFECYCLE_RETENTION = timedelta(hours=48)
+_SOURCE_TIMING_TRANSPORT_RETENTION = timedelta(minutes=10)
+_SOURCE_TIMING_TICKET_RETENTION = timedelta(seconds=10)
+_MAX_UTC_DATETIME = datetime.max.replace(tzinfo=UTC)
+_CACHE_TOMBSTONE = object()
+_ACTIVE_SOURCE_TIMING_PREPARATION: ContextVar[Any] = ContextVar(
+    "active_source_timing_preparation",
+    default=None,
+)
 
 
 @dataclass(slots=True)
@@ -56,9 +90,157 @@ class SourceTimingPlan:
 
     canonical_timestamp: datetime
     clock_profile_name: str = "complete"
+    compatibility_mode: bool = False
+    observation_delays: dict[str, timedelta] = field(default_factory=dict)
     source_times: dict[str, datetime] = field(default_factory=dict)
     finalized_times: dict[str, datetime] = field(default_factory=dict)
     finalized_flags: dict[str, bool] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTimingIndexCensus:
+    """Constant-time structural census for one cross-event timing index."""
+
+    name: str
+    live_entries: int
+    backing_entries: int
+    stale_entries: int
+    high_water_mark: int
+    estimated_bytes: int
+    lookup_candidates_inspected: int
+    expiry_work: int
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTimingIndexFamilySpec:
+    """Public production shape for one bounded source-timing index family."""
+
+    name: str
+    key_shape: str
+    value_shape: str
+    deadline_shape: str
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTimingProbeLoadResult:
+    """Describe one representative production-shaped probe insertion."""
+
+    inserted: bool
+    replaced: bool
+    key: Any
+    deadline: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTimingPlannerCensus:
+    """Constant-time census for bounded planner indexes and the shared runtime."""
+
+    index_count: int
+    live_entries: int
+    backing_entries: int
+    stale_entries: int
+    high_water_entries: int
+    estimated_index_bytes: int
+    estimated_total_bytes: int
+    lookup_candidates_inspected: int
+    expiry_work: int
+    watermark: datetime | None
+    indexes: tuple[SourceTimingIndexCensus, ...]
+    runtime: TimingRuntimeCensus
+
+
+PRODUCTION_SOURCE_TIMING_INDEX_FAMILIES: tuple[SourceTimingIndexFamilySpec, ...] = (
+    SourceTimingIndexFamilySpec(
+        "ecar_process_create", "process_object_id", "datetime", "lifecycle+48h"
+    ),
+    SourceTimingIndexFamilySpec(
+        "runtime_process_create",
+        "family/source_instance/process_object_id",
+        "datetime",
+        "lifecycle+48h",
+    ),
+    SourceTimingIndexFamilySpec(
+        "runtime_cross_source_sysmon_create",
+        "hostname/process_object_id",
+        "native/render datetime pair",
+        "lifecycle+48h",
+    ),
+    SourceTimingIndexFamilySpec(
+        "sysmon_process_render_create",
+        "hostname/process_object_id",
+        "datetime",
+        "lifecycle+48h",
+    ),
+    SourceTimingIndexFamilySpec(
+        "process_dependent_create",
+        "family/source_instance/process_object_id",
+        "datetime",
+        "lifecycle+48h",
+    ),
+    SourceTimingIndexFamilySpec(
+        "kerberos_service",
+        "format/principal/source_ip/dc_hostname",
+        "latest datetime",
+        "ticket+10s",
+    ),
+    SourceTimingIndexFamilySpec(
+        "latest_session_start", "family/lifecycle_group_id", "datetime", "lifecycle+48h"
+    ),
+    SourceTimingIndexFamilySpec(
+        "latest_session_dependent",
+        "family/lifecycle_group_id",
+        "datetime",
+        "lifecycle+48h",
+    ),
+    SourceTimingIndexFamilySpec(
+        "latest_session_dependent_description",
+        "family/lifecycle_group_id",
+        "description",
+        "lifecycle+48h",
+    ),
+    SourceTimingIndexFamilySpec(
+        "admitted_ecar_remote_transport",
+        "action/transaction/host/network tuple",
+        "datetime",
+        "transport+10m",
+    ),
+    SourceTimingIndexFamilySpec(
+        "admitted_windows_remote_transport",
+        "action/transaction/host/network tuple",
+        "datetime",
+        "transport+10m",
+    ),
+    SourceTimingIndexFamilySpec(
+        "admitted_ecar_transport_transaction",
+        "transaction/host/network tuple",
+        "datetime",
+        "transport+10m",
+    ),
+    SourceTimingIndexFamilySpec(
+        "ecar_transport_close_deadline",
+        "transaction/host/network tuple",
+        "datetime",
+        "transport+10m",
+    ),
+    SourceTimingIndexFamilySpec(
+        "admitted_windows_transport_transaction",
+        "transaction/host/network tuple",
+        "datetime",
+        "transport+10m",
+    ),
+    SourceTimingIndexFamilySpec(
+        "admitted_ecar_ssh_transport",
+        "host/network tuple",
+        "datetime",
+        "transport+10m",
+    ),
+    SourceTimingIndexFamilySpec(
+        "admitted_ecar_smb_transport",
+        "host/network tuple",
+        "datetime",
+        "transport+10m",
+    ),
+)
 
 
 def ecar_flow_render_key(direction: str, hostname: str) -> str:
@@ -71,6 +253,92 @@ def ecar_session_render_key(lifecycle: str) -> str:
     """Return the finalized-plan key for one eCAR USER_SESSION row."""
 
     return f"ecar.session.{lifecycle}"
+
+
+def ecar_process_render_key(lifecycle: str, hostname: str) -> str:
+    """Return the finalized-plan key for one eCAR PROCESS lifecycle row."""
+
+    return f"ecar.process.{lifecycle.lower()}.{hostname}"
+
+
+def ecar_process_create_source_key(hostname: str, pid: int, started_at: datetime) -> str:
+    """Return the compatibility-plan key for one eCAR process-create anchor."""
+
+    return SourceTimingPlanner._cache_key(
+        "source.ecar_process_create",
+        (hostname, pid, started_at),
+    )
+
+
+def sysmon_process_native_key(lifecycle: str, hostname: str) -> str:
+    """Return the finalized-plan key for a Sysmon PROCESS payload timestamp."""
+
+    return f"sysmon.process.{lifecycle.lower()}.native.{hostname}"
+
+
+def sysmon_process_render_key(lifecycle: str, hostname: str) -> str:
+    """Return the finalized-plan key for a Sysmon PROCESS envelope timestamp."""
+
+    return f"sysmon.process.{lifecycle.lower()}.render.{hostname}"
+
+
+def sysmon_parent_process_render_key(hostname: str) -> str:
+    """Return the finalized-plan key for a Sysmon Event 1 parent identity."""
+
+    return f"sysmon.process.parent.render.{hostname}"
+
+
+def sysmon_process_identity_render_key(
+    hostname: str,
+    pid: int,
+    started_at: datetime,
+) -> str:
+    """Return the frozen Sysmon Event 1 envelope key for one exact process."""
+
+    return (
+        f"sysmon.process.identity.render.{hostname.casefold()}:"
+        f"{pid}:{ensure_utc(started_at).isoformat()}"
+    )
+
+
+def sysmon_process_pid_render_key(hostname: str, pid: int) -> str:
+    """Return an occurrence-local Sysmon Event 1 envelope alias by PID."""
+
+    return f"sysmon.process.pid.render.{hostname.casefold()}:{pid}"
+
+
+def endpoint_event_native_key(
+    format_name: str,
+    hostname: str,
+    phase: str = "base",
+) -> str:
+    """Return the frozen source-native payload key for one endpoint row."""
+
+    family = _endpoint_format_family(format_name)
+    return f"{family}.event.{phase}.native.{hostname}"
+
+
+def endpoint_event_render_key(
+    format_name: str,
+    hostname: str,
+    phase: str = "base",
+) -> str:
+    """Return the frozen rendered-envelope key for one endpoint row."""
+
+    family = _endpoint_format_family(format_name)
+    return f"{family}.event.{phase}.render.{hostname}"
+
+
+def _endpoint_format_family(format_name: str) -> str:
+    """Normalize endpoint format aliases to one timing family."""
+
+    if format_name in {"windows_security", "windows_event_security"}:
+        return "windows_security"
+    if format_name in {"windows_event_sysmon", "sysmon"}:
+        return "sysmon"
+    if format_name == "ecar":
+        return "ecar"
+    raise ValueError(f"unsupported endpoint timing format: {format_name!r}")
 
 
 def ecar_flow_identity_key(direction: str, hostname: str) -> str:
@@ -86,25 +354,703 @@ _SSH_TRANSPORT_KEY = tuple[str, str, int, str, int, str]
 _SMB_TRANSPORT_KEY = tuple[str, str, int, str, int, str]
 
 
+def _retained_until(timestamp: datetime, retention: timedelta) -> datetime:
+    """Return an overflow-safe UTC retention deadline."""
+
+    canonical = ensure_utc(timestamp)
+    if canonical > _MAX_UTC_DATETIME - retention:
+        return _MAX_UTC_DATETIME
+    return canonical + retention
+
+
+def _latest_retained_until(
+    timestamps: tuple[datetime, ...],
+    retention: timedelta,
+) -> datetime:
+    """Return the retention deadline after the latest timestamp in a fixed tuple."""
+
+    return _retained_until(max(timestamps), retention)
+
+
+def _lifecycle_retention_deadline(timestamp: datetime) -> datetime:
+    return _retained_until(timestamp, _SOURCE_TIMING_LIFECYCLE_RETENTION)
+
+
+def _tuple_lifecycle_retention_deadline(
+    timestamps: tuple[datetime, datetime],
+) -> datetime:
+    return _latest_retained_until(timestamps, _SOURCE_TIMING_LIFECYCLE_RETENTION)
+
+
+def _transport_retention_deadline(timestamp: datetime) -> datetime:
+    return _retained_until(timestamp, _SOURCE_TIMING_TRANSPORT_RETENTION)
+
+
+def _ticket_retention_deadline(timestamp: datetime) -> datetime:
+    return _retained_until(timestamp, _SOURCE_TIMING_TICKET_RETENTION)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTimingPreparationToken:
+    """Stable owner-authenticated identity shared by related prepared dispatches."""
+
+    preparation_id: int
+    base_state_digest: str
+    _integrity: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTimingPreparationReceipt:
+    """Authenticated proof that one sealed timing overlay committed exactly once."""
+
+    binding_token: SourceTimingPreparationToken
+    overlay_digest: str
+    committed_state_digest: str
+    _integrity: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTimingPreparationCensus:
+    """Constant-time structural census for one bounded batch overlay."""
+
+    state: str
+    cache_family_count: int
+    staged_cache_keys: int
+    staged_cache_operations: int
+    staged_audit_operations: int
+    clock_live_entries: int
+    clock_capacity: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedCacheRecord:
+    value: Any
+    deadline_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedCacheOperation:
+    kind: str
+    key: Any
+    value: Any = None
+    deadline_seconds: float = 0.0
+
+
+class _SourceTimingCache:
+    """Versioned lock-owning facade for one bounded planner cache."""
+
+    __slots__ = ("_cache", "_default_deadline", "_lock", "_mutation_version")
+
+    def __init__(self, *, default_deadline: Any) -> None:
+        self._cache: BoundedRuntimeCache[Any, Any] = BoundedRuntimeCache(
+            default_deadline=default_deadline
+        )
+        self._default_deadline = default_deadline
+        self._lock = RLock()
+        self._mutation_version = 0
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._cache)
+
+    def __bool__(self) -> bool:
+        with self._lock:
+            return bool(self._cache)
+
+    def __contains__(self, key: object) -> bool:
+        return self.get(key) is not None
+
+    def __getitem__(self, key: Any) -> Any:
+        value = self.get(key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        self.set(key, value, deadline=self._default_deadline(value))
+
+    @property
+    def mutation_version(self) -> int:
+        with self._lock:
+            return self._mutation_version
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        with self._lock:
+            prior_candidates = self._cache.lookup_candidates_inspected
+            value = self._cache.get(key, default)
+            if self._cache.lookup_candidates_inspected != prior_candidates:
+                self._mutation_version += 1
+            return value
+
+    def raw_get(self, key: Any, default: Any = None) -> Any:
+        with self._lock:
+            return self._cache.raw_get(key, default)
+
+    def set(self, key: Any, value: Any, *, deadline: datetime | float | int) -> None:
+        with self._lock:
+            self._cache.set(key, value, deadline=deadline)
+            self._mutation_version += 1
+
+    def redeadline(self, key: Any, *, deadline: datetime | float | int) -> bool:
+        with self._lock:
+            moved = self._cache.redeadline(key, deadline=deadline)
+            if moved:
+                self._mutation_version += 1
+            return moved
+
+    def pop(self, key: Any, default: Any = None) -> Any:
+        with self._lock:
+            present = self._cache.raw_get(key, _CACHE_TOMBSTONE) is not _CACHE_TOMBSTONE
+            value = self._cache.pop(key, default)
+            if present:
+                self._mutation_version += 1
+            return value
+
+    def advance_watermark(self, cutoff: datetime, *, limit: int) -> tuple[tuple[Any, Any], ...]:
+        with self._lock:
+            expired = self._cache.advance_watermark(cutoff, limit=limit)
+            self._mutation_version += 1
+            return expired
+
+    def metrics(self, *, estimate_bytes: bool = False) -> Any:
+        with self._lock:
+            return self._cache.metrics(estimate_bytes=estimate_bytes)
+
+    @property
+    def lookup_candidates_inspected(self) -> int:
+        with self._lock:
+            return self._cache.lookup_candidates_inspected
+
+    @property
+    def expiry_work(self) -> int:
+        with self._lock:
+            return self._cache.expiry_work
+
+    def _peek(self, key: Any) -> tuple[_PreparedCacheRecord | None, bool]:
+        """Return one exact record and visibility without counter mutation."""
+
+        with self._lock:
+            record = self._cache._record(key)
+            if record is None:
+                return None, False
+            return (
+                _PreparedCacheRecord(record.value, record.deadline_seconds),
+                self._cache._visible(record),
+            )
+
+    def _apply_prepared_locked(self, prepared: _PreparedSourceTimingCache) -> None:
+        """Apply a prevalidated ordered overlay while ``_lock`` is held."""
+
+        for operation in prepared.operations:
+            if operation.kind == "set":
+                self._cache.set(
+                    operation.key,
+                    operation.value,
+                    deadline=operation.deadline_seconds,
+                )
+            else:
+                self._cache.pop(operation.key)
+        self._cache._lookup_candidates_inspected += prepared.lookup_candidate_delta
+        self._mutation_version += prepared.version_delta
+
+
+class _PreparedSourceTimingCache:
+    """Copy-on-write exact-key view over one source-timing cache."""
+
+    __slots__ = (
+        "_base",
+        "_base_watermark_seconds",
+        "_base_version",
+        "_lookup_candidate_delta",
+        "_operations",
+        "_overlay",
+        "_version_delta",
+    )
+
+    def __init__(self, base: _SourceTimingCache) -> None:
+        self._base = base
+        with base._lock:
+            self._base_version = base._mutation_version
+            self._base_watermark_seconds = base._cache._watermark_seconds
+        self._lookup_candidate_delta = 0
+        self._version_delta = 0
+        self._operations: list[_PreparedCacheOperation] = []
+        self._overlay: dict[Any, _PreparedCacheRecord | object] = {}
+
+    @property
+    def base_version(self) -> int:
+        return self._base_version
+
+    @property
+    def operations(self) -> tuple[_PreparedCacheOperation, ...]:
+        return tuple(self._operations)
+
+    @property
+    def lookup_candidate_delta(self) -> int:
+        return self._lookup_candidate_delta
+
+    @property
+    def version_delta(self) -> int:
+        return self._version_delta
+
+    @property
+    def staged_keys(self) -> int:
+        return len(self._overlay)
+
+    def __contains__(self, key: object) -> bool:
+        return self.get(key) is not None
+
+    def __getitem__(self, key: Any) -> Any:
+        value = self.get(key, _CACHE_TOMBSTONE)
+        if value is _CACHE_TOMBSTONE:
+            raise KeyError(key)
+        return value
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        self.set(key, value, deadline=self._base._default_deadline(value))
+
+    def _current(self, key: Any) -> tuple[_PreparedCacheRecord | None, bool]:
+        staged = self._overlay.get(key, _CACHE_TOMBSTONE)
+        if staged is _CACHE_TOMBSTONE:
+            return self._base._peek(key)
+        if staged is None:
+            return None, False
+        record = staged
+        return (
+            record,
+            self._base_watermark_seconds is None
+            or record.deadline_seconds >= self._base_watermark_seconds,
+        )
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        record, visible = self._current(key)
+        if record is None:
+            return default
+        self._lookup_candidate_delta += 1
+        self._version_delta += 1
+        return record.value if visible else default
+
+    def raw_get(self, key: Any, default: Any = None) -> Any:
+        record, _visible = self._current(key)
+        return default if record is None else record.value
+
+    def set(self, key: Any, value: Any, *, deadline: datetime | float | int) -> None:
+        deadline_value = deadline_seconds(deadline)
+        record = _PreparedCacheRecord(value, deadline_value)
+        self._overlay[key] = record
+        self._operations.append(_PreparedCacheOperation("set", key, value, deadline_value))
+        self._version_delta += 1
+
+    def redeadline(self, key: Any, *, deadline: datetime | float | int) -> bool:
+        record, _visible = self._current(key)
+        if record is None:
+            return False
+        self.set(key, record.value, deadline=deadline)
+        return True
+
+    def pop(self, key: Any, default: Any = None) -> Any:
+        record, _visible = self._current(key)
+        if record is None:
+            return default
+        self._overlay[key] = None
+        self._operations.append(_PreparedCacheOperation("pop", key))
+        self._version_delta += 1
+        return record.value
+
+    def overlay_digest(self) -> str:
+        payload = tuple(
+            (operation.kind, repr(operation.key), repr(operation.value), operation.deadline_seconds)
+            for operation in self._operations
+        )
+        payload += (("lookup", self._lookup_candidate_delta, self._version_delta, 0.0),)
+        return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
+
+
 class SourceTimingPlanner:
     """Plan source-native observation times with deterministic constraints."""
 
-    def __init__(self, clock_profile_name: str = "complete") -> None:
+    def __init__(
+        self,
+        clock_profile_name: str = "complete",
+        *,
+        timing_runtime: TimingRuntime | None = None,
+    ) -> None:
         self.clock_profile_name = clock_profile_name or "complete"
-        self._ecar_process_create_times: dict[str, datetime] = {}
-        self._kerberos_service_times: dict[tuple[str, str, str, str], list[datetime]] = {}
-        self._latest_session_start_times: dict[tuple[str, str], datetime] = {}
-        self._latest_session_dependent_times: dict[tuple[str, str], datetime] = {}
-        self._latest_session_dependent_descriptions: dict[tuple[str, str], str] = {}
-        self._admitted_ecar_remote_transports: dict[_REMOTE_TRANSPORT_KEY, datetime] = {}
-        self._admitted_windows_remote_transports: dict[_REMOTE_TRANSPORT_KEY, datetime] = {}
-        self._admitted_ecar_transport_transactions: dict[_TRANSACTION_TRANSPORT_KEY, datetime] = {}
-        self._ecar_transport_close_deadlines: dict[_TRANSACTION_TRANSPORT_KEY, datetime] = {}
-        self._admitted_windows_transport_transactions: dict[
-            _TRANSACTION_TRANSPORT_KEY, datetime
-        ] = {}
-        self._admitted_ecar_ssh_transports: dict[_SSH_TRANSPORT_KEY, datetime] = {}
-        self._admitted_ecar_smb_transports: dict[_SMB_TRANSPORT_KEY, datetime] = {}
+        self.timing_runtime = timing_runtime or TimingRuntime.compatibility_default()
+        self._ecar_process_create_times = _SourceTimingCache(
+            default_deadline=_lifecycle_retention_deadline
+        )
+        self._runtime_process_create_times = _SourceTimingCache(
+            default_deadline=_lifecycle_retention_deadline
+        )
+        self._runtime_cross_source_sysmon_create_times = _SourceTimingCache(
+            default_deadline=_tuple_lifecycle_retention_deadline
+        )
+        self._sysmon_process_render_create_times = _SourceTimingCache(
+            default_deadline=_lifecycle_retention_deadline
+        )
+        self._process_dependent_create_times = _SourceTimingCache(
+            default_deadline=_lifecycle_retention_deadline
+        )
+        self._kerberos_service_times = _SourceTimingCache(
+            default_deadline=_ticket_retention_deadline
+        )
+        self._latest_session_start_times = _SourceTimingCache(
+            default_deadline=_lifecycle_retention_deadline
+        )
+        self._latest_session_dependent_times = _SourceTimingCache(
+            default_deadline=_lifecycle_retention_deadline
+        )
+        self._latest_session_dependent_descriptions = _SourceTimingCache(
+            default_deadline=lambda _description: _MAX_UTC_DATETIME
+        )
+        self._admitted_ecar_remote_transports = _SourceTimingCache(
+            default_deadline=_transport_retention_deadline
+        )
+        self._admitted_windows_remote_transports = _SourceTimingCache(
+            default_deadline=_transport_retention_deadline
+        )
+        self._admitted_ecar_transport_transactions = _SourceTimingCache(
+            default_deadline=_transport_retention_deadline
+        )
+        self._ecar_transport_close_deadlines = _SourceTimingCache(
+            default_deadline=_transport_retention_deadline
+        )
+        self._admitted_windows_transport_transactions = _SourceTimingCache(
+            default_deadline=_transport_retention_deadline
+        )
+        self._admitted_ecar_ssh_transports = _SourceTimingCache(
+            default_deadline=_transport_retention_deadline
+        )
+        self._admitted_ecar_smb_transports = _SourceTimingCache(
+            default_deadline=_transport_retention_deadline
+        )
+        self._watermark: datetime | None = None
+        self._preparation_lock = RLock()
+        self._preparation_secret = secrets.token_bytes(32)
+        self._next_preparation_id = 1
+
+    def _bounded_indexes(self) -> tuple[tuple[str, _SourceTimingCache], ...]:
+        """Return the fixed bounded cross-event index inventory."""
+
+        return (
+            ("ecar_process_create", self._ecar_process_create_times),
+            ("runtime_process_create", self._runtime_process_create_times),
+            (
+                "runtime_cross_source_sysmon_create",
+                self._runtime_cross_source_sysmon_create_times,
+            ),
+            ("sysmon_process_render_create", self._sysmon_process_render_create_times),
+            ("process_dependent_create", self._process_dependent_create_times),
+            ("kerberos_service", self._kerberos_service_times),
+            ("latest_session_start", self._latest_session_start_times),
+            ("latest_session_dependent", self._latest_session_dependent_times),
+            (
+                "latest_session_dependent_description",
+                self._latest_session_dependent_descriptions,
+            ),
+            ("admitted_ecar_remote_transport", self._admitted_ecar_remote_transports),
+            (
+                "admitted_windows_remote_transport",
+                self._admitted_windows_remote_transports,
+            ),
+            (
+                "admitted_ecar_transport_transaction",
+                self._admitted_ecar_transport_transactions,
+            ),
+            ("ecar_transport_close_deadline", self._ecar_transport_close_deadlines),
+            (
+                "admitted_windows_transport_transaction",
+                self._admitted_windows_transport_transactions,
+            ),
+            ("admitted_ecar_ssh_transport", self._admitted_ecar_ssh_transports),
+            ("admitted_ecar_smb_transport", self._admitted_ecar_smb_transports),
+        )
+
+    @property
+    def index_family_specs(self) -> tuple[SourceTimingIndexFamilySpec, ...]:
+        """Return immutable public shapes for every bounded planner index."""
+
+        return PRODUCTION_SOURCE_TIMING_INDEX_FAMILIES
+
+    def load_probe_entry(
+        self,
+        family: str,
+        ordinal: int,
+        at: datetime,
+    ) -> SourceTimingProbeLoadResult:
+        """Load one representative production-shaped entry for a scale probe."""
+
+        if ordinal < 0:
+            raise ValueError("Source timing probe ordinal must be non-negative")
+        timestamp = ensure_utc(at)
+        cache = next(
+            (candidate for name, candidate in self._bounded_indexes() if name == family),
+            None,
+        )
+        if cache is None:
+            raise KeyError(f"Unknown source timing index family: {family}")
+        key, value, deadline = self._probe_entry(family, ordinal, timestamp)
+        inserted = cache.raw_get(key) is None
+        cache.set(key, value, deadline=deadline)
+        return SourceTimingProbeLoadResult(
+            inserted=inserted,
+            replaced=not inserted,
+            key=key,
+            deadline=deadline,
+        )
+
+    @staticmethod
+    def _probe_entry(
+        family: str,
+        ordinal: int,
+        timestamp: datetime,
+    ) -> tuple[Any, Any, datetime]:
+        """Build one fixed-shape probe entry without inspecting retained state."""
+
+        host = f"host-{ordinal % 4_096:04d}"
+        object_id = f"process:{host}:{10_000 + ordinal}:{timestamp.isoformat()}"
+        source_instance = f"endpoint:{host}:agent"
+        transaction_id = f"transaction-{ordinal:016x}"
+        src_ip = f"10.{(ordinal // 65_536) % 256}.{(ordinal // 256) % 256}.{ordinal % 256}"
+        dst_ip = f"172.20.{(ordinal // 256) % 256}.{ordinal % 256}"
+        network_tuple = (src_ip, 10_000 + ordinal % 50_000, dst_ip, 445, "tcp")
+        lifecycle_deadline = _lifecycle_retention_deadline(timestamp)
+        transport_deadline = _transport_retention_deadline(timestamp)
+        if family == "ecar_process_create":
+            return object_id, timestamp, lifecycle_deadline
+        if family in {"runtime_process_create", "process_dependent_create"}:
+            return (
+                ("ecar", source_instance, object_id),
+                timestamp,
+                lifecycle_deadline,
+            )
+        if family == "runtime_cross_source_sysmon_create":
+            rendered = timestamp + timedelta(microseconds=ordinal % 997 + 1)
+            return (host, object_id), (timestamp, rendered), lifecycle_deadline
+        if family == "sysmon_process_render_create":
+            return (host, object_id), timestamp, lifecycle_deadline
+        if family == "kerberos_service":
+            return (
+                ("windows_event_security", f"machine-{ordinal}$", src_ip, host),
+                timestamp,
+                _ticket_retention_deadline(timestamp),
+            )
+        if family in {
+            "latest_session_start",
+            "latest_session_dependent",
+            "latest_session_dependent_description",
+        }:
+            value: Any = (
+                f"event=process_terminate source={timestamp.isoformat()}"
+                if family == "latest_session_dependent_description"
+                else timestamp
+            )
+            return ("ecar", f"session-{ordinal:016x}"), value, lifecycle_deadline
+        if family in {
+            "admitted_ecar_remote_transport",
+            "admitted_windows_remote_transport",
+        }:
+            return (
+                (
+                    f"action-{ordinal:016x}",
+                    transaction_id,
+                    host,
+                    *network_tuple,
+                ),
+                timestamp,
+                transport_deadline,
+            )
+        if family in {
+            "admitted_ecar_transport_transaction",
+            "ecar_transport_close_deadline",
+            "admitted_windows_transport_transaction",
+        }:
+            return (
+                (transaction_id, host, *network_tuple),
+                timestamp,
+                transport_deadline,
+            )
+        if family in {"admitted_ecar_ssh_transport", "admitted_ecar_smb_transport"}:
+            dst_port = 22 if family == "admitted_ecar_ssh_transport" else 445
+            return (
+                (host, src_ip, network_tuple[1], dst_ip, dst_port, "tcp"),
+                timestamp,
+                transport_deadline,
+            )
+        raise KeyError(f"Unknown source timing index family: {family}")
+
+    def advance_watermark(self, cutoff: datetime, *, page_limit: int = 4_096) -> int:
+        """Advance logical expiry and reclaim one bounded page from every index."""
+
+        canonical_cutoff = ensure_utc(cutoff)
+        active = _ACTIVE_SOURCE_TIMING_PREPARATION.get()
+        if active is not None and active.owner is self:
+            raise StateError("Source timing watermark cannot advance inside a preparation")
+        with self._preparation_lock:
+            if self._watermark is not None and canonical_cutoff < self._watermark:
+                raise ValueError("Source timing watermark cannot move backward")
+            self._watermark = canonical_cutoff
+            return sum(
+                len(cache.advance_watermark(canonical_cutoff, limit=page_limit))
+                for _name, cache in self._bounded_indexes()
+            )
+
+    def census(self, *, estimate_bytes: bool = False) -> SourceTimingPlannerCensus:
+        """Return constant-time bounded-index and shared-runtime diagnostics."""
+
+        families: list[SourceTimingIndexCensus] = []
+        for name, cache in self._bounded_indexes():
+            metrics = cache.metrics(estimate_bytes=estimate_bytes)
+            families.append(
+                SourceTimingIndexCensus(
+                    name=name,
+                    live_entries=metrics.live_entries,
+                    backing_entries=metrics.backing_entries,
+                    stale_entries=metrics.stale_entries,
+                    high_water_mark=metrics.high_water_mark,
+                    estimated_bytes=metrics.estimated_bytes,
+                    lookup_candidates_inspected=cache.lookup_candidates_inspected,
+                    expiry_work=cache.expiry_work,
+                )
+            )
+        indexes = tuple(families)
+        runtime = self.timing_runtime.census(estimate_bytes=estimate_bytes)
+        estimated_index_bytes = sum(index.estimated_bytes for index in indexes)
+        return SourceTimingPlannerCensus(
+            index_count=len(indexes),
+            live_entries=sum(index.live_entries for index in indexes),
+            backing_entries=sum(index.backing_entries for index in indexes),
+            stale_entries=sum(index.stale_entries for index in indexes),
+            high_water_entries=sum(index.high_water_mark for index in indexes),
+            estimated_index_bytes=estimated_index_bytes,
+            estimated_total_bytes=(
+                sys.getsizeof(self) + estimated_index_bytes + runtime.estimated_bytes
+                if estimate_bytes
+                else 0
+            ),
+            lookup_candidates_inspected=sum(index.lookup_candidates_inspected for index in indexes),
+            expiry_work=sum(index.expiry_work for index in indexes),
+            watermark=self._watermark,
+            indexes=indexes,
+            runtime=runtime,
+        )
+
+    def state_digest(self) -> str:
+        """Return a constant-time digest of planner, runtime, and diagnostic versions."""
+
+        indexes: list[tuple[Any, ...]] = []
+        for name, cache in self._bounded_indexes():
+            metrics = cache.metrics()
+            indexes.append(
+                (
+                    name,
+                    cache.mutation_version,
+                    metrics.live_entries,
+                    metrics.backing_entries,
+                    metrics.stale_entries,
+                    metrics.high_water_mark,
+                    cache.lookup_candidates_inspected,
+                    cache.expiry_work,
+                )
+            )
+        payload = (
+            self._watermark.isoformat() if self._watermark is not None else "",
+            tuple(indexes),
+            self.timing_runtime.state_digest(),
+        )
+        return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
+
+    @contextmanager
+    def prepared_planning(self) -> Iterator[SourceTimingPreparation]:
+        """Stage a related source-timing family without canonical mutation."""
+
+        active = _ACTIVE_SOURCE_TIMING_PREPARATION.get()
+        if active is not None and active.owner is self:
+            raise StateError("Nested source timing preparations are not supported")
+        with self._preparation_lock:
+            preparation_id = self._next_preparation_id
+            self._next_preparation_id += 1
+            preparation = SourceTimingPreparation(self, preparation_id=preparation_id)
+        context_token: Token[Any] = _ACTIVE_SOURCE_TIMING_PREPARATION.set(preparation)
+        try:
+            yield preparation
+        except BaseException:
+            preparation.cancel()
+            raise
+        else:
+            preparation.seal()
+        finally:
+            _ACTIVE_SOURCE_TIMING_PREPARATION.reset(context_token)
+
+    def authenticates_binding_token(self, token: object) -> bool:
+        """Return whether ``token`` belongs to this exact planner instance."""
+
+        if not isinstance(token, SourceTimingPreparationToken):
+            return False
+        expected = self._preparation_token_integrity(
+            token.preparation_id,
+            token.base_state_digest,
+        )
+        return hmac.compare_digest(token._integrity, expected)
+
+    def is_active_preparation(self, preparation: object) -> bool:
+        """Return whether ``preparation`` owns the current planning context."""
+
+        return bool(
+            isinstance(preparation, SourceTimingPreparation)
+            and preparation.owner is self
+            and preparation._state == "open"
+            and _ACTIVE_SOURCE_TIMING_PREPARATION.get() is preparation
+        )
+
+    def authenticates_preparation(self, preparation: object) -> bool:
+        """Authenticate one sealed or committed preparation and its overlay digest."""
+
+        if not isinstance(preparation, SourceTimingPreparation):
+            return False
+        return preparation._authenticates(self)
+
+    def authenticates_preparation_receipt(self, receipt: object) -> bool:
+        """Authenticate a receipt that can exist only after one committed overlay."""
+
+        if not isinstance(receipt, SourceTimingPreparationReceipt):
+            return False
+        if not self.authenticates_binding_token(receipt.binding_token):
+            return False
+        expected = self._preparation_receipt_integrity(
+            receipt.binding_token,
+            receipt.overlay_digest,
+            receipt.committed_state_digest,
+        )
+        return hmac.compare_digest(receipt._integrity, expected)
+
+    def _preparation_token_integrity(self, preparation_id: int, base_digest: str) -> str:
+        payload = f"source-timing-preparation\0{preparation_id}\0{base_digest}".encode()
+        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+
+    def _preparation_seal_integrity(
+        self,
+        token: SourceTimingPreparationToken,
+        overlay_digest: str,
+    ) -> str:
+        payload = (
+            f"source-timing-seal\0{token.preparation_id}\0{token._integrity}\0{overlay_digest}"
+        ).encode()
+        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+
+    def _preparation_receipt_integrity(
+        self,
+        token: SourceTimingPreparationToken,
+        overlay_digest: str,
+        committed_state_digest: str,
+    ) -> str:
+        payload = (
+            "source-timing-receipt\0"
+            f"{token.preparation_id}\0{token._integrity}\0{overlay_digest}\0"
+            f"{committed_state_digest}"
+        ).encode()
+        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
 
     @staticmethod
     def sysmon_envelope_time(
@@ -117,68 +1063,146 @@ class SourceTimingPlanner:
         """Project Sysmon semantic time through its provider event-envelope path."""
 
         timing = sysmon_envelope_timing(event_id)
-        seed = _stable_seed(
-            "sysmon-envelope:"
-            f"{hostname}:{event_id}:" + ":".join(str(part) for part in identity_parts)
+        stable_id = f"{hostname}:{event_id}:" + ":".join(str(part) for part in identity_parts)
+        native = ensure_utc(native_time)
+        runtime = TimingRuntime(
+            reference_time=native.replace(hour=0, minute=0, second=0, microsecond=0),
+            namespace="sysmon-envelope-static-compatibility",
         )
-        rng = random.Random(seed)
-        delay_us = round(rng.lognormvariate(math.log(timing.median_us), timing.sigma))
-        delay_us = max(timing.min_us, min(delay_us, timing.max_us))
-        if rng.random() < timing.tail_probability:
-            tail_span = timing.tail_max_us - timing.tail_min_us
-            tail_unit = rng.betavariate(1.4, 4.5)
-            delay_us = timing.tail_min_us + round(tail_span * tail_unit)
-        return ensure_utc(native_time) + timedelta(microseconds=delay_us)
-
-    @staticmethod
-    def file_transfer_close_margin_seconds(
-        event: TimingOccurrence,
-        file_transfer: Any,
-        connection_duration: float,
-    ) -> float:
-        """Return a source-native analyzer-to-transport teardown margin."""
-
-        duration = max(0.0, connection_duration)
-        if duration <= 0:
-            return 0.0
-        network = event.network
-        seed = _stable_seed(
-            "file_transfer_close_margin:"
-            f"{getattr(network, 'zeek_uid', '')}:"
-            f"{getattr(file_transfer, 'fuid', '')}:"
-            f"{getattr(file_transfer, 'source', '')}:"
-            f"{getattr(file_transfer, 'seen_bytes', 0)}"
+        main = TruncatedLognormalDistribution(
+            median=timing.median_us,
+            sigma=timing.sigma,
+            minimum=timing.min_us,
+            maximum=timing.max_us,
         )
-        unit = (seed % 10_000) / 9_999
-        source = str(getattr(file_transfer, "source", "")).upper()
-        if source == "SMB":
-            minimum, maximum, cap = 0.004, 0.16, 0.75
-        elif source == "HTTP":
-            minimum, maximum, cap = 0.003, 0.12, 0.50
-        elif source == "SMTP":
-            minimum, maximum, cap = 0.012, 0.28, 1.50
-        else:
-            minimum, maximum, cap = 0.002, 0.10, 0.40
-        fraction = minimum + ((maximum - minimum) * unit)
-        desired = min(cap, max(minimum, duration * fraction))
-        return min(desired, max(0.00025, duration * 0.35))
+        distribution = main
+        if timing.tail_probability > 0:
+            tail = TruncatedLognormalDistribution(
+                median=timing.tail_min_us + (timing.tail_max_us - timing.tail_min_us) * 0.28,
+                sigma=max(0.35, timing.sigma),
+                minimum=timing.tail_min_us,
+                maximum=timing.tail_max_us,
+            )
+            distribution = MixtureDistribution(
+                (
+                    WeightedDistribution(1.0 - timing.tail_probability, main),
+                    WeightedDistribution(timing.tail_probability, tail),
+                )
+            )
+        delay = runtime.sampler.sample_timedelta(
+            distribution,
+            relationship_key="sysmon.provider.envelope",
+            scope=TimingScope(
+                stable_id=stable_id,
+                host=hostname,
+                source="sysmon",
+                lifecycle_id=stable_id,
+            ),
+            sample_key="envelope",
+        )
+        return native + delay
 
     def plan_event(
         self,
         event: TimingOccurrence,
         format_name: str | None = None,
+        *,
+        observation_delay: timedelta = timedelta(0),
+        source_instance: str = "",
+        source_hostname: str = "",
+        projection_role: str = "",
+        output_end_time: datetime | None = None,
     ) -> TimingOccurrence:
-        """Return ``event`` with an attached source timing plan."""
+        """Return a source projection while retaining immutable canonical time."""
+
+        active = _ACTIVE_SOURCE_TIMING_PREPARATION.get()
+        if active is not None and active.owner is self:
+            return active.plan_event(
+                event,
+                format_name,
+                observation_delay=observation_delay,
+                source_instance=source_instance,
+                source_hostname=source_hostname,
+                projection_role=projection_role,
+                output_end_time=output_end_time,
+            )
+
+        if observation_delay < timedelta(0):
+            raise ValueError("observation_delay must be non-negative")
         event = self.initialize_event(event)
+        plan = self._ensure_plan(event)
+        if format_name is not None:
+            plan.observation_delays[source_instance or format_name] = observation_delay
+        runtime_owned = self._runtime_owns_projection(event, format_name)
+        if observation_delay and not runtime_owned:
+            event = replace(
+                event,
+                timestamp=plan.canonical_timestamp + observation_delay,
+            )
         if format_name in {None, "ecar"}:
             self._plan_ecar_identity_times(event)
         if format_name == "ecar":
-            self._plan_ecar_render_times(event)
+            self._plan_ecar_render_times(
+                event,
+                source_instance=source_instance,
+                source_hostname=source_hostname,
+                projection_role=projection_role,
+            )
+        if format_name == "windows_event_sysmon":
+            self._plan_sysmon_process_times(
+                event,
+                source_instance=source_instance,
+                source_hostname=source_hostname,
+            )
         if format_name in {"windows_security", "windows_event_security"}:
-            event = self._plan_windows_remote_auth_time(event)
-        if format_name is not None:
+            self._plan_windows_process_times(
+                event,
+                source_instance=source_instance,
+                source_hostname=source_hostname,
+            )
+        if format_name in {
+            "ecar",
+            "windows_event_sysmon",
+            "windows_security",
+            "windows_event_security",
+        }:
+            self._plan_endpoint_event_times(
+                event,
+                format_name,
+                source_instance=source_instance,
+                source_hostname=source_hostname,
+                output_end_time=output_end_time,
+            )
+        if format_name is not None and format_name not in {
+            "ecar",
+            "windows_event_sysmon",
+            "windows_security",
+            "windows_event_security",
+        }:
             event = self._plan_session_lifecycle_time(event, format_name)
         return event
+
+    @staticmethod
+    def _runtime_owns_projection(
+        event: TimingOccurrence,
+        format_name: str | None,
+    ) -> bool:
+        """Return whether the shared runtime owns this migrated projection timestamp."""
+
+        from evidenceforge.generation.network_observation import RUNTIME_OWNED_ZEEK_FORMATS
+
+        if format_name in {
+            "ecar",
+            "windows_event_sysmon",
+            "windows_security",
+            "windows_event_security",
+        }:
+            return True
+        return bool(
+            format_name in RUNTIME_OWNED_ZEEK_FORMATS
+            and event.network is not None
+            and event.event_type in {"connection", "dhcp_lease"}
+        )
 
     def initialize_event(self, event: TimingOccurrence) -> TimingOccurrence:
         """Retain canonical time before source observation delay is applied.
@@ -209,6 +1233,49 @@ class SourceTimingPlanner:
         """Publish an admitted transport anchor for later authentication siblings."""
 
         if (
+            format_name
+            in {
+                "ecar",
+                "windows_event_sysmon",
+                "windows_security",
+                "windows_event_security",
+            }
+            and event.lifecycle is not None
+        ):
+            family = _endpoint_format_family(format_name)
+            timestamp = self.admission_time(event, format_name)
+            if event.event_type in {"logon", "machine_logon", "ssh_session"}:
+                key = (family, event.lifecycle.group_id)
+                previous = self._latest_session_start_times.get(key)
+                if previous is None or timestamp > previous:
+                    self._latest_session_start_times[key] = timestamp
+            session_group = (
+                event.lifecycle.parent_group_id
+                if event.event_type in _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES
+                else event.lifecycle.group_id
+                if event.lifecycle.phase == "dependent"
+                else None
+            )
+            if session_group:
+                key = (family, session_group)
+                previous = self._latest_session_dependent_times.get(key)
+                if previous is None or timestamp > previous:
+                    self._latest_session_dependent_times[key] = timestamp
+                    self._latest_session_dependent_descriptions.set(
+                        key,
+                        f"event={event.event_type} source={timestamp.isoformat()}",
+                        deadline=_retained_until(
+                            timestamp,
+                            _SOURCE_TIMING_LIFECYCLE_RETENTION,
+                        ),
+                    )
+            if event.event_type == "logoff":
+                key = (family, event.lifecycle.group_id)
+                self._latest_session_start_times.pop(key)
+                self._latest_session_dependent_times.pop(key)
+                self._latest_session_dependent_descriptions.pop(key)
+
+        if (
             format_name in {"windows_security", "windows_event_security"}
             and event.event_type == "kerberos_service"
             and event.kerberos is not None
@@ -220,7 +1287,10 @@ class SourceTimingPlanner:
                 event.kerberos.source_ip,
                 event.dst_host.hostname,
             )
-            self._kerberos_service_times.setdefault(key, []).append(event.timestamp)
+            timestamp = self.admission_time(event, format_name)
+            previous = self._kerberos_service_times.get(key)
+            if previous is None or timestamp > previous:
+                self._kerberos_service_times[key] = timestamp
 
         network = event.network
         lifecycle = event.lifecycle
@@ -365,125 +1435,1767 @@ class SourceTimingPlanner:
                 )
             ] = timestamp
 
-    def _plan_ecar_render_times(self, event: TimingOccurrence) -> None:
-        """Finalize eCAR FLOW and USER_SESSION times before emitter admission."""
+    def _plan_ecar_render_times(
+        self,
+        event: TimingOccurrence,
+        *,
+        source_instance: str = "",
+        source_hostname: str = "",
+        projection_role: str = "",
+    ) -> None:
+        """Finalize migrated eCAR row times before emitter admission."""
+
+        if event.event_type in _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES:
+            self._plan_ecar_process_time(
+                event,
+                source_instance=source_instance,
+                source_hostname=source_hostname,
+            )
+            return
 
         if event.event_type == "connection" and event.network is not None:
-            self._plan_ecar_flow_times(event)
+            self._plan_ecar_flow_times(
+                event,
+                source_instance=source_instance,
+                source_hostname=source_hostname,
+                projection_role=projection_role,
+            )
+        # Remaining endpoint rows are finalized by `_plan_endpoint_event_times`.
+
+    def _plan_ecar_process_time(
+        self,
+        event: TimingOccurrence,
+        *,
+        source_instance: str,
+        source_hostname: str,
+    ) -> None:
+        """Freeze one eCAR PROCESS lifecycle timestamp from the shared runtime."""
+
+        host = event.src_host or event.dst_host
+        process = event.process
+        if host is None or process is None:
             return
-        if event.auth is None or event.event_type not in {
-            "logon",
-            "machine_logon",
-            "ssh_session",
-            "failed_logon",
-            "logoff",
-        }:
+        # Finalized-time keys are part of the canonical event contract and must
+        # retain the event's hostname spelling.  ``source_hostname`` identifies
+        # the compiled source instance and is intentionally allowed to be
+        # normalized (for example, lower-cased) by deployment planning.
+        hostname = host.hostname
+        identity = self._subject_process_identity(event)
+        start_time = (
+            identity.started_at
+            if identity is not None
+            else process.start_time or self._ensure_plan(event).canonical_timestamp
+        )
+        object_id, lifecycle_id = self._process_scope_ids(
+            event,
+            identity,
+            hostname=hostname,
+            pid=process.pid,
+            started_at=start_time,
+        )
+        object_id = self._sysmon_process_object_id(
+            hostname,
+            process.pid,
+            start_time,
+        )
+        instance = source_instance or f"ecar:{hostname.casefold()}"
+        if event.event_type in _PROCESS_START_EVENT_TYPES:
+            timestamp = self._runtime_process_create_time(
+                event,
+                family="ecar",
+                source_key="source.ecar_process_create",
+                source_instance=instance,
+                hostname=hostname,
+                os_category=host.os_category,
+                object_id=object_id,
+                lifecycle_id=lifecycle_id,
+                canonical_start=start_time,
+            )
+            if identity is not None:
+                self._ecar_process_create_times[identity.object_id] = timestamp
+            self._ensure_plan(event).finalized_times[
+                ecar_process_render_key("create", hostname)
+            ] = timestamp
             return
-        lifecycle = (
-            "logout"
-            if event.event_type == "logoff"
-            else "failed_login"
-            if event.event_type == "failed_logon"
-            else "login"
+
+        create_time = self._runtime_process_create_time(
+            event,
+            family="ecar",
+            source_key="source.ecar_process_create",
+            source_instance=instance,
+            hostname=hostname,
+            os_category=host.os_category,
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+            canonical_start=start_time,
+        )
+        canonical_end = self._ensure_plan(event).canonical_timestamp
+        timestamp = self._runtime_process_termination_time(
+            event,
+            family="ecar",
+            source_key="source.ecar_process_terminate",
+            source_instance=instance,
+            hostname=hostname,
+            os_category=host.os_category,
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+            canonical_start=start_time,
+            canonical_end=canonical_end,
+            create_time=create_time,
         )
         plan = self._ensure_plan(event)
-        if lifecycle == "logout":
-            plan.finalized_times[ecar_session_render_key(lifecycle)] = (
-                self.session_closure_source_time(event, "ecar")
-            )
+        plan.finalized_times[ecar_process_render_key("create", hostname)] = create_time
+        plan.finalized_times[ecar_process_render_key("terminate", hostname)] = timestamp
+
+    def _plan_sysmon_process_times(
+        self,
+        event: TimingOccurrence,
+        *,
+        source_instance: str,
+        source_hostname: str,
+    ) -> None:
+        """Freeze Sysmon PROCESS native and provider-envelope timestamps."""
+
+        if event.event_type not in _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES:
             return
-        host = event.dst_host or event.src_host
-        canonical_timestamp = plan.canonical_timestamp
-        seed_parts = (
-            lifecycle,
-            getattr(host, "hostname", ""),
-            getattr(event.auth, "username", ""),
-            getattr(event.auth, "source_ip", ""),
-            getattr(event.auth, "source_port", ""),
-            getattr(event.auth, "logon_id", ""),
-            getattr(event.auth, "logon_type", ""),
-            event.identity_plan.object_id if event.identity_plan is not None else "",
-            canonical_timestamp,
+        host = event.src_host or event.dst_host
+        process = event.process
+        if host is None or process is None:
+            return
+        # Keep canonical event identity in finalized keys; the separately
+        # supplied source-instance name is only a clock/sampling scope.
+        hostname = host.hostname
+        identity = self._subject_process_identity(event)
+        start_time = (
+            identity.started_at
+            if identity is not None
+            else process.start_time or self._ensure_plan(event).canonical_timestamp
         )
-        timestamp = self.source_time(
+        object_id, lifecycle_id = self._process_scope_ids(
             event,
-            "source.ecar_session",
-            seed_parts=seed_parts,
+            identity,
+            hostname=hostname,
+            pid=process.pid,
+            started_at=start_time,
         )
-        anchor = self._remote_auth_transport_anchor(
+        # ProcessGuid identity is the host/PID/start tuple, not the occurrence-local
+        # process object carried by a particular row.  Event 1 may be collection-
+        # dropped, so dependent Event 3/7/8 rows must enter the same timing cache.
+        object_id = self._sysmon_process_object_id(hostname, process.pid, start_time)
+        instance = source_instance or f"sysmon:{hostname.casefold()}"
+        create_native, shared_create_render = self._runtime_shared_sysmon_process_create_time(
             event,
-            self._admitted_ecar_remote_transports,
-            self._admitted_ecar_transport_transactions,
+            hostname=hostname,
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+            canonical_start=start_time,
         )
-        if anchor is not None:
-            timestamp = anchor + sample_timing_delta(
-                "windows.network_logon_after_transport",
-                seed_parts=(
-                    "ecar",
-                    event.remote_auth.stable_id,
-                    event.remote_auth.primary_transport.transaction_id,
-                    lifecycle,
-                ),
+        create_cache_key = (instance, object_id)
+        create_render = self._sysmon_process_render_create_times.get(create_cache_key)
+        if create_render is None:
+            create_render = shared_create_render
+        parent = (
+            event.identity_plan.actor
+            if event.identity_plan is not None
+            and event.event_type in _PROCESS_START_EVENT_TYPES
+            and isinstance(event.identity_plan.actor, ProcessIdentity)
+            else None
+        )
+        parent_render = None
+        if parent is not None:
+            parent_object_id = self._sysmon_process_object_id(
+                hostname,
+                parent.pid,
+                parent.started_at,
             )
-        elif event.event_type == "ssh_session":
-            ssh_anchor = self._ssh_transport_anchor(event)
-            if ssh_anchor is not None:
-                timestamp = max(
-                    timestamp,
-                    ssh_anchor
-                    + sample_timing_delta(
-                        "source.ecar_ssh_session_after_accept",
-                        seed_parts=(
-                            "flow_order",
-                            getattr(host, "hostname", ""),
-                            getattr(event.auth, "source_ip", ""),
-                            getattr(event.auth, "source_port", ""),
-                            canonical_timestamp,
-                        ),
-                    ),
+            parent_cache_key = (instance, parent_object_id)
+            parent_render = self._sysmon_process_render_create_times.get(parent_cache_key)
+            if parent_render is None:
+                _parent_native, parent_render = self._runtime_shared_sysmon_process_create_time(
+                    event,
+                    hostname=hostname,
+                    object_id=parent_object_id,
+                    lifecycle_id=parent.lifecycle_group_id,
+                    canonical_start=parent.started_at,
                 )
-        elif event.auth.session_kind == "smb" and getattr(host, "os_category", "") == "linux":
-            smb_anchor = self._smb_transport_anchor(event)
-            if smb_anchor is not None:
-                timestamp = max(
-                    timestamp,
-                    smb_anchor
-                    + sample_timing_delta(
-                        "source.ecar_smb_session_after_accept",
-                        seed_parts=(
-                            "flow_order",
-                            getattr(host, "hostname", ""),
-                            getattr(event.auth, "source_ip", ""),
-                            getattr(event.auth, "source_port", ""),
-                            getattr(event.auth, "auth_session_ref", ""),
-                            canonical_timestamp,
-                        ),
-                    ),
+                self._sysmon_process_render_create_times[parent_cache_key] = parent_render
+        if parent_render is not None and create_render <= parent_render:
+            self.timing_runtime.audit.record_repair("sysmon.process.parent_before_child")
+            create_render = self._sample_after_floor(
+                parent_render,
+                relationship_key="sysmon.process.parent_before_child",
+                scope=TimingScope(
+                    stable_id=object_id,
+                    host=hostname,
+                    source=instance,
+                    lifecycle_id=lifecycle_id,
+                ),
+                maximum_us=2_500,
+            )
+        self._sysmon_process_render_create_times[create_cache_key] = create_render
+        plan = self._ensure_plan(event)
+        plan.finalized_times[sysmon_process_native_key("create", hostname)] = create_native
+        plan.finalized_times[sysmon_process_render_key("create", hostname)] = create_render
+        if parent_render is not None:
+            plan.finalized_times[sysmon_parent_process_render_key(hostname)] = parent_render
+        if event.event_type in _PROCESS_START_EVENT_TYPES:
+            return
+
+        canonical_end = plan.canonical_timestamp
+        terminate_native = self._runtime_process_termination_time(
+            event,
+            family="sysmon",
+            source_key="source.sysmon_process_terminate",
+            source_instance=instance,
+            hostname=hostname,
+            os_category="windows",
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+            canonical_start=start_time,
+            canonical_end=canonical_end,
+            create_time=create_native,
+        )
+        terminate_render = self._sysmon_runtime_envelope_time(
+            terminate_native,
+            event_id=5,
+            source_instance=instance,
+            hostname=hostname,
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+        )
+        render_floor = create_render + max(
+            timedelta(microseconds=1),
+            canonical_end - start_time,
+        )
+        if terminate_render <= render_floor:
+            self.timing_runtime.audit.record_repair("sysmon.process.envelope_containment")
+            terminate_render = self._sample_after_floor(
+                render_floor,
+                relationship_key="sysmon.process.envelope_containment",
+                scope=TimingScope(
+                    stable_id=object_id,
+                    host=hostname,
+                    source=instance,
+                    lifecycle_id=lifecycle_id,
+                    ordinal=5,
+                ),
+                maximum_us=4_000,
+            )
+        plan.finalized_times[sysmon_process_native_key("terminate", hostname)] = terminate_native
+        plan.finalized_times[sysmon_process_render_key("terminate", hostname)] = terminate_render
+
+    def _freeze_sysmon_process_identity_times(
+        self,
+        event: TimingOccurrence,
+        *,
+        source_instance: str,
+        hostname: str,
+    ) -> None:
+        """Freeze every ProcessGuid seed needed by one Sysmon occurrence."""
+
+        identities: list[tuple[str, str, int, datetime]] = []
+        identity_plan = event.identity_plan
+        if identity_plan is not None:
+            for identity in (
+                identity_plan.actor,
+                identity_plan.subject,
+                identity_plan.target,
+            ):
+                if (
+                    isinstance(identity, ProcessIdentity)
+                    and identity.hostname.casefold() == hostname.casefold()
+                ):
+                    identities.append(
+                        (
+                            identity.object_id,
+                            identity.lifecycle_group_id,
+                            identity.pid,
+                            identity.started_at,
+                        )
+                    )
+        process = event.process
+        if process is not None and process.pid > 0:
+            started_at = process.start_time or self._ensure_plan(event).canonical_timestamp
+            raw_object_id, raw_lifecycle_id = self._process_scope_ids(
+                event,
+                None,
+                hostname=hostname,
+                pid=process.pid,
+                started_at=started_at,
+            )
+            identities.append((raw_object_id, raw_lifecycle_id, process.pid, started_at))
+        query_process = event.dns.query_process if event.dns is not None else None
+        if query_process is not None and query_process.pid > 0:
+            started_at = query_process.start_time or self._ensure_plan(event).canonical_timestamp
+            raw_object_id, raw_lifecycle_id = self._process_scope_ids(
+                event,
+                None,
+                hostname=hostname,
+                pid=query_process.pid,
+                started_at=started_at,
+            )
+            identities.append((raw_object_id, raw_lifecycle_id, query_process.pid, started_at))
+
+        plan = self._ensure_plan(event)
+        seen: set[tuple[int, datetime]] = set()
+        for object_id, lifecycle_id, pid, started_at in identities:
+            exact_identity = (pid, ensure_utc(started_at))
+            if exact_identity in seen:
+                continue
+            seen.add(exact_identity)
+            object_id = self._sysmon_process_object_id(hostname, pid, started_at)
+            cache_key = (source_instance, object_id)
+            rendered = self._sysmon_process_render_create_times.get(cache_key)
+            if rendered is None:
+                _native, rendered = self._runtime_shared_sysmon_process_create_time(
+                    event,
+                    hostname=hostname,
+                    object_id=object_id,
+                    lifecycle_id=lifecycle_id,
+                    canonical_start=started_at,
                 )
+                self._sysmon_process_render_create_times[cache_key] = rendered
+            plan.finalized_times[sysmon_process_identity_render_key(hostname, pid, started_at)] = (
+                rendered
+            )
+            plan.finalized_times[sysmon_process_pid_render_key(hostname, pid)] = rendered
+
+    def _plan_windows_process_times(
+        self,
+        event: TimingOccurrence,
+        *,
+        source_instance: str,
+        source_hostname: str,
+    ) -> None:
+        """Freeze Security 4688/4689 timestamps through the shared endpoint runtime."""
+
+        if event.event_type not in _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES:
+            return
+        host = event.src_host or event.dst_host
+        process = event.process
+        if host is None or process is None:
+            return
+        hostname = host.hostname
+        identity = self._subject_process_identity(event)
+        start_time = (
+            identity.started_at
+            if identity is not None
+            else process.start_time or self._ensure_plan(event).canonical_timestamp
+        )
+        object_id, lifecycle_id = self._process_scope_ids(
+            event,
+            identity,
+            hostname=hostname,
+            pid=process.pid,
+            started_at=start_time,
+        )
+        instance = source_instance or f"windows_security:{hostname.casefold()}"
+        create_time = self._runtime_windows_process_create_time(
+            event,
+            source_instance=instance,
+            hostname=hostname,
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+            pid=process.pid,
+            canonical_start=start_time,
+        )
+        plan = self._ensure_plan(event)
+        plan.finalized_times[
+            endpoint_event_native_key("windows_security", hostname, "process_create")
+        ] = create_time
+        plan.finalized_times[
+            endpoint_event_render_key("windows_security", hostname, "process_create")
+        ] = create_time
+        if event.event_type in _PROCESS_START_EVENT_TYPES:
+            return
+        terminate_time = self._runtime_process_termination_time(
+            event,
+            family="windows_security",
+            source_key="source.windows_security_process_terminate",
+            source_instance=instance,
+            hostname=hostname,
+            os_category="windows",
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+            canonical_start=start_time,
+            canonical_end=plan.canonical_timestamp,
+            create_time=create_time,
+        )
+        plan.finalized_times[
+            endpoint_event_native_key("windows_security", hostname, "process_terminate")
+        ] = terminate_time
+        plan.finalized_times[
+            endpoint_event_render_key("windows_security", hostname, "process_terminate")
+        ] = terminate_time
+
+    def _plan_endpoint_event_times(
+        self,
+        event: TimingOccurrence,
+        format_name: str,
+        *,
+        source_instance: str,
+        source_hostname: str,
+        output_end_time: datetime | None = None,
+    ) -> None:
+        """Freeze remaining endpoint payload/envelope times before rendering."""
+
+        family = _endpoint_format_family(format_name)
+        for host in self._endpoint_projection_hosts(
+            event,
+            family=family,
+            source_hostname=source_hostname,
+        ):
+            hostname = host.hostname
+            default_instance = f"{family}:{hostname.casefold()}"
+            instance = (
+                source_instance
+                if source_instance
+                and (not source_hostname or hostname.casefold() == source_hostname.casefold())
+                else default_instance
+            )
+            if family == "sysmon":
+                self._freeze_sysmon_process_identity_times(
+                    event,
+                    source_instance=instance,
+                    hostname=hostname,
+                )
+            phases = self._endpoint_event_phases(event, family)
+            phase_times: dict[str, datetime] = {}
+            for phase in phases:
+                specialized = self._specialized_endpoint_times(
+                    event,
+                    family=family,
+                    hostname=hostname,
+                    phase=phase,
+                )
+                native_time = (
+                    specialized[0]
+                    if specialized is not None
+                    else self._runtime_endpoint_event_time(
+                        event,
+                        family=family,
+                        phase=phase,
+                        source_instance=instance,
+                        hostname=hostname,
+                        os_category=host.os_category,
+                    )
+                )
+                native_time = self._apply_runtime_transport_constraints(
+                    event,
+                    family=family,
+                    source_instance=instance,
+                    hostname=hostname,
+                    preferred=native_time,
+                )
+                predecessor = (
+                    "base"
+                    if phase in {"privilege", "smb_object_open"}
+                    else "client_file"
+                    if phase == "client_delete"
+                    else None
+                )
+                if predecessor is not None and predecessor in phase_times:
+                    native_time = self._sample_after_floor(
+                        phase_times[predecessor],
+                        relationship_key=f"{family}.{phase}_after_{predecessor}",
+                        scope=TimingScope(
+                            stable_id=self._endpoint_event_object_id(event, hostname, phase),
+                            host=hostname,
+                            source=instance,
+                            lifecycle_id=self._endpoint_event_lifecycle_id(event),
+                        ),
+                        maximum_us=85_000,
+                    )
+                if event.event_type == "logoff" and family in {
+                    "ecar",
+                    "windows_security",
+                }:
+                    native_time = self._runtime_session_closure_time(
+                        event,
+                        family=family,
+                        source_instance=instance,
+                        hostname=hostname,
+                        os_category=host.os_category,
+                        preferred=native_time,
+                        output_end_time=output_end_time,
+                    )
+                else:
+                    native_time = self._apply_runtime_session_constraints(
+                        event,
+                        family=family,
+                        source_instance=instance,
+                        hostname=hostname,
+                        preferred=native_time,
+                    )
+                phase_times[phase] = native_time
+                render_time = specialized[1] if specialized is not None else native_time
+                if family == "sysmon":
+                    if specialized is None:
+                        render_time = self._sysmon_runtime_envelope_time(
+                            native_time,
+                            event_id=self._sysmon_event_id(event, phase),
+                            source_instance=instance,
+                            hostname=hostname,
+                            object_id=self._endpoint_event_object_id(event, hostname, phase),
+                            lifecycle_id=self._endpoint_event_lifecycle_id(event),
+                        )
+                plan = self._ensure_plan(event)
+                plan.finalized_times[endpoint_event_native_key(format_name, hostname, phase)] = (
+                    native_time
+                )
+                plan.finalized_times[endpoint_event_render_key(format_name, hostname, phase)] = (
+                    render_time
+                )
+                self._publish_endpoint_compatibility_time(
+                    event,
+                    family=family,
+                    hostname=hostname,
+                    phase=phase,
+                    timestamp=render_time,
+                )
+
+    def _runtime_endpoint_event_time(
+        self,
+        event: TimingOccurrence,
+        *,
+        family: str,
+        phase: str,
+        source_instance: str,
+        hostname: str,
+        os_category: str,
+    ) -> datetime:
+        """Plan one typed endpoint row time with process-lifecycle containment."""
+
+        canonical_time = self._ensure_plan(event).canonical_timestamp
+        source_key = self._endpoint_event_source_key(event, family, phase)
+        object_id = self._endpoint_event_object_id(event, hostname, phase)
+        lifecycle_id = self._endpoint_event_lifecycle_id(event)
+        latency_phase = phase
+        if event.event_type.startswith("smb_") and event.lifecycle is not None:
+            source_key = f"source.{family}_smb_lifecycle"
+            object_id = f"smb:{event.lifecycle.group_id}"
+            lifecycle_id = event.lifecycle.group_id
+            latency_phase = "smb-lifecycle"
+        timestamp = self._runtime_endpoint_clock_time(
+            canonical_time,
+            hostname=hostname,
+            os_category=os_category,
+        ) + self._coherent_runtime_latency(
+            source_key,
+            canonical_time=canonical_time,
+            source_instance=source_instance,
+            hostname=hostname,
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+            phase=latency_phase,
+        )
+        process_scope = self._endpoint_process_scope(event, hostname)
+        if process_scope is None or event.event_type in (
+            _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES
+        ):
+            return timestamp
+        process_object_id, process_lifecycle_id, pid, started_at = process_scope
+        create_time = self._runtime_process_create_time(
+            event,
+            family=family,
+            source_key=self._endpoint_process_source_key(family),
+            source_instance=source_instance,
+            hostname=hostname,
+            os_category=os_category,
+            object_id=process_object_id,
+            lifecycle_id=process_lifecycle_id,
+            canonical_start=started_at,
+        )
+        if event.image_load is not None:
+            timestamp = self._runtime_process_module_time(
+                event,
+                family=family,
+                source_instance=source_instance,
+                hostname=hostname,
+                object_id=process_object_id,
+                lifecycle_id=process_lifecycle_id,
+                process_create_time=create_time,
+                preferred=timestamp,
+            )
+        elif timestamp <= create_time:
+            self.timing_runtime.audit.record_repair(f"{family}.dependent_after_process_create")
+            timestamp = self._sample_after_floor(
+                create_time,
+                relationship_key=f"{family}.dependent_after_process_create",
+                scope=TimingScope(
+                    stable_id=process_object_id,
+                    host=hostname,
+                    source=source_instance,
+                    lifecycle_id=process_lifecycle_id,
+                    ordinal=max(0, pid),
+                ),
+                maximum_us=4_000,
+            )
+        dependent_key = (family, source_instance, process_object_id)
+        previous = self._process_dependent_create_times.get(dependent_key)
+        if previous is None or timestamp > previous:
+            self._process_dependent_create_times[dependent_key] = timestamp
+        return timestamp
+
+    def _runtime_process_module_time(
+        self,
+        event: TimingOccurrence,
+        *,
+        family: str,
+        source_instance: str,
+        hostname: str,
+        object_id: str,
+        lifecycle_id: str,
+        process_create_time: datetime,
+        preferred: datetime,
+    ) -> datetime:
+        """Place one module row after process create with typed ordered gaps."""
+
+        image_load = event.image_load
+        if image_load is None:
+            return preferred
+        scope = TimingScope(
+            stable_id=object_id,
+            host=hostname,
+            source=source_instance,
+            lifecycle_id=lifecycle_id,
+        )
+        if image_load.load_phase != "startup":
+            return (
+                preferred
+                if preferred > process_create_time
+                else self._sample_after_floor(
+                    process_create_time,
+                    relationship_key=f"{family}.module_after_process_create",
+                    scope=scope,
+                    maximum_us=8_000,
+                )
+            )
+        timing = startup_module_observation_timing()
+        initial = self.timing_runtime.sampler.sample_microseconds(
+            self._right_skew_distribution(
+                timing.initial_delay_min_us,
+                timing.initial_delay_max_us + 1,
+            ),
+            relationship_key=f"{family}.startup_module.initial_delay",
+            scope=scope,
+            sample_key="initial",
+        )
+        elapsed_us = initial
+        for module_index in range(1, max(1, image_load.load_order)):
+            elapsed_us += self.timing_runtime.sampler.sample_microseconds(
+                TruncatedLognormalDistribution(
+                    median=float(timing.inter_load_gap_median_us),
+                    sigma=timing.inter_load_gap_sigma,
+                    minimum=float(timing.inter_load_gap_min_us),
+                    maximum=float(timing.inter_load_gap_max_us + 1),
+                ),
+                relationship_key=f"{family}.startup_module.inter_load_gap",
+                scope=replace(scope, ordinal=module_index),
+                sample_key="gap",
+            )
+        return process_create_time + timedelta(microseconds=elapsed_us)
+
+    @staticmethod
+    def _endpoint_projection_hosts(
+        event: TimingOccurrence,
+        *,
+        family: str,
+        source_hostname: str,
+    ) -> tuple[Any, ...]:
+        """Return endpoint hosts whose rows can be rendered by this projection."""
+
+        candidates = tuple(
+            host
+            for index, host in enumerate((event.src_host, event.dst_host))
+            if host is not None
+            and all(
+                previous is None or previous.hostname.casefold() != host.hostname.casefold()
+                for previous in (event.src_host, event.dst_host)[:index]
+            )
+        )
+        if not candidates:
+            return ()
+        # One eCAR SMB projection fans out both the server-local FILE row and,
+        # when the operation has a client-side effect, a client-local FILE row.
+        # Freeze both host clocks before the prepared projection is handed to
+        # the emitter even when the compiled source instance is hosted on one
+        # endpoint.  Returning only the matching source host here leaves the
+        # other row with an engine-owned but incomplete timing plan and would
+        # force the renderer through the compatibility adapter.
+        if family == "ecar" and event.event_type.startswith("smb_"):
+            return candidates
+        normalized_source = source_hostname.casefold()
+        matched = tuple(
+            host for host in candidates if host.hostname.casefold() == normalized_source
+        )
+        if matched:
+            return matched
+        if family == "sysmon":
+            return (event.src_host or event.dst_host,)
+        if family == "windows_security":
+            destination_types = {
+                "logon",
+                "logoff",
+                "failed_logon",
+                "machine_logon",
+                "kerberos_tgt",
+                "kerberos_tgt_renewal",
+                "kerberos_service",
+                "ntlm_validation",
+                "kerberos_preauth_failed",
+                "explicit_credentials",
+                "account_created",
+                "account_deleted",
+                "account_changed",
+                "password_change",
+                "password_reset",
+                "group_member_added_global",
+                "group_member_removed_global",
+                "group_member_added_local",
+                "group_member_removed_local",
+                "group_member_added_universal",
+                "group_member_removed_universal",
+                "workstation_locked",
+                "workstation_unlocked",
+                "smb_tree_connect",
+                "smb_file_open",
+                "smb_file_read",
+                "smb_file_write",
+                "smb_file_rename",
+                "smb_file_delete",
+                "smb_file_close",
+            }
+            host = (
+                event.dst_host or event.src_host
+                if event.event_type in destination_types
+                else event.src_host or event.dst_host
+            )
+            return (host,) if host is not None else ()
+        if event.event_type in {"logon", "machine_logon", "logoff", "failed_logon", "ssh_session"}:
+            host = event.dst_host or event.src_host
+            return (host,) if host is not None else ()
+        if event.event_type.startswith("smb_"):
+            return candidates
+        host = event.src_host or event.dst_host
+        return (host,) if host is not None else ()
+
+    @staticmethod
+    def _endpoint_event_phases(event: TimingOccurrence, family: str) -> tuple[str, ...]:
+        """Return the source-native rows emitted for one endpoint occurrence."""
+
+        if event.event_type in _PROCESS_START_EVENT_TYPES:
+            return ("process_create",)
+        if event.event_type in _PROCESS_END_EVENT_TYPES:
+            return ("process_terminate",)
+        if family == "sysmon" and event.event_type == "connection":
+            return ("network", "dns") if event.dns is not None else ("network",)
+        if family == "windows_security" and event.event_type in {"logon", "machine_logon"}:
+            return ("base", "privilege")
+        if (
+            family == "windows_security"
+            and event.event_type == "smb_file_open"
+            and event.smb is not None
+            and event.smb.audit == "high"
+            and event.smb.result == "success"
+        ):
+            return ("base", "smb_object_open")
+        if family == "ecar" and event.event_type.startswith("smb_"):
+            return ("base", "client_file", "client_delete")
+        return ("base",)
+
+    @staticmethod
+    def _specialized_endpoint_times(
+        event: TimingOccurrence,
+        *,
+        family: str,
+        hostname: str,
+        phase: str,
+    ) -> tuple[datetime, datetime] | None:
+        """Return an already finalized specialized native/envelope pair."""
+
+        plan = event.source_timing
+        if plan is None:
+            return None
+        native = plan.finalized_times.get(endpoint_event_native_key(family, hostname, phase))
+        rendered = plan.finalized_times.get(endpoint_event_render_key(family, hostname, phase))
+        if native is not None and rendered is not None:
+            return native, rendered
+        if family == "ecar":
+            if phase in {"process_create", "process_terminate"}:
+                lifecycle = phase.removeprefix("process_")
+                timestamp = plan.finalized_times.get(ecar_process_render_key(lifecycle, hostname))
+                return (timestamp, timestamp) if timestamp is not None else None
+            if event.event_type == "connection":
+                direction = (
+                    "outbound"
+                    if event.src_host is not None
+                    and event.src_host.hostname.casefold() == hostname.casefold()
+                    else "inbound"
+                )
+                timestamp = plan.finalized_times.get(ecar_flow_render_key(direction, hostname))
+                return (timestamp, timestamp) if timestamp is not None else None
+        if family == "sysmon" and phase in {"process_create", "process_terminate"}:
+            lifecycle = phase.removeprefix("process_")
+            native = plan.finalized_times.get(sysmon_process_native_key(lifecycle, hostname))
+            rendered = plan.finalized_times.get(sysmon_process_render_key(lifecycle, hostname))
+            return (native, rendered) if native is not None and rendered is not None else None
+        if family == "windows_security":
+            if phase in {"process_create", "process_terminate"}:
+                native = plan.finalized_times.get(
+                    endpoint_event_native_key(family, hostname, phase)
+                )
+                rendered = plan.finalized_times.get(
+                    endpoint_event_render_key(family, hostname, phase)
+                )
+                return (native, rendered) if native is not None and rendered is not None else None
+        return None
+
+    @staticmethod
+    def _endpoint_event_source_key(
+        event: TimingOccurrence,
+        family: str,
+        phase: str,
+    ) -> str:
+        """Return the configured timing profile for one endpoint row."""
+
+        if family == "sysmon" and phase == "network":
+            return "source.sysmon_network_connection"
+        if family == "sysmon" and phase == "dns":
+            return "source.sysmon_dns_query"
+        if family == "sysmon" and event.image_load is not None:
+            return "source.sysmon_module_after_process_create"
+        if family == "ecar" and event.event_type == "create_remote_thread":
+            return "source.ecar_remote_thread"
+        if family == "ecar" and event.event_type in {
+            "file_read",
+            "file_create",
+            "file_modify",
+            "file_delete",
+            "registry_modify",
+            "image_load",
+            "process_access",
+        }:
+            return "source.ecar_dependent_after_process_create"
+        if family == "ecar" and event.event_type in {
+            "logon",
+            "machine_logon",
+            "failed_logon",
+            "ssh_session",
+        }:
+            return "source.ecar_session"
+        if family == "windows_security" and event.event_type == "wfp_connection":
+            return "source.windows_wfp_connection"
+        return f"source.{family}_{event.event_type}_{phase}"
+
+    @staticmethod
+    def _endpoint_process_source_key(family: str) -> str:
+        return {
+            "ecar": "source.ecar_process_create",
+            "sysmon": "source.sysmon_process_create",
+            "windows_security": "source.windows_security_process_create",
+        }[family]
+
+    @staticmethod
+    def _endpoint_event_object_id(
+        event: TimingOccurrence,
+        hostname: str,
+        phase: str,
+    ) -> str:
+        identity = event.identity_plan
+        if identity is not None and identity.object_id:
+            return f"{str(identity.object_id)}:{phase}"
+        if event.occurrence_id:
+            return f"{str(event.occurrence_id)}:{phase}"
+        return f"{event.event_type}:{hostname}:{ensure_utc(event.timestamp).isoformat()}:{phase}"
+
+    @staticmethod
+    def _endpoint_event_lifecycle_id(event: TimingOccurrence) -> str:
+        lifecycle = event.lifecycle
+        if lifecycle is not None:
+            return str(lifecycle.group_id)
+        identity = event.identity_plan
+        if identity is not None:
+            for candidate in (identity.subject, identity.actor, identity.target, identity.session):
+                group_id = str(getattr(candidate, "lifecycle_group_id", "") or "")
+                if group_id:
+                    return group_id
+        return event.occurrence_id or event.event_type
+
+    @staticmethod
+    def _endpoint_process_scope(
+        event: TimingOccurrence,
+        hostname: str,
+    ) -> tuple[str, str, int, datetime] | None:
+        plan = event.identity_plan
+        identities = () if plan is None else (plan.actor, plan.subject, plan.target)
+        for identity in identities:
+            if (
+                isinstance(identity, ProcessIdentity)
+                and identity.hostname.casefold() == hostname.casefold()
+            ):
+                return (
+                    identity.object_id,
+                    identity.lifecycle_group_id,
+                    identity.pid,
+                    identity.started_at,
+                )
+        process = event.process
+        if process is None or process.pid <= 0:
+            return None
+        started_at = process.start_time or event.timestamp
+        lifecycle_id = (
+            event.lifecycle.group_id
+            if event.lifecycle is not None
+            else f"process:{hostname}:{process.pid}:{ensure_utc(started_at).isoformat()}"
+        )
+        object_id = f"process:{hostname}:{process.pid}:{ensure_utc(started_at).isoformat()}"
+        return object_id, lifecycle_id, process.pid, started_at
+
+    @staticmethod
+    def _sysmon_event_id(event: TimingOccurrence, phase: str) -> int:
+        """Return the provider event ID whose envelope is being planned."""
+
+        if phase == "network":
+            return 3
+        if phase == "dns":
+            return 22
+        return {
+            "process_create": 1,
+            "system_process_create": 1,
+            "process_terminate": 5,
+            "create_remote_thread": 8,
+            "process_access": 10,
+            "file_create": 11,
+            "file_modify": 11,
+            "registry_modify": 13,
+            "image_load": 7,
+        }.get(event.event_type, 0)
+
+    def _apply_runtime_transport_constraints(
+        self,
+        event: TimingOccurrence,
+        *,
+        family: str,
+        source_instance: str,
+        hostname: str,
+        preferred: datetime,
+    ) -> datetime:
+        """Place endpoint authentication strictly after its admitted transport view."""
+
+        if event.event_type not in {
+            "logon",
+            "machine_logon",
+            "failed_logon",
+            "ssh_session",
+        }:
+            return preferred
+        anchor: datetime | None = None
+        minimum_us = 8_000
+        maximum_us = 140_000
+        relationship = f"{family}.authentication_after_transport"
+        if family == "ecar":
+            anchor = self._remote_auth_transport_anchor(
+                event,
+                self._admitted_ecar_remote_transports,
+                self._admitted_ecar_transport_transactions,
+            )
+            if anchor is None and event.event_type == "ssh_session":
+                anchor = self._ssh_transport_anchor(event)
+                relationship = "ecar.ssh_session_after_transport"
+            if anchor is None and event.auth is not None and event.auth.session_kind == "smb":
+                anchor = self._smb_transport_anchor(event)
+                relationship = "ecar.smb_session_after_transport"
+        elif family == "windows_security":
+            anchor = self._remote_auth_transport_anchor(
+                event,
+                self._admitted_windows_remote_transports,
+                self._admitted_windows_transport_transactions,
+            )
+        ticket_anchor: datetime | None = None
+        if family == "windows_security" and event.event_type == "machine_logon":
+            ticket_anchor = self._machine_ticket_anchor(event)
+            if ticket_anchor is not None and (anchor is None or ticket_anchor > anchor):
+                anchor = ticket_anchor
+                minimum_us = 3_000
+                maximum_us = 135_000
+                relationship = "windows_security.machine_logon_after_service_ticket"
+        if anchor is None:
+            return preferred
+        scope = TimingScope(
+            stable_id=self._endpoint_event_object_id(event, hostname, "authentication"),
+            host=hostname,
+            source=source_instance,
+            lifecycle_id=self._endpoint_event_lifecycle_id(event),
+        )
+        timestamp = anchor + self.timing_runtime.sampler.sample_timedelta(
+            self._right_skew_distribution(minimum_us, maximum_us),
+            relationship_key=relationship,
+            scope=scope,
+            sample_key="after_anchor",
+        )
         primary_transport = (
             event.remote_auth.primary_transport if event.remote_auth is not None else None
         )
-        if primary_transport is not None:
-            tuple_view = primary_transport.tuple
-            transaction_key = self._transaction_transport_key(
-                primary_transport.transaction_id,
-                event.remote_auth.target_hostname,
-                tuple_view.src_ip,
-                tuple_view.src_port,
-                tuple_view.dst_ip,
-                tuple_view.dst_port,
-                tuple_view.protocol,
+        if primary_transport is None or primary_transport.closed_at is None:
+            return timestamp
+        close_time = ensure_utc(primary_transport.closed_at)
+        if ticket_anchor is not None and ticket_anchor >= close_time:
+            # Kerberos service-ticket acquisition is a prerequisite, not an
+            # application-session transport interval.  A machine-account logon
+            # may legitimately follow the completed ticket exchange, so do not
+            # force that endpoint row back inside an unrelated earlier socket.
+            return timestamp
+        if timestamp < close_time:
+            return timestamp
+        available_us = round((close_time - anchor).total_seconds() * 1_000_000)
+        if available_us <= 2:
+            self.timing_runtime.audit.record_saturation(f"{family}.authentication_transport_window")
+            raise StateError(
+                "Authentication source window cannot fit after its admitted transport: "
+                f"family={family} anchor={anchor.isoformat()} close={close_time.isoformat()}"
             )
-            close_candidates = [
-                primary_transport.closed_at,
-                self._ecar_transport_close_deadlines.get(transaction_key),
-            ]
-            close_candidates = [
-                candidate for candidate in close_candidates if candidate is not None
-            ]
-            if close_candidates:
-                timestamp = min(timestamp, min(close_candidates) - _SOURCE_EPSILON)
-        plan.finalized_times[ecar_session_render_key(lifecycle)] = timestamp
+        admissible_minimum = minimum_us if available_us > minimum_us + 1 else 0
+        return anchor + self.timing_runtime.sampler.sample_timedelta(
+            self._right_skew_distribution(admissible_minimum, available_us),
+            relationship_key=f"{relationship}.admissible",
+            scope=scope,
+            sample_key=f"before_close:{available_us}",
+        )
+
+    def _machine_ticket_anchor(self, event: TimingOccurrence) -> datetime | None:
+        """Return the latest admitted matching service ticket near a machine logon."""
+
+        if event.auth is None:
+            return None
+        host = event.dst_host or event.src_host
+        if host is None:
+            return None
+        candidate = self._kerberos_service_times.get(
+            self._kerberos_prerequisite_key(
+                "windows_event_security",
+                event.auth.username,
+                event.auth.source_ip,
+                host.hostname,
+            ),
+        )
+        if candidate is None:
+            return None
+        if abs((candidate - self._ensure_plan(event).canonical_timestamp).total_seconds()) > 5.0:
+            return None
+        return candidate
+
+    def _publish_endpoint_compatibility_time(
+        self,
+        event: TimingOccurrence,
+        *,
+        family: str,
+        hostname: str,
+        phase: str,
+        timestamp: datetime,
+    ) -> None:
+        """Publish legacy lookup aliases from the frozen runtime-owned plan."""
+
+        if phase != "base":
+            return
+        plan = self._ensure_plan(event)
+        if family == "ecar" and event.event_type in {
+            "logon",
+            "machine_logon",
+            "failed_logon",
+            "logoff",
+            "ssh_session",
+        }:
+            lifecycle = (
+                "logout"
+                if event.event_type == "logoff"
+                else "failed_login"
+                if event.event_type == "failed_logon"
+                else "login"
+            )
+            plan.finalized_times[ecar_session_render_key(lifecycle)] = timestamp
+        if family == "windows_security":
+            if event.event_type == "wfp_connection":
+                plan.finalized_times[_WINDOWS_WFP_RENDER_KEY] = timestamp
+            elif event.event_type in {"logon", "machine_logon", "failed_logon"}:
+                plan.finalized_times["windows.remote_authentication"] = timestamp
+
+    def _apply_runtime_session_constraints(
+        self,
+        event: TimingOccurrence,
+        *,
+        family: str,
+        source_instance: str,
+        hostname: str,
+        preferred: datetime,
+    ) -> datetime:
+        """Keep endpoint login/dependent rows inside one source session lifecycle."""
+
+        lifecycle = event.lifecycle
+        if lifecycle is None:
+            return preferred
+        if event.event_type in {"logon", "machine_logon", "ssh_session"}:
+            return preferred
+        session_group = (
+            lifecycle.parent_group_id
+            if event.event_type in _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES
+            else lifecycle.group_id
+            if lifecycle.phase == "dependent"
+            else None
+        )
+        if not session_group:
+            return preferred
+        key = (family, session_group)
+        visible_start = self._latest_session_start_times.get(key)
+        timestamp = preferred
+        if visible_start is not None and timestamp <= visible_start:
+            self.timing_runtime.audit.record_repair(f"{family}.session.dependent_after_login")
+            timestamp = self._sample_after_floor(
+                visible_start,
+                relationship_key=f"{family}.session.dependent_after_login",
+                scope=TimingScope(
+                    stable_id=self._endpoint_event_object_id(event, hostname, "session"),
+                    host=hostname,
+                    source=source_instance,
+                    lifecycle_id=session_group,
+                ),
+                maximum_us=8_000,
+            )
+        previous = self._latest_session_dependent_times.get(key)
+        if previous is not None and timestamp <= previous:
+            self.timing_runtime.audit.record_repair(f"{family}.session.dependent_order")
+            timestamp = self._sample_after_floor(
+                previous,
+                relationship_key=f"{family}.session.dependent_order",
+                scope=TimingScope(
+                    stable_id=self._endpoint_event_object_id(event, hostname, "session-order"),
+                    host=hostname,
+                    source=source_instance,
+                    lifecycle_id=session_group,
+                ),
+                maximum_us=4_000,
+            )
+        return timestamp
+
+    def _runtime_session_closure_time(
+        self,
+        event: TimingOccurrence,
+        *,
+        family: str,
+        source_instance: str,
+        hostname: str,
+        os_category: str,
+        preferred: datetime,
+        output_end_time: datetime | None = None,
+    ) -> datetime:
+        """Resolve one session close with sampled interior slack and no bound atom."""
+
+        lifecycle = event.lifecycle
+        if lifecycle is None:
+            return preferred
+        canonical_end = self._ensure_plan(event).canonical_timestamp
+        clock_end = self._runtime_endpoint_clock_time(
+            canonical_end,
+            hostname=hostname,
+            os_category=os_category,
+        )
+        key = (family, lifecycle.group_id)
+        earliest = clock_end
+        visible_start = self._latest_session_start_times.get(key)
+        if visible_start is not None:
+            canonical_duration = max(
+                timedelta(microseconds=1),
+                canonical_end - ensure_utc(lifecycle.canonical_start),
+            )
+            earliest = max(earliest, visible_start + canonical_duration)
+        latest_dependent = self._latest_session_dependent_times.get(key)
+        if latest_dependent is not None:
+            earliest = max(latest_dependent, earliest)
+        format_name = "ecar" if family == "ecar" else "windows_security"
+        latest_allowed = clock_end + self.session_closure_tail(format_name)
+        if output_end_time is not None:
+            latest_allowed = min(latest_allowed, ensure_utc(output_end_time))
+        available_us = round((latest_allowed - earliest).total_seconds() * 1_000_000)
+        if available_us <= 2:
+            if output_end_time is not None and latest_allowed == ensure_utc(output_end_time):
+                # A canonical close at/after the exclusive output fence has no
+                # admissible rendered instant. Keep it outside the window so
+                # dispatcher admission drops it; never clamp it onto the fence.
+                self.timing_runtime.audit.record_fallback(
+                    f"{family}.session.closure_outside_output"
+                )
+                return earliest
+            self.timing_runtime.audit.record_saturation(f"{family}.session.closure_window")
+            raise StateError(
+                "Source-visible session dependents exceed the closure tail bound: "
+                f"format={format_name} group={lifecycle.group_id} "
+                f"dependent={earliest.isoformat()} end={canonical_end.isoformat()}"
+            )
+        if earliest < preferred < latest_allowed:
+            timestamp = preferred
+        else:
+            timestamp = earliest + self.timing_runtime.sampler.sample_timedelta(
+                self._right_skew_distribution(0, available_us),
+                relationship_key=f"{family}.session.closure_repair",
+                scope=TimingScope(
+                    stable_id=self._endpoint_event_object_id(event, hostname, "closure"),
+                    host=hostname,
+                    source=source_instance,
+                    lifecycle_id=lifecycle.group_id,
+                ),
+                sample_key="admissible",
+            )
+        return timestamp
+
+    def _runtime_process_create_time(
+        self,
+        event: TimingOccurrence,
+        *,
+        family: str,
+        source_key: str,
+        source_instance: str,
+        hostname: str,
+        os_category: str,
+        object_id: str,
+        lifecycle_id: str,
+        canonical_start: datetime,
+    ) -> datetime:
+        """Return a stable process-create observation in one endpoint clock."""
+
+        cache_key = (family, source_instance, object_id)
+        cached = self._runtime_process_create_times.get(cache_key)
+        if cached is not None:
+            self._record_process_create_dependency(
+                event,
+                family,
+                source_instance,
+                object_id,
+                cached,
+            )
+            return cached
+        identity = self._subject_process_identity(event)
+        parent = (
+            event.identity_plan.actor
+            if event.identity_plan is not None
+            and event.event_type in _PROCESS_START_EVENT_TYPES
+            and isinstance(event.identity_plan.actor, ProcessIdentity)
+            else None
+        )
+        parent_time = None
+        if identity is not None and identity.object_id == object_id and parent is not None:
+            parent_time = self._runtime_process_create_time(
+                event,
+                family=family,
+                source_key=source_key,
+                source_instance=source_instance,
+                hostname=hostname,
+                os_category=os_category,
+                object_id=parent.object_id,
+                lifecycle_id=parent.lifecycle_group_id,
+                canonical_start=parent.started_at,
+            )
+
+        clock_time = self._runtime_endpoint_clock_time(
+            canonical_start,
+            hostname=hostname,
+            os_category=os_category,
+        )
+        latency = self._coherent_runtime_latency(
+            source_key,
+            canonical_time=canonical_start,
+            source_instance=source_instance,
+            hostname=hostname,
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+            phase="create",
+        )
+        timestamp = clock_time + latency
+
+        if parent_time is not None and timestamp <= parent_time:
+            self.timing_runtime.audit.record_repair(f"{family}.process.parent_before_child")
+            timestamp = self._sample_after_floor(
+                parent_time,
+                relationship_key=f"{family}.process.parent_before_child",
+                scope=TimingScope(
+                    stable_id=object_id,
+                    host=hostname,
+                    source=source_instance,
+                    lifecycle_id=lifecycle_id,
+                ),
+                maximum_us=2_500,
+            )
+        self._runtime_process_create_times[cache_key] = timestamp
+        self._record_process_create_dependency(
+            event,
+            family,
+            source_instance,
+            object_id,
+            timestamp,
+        )
+        return timestamp
+
+    def _runtime_shared_sysmon_process_create_time(
+        self,
+        event: TimingOccurrence,
+        *,
+        hostname: str,
+        object_id: str,
+        lifecycle_id: str,
+        canonical_start: datetime,
+    ) -> tuple[datetime, datetime]:
+        """Return the host-shared Sysmon create/envelope anchor for endpoint sources."""
+
+        key = (hostname.casefold(), object_id)
+        cached = self._runtime_cross_source_sysmon_create_times.get(key)
+        if cached is not None:
+            return cached
+        source_instance = f"sysmon:{hostname.casefold()}:host-agent"
+        native = self._runtime_process_create_time(
+            event,
+            family="sysmon",
+            source_key="source.sysmon_process_create",
+            source_instance=source_instance,
+            hostname=hostname,
+            os_category="windows",
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+            canonical_start=canonical_start,
+        )
+        rendered = self._sysmon_runtime_envelope_time(
+            native,
+            event_id=1,
+            source_instance=source_instance,
+            hostname=hostname,
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+        )
+        result = (native, rendered)
+        self._runtime_cross_source_sysmon_create_times[key] = result
+        return result
+
+    def _runtime_windows_process_create_time(
+        self,
+        event: TimingOccurrence,
+        *,
+        source_instance: str,
+        hostname: str,
+        object_id: str,
+        lifecycle_id: str,
+        pid: int,
+        canonical_start: datetime,
+    ) -> datetime:
+        """Place Security 4688 after the host-shared Sysmon Event 1 envelope."""
+
+        cache_key = ("windows_security", source_instance, object_id)
+        cached = self._runtime_process_create_times.get(cache_key)
+        if cached is not None:
+            self._record_process_create_dependency(
+                event,
+                "windows_security",
+                source_instance,
+                object_id,
+                cached,
+            )
+            return cached
+        _sysmon_native, sysmon_render = self._runtime_shared_sysmon_process_create_time(
+            event,
+            hostname=hostname,
+            object_id=self._sysmon_process_object_id(hostname, pid, canonical_start),
+            lifecycle_id=lifecycle_id,
+            canonical_start=canonical_start,
+        )
+        window = get_timing_window(
+            "source.windows_security_after_sysmon_process_create_gap",
+            default_min_ms=35,
+            default_max_ms=650,
+            default_position="after",
+            default_class="source_latency",
+        )
+        timestamp = sysmon_render + self.timing_runtime.sampler.sample_timedelta(
+            self._right_skew_distribution(window.min_ms * 1_000, window.max_ms * 1_000 + 1),
+            relationship_key="windows_security.process_create_after_sysmon",
+            scope=TimingScope(
+                stable_id=object_id,
+                host=hostname,
+                source=source_instance,
+                lifecycle_id=lifecycle_id,
+            ),
+            sample_key="after_sysmon",
+        )
+        self._runtime_process_create_times[cache_key] = timestamp
+        self._record_process_create_dependency(
+            event,
+            "windows_security",
+            source_instance,
+            object_id,
+            timestamp,
+        )
+        return timestamp
+
+    def _record_process_create_dependency(
+        self,
+        event: TimingOccurrence,
+        family: str,
+        source_instance: str,
+        object_id: str,
+        timestamp: datetime,
+    ) -> None:
+        """Retain a child's visible create as a floor for its parent close."""
+
+        parent = (
+            event.identity_plan.actor
+            if event.identity_plan is not None
+            and event.event_type in _PROCESS_START_EVENT_TYPES
+            and isinstance(event.identity_plan.actor, ProcessIdentity)
+            else None
+        )
+        subject = self._subject_process_identity(event)
+        if parent is None or subject is None or subject.object_id != object_id:
+            return
+        key = (family, source_instance, parent.object_id)
+        previous = self._process_dependent_create_times.get(key)
+        if previous is None or timestamp > previous:
+            self._process_dependent_create_times[key] = timestamp
+
+    def _runtime_process_termination_time(
+        self,
+        event: TimingOccurrence,
+        *,
+        family: str,
+        source_key: str,
+        source_instance: str,
+        hostname: str,
+        os_category: str,
+        object_id: str,
+        lifecycle_id: str,
+        canonical_start: datetime,
+        canonical_end: datetime,
+        create_time: datetime,
+    ) -> datetime:
+        """Return a lifecycle-contained process termination observation."""
+
+        clock_end = self._runtime_endpoint_clock_time(
+            canonical_end,
+            hostname=hostname,
+            os_category=os_category,
+        )
+        preferred = clock_end + self._coherent_runtime_latency(
+            source_key,
+            canonical_time=canonical_end,
+            source_instance=source_instance,
+            hostname=hostname,
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+            phase="terminate",
+        )
+        canonical_lifetime = max(timedelta(microseconds=1), canonical_end - canonical_start)
+        lifecycle_floor = create_time + canonical_lifetime
+        dependent_create = self._process_dependent_create_times.get(
+            (family, source_instance, object_id)
+        )
+        if dependent_create is not None:
+            lifecycle_floor = max(lifecycle_floor, dependent_create + _SOURCE_EPSILON)
+        if preferred > lifecycle_floor:
+            return preferred
+        self.timing_runtime.audit.record_repair(f"{family}.process.lifecycle_containment")
+        return self._sample_after_floor(
+            lifecycle_floor,
+            relationship_key=f"{family}.process.lifecycle_containment",
+            scope=TimingScope(
+                stable_id=object_id,
+                host=hostname,
+                source=source_instance,
+                lifecycle_id=lifecycle_id,
+                ordinal=1,
+            ),
+            maximum_us=4_000,
+        )
+
+    def _coherent_runtime_latency(
+        self,
+        source_key: str,
+        *,
+        canonical_time: datetime,
+        source_instance: str,
+        hostname: str,
+        object_id: str,
+        lifecycle_id: str,
+        phase: str,
+    ) -> timedelta:
+        """Sample a right-skew queue delay with smooth source-local coherence."""
+
+        window = get_timing_window(
+            source_key,
+            default_min_ms=1,
+            default_max_ms=100,
+            default_position="after",
+            default_class="source_latency",
+        )
+        minimum_us = window.min_ms * 1_000
+        maximum_us = window.max_ms * 1_000
+        if maximum_us <= minimum_us:
+            return timedelta(microseconds=minimum_us)
+
+        span_us = maximum_us - minimum_us
+        residual_max_us = min(2_500, max(3, span_us // 16))
+        base_max_us = maximum_us - residual_max_us
+        if base_max_us <= minimum_us + 2:
+            scope = TimingScope(
+                stable_id=object_id,
+                host=hostname,
+                source=source_instance,
+                lifecycle_id=lifecycle_id,
+            )
+            return self.timing_runtime.sampler.sample_timedelta(
+                self._right_skew_distribution(minimum_us, maximum_us),
+                relationship_key=source_key,
+                scope=scope,
+                sample_key=phase,
+            )
+
+        reference = self.timing_runtime.clocks.reference_time
+        interval_us = 15 * 60 * 1_000_000
+        elapsed_us = round((ensure_utc(canonical_time) - reference).total_seconds() * 1_000_000)
+        left_ordinal = math.floor(elapsed_us / interval_us)
+        fraction = (elapsed_us - left_ordinal * interval_us) / interval_us
+        queue_distribution = self._right_skew_distribution(minimum_us, base_max_us)
+
+        def queue_knot(ordinal: int) -> int:
+            return self.timing_runtime.sampler.sample_microseconds(
+                queue_distribution,
+                relationship_key=f"{source_key}.coherent_queue",
+                scope=TimingScope(
+                    stable_id=f"queue:{source_instance}",
+                    host=hostname,
+                    source=source_instance,
+                    ordinal=ordinal,
+                ),
+                sample_key="queue",
+            )
+
+        left = queue_knot(left_ordinal)
+        right = queue_knot(left_ordinal + 1)
+        smooth_fraction = fraction * fraction * (3.0 - 2.0 * fraction)
+        base_us = round(left + ((right - left) * smooth_fraction))
+        residual = self.timing_runtime.sampler.sample_microseconds(
+            self._right_skew_distribution(0, residual_max_us),
+            relationship_key=f"{source_key}.lifecycle_residual",
+            scope=TimingScope(
+                stable_id=object_id,
+                host=hostname,
+                source=source_instance,
+                lifecycle_id=lifecycle_id,
+            ),
+            sample_key=phase,
+        )
+        return timedelta(microseconds=base_us + residual)
+
+    def _sysmon_runtime_envelope_time(
+        self,
+        native_time: datetime,
+        *,
+        event_id: int,
+        source_instance: str,
+        hostname: str,
+        object_id: str,
+        lifecycle_id: str,
+    ) -> datetime:
+        """Project a migrated Sysmon row through a typed provider envelope."""
+
+        timing = sysmon_envelope_timing(event_id)
+        main = TruncatedLognormalDistribution(
+            median=float(timing.median_us),
+            sigma=timing.sigma,
+            minimum=float(timing.min_us),
+            maximum=float(timing.max_us),
+        )
+        distribution = main
+        if timing.tail_probability > 0 and timing.tail_max_us > timing.tail_min_us:
+            tail = TruncatedLognormalDistribution(
+                median=float(timing.tail_min_us + (timing.tail_max_us - timing.tail_min_us) // 4),
+                sigma=max(0.35, timing.sigma),
+                minimum=float(timing.tail_min_us),
+                maximum=float(timing.tail_max_us),
+            )
+            distribution = MixtureDistribution(
+                (
+                    WeightedDistribution(1.0 - timing.tail_probability, main),
+                    WeightedDistribution(timing.tail_probability, tail),
+                )
+            )
+        delay = self.timing_runtime.sampler.sample_timedelta(
+            distribution,
+            relationship_key="sysmon.provider_envelope",
+            scope=TimingScope(
+                stable_id=object_id,
+                host=hostname,
+                source=source_instance,
+                lifecycle_id=lifecycle_id,
+                ordinal=event_id,
+            ),
+            sample_key="envelope",
+        )
+        return native_time + delay
+
+    def _runtime_endpoint_clock_time(
+        self,
+        canonical_time: datetime,
+        *,
+        hostname: str,
+        os_category: str,
+    ) -> datetime:
+        """Project canonical time through the engine-owned endpoint clock."""
+
+        if not hostname or os_category not in {"windows", "linux"}:
+            return ensure_utc(canonical_time)
+        timing = endpoint_clock_timing(self.clock_profile_name, os_category)
+        spec = SourceClockSpec(
+            offset_microseconds=self._clock_distribution(
+                timing.host_offset_min_ms * 1_000,
+                timing.host_offset_max_ms * 1_000,
+            ),
+            drift_ppm=self._clock_distribution(
+                timing.host_drift_min_ppm,
+                timing.host_drift_max_ppm,
+            ),
+        )
+        return self.timing_runtime.clocks.project(
+            ensure_utc(canonical_time),
+            key=SourceClockKey(
+                kind="endpoint-host",
+                identity=hostname.casefold(),
+                profile=self.clock_profile_name,
+            ),
+            spec=spec,
+        )
+
+    @staticmethod
+    def _clock_distribution(
+        minimum: int, maximum: int
+    ) -> ConstantDistribution | TriangularDistribution:
+        """Return a typed source-clock distribution for one configured range."""
+
+        if maximum <= minimum:
+            return ConstantDistribution(float(minimum))
+        mode = min(float(maximum), max(float(minimum), 0.0))
+        return TriangularDistribution(float(minimum), mode, float(maximum))
+
+    @staticmethod
+    def _right_skew_distribution(
+        minimum_us: int,
+        maximum_us: int,
+    ) -> TruncatedLognormalDistribution:
+        """Build an open-support lognormal shaped toward the lower delay tail."""
+
+        width = maximum_us - minimum_us
+        median = minimum_us + max(1.0, width * 0.16)
+        return TruncatedLognormalDistribution(
+            median=float(median),
+            sigma=0.9,
+            minimum=float(minimum_us),
+            maximum=float(maximum_us),
+        )
+
+    def _sample_profile_delay(
+        self,
+        event: TimingOccurrence,
+        relationship_key: str,
+        *,
+        seed_parts: tuple[Any, ...],
+        sample_key: str,
+    ) -> timedelta:
+        """Sample one configured relationship through the engine timing runtime."""
+
+        window = get_timing_window(
+            relationship_key,
+            default_min_ms=0,
+            default_max_ms=0,
+            default_position="after",
+        )
+        minimum_us = window.min_ms * 1_000
+        maximum_us = window.max_ms * 1_000
+        distribution = (
+            ConstantDistribution(float(minimum_us))
+            if maximum_us <= minimum_us
+            else self._right_skew_distribution(minimum_us, maximum_us + 1)
+        )
+        host = event.src_host or event.dst_host
+        hostname = str(getattr(host, "hostname", "") or "")
+        lifecycle_id = event.lifecycle.group_id if event.lifecycle is not None else ""
+        effective_seed = seed_parts or self._event_seed_parts(event)
+        return self.timing_runtime.sampler.sample_timedelta(
+            distribution,
+            relationship_key=relationship_key,
+            scope=TimingScope(
+                stable_id=self._cache_key(
+                    f"runtime-profile:{relationship_key}",
+                    effective_seed,
+                ),
+                host=hostname,
+                source=relationship_key,
+                lifecycle_id=lifecycle_id,
+            ),
+            sample_key=sample_key,
+        )
+
+    def _sample_after_floor(
+        self,
+        floor: datetime,
+        *,
+        relationship_key: str,
+        scope: TimingScope,
+        maximum_us: int,
+    ) -> datetime:
+        """Sample admissible positive slack rather than clamping onto a floor."""
+
+        return floor + self.timing_runtime.sampler.sample_timedelta(
+            self._right_skew_distribution(0, maximum_us),
+            relationship_key=relationship_key,
+            scope=scope,
+            sample_key="repair_slack",
+        )
+
+    @staticmethod
+    def _subject_process_identity(event: TimingOccurrence) -> ProcessIdentity | None:
+        """Return the canonical process subject when the event owns one."""
+
+        identity = event.identity_plan
+        return (
+            identity.subject
+            if identity is not None and isinstance(identity.subject, ProcessIdentity)
+            else None
+        )
+
+    @staticmethod
+    def _process_scope_ids(
+        event: TimingOccurrence,
+        identity: ProcessIdentity | None,
+        *,
+        hostname: str,
+        pid: int,
+        started_at: datetime,
+    ) -> tuple[str, str]:
+        """Return durable process and lifecycle IDs for semantic timing draws."""
+
+        if identity is not None:
+            return identity.object_id, identity.lifecycle_group_id
+        lifecycle_id = (
+            event.lifecycle.group_id
+            if event.lifecycle is not None and isinstance(event.lifecycle.group_id, str)
+            else ""
+        )
+        object_id = f"process:{hostname}:{pid}:{ensure_utc(started_at).isoformat()}"
+        return object_id, lifecycle_id or object_id
+
+    @staticmethod
+    def _sysmon_process_object_id(
+        hostname: str,
+        pid: int,
+        started_at: datetime,
+    ) -> str:
+        """Return the identity shared by visible or collection-dropped Event 1 rows."""
+
+        return f"process:{hostname.casefold()}:{pid}:{ensure_utc(started_at).isoformat()}"
 
     def _plan_windows_remote_auth_time(self, event: TimingOccurrence) -> TimingOccurrence:
         """Finalize source-local WFP-before-authentication ordering."""
@@ -520,22 +3232,19 @@ class SourceTimingPlanner:
         if event.event_type == "machine_logon" and event.auth is not None:
             host = event.dst_host or event.src_host
             if host is not None:
-                candidates = self._kerberos_service_times.get(
+                candidate = self._kerberos_service_times.get(
                     self._kerberos_prerequisite_key(
                         "windows_event_security",
                         event.auth.username,
                         event.auth.source_ip,
                         host.hostname,
                     ),
-                    [],
                 )
-                nearby = [
-                    candidate
-                    for candidate in candidates
-                    if abs((candidate - event.timestamp).total_seconds()) <= 5.0
-                ]
-                if nearby:
-                    ticket_time = max(nearby)
+                if (
+                    candidate is not None
+                    and abs((candidate - event.timestamp).total_seconds()) <= 5.0
+                ):
+                    ticket_time = candidate
         if anchor is None:
             if ticket_time is not None:
                 timestamp = max(
@@ -547,7 +3256,8 @@ class SourceTimingPlanner:
                 )
                 return replace(event, timestamp=timestamp)
             return event
-        timestamp = anchor + sample_timing_delta(
+        timestamp = anchor + self._sample_profile_delay(
+            event,
             "windows.network_logon_after_transport",
             seed_parts=(
                 "windows_security",
@@ -555,6 +3265,7 @@ class SourceTimingPlanner:
                 event.remote_auth.primary_transport.transaction_id,
                 event.event_type,
             ),
+            sample_key="remote_authentication",
         )
         if ticket_time is not None:
             timestamp = max(
@@ -564,15 +3275,16 @@ class SourceTimingPlanner:
         self._ensure_plan(event).finalized_times["windows.remote_authentication"] = timestamp
         return replace(event, timestamp=timestamp)
 
-    @staticmethod
     def _machine_logon_after_ticket_delay(
+        self,
         event: TimingOccurrence,
         ticket_time: datetime,
     ) -> timedelta:
-        """Return one deterministic source-native delay for a machine auth lifecycle."""
+        """Return one runtime-owned source-native delay for a machine auth lifecycle."""
         remote_auth = event.remote_auth
         auth = event.auth
-        return sample_timing_delta(
+        return self._sample_profile_delay(
+            event,
             "windows.machine_logon_after_service_ticket",
             seed_parts=(
                 remote_auth.stable_id if remote_auth is not None else "",
@@ -581,6 +3293,7 @@ class SourceTimingPlanner:
                 auth.source_port if auth is not None else "",
                 ticket_time,
             ),
+            sample_key="after_service_ticket",
         )
 
     @staticmethod
@@ -603,8 +3316,8 @@ class SourceTimingPlanner:
     def _remote_auth_transport_anchor(
         self,
         event: TimingOccurrence,
-        registry: dict[_REMOTE_TRANSPORT_KEY, datetime],
-        transaction_registry: dict[_TRANSACTION_TRANSPORT_KEY, datetime],
+        registry: BoundedRuntimeCache[_REMOTE_TRANSPORT_KEY, datetime],
+        transaction_registry: BoundedRuntimeCache[_TRANSACTION_TRANSPORT_KEY, datetime],
     ) -> datetime | None:
         remote_auth = event.remote_auth
         if remote_auth is None or remote_auth.primary_transport is None:
@@ -785,7 +3498,14 @@ class SourceTimingPlanner:
                 timestamps.append(timestamp)
         return max(timestamps) if timestamps else None
 
-    def _plan_ecar_flow_times(self, event: TimingOccurrence) -> None:
+    def _plan_ecar_flow_times(
+        self,
+        event: TimingOccurrence,
+        *,
+        source_instance: str = "",
+        source_hostname: str = "",
+        projection_role: str = "",
+    ) -> None:
         """Finalize every host-local FLOW timestamp and attribution decision."""
 
         network = event.network
@@ -803,8 +3523,9 @@ class SourceTimingPlanner:
             else None
         )
         plan = self._ensure_plan(event)
-        paired_endpoint = event.src_host is not None and event.dst_host is not None
-        if event.src_host is not None:
+        render_source = projection_role not in {"destination_endpoint"}
+        render_destination = projection_role not in {"source_endpoint"}
+        if event.src_host is not None and render_source:
             direction = "outbound"
             hostname = event.src_host.hostname
             not_before = (
@@ -828,11 +3549,16 @@ class SourceTimingPlanner:
                 drop_late_process_identity=(
                     network.protocol == "tcp" and network.dst_port in {22, 3389}
                 ),
-                paired_endpoint=paired_endpoint,
+                source_instance=(
+                    source_instance
+                    if not source_hostname or source_hostname.casefold() == hostname.casefold()
+                    else f"ecar:{hostname.casefold()}"
+                ),
+                hostname=hostname,
             )
             plan.finalized_times[ecar_flow_render_key(direction, hostname)] = timestamp
             plan.finalized_flags[ecar_flow_identity_key(direction, hostname)] = identity_safe
-        if event.dst_host is not None:
+        if event.dst_host is not None and render_destination:
             direction = "inbound"
             hostname = event.dst_host.hostname
             not_before = (
@@ -856,7 +3582,12 @@ class SourceTimingPlanner:
                 drop_late_process_identity=(
                     network.protocol == "tcp" and network.dst_port in {22, 3389}
                 ),
-                paired_endpoint=paired_endpoint,
+                source_instance=(
+                    source_instance
+                    if not source_hostname or source_hostname.casefold() == hostname.casefold()
+                    else f"ecar:{hostname.casefold()}"
+                ),
+                hostname=hostname,
             )
             plan.finalized_times[ecar_flow_render_key(direction, hostname)] = timestamp
             plan.finalized_flags[ecar_flow_identity_key(direction, hostname)] = identity_safe
@@ -880,251 +3611,143 @@ class SourceTimingPlanner:
         seed_parts: tuple[Any, ...],
         not_before: datetime | None,
         drop_late_process_identity: bool,
-        paired_endpoint: bool,
+        source_instance: str,
+        hostname: str,
     ) -> tuple[datetime, bool]:
-        """Return a finalized FLOW time bounded by its canonical interval."""
-
-        interval_start, not_after = self._ecar_flow_interval(event, seed_parts)
-        interval_start = self.canonical_time_in_source_clock(
-            event,
-            "source.ecar_flow",
-            interval_start,
-            seed_parts,
-        )
-        if not_after is not None:
-            not_after = self.canonical_time_in_source_clock(
-                event,
-                "source.ecar_flow",
-                not_after,
-                seed_parts,
-            )
-        lifecycle = event.lifecycle
-        if (
-            lifecycle is not None
-            and lifecycle.parent_group_id is not None
-            and lifecycle.parent_group_id.startswith("proxy-transaction-")
-        ):
-            host_key = str(seed_parts[1]) if len(seed_parts) > 1 else ""
-            flow_time = self.lifecycle_child_source_time(
-                event,
-                "source.ecar_flow",
-                host_key=host_key,
-                seed_parts=seed_parts,
-                within=(interval_start, not_after) if not_after is not None else None,
-            )
-            if flow_time is not None:
-                flow_time = self._clamp_ecar_flow_before_close(
-                    flow_time,
-                    interval_start=interval_start,
-                    not_after=not_after,
-                )
-                flow_time = self._paired_ecar_flow_observation_time(
-                    event,
-                    flow_time,
-                    seed_parts=seed_parts,
-                    interval_start=interval_start,
-                    not_before=not_before,
-                    not_after=not_after,
-                    enabled=paired_endpoint,
-                )
-                return flow_time, not_before is None or not_before <= flow_time
-
-        if drop_late_process_identity and not_before is not None:
-            flow_time = self.source_time(
-                event,
-                "source.ecar_flow",
-                seed_parts=seed_parts,
-                within=(interval_start, not_after) if not_after is not None else None,
-            )
-            flow_time = self._clamp_ecar_flow_before_close(
-                flow_time,
-                interval_start=interval_start,
-                not_after=not_after,
-            )
-            flow_time = self._paired_ecar_flow_observation_time(
-                event,
-                flow_time,
-                seed_parts=seed_parts,
-                interval_start=interval_start,
-                not_before=None,
-                not_after=not_after,
-                enabled=paired_endpoint,
-            )
-            return flow_time, not_before <= flow_time
-
-        identity_safe = not_before is None or not_after is None or not_before <= not_after
-        flow_time = self.source_time(
-            event,
-            "source.ecar_flow",
-            seed_parts=seed_parts,
-            not_before=not_before if identity_safe else None,
-            within=(interval_start, not_after) if not_after is not None else None,
-        )
-        flow_time = self._clamp_ecar_flow_before_close(
-            flow_time,
-            interval_start=interval_start,
-            not_after=not_after,
-        )
-        flow_time = self._paired_ecar_flow_observation_time(
-            event,
-            flow_time,
-            seed_parts=seed_parts,
-            interval_start=interval_start,
-            not_before=not_before if identity_safe else None,
-            not_after=not_after,
-            enabled=paired_endpoint,
-        )
-        if identity_safe and not_before is not None and flow_time < not_before:
-            identity_safe = False
-        return flow_time, identity_safe
-
-    @staticmethod
-    def _clamp_ecar_flow_before_close(
-        timestamp: datetime,
-        *,
-        interval_start: datetime,
-        not_after: datetime | None,
-    ) -> datetime:
-        """Leave room for source-native authentication after an endpoint FLOW."""
-
-        if not_after is None:
-            return timestamp
-        duration = max(timedelta(0), not_after - interval_start)
-        margin = min(timedelta(milliseconds=100), duration / 3)
-        return min(timestamp, max(interval_start, not_after - margin))
-
-    @staticmethod
-    def _paired_ecar_flow_observation_time(
-        event: TimingOccurrence,
-        timestamp: datetime,
-        *,
-        seed_parts: tuple[Any, ...],
-        interval_start: datetime,
-        not_before: datetime | None,
-        not_after: datetime | None,
-        enabled: bool,
-    ) -> datetime:
-        """Add deterministic host-local texture to paired endpoint FLOWs."""
-
-        if not enabled:
-            return timestamp
-        if not_after is None:
-            return SourceTimingPlanner._unbounded_paired_ecar_flow_time(
-                event,
-                seed_parts=seed_parts,
-                interval_start=interval_start,
-                not_before=not_before,
-            )
-        short_interval = not_after <= interval_start + timedelta(milliseconds=5)
-        lower_bound = interval_start if not_before is None else max(not_before, interval_start)
-        min_offset_ms = SourceTimingPlanner._ecar_flow_min_endpoint_offset_ms(
-            event,
-            seed_parts,
-        )
-        if min_offset_ms > 0:
-            minimum_time = interval_start + timedelta(milliseconds=min_offset_ms)
-            if minimum_time <= not_after:
-                lower_bound = (
-                    minimum_time if lower_bound is None else max(lower_bound, minimum_time)
-                )
-
-        if short_interval and lower_bound is not None and not_after > lower_bound:
-            available_us = int((not_after - lower_bound).total_seconds() * 1_000_000)
-            if available_us >= 2_000:
-                direction = str(seed_parts[0]) if seed_parts else ""
-                seed = _stable_seed(
-                    "ecar_short_paired_flow_observation:"
-                    + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
-                )
-                if direction == "outbound":
-                    lower_fraction, fraction_span = 100, 250
-                elif direction == "inbound":
-                    lower_fraction, fraction_span = 650, 250
-                else:
-                    lower_fraction, fraction_span = 300, 400
-                fraction = lower_fraction + (seed % (fraction_span + 1))
-                return lower_bound + timedelta(microseconds=(available_us * fraction) // 1000)
-
-        seed = _stable_seed(
-            "ecar_paired_flow_observation:"
-            + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
-        )
-        direction = str(seed_parts[0]) if seed_parts else ""
-        if short_interval and direction == "inbound":
-            minimum_jitter_ms, maximum_jitter_ms = 22, 55
-        elif short_interval and direction == "outbound":
-            minimum_jitter_ms, maximum_jitter_ms = 1, 16
-        elif direction == "inbound":
-            minimum_jitter_ms, maximum_jitter_ms = 75, 540
-        elif direction == "outbound":
-            minimum_jitter_ms, maximum_jitter_ms = 12, 220
-        else:
-            minimum_jitter_ms, maximum_jitter_ms = 12, 360
-        jitter_ms = minimum_jitter_ms + (seed % (maximum_jitter_ms - minimum_jitter_ms + 1))
-        candidate = timestamp - timedelta(milliseconds=jitter_ms)
-        if lower_bound is not None and candidate < lower_bound:
-            available_ms = int((timestamp - lower_bound).total_seconds() * 1000)
-            if available_ms <= 0:
-                return timestamp
-            if available_ms < minimum_jitter_ms:
-                if direction == "inbound" and available_ms >= 4:
-                    slice_min_ms, slice_max_ms = max(1, (available_ms * 2) // 3), available_ms
-                elif direction == "outbound" and available_ms >= 4:
-                    slice_min_ms, slice_max_ms = 1, max(1, available_ms // 3)
-                else:
-                    slice_min_ms, slice_max_ms = 1, available_ms
-                bounded_jitter_ms = slice_min_ms + (seed % (slice_max_ms - slice_min_ms + 1))
-            else:
-                bounded_jitter_ms = minimum_jitter_ms + (
-                    seed % (available_ms - minimum_jitter_ms + 1)
-                )
-            candidate = timestamp - timedelta(milliseconds=bounded_jitter_ms)
-        return min(candidate, not_after)
-
-    @staticmethod
-    def _unbounded_paired_ecar_flow_time(
-        event: TimingOccurrence,
-        *,
-        seed_parts: tuple[Any, ...],
-        interval_start: datetime,
-        not_before: datetime | None,
-    ) -> datetime:
-        """Return coordinated paired FLOW timing when no close bound exists."""
+        """Return a typed, right-skew FLOW time inside its local interval."""
 
         network = event.network
         if network is None:
-            return event.timestamp
-        tuple_seed = _stable_seed(
-            "ecar_paired_flow_base:"
-            + ":".join(
-                str(part)
-                for part in (
-                    network.src_ip,
-                    network.src_port,
-                    network.dst_ip,
-                    network.dst_port,
-                    network.protocol,
-                    event.timestamp.isoformat(),
-                )
+            return self._ensure_plan(event).canonical_timestamp, False
+        host = next(
+            (
+                candidate
+                for candidate in (event.src_host, event.dst_host)
+                if candidate is not None and candidate.hostname.casefold() == hostname.casefold()
+            ),
+            event.src_host or event.dst_host,
+        )
+        os_category = getattr(host, "os_category", "windows")
+        canonical_start, canonical_end = self._ecar_flow_interval(event, seed_parts)
+        interval_start = self._runtime_endpoint_clock_time(
+            canonical_start,
+            hostname=hostname,
+            os_category=os_category,
+        )
+        not_after = (
+            self._runtime_endpoint_clock_time(
+                canonical_end,
+                hostname=hostname,
+                os_category=os_category,
             )
+            if canonical_end is not None
+            else None
         )
-        base_delay_ms = 220 + (tuple_seed % 900)
-        direction = str(seed_parts[0]) if seed_parts else ""
-        host = str(seed_parts[1]) if len(seed_parts) > 1 else ""
-        offset_seed = _stable_seed(
-            "ecar_paired_flow_host_offset:"
-            + ":".join(str(part) for part in (direction, host, *seed_parts))
+        identity_safe = not_before is None
+        lower_bound = interval_start
+        if not_before is not None:
+            if not_after is None or not_before < not_after:
+                lower_bound = max(lower_bound, not_before)
+                identity_safe = True
+            elif drop_late_process_identity:
+                identity_safe = False
+
+        lifecycle = event.lifecycle
+        parent_group_id = (
+            lifecycle.parent_group_id
+            if lifecycle is not None and isinstance(lifecycle.parent_group_id, str)
+            else ""
         )
-        if direction == "inbound":
-            offset_ms = 300 + (offset_seed % 360)
-        elif direction == "outbound":
-            offset_ms = 20 + (offset_seed % 180)
+        group_id = (
+            lifecycle.group_id
+            if lifecycle is not None and isinstance(lifecycle.group_id, str)
+            else ""
+        )
+        stable_id = network.stable_id or network.zeek_uid
+        lifecycle_id = parent_group_id or group_id or stable_id
+        scope = TimingScope(
+            stable_id=stable_id,
+            host=hostname,
+            source=source_instance or f"ecar:{hostname.casefold()}",
+            lifecycle_id=lifecycle_id,
+            ordinal=0 if str(seed_parts[0]).lower() == "outbound" else 1,
+        )
+        timestamp = self._sample_admissible_flow_time(
+            lower_bound,
+            not_after,
+            scope=scope,
+            lifecycle_coherent=bool(parent_group_id.startswith("proxy-transaction-")),
+        )
+        return timestamp, identity_safe and (not_before is None or timestamp >= not_before)
+
+    def _sample_admissible_flow_time(
+        self,
+        lower_bound: datetime,
+        upper_bound: datetime | None,
+        *,
+        scope: TimingScope,
+        lifecycle_coherent: bool,
+    ) -> datetime:
+        """Sample FLOW queue slack from the interval that is actually available."""
+
+        window = get_timing_window(
+            "source.ecar_flow",
+            default_min_ms=180,
+            default_max_ms=1800,
+            default_position="after",
+            default_class="source_latency",
+        )
+        relationship_key = (
+            "source.ecar_flow.lifecycle_queue"
+            if lifecycle_coherent
+            else "source.ecar_flow.endpoint_queue"
+        )
+        sample_scope = (
+            TimingScope(
+                stable_id=f"lifecycle:{scope.lifecycle_id}",
+                host=scope.host,
+                source=scope.source,
+                lifecycle_id=scope.lifecycle_id,
+            )
+            if lifecycle_coherent
+            else scope
+        )
+        if upper_bound is None:
+            distribution = self._right_skew_distribution(
+                window.min_ms * 1_000,
+                window.max_ms * 1_000,
+            )
+            return self.timing_runtime.sampler.after(
+                lower_bound,
+                distribution,
+                relationship_key=relationship_key,
+                scope=sample_scope,
+                sample_key="flow",
+            )
+
+        available_us = round((upper_bound - lower_bound).total_seconds() * 1_000_000)
+        if available_us <= 2:
+            self.timing_runtime.audit.record_saturation("source.ecar_flow.admissible_window")
+            return lower_bound
+        preferred_minimum = window.min_ms * 1_000
+        if available_us <= preferred_minimum + 2:
+            minimum_us = 18_000 if available_us > 18_002 else 0
         else:
-            offset_ms = 80 + (offset_seed % 420)
-        candidate = interval_start + timedelta(milliseconds=base_delay_ms + offset_ms)
-        if not_before is not None and candidate < not_before:
-            candidate = not_before + timedelta(milliseconds=6 + (offset_seed % 180))
-        return candidate
+            minimum_us = preferred_minimum
+        maximum_us = min(window.max_ms * 1_000, available_us)
+        if maximum_us <= minimum_us + 1:
+            minimum_us = 0
+        try:
+            delay = self.timing_runtime.sampler.sample_timedelta(
+                self._right_skew_distribution(minimum_us, maximum_us),
+                relationship_key=relationship_key,
+                scope=sample_scope,
+                sample_key=f"flow:{available_us}",
+            )
+        except TimingDistributionError:
+            self.timing_runtime.audit.record_saturation("source.ecar_flow.admissible_window")
+            delay = timedelta(microseconds=max(1, available_us // 2))
+        return lower_bound + delay
 
     @staticmethod
     def _ecar_flow_interval(
@@ -1133,52 +3756,29 @@ class SourceTimingPlanner:
     ) -> tuple[datetime, datetime | None]:
         """Return the finalized canonical interval for an endpoint FLOW."""
 
+        del seed_parts
         network = event.network
         if network is None:
             return event.timestamp, None
-        start_time = network.started_at
+        # A connection occurrence without a modeled close interval is anchored
+        # by the canonical occurrence timestamp.  Compatibility callers may
+        # construct a sparse NetworkTransactionPlan whose default ``started_at``
+        # is merely a factory epoch; that value must never replace the date of
+        # the occurrence.  Once an interval is modeled, its canonical start and
+        # close remain authoritative and immutable.
+        start_time = (
+            event.timestamp
+            if network.duration is None and network.closed_at is None
+            else network.started_at
+        )
         if network.duration is None:
             if network.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR"}:
-                seed = _stable_seed(
-                    "ecar_failed_flow_not_after:"
-                    + ":".join(str(part) for part in (*seed_parts, start_time.isoformat()))
-                )
-                return start_time, start_time + timedelta(milliseconds=45 + (seed % 620))
+                return start_time, start_time + timedelta(milliseconds=665)
             return start_time, None
         close_time = network.closed_at or (
             start_time + timedelta(seconds=max(0.0, network.duration))
         )
-        if close_time <= start_time:
-            return start_time, close_time
-        duration_us = int((close_time - start_time).total_seconds() * 1_000_000)
-        seed = _stable_seed("ecar_flow_not_after:" + ":".join(str(part) for part in seed_parts))
-        margin_us = 1000 + (seed % 4000)
-        if duration_us <= margin_us:
-            margin_us = max(0, duration_us // 2)
-        return start_time, close_time - timedelta(microseconds=margin_us)
-
-    @staticmethod
-    def _ecar_flow_min_endpoint_offset_ms(
-        event: TimingOccurrence,
-        seed_parts: tuple[Any, ...],
-    ) -> int:
-        """Return the minimum endpoint delay for very short FLOWs."""
-
-        network = event.network
-        if network is None:
-            return 0
-        applies = (
-            network.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR"}
-            if network.duration is None
-            else 0 <= network.duration < 0.1
-        )
-        if not applies:
-            return 0
-        seed = _stable_seed(
-            "ecar_flow_min_endpoint_offset:"
-            + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
-        )
-        return 18 + (seed % 65)
+        return start_time, close_time
 
     def _plan_session_lifecycle_time(
         self,
@@ -1220,14 +3820,19 @@ class SourceTimingPlanner:
                     if identity is not None
                     else None
                 )
-                self._latest_session_dependent_descriptions[key] = (
+                self._latest_session_dependent_descriptions.set(
+                    key,
                     f"event={event.event_type} host={event.src_host.hostname if event.src_host else ''} "
                     f"pid={process.pid if process is not None else ''} "
                     f"image={process.image if process is not None else ''} "
                     f"process_start={process.start_time.isoformat() if process is not None and process.start_time is not None else ''} "
                     f"source_create={create_time.isoformat() if create_time is not None else ''} "
                     f"canonical_terminate={event.timestamp.isoformat()} "
-                    f"source_terminate={source_time.isoformat()}"
+                    f"source_terminate={source_time.isoformat()}",
+                    deadline=_retained_until(
+                        source_time,
+                        _SOURCE_TIMING_LIFECYCLE_RETENTION,
+                    ),
                 )
             return event
         if lifecycle.phase == "dependent":
@@ -1238,7 +3843,8 @@ class SourceTimingPlanner:
                 source_time = max(
                     source_time,
                     visible_start
-                    + sample_timing_delta(
+                    + self._sample_profile_delay(
+                        event,
                         "source.session_dependent_after_login",
                         seed_parts=(
                             format_name,
@@ -1246,6 +3852,7 @@ class SourceTimingPlanner:
                             event.event_type,
                             event.timestamp,
                         ),
+                        sample_key="dependent_after_login",
                     ),
                 )
                 event = replace(event, timestamp=source_time)
@@ -1254,16 +3861,23 @@ class SourceTimingPlanner:
                 source_time = max(source_time, previous + _SOURCE_EPSILON)
                 event = replace(event, timestamp=source_time)
             self._latest_session_dependent_times[key] = source_time
-            self._latest_session_dependent_descriptions[key] = (
-                f"event={event.event_type} source={source_time.isoformat()}"
+            self._latest_session_dependent_descriptions.set(
+                key,
+                f"event={event.event_type} source={source_time.isoformat()}",
+                deadline=_retained_until(
+                    source_time,
+                    _SOURCE_TIMING_LIFECYCLE_RETENTION,
+                ),
             )
             return event
         if event.event_type != "logoff" or format_name not in _SESSION_CLOSURE_SOURCE_KEYS:
             return event
-        return replace(
-            event,
-            timestamp=self.session_closure_source_time(event, format_name),
-        )
+        timestamp = self.session_closure_source_time(event, format_name)
+        key = (format_name, lifecycle.group_id)
+        self._latest_session_start_times.pop(key)
+        self._latest_session_dependent_times.pop(key)
+        self._latest_session_dependent_descriptions.pop(key)
+        return replace(event, timestamp=timestamp)
 
     def _process_termination_source_time(
         self,
@@ -1276,6 +3890,19 @@ class SourceTimingPlanner:
         host = event.src_host
         if process is None or host is None:
             return event.timestamp
+        plan = self._ensure_plan(event)
+        if format_name == "ecar":
+            finalized = plan.finalized_times.get(
+                ecar_process_render_key("terminate", host.hostname)
+            )
+            if finalized is not None:
+                return finalized
+        if format_name == "windows_event_sysmon":
+            finalized = plan.finalized_times.get(
+                sysmon_process_render_key("terminate", host.hostname)
+            )
+            if finalized is not None:
+                return finalized
         start_time = process.start_time or event.timestamp
         if format_name in {"windows_security", "windows_event_security"}:
             return self.source_time(
@@ -1308,6 +3935,21 @@ class SourceTimingPlanner:
                 not_before=max(event.timestamp, create_time + canonical_lifetime),
             )
         return event.timestamp
+
+    @staticmethod
+    def session_closure_tail(format_name: str) -> timedelta:
+        """Return the maximum source-visible tail for one session format."""
+
+        try:
+            return _SESSION_CLOSURE_TAILS[format_name]
+        except KeyError as exc:
+            raise ValueError(f"unsupported session closure format: {format_name!r}") from exc
+
+    @classmethod
+    def max_session_closure_tail(cls, format_names: Iterable[str]) -> timedelta:
+        """Return the maximum source-visible tail across selected formats."""
+
+        return max((cls.session_closure_tail(name) for name in format_names), default=timedelta())
 
     def session_closure_source_time(
         self,
@@ -1344,13 +3986,14 @@ class SourceTimingPlanner:
             earliest = max(
                 earliest,
                 latest
-                + sample_timing_delta(
+                + self._sample_profile_delay(
+                    event,
                     "windows.logoff_after_rendered_dependents",
                     seed_parts=(format_name, lifecycle.group_id, latest),
+                    sample_key="closure_after_dependents",
                 ),
             )
-        tail_seconds = 4 if format_name == "syslog" else 15
-        latest_allowed = canonical_end + timedelta(seconds=tail_seconds)
+        latest_allowed = canonical_end + self.session_closure_tail(format_name)
         if earliest > latest_allowed:
             description = self._latest_session_dependent_descriptions.get(
                 (format_name, lifecycle.group_id),
@@ -1375,6 +4018,59 @@ class SourceTimingPlanner:
         """Return the admitted source-native start time for a session group."""
 
         return self._latest_session_start_times.get((format_name, lifecycle_group_id))
+
+    def plan_endpoint_session_ready_time(
+        self,
+        event: TimingOccurrence,
+        format_name: str,
+        *,
+        not_before: datetime,
+        relationship_key: str,
+    ) -> datetime:
+        """Freeze an endpoint login after a bundle-owned native readiness barrier."""
+
+        event = self.initialize_event(event)
+        family = _endpoint_format_family(format_name)
+        host = event.dst_host or event.src_host
+        if host is None:
+            raise ValueError("Endpoint session timing requires a projected host")
+        hostname = host.hostname
+        source_instance = f"{family}:{hostname.casefold()}:session"
+        anchor = ensure_utc(not_before)
+        if family == "ecar":
+            transport_anchor = self._remote_auth_transport_anchor(
+                event,
+                self._admitted_ecar_remote_transports,
+                self._admitted_ecar_transport_transactions,
+            )
+            if transport_anchor is None and event.event_type == "ssh_session":
+                transport_anchor = self._ssh_transport_anchor(event)
+            if transport_anchor is not None:
+                anchor = max(anchor, transport_anchor)
+        window = get_timing_window(
+            relationship_key,
+            default_min_ms=275,
+            default_max_ms=650,
+            default_position="after",
+            default_class="source_latency",
+        )
+        timestamp = anchor + self.timing_runtime.sampler.sample_timedelta(
+            self._right_skew_distribution(window.min_ms * 1_000, window.max_ms * 1_000 + 1),
+            relationship_key=f"{family}.session_after_native_readiness",
+            scope=TimingScope(
+                stable_id=self._endpoint_event_object_id(event, hostname, "session-ready"),
+                host=hostname,
+                source=source_instance,
+                lifecycle_id=self._endpoint_event_lifecycle_id(event),
+            ),
+            sample_key=relationship_key,
+        )
+        plan = self._ensure_plan(event)
+        plan.finalized_times[endpoint_event_native_key(format_name, hostname)] = timestamp
+        plan.finalized_times[endpoint_event_render_key(format_name, hostname)] = timestamp
+        if family == "ecar":
+            plan.finalized_times[ecar_session_render_key("login")] = timestamp
+        return timestamp
 
     def record_session_closure_source_time(
         self,
@@ -1456,13 +4152,15 @@ class SourceTimingPlanner:
             )
             not_before = None
             if identity is subject and parent_time is not None:
-                not_before = parent_time + sample_timing_delta(
+                not_before = parent_time + self._sample_profile_delay(
+                    event,
                     "source.ecar_dependent_after_process_create",
                     seed_parts=(
                         "parent-before-child",
                         parent.object_id,
                         identity.object_id,
                     ),
+                    sample_key="parent_before_child",
                 )
             if identity is subject and session_ready_time is not None:
                 session_floor = session_ready_time + _SOURCE_EPSILON
@@ -1493,7 +4191,18 @@ class SourceTimingPlanner:
         cached = self._ecar_process_create_times.get(identity.object_id)
         if cached is not None:
             if not_before is not None and cached < not_before:
-                cached = not_before
+                self.timing_runtime.audit.record_repair("ecar.process.visibility_floor")
+                cached = self._sample_after_floor(
+                    not_before,
+                    relationship_key="ecar.process.visibility_floor",
+                    scope=TimingScope(
+                        stable_id=identity.object_id,
+                        host=identity.hostname,
+                        source=f"ecar:{identity.hostname.casefold()}",
+                        lifecycle_id=identity.lifecycle_group_id,
+                    ),
+                    maximum_us=2_500,
+                )
                 self._ecar_process_create_times[identity.object_id] = cached
             return cached
         if event.source_timing is not None:
@@ -1507,32 +4216,91 @@ class SourceTimingPlanner:
             cached = event.source_timing.source_times.get(planned_key)
             if cached is not None:
                 if not_before is not None and cached < not_before:
-                    cached = not_before
+                    self.timing_runtime.audit.record_repair("ecar.process.visibility_floor")
+                    cached = self._sample_after_floor(
+                        not_before,
+                        relationship_key="ecar.process.visibility_floor",
+                        scope=TimingScope(
+                            stable_id=identity.object_id,
+                            host=identity.hostname,
+                            source=f"ecar:{identity.hostname.casefold()}",
+                            lifecycle_id=identity.lifecycle_group_id,
+                        ),
+                        maximum_us=2_500,
+                    )
                 self._ecar_process_create_times[identity.object_id] = cached
                 return cached
-        anchor = self.initialize_event(
-            replace(
-                event,
-                timestamp=anchor_timestamp or identity.started_at,
-                source_timing=None,
+        host = next(
+            (
+                candidate
+                for candidate in (event.src_host, event.dst_host)
+                if candidate is not None
+                and candidate.hostname.casefold() == identity.hostname.casefold()
+            ),
+            event.src_host or event.dst_host,
+        )
+        create_time = self._runtime_process_create_time(
+            event,
+            family="ecar",
+            source_key="source.ecar_process_create",
+            source_instance=f"ecar:{identity.hostname.casefold()}",
+            hostname=identity.hostname,
+            os_category=getattr(host, "os_category", "windows"),
+            object_id=identity.object_id,
+            lifecycle_id=identity.lifecycle_group_id,
+            canonical_start=anchor_timestamp or identity.started_at,
+        )
+        if not_before is not None and create_time < not_before:
+            self.timing_runtime.audit.record_repair("ecar.process.visibility_floor")
+            create_time = self._sample_after_floor(
+                not_before,
+                relationship_key="ecar.process.visibility_floor",
+                scope=TimingScope(
+                    stable_id=identity.object_id,
+                    host=identity.hostname,
+                    source=f"ecar:{identity.hostname.casefold()}",
+                    lifecycle_id=identity.lifecycle_group_id,
+                ),
+                maximum_us=2_500,
             )
-        )
-        create_time = self.source_time(
-            anchor,
-            "source.ecar_process_create",
-            seed_parts=(identity.hostname, identity.pid, identity.started_at),
-            not_before=max(identity.started_at, not_before)
-            if not_before is not None
-            else identity.started_at,
-        )
         self._ecar_process_create_times[identity.object_id] = create_time
         return create_time
 
     def admission_time(self, event: TimingOccurrence, format_name: str) -> datetime:
         """Return the finalized source-visible timestamp used for window admission."""
 
+        from evidenceforge.generation.network_observation import RUNTIME_OWNED_ZEEK_FORMATS
+
         if event.source_timing is not None:
+            if format_name in {
+                "ecar",
+                "windows_event_sysmon",
+                "windows_security",
+                "windows_event_security",
+            }:
+                family = _endpoint_format_family(format_name)
+                prefix = f"{family}.event."
+                endpoint_times = [
+                    timestamp
+                    for key, timestamp in event.source_timing.finalized_times.items()
+                    if key.startswith(prefix) and ".render." in key
+                ]
+                if endpoint_times:
+                    return max(endpoint_times)
             if format_name == "ecar":
+                host = event.src_host or event.dst_host
+                if (
+                    host is not None
+                    and event.event_type in _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES
+                ):
+                    lifecycle = (
+                        "terminate" if event.event_type in _PROCESS_END_EVENT_TYPES else "create"
+                    )
+                    process_time = event.source_timing.finalized_times.get(
+                        ecar_process_render_key(lifecycle, host.hostname)
+                    )
+                    if process_time is not None:
+                        return process_time
                 ecar_times = [
                     timestamp
                     for key, timestamp in event.source_timing.finalized_times.items()
@@ -1546,6 +4314,31 @@ class SourceTimingPlanner:
                 ) or event.source_timing.finalized_times.get(_WINDOWS_WFP_RENDER_KEY)
                 if windows_time is not None:
                     return windows_time
+            if format_name == "windows_event_sysmon":
+                host = event.src_host or event.dst_host
+                if (
+                    host is not None
+                    and event.event_type in _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES
+                ):
+                    lifecycle = (
+                        "terminate" if event.event_type in _PROCESS_END_EVENT_TYPES else "create"
+                    )
+                    process_time = event.source_timing.finalized_times.get(
+                        sysmon_process_render_key(lifecycle, host.hostname)
+                    )
+                    if process_time is not None:
+                        return process_time
+        if format_name in RUNTIME_OWNED_ZEEK_FORMATS and event.network_observations:
+            prefix = f"{format_name}:"
+            source_times = [
+                timestamp
+                for observation in event.network_observations
+                if format_name in observation.visible_formats
+                for key, timestamp in observation.source_times
+                if key == format_name or key.startswith(prefix)
+            ]
+            if source_times:
+                return max(source_times)
         if format_name == "proxy_access" and event.protocol.proxy is not None:
             transaction = event.protocol.proxy.transaction
             if transaction is not None:
@@ -1590,6 +4383,16 @@ class SourceTimingPlanner:
         inverted by jitter. If bounds conflict, the lower bound wins because
         preserving causality is more important than preserving a sampled delay.
         """
+        active = _ACTIVE_SOURCE_TIMING_PREPARATION.get()
+        if isinstance(active, SourceTimingPreparation) and active.owner is self:
+            return active.source_time(
+                event,
+                source_key,
+                seed_parts=seed_parts,
+                not_before=not_before,
+                not_after=not_after,
+                within=within,
+            )
         plan = self._ensure_plan(event)
         effective_seed = seed_parts or self._event_seed_parts(event)
         cache_key = self._cache_key(source_key, effective_seed)
@@ -1633,17 +4436,25 @@ class SourceTimingPlanner:
             not_after=not_after,
             within=within,
         )
-        noise_us = 37 + (
-            _stable_seed(
-                "packet-child-texture:"
-                + source_key
-                + ":"
-                + ":".join(str(part) for part in effective_seed)
-            )
-            % 961
+        host = event.src_host or event.dst_host
+        hostname = str(getattr(host, "hostname", "") or "")
+        lifecycle_id = event.lifecycle.group_id if event.lifecycle is not None else ""
+        noise = self.timing_runtime.sampler.sample_timedelta(
+            self._right_skew_distribution(36, 998),
+            relationship_key="source.packet_child_micro_noise",
+            scope=TimingScope(
+                stable_id=self._cache_key(
+                    f"packet-child-texture:{source_key}",
+                    effective_seed,
+                ),
+                host=hostname,
+                source=source_key,
+                lifecycle_id=lifecycle_id,
+            ),
+            sample_key="packet_child",
         )
         return self._apply_constraints(
-            base_time + timedelta(microseconds=noise_us),
+            base_time + noise,
             not_before=not_before,
             not_after=not_after,
             within=within,
@@ -1673,29 +4484,41 @@ class SourceTimingPlanner:
         if image_load.load_phase == "startup":
             order = max(1, image_load.load_order)
             timing = startup_module_observation_timing()
-            spacing_seed = (
-                format_name,
-                getattr(event.src_host, "hostname", ""),
-                process.pid,
-                process.start_time,
+            hostname = getattr(event.src_host, "hostname", "")
+            stable_id = (
+                f"{format_name}:{hostname}:{process.pid}:"
+                f"{process.start_time.isoformat() if process.start_time is not None else ''}"
             )
-            rng = random.Random(_stable_seed(f"startup-module-source:{spacing_seed}"))
-            elapsed_us = rng.randint(
-                timing.initial_delay_min_us,
-                timing.initial_delay_max_us,
+            scope = TimingScope(
+                stable_id=stable_id,
+                host=hostname,
+                source=format_name,
+                lifecycle_id=f"process:{hostname}:{process.pid}",
             )
-            for _module_index in range(1, order):
-                sampled_gap = round(
-                    rng.lognormvariate(
-                        math.log(timing.inter_load_gap_median_us),
-                        timing.inter_load_gap_sigma,
-                    )
+            elapsed = self.timing_runtime.sampler.sample_timedelta(
+                TriangularDistribution(
+                    timing.initial_delay_min_us,
+                    timing.initial_delay_min_us
+                    + (timing.initial_delay_max_us - timing.initial_delay_min_us) * 0.3,
+                    timing.initial_delay_max_us,
+                ),
+                relationship_key="endpoint.module.startup_initial_delay",
+                scope=scope,
+                sample_key="initial",
+            )
+            for module_index in range(1, order):
+                elapsed += self.timing_runtime.sampler.sample_timedelta(
+                    TruncatedLognormalDistribution(
+                        median=timing.inter_load_gap_median_us,
+                        sigma=timing.inter_load_gap_sigma,
+                        minimum=timing.inter_load_gap_min_us,
+                        maximum=timing.inter_load_gap_max_us,
+                    ),
+                    relationship_key="endpoint.module.startup_inter_load_gap",
+                    scope=replace(scope, ordinal=module_index),
+                    sample_key="gap",
                 )
-                elapsed_us += max(
-                    timing.inter_load_gap_min_us,
-                    min(sampled_gap, timing.inter_load_gap_max_us),
-                )
-            return process_create_time + timedelta(microseconds=elapsed_us)
+            return process_create_time + elapsed
 
         source_key = (
             "source.ecar_dependent_after_process_create"
@@ -1744,10 +4567,17 @@ class SourceTimingPlanner:
         if cached is not None:
             return cached
 
-        group_seed = _stable_seed(
-            f"lifecycle-child-source-time:{source_key}:{parent_group_id}:{host_key}"
+        observation_offset = self.timing_runtime.sampler.sample_timedelta(
+            self._right_skew_distribution(249, 1_001),
+            relationship_key="source.lifecycle_child_observation_offset",
+            scope=TimingScope(
+                stable_id=f"lifecycle-child:{parent_group_id}",
+                host=host_key,
+                source=source_key,
+                lifecycle_id=parent_group_id,
+            ),
+            sample_key="shared_offset",
         )
-        observation_offset = timedelta(microseconds=250 + (group_seed % 751))
         preferred_time = anchor + observation_offset
         constrained_time = self._apply_constraints(
             preferred_time,
@@ -1796,7 +4626,15 @@ class SourceTimingPlanner:
 
         anchor_cache_key = self._cache_key(after_source_key, anchor_seed)
         source_cache_key = self._cache_key(source_key, effective_seed)
-        graph = TemporalConstraintGraph()
+        graph = TemporalConstraintGraph(
+            timing_runtime=self.timing_runtime,
+            scope=TimingScope(
+                stable_id=f"source-constraint:{self._cache_key(source_key, effective_seed)}",
+                source=source_key,
+                lifecycle_id=self._cache_key(after_source_key, anchor_seed),
+            ),
+            relationship_key="source.constraint.repair",
+        )
         graph.add_node(
             "anchor",
             self._preferred_source_time(event, after_source_key, anchor_seed),
@@ -1812,7 +4650,12 @@ class SourceTimingPlanner:
         graph.constrain_after(
             "source",
             "anchor",
-            min_gap=sample_timing_delta(gap_key, seed_parts=effective_seed),
+            min_gap=self._sample_profile_delay(
+                event,
+                gap_key,
+                seed_parts=effective_seed,
+                sample_key="constraint_gap",
+            ),
         )
         resolved = graph.resolve()
 
@@ -1833,7 +4676,15 @@ class SourceTimingPlanner:
         before_seed = ("ordered-before", *self._event_seed_parts(before_event))
         after_seed = ("ordered-after", *self._event_seed_parts(after_event))
 
-        graph = TemporalConstraintGraph()
+        graph = TemporalConstraintGraph(
+            timing_runtime=self.timing_runtime,
+            scope=TimingScope(
+                stable_id=f"ordered-pair:{self._cache_key(source_key, before_seed)}",
+                source=source_key,
+                lifecycle_id=self._cache_key(source_key, after_seed),
+            ),
+            relationship_key="source.ordered_pair.repair",
+        )
         graph.add_node(
             "before",
             self._preferred_source_time(before_event, source_key, before_seed),
@@ -1862,76 +4713,31 @@ class SourceTimingPlanner:
         route_key: str,
         source_key: str,
     ) -> datetime:
-        """Return the timestamp a network sensor sees for this source event."""
-        source_time = self.source_time(
-            event,
-            source_key,
-            seed_parts=(route_key, *self._event_seed_parts(event)),
-        )
+        """Return a runtime-owned source-instance sensor timestamp."""
+
+        del source_key
+        from evidenceforge.generation.network_observation import NetworkObservationPlanner
+
         timing = network_sensor_observation_timing()
-        skew = self._bounded_us(
-            "sensor-clock-skew",
-            timing.clock_skew_min_us,
-            timing.clock_skew_max_us,
-            (sensor,),
-        )
-        drift_ppm = self._bounded_int(
-            "sensor-clock-drift",
-            timing.clock_drift_min_ppm,
-            timing.clock_drift_max_ppm,
-            (sensor,),
-        )
         observed_at = ensure_utc(event.timestamp)
-        seconds_since_midnight = (
-            observed_at.hour * 3600
-            + observed_at.minute * 60
-            + observed_at.second
-            + observed_at.microsecond / 1_000_000
+        key = NetworkObservationPlanner._sensor_clock_key(sensor, timing.profile_name)
+        spec = NetworkObservationPlanner._sensor_clock_spec(timing)
+        projected = self.timing_runtime.clocks.project(observed_at, key=key, spec=spec)
+        scope = TimingScope(
+            stable_id=str(route_key),
+            source=sensor.casefold(),
+            lifecycle_id=str(route_key),
         )
-        drift_us = round(seconds_since_midnight * drift_ppm)
-        path_delay = self._bounded_us(
-            "sensor-path-delay",
-            timing.path_delay_min_us,
-            timing.path_delay_max_us,
-            (sensor, route_key),
+        route_delay = self.timing_runtime.sampler.sample_timedelta(
+            NetworkObservationPlanner._right_skew_distribution(
+                timing.route_delay_min_us,
+                timing.route_delay_max_us,
+            ),
+            relationship_key="network.sensor.route_delay",
+            scope=scope,
+            sample_key="compatibility",
         )
-        wander_us = self._coherent_sensor_wander_us(
-            sensor,
-            observed_at,
-            timing.event_jitter_min_us,
-            timing.event_jitter_max_us,
-        )
-        noise = self._bounded_us(
-            "sensor-capture-noise",
-            -_OBSERVATION_NOISE_US,
-            _OBSERVATION_NOISE_US,
-            (sensor, route_key, *self._event_seed_parts(event)),
-        )
-        return source_time + timedelta(
-            microseconds=skew + drift_us + path_delay + wander_us + noise
-        )
-
-    @staticmethod
-    def _coherent_sensor_wander_us(
-        sensor: str,
-        timestamp: datetime,
-        minimum_us: int,
-        maximum_us: int,
-    ) -> int:
-        """Return slowly varying sensor-clock wander inside the configured envelope."""
-
-        if maximum_us <= minimum_us:
-            return minimum_us
-        seed = _stable_seed(f"sensor-clock-wander:{sensor}")
-        period_seconds = 1_200 + (seed % 2_401)
-        period_us = period_seconds * 1_000_000
-        half_period_us = period_us // 2
-        phase_us = (seed >> 16) % period_us
-        timestamp_us = round(ensure_utc(timestamp).timestamp() * 1_000_000)
-        position_us = (timestamp_us + phase_us) % period_us
-        distance_us = min(position_us, period_us - position_us)
-        span_us = maximum_us - minimum_us
-        return minimum_us + (span_us * distance_us) // half_period_us
+        return projected + route_delay
 
     def canonical_time_in_source_clock(
         self,
@@ -1976,11 +4782,16 @@ class SourceTimingPlanner:
             default_position="after",
         )
         if source_key == "source.ecar_process_create":
-            delta = self._coherent_ecar_process_create_latency(event, source_key, window)
+            delta = self._coherent_ecar_process_create_latency(event, source_key)
         else:
-            delta = sample_timing_delta(source_key, seed_parts=seed_parts)
+            delta = self._sample_profile_delay(
+                event,
+                source_key,
+                seed_parts=seed_parts,
+                sample_key="source_delay",
+            )
         micro_noise = (
-            self._source_micro_noise(source_key, seed_parts)
+            self._source_micro_noise(event, source_key, seed_parts)
             if window.relationship_class == "same_observation"
             and source_key != "source.zeek_conn_start"
             else timedelta(0)
@@ -1992,37 +4803,44 @@ class SourceTimingPlanner:
             source_time = canonical_time + delta + micro_noise
         return source_time + self._endpoint_clock_adjustment(event, source_key, seed_parts)
 
-    @staticmethod
     def _coherent_ecar_process_create_latency(
+        self,
         event: TimingOccurrence,
         source_key: str,
-        window: TimingWindow,
     ) -> timedelta:
-        """Return slowly varying host-local eCAR process observation latency.
+        """Return runtime-owned coherent eCAR process observation latency.
 
         Independent per-process latency samples can visibly reorder successive
         process creates even when their canonical starts and PIDs are ordered.
-        A real host collector's queue delay changes coherently, so model it as a
-        continuous triangular wave whose slope is far below wall-clock time.
+        The shared runtime's source-local queue knots keep that latency coherent
+        without a separate stable-seed timing implementation.
         """
 
         host = event.src_host or event.dst_host
         hostname = str(getattr(host, "hostname", "") or "unknown-host")
-        minimum_us = window.min_ms * 1_000
-        latency_span_us = max(0, (window.max_ms - window.min_ms) * 1_000)
-        if latency_span_us == 0:
-            return timedelta(microseconds=minimum_us)
-
-        seed = _stable_seed(f"coherent-source-latency:{source_key}:{hostname}")
-        period_seconds = 2_700 + (seed % 2_701)
-        period_us = period_seconds * 1_000_000
-        half_period_us = period_us // 2
-        phase_us = (seed >> 16) % period_us
-        canonical_us = round(ensure_utc(event.timestamp).timestamp() * 1_000_000)
-        position_us = (canonical_us + phase_us) % period_us
-        distance_us = min(position_us, period_us - position_us)
-        latency_us = minimum_us + (latency_span_us * distance_us) // half_period_us
-        return timedelta(microseconds=latency_us)
+        process = event.process
+        identity = self._subject_process_identity(event)
+        if process is not None:
+            started_at = process.start_time or self._ensure_plan(event).canonical_timestamp
+            object_id, lifecycle_id = self._process_scope_ids(
+                event,
+                identity,
+                hostname=hostname,
+                pid=process.pid,
+                started_at=started_at,
+            )
+        else:
+            object_id = self._endpoint_event_object_id(event, hostname, "process_create")
+            lifecycle_id = self._endpoint_event_lifecycle_id(event)
+        return self._coherent_runtime_latency(
+            source_key,
+            canonical_time=self._ensure_plan(event).canonical_timestamp,
+            source_instance=f"ecar:{hostname.casefold()}:host-agent",
+            hostname=hostname,
+            object_id=object_id,
+            lifecycle_id=lifecycle_id,
+            phase="create",
+        )
 
     def _preferred_source_time(
         self,
@@ -2067,27 +4885,12 @@ class SourceTimingPlanner:
 
         if not hostname or os_category not in {"windows", "linux"}:
             return timedelta(0)
-        timing = endpoint_clock_timing(self.clock_profile_name, os_category)
-        offset_ms = self._bounded_int(
-            "endpoint-clock-offset",
-            timing.host_offset_min_ms,
-            timing.host_offset_max_ms,
-            (self.clock_profile_name, os_category, hostname),
+        projected = self._runtime_endpoint_clock_time(
+            timestamp,
+            hostname=hostname,
+            os_category=os_category,
         )
-        drift_ppm = self._bounded_int(
-            "endpoint-clock-drift",
-            timing.host_drift_min_ppm,
-            timing.host_drift_max_ppm,
-            (self.clock_profile_name, os_category, hostname),
-        )
-        seconds_since_midnight = (
-            timestamp.hour * 3600
-            + timestamp.minute * 60
-            + timestamp.second
-            + timestamp.microsecond / 1_000_000
-        )
-        drift_us = round(seconds_since_midnight * drift_ppm)
-        return timedelta(milliseconds=offset_ms, microseconds=drift_us)
+        return projected - ensure_utc(timestamp)
 
     @staticmethod
     def _endpoint_clock_scope(
@@ -2119,16 +4922,31 @@ class SourceTimingPlanner:
             return (hostname, "linux") if hostname else None
         return None
 
-    @staticmethod
     def _source_micro_noise(
+        self,
+        event: TimingOccurrence,
         source_key: str,
         seed_parts: tuple[Any, ...],
     ) -> timedelta:
-        """Return deterministic sub-millisecond texture for packet-like source rows."""
-        seed = _stable_seed(
-            "source-micro-noise:" + source_key + ":" + ":".join(str(part) for part in seed_parts)
+        """Return runtime-owned sub-millisecond texture for packet-like source rows."""
+
+        host = event.src_host or event.dst_host
+        hostname = str(getattr(host, "hostname", "") or "")
+        lifecycle_id = event.lifecycle.group_id if event.lifecycle is not None else ""
+        return self.timing_runtime.sampler.sample_timedelta(
+            self._right_skew_distribution(36, 998),
+            relationship_key="source.same_observation_micro_noise",
+            scope=TimingScope(
+                stable_id=self._cache_key(
+                    f"source-micro-noise:{source_key}",
+                    seed_parts,
+                ),
+                host=hostname,
+                source=source_key,
+                lifecycle_id=lifecycle_id,
+            ),
+            sample_key="micro_noise",
         )
-        return timedelta(microseconds=37 + (seed % 961))
 
     def _source_floor_repair_time(
         self,
@@ -2141,17 +4959,13 @@ class SourceTimingPlanner:
         if source_key not in _PROCESS_CREATE_SOURCE_KEYS:
             return lower_bound
         if source_key == "source.ecar_process_create":
-            window = get_timing_window(
-                source_key,
-                default_min_ms=0,
-                default_max_ms=0,
-                default_position="after",
-            )
-            delay = self._coherent_ecar_process_create_latency(event, source_key, window)
+            delay = self._coherent_ecar_process_create_latency(event, source_key)
         else:
-            delay = sample_timing_delta(
+            delay = self._sample_profile_delay(
+                event,
                 source_key,
                 seed_parts=("floor-repair", source_key, *seed_parts),
+                sample_key="floor_repair",
             )
         return lower_bound + max(delay, _SOURCE_EPSILON)
 
@@ -2178,22 +4992,6 @@ class SourceTimingPlanner:
         if upper is not None and result > upper:
             result = upper
         return result
-
-    @staticmethod
-    def _bounded_us(prefix: str, minimum: int, maximum: int, parts: tuple[Any, ...]) -> int:
-        """Return a deterministic integer in the inclusive microsecond range."""
-        if maximum <= minimum:
-            return minimum
-        seed = _stable_seed(prefix + ":" + ":".join(str(part) for part in parts))
-        return minimum + (seed % (maximum - minimum + 1))
-
-    @staticmethod
-    def _bounded_int(prefix: str, minimum: int, maximum: int, parts: tuple[Any, ...]) -> int:
-        """Return a deterministic integer in the inclusive range."""
-        if maximum <= minimum:
-            return minimum
-        seed = _stable_seed(prefix + ":" + ":".join(str(part) for part in parts))
-        return minimum + (seed % (maximum - minimum + 1))
 
     @staticmethod
     def _cache_key(source_key: str, seed_parts: tuple[Any, ...]) -> str:
@@ -2227,3 +5025,508 @@ class SourceTimingPlanner:
             identity.object_id if identity is not None else "",
             event.storyline_cluster_id or "",
         )
+
+
+class SourceTimingPreparation:
+    """Authenticated copy-on-write planner and runtime transaction."""
+
+    __slots__ = (
+        "_binding_token",
+        "_cache_overlays",
+        "_claim_thread_id",
+        "_commit_state_digest",
+        "_committed_receipt",
+        "_context_closed",
+        "_overlay_planner",
+        "_owner",
+        "_runtime_preparation",
+        "_seal_integrity",
+        "_sealed_overlay_digest",
+        "_state",
+        "_watermark",
+    )
+
+    def __init__(self, owner: SourceTimingPlanner, *, preparation_id: int) -> None:
+        self._owner = owner
+        self._watermark = owner._watermark
+        self._runtime_preparation: TimingRuntimePreparation = owner.timing_runtime.prepared()
+        cache_overlays: list[tuple[str, _SourceTimingCache, _PreparedSourceTimingCache]] = []
+        cache_by_identity: dict[int, _PreparedSourceTimingCache] = {}
+        for name, cache in owner._bounded_indexes():
+            prepared_cache = _PreparedSourceTimingCache(cache)
+            cache_overlays.append((name, cache, prepared_cache))
+            cache_by_identity[id(cache)] = prepared_cache
+        self._cache_overlays = tuple(cache_overlays)
+
+        overlay_planner = object.__new__(SourceTimingPlanner)
+        overlay_planner.__dict__ = owner.__dict__.copy()
+        overlay_planner.timing_runtime = self._runtime_preparation
+        for attribute, value in tuple(overlay_planner.__dict__.items()):
+            prepared_cache = cache_by_identity.get(id(value))
+            if prepared_cache is not None:
+                setattr(overlay_planner, attribute, prepared_cache)
+        self._overlay_planner = overlay_planner
+
+        base_state_digest = owner.state_digest()
+        integrity = owner._preparation_token_integrity(preparation_id, base_state_digest)
+        self._binding_token = SourceTimingPreparationToken(
+            preparation_id=preparation_id,
+            base_state_digest=base_state_digest,
+            _integrity=integrity,
+        )
+        self._state = "open"
+        self._context_closed = False
+        self._sealed_overlay_digest = ""
+        self._seal_integrity = ""
+        self._commit_state_digest = ""
+        self._committed_receipt: SourceTimingPreparationReceipt | None = None
+        self._claim_thread_id: int | None = None
+
+    @property
+    def owner(self) -> SourceTimingPlanner:
+        """Return the exact planner that issued this preparation."""
+
+        return self._owner
+
+    @property
+    def binding_token(self) -> SourceTimingPreparationToken:
+        """Return the stable token shared across related prepared dispatches."""
+
+        return self._binding_token
+
+    @property
+    def committed(self) -> bool:
+        """Return whether the staged timing state committed once."""
+
+        return self._state == "committed"
+
+    @property
+    def sealed(self) -> bool:
+        """Return whether staging is closed and integrity-authenticated."""
+
+        return self._state in {"sealed", "claimed", "committed"}
+
+    @property
+    def receipt(self) -> SourceTimingPreparationReceipt | None:
+        """Return the authenticated commit receipt after successful publication."""
+
+        return self._committed_receipt
+
+    @property
+    def staged_cache_operations(self) -> int:
+        """Return bounded staged cache mutations without scanning canonical state."""
+
+        return sum(len(prepared.operations) for _name, _cache, prepared in self._cache_overlays)
+
+    @property
+    def staged_audit_operations(self) -> int:
+        """Return staged audit mutations."""
+
+        return len(self._runtime_preparation.audit.operations)
+
+    @property
+    def overlay_digest(self) -> str:
+        """Return the authenticated overlay digest after normal context exit."""
+
+        return self._sealed_overlay_digest
+
+    def census(self) -> SourceTimingPreparationCensus:
+        """Return constant-time staged retention and clock-capacity diagnostics."""
+
+        clock_census = self._runtime_preparation.clocks.census()
+        return SourceTimingPreparationCensus(
+            state=self._state,
+            cache_family_count=len(self._cache_overlays),
+            staged_cache_keys=sum(
+                prepared.staged_keys for _name, _cache, prepared in self._cache_overlays
+            ),
+            staged_cache_operations=self.staged_cache_operations,
+            staged_audit_operations=self.staged_audit_operations,
+            clock_live_entries=clock_census.live_entries,
+            clock_capacity=clock_census.capacity,
+        )
+
+    def plan_event(
+        self,
+        event: TimingOccurrence,
+        format_name: str | None = None,
+        *,
+        observation_delay: timedelta = timedelta(0),
+        source_instance: str = "",
+        source_hostname: str = "",
+        projection_role: str = "",
+        output_end_time: datetime | None = None,
+    ) -> TimingOccurrence:
+        """Plan one event against canonical plus staged timing state."""
+
+        if self._state != "open":
+            raise StateError("Source timing preparation is sealed and cannot stage more events")
+        return self._overlay_planner.plan_event(
+            event,
+            format_name,
+            observation_delay=observation_delay,
+            source_instance=source_instance,
+            source_hostname=source_hostname,
+            projection_role=projection_role,
+            output_end_time=output_end_time,
+        )
+
+    def source_time(
+        self,
+        event: TimingOccurrence,
+        source_key: str,
+        seed_parts: tuple[Any, ...] = (),
+        not_before: datetime | None = None,
+        not_after: datetime | None = None,
+        within: tuple[datetime, datetime] | None = None,
+    ) -> datetime:
+        """Sample one direct source relationship against the staged runtime."""
+
+        if self._state != "open":
+            raise StateError("Source timing preparation is sealed and cannot stage more events")
+        return self._overlay_planner.source_time(
+            event,
+            source_key,
+            seed_parts=seed_parts,
+            not_before=not_before,
+            not_after=not_after,
+            within=within,
+        )
+
+    def seal(self) -> None:
+        """Authenticate the final overlay while leaving canonical state untouched."""
+
+        if self._state == "sealed":
+            return
+        if self._state != "open":
+            raise StateError(f"Source timing preparation cannot seal from {self._state!r}")
+        self._sealed_overlay_digest = self._current_overlay_digest()
+        self._seal_integrity = self._owner._preparation_seal_integrity(
+            self._binding_token,
+            self._sealed_overlay_digest,
+        )
+        self._state = "sealed"
+        self._context_closed = True
+
+    def cancel(self) -> None:
+        """Discard an uncommitted overlay with exact zero canonical residue."""
+
+        if self._state == "cancelled":
+            return
+        if self._state == "committed":
+            raise StateError("Committed source timing preparation cannot cancel")
+        if self._state == "claimed":
+            raise StateError("Claimed source timing preparation cannot cancel directly")
+        self._runtime_preparation.cancel()
+        self._state = "cancelled"
+        self._context_closed = True
+
+    @contextmanager
+    def claimed_commit(self) -> Iterator[SourceTimingPreparation]:
+        """Claim timing locks before State/Lifecycle and expose a no-fail callback."""
+
+        if self._state != "sealed":
+            raise StateError("Source timing preparation must be sealed before claim")
+        if not self._authenticates(self._owner):
+            raise StateError("Source timing preparation integrity check failed")
+
+        self._owner._preparation_lock.acquire()
+        acquired_caches: list[_SourceTimingCache] = []
+        try:
+            if self._owner._watermark != self._watermark:
+                raise StateError("Source timing preparation is stale after watermark advance")
+            for _name, cache, prepared in self._cache_overlays:
+                cache._lock.acquire()
+                acquired_caches.append(cache)
+                if cache._mutation_version != prepared.base_version:
+                    raise StateError("Source timing preparation is stale")
+            self._runtime_preparation._acquire_claim()
+            self._state = "claimed"
+            from threading import get_ident
+
+            self._claim_thread_id = get_ident()
+            self._commit_state_digest = hashlib.sha256(
+                repr(
+                    (
+                        self._binding_token.base_state_digest,
+                        self._sealed_overlay_digest,
+                        tuple(
+                            (name, prepared.version_delta)
+                            for name, _cache, prepared in self._cache_overlays
+                        ),
+                        self._runtime_preparation.base_versions,
+                    )
+                ).encode("utf-8")
+            ).hexdigest()
+            try:
+                yield self
+            except BaseException:
+                if self._state == "claimed":
+                    self._state = "sealed"
+                raise
+            else:
+                if self._state != "committed":
+                    self._state = "sealed"
+                    raise StateError(
+                        "Claimed source timing preparation exited without commit_no_fail"
+                    )
+        finally:
+            self._claim_thread_id = None
+            self._runtime_preparation._release_claim()
+            for cache in reversed(acquired_caches):
+                cache._lock.release()
+            self._owner._preparation_lock.release()
+
+    def commit_no_fail(self) -> None:
+        """Apply a preclaimed overlay inside the State/Lifecycle finalization fence."""
+
+        if self._state != "claimed" or not self._commit_state_digest:
+            raise StateError("Source timing preparation is not claimed for commit")
+        from threading import get_ident
+
+        if self._claim_thread_id != get_ident():
+            raise StateError("Source timing preparation must commit on its claiming thread")
+        for _name, cache, prepared in self._cache_overlays:
+            cache._apply_prepared_locked(prepared)
+        self._runtime_preparation._commit_no_fail()
+        self._committed_receipt = SourceTimingPreparationReceipt(
+            binding_token=self._binding_token,
+            overlay_digest=self._sealed_overlay_digest,
+            committed_state_digest=self._commit_state_digest,
+            _integrity=self._owner._preparation_receipt_integrity(
+                self._binding_token,
+                self._sealed_overlay_digest,
+                self._commit_state_digest,
+            ),
+        )
+        self._state = "committed"
+
+    def _current_overlay_digest(self) -> str:
+        cache_digests = tuple(
+            (name, prepared.overlay_digest()) for name, _cache, prepared in self._cache_overlays
+        )
+        payload = (cache_digests, self._runtime_preparation.overlay_digest())
+        return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
+
+    def _authenticates(self, owner: SourceTimingPlanner) -> bool:
+        if owner is not self._owner or not owner.authenticates_binding_token(self._binding_token):
+            return False
+        if self._state in {"open", "cancelled"}:
+            return False
+        if self._current_overlay_digest() != self._sealed_overlay_digest:
+            return False
+        expected_seal = owner._preparation_seal_integrity(
+            self._binding_token,
+            self._sealed_overlay_digest,
+        )
+        if not hmac.compare_digest(self._seal_integrity, expected_seal):
+            return False
+        if self._state != "committed":
+            return True
+        receipt = self._committed_receipt
+        if receipt is None or receipt.binding_token != self._binding_token:
+            return False
+        expected_receipt = owner._preparation_receipt_integrity(
+            receipt.binding_token,
+            receipt.overlay_digest,
+            receipt.committed_state_digest,
+        )
+        return hmac.compare_digest(receipt._integrity, expected_receipt)
+
+
+def finalized_endpoint_event_times(
+    event: TimingOccurrence,
+    format_name: str,
+    hostname: str,
+    phase: str = "base",
+) -> tuple[datetime, datetime] | None:
+    """Return a pre-render frozen endpoint native/envelope pair when present."""
+
+    plan = event.source_timing
+    if plan is None:
+        return None
+    native = plan.finalized_times.get(endpoint_event_native_key(format_name, hostname, phase))
+    rendered = plan.finalized_times.get(endpoint_event_render_key(format_name, hostname, phase))
+    if native is None or rendered is None:
+        return None
+    return native, rendered
+
+
+def compatibility_endpoint_event_times(
+    event: TimingOccurrence,
+    format_name: str,
+    hostname: str,
+    phase: str = "base",
+) -> tuple[datetime, datetime]:
+    """Plan one isolated direct-emitter endpoint row without retained global state."""
+
+    finalized = finalized_endpoint_event_times(event, format_name, hostname, phase)
+    if finalized is not None:
+        return finalized
+    if event.source_timing is not None and not event.source_timing.compatibility_mode:
+        raise RuntimeError(
+            "Endpoint compatibility timing cannot extend an engine-owned incomplete plan: "
+            f"format={format_name} host={hostname} phase={phase}"
+        )
+    canonical_time = ensure_utc(
+        event.source_timing.canonical_timestamp
+        if event.source_timing is not None
+        else event.timestamp
+    )
+    reference_time = canonical_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    runtime = TimingRuntime(reference_time=reference_time, namespace="endpoint-compatibility")
+    planner = SourceTimingPlanner(
+        event.source_timing.clock_profile_name if event.source_timing is not None else "complete",
+        timing_runtime=runtime,
+    )
+    planned = planner.plan_event(
+        event,
+        format_name,
+        source_instance=f"{_endpoint_format_family(format_name)}:{hostname.casefold()}:compat",
+        source_hostname=hostname,
+    )
+    if planned.source_timing is not None:
+        planned.source_timing.compatibility_mode = True
+    finalized = finalized_endpoint_event_times(planned, format_name, hostname, phase)
+    if finalized is None:
+        return canonical_time, canonical_time
+    return finalized
+
+
+def compatibility_sysmon_envelope_time(
+    native_time: datetime,
+    *,
+    hostname: str,
+    event_id: int,
+    identity_parts: tuple[Any, ...] = (),
+) -> datetime:
+    """Project a raw direct-emitter Sysmon row through a stateless typed envelope."""
+
+    native_time = ensure_utc(native_time)
+    reference_time = native_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    runtime = TimingRuntime(
+        reference_time=reference_time, namespace="sysmon-envelope-compatibility"
+    )
+    planner = SourceTimingPlanner(timing_runtime=runtime)
+    object_id = "sysmon-compat:" + ":".join(str(part) for part in identity_parts)
+    return planner._sysmon_runtime_envelope_time(
+        native_time,
+        event_id=event_id,
+        source_instance=f"sysmon:{hostname.casefold()}:compat",
+        hostname=hostname,
+        object_id=object_id,
+        lifecycle_id=object_id,
+    )
+
+
+def compatibility_process_create_time(
+    canonical_start: datetime,
+    *,
+    format_name: str,
+    hostname: str,
+    pid: int,
+    os_category: str = "windows",
+) -> datetime:
+    """Return one stateless direct-emitter process-create observation."""
+
+    canonical_start = ensure_utc(canonical_start)
+    reference_time = canonical_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    runtime = TimingRuntime(reference_time=reference_time, namespace="process-create-compatibility")
+    planner = SourceTimingPlanner(timing_runtime=runtime)
+    family = _endpoint_format_family(format_name)
+    source_instance = f"{family}:{hostname.casefold()}:compat"
+    object_id = f"process:{hostname}:{pid}:{canonical_start.isoformat()}"
+    native = planner._runtime_endpoint_clock_time(
+        canonical_start,
+        hostname=hostname,
+        os_category=os_category,
+    ) + planner._coherent_runtime_latency(
+        planner._endpoint_process_source_key(family),
+        canonical_time=canonical_start,
+        source_instance=source_instance,
+        hostname=hostname,
+        object_id=object_id,
+        lifecycle_id=object_id,
+        phase="create",
+    )
+    if family != "sysmon":
+        return native
+    return planner._sysmon_runtime_envelope_time(
+        native,
+        event_id=1,
+        source_instance=source_instance,
+        hostname=hostname,
+        object_id=object_id,
+        lifecycle_id=object_id,
+    )
+
+
+def compatibility_relationship_time(
+    anchor: datetime,
+    *,
+    relationship_key: str,
+    identity_parts: tuple[Any, ...],
+) -> datetime:
+    """Return one stateless legacy relationship projection for raw emitter rows.
+
+    Canonical rows are finalized by the engine-owned :class:`TimingRuntime` before
+    they reach an emitter.  This adapter only preserves the direct-dictionary API
+    used by compatibility tests and callers that do not construct a canonical
+    occurrence; keeping the sampler here prevents production emitters from owning
+    timing RNG or retaining a planner.
+    """
+
+    anchor = ensure_utc(anchor)
+    window = get_timing_window(
+        relationship_key,
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    minimum_us = window.min_ms * 1_000
+    maximum_us = window.max_ms * 1_000
+    distribution = (
+        ConstantDistribution(float(minimum_us))
+        if maximum_us <= minimum_us
+        else SourceTimingPlanner._right_skew_distribution(minimum_us, maximum_us + 1)
+    )
+    runtime = TimingRuntime(
+        reference_time=anchor.replace(hour=0, minute=0, second=0, microsecond=0),
+        namespace="relationship-compatibility",
+    )
+    return runtime.sampler.after(
+        anchor,
+        distribution,
+        relationship_key=relationship_key,
+        scope=TimingScope(
+            stable_id=SourceTimingPlanner._cache_key(
+                f"compatibility:{relationship_key}",
+                identity_parts,
+            ),
+            source="compatibility",
+        ),
+        sample_key="relationship",
+    )
+
+
+def compatibility_ecar_flow_identity_deadline(event: TimingOccurrence) -> datetime:
+    """Return the legacy safe-identity bound for isolated SSH compatibility callers."""
+
+    network = event.network
+    canonical_start = (
+        network.started_at
+        if network is not None
+        and (network.duration is not None or network.closed_at is not None)
+        and getattr(network, "started_at", None) is not None
+        else event.source_timing.canonical_timestamp
+        if event.source_timing is not None
+        else event.timestamp
+    )
+    window = get_timing_window(
+        "source.ecar_flow",
+        default_min_ms=40,
+        default_max_ms=300,
+        default_position="after",
+        default_class="source_latency",
+    )
+    return ensure_utc(canonical_start) + timedelta(milliseconds=window.max_ms + 1)

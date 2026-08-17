@@ -249,6 +249,8 @@ class NetworkSensorObservation:
     firewall_teardown_time: datetime | None = None
     firewall_teardown_observed: bool = True
     nat: NatSensorObservation | None = None
+    source_times: tuple[tuple[str, datetime], ...] = ()
+    source_durations: tuple[tuple[str, float], ...] = ()
 
     def __post_init__(self) -> None:
         """Validate source-local interval and identifier invariants."""
@@ -285,6 +287,21 @@ class NetworkSensorObservation:
             raise ValueError("Observed HTTP request bodies must be non-negative")
         if self.http_response_body_len is not None and self.http_response_body_len < 0:
             raise ValueError("Observed HTTP response bodies must be non-negative")
+        time_keys = [key for key, _timestamp in self.source_times]
+        if len(time_keys) != len(set(time_keys)):
+            raise ValueError("Source-native network timing keys must be unique")
+        duration_keys = [key for key, _duration in self.source_durations]
+        if len(duration_keys) != len(set(duration_keys)):
+            raise ValueError("Source-native network duration keys must be unique")
+        if any(duration < 0 for _key, duration in self.source_durations):
+            raise ValueError("Source-native network durations must be non-negative")
+        for key, timestamp in self.source_times:
+            if not key:
+                raise ValueError("Source-native network timing keys must not be empty")
+            if timestamp < self.observed_start_time:
+                raise ValueError("Source-native network times cannot precede the observed start")
+            if self.observed_close_time is not None and timestamp > self.observed_close_time:
+                raise ValueError("Source-native network times cannot follow the observed close")
 
     @property
     def observed_duration(self) -> float | None:
@@ -317,6 +334,22 @@ class NetworkSensorObservation:
             if candidate == canonical_id:
                 return observed
         return canonical_id
+
+    def source_time(self, key: str) -> datetime | None:
+        """Return one frozen source-native row timestamp."""
+
+        for candidate, timestamp in self.source_times:
+            if candidate == key:
+                return timestamp
+        return None
+
+    def source_duration(self, key: str) -> float | None:
+        """Return one frozen source-native row duration in seconds."""
+
+        for candidate, duration in self.source_durations:
+            if candidate == key:
+                return duration
+        return None
 
 
 @dataclass(frozen=True, slots=True)

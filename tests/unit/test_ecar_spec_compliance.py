@@ -64,7 +64,11 @@ from evidenceforge.formats.loader import load_format
 from evidenceforge.formats.validator import validate_event
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
-from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanner,
+    ecar_process_create_source_key,
+    endpoint_event_render_key,
+)
 from evidenceforge.generation.state_manager import StateManager
 from tests.network_factories import network_plan
 
@@ -1422,11 +1426,10 @@ class TestRemoteThreadRendering:
         emitter._render_create_remote_thread(event)
 
         rendered = emitter.emit_event.call_args[0][0]
-        expected_delta = sample_timing_delta(
-            "source.ecar_remote_thread",
-            seed_parts=("WS-01", 4321, 688, 840, ts),
+        assert (
+            rendered["timestamp"]
+            == event.source_timing.finalized_times[endpoint_event_render_key("ecar", host.hostname)]
         )
-        assert rendered["timestamp"] == ts + expected_delta
         assert rendered["target_pid"] == "688"
         assert rendered["tgt_tid"] == "840"
         assert rendered["target_process_uuid"] == "target-process-id"
@@ -1467,11 +1470,9 @@ class TestSessionOutcomeRendering:
             emitter._render_logon(event)
             rendered_rows.append(emitter.emit_event.call_args.args[0])
 
-        timestamp_ms = [
-            json.loads(emitter._render_event(row))["timestamp_ms"] for row in rendered_rows
-        ]
         assert all(row["timestamp"] > ts for row in rendered_rows)
-        assert len(set(timestamp_ms)) == len(timestamp_ms)
+        assert len({row["timestamp"] for row in rendered_rows}) == len(rendered_rows)
+        assert all(row["timestamp"].microsecond % 1_000 != 0 for row in rendered_rows)
 
     def test_session_source_latency_stays_before_same_time_process_create(self, emitter, ts):
         """eCAR session latency should not move a login after its first process."""
@@ -1494,21 +1495,21 @@ class TestSessionOutcomeRendering:
             )
         )
         logon_row = emitter.emit_event.call_args.args[0]
-        emitter._render_process_create(
-            OccurrenceBuilder(
-                timestamp=ts,
-                event_type="process_create",
-                src_host=host,
-                process=ProcessContext(
-                    pid=4321,
-                    parent_pid=4,
-                    image=r"C:\Windows\System32\cmd.exe",
-                    command_line="cmd.exe",
-                    username="alice",
-                    start_time=ts,
-                ),
-            )
+        process_event = OccurrenceBuilder(
+            timestamp=ts,
+            event_type="process_create",
+            src_host=host,
+            process=ProcessContext(
+                pid=4321,
+                parent_pid=4,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe",
+                username="alice",
+                start_time=ts,
+            ),
         )
+        SourceTimingPlanner().plan_event(process_event, "ecar")
+        emitter._render_process_create(process_event)
         process_row = emitter.emit_event.call_args.args[0]
 
         assert logon_row["timestamp"] < process_row["timestamp"]
@@ -2232,7 +2233,11 @@ class TestChronologicalOutput:
                 ts,
             ),
         )
-        assert emitted[0]["timestamp"] == ts + expected_delta
+        rendered = emitted[0]["timestamp"]
+        assert rendered.date() == ts.date()
+        assert ts + timedelta(milliseconds=180) < rendered < ts + timedelta(milliseconds=1800)
+        assert rendered != ts + expected_delta
+        assert rendered.microsecond % 1000 != 0
 
     def test_proxy_child_flows_preserve_ingress_before_origin_order(
         self,
@@ -2598,12 +2603,25 @@ class TestChronologicalOutput:
                 protocol="tcp",
                 initiating_pid=1234,
             ),
-            identity_plan=_identity_plan_from_ids(object_id="flow-1", actor_id="process-1"),
+            identity_plan=EventIdentityPlan(
+                subject=EntityIdentity(object_id="flow-1", kind="service"),
+                actor=_canonical_process_identity(
+                    "ws01",
+                    process.pid,
+                    process.start_time,
+                    image=process.image,
+                    principal="alice",
+                    os_category="windows",
+                ),
+            ),
         )
 
         emitter._render_connection(event)
 
-        assert emitted[0]["timestamp"] > emitter._process_create_timestamp(event, process)
+        process_create_time = event.source_timing.source_times[
+            ecar_process_create_source_key("ws01", process.pid, process.start_time)
+        ]
+        assert emitted[0]["timestamp"] > process_create_time
 
     def test_inbound_flow_drops_late_listener_identity_instead_of_delaying_flow(
         self,
