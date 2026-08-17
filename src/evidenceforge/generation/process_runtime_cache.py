@@ -1089,6 +1089,7 @@ _PROCESS_CACHE_FIELDS = (
 )
 _BOUNDED_TEMPORAL_FIELDS = (
     "_recent_connection_tuples",
+    "_ssh_source_ports",
     "_dns_cache",
     "_bash_history_user_seconds",
     "_top_level_browser_launch_targets",
@@ -1147,7 +1148,7 @@ _BOUNDED_LEGACY_FIELDS = (
     "_linux_shell_last_session_close",
     "_postfix_qmgr_pid_cache",
 )
-_DEFINITE_GROWING_FIELDS = ("_ssh_source_ports",)
+_DEFINITE_GROWING_FIELDS: tuple[str, ...] = ()
 _CONDITIONAL_GROWING_FIELDS: tuple[str, ...] = ()
 REMOVED_DEAD_ACTIVITY_GENERATOR_MUTABLE_FIELDS = (
     "_dns_observation_cache",

@@ -4849,7 +4849,10 @@ class ActivityGenerator:
         self._visible_account_created_at: dict[str, datetime] = {}
         self._visible_account_kerberos_transport_emitted: set[tuple[str, str, str]] = set()
         self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
-        self._ssh_source_ports: set[tuple[str, str, int]] = set()
+        self._ssh_source_ports: BoundedRuntimeCache[
+            tuple[str, str, int],
+            datetime,
+        ] = BoundedRuntimeCache(default_deadline=lambda reserved_at: reserved_at)
         self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
         self._terminated_process_times: dict[tuple[str, int, datetime | None], datetime] = {}
         self._dns_cache: ExpiringIndex[tuple[str, str, str, str], tuple[float, float]] = (
@@ -5111,6 +5114,15 @@ class ActivityGenerator:
             raise StateError(
                 "Failed-logon cadence expiry reached its bounded 4,096-row watermark page; "
                 "the modeled authentication rate exceeds the duration-stability gate"
+            )
+        expired_ssh_source_ports = self._ssh_source_ports.advance_watermark(
+            normalized_cutoff,
+            limit=_NETWORK_RUNTIME_WATERMARK_PAGE,
+        )
+        if len(expired_ssh_source_ports) == _NETWORK_RUNTIME_WATERMARK_PAGE:
+            raise StateError(
+                "SSH source-port expiry reached its bounded 4,096-row watermark page; "
+                "the modeled SSH connection rate exceeds the duration-stability gate"
             )
 
     def _remember_process_connection_hold(
@@ -16030,14 +16042,41 @@ class ActivityGenerator:
         time: datetime | None = None,
     ) -> int:
         """Reserve a per-source/destination SSH source port for unambiguous correlation."""
+        reservation_time = ensure_utc(
+            time or self.state_manager.state.current_time or self._proxy_channel_watermark
+        )
         candidate = source_port or _ephemeral_port(rng, source_os)
         ts_epoch = time.timestamp() if time is not None else None
+        reservation_cutoff = reservation_time - timedelta(
+            seconds=_RECENT_CONNECTION_REUSE_WINDOW_SECONDS
+        )
+        network_runtime = getattr(self, "_network_transaction_runtime", None)
         if ts_epoch is not None:
             self._prune_recent_connection_tuples(ts_epoch)
         for _ in range(100):
             key = (source_ip, target_ip, candidate)
+            reserved_at = self._ssh_source_ports.get(key)
+            if reserved_at is not None and reserved_at < reservation_cutoff:
+                self._ssh_source_ports.pop(key)
+                reserved_at = None
             recent_key = (source_ip, candidate, target_ip, 22, "tcp")
             recent_seen = self._recent_connection_tuples.get(recent_key)
+            if network_runtime is not None:
+                runtime_seen = network_runtime.get_point(
+                    NetworkRuntimePointFamily.RECENT_TUPLE,
+                    recent_key,
+                    None,
+                    at=reservation_time,
+                )
+                if runtime_seen is not None:
+                    if type(runtime_seen) is not float:
+                        raise StateError(
+                            "Network runtime SSH source-port tuple contains a malformed timestamp"
+                        )
+                    recent_seen = max(
+                        recent_seen if recent_seen is not None else float("-inf"),
+                        runtime_seen,
+                    )
             recent_is_active = (
                 ts_epoch is not None
                 and recent_seen is not None
@@ -16045,24 +16084,52 @@ class ActivityGenerator:
             )
             if (
                 source_port is not None
-                and key in self._ssh_source_ports
+                and reserved_at is not None
                 and ts_epoch is not None
                 and recent_seen is not None
                 and abs(ts_epoch - recent_seen) <= 1.0
             ):
                 return candidate
-            if key not in self._ssh_source_ports and not recent_is_active:
-                self._ssh_source_ports.add(key)
+            if reserved_at is None and not recent_is_active:
+                self._ssh_source_ports.set(
+                    key,
+                    reservation_time,
+                    deadline=reservation_time,
+                )
                 if time is not None:
                     self._remember_connection_tuple(
-                        source_ip, candidate, target_ip, 22, "tcp", time
+                        source_ip,
+                        candidate,
+                        target_ip,
+                        22,
+                        "tcp",
+                        reservation_time,
                     )
+                    if network_runtime is not None:
+                        tuple_expiry = min(
+                            network_runtime.window_end,
+                            reservation_time
+                            + timedelta(seconds=_RECENT_CONNECTION_REUSE_WINDOW_SECONDS),
+                        )
+                        for tuple_key in self._connection_tuple_key_variants(
+                            source_ip,
+                            candidate,
+                            target_ip,
+                            22,
+                            "tcp",
+                        ):
+                            network_runtime.set_point(
+                                NetworkRuntimePointFamily.RECENT_TUPLE,
+                                tuple_key,
+                                reservation_time.timestamp(),
+                                expires_at=tuple_expiry,
+                            )
                 return candidate
             candidate = _ephemeral_port(rng, source_os)
-        self._ssh_source_ports.add((source_ip, target_ip, candidate))
-        if time is not None:
-            self._remember_connection_tuple(source_ip, candidate, target_ip, 22, "tcp", time)
-        return candidate
+        raise StateError(
+            "Unable to reserve a unique SSH source port after 100 exact-key attempts for "
+            f"{source_ip} -> {target_ip}:22 inside the 24-hour tuple-reuse window"
+        )
 
     def generate_process_termination(
         self,
