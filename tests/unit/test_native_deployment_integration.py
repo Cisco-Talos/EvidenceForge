@@ -143,7 +143,7 @@ def test_storage_world_content_compiles_once_without_paths_or_payloads() -> None
 
 
 def test_enabled_user_profile_compiles_without_application_persona() -> None:
-    """Runtime files resolve a real OS profile even when no app persona is authored."""
+    """A missing persona compiles the OS profile and catalog-default applications."""
 
     scenario = Scenario.model_validate(yaml.safe_load(_SCENARIO_PATH.read_text(encoding="utf-8")))
     assert scenario.environment.users[0].persona is None
@@ -155,6 +155,17 @@ def test_enabled_user_profile_compiles_without_application_persona() -> None:
     profile = registry.user_profile_for("TEST-01", "test_user", "windows")
     assert profile is not None
     assert profile.profile_root == r"C:\Users\test_user"
+    teams = registry.resolve_binary(
+        "TEST-01",
+        r"C:\Users\test_user\AppData\Local\Microsoft\Teams\current\Teams.exe",
+        "windows",
+        principal="test_user",
+    )
+    assert teams is not None
+    assignments = registry.user_application_assignments_for_product("TEST-01", "teams")
+    assert [(assignment.principal, assignment.persona) for assignment in assignments] == [
+        ("test_user", "default")
+    ]
 
 
 def test_authored_process_actor_profile_compiles_on_exact_storyline_host() -> None:
@@ -713,8 +724,21 @@ def test_compilation_is_order_independent() -> None:
         _system("WS-A", 1, os_build="10.0.22621.1"),
         _system("WS-B", 2, os_build="10.0.26100.1"),
     ]
-    _first_scenario, first = _compile(systems)
-    _second_scenario, second = _compile(list(reversed(systems)))
+    first_scenario = _scenario_with_systems(systems)
+    second_scenario = _scenario_with_systems(list(reversed(systems)))
+    # Reordering the host carrier must not silently move the modeled user; keep
+    # both scenarios semantically identical before comparing registry identity.
+    second_scenario.environment.users[0].primary_system = first_scenario.environment.users[
+        0
+    ].primary_system
+    first = compile_native_deployment_registry(
+        first_scenario,
+        WorldModel(first_scenario, "example.com"),
+    )
+    second = compile_native_deployment_registry(
+        second_scenario,
+        WorldModel(second_scenario, "example.com"),
+    )
 
     for hostname in ("WS-A", "WS-B"):
         first_deployment = first.host_deployment(hostname)

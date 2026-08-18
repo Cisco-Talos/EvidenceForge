@@ -619,7 +619,7 @@ def _users_by_host(world_model: WorldModel) -> dict[str, tuple[User, ...]]:
         key=lambda item: item.user.username.casefold(),
     ):
         user = user_world.user
-        if not user.enabled or not user.persona:
+        if not user.enabled:
             continue
         for system in sorted(
             user_world.activity_systems,
