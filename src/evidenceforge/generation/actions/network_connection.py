@@ -63,6 +63,10 @@ from evidenceforge.events.rdp import (
     RdpTransportPlan,
 )
 from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.actions.network_identity import (
+    _network_request_stable_id,
+    _register_network_request_type,
+)
 from evidenceforge.generation.deferred_session_composition import (
     DeferredSessionApplicationToken,
     DeferredSessionCompositionCoordinator,
@@ -987,33 +991,6 @@ class NetworkConnectionPublicationOutcome(StrEnum):
     COMMITTED_SUPPRESSED = "committed_suppressed"
 
 
-def _context_fingerprint(value: object) -> str:
-    """Return a compact deterministic fingerprint for optional context objects."""
-
-    if value is None:
-        return ""
-    if isinstance(value, list | tuple):
-        return ";".join(_context_fingerprint(item) for item in value)
-    parts = []
-    for name in (
-        "query",
-        "query_type",
-        "signature_id",
-        "signature",
-        "sid",
-        "method",
-        "host",
-        "uri",
-        "fuid",
-        "url",
-        "action",
-        "rule_id",
-    ):
-        if hasattr(value, name):
-            parts.append(f"{name}={getattr(value, name)}")
-    return "|".join(parts) if parts else value.__class__.__name__
-
-
 class _NetworkConnectionIdentityCaptureClaim:
     """Exact private one-shot capability for one empty identity capture."""
 
@@ -1370,29 +1347,10 @@ class NetworkConnectionRequest:
     def stable_id(self) -> str:
         """Return a deterministic intent identifier for durable references."""
 
-        source_hostname = self.source_system.hostname if self.source_system is not None else ""
-        seed = _stable_seed(
-            "action_bundle:network_connection:"
-            f"{self.src_ip}:{self.dst_ip}:{self.time.isoformat()}:{self.dst_port}:"
-            f"{self.proto}:{self.service or ''}:{self.duration or ''}:"
-            f"{self.orig_bytes or ''}:{self.resp_bytes or ''}:{self.src_port or ''}:"
-            f"{self.emit_dns}:{self.pid}:{source_hostname}:{self.conn_state or ''}:"
-            f"{_context_fingerprint(self.dns)}:{_context_fingerprint(self.ssl)}:"
-            f"{_context_fingerprint(self.ids_alerts)}:"
-            f"{_context_fingerprint(self.http)}:{_context_fingerprint(self.file_transfer)}:"
-            f"{_context_fingerprint(self.file_transfers)}:"
-            f"{_context_fingerprint(self.pe)}:{_context_fingerprint(self.ocsp)}:"
-            f"{_context_fingerprint(self.pe_analyses)}:"
-            f"{_context_fingerprint(self.proxy)}:"
-            f"{_context_fingerprint(self.firewall)}:{self.hostname or ''}:"
-            f"{self.proxy_bypass}:{self.process_image or ''}:{self.preserve_dst_ip}:"
-            f"{self.preserve_http_outcome}:{self.suppress_application_side_effects}:"
-            f"{self.suppress_source_pid_inference}:{self.preserve_explicit_payload}:"
-            f"{self.suppress_prereq_dns}:{self.packet_overhead_bytes or ''}:"
-            f"{self.responding_pid}:{self.ssh_attempted_username or ''}:"
-            f"{self.parent_action_group_id or ''}:{self.preserve_start_time}:{self.source}"
-        )
-        return f"network-connection-{seed:016x}"
+        return _network_request_stable_id(self, NetworkConnectionRequest)
+
+
+_register_network_request_type(NetworkConnectionRequest)
 
 
 class NetworkConnectionExecutor(Protocol):
