@@ -28,6 +28,7 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.suspicious_benign import generate_unusual_outbound
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from tests.network_factories import network_plan
 
@@ -545,6 +546,58 @@ class TestHostnameConsistency:
 
         assert len(address_events) == 1
         assert address_events[0].dns.TTLs == [30.0]
+
+    def test_prerequisite_address_cache_waits_for_transport_publication(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """A rejected DNS transport must not poison the client-visible cache."""
+
+        state_manager.set_current_time(timestamp)
+        original_generate_connection = activity_gen.generate_connection
+        attempts = 0
+
+        def reject_first_transports(*args: object, **kwargs: object) -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise StateError("injected DNS transport rejection")
+            if attempts == 2:
+                return ""
+            return original_generate_connection(*args, **kwargs)
+
+        monkeypatch.setattr(activity_gen, "generate_connection", reject_first_transports)
+
+        lookup = {
+            "src_ip": "10.0.1.50",
+            "dst_ip": "93.184.216.34",
+            "time": timestamp,
+            "hostname": "cdn.example.net",
+            "force_address": True,
+        }
+        with pytest.raises(StateError, match="injected DNS transport rejection"):
+            activity_gen._emit_dns_lookup(**lookup)
+
+        assert len(activity_gen._dns_cache) == 0
+        assert mock_emitters["zeek_dns"].emit.call_count == 0
+
+        activity_gen._emit_dns_lookup(**lookup)
+
+        assert attempts == 2
+        assert len(activity_gen._dns_cache) == 0
+        assert mock_emitters["zeek_dns"].emit.call_count == 0
+
+        activity_gen._emit_dns_lookup(**lookup)
+
+        assert attempts >= 3
+        assert len(activity_gen._dns_cache) == 1
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "cdn.example.net"
+            and call.args[0].dns.query_type == "A"
+        ]
+        assert len(address_events) == 1
 
     def test_prerequisite_address_lookup_refreshes_after_visible_ttl(
         self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch

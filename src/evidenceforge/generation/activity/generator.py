@@ -23650,10 +23650,11 @@ class ActivityGenerator:
         # Only address lookups for the requested hostname populate the client
         # DNS cache. PTR/SRV/MX companions should not hide future A/AAAA
         # evidence for high-volume proxy or browser destinations.
+        pending_cache_window: tuple[float, float] | None = None
         if query == hostname and qtype in (1, 28):
             client_ttl = max(1.0, min(ttls) if ttls else float(base_ttl))
             cached_at = dns_time.timestamp()
-            self._dns_cache[cache_key] = (cached_at, cached_at + client_ttl)
+            pending_cache_window = (cached_at, cached_at + client_ttl)
 
         # Build DnsContext and emit connection + dns.log via fan-out
         dns_ctx = DnsContext(
@@ -23676,7 +23677,7 @@ class ActivityGenerator:
             preserve_ttls=True,
             query_process=query_process,
         )
-        self.generate_connection(
+        dns_uid = self.generate_connection(
             src_ip=src_ip,
             dst_ip=dns_server_ip,
             time=dns_time,
@@ -23691,6 +23692,10 @@ class ActivityGenerator:
             parent_action_group_id=request.parent_action_group_id,
             preserve_start_time=request.planned_query_time is not None,
         )
+        if not dns_uid:
+            return
+        if pending_cache_window is not None:
+            self._dns_cache[cache_key] = pending_cache_window
 
         # Address lookups that are prerequisites for TCP still occur in a
         # resolver ecosystem. Add low-volume companion questions so Zeek DNS
