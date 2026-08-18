@@ -33,7 +33,7 @@ from evidenceforge.generation.source_timing import (
     SourceTimingPreparationReceipt,
     active_source_timing_planning_runtime,
 )
-from evidenceforge.generation.timing import TimingRuntime
+from evidenceforge.generation.timing import TimingDistributionError, TimingRuntime
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System
 
@@ -446,31 +446,30 @@ def test_tampered_wrong_owner_and_double_commit_are_rejected() -> None:
             pass
 
 
-def test_stale_and_aba_cache_or_runtime_mutations_reject_before_commit() -> None:
-    """Any intervening cache/audit mutation must invalidate the sealed snapshot."""
+def test_owner_lane_rejects_cache_and_runtime_mutation_before_commit() -> None:
+    """A sealed preparation fences canonical ABA and audit writes through commit."""
 
     cache_planner = _planner("source-timing-stale-cache")
     with cache_planner.prepared_planning() as cache_preparation:
         _plan_batch(cache_planner, _logon_batch())
     cache = cache_planner._ecar_process_create_times
-    cache["temporary-aba-key"] = T0
-    cache.pop("temporary-aba-key")
+    with pytest.raises(StateError, match="active owner claim"):
+        cache["temporary-aba-key"] = T0
     assert cache_planner.census().live_entries == 0
-    with pytest.raises(StateError, match="stale"):
-        with cache_preparation.claimed_commit():
-            pass
+    with cache_preparation.claimed_commit():
+        cache_preparation.commit_no_fail()
 
     runtime_planner = _planner("source-timing-stale-runtime")
     with runtime_planner.prepared_planning() as runtime_preparation:
         _plan_batch(runtime_planner, _logon_batch())
-    runtime_planner.timing_runtime.audit.record_fallback("external-runtime-write")
-    with pytest.raises(Exception, match="stale"):
-        with runtime_preparation.claimed_commit():
-            pass
+    with pytest.raises(TimingDistributionError, match="active owner claim"):
+        runtime_planner.timing_runtime.audit.record_fallback("external-runtime-write")
+    with runtime_preparation.claimed_commit():
+        runtime_preparation.commit_no_fail()
 
 
-def test_preparation_census_is_bounded_and_watermark_waits_for_claim() -> None:
-    """Overlay retention is batch-bounded and watermark cannot cross a held claim."""
+def test_preparation_census_is_bounded_and_watermark_rejects_during_claim() -> None:
+    """Overlay retention is batch-bounded and held claims reject watermark mutation."""
 
     planner = _planner("source-timing-preparation-bounds")
     with planner.prepared_planning() as preparation:
@@ -493,20 +492,29 @@ def test_preparation_census_is_bounded_and_watermark_waits_for_claim() -> None:
 
     started = Event()
     finished = Event()
+    failures: list[BaseException] = []
 
     def advance() -> None:
         started.set()
-        planner.advance_watermark(T0 + timedelta(days=3))
-        finished.set()
+        try:
+            planner.advance_watermark(T0 + timedelta(days=3))
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            finished.set()
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         with preparation.claimed_commit():
             future = executor.submit(advance)
             assert started.wait(timeout=1)
-            assert not finished.wait(timeout=0.05)
+            assert finished.wait(timeout=1)
+            assert len(failures) == 1
+            assert isinstance(failures[0], StateError)
+            assert "active owner claim" in str(failures[0])
             preparation.commit_no_fail()
         future.result(timeout=2)
     assert finished.is_set()
+    assert planner.census().watermark is None
 
 
 def test_production_claim_site_enforces_global_timing_before_authority_lock_order() -> None:

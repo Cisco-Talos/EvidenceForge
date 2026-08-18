@@ -20,8 +20,9 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from threading import RLock
-from typing import Any, TypeAlias
+from threading import RLock, get_ident
+from typing import Any, TypeAlias, cast
+from weakref import ReferenceType, ref
 
 from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder
 from evidenceforge.events.identity import ProcessIdentity
@@ -76,6 +77,7 @@ _SESSION_CLOSURE_TAILS = {
 _SOURCE_TIMING_LIFECYCLE_RETENTION = timedelta(hours=48)
 _SOURCE_TIMING_TRANSPORT_RETENTION = timedelta(minutes=10)
 _SOURCE_TIMING_TICKET_RETENTION = timedelta(seconds=10)
+_DEFAULT_SOURCE_TIMING_PREPARATION_AUTHORITY_CAPACITY = 4_096
 _MAX_UTC_DATETIME = datetime.max.replace(tzinfo=UTC)
 _CACHE_TOMBSTONE = object()
 
@@ -94,9 +96,10 @@ class SourceTimingPlanningRuntime:
         self._preparation = preparation
 
     def _open_runtime(self) -> TimingRuntimePreparation:
-        if self._preparation._state != "open":
+        runtime = self._preparation._runtime_preparation
+        if not self._preparation._owner.is_active_preparation(self._preparation) or runtime is None:
             raise StateError("Source timing planning runtime is no longer open")
-        return self._preparation._runtime_preparation
+        return runtime
 
     @property
     def sampler(self) -> Any:
@@ -470,7 +473,7 @@ class SourceTimingPreparationToken:
     _integrity: str = field(repr=False)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class SourceTimingPreparationReceipt:
     """Authenticated proof that one sealed timing overlay committed exactly once."""
 
@@ -494,6 +497,20 @@ class SourceTimingPreparationCensus:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceTimingPreparationAuthorityCensus:
+    """Constant-time counts for bounded preparation and receipt authorities."""
+
+    retained_preparations: int
+    active_claims: int
+    terminal_preparations: int
+    retained_receipts: int
+    retained_plan_operations: int
+    high_water_preparations: int
+    high_water_receipts: int
+    capacity: int
+
+
+@dataclass(frozen=True, slots=True)
 class _PreparedCacheRecord:
     value: Any
     deadline_seconds: float
@@ -507,10 +524,75 @@ class _PreparedCacheOperation:
     deadline_seconds: float = 0.0
 
 
+@dataclass(frozen=True, slots=True)
+class _SourceTimingCacheCommitPlan:
+    """Owner-private bounded operation-native cache commit plan."""
+
+    target: _SourceTimingCache
+    operations: tuple[_PreparedCacheOperation, ...]
+    lookup_candidate_delta: int
+    version_delta: int
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceTimingRuntimeCommitPlan:
+    """Owner-private delta audit and prebuilt clock state for the primitive tail."""
+
+    preparation: TimingRuntimePreparation
+    audit_target: Any
+    audit_operations: tuple[tuple[str, str, str], ...]
+    clocks_target: Any
+    clock_states: Any
+    discarded_clock_states: Any
+    clock_high_water_mark: int
+    clock_cache_entry_estimated_bytes: int
+    clock_lookup_count: int
+    clock_cache_hit_count: int
+    clock_cache_miss_count: int
+    clock_eviction_count: int
+    clock_mutation_version: int
+
+
+@dataclass(slots=True)
+class _SourceTimingReceiptAuthority:
+    """Owner-side exact-object receipt publication truth."""
+
+    receipt_ref: ReferenceType[SourceTimingPreparationReceipt]
+    committed: bool = False
+
+
+@dataclass(slots=True)
+class _SourceTimingClaimRecord:
+    """Planner-owned exact claim, commit plan, certification, and terminal truth."""
+
+    preparation_id: int
+    preparation_ref: ReferenceType[SourceTimingPreparation]
+    owner: SourceTimingPlanner
+    claim_thread_id: int
+    lane_marker: object
+    base_watermark: datetime | None
+    binding_token: SourceTimingPreparationToken
+    sealed_overlay_digest: str
+    seal_integrity: str
+    commit_state_digest: str
+    expected_receipt: SourceTimingPreparationReceipt
+    receipt_authority: _SourceTimingReceiptAuthority
+    admitted_cache_overlays: tuple[
+        tuple[str, _SourceTimingCache, _PreparedSourceTimingCache],
+        ...,
+    ]
+    admitted_runtime_preparation: TimingRuntimePreparation | None
+    cache_plans: tuple[_SourceTimingCacheCommitPlan, ...]
+    runtime_plan: _SourceTimingRuntimeCommitPlan | None
+    retained_plan_operations: int
+    state: str = "claimed"
+    certified_receipt: SourceTimingPreparationReceipt | None = None
+
+
 class _SourceTimingCache:
     """Versioned lock-owning facade for one bounded planner cache."""
 
-    __slots__ = ("_cache", "_default_deadline", "_lock", "_mutation_version")
+    __slots__ = ("_cache", "_default_deadline", "_lock", "_mutation_version", "_owner")
 
     def __init__(self, *, default_deadline: Any) -> None:
         self._cache: BoundedRuntimeCache[Any, Any] = BoundedRuntimeCache(
@@ -519,6 +601,20 @@ class _SourceTimingCache:
         self._default_deadline = default_deadline
         self._lock = RLock()
         self._mutation_version = 0
+        self._owner: SourceTimingPlanner | None = None
+
+    def _enter_public_mutation(self) -> SourceTimingPlanner | None:
+        """Enter the planner lane before one canonical cache mutation."""
+
+        owner = self._owner
+        if owner is not None:
+            owner._enter_public_mutation_lane()
+        return owner
+
+    @staticmethod
+    def _leave_public_mutation(owner: SourceTimingPlanner | None) -> None:
+        if owner is not None:
+            owner._leave_public_mutation_lane()
 
     def __len__(self) -> int:
         with self._lock:
@@ -546,42 +642,62 @@ class _SourceTimingCache:
             return self._mutation_version
 
     def get(self, key: Any, default: Any = None) -> Any:
-        with self._lock:
-            prior_candidates = self._cache.lookup_candidates_inspected
-            value = self._cache.get(key, default)
-            if self._cache.lookup_candidates_inspected != prior_candidates:
-                self._mutation_version += 1
-            return value
+        owner = self._enter_public_mutation()
+        try:
+            with self._lock:
+                prior_candidates = self._cache.lookup_candidates_inspected
+                value = self._cache.get(key, default)
+                if self._cache.lookup_candidates_inspected != prior_candidates:
+                    self._mutation_version += 1
+                return value
+        finally:
+            self._leave_public_mutation(owner)
 
     def raw_get(self, key: Any, default: Any = None) -> Any:
         with self._lock:
             return self._cache.raw_get(key, default)
 
     def set(self, key: Any, value: Any, *, deadline: datetime | float | int) -> None:
-        with self._lock:
-            self._cache.set(key, value, deadline=deadline)
-            self._mutation_version += 1
+        owner = self._enter_public_mutation()
+        try:
+            with self._lock:
+                self._cache.set(key, value, deadline=deadline)
+                self._mutation_version += 1
+        finally:
+            self._leave_public_mutation(owner)
 
     def redeadline(self, key: Any, *, deadline: datetime | float | int) -> bool:
-        with self._lock:
-            moved = self._cache.redeadline(key, deadline=deadline)
-            if moved:
-                self._mutation_version += 1
-            return moved
+        owner = self._enter_public_mutation()
+        try:
+            with self._lock:
+                moved = self._cache.redeadline(key, deadline=deadline)
+                if moved:
+                    self._mutation_version += 1
+                return moved
+        finally:
+            self._leave_public_mutation(owner)
 
     def pop(self, key: Any, default: Any = None) -> Any:
-        with self._lock:
-            present = self._cache.raw_get(key, _CACHE_TOMBSTONE) is not _CACHE_TOMBSTONE
-            value = self._cache.pop(key, default)
-            if present:
-                self._mutation_version += 1
-            return value
+        owner = self._enter_public_mutation()
+        try:
+            with self._lock:
+                present = self._cache.raw_get(key, _CACHE_TOMBSTONE) is not _CACHE_TOMBSTONE
+                value = self._cache.pop(key, default)
+                if present:
+                    self._mutation_version += 1
+                return value
+        finally:
+            self._leave_public_mutation(owner)
 
     def advance_watermark(self, cutoff: datetime, *, limit: int) -> tuple[tuple[Any, Any], ...]:
-        with self._lock:
-            expired = self._cache.advance_watermark(cutoff, limit=limit)
-            self._mutation_version += 1
-            return expired
+        owner = self._enter_public_mutation()
+        try:
+            with self._lock:
+                expired = self._cache.advance_watermark(cutoff, limit=limit)
+                self._mutation_version += 1
+                return expired
+        finally:
+            self._leave_public_mutation(owner)
 
     def metrics(self, *, estimate_bytes: bool = False) -> Any:
         with self._lock:
@@ -612,7 +728,22 @@ class _SourceTimingCache:
     def _apply_prepared_locked(self, prepared: _PreparedSourceTimingCache) -> None:
         """Apply a prevalidated ordered overlay while ``_lock`` is held."""
 
-        for operation in prepared.operations:
+        self._apply_operations_locked(
+            prepared.operations,
+            lookup_candidate_delta=prepared.lookup_candidate_delta,
+            version_delta=prepared.version_delta,
+        )
+
+    def _apply_operations_locked(
+        self,
+        operations: tuple[_PreparedCacheOperation, ...],
+        *,
+        lookup_candidate_delta: int,
+        version_delta: int,
+    ) -> None:
+        """Apply one prevalidated bounded delta while the claim owns ``_lock``."""
+
+        for operation in operations:
             if operation.kind == "set":
                 self._cache.set(
                     operation.key,
@@ -621,8 +752,8 @@ class _SourceTimingCache:
                 )
             else:
                 self._cache.pop(operation.key)
-        self._cache._lookup_candidates_inspected += prepared.lookup_candidate_delta
-        self._mutation_version += prepared.version_delta
+        self._cache._lookup_candidates_inspected += lookup_candidate_delta
+        self._mutation_version += version_delta
 
 
 class _PreparedSourceTimingCache:
@@ -745,7 +876,12 @@ class SourceTimingPlanner:
         clock_profile_name: str = "complete",
         *,
         timing_runtime: TimingRuntime | None = None,
+        preparation_authority_capacity: int = (
+            _DEFAULT_SOURCE_TIMING_PREPARATION_AUTHORITY_CAPACITY
+        ),
     ) -> None:
+        if type(preparation_authority_capacity) is not int or preparation_authority_capacity < 1:
+            raise ValueError("preparation_authority_capacity must be a positive integer")
         self.clock_profile_name = clock_profile_name or "complete"
         self.timing_runtime = timing_runtime or TimingRuntime.compatibility_default()
         self._ecar_process_create_times = _SourceTimingCache(
@@ -798,8 +934,297 @@ class SourceTimingPlanner:
         )
         self._watermark: datetime | None = None
         self._preparation_lock = RLock()
+        self._preparation_admission_lock = RLock()
+        self._preparation_lane_epoch = 0
+        self._preparation_lane: SourceTimingPreparation | None = None
+        self._preparation_lane_marker: object | None = None
+        self._preparation_authority_lock = RLock()
         self._preparation_secret = secrets.token_bytes(32)
         self._next_preparation_id = 1
+        self._preparation_authority_capacity = preparation_authority_capacity
+        self._preparation_claim_records: dict[int, _SourceTimingClaimRecord] = {}
+        self._committed_preparation_receipts: dict[
+            int,
+            _SourceTimingReceiptAuthority,
+        ] = {}
+        self._preparation_authority_high_water = 0
+        self._preparation_receipt_high_water = 0
+        self._active_preparation_claims = 0
+        self._terminal_preparations = 0
+        self._retained_preparation_plan_operations = 0
+        for _name, cache in self._bounded_indexes():
+            cache._owner = self
+
+    def _require_public_mutation_lane(self) -> None:
+        """Reject canonical planner mutation while one preparation owns the lane."""
+
+        if self._preparation_lane_marker is not None:
+            raise StateError("Source timing canonical mutation is blocked by an active owner claim")
+
+    def _enter_public_mutation_lane(self) -> None:
+        """Admit one mutation or reject if it overlaps any owner claim epoch."""
+
+        observed_epoch = self._preparation_lane_epoch
+        if self._preparation_lane_marker is not None:
+            self._require_public_mutation_lane()
+        with self._preparation_admission_lock:
+            if (
+                self._preparation_lane_marker is not None
+                or self._preparation_lane_epoch != observed_epoch
+            ):
+                self._require_public_mutation_lane()
+                raise StateError("Source timing canonical mutation overlapped an owner claim")
+            admitted_epoch = self._preparation_lane_epoch
+        self._preparation_lock.acquire()
+        try:
+            with self._preparation_admission_lock:
+                if (
+                    self._preparation_lane_marker is not None
+                    or self._preparation_lane_epoch != admitted_epoch
+                ):
+                    self._require_public_mutation_lane()
+                    raise StateError("Source timing canonical mutation overlapped an owner claim")
+        except BaseException:
+            self._preparation_lock.release()
+            raise
+
+    def _leave_public_mutation_lane(self) -> None:
+        """Release one admitted canonical planner mutation."""
+
+        self._preparation_lock.release()
+
+    def _require_public_planning_entry(self) -> None:
+        """Reject canonical planning while allowing the isolated overlay clone."""
+
+        if self._preparation_lane is not None:
+            self._require_public_mutation_lane()
+
+    def _install_preparation_lane(self, marker: object) -> None:
+        """Install one planner/runtime lane before constructing its snapshot."""
+
+        with self._preparation_admission_lock:
+            if self._preparation_lane_marker is not None:
+                raise StateError("Source timing planner already has an active owner claim")
+            try:
+                self.timing_runtime._install_owner_lane(marker)
+            except TimingDistributionError as error:
+                raise StateError(str(error)) from error
+            self._preparation_lane_epoch += 1
+            self._preparation_lane_marker = marker
+
+    def _bind_preparation_lane(
+        self,
+        preparation: SourceTimingPreparation,
+        marker: object,
+    ) -> None:
+        """Bind the installed marker to its exact public preparation carrier."""
+
+        if self._preparation_lane_marker is not marker or self._preparation_lane is not None:
+            raise StateError("Source timing preparation owner lane changed before binding")
+        self._preparation_lane = preparation
+
+    def _release_preparation_lane(
+        self,
+        preparation: SourceTimingPreparation,
+        marker: object,
+    ) -> None:
+        """Release only the exact preparation/runtime owner lane."""
+
+        with self._preparation_lock:
+            with self._preparation_admission_lock:
+                if (
+                    self._preparation_lane is not preparation
+                    or self._preparation_lane_marker is not marker
+                ):
+                    raise StateError("Source timing preparation owner lane is not active")
+                self._preparation_lane = None
+                self._preparation_lane_marker = None
+                try:
+                    self.timing_runtime._release_owner_lane(marker)
+                except TimingDistributionError as error:
+                    self._preparation_lane = preparation
+                    self._preparation_lane_marker = marker
+                    raise StateError(str(error)) from error
+                self._preparation_lane_epoch += 1
+
+    def _install_preparation_claim_record(
+        self,
+        preparation: SourceTimingPreparation,
+        record: _SourceTimingClaimRecord,
+    ) -> None:
+        """Install one exact weak carrier locator while the preparation lock is held."""
+
+        preparation_id = id(preparation)
+        with self._preparation_authority_lock:
+            if len(self._preparation_claim_records) >= self._preparation_authority_capacity:
+                raise StateError("Source timing preparation authority capacity is exhausted")
+            if preparation_id in self._preparation_claim_records:
+                raise StateError("Source timing preparation already owns an active claim record")
+            self._preparation_claim_records[preparation_id] = record
+            self._active_preparation_claims += 1
+            self._retained_preparation_plan_operations += record.retained_plan_operations
+            self._preparation_authority_high_water = max(
+                self._preparation_authority_high_water,
+                len(self._preparation_claim_records),
+            )
+
+    def _active_preparation_claim_record(
+        self,
+        preparation: object,
+    ) -> _SourceTimingClaimRecord | None:
+        """Resolve one exact planner-owned carrier record without trusting carrier fields."""
+
+        if type(preparation) is not SourceTimingPreparation:
+            return None
+        with self._preparation_authority_lock:
+            record = self._preparation_claim_records.get(id(preparation))
+            if record is None or record.preparation_ref() is not preparation:
+                return None
+            return record
+
+    def _claim_record_matches_current_state(
+        self,
+        record: _SourceTimingClaimRecord,
+    ) -> bool:
+        """Match one claim to the exact canonical primitives it will replace."""
+
+        if (
+            record.owner is not self
+            or record.claim_thread_id != get_ident()
+            or self._preparation_lane_marker is not record.lane_marker
+            or self._preparation_lane is not record.preparation_ref()
+            or self._watermark != record.base_watermark
+        ):
+            return False
+        if any(
+            cache._mutation_version != prepared.base_version
+            for _name, cache, prepared in record.admitted_cache_overlays
+        ):
+            return False
+        runtime_preparation = record.admitted_runtime_preparation
+        if runtime_preparation is None:
+            return False
+        runtime_base = runtime_preparation._base
+        return bool(
+            runtime_base.audit._mutation_version == runtime_preparation.audit.base_version
+            and runtime_base.clocks._mutation_version == runtime_preparation.clocks.base_version
+        )
+
+    def _discard_preparation_claim_record(
+        self,
+        preparation: SourceTimingPreparation,
+    ) -> None:
+        """Discard only the exact active record for ``preparation``."""
+
+        preparation_id = id(preparation)
+        with self._preparation_authority_lock:
+            record = self._preparation_claim_records.get(preparation_id)
+            if record is not None and record.preparation_ref() is preparation:
+                self._preparation_claim_records.pop(preparation_id, None)
+                self._remove_preparation_record_counts_locked(record)
+
+    def _remove_preparation_record_counts_locked(
+        self,
+        record: _SourceTimingClaimRecord,
+    ) -> None:
+        """Remove one exact active or terminal record from constant-time counts."""
+
+        if record.state in {"claimed", "certified"}:
+            self._active_preparation_claims -= 1
+        elif record.state == "committed":
+            self._terminal_preparations -= 1
+        self._retained_preparation_plan_operations -= record.retained_plan_operations
+
+    def _terminalize_preparation_record_no_fail(
+        self,
+        record: _SourceTimingClaimRecord,
+    ) -> None:
+        """Publish one already-certified terminal record with scalar-only writes."""
+
+        with self._preparation_authority_lock:
+            self._active_preparation_claims -= 1
+            self._terminal_preparations += 1
+            self._retained_preparation_plan_operations -= record.retained_plan_operations
+            record.receipt_authority.committed = True
+            record.state = "committed"
+            record.retained_plan_operations = 0
+
+    def _preparation_carrier_collected(
+        self,
+        preparation_id: int,
+        carrier_ref: ReferenceType[SourceTimingPreparation],
+    ) -> None:
+        """Prune one dead preparation locator without an untrusted carrier callback."""
+
+        with self._preparation_authority_lock:
+            record = self._preparation_claim_records.get(preparation_id)
+            if record is not None and record.preparation_ref is carrier_ref:
+                self._preparation_claim_records.pop(preparation_id, None)
+                self._remove_preparation_record_counts_locked(record)
+
+    def _retain_expected_preparation_receipt(
+        self,
+        receipt: SourceTimingPreparationReceipt,
+    ) -> _SourceTimingReceiptAuthority:
+        """Preallocate exact receipt authority before any canonical mutation."""
+
+        receipt_id = id(receipt)
+        owner_ref = ref(self)
+
+        def remove_collected(
+            receipt_ref: ReferenceType[SourceTimingPreparationReceipt],
+        ) -> None:
+            owner = owner_ref()
+            if owner is None:
+                return
+            with owner._preparation_authority_lock:
+                authority = owner._committed_preparation_receipts.get(receipt_id)
+                if authority is not None and authority.receipt_ref is receipt_ref:
+                    owner._committed_preparation_receipts.pop(receipt_id, None)
+
+        receipt_ref = ref(receipt, remove_collected)
+        authority = _SourceTimingReceiptAuthority(receipt_ref)
+        with self._preparation_authority_lock:
+            if len(self._committed_preparation_receipts) >= self._preparation_authority_capacity:
+                raise StateError("Source timing preparation receipt capacity is exhausted")
+            if receipt_id in self._committed_preparation_receipts:
+                raise StateError("Source timing receipt identity is already retained")
+            self._committed_preparation_receipts[receipt_id] = authority
+            self._preparation_receipt_high_water = max(
+                self._preparation_receipt_high_water,
+                len(self._committed_preparation_receipts),
+            )
+        return authority
+
+    def _discard_expected_preparation_receipt(
+        self,
+        receipt: SourceTimingPreparationReceipt,
+    ) -> None:
+        """Discard one unpublished exact receipt authority after claim abort."""
+
+        with self._preparation_authority_lock:
+            authority = self._committed_preparation_receipts.get(id(receipt))
+            if (
+                authority is not None
+                and not authority.committed
+                and authority.receipt_ref() is receipt
+            ):
+                self._committed_preparation_receipts.pop(id(receipt), None)
+
+    def preparation_authority_census(self) -> SourceTimingPreparationAuthorityCensus:
+        """Return exact bounded preparation and terminal-receipt counts."""
+
+        with self._preparation_authority_lock:
+            return SourceTimingPreparationAuthorityCensus(
+                retained_preparations=len(self._preparation_claim_records),
+                active_claims=self._active_preparation_claims,
+                terminal_preparations=self._terminal_preparations,
+                retained_receipts=len(self._committed_preparation_receipts),
+                retained_plan_operations=self._retained_preparation_plan_operations,
+                high_water_preparations=self._preparation_authority_high_water,
+                high_water_receipts=self._preparation_receipt_high_water,
+                capacity=self._preparation_authority_capacity,
+            )
 
     def _bounded_indexes(self) -> tuple[tuple[str, _SourceTimingCache], ...]:
         """Return the fixed bounded cross-event index inventory."""
@@ -955,10 +1380,8 @@ class SourceTimingPlanner:
         """Advance logical expiry and reclaim one bounded page from every index."""
 
         canonical_cutoff = ensure_utc(cutoff)
-        active = _ACTIVE_SOURCE_TIMING_PREPARATION.get()
-        if active is not None and active.owner is self:
-            raise StateError("Source timing watermark cannot advance inside a preparation")
-        with self._preparation_lock:
+        self._enter_public_mutation_lane()
+        try:
             if self._watermark is not None and canonical_cutoff < self._watermark:
                 raise ValueError("Source timing watermark cannot move backward")
             self._watermark = canonical_cutoff
@@ -966,6 +1389,8 @@ class SourceTimingPlanner:
                 len(cache.advance_watermark(canonical_cutoff, limit=page_limit))
                 for _name, cache in self._bounded_indexes()
             )
+        finally:
+            self._leave_public_mutation_lane()
 
     def census(self, *, estimate_bytes: bool = False) -> SourceTimingPlannerCensus:
         """Return constant-time bounded-index and shared-runtime diagnostics."""
@@ -1037,57 +1462,139 @@ class SourceTimingPlanner:
         """Stage a related source-timing family without canonical mutation."""
 
         active = _ACTIVE_SOURCE_TIMING_PREPARATION.get()
-        if active is not None and active.owner is self:
+        if type(active) is SourceTimingPreparation and active._owner is self:
             raise StateError("Nested source timing preparations are not supported")
         with self._preparation_lock:
+            marker = object()
+            self._install_preparation_lane(marker)
             preparation_id = self._next_preparation_id
             self._next_preparation_id += 1
-            preparation = SourceTimingPreparation(self, preparation_id=preparation_id)
+            try:
+                preparation = SourceTimingPreparation(
+                    self,
+                    preparation_id=preparation_id,
+                    lane_marker=marker,
+                )
+                self._bind_preparation_lane(preparation, marker)
+            except BaseException:
+                with self._preparation_admission_lock:
+                    self._preparation_lane = None
+                    self._preparation_lane_marker = None
+                    self.timing_runtime._release_owner_lane(marker)
+                    self._preparation_lane_epoch += 1
+                raise
         context_token: Token[Any] = _ACTIVE_SOURCE_TIMING_PREPARATION.set(preparation)
         try:
             yield preparation
-        except BaseException:
-            preparation.cancel()
-            raise
-        else:
             preparation.seal()
+        except BaseException:
+            if not preparation.committed:
+                preparation.cancel()
+            raise
         finally:
             _ACTIVE_SOURCE_TIMING_PREPARATION.reset(context_token)
 
     def authenticates_binding_token(self, token: object) -> bool:
         """Return whether ``token`` belongs to this exact planner instance."""
 
-        if not isinstance(token, SourceTimingPreparationToken):
+        if type(token) is not SourceTimingPreparationToken:
             return False
-        expected = self._preparation_token_integrity(
-            token.preparation_id,
-            token.base_state_digest,
-        )
-        return hmac.compare_digest(token._integrity, expected)
+        try:
+            if (
+                type(token.preparation_id) is not int
+                or type(token.base_state_digest) is not str
+                or type(token._integrity) is not str
+            ):
+                return False
+            expected = self._preparation_token_integrity(
+                token.preparation_id,
+                token.base_state_digest,
+            )
+            return hmac.compare_digest(token._integrity, expected)
+        except BaseException:
+            return False
 
     def is_active_preparation(self, preparation: object) -> bool:
         """Return whether ``preparation`` owns the current planning context."""
 
         return bool(
-            isinstance(preparation, SourceTimingPreparation)
-            and preparation.owner is self
+            type(preparation) is SourceTimingPreparation
+            and preparation._owner is self
+            and preparation._planning_thread_id == get_ident()
             and preparation._state == "open"
+            and preparation._lane_active
+            and self._preparation_lane is preparation
+            and self._preparation_lane_marker is preparation._lane_marker
             and _ACTIVE_SOURCE_TIMING_PREPARATION.get() is preparation
         )
 
     def authenticates_preparation(self, preparation: object) -> bool:
         """Authenticate one sealed or committed preparation and its overlay digest."""
 
-        if not isinstance(preparation, SourceTimingPreparation):
+        if type(preparation) is not SourceTimingPreparation:
             return False
-        return preparation._authenticates(self)
+        try:
+            return preparation._authenticates(self)
+        except BaseException:
+            return False
+
+    def authenticates_expected_preparation_receipt(
+        self,
+        receipt: object,
+        *,
+        preparation: object,
+    ) -> bool:
+        """Authenticate one exact precommit receipt against its active claim record."""
+
+        if (
+            type(receipt) is not SourceTimingPreparationReceipt
+            or type(preparation) is not SourceTimingPreparation
+        ):
+            return False
+        try:
+            record = self._active_preparation_claim_record(preparation)
+            if (
+                record is None
+                or record.state not in {"claimed", "certified"}
+                or record.expected_receipt is not receipt
+                or not self._claim_record_matches_current_state(record)
+            ):
+                return False
+            return self._preparation_receipt_shape_authenticates(receipt)
+        except BaseException:
+            return False
 
     def authenticates_preparation_receipt(self, receipt: object) -> bool:
         """Authenticate a receipt that can exist only after one committed overlay."""
 
-        if not isinstance(receipt, SourceTimingPreparationReceipt):
+        if type(receipt) is not SourceTimingPreparationReceipt:
             return False
-        if not self.authenticates_binding_token(receipt.binding_token):
+        try:
+            with self._preparation_authority_lock:
+                authority = self._committed_preparation_receipts.get(id(receipt))
+                if (
+                    authority is None
+                    or not authority.committed
+                    or authority.receipt_ref() is not receipt
+                ):
+                    return False
+            return self._preparation_receipt_shape_authenticates(receipt)
+        except BaseException:
+            return False
+
+    def _preparation_receipt_shape_authenticates(
+        self,
+        receipt: SourceTimingPreparationReceipt,
+    ) -> bool:
+        """Authenticate exact primitive receipt fields without terminal-state inference."""
+
+        if (
+            type(receipt.binding_token) is not SourceTimingPreparationToken
+            or type(receipt.overlay_digest) is not str
+            or type(receipt.committed_state_digest) is not str
+            or type(receipt._integrity) is not str
+            or not self.authenticates_binding_token(receipt.binding_token)
+        ):
             return False
         expected = self._preparation_receipt_integrity(
             receipt.binding_token,
@@ -1187,7 +1694,7 @@ class SourceTimingPlanner:
         """Return a source projection while retaining immutable canonical time."""
 
         active = _ACTIVE_SOURCE_TIMING_PREPARATION.get()
-        if active is not None and active.owner is self:
+        if type(active) is SourceTimingPreparation and active._owner is self:
             return active.plan_event(
                 event,
                 format_name,
@@ -1197,6 +1704,7 @@ class SourceTimingPlanner:
                 projection_role=projection_role,
                 output_end_time=output_end_time,
             )
+        self._require_public_planning_entry()
 
         if observation_delay < timedelta(0):
             raise ValueError("observation_delay must be non-negative")
@@ -4455,7 +4963,7 @@ class SourceTimingPlanner:
         preserving causality is more important than preserving a sampled delay.
         """
         active = _ACTIVE_SOURCE_TIMING_PREPARATION.get()
-        if isinstance(active, SourceTimingPreparation) and active.owner is self:
+        if type(active) is SourceTimingPreparation and active._owner is self:
             return active.source_time(
                 event,
                 source_key,
@@ -4464,6 +4972,7 @@ class SourceTimingPlanner:
                 not_after=not_after,
                 within=within,
             )
+        self._require_public_planning_entry()
         plan = self._ensure_plan(event)
         effective_seed = seed_parts or self._event_seed_parts(event)
         cache_key = self._cache_key(source_key, effective_seed)
@@ -5102,14 +5611,20 @@ class SourceTimingPreparation:
     """Authenticated copy-on-write planner and runtime transaction."""
 
     __slots__ = (
+        "__weakref__",
         "_binding_token",
         "_cache_overlays",
         "_claim_thread_id",
         "_commit_state_digest",
         "_committed_receipt",
+        "_composite_certified_receipt",
         "_context_closed",
+        "_expected_receipt",
+        "_lane_active",
+        "_lane_marker",
         "_overlay_planner",
         "_owner",
+        "_planning_thread_id",
         "_planning_runtime",
         "_runtime_preparation",
         "_seal_integrity",
@@ -5118,10 +5633,22 @@ class SourceTimingPreparation:
         "_watermark",
     )
 
-    def __init__(self, owner: SourceTimingPlanner, *, preparation_id: int) -> None:
+    def __init__(
+        self,
+        owner: SourceTimingPlanner,
+        *,
+        preparation_id: int,
+        lane_marker: object,
+    ) -> None:
         self._owner = owner
+        self._planning_thread_id = get_ident()
+        self._lane_marker = lane_marker
+        self._lane_active = True
         self._watermark = owner._watermark
-        self._runtime_preparation: TimingRuntimePreparation = owner.timing_runtime.prepared()
+        self._runtime_preparation: TimingRuntimePreparation | None = (
+            owner.timing_runtime._prepared_for_owner(lane_marker)
+        )
+        runtime_preparation = self._runtime_preparation
         self._planning_runtime = SourceTimingPlanningRuntime(self)
         cache_overlays: list[tuple[str, _SourceTimingCache, _PreparedSourceTimingCache]] = []
         cache_by_identity: dict[int, _PreparedSourceTimingCache] = {}
@@ -5133,7 +5660,7 @@ class SourceTimingPreparation:
 
         overlay_planner = object.__new__(SourceTimingPlanner)
         overlay_planner.__dict__ = owner.__dict__.copy()
-        overlay_planner.timing_runtime = self._runtime_preparation
+        overlay_planner.timing_runtime = runtime_preparation
         for attribute, value in tuple(overlay_planner.__dict__.items()):
             prepared_cache = cache_by_identity.get(id(value))
             if prepared_cache is not None:
@@ -5152,8 +5679,11 @@ class SourceTimingPreparation:
         self._sealed_overlay_digest = ""
         self._seal_integrity = ""
         self._commit_state_digest = ""
+        self._expected_receipt: SourceTimingPreparationReceipt | None = None
         self._committed_receipt: SourceTimingPreparationReceipt | None = None
+        self._composite_certified_receipt: SourceTimingPreparationReceipt | None = None
         self._claim_thread_id: int | None = None
+        runtime_preparation._source_timing_owner = self
 
     @property
     def owner(self) -> SourceTimingPlanner:
@@ -5165,7 +5695,7 @@ class SourceTimingPreparation:
     def planning_runtime(self) -> SourceTimingPlanningRuntime:
         """Return a non-owning view of the open staged timing runtime."""
 
-        if self._state != "open":
+        if not self._owner.is_active_preparation(self):
             raise StateError("Source timing preparation is not open for planning")
         return self._planning_runtime
 
@@ -5179,7 +5709,11 @@ class SourceTimingPreparation:
     def committed(self) -> bool:
         """Return whether the staged timing state committed once."""
 
-        return self._state == "committed"
+        owner = self._owner
+        if type(owner) is not SourceTimingPlanner:
+            return False
+        record = owner._active_preparation_claim_record(self)
+        return record is not None and record.state == "committed"
 
     @property
     def sealed(self) -> bool:
@@ -5191,7 +5725,25 @@ class SourceTimingPreparation:
     def receipt(self) -> SourceTimingPreparationReceipt | None:
         """Return the authenticated commit receipt after successful publication."""
 
-        return self._committed_receipt
+        owner = self._owner
+        if type(owner) is not SourceTimingPlanner:
+            return None
+        record = owner._active_preparation_claim_record(self)
+        if record is None or record.state != "committed":
+            return None
+        return record.expected_receipt
+
+    @property
+    def expected_receipt(self) -> SourceTimingPreparationReceipt:
+        """Return the exact immutable receipt sealed by the active claim."""
+
+        owner = self._owner
+        if type(owner) is not SourceTimingPlanner:
+            raise StateError("Source timing preparation has no active expected receipt")
+        record = owner._active_preparation_claim_record(self)
+        if record is None or record.state not in {"claimed", "certified", "committed"}:
+            raise StateError("Source timing preparation has no active expected receipt")
+        return record.expected_receipt
 
     @property
     def staged_cache_operations(self) -> int:
@@ -5203,7 +5755,8 @@ class SourceTimingPreparation:
     def staged_audit_operations(self) -> int:
         """Return staged audit mutations."""
 
-        return len(self._runtime_preparation.audit.operations)
+        runtime_preparation = self._runtime_preparation
+        return 0 if runtime_preparation is None else len(runtime_preparation.audit.operations)
 
     @property
     def overlay_digest(self) -> str:
@@ -5214,7 +5767,10 @@ class SourceTimingPreparation:
     def census(self) -> SourceTimingPreparationCensus:
         """Return constant-time staged retention and clock-capacity diagnostics."""
 
-        clock_census = self._runtime_preparation.clocks.census()
+        runtime_preparation = self._runtime_preparation
+        clock_census = (
+            runtime_preparation.clocks.census() if runtime_preparation is not None else None
+        )
         return SourceTimingPreparationCensus(
             state=self._state,
             cache_family_count=len(self._cache_overlays),
@@ -5223,8 +5779,8 @@ class SourceTimingPreparation:
             ),
             staged_cache_operations=self.staged_cache_operations,
             staged_audit_operations=self.staged_audit_operations,
-            clock_live_entries=clock_census.live_entries,
-            clock_capacity=clock_census.capacity,
+            clock_live_entries=clock_census.live_entries if clock_census is not None else 0,
+            clock_capacity=clock_census.capacity if clock_census is not None else 0,
         )
 
     def plan_event(
@@ -5240,7 +5796,7 @@ class SourceTimingPreparation:
     ) -> TimingOccurrence:
         """Plan one event against canonical plus staged timing state."""
 
-        if self._state != "open":
+        if not self._owner.is_active_preparation(self):
             raise StateError("Source timing preparation is sealed and cannot stage more events")
         return self._overlay_planner.plan_event(
             event,
@@ -5263,7 +5819,7 @@ class SourceTimingPreparation:
     ) -> datetime:
         """Sample one direct source relationship against the staged runtime."""
 
-        if self._state != "open":
+        if not self._owner.is_active_preparation(self):
             raise StateError("Source timing preparation is sealed and cannot stage more events")
         return self._overlay_planner.source_time(
             event,
@@ -5274,9 +5830,22 @@ class SourceTimingPreparation:
             within=within,
         )
 
+    def record_admitted_source_event(
+        self,
+        event: TimingOccurrence,
+        format_name: str,
+    ) -> None:
+        """Stage one admitted-source index update in this preparation's overlay."""
+
+        if not self._owner.is_active_preparation(self):
+            raise StateError("Source timing preparation is sealed and cannot stage admitted events")
+        self._overlay_planner.record_admitted_source_event(event, format_name)
+
     def seal(self) -> None:
         """Authenticate the final overlay while leaving canonical state untouched."""
 
+        if self._planning_thread_id != get_ident():
+            raise StateError("Source timing preparation must seal on its planning thread")
         if self._state == "sealed":
             return
         if self._state != "open":
@@ -5289,98 +5858,409 @@ class SourceTimingPreparation:
         self._state = "sealed"
         self._context_closed = True
 
+    def _freeze_claim_record(
+        self,
+        *,
+        owner: SourceTimingPlanner,
+        claim_thread_id: int,
+        binding_token: SourceTimingPreparationToken,
+        cache_overlays: tuple[tuple[str, _SourceTimingCache, _PreparedSourceTimingCache], ...],
+        runtime_preparation: TimingRuntimePreparation,
+        sealed_overlay_digest: str,
+        seal_integrity: str,
+        commit_state_digest: str,
+        expected_receipt: SourceTimingPreparationReceipt,
+    ) -> _SourceTimingClaimRecord:
+        """Freeze only staged deltas and prebuilt clock state before yielding."""
+
+        cache_plans: list[_SourceTimingCacheCommitPlan] = []
+        for _name, cache, prepared in cache_overlays:
+            operations = tuple(
+                _PreparedCacheOperation(
+                    kind=operation.kind,
+                    key=operation.key,
+                    value=operation.value,
+                    deadline_seconds=operation.deadline_seconds,
+                )
+                for operation in prepared.operations
+            )
+            cache_plans.append(
+                _SourceTimingCacheCommitPlan(
+                    target=cache,
+                    operations=operations,
+                    lookup_candidate_delta=prepared.lookup_candidate_delta,
+                    version_delta=prepared.version_delta,
+                )
+            )
+
+        runtime_base = runtime_preparation._base
+        audit_target = runtime_base.audit
+        audit_operations = tuple(
+            tuple(operation) for operation in runtime_preparation.audit.operations
+        )
+        clocks_target = runtime_base.clocks
+        prepared_clocks = runtime_preparation.clocks
+        runtime_plan = _SourceTimingRuntimeCommitPlan(
+            preparation=runtime_preparation,
+            audit_target=audit_target,
+            audit_operations=audit_operations,
+            clocks_target=clocks_target,
+            clock_states=prepared_clocks._states,
+            discarded_clock_states=prepared_clocks._states.__class__(),
+            clock_high_water_mark=prepared_clocks._high_water_mark,
+            clock_cache_entry_estimated_bytes=(prepared_clocks._cache_entry_estimated_bytes),
+            clock_lookup_count=prepared_clocks._lookup_count,
+            clock_cache_hit_count=prepared_clocks._cache_hit_count,
+            clock_cache_miss_count=prepared_clocks._cache_miss_count,
+            clock_eviction_count=prepared_clocks._eviction_count,
+            clock_mutation_version=(
+                clocks_target._mutation_version + prepared_clocks._version_delta
+            ),
+        )
+        receipt_authority = owner._retain_expected_preparation_receipt(expected_receipt)
+        preparation_id = id(self)
+        owner_ref = ref(owner)
+
+        def remove_collected(
+            preparation_ref: ReferenceType[SourceTimingPreparation],
+        ) -> None:
+            canonical_owner = owner_ref()
+            if canonical_owner is not None:
+                canonical_owner._preparation_carrier_collected(
+                    preparation_id,
+                    preparation_ref,
+                )
+
+        return _SourceTimingClaimRecord(
+            preparation_id=preparation_id,
+            preparation_ref=ref(self, remove_collected),
+            owner=owner,
+            claim_thread_id=claim_thread_id,
+            lane_marker=self._lane_marker,
+            base_watermark=self._watermark,
+            binding_token=binding_token,
+            sealed_overlay_digest=sealed_overlay_digest,
+            seal_integrity=seal_integrity,
+            commit_state_digest=commit_state_digest,
+            expected_receipt=expected_receipt,
+            receipt_authority=receipt_authority,
+            admitted_cache_overlays=cache_overlays,
+            admitted_runtime_preparation=runtime_preparation,
+            cache_plans=tuple(cache_plans),
+            runtime_plan=runtime_plan,
+            retained_plan_operations=(
+                sum(len(plan.operations) for plan in cache_plans)
+                + len(audit_operations)
+                + len(prepared_clocks._operations)
+            ),
+        )
+
+    def _release_owner_lane(self) -> None:
+        """Release this exact planner/runtime lane once cleanup is complete."""
+
+        if not self._lane_active:
+            return
+        self._owner._release_preparation_lane(self, self._lane_marker)
+        self._lane_active = False
+
+    def _discard_staged_payload(self) -> None:
+        """Discard bulky staged state once it can no longer be published."""
+
+        for _name, _cache, prepared in self._cache_overlays:
+            prepared._operations.clear()
+            prepared._overlay.clear()
+        runtime_preparation = self._runtime_preparation
+        if runtime_preparation is not None:
+            runtime_preparation._source_timing_owner = None
+            runtime_preparation.audit._operations.clear()
+            runtime_preparation.clocks._states.clear()
+            runtime_preparation.clocks._operations.clear()
+            runtime_preparation.clocks._cache_entry_estimated_bytes = 0
+        self._cache_overlays = ()
+        self._runtime_preparation = None
+        self._overlay_planner = None
+        self._planning_runtime = None
+
     def cancel(self) -> None:
         """Discard an uncommitted overlay with exact zero canonical residue."""
 
+        owner = self._owner
+        if (
+            type(owner) is SourceTimingPlanner
+            and owner._active_preparation_claim_record(self) is not None
+        ):
+            raise StateError("Claimed source timing preparation cannot cancel directly")
         if self._state == "cancelled":
             return
         if self._state == "committed":
             raise StateError("Committed source timing preparation cannot cancel")
-        if self._state == "claimed":
-            raise StateError("Claimed source timing preparation cannot cancel directly")
-        self._runtime_preparation.cancel()
+        if self._planning_thread_id != get_ident():
+            raise StateError("Source timing preparation must cancel on its planning thread")
+        if (
+            type(owner) is not SourceTimingPlanner
+            or not self._lane_active
+            or owner._preparation_lane is not self
+            or owner._preparation_lane_marker is not self._lane_marker
+        ):
+            raise StateError("Source timing preparation is not the exact active owner")
+        runtime_preparation = self._runtime_preparation
+        if runtime_preparation is not None:
+            runtime_preparation.cancel()
+        self._discard_staged_payload()
+        self._expected_receipt = None
+        self._composite_certified_receipt = None
         self._state = "cancelled"
         self._context_closed = True
+        self._release_owner_lane()
 
     @contextmanager
     def claimed_commit(self) -> Iterator[SourceTimingPreparation]:
         """Claim timing locks before State/Lifecycle and expose a no-fail callback."""
 
+        owner = self._owner
+        if type(owner) is not SourceTimingPlanner:
+            raise StateError("Source timing preparation owner is malformed")
         if self._state != "sealed":
             raise StateError("Source timing preparation must be sealed before claim")
-        if not self._authenticates(self._owner):
+        if self._planning_thread_id != get_ident():
+            raise StateError("Source timing preparation must claim on its planning thread")
+        if not self._authenticates(owner):
             raise StateError("Source timing preparation integrity check failed")
 
-        self._owner._preparation_lock.acquire()
-        acquired_caches: list[_SourceTimingCache] = []
+        preparation_lock = owner._preparation_lock
+        watermark = self._watermark
+        cache_overlays = self._cache_overlays
+        runtime_preparation = self._runtime_preparation
+        if (
+            runtime_preparation is None
+            or not self._lane_active
+            or owner._preparation_lane is not self
+            or owner._preparation_lane_marker is not self._lane_marker
+        ):
+            raise StateError("Source timing preparation owner lane is not active")
+        binding_token = self._binding_token
+        sealed_overlay_digest = self._sealed_overlay_digest
+        seal_integrity = self._seal_integrity
+        preparation_lock.acquire()
+        acquired_cache_locks: list[RLock] = []
+        runtime_claimed = False
+        runtime_audit_lock = runtime_preparation._base.audit._lock
+        runtime_clock_lock = runtime_preparation._base.clocks._lock
+        expected_receipt: SourceTimingPreparationReceipt | None = None
+        record: _SourceTimingClaimRecord | None = None
         try:
-            if self._owner._watermark != self._watermark:
+            if owner._watermark != watermark:
                 raise StateError("Source timing preparation is stale after watermark advance")
-            for _name, cache, prepared in self._cache_overlays:
-                cache._lock.acquire()
-                acquired_caches.append(cache)
+            for _name, cache, prepared in cache_overlays:
+                cache_lock = cache._lock
+                cache_lock.acquire()
+                acquired_cache_locks.append(cache_lock)
                 if cache._mutation_version != prepared.base_version:
                     raise StateError("Source timing preparation is stale")
-            self._runtime_preparation._acquire_claim()
+            runtime_preparation._acquire_claim()
+            runtime_claimed = True
             self._state = "claimed"
-            from threading import get_ident
-
-            self._claim_thread_id = get_ident()
-            self._commit_state_digest = hashlib.sha256(
+            claim_thread_id = get_ident()
+            self._claim_thread_id = claim_thread_id
+            commit_state_digest = hashlib.sha256(
                 repr(
                     (
-                        self._binding_token.base_state_digest,
-                        self._sealed_overlay_digest,
+                        binding_token.base_state_digest,
+                        sealed_overlay_digest,
                         tuple(
                             (name, prepared.version_delta)
-                            for name, _cache, prepared in self._cache_overlays
+                            for name, _cache, prepared in cache_overlays
                         ),
-                        self._runtime_preparation.base_versions,
+                        runtime_preparation.base_versions,
                     )
                 ).encode("utf-8")
             ).hexdigest()
+            self._commit_state_digest = commit_state_digest
+            expected_receipt = SourceTimingPreparationReceipt(
+                binding_token=binding_token,
+                overlay_digest=sealed_overlay_digest,
+                committed_state_digest=commit_state_digest,
+                _integrity=owner._preparation_receipt_integrity(
+                    binding_token,
+                    sealed_overlay_digest,
+                    commit_state_digest,
+                ),
+            )
+            self._expected_receipt = expected_receipt
+            record = self._freeze_claim_record(
+                owner=owner,
+                claim_thread_id=claim_thread_id,
+                binding_token=binding_token,
+                cache_overlays=cache_overlays,
+                runtime_preparation=runtime_preparation,
+                sealed_overlay_digest=sealed_overlay_digest,
+                seal_integrity=seal_integrity,
+                commit_state_digest=commit_state_digest,
+                expected_receipt=expected_receipt,
+            )
+            owner._install_preparation_claim_record(self, record)
             try:
                 yield self
             except BaseException:
-                if self._state == "claimed":
+                if record.state != "committed":
+                    owner._discard_preparation_claim_record(self)
+                    owner._discard_expected_preparation_receipt(expected_receipt)
                     self._state = "sealed"
+                    self._expected_receipt = None
+                    self._composite_certified_receipt = None
                 raise
             else:
-                if self._state != "committed":
+                if record.state != "committed":
+                    owner._discard_preparation_claim_record(self)
+                    owner._discard_expected_preparation_receipt(expected_receipt)
                     self._state = "sealed"
+                    self._expected_receipt = None
+                    self._composite_certified_receipt = None
                     raise StateError(
                         "Claimed source timing preparation exited without commit_no_fail"
                     )
         finally:
             self._claim_thread_id = None
-            self._runtime_preparation._release_claim()
-            for cache in reversed(acquired_caches):
-                cache._lock.release()
-            self._owner._preparation_lock.release()
+            if record is None or record.state != "committed":
+                owner._discard_preparation_claim_record(self)
+                if expected_receipt is not None:
+                    owner._discard_expected_preparation_receipt(expected_receipt)
+                if self._state == "claimed":
+                    self._state = "sealed"
+                    self._expected_receipt = None
+                    self._composite_certified_receipt = None
+            if runtime_claimed:
+                runtime_preparation._claim_held = False
+                if record is None or record.state != "committed":
+                    runtime_preparation._state = "open"
+                runtime_clock_lock.release()
+                runtime_audit_lock.release()
+            for cache_lock in reversed(acquired_cache_locks):
+                cache_lock.release()
+            preparation_lock.release()
+            if record is not None:
+                if record.state != "committed":
+                    runtime_preparation.cancel()
+                    self._discard_staged_payload()
+                    self._state = "cancelled"
+                    self._expected_receipt = None
+                    self._composite_certified_receipt = None
+                self._release_owner_lane()
 
-    def commit_no_fail(self) -> None:
+    def certify_composite_commit(
+        self,
+        expected_receipt: SourceTimingPreparationReceipt,
+    ) -> None:
+        """Certify one claim for a later validation-free composite primitive commit."""
+
+        owner = self._owner
+        if type(owner) is not SourceTimingPlanner:
+            raise StateError("Source timing preparation owner is malformed")
+        record = owner._active_preparation_claim_record(self)
+        if record is None or record.state not in {"claimed", "certified"}:
+            raise StateError("Source timing preparation is not claimed for certification")
+        if record.certified_receipt is not None:
+            raise StateError("Source timing composite commit is already certified")
+        if self._claim_thread_id != get_ident():
+            raise StateError("Source timing preparation must certify on its claiming thread")
+        if (
+            record.claim_thread_id != get_ident()
+            or record.expected_receipt is not expected_receipt
+            or self._expected_receipt is not expected_receipt
+            or not owner.authenticates_expected_preparation_receipt(
+                expected_receipt,
+                preparation=self,
+            )
+            or not self._authenticates(owner)
+            or not owner._claim_record_matches_current_state(record)
+        ):
+            raise StateError("Source timing composite expected receipt failed authentication")
+        record.certified_receipt = expected_receipt
+        record.state = "certified"
+        self._composite_certified_receipt = expected_receipt
+
+    def _commit_primitives_no_fail(
+        self,
+        record: _SourceTimingClaimRecord,
+    ) -> SourceTimingPreparationReceipt:
+        """Apply only prevalidated writes and install one exact immutable receipt."""
+
+        runtime_plan = cast(_SourceTimingRuntimeCommitPlan, record.runtime_plan)
+        expected_receipt = record.expected_receipt
+        owner = record.owner
+        for cache_plan in record.cache_plans:
+            cache_plan.target._apply_operations_locked(
+                cache_plan.operations,
+                lookup_candidate_delta=cache_plan.lookup_candidate_delta,
+                version_delta=cache_plan.version_delta,
+            )
+        audit_target = runtime_plan.audit_target
+        audit_target._apply_prepared_operations_locked(runtime_plan.audit_operations)
+        clocks_target = runtime_plan.clocks_target
+        clocks_target._states = runtime_plan.clock_states
+        clocks_target._high_water_mark = runtime_plan.clock_high_water_mark
+        clocks_target._cache_entry_estimated_bytes = runtime_plan.clock_cache_entry_estimated_bytes
+        clocks_target._lookup_count = runtime_plan.clock_lookup_count
+        clocks_target._cache_hit_count = runtime_plan.clock_cache_hit_count
+        clocks_target._cache_miss_count = runtime_plan.clock_cache_miss_count
+        clocks_target._eviction_count = runtime_plan.clock_eviction_count
+        clocks_target._mutation_version = runtime_plan.clock_mutation_version
+        runtime_plan.preparation._state = "committed"
+        runtime_plan.preparation._source_timing_owner = None
+        for _name, _cache, prepared in record.admitted_cache_overlays:
+            prepared._operations.clear()
+            prepared._overlay.clear()
+        runtime_plan.preparation.audit._operations.clear()
+        runtime_plan.preparation.clocks._states = runtime_plan.discarded_clock_states
+        runtime_plan.preparation.clocks._operations.clear()
+        runtime_plan.preparation.clocks._cache_entry_estimated_bytes = 0
+        self._owner = owner
+        self._binding_token = record.binding_token
+        self._cache_overlays = ()
+        self._runtime_preparation = None
+        self._overlay_planner = None
+        self._planning_runtime = None
+        self._sealed_overlay_digest = record.sealed_overlay_digest
+        self._seal_integrity = record.seal_integrity
+        self._commit_state_digest = record.commit_state_digest
+        self._expected_receipt = expected_receipt
+        self._composite_certified_receipt = record.certified_receipt
+        self._committed_receipt = expected_receipt
+        self._state = "committed"
+        record.admitted_cache_overlays = ()
+        record.admitted_runtime_preparation = None
+        record.cache_plans = ()
+        record.runtime_plan = None
+        owner._terminalize_preparation_record_no_fail(record)
+        return expected_receipt
+
+    def commit_no_fail(self) -> SourceTimingPreparationReceipt:
         """Apply a preclaimed overlay inside the State/Lifecycle finalization fence."""
 
-        if self._state != "claimed" or not self._commit_state_digest:
+        owner = self._owner
+        if type(owner) is not SourceTimingPlanner:
+            raise StateError("Source timing preparation owner is malformed")
+        record = owner._active_preparation_claim_record(self)
+        if record is None or record.state not in {"claimed", "certified"}:
             raise StateError("Source timing preparation is not claimed for commit")
-        from threading import get_ident
-
-        if self._claim_thread_id != get_ident():
+        if record.claim_thread_id != get_ident():
             raise StateError("Source timing preparation must commit on its claiming thread")
-        for _name, cache, prepared in self._cache_overlays:
-            cache._apply_prepared_locked(prepared)
-        self._runtime_preparation._commit_no_fail()
-        self._committed_receipt = SourceTimingPreparationReceipt(
-            binding_token=self._binding_token,
-            overlay_digest=self._sealed_overlay_digest,
-            committed_state_digest=self._commit_state_digest,
-            _integrity=self._owner._preparation_receipt_integrity(
-                self._binding_token,
-                self._sealed_overlay_digest,
-                self._commit_state_digest,
-            ),
-        )
-        self._state = "committed"
+        if record.state == "certified":
+            return self._commit_primitives_no_fail(record)
+        expected_receipt = record.expected_receipt
+        if (
+            self._state != "claimed"
+            or not self._commit_state_digest
+            or self._expected_receipt is not expected_receipt
+            or not owner.authenticates_expected_preparation_receipt(
+                expected_receipt,
+                preparation=self,
+            )
+            or not self._authenticates(owner)
+            or not owner._claim_record_matches_current_state(record)
+        ):
+            raise StateError("Source timing preparation failed standalone commit validation")
+        return self._commit_primitives_no_fail(record)
 
     def _current_overlay_digest(self) -> str:
         cache_digests = tuple(
@@ -5394,7 +6274,47 @@ class SourceTimingPreparation:
             return False
         if self._state in {"open", "cancelled"}:
             return False
-        if self._current_overlay_digest() != self._sealed_overlay_digest:
+        record = owner._active_preparation_claim_record(self)
+        if self._state == "sealed":
+            if (
+                record is not None
+                or not self._lane_active
+                or owner._preparation_lane is not self
+                or owner._preparation_lane_marker is not self._lane_marker
+            ):
+                return False
+        elif self._state == "claimed":
+            if (
+                record is None
+                or record.state not in {"claimed", "certified"}
+                or not self._lane_active
+            ):
+                return False
+        elif self._state == "committed":
+            if record is None or record.state != "committed" or self._lane_active:
+                return False
+        else:
+            return False
+        if record is not None and (
+            record.owner is not owner
+            or record.binding_token is not self._binding_token
+            or record.admitted_cache_overlays is not self._cache_overlays
+            or record.admitted_runtime_preparation is not self._runtime_preparation
+            or record.sealed_overlay_digest != self._sealed_overlay_digest
+            or record.seal_integrity != self._seal_integrity
+            or record.commit_state_digest != self._commit_state_digest
+        ):
+            return False
+        if (
+            record is not None
+            and self._state == "claimed"
+            and not owner._claim_record_matches_current_state(record)
+        ):
+            return False
+        if (
+            self._state != "committed"
+            and self._current_overlay_digest() != self._sealed_overlay_digest
+        ):
             return False
         expected_seal = owner._preparation_seal_integrity(
             self._binding_token,
@@ -5405,7 +6325,14 @@ class SourceTimingPreparation:
         if self._state != "committed":
             return True
         receipt = self._committed_receipt
-        if receipt is None or receipt.binding_token != self._binding_token:
+        if (
+            record is None
+            or receipt is None
+            or record.expected_receipt is not receipt
+            or receipt.binding_token is not self._binding_token
+            or not record.receipt_authority.committed
+            or record.receipt_authority.receipt_ref() is not receipt
+        ):
             return False
         expected_receipt = owner._preparation_receipt_integrity(
             receipt.binding_token,

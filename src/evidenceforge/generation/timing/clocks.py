@@ -13,6 +13,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from threading import RLock
+from weakref import ReferenceType
 
 from evidenceforge.generation.timing.distributions import (
     ConstantDistribution,
@@ -22,6 +23,18 @@ from evidenceforge.generation.timing.distributions import (
     TimingScope,
     validate_distribution_spec,
 )
+
+
+def _validate_clock_label(value: object, name: str, *, allow_empty: bool = False) -> None:
+    """Require one exact UTF-8 string safe for cache keys and deterministic seeds."""
+
+    if type(value) is not str or (not allow_empty and not value):
+        requirement = "a string" if allow_empty else "a non-empty string"
+        raise TimingDistributionError(f"{name} must be {requirement}")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise TimingDistributionError(f"{name} must be valid UTF-8") from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,10 +48,9 @@ class SourceClockKey:
     def __post_init__(self) -> None:
         """Require source kind and identity."""
 
-        if not self.kind:
-            raise TimingDistributionError("SourceClockKey.kind must not be empty")
-        if not self.identity:
-            raise TimingDistributionError("SourceClockKey.identity must not be empty")
+        _validate_clock_label(self.kind, "SourceClockKey.kind")
+        _validate_clock_label(self.identity, "SourceClockKey.identity")
+        _validate_clock_label(self.profile, "SourceClockKey.profile", allow_empty=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +143,20 @@ class SourceClockRegistry:
         self._cache_miss_count = 0
         self._eviction_count = 0
         self._mutation_version = 0
+        self._owner_runtime: object | None = None
+
+    def _enter_public_mutation(self) -> object | None:
+        """Enter the shared runtime lane before one canonical clock mutation."""
+
+        owner = self._owner_runtime
+        if owner is not None:
+            owner._enter_public_mutation()
+        return owner
+
+    @staticmethod
+    def _leave_public_mutation(owner: object | None) -> None:
+        if owner is not None:
+            owner._leave_public_mutation()
 
     @property
     def reference_time(self) -> datetime:
@@ -154,12 +180,16 @@ class SourceClockRegistry:
     def clear_cache(self) -> None:
         """Discard cached clock states without changing future projections."""
 
-        with self._lock:
-            if not self._states:
-                return
-            self._states.clear()
-            self._cache_entry_estimated_bytes = 0
-            self._mutation_version += 1
+        owner = self._enter_public_mutation()
+        try:
+            with self._lock:
+                if not self._states:
+                    return
+                self._states.clear()
+                self._cache_entry_estimated_bytes = 0
+                self._mutation_version += 1
+        finally:
+            self._leave_public_mutation(owner)
 
     @property
     def mutation_version(self) -> int:
@@ -195,61 +225,74 @@ class SourceClockRegistry:
     def state(self, key: SourceClockKey, spec: SourceClockSpec) -> SourceClockState:
         """Return stable offset and drift parameters for one clock."""
 
-        self._sampler.record_logical_sample(
-            spec.offset_microseconds,
-            relationship_key="clock.offset_microseconds",
-        )
-        self._sampler.record_logical_sample(
-            spec.drift_ppm,
-            relationship_key="clock.drift_ppm",
-        )
-        cache_key = (self._sampler.generation_seed, key, spec)
-        with self._lock:
-            self._lookup_count += 1
-            self._mutation_version += 1
-            if self._max_cache_entries:
-                cached = self._states.get(cache_key)
+        owner = self._enter_public_mutation()
+        try:
+            self._validate_state_request(key, spec)
+            cache_key = (self._sampler.generation_seed, key, spec)
+            with self._lock:
+                cached = self._states.get(cache_key) if self._max_cache_entries else None
+            state = cached
+            if state is None:
+                scope = self._scope(key)
+                state = SourceClockState(
+                    offset_microseconds=self._value_sampler.sample_value(
+                        spec.offset_microseconds,
+                        relationship_key="clock.offset_microseconds",
+                        scope=scope,
+                        sample_key="offset",
+                    ),
+                    drift_ppm=self._value_sampler.sample_value(
+                        spec.drift_ppm,
+                        relationship_key="clock.drift_ppm",
+                        scope=scope,
+                        sample_key="drift",
+                    ),
+                )
+            self._sampler.record_logical_sample(
+                spec.offset_microseconds,
+                relationship_key="clock.offset_microseconds",
+            )
+            self._sampler.record_logical_sample(
+                spec.drift_ppm,
+                relationship_key="clock.drift_ppm",
+            )
+            with self._lock:
+                self._lookup_count += 1
+                self._mutation_version += 1
                 if cached is not None:
                     self._cache_hit_count += 1
                     self._states.move_to_end(cache_key)
                     return cached
-            self._cache_miss_count += 1
-
-        scope = self._scope(key)
-        state = SourceClockState(
-            offset_microseconds=self._value_sampler.sample_value(
-                spec.offset_microseconds,
-                relationship_key="clock.offset_microseconds",
-                scope=scope,
-                sample_key="offset",
-            ),
-            drift_ppm=self._value_sampler.sample_value(
-                spec.drift_ppm,
-                relationship_key="clock.drift_ppm",
-                scope=scope,
-                sample_key="drift",
-            ),
-        )
-        if self._max_cache_entries:
-            with self._lock:
-                existing = self._states.get(cache_key)
-                if existing is not None:
-                    self._states.move_to_end(cache_key)
-                    return existing
-                self._states[cache_key] = state
-                self._cache_entry_estimated_bytes += self._estimate_cache_entry_bytes(
-                    cache_key,
-                    state,
-                )
-                while len(self._states) > self._max_cache_entries:
-                    evicted_key, evicted_state = self._states.popitem(last=False)
-                    self._cache_entry_estimated_bytes -= self._estimate_cache_entry_bytes(
-                        evicted_key,
-                        evicted_state,
+                self._cache_miss_count += 1
+                if self._max_cache_entries:
+                    self._states[cache_key] = state
+                    self._cache_entry_estimated_bytes += self._estimate_cache_entry_bytes(
+                        cache_key,
+                        state,
                     )
-                    self._eviction_count += 1
-                self._high_water_mark = max(self._high_water_mark, len(self._states))
-        return state
+                    while len(self._states) > self._max_cache_entries:
+                        evicted_key, evicted_state = self._states.popitem(last=False)
+                        self._cache_entry_estimated_bytes -= self._estimate_cache_entry_bytes(
+                            evicted_key,
+                            evicted_state,
+                        )
+                        self._eviction_count += 1
+                    self._high_water_mark = max(self._high_water_mark, len(self._states))
+            return state
+        finally:
+            self._leave_public_mutation(owner)
+
+    @staticmethod
+    def _validate_state_request(key: object, spec: object) -> None:
+        """Reject malformed public keys before audit or cache mutation."""
+
+        if type(key) is not SourceClockKey:
+            raise TimingDistributionError("key must be an exact SourceClockKey")
+        _validate_clock_label(key.kind, "SourceClockKey.kind")
+        _validate_clock_label(key.identity, "SourceClockKey.identity")
+        _validate_clock_label(key.profile, "SourceClockKey.profile", allow_empty=True)
+        if type(spec) is not SourceClockSpec:
+            raise TimingDistributionError("spec must be an exact SourceClockSpec")
 
     @staticmethod
     def _estimate_cache_entry_bytes(
@@ -407,6 +450,7 @@ class SourceClockRegistryPreparation:
         "_high_water_mark",
         "_lookup_count",
         "_operations",
+        "_owner_preparation",
         "_sampler",
         "_states",
         "_value_sampler",
@@ -428,6 +472,7 @@ class SourceClockRegistryPreparation:
         eviction_count: int,
     ) -> None:
         self._base = base
+        self._owner_preparation: ReferenceType[object] | None = None
         self._sampler = sampler
         self._value_sampler = TimingSampler(
             namespace=sampler.namespace,
@@ -443,6 +488,17 @@ class SourceClockRegistryPreparation:
         self._eviction_count = eviction_count
         self._version_delta = 0
         self._operations: list[tuple[str, str]] = []
+
+    def _require_public_staging(self) -> None:
+        """Reject mutation through a retained closed clock capability."""
+
+        owner_ref = self._owner_preparation
+        if owner_ref is None:
+            return
+        owner = owner_ref()
+        if owner is None:
+            raise TimingDistributionError("Timing runtime preparation is not open for staging")
+        owner._require_public_staging()
 
     @property
     def reference_time(self) -> datetime:
@@ -471,6 +527,7 @@ class SourceClockRegistryPreparation:
     def clear_cache(self) -> None:
         """Stage a cache clear without mutating the canonical registry."""
 
+        self._require_public_staging()
         if not self._states:
             return
         self._states.clear()
@@ -504,6 +561,27 @@ class SourceClockRegistryPreparation:
     def state(self, key: SourceClockKey, spec: SourceClockSpec) -> SourceClockState:
         """Return one staged clock state without canonical cache mutation."""
 
+        self._require_public_staging()
+        SourceClockRegistry._validate_state_request(key, spec)
+        cache_key = (self._sampler.generation_seed, key, spec)
+        cached = self._states.get(cache_key) if self.max_cache_entries else None
+        state = cached
+        if state is None:
+            scope = SourceClockRegistry._scope(key)
+            state = SourceClockState(
+                offset_microseconds=self._value_sampler.sample_value(
+                    spec.offset_microseconds,
+                    relationship_key="clock.offset_microseconds",
+                    scope=scope,
+                    sample_key="offset",
+                ),
+                drift_ppm=self._value_sampler.sample_value(
+                    spec.drift_ppm,
+                    relationship_key="clock.drift_ppm",
+                    scope=scope,
+                    sample_key="drift",
+                ),
+            )
         self._sampler.record_logical_sample(
             spec.offset_microseconds,
             relationship_key="clock.offset_microseconds",
@@ -512,10 +590,8 @@ class SourceClockRegistryPreparation:
             spec.drift_ppm,
             relationship_key="clock.drift_ppm",
         )
-        cache_key = (self._sampler.generation_seed, key, spec)
         self._lookup_count += 1
         self._version_delta += 1
-        cached = self._states.get(cache_key) if self.max_cache_entries else None
         if cached is not None:
             self._cache_hit_count += 1
             self._states.move_to_end(cache_key)
@@ -523,21 +599,6 @@ class SourceClockRegistryPreparation:
             return cached
         self._cache_miss_count += 1
 
-        scope = SourceClockRegistry._scope(key)
-        state = SourceClockState(
-            offset_microseconds=self._value_sampler.sample_value(
-                spec.offset_microseconds,
-                relationship_key="clock.offset_microseconds",
-                scope=scope,
-                sample_key="offset",
-            ),
-            drift_ppm=self._value_sampler.sample_value(
-                spec.drift_ppm,
-                relationship_key="clock.drift_ppm",
-                scope=scope,
-                sample_key="drift",
-            ),
-        )
         if self.max_cache_entries:
             self._states[cache_key] = state
             self._cache_entry_estimated_bytes += SourceClockRegistry._estimate_cache_entry_bytes(
