@@ -2312,3 +2312,26 @@ format, pre-commit, and diff checks. Version artifacts remain unchanged. The rem
 owner prerequisite is the State public transaction lane; production lifecycle composition must
 then authenticate and certify this exact SourceTiming receipt before entering its wider no-fail
 publication tail.
+
+### DNS client-cache publication made transactional
+
+Commit ``34de4ccd5`` (``fix: publish DNS cache after transport``) moves the client-visible DNS
+address cache write after the canonical UDP/53 transaction has returned a nonempty UID. An ordinary
+transport exception or rejected empty transaction now leaves the cache and rendered DNS evidence
+neutral, so an exact retry is not suppressed by a phantom cache hit. Once the address transaction
+has published, the cache is committed before optional companion questions; a later companion fault
+therefore cannot duplicate the already-published address lookup on retry.
+
+Independent review reproduced the old poisoned-cache behavior on the exact parent, found no
+public-boundary P0/P1, and matched the candidate and committed patch IDs exactly. The clean committed
+revision passes the focused rollback/retry node and 72 causal/proxy adjacency tests; the candidate's
+broader 151-pass DNS/causal/proxy cohort retained the same two exact-parent failures. The full clean
+DNS file likewise has an identical seven-node inherited failure set on parent and candidate.
+Pre-commit, Ruff, format, and diff checks pass for the committed paths, unrelated live generator
+and test bytes remain unchanged, and version artifacts are untouched.
+
+The repaired execution/effect bridge is also independently commit-clear but remains queued behind
+the State/lifecycle/dispatcher owner foundation. Its exact four-path chain closes File/Registry
+multi-occurrence cardinality, equal-time identity, latest process/session frontiers, artifact-group
+atomicity, and the prior scanner and State-only-session regressions. Scanner transport aggregation
+itself remains a later execution-family milestone.
