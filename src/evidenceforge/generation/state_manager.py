@@ -27,10 +27,13 @@ log generation, ensuring consistency across log formats.
 """
 
 import hashlib
+import heapq
 import hmac
 import logging
+import math
 import random
 import secrets
+from bisect import bisect_left
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, is_dataclass, replace
@@ -480,6 +483,7 @@ class ConnectionPlanningCursor:
         "_expected_version",
         "_expected_state_time",
         "_expected_connection_counter",
+        "_admission_epoch",
         "_owner_rng",
         "_owner_identity",
         "_rng_state_entry",
@@ -499,6 +503,7 @@ class ConnectionPlanningCursor:
         expected_version: int,
         expected_state_time: datetime | None,
         expected_connection_counter: int,
+        admission_epoch: int,
         owner_rng: random.Random,
         rng_state_entry: object,
         cursor_token: str,
@@ -507,6 +512,7 @@ class ConnectionPlanningCursor:
         self._expected_version = expected_version
         self._expected_state_time = expected_state_time
         self._expected_connection_counter = expected_connection_counter
+        self._admission_epoch = admission_epoch
         self._owner_rng = owner_rng
         self._owner_identity = id(owner_rng)
         self._rng_state_entry = rng_state_entry
@@ -690,9 +696,11 @@ class MaterializationBatchBuilder:
     """Allocation-free builder for one session and its bootstrap process tree."""
 
     def __init__(self, manager: "StateManager", expected_version: int) -> None:
-        self._manager = manager
-        self._expected_version = expected_version
-        self._expected_state_time = manager.state.current_time
+        with manager._capability_minting_guard("MaterializationBatchBuilder"):
+            self._manager = manager
+            self._expected_version = expected_version
+            self._expected_state_time = manager.state.current_time
+            self._admission_epoch = manager._prepared_state_admission_epoch
         self._session: SessionMaterializationPlan | None = None
         self._processes: list[ProcessMaterializationPlan] = []
         self._session_process_plans: dict[str, ProcessMaterializationPlan] = {}
@@ -717,11 +725,19 @@ class MaterializationBatchBuilder:
 
         return self._expected_version
 
+    def _require_open(self) -> None:
+        if (
+            self._manager._active_prepared_state_claim is not None
+            or self._admission_epoch != self._manager._prepared_state_admission_epoch
+        ):
+            raise StateError("Materialization batch builder crossed an active prepared-State claim")
+        if self._sealed:
+            raise StateError("Materialization batch builder is already sealed")
+
     def plan_session(self, **kwargs: object) -> SessionMaterializationPlan:
         """Plan the batch's optional session without changing canonical state."""
 
-        if self._sealed:
-            raise StateError("Materialization batch builder is already sealed")
+        self._require_open()
         if self._session is not None:
             raise StateError("Materialization batch may contain only one session")
         if self._processes:
@@ -739,8 +755,7 @@ class MaterializationBatchBuilder:
     ) -> SessionMaterializationPlan:
         """Attach one allocation-free logind identity to the planned session."""
 
-        if self._sealed:
-            raise StateError("Materialization batch builder is already sealed")
+        self._require_open()
         if self._session is not plan or self._processes:
             raise StateError("Linux logind enrichment must precede batch process planning")
         enriched = self._manager._enrich_batch_linux_logind_session(
@@ -777,8 +792,7 @@ class MaterializationBatchBuilder:
     ) -> ProcessMaterializationPlan:
         """Plan one process member using prior batch members as exact owners."""
 
-        if self._sealed:
-            raise StateError("Materialization batch builder is already sealed")
+        self._require_open()
         plan = self._manager._plan_batch_process(
             self,
             system=system,
@@ -817,8 +831,7 @@ class MaterializationBatchBuilder:
     ) -> None:
         """Bind exact planned process roles into the session's primitive commit."""
 
-        if self._sealed:
-            raise StateError("Materialization batch builder is already sealed")
+        self._require_open()
         if self._session is not session:
             raise StateError("Session process links require this batch's session member")
         values = {
@@ -839,8 +852,7 @@ class MaterializationBatchBuilder:
     def seal(self) -> MaterializationBatchPlan:
         """Freeze and authenticate the complete allocation-free batch."""
 
-        if self._sealed:
-            raise StateError("Materialization batch builder is already sealed")
+        self._require_open()
         if self._session is None and not self._processes:
             raise StateError("Materialization batch cannot be empty")
         self._sealed = True
@@ -1356,6 +1368,239 @@ class ActionCohortMaterializationResult:
     terminalized_sessions: tuple[SessionIdentity, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedActionCohortSessionStart:
+    """Runtime row and optional allocator defaults built before claim publication."""
+
+    plan: SessionMaterializationPlan
+    session: ActiveSession
+    linux_logind_used_ids_default: set[int] | None
+    linux_logind_allocations_default: TemporalAllocationIndex | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedActionCohortProcessStart:
+    """Runtime process/thread rows and allocator defaults built before publication."""
+
+    plan: ProcessMaterializationPlan
+    process: RunningProcess
+    thread: RunningThread
+    pid_rng_replacement: random.Random | None
+    linux_pid_allocations_default: TemporalAllocationIndex | None
+    fixed_pid_reservations_default: set[int] | None
+    thread_rng_replacement: random.Random | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedActionCohortProcessTermination:
+    """Exact primitive process-close projection built before claim publication."""
+
+    plan: ProcessTerminationMaterializationPlan
+    process_key: tuple[str, int]
+    thread_keys: tuple[tuple[str, str, int], ...]
+    thread_deadline: float
+    process_deadline: float
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedActionCohortSessionTerminalization:
+    """Exact primitive session-close projection built before claim publication."""
+
+    terminalization: ActionCohortSessionTerminalization
+    resolved_logon_id: str
+    ended: tuple[ActiveSession, datetime]
+    retention_deadline: float
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortMappingSavepoint:
+    """One bounded mapping key captured before cohort mutation."""
+
+    mapping: dict[object, object]
+    key: object
+    present: bool
+    value: object
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortSetSavepoint:
+    """One bounded set member captured before cohort mutation."""
+
+    values: set[object]
+    value: object
+    present: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortMappedSetSavepoint:
+    """One member of one mapping-owned set captured before mutation."""
+
+    mapping: dict[object, object]
+    key: object
+    mapping_present: bool
+    values: set[object] | None
+    value: object
+    value_present: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortIndexedStoreSavepoint:
+    """One exact IndexedEntityStore key and its prior bucket ownership."""
+
+    store: IndexedEntityStore[object, object]
+    key: object
+    present: bool
+    value: object
+    indexed_values: dict[str, object] | None
+    buckets: tuple[tuple[str, object, dict[object, None]], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortExpiringKeySavepoint:
+    """One exact ExpiringIndex key before mutation."""
+
+    key: object
+    present: bool
+    value: object
+    deadline: float | None
+    order: int | None
+    version: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortExpiringIndexSavepoint:
+    """Bounded logical and allocator savepoint for touched expiry keys."""
+
+    index: ExpiringIndex[object, object]
+    keys: tuple[_ActionCohortExpiringKeySavepoint, ...]
+    next_order: int
+    high_water_mark: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortGroupedTemporalSavepoint:
+    """One bounded GroupedTemporalIndex key before a known mutation."""
+
+    index: GroupedTemporalIndex[object, object]
+    key: object
+    prior_current: tuple[object, datetime, int, int] | None
+    prior_next_sequence: int
+    prior_stale_counts: tuple[tuple[object, int | None], ...]
+    added_record: tuple[object, datetime, int, int] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortObjectSavepoint:
+    """One mutable runtime entity's bounded field state."""
+
+    target: ActiveSession | RunningProcess | RunningThread
+    fields: tuple[tuple[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortTemporalAllocationSavepoint:
+    """One reversible temporal allocation addition."""
+
+    mapping: dict[str, TemporalAllocationIndex]
+    host: str
+    index_was_present: bool
+    index: TemporalAllocationIndex | None
+    event_time: datetime
+    value: int
+    sequence: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ActionCohortRollbackJournal:
+    """Cohort-bounded per-owner undo journal captured under the State lock."""
+
+    mapping_entries: tuple[_ActionCohortMappingSavepoint, ...]
+    set_entries: tuple[_ActionCohortSetSavepoint, ...]
+    mapped_set_entries: tuple[_ActionCohortMappedSetSavepoint, ...]
+    indexed_store_entries: tuple[_ActionCohortIndexedStoreSavepoint, ...]
+    expiring_indexes: tuple[_ActionCohortExpiringIndexSavepoint, ...]
+    grouped_temporal_entries: tuple[_ActionCohortGroupedTemporalSavepoint, ...]
+    temporal_allocations: tuple[_ActionCohortTemporalAllocationSavepoint, ...]
+    object_entries: tuple[_ActionCohortObjectSavepoint, ...]
+    scalar_entries: tuple[tuple[str, object], ...]
+    retention_mapping_entries: list[_ActionCohortMappingSavepoint]
+    retention_mapped_set_entries: list[_ActionCohortMappedSetSavepoint]
+    retention_expiring_indexes: list[_ActionCohortExpiringIndexSavepoint]
+    retention_grouped_temporal_entries: list[_ActionCohortGroupedTemporalSavepoint]
+    state_time: datetime | None
+    materialization_version: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedActionCohortCommitPlan:
+    """Every explicit object needed by the action-cohort primitive tail."""
+
+    plan: ActionCohortMaterializationPlan
+    committed_version: int
+    sessions: tuple[_PreparedActionCohortSessionStart, ...]
+    processes: tuple[_PreparedActionCohortProcessStart, ...]
+    process_terminations: tuple[_PreparedActionCohortProcessTermination, ...]
+    session_terminalizations: tuple[_PreparedActionCohortSessionTerminalization, ...]
+    rollback_journal: _ActionCohortRollbackJournal
+    claim_version: int
+    claim_state_time: datetime | None
+    claim_preimage: object
+
+
+@dataclass(slots=True)
+class _ActionCohortPreparationRecord:
+    """Manager-owned exact locator for one active prepared capability."""
+
+    preparation: "PreparedActionCohortMaterialization"
+    expected_result: ActionCohortMaterializationResult
+    expected_result_publication_token: str
+    commit_plan: _PreparedActionCohortCommitPlan
+    claim_thread_id: int
+    claim_epoch: int
+    certified: bool = False
+    provisional: bool = False
+    committed: bool = False
+    failed: bool = False
+    terminal: bool = False
+    provisional_postimage: object | None = None
+
+
+@dataclass(slots=True)
+class _PreparedConnectionMaterializationRecord:
+    """Manager-owned exact authority for one yielded connection preparation."""
+
+    preparation: "PreparedConnectionMaterialization"
+    plan: ConnectionMaterializationPlan
+    rng: random.Random
+    claim_thread_id: int
+    claim_epoch: int
+    claim_version: int
+    claim_state_time: datetime | None
+    rng_state: object
+    committed: bool = False
+    failed: bool = False
+    terminal: bool = False
+    result: OpenConnection | None = None
+
+
+@dataclass(slots=True)
+class _PreparedConnectionCompositeMaterializationRecord:
+    """Manager-owned exact authority for one yielded connection composite."""
+
+    preparation: "PreparedConnectionCompositeMaterialization"
+    plan: ConnectionCompositeMaterializationPlan
+    owner_rng: random.Random
+    claim_thread_id: int
+    claim_epoch: int
+    claim_version: int
+    claim_state_time: datetime | None
+    rng_state: object
+    committed: bool = False
+    failed: bool = False
+    terminal: bool = False
+    result: ConnectionCompositeMaterializationResult | None = None
+
+
 class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
     """Allocation-free builder for one ordered multi-session action cohort."""
 
@@ -1383,8 +1628,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
     def _require_open(self) -> None:
         if self._cancelled:
             raise StateError("Action cohort materialization builder is cancelled")
-        if self._sealed:
-            raise StateError("Action cohort materialization builder is already sealed")
+        super()._require_open()
 
     def cancel(self) -> None:
         """Idempotently discard an open builder without changing StateManager."""
@@ -2286,6 +2530,27 @@ def _action_cohort_integrity_token(
     return hmac.new(authority_secret, repr(canonical).encode(), hashlib.sha256).hexdigest()
 
 
+def _action_cohort_result_publication_token(
+    authority_secret: bytes,
+    *,
+    plan: ActionCohortMaterializationPlan,
+    result: ActionCohortMaterializationResult,
+    commit_plan: _PreparedActionCohortCommitPlan,
+) -> str:
+    """Authenticate one exact claim-owned precomputed result."""
+
+    canonical = (
+        "action-cohort-state-result-v1",
+        id(plan),
+        plan.publication_token,
+        id(result),
+        commit_plan.claim_version,
+        commit_plan.claim_state_time,
+        repr(result),
+    )
+    return hmac.new(authority_secret, repr(canonical).encode(), hashlib.sha256).hexdigest()
+
+
 def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
     """Return whether a session can own visible activity at cutoff."""
     if ensure_utc(session.start_time) > cutoff:
@@ -2320,20 +2585,12 @@ class PreparedConnectionMaterialization:
     def committed(self) -> bool:
         """Return whether connection allocator/state truth was published."""
 
-        return self._committed
+        return self._manager._prepared_connection_materialization_committed(self)
 
     def commit(self) -> OpenConnection | None:
         """Publish the fully validated plan using primitive writes only."""
 
-        if not self._active:
-            raise StateError("Prepared connection materialization is no longer active")
-        if not self._committed:
-            self._result = self._manager._commit_prevalidated_connection_materialization(
-                self._plan,
-                self._rng,
-            )
-            self._committed = True
-        return self._result
+        return self._manager._commit_claimed_connection_materialization(self)
 
 
 @dataclass(slots=True)
@@ -2351,21 +2608,12 @@ class PreparedConnectionCompositeMaterialization:
     def committed(self) -> bool:
         """Return whether the complete State transaction was published."""
 
-        return self._committed
+        return self._manager._prepared_connection_composite_materialization_committed(self)
 
     def commit(self) -> ConnectionCompositeMaterializationResult:
         """Publish the fully prevalidated composite exactly once."""
 
-        if not self._active:
-            raise StateError("Prepared connection composite is no longer active")
-        if self._committed:
-            raise StateError("Prepared connection composite is already committed")
-        self._result = self._manager._commit_prevalidated_connection_composite(
-            self._plan,
-            self._owner_rng,
-        )
-        self._committed = True
-        return self._result
+        return self._manager._commit_claimed_connection_composite_materialization(self)
 
 
 @dataclass(slots=True)
@@ -2374,6 +2622,7 @@ class PreparedActionCohortMaterialization:
 
     _manager: "StateManager"
     _plan: ActionCohortMaterializationPlan
+    _expected_result: ActionCohortMaterializationResult
     _claim_thread_id: int
     _active: bool = True
     _committed: bool = False
@@ -2383,22 +2632,53 @@ class PreparedActionCohortMaterialization:
     def committed(self) -> bool:
         """Return whether the complete State cohort was published."""
 
-        return self._committed
+        return self._manager._action_cohort_preparation_committed(self)
+
+    @property
+    def expected_result(self) -> ActionCohortMaterializationResult:
+        """Return the exact immutable result authenticated by this active claim."""
+
+        return self._manager._expected_action_cohort_result_for(self)
+
+    @property
+    def expected_result_publication_token(self) -> str:
+        """Return the owner-precomputed token for this exact expected result."""
+
+        return self._manager._expected_action_cohort_result_publication_token_for(self)
+
+    def certify_composite_commit(
+        self,
+        expected_result: ActionCohortMaterializationResult,
+    ) -> None:
+        """Authenticate this exact claim once for a later composite commit tail."""
+
+        self._manager._certify_expected_action_cohort_result(
+            expected_result,
+            preparation=self,
+        )
 
     def commit_no_fail(self) -> ActionCohortMaterializationResult:
         """Publish the fully prevalidated primitive transaction exactly once."""
 
-        if not self._active:
-            raise StateError("Prepared action cohort materialization is no longer active")
-        if self._committed:
-            raise StateError("Prepared action cohort materialization is already committed")
-        if get_ident() != self._claim_thread_id:
-            raise StateError(
-                "Prepared action cohort materialization must commit on its claiming thread"
-            )
-        self._result = self._manager._commit_prevalidated_action_cohort(self._plan)
+        self._result = self._manager._commit_claimed_action_cohort_materialization(self)
         self._committed = True
         return self._result
+
+    def apply_provisional(self) -> None:
+        """Apply certified State writes while this claim retains rollback ownership."""
+
+        self._manager._apply_claimed_action_cohort_materialization(
+            self,
+            require_certified=True,
+        )
+
+    def finalize_no_fail(self) -> ActionCohortMaterializationResult:
+        """Make a provisionally applied cohort terminal and return its exact result."""
+
+        result = self._manager._finalize_claimed_action_cohort_materialization(self)
+        self._result = result
+        self._committed = True
+        return result
 
     def commit(self) -> ActionCohortMaterializationResult:
         """Compatibility alias for :meth:`commit_no_fail`."""
@@ -2511,6 +2791,21 @@ class StateManager:
         self._lock = RLock()  # Reentrant lock for thread safety
         self._materialization_version = 0
         self._materialization_secret = secrets.token_bytes(32)
+        self._active_connection_preparations: dict[
+            int, _PreparedConnectionMaterializationRecord
+        ] = {}
+        self._active_connection_composite_preparations: dict[
+            int, _PreparedConnectionCompositeMaterializationRecord
+        ] = {}
+        self._active_action_cohort_preparations: dict[int, _ActionCohortPreparationRecord] = {}
+        self._active_action_cohort_claim: _ActionCohortPreparationRecord | None = None
+        self._active_prepared_state_claim: (
+            _PreparedConnectionMaterializationRecord
+            | _PreparedConnectionCompositeMaterializationRecord
+            | _ActionCohortPreparationRecord
+            | None
+        ) = None
+        self._prepared_state_admission_epoch = 0
 
         # Entity lifecycle: per-system boot times for temporal validation
         self._system_boot_times: dict[str, datetime] = {}
@@ -2578,6 +2873,432 @@ class StateManager:
                 return False
             return True
 
+    def authenticates_expected_action_cohort_result(
+        self,
+        result: object,
+        *,
+        preparation: object,
+    ) -> bool:
+        """Authenticate one active claim's exact precomputed result object."""
+
+        if (
+            type(result) is not ActionCohortMaterializationResult
+            or type(preparation) is not PreparedActionCohortMaterialization
+        ):
+            return False
+        record = self._active_action_cohort_preparations.get(id(preparation))
+        if (
+            record is None
+            or record.preparation is not preparation
+            or preparation._manager is not self
+            or preparation._plan is not record.commit_plan.plan
+            or preparation._expected_result is not record.expected_result
+            or preparation._claim_thread_id != record.claim_thread_id
+            or record.claim_thread_id != get_ident()
+        ):
+            return False
+        with self._lock:
+            return (
+                self._active_action_cohort_preparations.get(id(preparation)) is record
+                and self._active_action_cohort_claim is record
+                and self._active_prepared_state_claim is record
+                and preparation._manager is self
+                and preparation._plan is record.commit_plan.plan
+                and preparation._expected_result is record.expected_result
+                and preparation._claim_thread_id == record.claim_thread_id
+                and record.claim_epoch == self._prepared_state_admission_epoch
+                and not record.terminal
+                and not record.committed
+                and not record.failed
+                and record.expected_result is result
+                and record.commit_plan.claim_version == self._materialization_version
+                and record.commit_plan.claim_state_time == self.state.current_time
+            )
+
+    def _action_cohort_record_for(
+        self,
+        preparation: PreparedActionCohortMaterialization,
+    ) -> _ActionCohortPreparationRecord:
+        """Resolve and validate one exact active claim locator."""
+
+        record = self._active_action_cohort_preparations.get(id(preparation))
+        if (
+            record is None
+            or record.preparation is not preparation
+            or preparation._manager is not self
+            or preparation._plan is not record.commit_plan.plan
+            or preparation._expected_result is not record.expected_result
+            or preparation._claim_thread_id != record.claim_thread_id
+            or self._active_action_cohort_claim is not record
+            or self._active_prepared_state_claim is not record
+            or record.claim_epoch != self._prepared_state_admission_epoch
+            or record.terminal
+        ):
+            raise StateError("Prepared action cohort materialization is no longer active")
+        if record.claim_thread_id != get_ident():
+            raise StateError(
+                "Prepared action cohort materialization belongs to its claiming thread"
+            )
+        return record
+
+    def _certify_expected_action_cohort_result(
+        self,
+        result: ActionCohortMaterializationResult,
+        *,
+        preparation: PreparedActionCohortMaterialization,
+    ) -> None:
+        """Certify one exact result while retaining manager-owned claim authority."""
+
+        record = self._action_cohort_record_for(preparation)
+        with self._lock:
+            if record.committed:
+                raise StateError("Prepared action cohort materialization is already committed")
+            if record.failed:
+                raise StateError("Prepared action cohort materialization has already failed")
+            if record.certified:
+                raise StateError(
+                    "Prepared action cohort materialization is already composite-certified"
+                )
+            if not self.authenticates_expected_action_cohort_result(
+                result,
+                preparation=preparation,
+            ):
+                raise StateError(
+                    "Prepared action cohort expected result failed exact claim authentication"
+                )
+            record.certified = True
+
+    def _expected_action_cohort_result_for(
+        self,
+        preparation: PreparedActionCohortMaterialization,
+    ) -> ActionCohortMaterializationResult:
+        """Resolve one expected result from the manager-owned active locator."""
+
+        return self._action_cohort_record_for(preparation).expected_result
+
+    def _expected_action_cohort_result_publication_token_for(
+        self,
+        preparation: PreparedActionCohortMaterialization,
+    ) -> str:
+        """Resolve the precomputed result token from exact owner state."""
+
+        return self._action_cohort_record_for(preparation).expected_result_publication_token
+
+    def _action_cohort_preparation_committed(
+        self,
+        preparation: PreparedActionCohortMaterialization,
+    ) -> bool:
+        """Return manager-owned terminal truth while a preparation remains active."""
+
+        record = self._active_action_cohort_preparations.get(id(preparation))
+        if record is not None and record.preparation is preparation:
+            return record.committed
+        return preparation._committed
+
+    def _apply_claimed_action_cohort_materialization(
+        self,
+        preparation: PreparedActionCohortMaterialization,
+        *,
+        require_certified: bool,
+    ) -> None:
+        """Apply claim-owned primitives while retaining exact rollback authority."""
+
+        record = self._action_cohort_record_for(preparation)
+        with self._lock:
+            if (
+                self._active_action_cohort_claim is not record
+                or self._active_prepared_state_claim is not record
+                or record.claim_epoch != self._prepared_state_admission_epoch
+            ):
+                raise StateError("Prepared action cohort no longer owns the State mutation lane")
+            if record.committed:
+                raise StateError("Prepared action cohort materialization is already committed")
+            if record.failed:
+                raise StateError("Prepared action cohort materialization has already failed")
+            if record.provisional:
+                raise StateError(
+                    "Prepared action cohort materialization is already provisionally applied"
+                )
+            if require_certified and not record.certified:
+                raise StateError(
+                    "Prepared action cohort materialization must be composite-certified "
+                    "before provisional apply"
+                )
+            try:
+                if not record.certified:
+                    if not self.authenticates_expected_action_cohort_result(
+                        record.expected_result,
+                        preparation=preparation,
+                    ):
+                        raise StateError(
+                            "Prepared action cohort expected result failed exact claim "
+                            "authentication"
+                        )
+                    record.certified = True
+                commit_plan = record.commit_plan
+                if commit_plan.claim_version != self._materialization_version:
+                    raise StateError("Prepared action cohort State version changed before apply")
+                if commit_plan.claim_state_time != self.state.current_time:
+                    raise StateError("Prepared action cohort State time changed before apply")
+                if (
+                    self._action_cohort_rollback_observation(commit_plan.rollback_journal)
+                    != commit_plan.claim_preimage
+                ):
+                    raise StateError("Prepared action cohort touched State changed before apply")
+            except StateError:
+                record.failed = True
+                raise
+            record.provisional = True
+            try:
+                self._commit_prevalidated_action_cohort(commit_plan)
+            except BaseException:
+                record.failed = True
+                record.provisional_postimage = self._action_cohort_rollback_observation(
+                    commit_plan.rollback_journal
+                )
+                try:
+                    self._restore_claimed_action_cohort_rollback(record)
+                finally:
+                    record.provisional = False
+                    record.provisional_postimage = None
+                raise
+            record.provisional_postimage = self._action_cohort_rollback_observation(
+                commit_plan.rollback_journal
+            )
+
+    def _finalize_claimed_action_cohort_materialization(
+        self,
+        preparation: PreparedActionCohortMaterialization,
+    ) -> ActionCohortMaterializationResult:
+        """Make a provisionally applied claim terminal without additional State writes."""
+
+        record = self._action_cohort_record_for(preparation)
+        with self._lock:
+            if (
+                self._active_action_cohort_claim is not record
+                or self._active_prepared_state_claim is not record
+                or record.claim_epoch != self._prepared_state_admission_epoch
+            ):
+                raise StateError("Prepared action cohort no longer owns the State mutation lane")
+            if record.committed:
+                raise StateError("Prepared action cohort materialization is already committed")
+            if record.failed:
+                raise StateError("Prepared action cohort materialization has already failed")
+            if not record.provisional:
+                raise StateError(
+                    "Prepared action cohort materialization is not provisionally applied"
+                )
+            try:
+                if self._materialization_version != record.commit_plan.committed_version:
+                    raise StateError("Prepared action cohort State version drifted before finalize")
+                if self.state.current_time != record.commit_plan.plan.final_state_time:
+                    raise StateError("Prepared action cohort State time drifted before finalize")
+                if (
+                    record.provisional_postimage is None
+                    or self._action_cohort_rollback_observation(record.commit_plan.rollback_journal)
+                    != record.provisional_postimage
+                ):
+                    raise StateError("Prepared action cohort touched State drifted before finalize")
+            except StateError:
+                record.failed = True
+                raise
+            record.committed = True
+            record.provisional = False
+            record.provisional_postimage = None
+            preparation._committed = True
+            preparation._result = record.expected_result
+            return record.expected_result
+
+    def _commit_claimed_action_cohort_materialization(
+        self,
+        preparation: PreparedActionCohortMaterialization,
+    ) -> ActionCohortMaterializationResult:
+        """Compatibility commit as one provisional apply and terminal finalize pair."""
+
+        self._apply_claimed_action_cohort_materialization(
+            preparation,
+            require_certified=False,
+        )
+        return self._finalize_claimed_action_cohort_materialization(preparation)
+
+    def _prepared_connection_materialization_record_for(
+        self,
+        preparation: PreparedConnectionMaterialization,
+    ) -> _PreparedConnectionMaterializationRecord:
+        """Resolve one exact active connection preparation and claiming thread."""
+
+        record = self._active_connection_preparations.get(id(preparation))
+        if (
+            record is None
+            or record.preparation is not preparation
+            or record.terminal
+            or self._active_prepared_state_claim is not record
+            or preparation._manager is not self
+            or preparation._plan is not record.plan
+            or preparation._rng is not record.rng
+        ):
+            raise StateError("Prepared connection materialization is no longer active")
+        if record.claim_thread_id != get_ident():
+            raise StateError("Prepared connection materialization belongs to its claiming thread")
+        return record
+
+    def _prepared_connection_composite_materialization_record_for(
+        self,
+        preparation: PreparedConnectionCompositeMaterialization,
+    ) -> _PreparedConnectionCompositeMaterializationRecord:
+        """Resolve one exact active connection-composite preparation and thread."""
+
+        record = self._active_connection_composite_preparations.get(id(preparation))
+        if (
+            record is None
+            or record.preparation is not preparation
+            or record.terminal
+            or self._active_prepared_state_claim is not record
+            or preparation._manager is not self
+            or preparation._plan is not record.plan
+            or preparation._owner_rng is not record.owner_rng
+        ):
+            raise StateError("Prepared connection composite is no longer active")
+        if record.claim_thread_id != get_ident():
+            raise StateError("Prepared connection composite belongs to its claiming thread")
+        return record
+
+    def _prepared_connection_materialization_committed(
+        self,
+        preparation: PreparedConnectionMaterialization,
+    ) -> bool:
+        """Return exact manager-owned commit truth while a preparation is active."""
+
+        record = self._active_connection_preparations.get(id(preparation))
+        if record is not None and record.preparation is preparation and not record.terminal:
+            return record.committed
+        return preparation._committed
+
+    def _prepared_connection_composite_materialization_committed(
+        self,
+        preparation: PreparedConnectionCompositeMaterialization,
+    ) -> bool:
+        """Return exact manager-owned composite commit truth while active."""
+
+        record = self._active_connection_composite_preparations.get(id(preparation))
+        if record is not None and record.preparation is preparation and not record.terminal:
+            return record.committed
+        return preparation._committed
+
+    def _commit_claimed_connection_materialization(
+        self,
+        preparation: PreparedConnectionMaterialization,
+    ) -> OpenConnection | None:
+        """Publish one exact connection preparation after immediate preimage checks."""
+
+        record = self._prepared_connection_materialization_record_for(preparation)
+        with self._lock:
+            record = self._prepared_connection_materialization_record_for(preparation)
+            if record.committed:
+                raise StateError("Prepared connection materialization is already committed")
+            if record.failed:
+                raise StateError("Prepared connection materialization has already failed")
+            try:
+                if record.claim_epoch != self._prepared_state_admission_epoch:
+                    raise StateError("Prepared connection materialization claim epoch changed")
+                if (
+                    record.plan.expected_version != record.claim_version
+                    or self._materialization_version != record.claim_version
+                ):
+                    raise StateError(
+                        "Prepared connection materialization became stale before commit"
+                    )
+                if self.state.current_time != record.claim_state_time:
+                    raise StateError(
+                        "Prepared connection materialization State time changed before commit"
+                    )
+                if record.rng.getstate() != record.rng_state:
+                    raise StateError(
+                        "Prepared connection materialization RNG changed before commit"
+                    )
+                self.validate_connection_materialization(record.plan, record.rng)
+            except StateError:
+                record.failed = True
+                raise
+            result = self._commit_prevalidated_connection_materialization(
+                record.plan,
+                record.rng,
+            )
+            record.result = result
+            record.committed = True
+            preparation._result = result
+            preparation._committed = True
+            return result
+
+    def _commit_claimed_connection_composite_materialization(
+        self,
+        preparation: PreparedConnectionCompositeMaterialization,
+    ) -> ConnectionCompositeMaterializationResult:
+        """Publish one exact composite preparation after immediate preimage checks."""
+
+        record = self._prepared_connection_composite_materialization_record_for(preparation)
+        with self._lock:
+            record = self._prepared_connection_composite_materialization_record_for(preparation)
+            if record.committed:
+                raise StateError("Prepared connection composite is already committed")
+            if record.failed:
+                raise StateError("Prepared connection composite has already failed")
+            try:
+                if record.claim_epoch != self._prepared_state_admission_epoch:
+                    raise StateError("Prepared connection composite claim epoch changed")
+                if (
+                    record.plan.expected_version != record.claim_version
+                    or self._materialization_version != record.claim_version
+                ):
+                    raise StateError("Connection composite became stale before commit")
+                if self.state.current_time != record.claim_state_time:
+                    raise StateError("Connection composite State time changed before commit")
+                if record.owner_rng.getstate() != record.rng_state:
+                    raise StateError("Connection composite RNG owner changed before commit")
+                self._validate_connection_composite_semantics(record.plan, record.owner_rng)
+            except StateError:
+                record.failed = True
+                raise
+            result = self._commit_prevalidated_connection_composite(
+                record.plan,
+                record.owner_rng,
+            )
+            record.result = result
+            record.committed = True
+            preparation._result = result
+            preparation._committed = True
+            return result
+
+    def _reject_mutation_during_action_cohort_claim(
+        self,
+        operation: str,
+        *,
+        admitted_at: int | None = None,
+    ) -> int:
+        """Admit or recheck one public mutation against the prepared-State lane."""
+
+        current_epoch = self._prepared_state_admission_epoch
+        if self._active_prepared_state_claim is not None or (
+            admitted_at is not None and admitted_at != current_epoch
+        ):
+            raise StateError(
+                f"State mutation {operation} is unavailable during an active action-cohort "
+                "claim or prepared-State claim"
+            )
+        return current_epoch
+
+    @contextmanager
+    def _capability_minting_guard(self, operation: str) -> Iterator[None]:
+        """Fence one public State-derived capability mint across the prepared lane."""
+
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(operation)
+        with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                operation,
+                admitted_at=admission_epoch,
+            )
+            yield
+
     def authenticates_process_termination_plan(
         self,
         plan: ProcessTerminationMaterializationPlan,
@@ -2611,7 +3332,18 @@ class StateManager:
                         _freeze_materialization_digest_value(value, set()),
                     )
                     for name, value in self.__dict__.items()
-                    if name not in {"_lock", "_materialization_secret", "state"}
+                    if name
+                    not in {
+                        "_lock",
+                        "_materialization_secret",
+                        "_active_connection_preparations",
+                        "_active_connection_composite_preparations",
+                        "_active_action_cohort_preparations",
+                        "_active_action_cohort_claim",
+                        "_active_prepared_state_claim",
+                        "_prepared_state_admission_epoch",
+                        "state",
+                    }
                 )
             )
             state_payload = (
@@ -2637,7 +3369,12 @@ class StateManager:
         not yet adopted an opaque plan; production start publication passes the plan.
         """
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("materialization_guard")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "materialization_guard",
+                admitted_at=admission_epoch,
+            )
             expected_version = plan if isinstance(plan, int) else plan.expected_version
             if expected_version != self._materialization_version:
                 raise StateError(
@@ -2668,7 +3405,14 @@ class StateManager:
     ) -> Iterator[None]:
         """Hold the StateManager lane after fully validating one termination plan."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "process_termination_materialization_guard"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "process_termination_materialization_guard",
+                admitted_at=admission_epoch,
+            )
             self.validate_process_termination_materialization(plan)
             yield
 
@@ -2985,13 +3729,13 @@ class StateManager:
     def begin_materialization_batch(self) -> MaterializationBatchBuilder:
         """Return an allocation-free builder bound to the current state fence."""
 
-        with self._lock:
+        with self._capability_minting_guard("begin_materialization_batch"):
             return MaterializationBatchBuilder(self, self._materialization_version)
 
     def begin_action_cohort_materialization(self) -> ActionCohortMaterializationBuilder:
         """Return an allocation-free multi-session action-cohort builder."""
 
-        with self._lock:
+        with self._capability_minting_guard("begin_action_cohort_materialization"):
             return ActionCohortMaterializationBuilder(self, self._materialization_version)
 
     def _action_cohort_preview_host_base(
@@ -3147,8 +3891,11 @@ class StateManager:
     ) -> SessionMaterializationPlan:
         """Plan one session against a private cohort-local allocator overlay."""
 
-        with self._lock:
-            if builder._manager is not self:
+        with self._capability_minting_guard("ActionCohortMaterializationBuilder.plan_session"):
+            if (
+                builder._manager is not self
+                or builder._admission_epoch != self._prepared_state_admission_epoch
+            ):
                 raise StateError("Action cohort builder belongs to another StateManager")
             if builder.expected_version != self._materialization_version:
                 raise StateError("Action cohort builder became stale during session planning")
@@ -3312,9 +4059,10 @@ class StateManager:
     ) -> SessionMaterializationPlan | SessionIdentity:
         """Require an exact staged member or exact currently live session identity."""
 
-        with self._lock:
+        with self._capability_minting_guard("ActionCohortMaterializationBuilder.session_target"):
             if (
                 builder._manager is not self
+                or builder._admission_epoch != self._prepared_state_admission_epoch
                 or builder.expected_version != self._materialization_version
             ):
                 raise StateError("Action cohort session target uses a stale or foreign builder")
@@ -3338,9 +4086,10 @@ class StateManager:
     ) -> ProcessMaterializationPlan | ProcessIdentity:
         """Require an exact staged member or exact currently live process identity."""
 
-        with self._lock:
+        with self._capability_minting_guard("ActionCohortMaterializationBuilder.process_target"):
             if (
                 builder._manager is not self
+                or builder._admission_epoch != self._prepared_state_admission_epoch
                 or builder.expected_version != self._materialization_version
             ):
                 raise StateError("Action cohort process target uses a stale or foreign builder")
@@ -3447,7 +4196,9 @@ class StateManager:
     ) -> ActionCohortLiveSessionProcessRolesPatch:
         """Build one manager-issued live desktop role transition without mutation."""
 
-        with self._lock:
+        with self._capability_minting_guard(
+            "ActionCohortMaterializationBuilder.bind_live_windows_session_shell"
+        ):
             if type(target) is not SessionIdentity:
                 raise TypeError("Live Windows session shell target requires an exact identity")
             normalized = self._normalize_action_cohort_session_target(builder, target)
@@ -3588,8 +4339,11 @@ class StateManager:
     ) -> ActionCohortMaterializationPlan:
         """Freeze and authenticate one exact builder without retaining it."""
 
-        with self._lock:
-            if builder._manager is not self:
+        with self._capability_minting_guard("ActionCohortMaterializationBuilder.seal"):
+            if (
+                builder._manager is not self
+                or builder._admission_epoch != self._prepared_state_admission_epoch
+            ):
                 raise StateError("Action cohort builder belongs to another StateManager")
             if builder.expected_version != self._materialization_version:
                 raise StateError("Action cohort builder became stale before sealing")
@@ -3731,8 +4485,11 @@ class StateManager:
     ) -> SessionMaterializationPlan:
         """Plan the one batch session while preserving the builder's state fence."""
 
-        with self._lock:
-            if builder._manager is not self:
+        with self._capability_minting_guard("MaterializationBatchBuilder.plan_session"):
+            if (
+                builder._manager is not self
+                or builder._admission_epoch != self._prepared_state_admission_epoch
+            ):
                 raise StateError("Materialization batch belongs to another StateManager")
             if builder.expected_version != self._materialization_version:
                 raise StateError("Materialization batch became stale during session planning")
@@ -3753,9 +4510,12 @@ class StateManager:
     ) -> SessionMaterializationPlan:
         """Enrich the one batch session without publishing either allocator."""
 
-        with self._lock:
+        with self._capability_minting_guard(
+            "MaterializationBatchBuilder.enrich_linux_logind_session"
+        ):
             if (
                 builder._manager is not self
+                or builder._admission_epoch != self._prepared_state_admission_epoch
                 or builder.expected_version != self._materialization_version
             ):
                 raise StateError("Materialization batch became stale during logind planning")
@@ -3773,8 +4533,11 @@ class StateManager:
     ) -> MaterializationBatchPlan:
         """Authenticate the builder's exact session/process membership."""
 
-        with self._lock:
-            if builder._manager is not self:
+        with self._capability_minting_guard("MaterializationBatchBuilder.seal"):
+            if (
+                builder._manager is not self
+                or builder._admission_epoch != self._prepared_state_admission_epoch
+            ):
                 raise StateError("Materialization batch belongs to another StateManager")
             if builder.expected_version != self._materialization_version:
                 raise StateError("Materialization batch became stale before sealing")
@@ -3937,7 +4700,7 @@ class StateManager:
     ) -> SessionMaterializationPlan:
         """Plan one exact session identity without consuming LUID/session allocators."""
 
-        with self._lock:
+        with self._capability_minting_guard("plan_session_materialization"):
             if start_time is None and self.state.current_time is None:
                 raise StateError("Cannot plan session: current_time not set")
             session_start = ensure_utc(start_time or self.state.current_time)
@@ -4053,7 +4816,12 @@ class StateManager:
     def materialize_session(self, plan: SessionMaterializationPlan) -> ActiveSession:
         """Commit one already-admitted session plan without sampling or domain validation."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("materialize_session")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "materialize_session",
+                admitted_at=admission_epoch,
+            )
             self.validate_session_materialization(plan)
             return self._commit_prevalidated_session_materialization(plan)
 
@@ -4072,7 +4840,7 @@ class StateManager:
         mutated until authority commit.
         """
 
-        with self._lock:
+        with self._capability_minting_guard("plan_linux_logind_session_materialization"):
             self._validate_session_materialization_plan(plan)
             if plan.expected_version != self._materialization_version:
                 raise StateError("Session materialization plan became stale before enrichment")
@@ -4129,6 +4897,8 @@ class StateManager:
         *,
         advance_version: bool = True,
         update_state_time: bool = True,
+        prepared: _PreparedActionCohortSessionStart | None = None,
+        emit_log: bool = True,
     ) -> ActiveSession:
         """Perform primitive session writes after validation under materialization_guard."""
 
@@ -4149,44 +4919,35 @@ class StateManager:
             host, counter = patch.windows_session_counter
             self._windows_session_id_counters[host] = counter
         if patch.linux_logind is not None:
-            self._commit_linux_logind_allocator_patch(patch.linux_logind)
-        identity = plan.identity
+            self._commit_linux_logind_allocator_patch(
+                patch.linux_logind,
+                used_ids_default=(
+                    prepared.linux_logind_used_ids_default if prepared is not None else None
+                ),
+                allocations_default=(
+                    prepared.linux_logind_allocations_default if prepared is not None else None
+                ),
+            )
         payload = plan._payload
         if update_state_time:
             self.state.current_time = payload.state_time
-        session = ActiveSession(
-            logon_id=identity.logon_id,
-            username=identity.principal,
-            system=identity.hostname,
-            logon_type=payload.logon_type,
-            start_time=identity.started_at,
-            source_ip=payload.source_ip,
-            session_id=identity.session_id,
-            source_port=payload.source_port,
-            session_kind=identity.session_kind,
-            transport_pid=payload.transport_pid,
-            ecar_object_id=identity.object_id,
-            logon_guid=identity.logon_guid,
-            lifecycle_group_id=identity.lifecycle_group_id,
-            parent_lifecycle_group_id=identity.parent_lifecycle_group_id,
-            auth_protocol=payload.auth_protocol,
-            smb_principal=payload.smb_principal,
-            account_scope=payload.account_scope,
-            auth_session_ref=payload.auth_session_ref,
-            effective_uid=payload.effective_uid,
-            effective_gid=payload.effective_gid,
+        session = (
+            prepared.session
+            if prepared is not None
+            else self._prepare_action_cohort_session_start(plan).session
         )
         self.state.active_sessions[session.logon_id] = session
         self._remove_logon_id_alias(session.logon_id)
         self._remove_ended_session(session.logon_id)
         if advance_version:
             self._materialization_version += 1
-        logger.debug(
-            "Materialized session %s for %s@%s",
-            session.logon_id,
-            session.username,
-            session.system,
-        )
+        if emit_log:
+            logger.debug(
+                "Materialized session %s for %s@%s",
+                session.logon_id,
+                session.username,
+                session.system,
+            )
         return session
 
     # ========================================
@@ -4294,7 +5055,12 @@ class StateManager:
 
     def allocate_logon_id(self, system: str, event_time: datetime | None = None) -> str:
         """Allocate a standalone host-local LogonID without registering a session."""
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("allocate_logon_id")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "allocate_logon_id",
+                admitted_at=admission_epoch,
+            )
             if event_time is None:
                 if self.state.current_time is None:
                     raise StateError("Cannot allocate LogonID: current_time not set")
@@ -4316,9 +5082,16 @@ class StateManager:
     def next_semantic_peer_ordinal(self, family: str, stable_key: str) -> int:
         """Allocate an ordinal scoped only to otherwise identical semantic peers."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "next_semantic_peer_ordinal"
+        )
         if not family or not stable_key:
             raise ValueError("Semantic peer ordinals require a family and stable key")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "next_semantic_peer_ordinal",
+                admitted_at=admission_epoch,
+            )
             key = (family, stable_key)
             ordinal = self._semantic_peer_ordinals.get(key, 0)
             self._semantic_peer_ordinals[key] = ordinal + 1
@@ -4501,29 +5274,34 @@ class StateManager:
         Raises:
             StateError: If current_time is not set or LogonID counter exhausted
         """
-        plan = self.plan_session_materialization(
-            username=username,
-            system=system,
-            logon_type=logon_type,
-            source_ip=source_ip,
-            source_port=source_port,
-            session_kind=session_kind,
-            transport_pid=transport_pid,
-            start_time=start_time,
-            logon_guid=logon_guid,
-            logon_guid_required=logon_guid_required,
-            session_id=session_id,
-            lifecycle_group_id=lifecycle_group_id,
-            parent_lifecycle_group_id=parent_lifecycle_group_id,
-            auth_protocol=auth_protocol,
-            smb_principal=smb_principal,
-            account_scope=account_scope,
-            auth_session_ref=auth_session_ref,
-            effective_uid=effective_uid,
-            effective_gid=effective_gid,
-        )
-        with self.materialization_guard(plan.expected_version):
-            return self.materialize_session(plan).logon_id
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("create_session")
+        with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "create_session", admitted_at=admission_epoch
+            )
+            plan = self.plan_session_materialization(
+                username=username,
+                system=system,
+                logon_type=logon_type,
+                source_ip=source_ip,
+                source_port=source_port,
+                session_kind=session_kind,
+                transport_pid=transport_pid,
+                start_time=start_time,
+                logon_guid=logon_guid,
+                logon_guid_required=logon_guid_required,
+                session_id=session_id,
+                lifecycle_group_id=lifecycle_group_id,
+                parent_lifecycle_group_id=parent_lifecycle_group_id,
+                auth_protocol=auth_protocol,
+                smb_principal=smb_principal,
+                account_scope=account_scope,
+                auth_session_ref=auth_session_ref,
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
+            )
+            with self.materialization_guard(plan.expected_version):
+                return self.materialize_session(plan).logon_id
 
     def get_session(self, logon_id: str) -> ActiveSession | None:
         """Get an active session by LogonID.
@@ -4726,37 +5504,41 @@ class StateManager:
         external generator returns a LogonID without recording the session
         through ``create_session()``.
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("register_session")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "register_session", admitted_at=admission_epoch
+            )
             resolved_logon_id = self._resolve_logon_id(logon_id)
             existing = self.state.active_sessions.get(logon_id) or self.state.active_sessions.get(
                 resolved_logon_id
             )
             if existing is not None:
                 return existing
-        plan = self.plan_session_materialization(
-            logon_id=logon_id,
-            username=username,
-            system=system,
-            logon_type=logon_type,
-            source_ip=source_ip,
-            start_time=start_time,
-            source_port=source_port,
-            session_kind=session_kind,
-            transport_pid=transport_pid,
-            logon_guid=logon_guid,
-            logon_guid_required=logon_guid_required,
-            session_id=session_id,
-            lifecycle_group_id=lifecycle_group_id,
-            parent_lifecycle_group_id=parent_lifecycle_group_id,
-            auth_protocol=auth_protocol,
-            smb_principal=smb_principal,
-            account_scope=account_scope,
-            auth_session_ref=auth_session_ref,
-            effective_uid=effective_uid,
-            effective_gid=effective_gid,
-        )
-        with self.materialization_guard(plan.expected_version):
-            return self.materialize_session(plan)
+            plan = self.plan_session_materialization(
+                logon_id=logon_id,
+                username=username,
+                system=system,
+                logon_type=logon_type,
+                source_ip=source_ip,
+                start_time=start_time,
+                source_port=source_port,
+                session_kind=session_kind,
+                transport_pid=transport_pid,
+                logon_guid=logon_guid,
+                logon_guid_required=logon_guid_required,
+                session_id=session_id,
+                lifecycle_group_id=lifecycle_group_id,
+                parent_lifecycle_group_id=parent_lifecycle_group_id,
+                auth_protocol=auth_protocol,
+                smb_principal=smb_principal,
+                account_scope=account_scope,
+                auth_session_ref=auth_session_ref,
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
+            )
+            with self.materialization_guard(plan.expected_version):
+                return self.materialize_session(plan)
 
     def update_session_metadata(
         self,
@@ -4783,7 +5565,14 @@ class StateManager:
         effective_gid: int | None = None,
     ) -> bool:
         """Update mutable metadata on an existing session."""
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "update_session_metadata"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "update_session_metadata",
+                admitted_at=admission_epoch,
+            )
             session = self.state.active_sessions.get(self._resolve_logon_id(logon_id))
             if session is None:
                 return False
@@ -4848,7 +5637,12 @@ class StateManager:
         idempotent.
         """
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("plan_session_end")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "plan_session_end",
+                admitted_at=admission_epoch,
+            )
             session = self.state.active_sessions.get(self._resolve_logon_id(logon_id))
             if session is None:
                 return False
@@ -4932,6 +5726,9 @@ class StateManager:
         require_nonzero: bool = True,
     ) -> str:
         """Return the canonical LogonGuid for a session, creating it if needed."""
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "get_or_create_session_logon_guid"
+        )
         with self._lock:
             resolved = self._resolve_logon_id(logon_id)
             session = self.state.active_sessions.get(resolved)
@@ -4946,12 +5743,23 @@ class StateManager:
                 else _NULL_LOGON_GUID
             )
             if session is not None:
+                self._reject_mutation_during_action_cohort_claim(
+                    "get_or_create_session_logon_guid",
+                    admitted_at=admission_epoch,
+                )
                 session.logon_guid = guid
             return guid
 
     def reassign_session_logon_id(self, logon_id: str, event_time: datetime) -> str | None:
         """Re-key an active session after its final source-native start time is known."""
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "reassign_session_logon_id"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "reassign_session_logon_id",
+                admitted_at=admission_epoch,
+            )
             session = self._active_sessions.pop(logon_id, None)
             if session is None:
                 return None
@@ -4977,7 +5785,12 @@ class StateManager:
         Returns:
             True if session was found and removed, False if not found
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("end_session")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "end_session",
+                admitted_at=admission_epoch,
+            )
             resolved_logon_id = self._resolve_logon_id(logon_id)
             session = self._active_sessions.pop(resolved_logon_id, None)
             if session is not None:
@@ -5096,6 +5909,9 @@ class StateManager:
     def _commit_linux_logind_allocator_patch(
         self,
         patch: _LinuxLogindAllocatorPatch,
+        *,
+        used_ids_default: set[int] | None = None,
+        allocations_default: TemporalAllocationIndex | None = None,
     ) -> None:
         """Apply one validated logind allocator patch with primitive writes only."""
 
@@ -5103,11 +5919,20 @@ class StateManager:
             self._linux_logind_session_initials[patch.system] = patch.initial
         if patch.epoch is not None:
             self._linux_logind_session_epochs[patch.system] = patch.epoch
-        self._linux_logind_session_used_ids.setdefault(patch.system, set()).add(patch.session_id)
-        self._linux_logind_session_allocations.setdefault(
-            patch.system,
-            TemporalAllocationIndex(),
-        ).add(patch.event_time, patch.session_id)
+        used_ids = self._linux_logind_session_used_ids.get(patch.system)
+        if used_ids is None:
+            used_ids = used_ids_default if used_ids_default is not None else set()
+            self._linux_logind_session_used_ids[patch.system] = used_ids
+        used_ids.add(patch.session_id)
+        allocations = self._linux_logind_session_allocations.get(patch.system)
+        if allocations is None:
+            allocations = (
+                allocations_default
+                if allocations_default is not None
+                else TemporalAllocationIndex()
+            )
+            self._linux_logind_session_allocations[patch.system] = allocations
+        allocations.add(patch.event_time, patch.session_id)
         self._linux_logind_session_last_ids[patch.system] = max(
             patch.session_id,
             self._linux_logind_session_last_ids.get(patch.system, patch.session_id),
@@ -5125,7 +5950,14 @@ class StateManager:
         counter in StateManager prevents split-brain session sequences when
         baseline noise and explicit SSH/logon events both emit logind messages.
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "next_linux_logind_session_id"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "next_linux_logind_session_id",
+                admitted_at=admission_epoch,
+            )
             if event_time is not None:
                 candidate, patch = self._preview_linux_logind_session_id(
                     system,
@@ -5487,7 +6319,7 @@ class StateManager:
     ) -> ProcessMaterializationPlan:
         """Plan one exact process identity without consuming PID/thread allocators."""
 
-        with self._lock:
+        with self._capability_minting_guard("plan_process_materialization"):
             raw_start = start_time or self.state.current_time
             if raw_start is None:
                 raise StateError("Cannot plan process: current_time not set")
@@ -5726,7 +6558,7 @@ class StateManager:
     ) -> ProcessTerminationMaterializationPlan:
         """Freeze one exact live process termination without publishing state."""
 
-        with self._lock:
+        with self._capability_minting_guard("plan_process_termination_materialization"):
             process = self.state.running_processes.get((system, pid))
             if process is None:
                 raise StateError(
@@ -5801,9 +6633,10 @@ class StateManager:
     ) -> ProcessMaterializationPlan:
         """Plan one batch process against exact canonical and prior staged owners."""
 
-        with self._lock:
+        with self._capability_minting_guard("MaterializationBatchBuilder.plan_process"):
             if (
                 builder._manager is not self
+                or builder._admission_epoch != self._prepared_state_admission_epoch
                 or builder.expected_version != self._materialization_version
             ):
                 raise StateError("Materialization batch became stale during process planning")
@@ -6112,7 +6945,12 @@ class StateManager:
     def materialize_process(self, plan: ProcessMaterializationPlan) -> RunningProcess:
         """Commit one already-admitted process plan without sampling or domain validation."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("materialize_process")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "materialize_process",
+                admitted_at=admission_epoch,
+            )
             self.validate_process_materialization(plan)
             return self._commit_prevalidated_process_materialization(plan)
 
@@ -6190,12 +7028,15 @@ class StateManager:
         plan: ProcessTerminationMaterializationPlan,
         *,
         advance_version: bool = True,
+        prepared: _PreparedActionCohortProcessTermination | None = None,
+        emit_log: bool = True,
+        enforce_retention: bool = True,
     ) -> ProcessIdentity:
         """Perform primitive process-termination writes after guarded validation."""
 
         identity = plan.identity
         payload = plan._payload
-        key = (identity.hostname, identity.pid)
+        key = prepared.process_key if prepared is not None else (identity.hostname, identity.pid)
         process = self.state.running_processes[key]
 
         parent_identity = payload.parent_identity
@@ -6208,13 +7049,20 @@ class StateManager:
             ):
                 parent.last_activity_time = parent_activity_time
 
-        thread_deadline = (payload.end_time + _ENDED_IDENTITY_RETENTION).timestamp()
-        for thread_identity in payload.threads:
-            thread_key = (
-                thread_identity.hostname,
-                thread_identity.process_object_id,
-                thread_identity.tid,
+        thread_deadline = (
+            prepared.thread_deadline
+            if prepared is not None
+            else (payload.end_time + _ENDED_IDENTITY_RETENTION).timestamp()
+        )
+        thread_keys = (
+            prepared.thread_keys
+            if prepared is not None
+            else tuple(
+                (thread.hostname, thread.process_object_id, thread.tid)
+                for thread in payload.threads
             )
+        )
+        for thread_key in thread_keys:
             thread = self.state.running_threads.pop(thread_key)
             thread.end_time = payload.end_time
             self._ended_threads.set(thread_key, thread, thread_deadline)
@@ -6228,7 +7076,11 @@ class StateManager:
         process.end_time = payload.end_time
         self._process_object_ids.pop(key)
         self._processes_by_object_id.pop(identity.object_id)
-        process_deadline = (payload.end_time + _ENDED_IDENTITY_RETENTION).timestamp()
+        process_deadline = (
+            prepared.process_deadline
+            if prepared is not None
+            else (payload.end_time + _ENDED_IDENTITY_RETENTION).timestamp()
+        )
         self._ended_processes_by_key.set(key, process, process_deadline)
         self._ended_processes_by_object_id.set(
             identity.object_id,
@@ -6241,11 +7093,13 @@ class StateManager:
             for name in reference.fields:
                 setattr(session, name, None)
 
-        self._trim_retained_thread_identities()
-        self._trim_retained_process_identities()
+        if enforce_retention:
+            self._trim_retained_thread_identities()
+            self._trim_retained_process_identities()
         if advance_version:
             self._materialization_version += 1
-        logger.debug("Ended process %s on %s", identity.pid, identity.hostname)
+        if emit_log:
+            logger.debug("Ended process %s on %s", identity.pid, identity.hostname)
         return identity
 
     def materialize_process_termination(
@@ -6254,8 +7108,16 @@ class StateManager:
     ) -> ProcessIdentity:
         """Commit one exact process termination and return its receipt-ready identity."""
 
-        with self.process_termination_materialization_guard(plan):
-            return self._commit_prevalidated_process_termination_materialization(plan)
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "materialize_process_termination"
+        )
+        with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "materialize_process_termination",
+                admitted_at=admission_epoch,
+            )
+            with self.process_termination_materialization_guard(plan):
+                return self._commit_prevalidated_process_termination_materialization(plan)
 
     @staticmethod
     def _action_session_identity(
@@ -6937,6 +7799,1091 @@ class StateManager:
             if not member_frontiers or plan.final_state_time != max(member_frontiers):
                 raise StateError("Action cohort final State time drifted from its member frontier")
 
+    @staticmethod
+    def _prepare_action_cohort_session_start(
+        plan: SessionMaterializationPlan,
+    ) -> _PreparedActionCohortSessionStart:
+        """Construct one runtime session row and allocator defaults before claim."""
+
+        identity = plan.identity
+        payload = plan._payload
+        session = ActiveSession(
+            logon_id=identity.logon_id,
+            username=identity.principal,
+            system=identity.hostname,
+            logon_type=payload.logon_type,
+            start_time=identity.started_at,
+            source_ip=payload.source_ip,
+            session_id=identity.session_id,
+            source_port=payload.source_port,
+            session_kind=identity.session_kind,
+            transport_pid=payload.transport_pid,
+            ecar_object_id=identity.object_id,
+            logon_guid=identity.logon_guid,
+            lifecycle_group_id=identity.lifecycle_group_id,
+            parent_lifecycle_group_id=identity.parent_lifecycle_group_id,
+            auth_protocol=payload.auth_protocol,
+            smb_principal=payload.smb_principal,
+            account_scope=payload.account_scope,
+            auth_session_ref=payload.auth_session_ref,
+            effective_uid=payload.effective_uid,
+            effective_gid=payload.effective_gid,
+        )
+        linux_logind = plan._allocator_patch.linux_logind
+        return _PreparedActionCohortSessionStart(
+            plan=plan,
+            session=session,
+            linux_logind_used_ids_default=set() if linux_logind is not None else None,
+            linux_logind_allocations_default=(
+                TemporalAllocationIndex() if linux_logind is not None else None
+            ),
+        )
+
+    @staticmethod
+    def _prepare_action_cohort_process_start(
+        plan: ProcessMaterializationPlan,
+    ) -> _PreparedActionCohortProcessStart:
+        """Construct one runtime process/thread row and allocator defaults before claim."""
+
+        identity = plan.identity
+        payload = plan._payload
+        primary_thread = identity.primary_thread
+        assert primary_thread is not None
+        process = RunningProcess(
+            pid=identity.pid,
+            parent_pid=identity.parent_pid,
+            image=identity.image,
+            command_line=identity.command_line,
+            username=identity.principal,
+            system=identity.hostname,
+            start_time=identity.started_at,
+            integrity_level=payload.integrity_level,
+            logon_id=identity.logon_id,
+            token_logon_id=identity.logon_id,
+            auth_session_id=payload.auth_session_id,
+            auth_logon_type=payload.auth_logon_type,
+            ecar_object_id=identity.object_id,
+            primary_tid=primary_thread.tid,
+            lifecycle_group_id=identity.lifecycle_group_id,
+            parent_lifecycle_group_id=identity.parent_lifecycle_group_id,
+            concurrency_group_id=payload.concurrency_group_id,
+            pid_logical_position=payload.pid_logical_position,
+        )
+        thread = RunningThread(
+            hostname=primary_thread.hostname,
+            process_object_id=primary_thread.process_object_id,
+            pid=primary_thread.pid,
+            tid=primary_thread.tid,
+            object_id=primary_thread.object_id,
+            start_time=primary_thread.started_at,
+            kind=primary_thread.kind,
+        )
+        patch = plan._allocator_patch
+        pid_rng: random.Random | None = None
+        if patch.pid_rng_state is not None:
+            pid_rng = random.Random()
+            pid_rng.setstate(patch.pid_rng_state[1])
+        thread_rng: random.Random | None = None
+        if patch.thread_rng_state is not None:
+            thread_rng = random.Random()
+            thread_rng.setstate(patch.thread_rng_state[1])
+        return _PreparedActionCohortProcessStart(
+            plan=plan,
+            process=process,
+            thread=thread,
+            pid_rng_replacement=pid_rng,
+            linux_pid_allocations_default=(
+                TemporalAllocationIndex() if patch.linux_allocation is not None else None
+            ),
+            fixed_pid_reservations_default=(set() if patch.fixed_pid is not None else None),
+            thread_rng_replacement=thread_rng,
+        )
+
+    @staticmethod
+    def _prepare_action_cohort_process_termination(
+        termination: ActionCohortProcessTermination,
+    ) -> _PreparedActionCohortProcessTermination:
+        """Construct exact process-close primitives and deadlines before claim."""
+
+        target = termination.target
+        if type(target) is ProcessTerminationMaterializationPlan:
+            primitive = target
+        else:
+            assert type(target) is ProcessMaterializationPlan
+            identity = target.identity
+            parent_activity = termination.parent_activity
+            parent_identity = (
+                StateManager._action_process_identity(parent_activity.target)
+                if parent_activity is not None
+                else None
+            )
+            primary_thread = identity.primary_thread
+            assert primary_thread is not None
+            payload = _ProcessTerminationMaterializationPayload(
+                end_time=termination.end_time,
+                threads=(primary_thread,),
+                parent_identity=parent_identity,
+                parent_activity_time=(
+                    parent_activity.activity_time if parent_activity is not None else None
+                ),
+                session_references=termination.staged_session_references,
+            )
+            primitive = ProcessTerminationMaterializationPlan(
+                _expected_version=target.expected_version,
+                _identity=identity,
+                _payload=payload,
+                _integrity_token="",
+            )
+        identity = primitive.identity
+        deadline = (primitive.end_time + _ENDED_IDENTITY_RETENTION).timestamp()
+        return _PreparedActionCohortProcessTermination(
+            plan=primitive,
+            process_key=(identity.hostname, identity.pid),
+            thread_keys=tuple(
+                (thread.hostname, thread.process_object_id, thread.tid)
+                for thread in primitive._payload.threads
+            ),
+            thread_deadline=deadline,
+            process_deadline=deadline,
+        )
+
+    def _prepare_action_cohort_rollback_journal(
+        self,
+        plan: ActionCohortMaterializationPlan,
+        *,
+        sessions: tuple[_PreparedActionCohortSessionStart, ...],
+        processes: tuple[_PreparedActionCohortProcessStart, ...],
+        process_terminations: tuple[_PreparedActionCohortProcessTermination, ...],
+        session_terminalizations: tuple[_PreparedActionCohortSessionTerminalization, ...],
+    ) -> _ActionCohortRollbackJournal:
+        """Capture only cohort-addressable keys, members, and runtime rows."""
+
+        mapping_entries: dict[tuple[int, object], _ActionCohortMappingSavepoint] = {}
+        set_entries: dict[tuple[int, object], _ActionCohortSetSavepoint] = {}
+        mapped_set_entries: dict[tuple[int, object, object], _ActionCohortMappedSetSavepoint] = {}
+        indexed_store_entries: dict[tuple[int, object], _ActionCohortIndexedStoreSavepoint] = {}
+        grouped_entries: dict[tuple[int, object], _ActionCohortGroupedTemporalSavepoint] = {}
+        temporal_entries: list[_ActionCohortTemporalAllocationSavepoint] = []
+        object_entries: dict[int, _ActionCohortObjectSavepoint] = {}
+        temporal_offsets: dict[tuple[int, str], int] = {}
+
+        def capture_mapping(mapping: dict[object, object], key: object) -> None:
+            journal_key = (id(mapping), key)
+            if journal_key in mapping_entries:
+                return
+            mapping_entries[journal_key] = _ActionCohortMappingSavepoint(
+                mapping=mapping,
+                key=key,
+                present=key in mapping,
+                value=mapping.get(key),
+            )
+
+        def capture_set(values: set[object], value: object) -> None:
+            journal_key = (id(values), value)
+            if journal_key in set_entries:
+                return
+            set_entries[journal_key] = _ActionCohortSetSavepoint(
+                values=values,
+                value=value,
+                present=value in values,
+            )
+
+        def capture_mapped_set(
+            mapping: dict[object, object],
+            key: object,
+            value: object,
+        ) -> None:
+            journal_key = (id(mapping), key, value)
+            if journal_key in mapped_set_entries:
+                return
+            current = mapping.get(key)
+            values = current if isinstance(current, set) else None
+            mapped_set_entries[journal_key] = _ActionCohortMappedSetSavepoint(
+                mapping=mapping,
+                key=key,
+                mapping_present=key in mapping,
+                values=values,
+                value=value,
+                value_present=values is not None and value in values,
+            )
+
+        def capture_indexed(store: IndexedEntityStore[object, object], key: object) -> None:
+            journal_key = (id(store), key)
+            if journal_key in indexed_store_entries:
+                return
+            present = key in store._items
+            indexed_values = store._indexed_values.get(key)
+            buckets: tuple[tuple[str, object, dict[object, None]], ...] = ()
+            if indexed_values is not None:
+                buckets = tuple(
+                    (name, indexed_value, store._indexes[name][indexed_value])
+                    for name, indexed_value in indexed_values.items()
+                )
+            indexed_store_entries[journal_key] = _ActionCohortIndexedStoreSavepoint(
+                store=store,
+                key=key,
+                present=present,
+                value=store._items.get(key),
+                indexed_values=indexed_values,
+                buckets=buckets,
+            )
+
+        def capture_object(target: ActiveSession | RunningProcess | RunningThread) -> None:
+            if id(target) in object_entries:
+                return
+            object_entries[id(target)] = _ActionCohortObjectSavepoint(
+                target=target,
+                fields=tuple(target.__dict__.items()),
+            )
+
+        def capture_grouped(
+            index: GroupedTemporalIndex[object, object],
+            key: object,
+            *,
+            added_group: object | None,
+            added_time: datetime | None,
+            adds_record: bool,
+        ) -> None:
+            journal_key = (id(index), key)
+            existing = grouped_entries.get(journal_key)
+            if existing is not None:
+                if not adds_record or existing.added_record is not None:
+                    return
+                assert added_group is not None
+                assert added_time is not None
+                prior = existing.prior_current
+                grouped_entries[journal_key] = _ActionCohortGroupedTemporalSavepoint(
+                    index=index,
+                    key=key,
+                    prior_current=prior,
+                    prior_next_sequence=existing.prior_next_sequence,
+                    prior_stale_counts=existing.prior_stale_counts,
+                    added_record=(
+                        added_group,
+                        added_time,
+                        prior[2] if prior is not None else existing.prior_next_sequence,
+                        prior[3] + 1 if prior is not None else 1,
+                    ),
+                )
+                return
+            prior_current = index._current.get(key)
+            groups: list[object] = []
+            if prior_current is not None:
+                groups.append(prior_current[0])
+            if added_group is not None and added_group not in groups:
+                groups.append(added_group)
+            added_record = None
+            if adds_record:
+                assert added_group is not None
+                assert added_time is not None
+                added_record = (
+                    added_group,
+                    added_time,
+                    prior_current[2] if prior_current is not None else index._next_sequence,
+                    prior_current[3] + 1 if prior_current is not None else 1,
+                )
+            grouped_entries[journal_key] = _ActionCohortGroupedTemporalSavepoint(
+                index=index,
+                key=key,
+                prior_current=prior_current,
+                prior_next_sequence=index._next_sequence,
+                prior_stale_counts=tuple(
+                    (group, index._stale_counts.get(group)) for group in groups
+                ),
+                added_record=added_record,
+            )
+
+        def capture_temporal_addition(
+            mapping: dict[str, TemporalAllocationIndex],
+            host: str,
+            event_time: datetime,
+            value: int,
+        ) -> None:
+            capture_mapping(mapping, host)  # type: ignore[arg-type]
+            index = mapping.get(host)
+            offset_key = (id(mapping), host)
+            offset = temporal_offsets.get(offset_key, 0)
+            temporal_offsets[offset_key] = offset + 1
+            temporal_entries.append(
+                _ActionCohortTemporalAllocationSavepoint(
+                    mapping=mapping,
+                    host=host,
+                    index_was_present=index is not None,
+                    index=index,
+                    event_time=event_time,
+                    value=value,
+                    sequence=(index._sequence if index is not None else 0) + offset,
+                )
+            )
+
+        session_rows = {item.plan.identity.object_id: item.session for item in sessions}
+        process_rows = {item.plan.identity.object_id: item.process for item in processes}
+        thread_rows = {
+            item.plan.identity.primary_thread.object_id: item.thread
+            for item in processes
+            if item.plan.identity.primary_thread is not None
+        }
+        for item in sessions:
+            capture_object(item.session)
+            capture_indexed(self._active_sessions, item.session.logon_id)  # type: ignore[arg-type]
+            patch = item.plan._allocator_patch
+            if patch.host_base is not None:
+                host, base = patch.host_base
+                capture_mapping(self._logon_id_host_bases, host)  # type: ignore[arg-type]
+                capture_set(self._logon_id_used_host_bases, base)  # type: ignore[arg-type]
+            if patch.host_epoch is not None:
+                capture_mapping(self._logon_id_epochs, patch.host_epoch[0])  # type: ignore[arg-type]
+            if patch.ordinal is not None:
+                capture_mapping(self._logon_id_second_ordinals, patch.ordinal[0])  # type: ignore[arg-type]
+            if patch.used_logon_id is not None:
+                capture_set(self._used_logon_ids, patch.used_logon_id)  # type: ignore[arg-type]
+            if patch.windows_session_counter is not None:
+                capture_mapping(
+                    self._windows_session_id_counters,
+                    patch.windows_session_counter[0],
+                )  # type: ignore[arg-type]
+            if patch.linux_logind is not None:
+                logind = patch.linux_logind
+                capture_mapping(self._linux_logind_session_initials, logind.system)  # type: ignore[arg-type]
+                capture_mapping(self._linux_logind_session_epochs, logind.system)  # type: ignore[arg-type]
+                capture_mapping(self._linux_logind_session_last_ids, logind.system)  # type: ignore[arg-type]
+                capture_mapped_set(
+                    self._linux_logind_session_used_ids,  # type: ignore[arg-type]
+                    logind.system,
+                    logind.session_id,
+                )
+                capture_temporal_addition(
+                    self._linux_logind_session_allocations,
+                    logind.system,
+                    logind.event_time,
+                    logind.session_id,
+                )
+            capture_mapping(self._logon_id_aliases, item.session.logon_id)  # type: ignore[arg-type]
+            alias_target = self._logon_id_aliases.get(item.session.logon_id)
+            if alias_target is not None:
+                capture_mapped_set(
+                    self._logon_id_aliases_by_target,  # type: ignore[arg-type]
+                    alias_target,
+                    item.session.logon_id,
+                )
+
+        for item in processes:
+            process = item.process
+            thread = item.thread
+            capture_object(process)
+            capture_object(thread)
+            process_key = (process.system, process.pid)
+            thread_key = (thread.hostname, thread.process_object_id, thread.tid)
+            capture_indexed(self._running_processes, process_key)  # type: ignore[arg-type]
+            capture_indexed(self._running_threads, thread_key)  # type: ignore[arg-type]
+            capture_mapping(self._active_pid_reservation_counts, process.system)  # type: ignore[arg-type]
+            capture_mapping(self._process_object_ids, process_key)  # type: ignore[arg-type]
+            capture_mapping(self._processes_by_object_id, process.ecar_object_id)  # type: ignore[arg-type]
+            patch = item.plan._allocator_patch
+            for mapping, entry in (
+                (self._pid_counters, patch.pid_counter),
+                (self._pid_os, patch.pid_os),
+                (self._pid_rngs, patch.pid_rng_state),
+                (self._pid_time_epochs, patch.pid_epoch),
+                (self._linux_pid_weekly_churn_prefixes, patch.pid_weekly_prefix),
+                (self._pid_bucket_offsets, patch.pid_bucket_offset),
+                (self._thread_id_counters, patch.thread_counter),
+                (self._thread_id_rngs, patch.thread_rng_state),
+            ):
+                if entry is not None:
+                    capture_mapping(mapping, entry[0])  # type: ignore[arg-type]
+            if patch.linux_allocation is not None:
+                host, event_time, logical_position = patch.linux_allocation
+                capture_temporal_addition(
+                    self._linux_pid_allocations,
+                    host,
+                    event_time,
+                    logical_position,
+                )
+            if patch.fixed_pid is not None:
+                capture_mapped_set(
+                    self._fixed_pid_reservations,  # type: ignore[arg-type]
+                    patch.fixed_pid[0],
+                    patch.fixed_pid[1],
+                )
+            if item.plan.identity.parent_pid:
+                parent = self._running_processes.get(
+                    (item.plan.identity.hostname, item.plan.identity.parent_pid)
+                )
+                if parent is not None:
+                    capture_object(parent)
+
+        ended_process_keys: set[object] = {
+            (item.process.system, item.process.pid) for item in processes
+        }
+        ended_process_object_ids: set[object] = set()
+        ended_thread_keys: set[object] = set()
+        for item in process_terminations:
+            identity = item.plan.identity
+            process = process_rows.get(identity.object_id) or self._processes_by_object_id.get(
+                identity.object_id
+            )
+            if process is not None:
+                capture_object(process)
+            capture_indexed(self._running_processes, item.process_key)  # type: ignore[arg-type]
+            capture_mapping(self._active_pid_reservation_counts, identity.hostname)  # type: ignore[arg-type]
+            capture_mapping(self._process_object_ids, item.process_key)  # type: ignore[arg-type]
+            capture_mapping(self._processes_by_object_id, identity.object_id)  # type: ignore[arg-type]
+            ended_process_keys.add(item.process_key)
+            ended_process_object_ids.add(identity.object_id)
+            for thread_identity, thread_key in zip(
+                item.plan._payload.threads,
+                item.thread_keys,
+                strict=True,
+            ):
+                thread = thread_rows.get(thread_identity.object_id) or self._running_threads.get(
+                    thread_key
+                )
+                if thread is not None:
+                    capture_object(thread)
+                capture_indexed(self._running_threads, thread_key)  # type: ignore[arg-type]
+                ended_thread_keys.add(thread_key)
+            parent_identity = item.plan._payload.parent_identity
+            if parent_identity is not None:
+                parent = process_rows.get(
+                    parent_identity.object_id
+                ) or self._processes_by_object_id.get(parent_identity.object_id)
+                if parent is not None:
+                    capture_object(parent)
+            for reference in item.plan._payload.session_references:
+                referenced = session_rows.get(reference.object_id) or self._active_sessions.get(
+                    reference.logon_id
+                )
+                if referenced is not None:
+                    capture_object(referenced)
+
+        ended_session_keys: set[object] = set()
+        for item in session_terminalizations:
+            terminalization = item.terminalization
+            identity = terminalization.identity
+            session = item.ended[0]
+            capture_object(session)
+            capture_indexed(self._active_sessions, item.resolved_logon_id)  # type: ignore[arg-type]
+            ended_session_keys.add(item.resolved_logon_id)
+            if item.resolved_logon_id != identity.logon_id:
+                ended_session_keys.add(identity.logon_id)
+            capture_grouped(
+                self._ended_sessions_by_username_end,  # type: ignore[arg-type]
+                item.resolved_logon_id,
+                added_group=session.username,
+                added_time=terminalization.end_time,
+                adds_record=True,
+            )
+            capture_grouped(
+                self._ended_sessions_by_system_end,  # type: ignore[arg-type]
+                item.resolved_logon_id,
+                added_group=session.system,
+                added_time=terminalization.end_time,
+                adds_record=True,
+            )
+
+        for patch in plan._live_session_process_roles:
+            session = self._active_sessions[self._resolve_logon_id(patch.target.logon_id)]
+            capture_object(session)
+        for patch in plan._session_metadata:
+            identity = self._action_session_identity(patch.target)
+            session = (
+                session_rows.get(identity.object_id)
+                or self._active_sessions[self._resolve_logon_id(identity.logon_id)]
+            )
+            capture_object(session)
+            if patch.before.end_plan != patch.after.end_plan:
+                after_plan = patch.after.end_plan
+                adds_record = after_plan is not None and after_plan.is_hard_deadline
+                capture_grouped(
+                    self._authoritative_session_ends,  # type: ignore[arg-type]
+                    session.logon_id,
+                    added_group=((session.username, session.system) if adds_record else None),
+                    added_time=(ensure_utc(after_plan.canonical_end) if adds_record else None),
+                    adds_record=adds_record,
+                )
+        for patch in plan._process_activity:
+            identity = self._action_process_identity(patch.target)
+            process = (
+                process_rows.get(identity.object_id)
+                or self._processes_by_object_id[identity.object_id]
+            )
+            capture_object(process)
+        for patch in plan._session_activity:
+            identity = self._action_session_identity(patch.target)
+            session = (
+                session_rows.get(identity.object_id)
+                or self._active_sessions[self._resolve_logon_id(identity.logon_id)]
+            )
+            capture_object(session)
+
+        def capture_expiring(
+            index: ExpiringIndex[object, object],
+            keys: set[object],
+        ) -> _ActionCohortExpiringIndexSavepoint:
+            return _ActionCohortExpiringIndexSavepoint(
+                index=index,
+                keys=tuple(
+                    _ActionCohortExpiringKeySavepoint(
+                        key=key,
+                        present=key in index._items,
+                        value=index._items.get(key),
+                        deadline=index._deadlines.get(key),
+                        order=index._orders.get(key),
+                        version=index._versions.get(key),
+                    )
+                    for key in keys
+                ),
+                next_order=index._next_order,
+                high_water_mark=index._high_water_mark,
+            )
+
+        return _ActionCohortRollbackJournal(
+            mapping_entries=tuple(mapping_entries.values()),
+            set_entries=tuple(set_entries.values()),
+            mapped_set_entries=tuple(mapped_set_entries.values()),
+            indexed_store_entries=tuple(indexed_store_entries.values()),
+            expiring_indexes=(
+                capture_expiring(self._ended_sessions, ended_session_keys),  # type: ignore[arg-type]
+                capture_expiring(self._ended_processes_by_key, ended_process_keys),  # type: ignore[arg-type]
+                capture_expiring(
+                    self._ended_processes_by_object_id,  # type: ignore[arg-type]
+                    ended_process_object_ids,
+                ),
+                capture_expiring(self._ended_threads, ended_thread_keys),  # type: ignore[arg-type]
+            ),
+            grouped_temporal_entries=tuple(grouped_entries.values()),
+            temporal_allocations=tuple(temporal_entries),
+            object_entries=tuple(object_entries.values()),
+            scalar_entries=(
+                ("_pid_allocation_count", self._pid_allocation_count),
+                ("_pid_candidate_probe_count", self._pid_candidate_probe_count),
+            ),
+            retention_mapping_entries=[],
+            retention_mapped_set_entries=[],
+            retention_expiring_indexes=[],
+            retention_grouped_temporal_entries=[],
+            state_time=self.state.current_time,
+            materialization_version=self._materialization_version,
+        )
+
+    @staticmethod
+    def _action_cohort_observation_value(value: object) -> object:
+        """Project one touched scalar or owner reference without traversing global state."""
+
+        if value is None or isinstance(value, (bool, int, float, str, bytes, datetime, Enum)):
+            return _freeze_materialization_digest_value(value, set())
+        return ("owner", type(value).__module__, type(value).__qualname__, id(value))
+
+    @staticmethod
+    def _action_cohort_temporal_record_present(
+        index: TemporalAllocationIndex,
+        record: tuple[datetime, int, int],
+    ) -> bool:
+        """Return whether one exact allocation record remains in its bounded index lane."""
+
+        event_time = record[0]
+        block_index = bisect_left(index._block_last_times, event_time)
+        if block_index == len(index._blocks):
+            return False
+        while block_index > 0 and index._blocks[block_index - 1][-1][0] >= event_time:
+            block_index -= 1
+        while block_index < len(index._blocks):
+            block = index._blocks[block_index]
+            if block[0][0] > event_time:
+                return False
+            position = bisect_left(block, record)
+            if position < len(block) and block[position] == record:
+                return True
+            block_index += 1
+        return False
+
+    def _action_cohort_rollback_observation(
+        self,
+        journal: _ActionCohortRollbackJournal,
+    ) -> object:
+        """Capture the current O(cohort delta) projection that rollback may overwrite."""
+
+        mapping_entries = (*journal.mapping_entries, *journal.retention_mapping_entries)
+        mapped_set_entries = (
+            *journal.mapped_set_entries,
+            *journal.retention_mapped_set_entries,
+        )
+        expiring_indexes = (*journal.expiring_indexes, *journal.retention_expiring_indexes)
+        grouped_entries = (
+            *journal.grouped_temporal_entries,
+            *journal.retention_grouped_temporal_entries,
+        )
+
+        mapping_observation = tuple(
+            (
+                id(entry.mapping),
+                self._action_cohort_observation_value(entry.key),
+                entry.key in entry.mapping,
+                self._action_cohort_observation_value(entry.mapping.get(entry.key)),
+            )
+            for entry in mapping_entries
+        )
+        set_observation = tuple(
+            (
+                id(entry.values),
+                self._action_cohort_observation_value(entry.value),
+                entry.value in entry.values,
+            )
+            for entry in journal.set_entries
+        )
+        mapped_set_observation = tuple(
+            (
+                id(entry.mapping),
+                self._action_cohort_observation_value(entry.key),
+                entry.key in entry.mapping,
+                id(entry.mapping.get(entry.key)),
+                isinstance(entry.mapping.get(entry.key), set)
+                and entry.value in entry.mapping[entry.key],
+            )
+            for entry in mapped_set_entries
+        )
+
+        indexed_observation: list[object] = []
+        for entry in journal.indexed_store_entries:
+            store = entry.store
+            indexed_values = store._indexed_values.get(entry.key)
+            buckets: list[object] = []
+            if indexed_values is not None:
+                for name, indexed_value in indexed_values.items():
+                    index = store._indexes.get(name)
+                    bucket = index.get(indexed_value) if index is not None else None
+                    buckets.append(
+                        (
+                            name,
+                            self._action_cohort_observation_value(indexed_value),
+                            id(bucket),
+                            bucket is not None and entry.key in bucket,
+                        )
+                    )
+            indexed_observation.append(
+                (
+                    id(store),
+                    self._action_cohort_observation_value(entry.key),
+                    entry.key in store._items,
+                    id(store._items.get(entry.key)),
+                    _freeze_materialization_digest_value(indexed_values, set()),
+                    tuple(buckets),
+                )
+            )
+
+        expiring_observation = tuple(
+            (
+                id(entry.index),
+                entry.index._next_order,
+                entry.index._high_water_mark,
+                tuple(
+                    (
+                        self._action_cohort_observation_value(key.key),
+                        key.key in entry.index._items,
+                        self._action_cohort_observation_value(entry.index._items.get(key.key)),
+                        entry.index._deadlines.get(key.key),
+                        entry.index._orders.get(key.key),
+                        entry.index._versions.get(key.key),
+                    )
+                    for key in entry.keys
+                ),
+            )
+            for entry in expiring_indexes
+        )
+
+        grouped_observation: list[object] = []
+        for entry in grouped_entries:
+            current = entry.index._current.get(entry.key)
+            groups = {group for group, _count in entry.prior_stale_counts}
+            record_present = False
+            if current is not None:
+                group, event_time, sequence, version = current
+                groups.add(group)
+                records = entry.index._records.get(group, [])
+                record = (event_time, sequence, version, entry.key)
+                position = bisect_left(records, record)
+                record_present = position < len(records) and records[position] == record
+            grouped_observation.append(
+                (
+                    id(entry.index),
+                    self._action_cohort_observation_value(entry.key),
+                    self._action_cohort_observation_value(current),
+                    entry.index._next_sequence,
+                    tuple(
+                        sorted(
+                            (
+                                self._action_cohort_observation_value(group),
+                                entry.index._stale_counts.get(group),
+                            )
+                            for group in groups
+                        )
+                    ),
+                    record_present,
+                )
+            )
+
+        temporal_observation = tuple(
+            (
+                id(entry.mapping),
+                entry.host,
+                id(entry.mapping.get(entry.host)),
+                (
+                    entry.mapping[entry.host]._sequence,
+                    entry.mapping[entry.host]._value_counts.get(entry.value),
+                    self._action_cohort_temporal_record_present(
+                        entry.mapping[entry.host],
+                        (entry.event_time, entry.sequence, entry.value),
+                    ),
+                )
+                if entry.host in entry.mapping
+                else None,
+            )
+            for entry in journal.temporal_allocations
+        )
+
+        object_observation = tuple(
+            (
+                id(entry.target),
+                tuple(
+                    sorted(
+                        (
+                            name,
+                            _freeze_materialization_digest_value(value, set()),
+                        )
+                        for name, value in entry.target.__dict__.items()
+                    )
+                ),
+            )
+            for entry in journal.object_entries
+        )
+        scalar_observation = tuple(
+            (name, self._action_cohort_observation_value(getattr(self, name)))
+            for name, _value in journal.scalar_entries
+        )
+        return (
+            mapping_observation,
+            set_observation,
+            mapped_set_observation,
+            tuple(indexed_observation),
+            expiring_observation,
+            tuple(grouped_observation),
+            temporal_observation,
+            object_observation,
+            scalar_observation,
+            self.state.current_time,
+            self._materialization_version,
+        )
+
+    def _restore_claimed_action_cohort_rollback(
+        self,
+        record: _ActionCohortPreparationRecord,
+    ) -> None:
+        """Restore one exact claim only while its touched postimage is unchanged."""
+
+        preparation = record.preparation
+        if (
+            self._active_action_cohort_claim is not record
+            or self._active_prepared_state_claim is not record
+            or self._active_action_cohort_preparations.get(id(preparation)) is not record
+            or record.claim_thread_id != get_ident()
+            or record.claim_epoch != self._prepared_state_admission_epoch
+            or record.terminal
+        ):
+            raise StateError("Prepared action cohort no longer owns the rollback lane")
+        expected_postimage = record.provisional_postimage
+        if expected_postimage is None:
+            raise StateError("Prepared action cohort has no rollback postimage")
+        if (
+            self._action_cohort_rollback_observation(record.commit_plan.rollback_journal)
+            != expected_postimage
+        ):
+            raise StateError(
+                "Prepared action cohort touched State drifted after provisional apply; "
+                "refusing rollback"
+            )
+        self._restore_action_cohort_rollback_journal(record.commit_plan.rollback_journal)
+
+    @staticmethod
+    def _rollback_action_cohort_temporal_allocation(
+        savepoint: _ActionCohortTemporalAllocationSavepoint,
+    ) -> None:
+        """Remove one exact appended temporal-allocation record in bounded work."""
+
+        if not savepoint.index_was_present:
+            return
+        index = savepoint.index
+        assert index is not None
+        record = (savepoint.event_time, savepoint.sequence, savepoint.value)
+        block_index = bisect_left(index._block_last_times, savepoint.event_time)
+        if block_index == len(index._blocks):
+            block_index -= 1
+        while block_index > 0 and index._blocks[block_index - 1][-1][0] >= savepoint.event_time:
+            block_index -= 1
+        removed = False
+        while block_index < len(index._blocks):
+            block = index._blocks[block_index]
+            if block[0][0] > savepoint.event_time:
+                break
+            position = bisect_left(block, record)
+            if position < len(block) and block[position] == record:
+                block.pop(position)
+                removed = True
+                if block:
+                    index._refresh_block_summary(block_index)
+                    index._update_summary_tree(block_index)
+                else:
+                    index._blocks.pop(block_index)
+                    index._block_last_times.pop(block_index)
+                    index._block_max_values.pop(block_index)
+                    index._block_min_values.pop(block_index)
+                    index._rebuild_summary_tree()
+                break
+            block_index += 1
+        if not removed:
+            return
+
+        epoch = savepoint.event_time.timestamp()
+        for buckets, invariant in (
+            (index._minus_invariants, savepoint.value - epoch),
+            (index._plus_invariants, savepoint.value + epoch),
+        ):
+            bucket_key = math.floor(invariant)
+            bucket = buckets.get(bucket_key)
+            entry = (invariant, savepoint.event_time, savepoint.value)
+            if bucket is not None:
+                if bucket and bucket[-1] == entry:
+                    bucket.pop()
+                else:
+                    position = len(bucket) - 1
+                    while position >= 0 and bucket[position] != entry:
+                        position -= 1
+                    if position >= 0:
+                        bucket.pop(position)
+                if not bucket:
+                    buckets.pop(bucket_key, None)
+        count = index._value_counts.get(savepoint.value, 0)
+        if count > 1:
+            index._value_counts[savepoint.value] = count - 1
+        else:
+            index._value_counts.pop(savepoint.value, None)
+        index._sequence = savepoint.sequence
+
+    @staticmethod
+    def _restore_action_cohort_indexed_store_key(
+        savepoint: _ActionCohortIndexedStoreSavepoint,
+    ) -> None:
+        """Restore one IndexedEntityStore key without invoking indexer callbacks."""
+
+        store = savepoint.store
+        current = store._indexed_values.pop(savepoint.key, None)
+        if current is not None:
+            for name, indexed_value in current.items():
+                bucket = store._indexes[name].get(indexed_value)
+                if bucket is None:
+                    continue
+                bucket.pop(savepoint.key, None)
+                if not bucket:
+                    store._indexes[name].pop(indexed_value, None)
+        store._items.pop(savepoint.key, None)
+        if not savepoint.present:
+            return
+        assert savepoint.indexed_values is not None
+        store._items[savepoint.key] = savepoint.value
+        store._indexed_values[savepoint.key] = savepoint.indexed_values
+        for name, indexed_value, bucket in savepoint.buckets:
+            store._indexes[name][indexed_value] = bucket
+            bucket[savepoint.key] = None
+
+    @staticmethod
+    def _restore_action_cohort_expiring_index(
+        savepoint: _ActionCohortExpiringIndexSavepoint,
+    ) -> None:
+        """Restore touched expiry keys and compact bounded stale entries."""
+
+        index = savepoint.index
+        for entry in savepoint.keys:
+            index._items.pop(entry.key, None)
+            index._deadlines.pop(entry.key, None)
+            index._orders.pop(entry.key, None)
+            index._versions.pop(entry.key, None)
+        for entry in savepoint.keys:
+            if not entry.present:
+                continue
+            assert entry.deadline is not None
+            assert entry.order is not None
+            assert entry.version is not None
+            index._items[entry.key] = entry.value
+            index._deadlines[entry.key] = entry.deadline
+            index._orders[entry.key] = entry.order
+            index._versions[entry.key] = entry.version
+            heapq.heappush(
+                index._heap,
+                (entry.deadline, entry.order, entry.version, entry.key),
+            )
+        index._next_order = savepoint.next_order
+        index._high_water_mark = savepoint.high_water_mark
+        if not index._items:
+            index._items = {}
+            index._deadlines = {}
+            index._orders = {}
+            index._versions = {}
+            index._heap = []
+            index._retired_heap = None
+            index._next_order = 0
+        else:
+            index.compact(max_entries=4_096)
+
+    @staticmethod
+    def _restore_action_cohort_grouped_temporal(
+        savepoint: _ActionCohortGroupedTemporalSavepoint,
+    ) -> None:
+        """Remove one new record and reactivate its exact prior locator."""
+
+        index = savepoint.index
+        added_record = savepoint.added_record
+        if added_record is not None:
+            group, event_time, sequence, version = added_record
+            record = (event_time, sequence, version, savepoint.key)
+            records = index._records.get(group)
+            if records is not None:
+                position = bisect_left(records, record)
+                if position < len(records) and records[position] == record:
+                    records.pop(position)
+                if not records:
+                    index._records.pop(group, None)
+        if savepoint.prior_current is None:
+            index._current.pop(savepoint.key, None)
+        else:
+            group, event_time, sequence, version = savepoint.prior_current
+            prior_record = (event_time, sequence, version, savepoint.key)
+            records = index._records.setdefault(group, [])
+            position = bisect_left(records, prior_record)
+            if position == len(records) or records[position] != prior_record:
+                records.insert(position, prior_record)
+            index._current[savepoint.key] = savepoint.prior_current
+        index._next_sequence = savepoint.prior_next_sequence
+        for group, stale_count in savepoint.prior_stale_counts:
+            if stale_count is None:
+                index._stale_counts.pop(group, None)
+            else:
+                index._stale_counts[group] = stale_count
+
+    def _restore_action_cohort_rollback_journal(
+        self,
+        journal: _ActionCohortRollbackJournal,
+    ) -> None:
+        """Undo every cohort-owned mutation without scanning retained State."""
+
+        for savepoint in reversed(journal.temporal_allocations):
+            self._rollback_action_cohort_temporal_allocation(savepoint)
+        for savepoint in journal.object_entries:
+            savepoint.target.__dict__.clear()
+            savepoint.target.__dict__.update(savepoint.fields)
+        for savepoint in reversed(journal.indexed_store_entries):
+            self._restore_action_cohort_indexed_store_key(savepoint)
+        for savepoint in reversed(journal.retention_mapping_entries):
+            if savepoint.present:
+                savepoint.mapping[savepoint.key] = savepoint.value
+            else:
+                savepoint.mapping.pop(savepoint.key, None)
+        for savepoint in reversed(journal.mapping_entries):
+            if savepoint.present:
+                savepoint.mapping[savepoint.key] = savepoint.value
+            else:
+                savepoint.mapping.pop(savepoint.key, None)
+        for savepoint in reversed(journal.set_entries):
+            if savepoint.present:
+                savepoint.values.add(savepoint.value)
+            else:
+                savepoint.values.discard(savepoint.value)
+        for savepoint in reversed(journal.retention_mapped_set_entries):
+            if not savepoint.mapping_present:
+                savepoint.mapping.pop(savepoint.key, None)
+                continue
+            assert savepoint.values is not None
+            savepoint.mapping[savepoint.key] = savepoint.values
+            if savepoint.value_present:
+                savepoint.values.add(savepoint.value)
+            else:
+                savepoint.values.discard(savepoint.value)
+        for savepoint in reversed(journal.mapped_set_entries):
+            if not savepoint.mapping_present:
+                savepoint.mapping.pop(savepoint.key, None)
+                continue
+            assert savepoint.values is not None
+            savepoint.mapping[savepoint.key] = savepoint.values
+            if savepoint.value_present:
+                savepoint.values.add(savepoint.value)
+            else:
+                savepoint.values.discard(savepoint.value)
+        for savepoint in reversed(journal.retention_expiring_indexes):
+            self._restore_action_cohort_expiring_index(savepoint)
+        for savepoint in journal.expiring_indexes:
+            self._restore_action_cohort_expiring_index(savepoint)
+        for savepoint in reversed(journal.retention_grouped_temporal_entries):
+            self._restore_action_cohort_grouped_temporal(savepoint)
+        for savepoint in reversed(journal.grouped_temporal_entries):
+            self._restore_action_cohort_grouped_temporal(savepoint)
+        for name, value in journal.scalar_entries:
+            setattr(self, name, value)
+        self.state.current_time = journal.state_time
+        self._materialization_version = journal.materialization_version
+
+    def _prepare_action_cohort_commit_plan(
+        self,
+        plan: ActionCohortMaterializationPlan,
+    ) -> _PreparedActionCohortCommitPlan:
+        """Build every runtime and rollback object while the validated guard is held."""
+
+        sessions = tuple(self._prepare_action_cohort_session_start(item) for item in plan.sessions)
+        processes = tuple(
+            self._prepare_action_cohort_process_start(item) for item in plan.processes
+        )
+        sessions_by_object_id = {item.plan.identity.object_id: item.session for item in sessions}
+        terminalizations: list[_PreparedActionCohortSessionTerminalization] = []
+        for terminalization in plan.session_terminalizations:
+            identity = terminalization.identity
+            session = sessions_by_object_id.get(identity.object_id)
+            resolved = identity.logon_id
+            if session is None:
+                resolved = self._resolve_logon_id(identity.logon_id)
+                session = self._active_sessions[resolved]
+            terminalizations.append(
+                _PreparedActionCohortSessionTerminalization(
+                    terminalization=terminalization,
+                    resolved_logon_id=resolved,
+                    ended=(session, terminalization.end_time),
+                    retention_deadline=(
+                        terminalization.end_time + _ENDED_IDENTITY_RETENTION
+                    ).timestamp(),
+                )
+            )
+        process_terminations = tuple(
+            self._prepare_action_cohort_process_termination(item)
+            for item in plan.process_terminations
+        )
+        session_terminalizations = tuple(terminalizations)
+        rollback_journal = self._prepare_action_cohort_rollback_journal(
+            plan,
+            sessions=sessions,
+            processes=processes,
+            process_terminations=process_terminations,
+            session_terminalizations=session_terminalizations,
+        )
+        return _PreparedActionCohortCommitPlan(
+            plan=plan,
+            committed_version=plan.expected_version + 1,
+            sessions=sessions,
+            processes=processes,
+            process_terminations=process_terminations,
+            session_terminalizations=session_terminalizations,
+            rollback_journal=rollback_journal,
+            claim_version=self._materialization_version,
+            claim_state_time=self.state.current_time,
+            claim_preimage=self._action_cohort_rollback_observation(rollback_journal),
+        )
+
     @contextmanager
     def prepared_action_cohort_materialization(
         self,
@@ -6944,17 +8891,106 @@ class StateManager:
     ) -> Iterator[PreparedActionCohortMaterialization]:
         """Retain the State guard after all cohort validation succeeds."""
 
+        claim_admission_epoch = self._prepared_state_admission_epoch
+        if self._active_prepared_state_claim is not None:
+            if self._active_action_cohort_claim is not None:
+                raise StateError("StateManager already has an active action-cohort claim")
+            raise StateError("StateManager already has an active prepared-State claim")
         with self._lock:
+            if self._active_prepared_state_claim is not None:
+                if self._active_action_cohort_claim is not None:
+                    raise StateError("StateManager already has an active action-cohort claim")
+                raise StateError("StateManager already has an active prepared-State claim")
+            if claim_admission_epoch != self._prepared_state_admission_epoch:
+                raise StateError("Action-cohort claim overlapped another prepared-State claim")
             self.validate_action_cohort_materialization(plan)
+            commit_plan = self._prepare_action_cohort_commit_plan(plan)
+            expected_result = ActionCohortMaterializationResult(
+                semantic_id=plan.semantic_id,
+                prior_version=plan.expected_version,
+                committed_version=plan.expected_version + 1,
+                started_sessions=tuple(item.identity for item in plan.sessions),
+                started_processes=tuple(item.identity for item in plan.processes),
+                terminated_processes=tuple(item.identity for item in plan.process_terminations),
+                terminalized_sessions=tuple(
+                    item.identity for item in plan.session_terminalizations
+                ),
+            )
             prepared = PreparedActionCohortMaterialization(
                 _manager=self,
                 _plan=plan,
+                _expected_result=expected_result,
                 _claim_thread_id=get_ident(),
             )
+            token = _action_cohort_result_publication_token(
+                self._materialization_secret,
+                plan=plan,
+                result=expected_result,
+                commit_plan=commit_plan,
+            )
+            claim_epoch = self._prepared_state_admission_epoch + 1
+            record = _ActionCohortPreparationRecord(
+                preparation=prepared,
+                expected_result=expected_result,
+                expected_result_publication_token=token,
+                commit_plan=commit_plan,
+                claim_thread_id=prepared._claim_thread_id,
+                claim_epoch=claim_epoch,
+            )
+            locator = id(prepared)
+            self._active_action_cohort_preparations[locator] = record
+            self._prepared_state_admission_epoch = claim_epoch
+            self._active_action_cohort_claim = record
+            self._active_prepared_state_claim = record
+            primary_error: BaseException | None = None
             try:
                 yield prepared
+            except BaseException as error:
+                primary_error = error
+                raise
             finally:
+                cleanup_error: BaseException | None = None
+                if (
+                    self._active_action_cohort_claim is record
+                    and self._active_prepared_state_claim is record
+                    and self._active_action_cohort_preparations.get(locator) is record
+                    and record.provisional
+                    and not record.committed
+                ):
+                    try:
+                        self._restore_claimed_action_cohort_rollback(record)
+                        record.provisional = False
+                        record.provisional_postimage = None
+                    except BaseException as error:
+                        if primary_error is not None:
+                            primary_error.add_note(
+                                "State provisional action-cohort rollback also raised "
+                                f"{type(error).__name__}: {error}"
+                            )
+                        else:
+                            cleanup_error = error
+                if (
+                    self._active_action_cohort_preparations.get(locator) is not record
+                    or self._active_action_cohort_claim is not record
+                    or self._active_prepared_state_claim is not record
+                ) and cleanup_error is None:
+                    cleanup_error = StateError(
+                        "Prepared action cohort no longer owns its prepared-State lane"
+                    )
+                if self._active_action_cohort_preparations.get(locator) is record:
+                    self._active_action_cohort_preparations.pop(locator)
+                if self._active_action_cohort_claim is record:
+                    self._active_action_cohort_claim = None
+                if self._active_prepared_state_claim is record:
+                    self._active_prepared_state_claim = None
+                    self._prepared_state_admission_epoch += 1
+                record.terminal = True
                 prepared._active = False
+                prepared._committed = record.committed
+                if not record.committed:
+                    prepared._result = None
+                if cleanup_error is not None:
+                    raise cleanup_error
 
     def materialize_action_cohort(
         self,
@@ -6962,8 +8998,20 @@ class StateManager:
     ) -> ActionCohortMaterializationResult:
         """Compatibility commit for one fully prepared action cohort."""
 
-        with self.prepared_action_cohort_materialization(plan) as prepared:
-            return prepared.commit_no_fail()
+        claim_admission_epoch = self._prepared_state_admission_epoch
+        if self._active_prepared_state_claim is not None:
+            if self._active_action_cohort_claim is not None:
+                raise StateError("StateManager already has an active action-cohort claim")
+            raise StateError("StateManager already has an active prepared-State claim")
+        with self._lock:
+            if self._active_prepared_state_claim is not None:
+                if self._active_action_cohort_claim is not None:
+                    raise StateError("StateManager already has an active action-cohort claim")
+                raise StateError("StateManager already has an active prepared-State claim")
+            if claim_admission_epoch != self._prepared_state_admission_epoch:
+                raise StateError("Action-cohort claim overlapped another prepared-State claim")
+            with self.prepared_action_cohort_materialization(plan) as prepared:
+                return prepared.commit_no_fail()
 
     def _commit_action_cohort_session_metadata(
         self,
@@ -6999,92 +9047,297 @@ class StateManager:
         session.process_tree_root = after.process_tree_root
         session.windows_shell_bootstrapped = after.windows_shell_bootstrapped
 
-    def _commit_action_cohort_staged_process_termination(
-        self,
-        termination: ActionCohortProcessTermination,
-    ) -> ProcessIdentity:
-        target = termination.target
-        assert type(target) is ProcessMaterializationPlan
-        identity = target.identity
-        parent_activity = termination.parent_activity
-        parent_identity = (
-            self._action_process_identity(parent_activity.target)
-            if parent_activity is not None
-            else None
-        )
-        primary_thread = identity.primary_thread
-        assert primary_thread is not None
-        payload = _ProcessTerminationMaterializationPayload(
-            end_time=termination.end_time,
-            threads=(primary_thread,),
-            parent_identity=parent_identity,
-            parent_activity_time=(
-                parent_activity.activity_time if parent_activity is not None else None
-            ),
-            session_references=termination.staged_session_references,
-        )
-        primitive = ProcessTerminationMaterializationPlan(
-            _expected_version=target.expected_version,
-            _identity=identity,
-            _payload=payload,
-            _integrity_token="",
-        )
-        return self._commit_prevalidated_process_termination_materialization(
-            primitive,
-            advance_version=False,
-        )
-
     def _commit_action_cohort_session_terminalization(
         self,
-        terminalization: ActionCohortSessionTerminalization,
+        prepared: _PreparedActionCohortSessionTerminalization,
     ) -> SessionIdentity:
+        terminalization = prepared.terminalization
         identity = terminalization.identity
-        resolved = self._resolve_logon_id(identity.logon_id)
+        resolved = prepared.resolved_logon_id
         session = self._active_sessions.pop(resolved)
-        ended = (session, terminalization.end_time)
-        self._ended_sessions[resolved] = ended
+        ended = prepared.ended
+        assert ended[0] is session
+        self._ended_sessions.set(resolved, ended, prepared.retention_deadline)
         self._index_ended_session(resolved, session, terminalization.end_time)
         if resolved != identity.logon_id:
-            self._ended_sessions[identity.logon_id] = ended
-        self._trim_retained_session_identities()
+            self._ended_sessions.set(
+                identity.logon_id,
+                ended,
+                prepared.retention_deadline,
+            )
         return identity
+
+    @staticmethod
+    def _capture_action_cohort_expiring_key(
+        index: ExpiringIndex[object, object],
+        key: object,
+    ) -> _ActionCohortExpiringIndexSavepoint:
+        """Capture one exact live expiry key before bounded retention removal."""
+
+        return _ActionCohortExpiringIndexSavepoint(
+            index=index,
+            keys=(
+                _ActionCohortExpiringKeySavepoint(
+                    key=key,
+                    present=key in index._items,
+                    value=index._items.get(key),
+                    deadline=index._deadlines.get(key),
+                    order=index._orders.get(key),
+                    version=index._versions.get(key),
+                ),
+            ),
+            next_order=index._next_order,
+            high_water_mark=index._high_water_mark,
+        )
+
+    @staticmethod
+    def _capture_action_cohort_grouped_key(
+        index: GroupedTemporalIndex[object, object],
+        key: object,
+    ) -> _ActionCohortGroupedTemporalSavepoint:
+        """Capture one exact grouped locator before retention cleanup removes it."""
+
+        prior = index._current.get(key)
+        return _ActionCohortGroupedTemporalSavepoint(
+            index=index,
+            key=key,
+            prior_current=prior,
+            prior_next_sequence=index._next_sequence,
+            prior_stale_counts=(
+                ((prior[0], index._stale_counts.get(prior[0])),) if prior is not None else ()
+            ),
+            added_record=None,
+        )
+
+    @staticmethod
+    def _next_action_cohort_retention_victim(
+        index: ExpiringIndex[object, object],
+    ) -> tuple[list[tuple[float, int, int, object]], object, object] | None:
+        """Resolve one live earliest victim with bounded stale-heap repair."""
+
+        while heap := index._earliest_heap():
+            deadline, order, version, key = heap[0]
+            if (
+                index._versions.get(key) == version
+                and index._deadlines.get(key) == deadline
+                and index._orders.get(key) == order
+            ):
+                return heap, key, index._items[key]
+            heapq.heappop(heap)
+        return None
+
+    def _capture_action_cohort_session_retention_victim(
+        self,
+        journal: _ActionCohortRollbackJournal,
+        logon_id: str,
+        ended: tuple[ActiveSession, datetime],
+    ) -> None:
+        """Append the complete bounded undo projection for one session victim."""
+
+        session = ended[0]
+        expiring = [
+            self._capture_action_cohort_expiring_key(
+                self._ended_sessions,  # type: ignore[arg-type]
+                logon_id,
+            )
+        ]
+        mappings: list[_ActionCohortMappingSavepoint] = []
+        mapped_sets: list[_ActionCohortMappedSetSavepoint] = []
+        grouped: list[_ActionCohortGroupedTemporalSavepoint] = []
+        if logon_id == session.logon_id:
+            aliases = tuple(self._logon_id_aliases_by_target.get(logon_id, ()))
+            mappings.append(
+                _ActionCohortMappingSavepoint(
+                    mapping=self._logon_id_aliases_by_target,  # type: ignore[arg-type]
+                    key=logon_id,
+                    present=logon_id in self._logon_id_aliases_by_target,
+                    value=self._logon_id_aliases_by_target.get(logon_id),
+                )
+            )
+            for alias in aliases:
+                mappings.append(
+                    _ActionCohortMappingSavepoint(
+                        mapping=self._logon_id_aliases,  # type: ignore[arg-type]
+                        key=alias,
+                        present=alias in self._logon_id_aliases,
+                        value=self._logon_id_aliases.get(alias),
+                    )
+                )
+                if alias in self._ended_sessions:
+                    expiring.append(
+                        self._capture_action_cohort_expiring_key(
+                            self._ended_sessions,  # type: ignore[arg-type]
+                            alias,
+                        )
+                    )
+            grouped.extend(
+                (
+                    self._capture_action_cohort_grouped_key(
+                        self._ended_sessions_by_username_end,  # type: ignore[arg-type]
+                        logon_id,
+                    ),
+                    self._capture_action_cohort_grouped_key(
+                        self._ended_sessions_by_system_end,  # type: ignore[arg-type]
+                        logon_id,
+                    ),
+                    self._capture_action_cohort_grouped_key(
+                        self._authoritative_session_ends,  # type: ignore[arg-type]
+                        logon_id,
+                    ),
+                )
+            )
+        else:
+            target = self._logon_id_aliases.get(logon_id)
+            mappings.append(
+                _ActionCohortMappingSavepoint(
+                    mapping=self._logon_id_aliases,  # type: ignore[arg-type]
+                    key=logon_id,
+                    present=logon_id in self._logon_id_aliases,
+                    value=target,
+                )
+            )
+            if target is not None:
+                aliases = self._logon_id_aliases_by_target.get(target)
+                mapped_sets.append(
+                    _ActionCohortMappedSetSavepoint(
+                        mapping=self._logon_id_aliases_by_target,  # type: ignore[arg-type]
+                        key=target,
+                        mapping_present=target in self._logon_id_aliases_by_target,
+                        values=aliases,
+                        value=logon_id,
+                        value_present=aliases is not None and logon_id in aliases,
+                    )
+                )
+        journal.retention_expiring_indexes.extend(expiring)
+        journal.retention_mapping_entries.extend(mappings)
+        journal.retention_mapped_set_entries.extend(mapped_sets)
+        journal.retention_grouped_temporal_entries.extend(grouped)
+
+    def _capture_action_cohort_process_retention_victim(
+        self,
+        journal: _ActionCohortRollbackJournal,
+        object_id: str,
+        process: RunningProcess,
+    ) -> None:
+        """Append both exact process retention keys before coupled removal."""
+
+        entries = [
+            self._capture_action_cohort_expiring_key(
+                self._ended_processes_by_object_id,  # type: ignore[arg-type]
+                object_id,
+            )
+        ]
+        key = (process.system, process.pid)
+        if self._ended_processes_by_key.get(key) is process:
+            entries.append(
+                self._capture_action_cohort_expiring_key(
+                    self._ended_processes_by_key,  # type: ignore[arg-type]
+                    key,
+                )
+            )
+        journal.retention_expiring_indexes.extend(entries)
+
+    def _commit_action_cohort_retention_evictions(
+        self,
+        prepared: _PreparedActionCohortCommitPlan,
+    ) -> None:
+        """Capture and apply exact bounded retention victims under the State lane."""
+
+        journal = prepared.rollback_journal
+        while len(self._ended_sessions) > _MAX_RETAINED_SESSION_IDENTITIES:
+            victim = self._next_action_cohort_retention_victim(
+                self._ended_sessions  # type: ignore[arg-type]
+            )
+            if victim is None:
+                break
+            heap, key, ended = victim
+            assert isinstance(key, str)
+            assert isinstance(ended, tuple)
+            self._capture_action_cohort_session_retention_victim(journal, key, ended)
+            heapq.heappop(heap)
+            removed = self._ended_sessions.pop(key, None)
+            if removed is not None:
+                self._cleanup_ended_session_retention_entry(key, removed)
+
+        while len(self._ended_processes_by_object_id) > _MAX_RETAINED_PROCESS_IDENTITIES:
+            victim = self._next_action_cohort_retention_victim(
+                self._ended_processes_by_object_id  # type: ignore[arg-type]
+            )
+            if victim is None:
+                break
+            heap, key, process = victim
+            assert isinstance(key, str)
+            assert isinstance(process, RunningProcess)
+            self._capture_action_cohort_process_retention_victim(journal, key, process)
+            heapq.heappop(heap)
+            removed = self._ended_processes_by_object_id.pop(key, None)
+            if removed is not None:
+                process_key = (removed.system, removed.pid)
+                if self._ended_processes_by_key.get(process_key) is removed:
+                    self._ended_processes_by_key.pop(process_key, None)
+
+        while len(self._ended_threads) > _MAX_RETAINED_THREAD_IDENTITIES:
+            victim = self._next_action_cohort_retention_victim(
+                self._ended_threads  # type: ignore[arg-type]
+            )
+            if victim is None:
+                break
+            heap, key, _thread = victim
+            assert isinstance(key, tuple)
+            journal.retention_expiring_indexes.append(
+                self._capture_action_cohort_expiring_key(
+                    self._ended_threads,  # type: ignore[arg-type]
+                    key,
+                )
+            )
+            heapq.heappop(heap)
+            self._ended_threads.pop(key, None)
 
     def _commit_prevalidated_action_cohort(
         self,
-        plan: ActionCohortMaterializationPlan,
-    ) -> ActionCohortMaterializationResult:
+        prepared: _PreparedActionCohortCommitPlan,
+    ) -> None:
         """Apply one prevalidated cohort using only primitive no-fail writes."""
 
-        prior_version = self._materialization_version
-        sessions = tuple(
+        plan = prepared.plan
+        sessions = prepared.sessions
+        processes = prepared.processes
+        for session in sessions:
             self._commit_prevalidated_session_materialization(
-                session,
+                session.plan,
                 advance_version=False,
                 update_state_time=False,
+                prepared=session,
+                emit_log=False,
             )
-            for session in plan.sessions
-        )
-        processes = tuple(
+        for process in processes:
             self._commit_prevalidated_process_materialization(
-                process,
+                process.plan,
                 advance_version=False,
                 update_state_time=False,
+                prepared=process,
+                emit_log=False,
             )
-            for process in plan.processes
-        )
         for session_links in plan._session_process_links:
-            session = sessions[session_links.session_index]
+            session = sessions[session_links.session_index].session
             links = session_links.links
-
-            def _linked_pid(index: int) -> int | None:
-                return processes[index].pid if index >= 0 else None
-
-            session.transport_pid = _linked_pid(links.transport) or session.transport_pid
-            session.session_shell_pid = _linked_pid(links.shell)
-            session.session_user_manager_pid = _linked_pid(links.user_manager)
-            session.session_winlogon_pid = _linked_pid(links.winlogon)
-            session.process_tree_root = _linked_pid(links.process_tree_root)
-            explorer_pid = _linked_pid(links.explorer)
+            transport_pid = processes[links.transport].process.pid if links.transport >= 0 else None
+            session.transport_pid = transport_pid or session.transport_pid
+            session.session_shell_pid = (
+                processes[links.shell].process.pid if links.shell >= 0 else None
+            )
+            session.session_user_manager_pid = (
+                processes[links.user_manager].process.pid if links.user_manager >= 0 else None
+            )
+            session.session_winlogon_pid = (
+                processes[links.winlogon].process.pid if links.winlogon >= 0 else None
+            )
+            session.process_tree_root = (
+                processes[links.process_tree_root].process.pid
+                if links.process_tree_root >= 0
+                else None
+            )
+            explorer_pid = processes[links.explorer].process.pid if links.explorer >= 0 else None
             if explorer_pid is not None:
                 session.explorer_pid = explorer_pid
                 session.initial_explorer_pid = explorer_pid
@@ -7111,34 +9364,19 @@ class StateManager:
             ):
                 session.last_activity_time = patch.activity_time
 
-        terminated: list[ProcessIdentity] = []
-        for termination in plan.process_terminations:
-            if type(termination.target) is ProcessTerminationMaterializationPlan:
-                terminated.append(
-                    self._commit_prevalidated_process_termination_materialization(
-                        termination.target,
-                        advance_version=False,
-                    )
-                )
-            else:
-                terminated.append(
-                    self._commit_action_cohort_staged_process_termination(termination)
-                )
-        terminalized = tuple(
+        for termination in prepared.process_terminations:
+            self._commit_prevalidated_process_termination_materialization(
+                termination.plan,
+                advance_version=False,
+                prepared=termination,
+                emit_log=False,
+                enforce_retention=False,
+            )
+        for terminalization in prepared.session_terminalizations:
             self._commit_action_cohort_session_terminalization(terminalization)
-            for terminalization in plan.session_terminalizations
-        )
+        self._commit_action_cohort_retention_evictions(prepared)
         self.state.current_time = plan.final_state_time
-        self._materialization_version = prior_version + 1
-        return ActionCohortMaterializationResult(
-            semantic_id=plan.semantic_id,
-            prior_version=prior_version,
-            committed_version=self._materialization_version,
-            started_sessions=tuple(session.identity for session in plan.sessions),
-            started_processes=tuple(process.identity for process in plan.processes),
-            terminated_processes=tuple(terminated),
-            terminalized_sessions=terminalized,
-        )
+        self._materialization_version = prepared.committed_version
 
     def validate_materialization_batch(self, plan: MaterializationBatchPlan) -> None:
         """Validate every batch member and dependency without publishing state."""
@@ -7394,6 +9632,8 @@ class StateManager:
         *,
         advance_version: bool = True,
         update_state_time: bool = True,
+        prepared: _PreparedActionCohortProcessStart | None = None,
+        emit_log: bool = True,
     ) -> RunningProcess:
         """Perform primitive process writes after validation under materialization_guard."""
 
@@ -7406,8 +9646,11 @@ class StateManager:
             self._pid_os[host] = category
         if patch.pid_rng_state is not None:
             host, rng_state = patch.pid_rng_state
-            rng = self._pid_rngs.setdefault(host, random.Random())
-            rng.setstate(rng_state)
+            if prepared is not None and prepared.pid_rng_replacement is not None:
+                self._pid_rngs[host] = prepared.pid_rng_replacement
+            else:
+                rng = self._pid_rngs.setdefault(host, random.Random())
+                rng.setstate(rng_state)
         if patch.pid_epoch is not None:
             host, epoch = patch.pid_epoch
             self._pid_time_epochs[host] = epoch
@@ -7416,15 +9659,29 @@ class StateManager:
             self._linux_pid_weekly_churn_prefixes[host] = prefix
         if patch.linux_allocation is not None:
             host, at, logical_position = patch.linux_allocation
-            self._linux_pid_allocations.setdefault(host, TemporalAllocationIndex()).add(
-                at, logical_position
-            )
+            allocations = self._linux_pid_allocations.get(host)
+            if allocations is None:
+                allocations = (
+                    prepared.linux_pid_allocations_default
+                    if prepared is not None and prepared.linux_pid_allocations_default is not None
+                    else TemporalAllocationIndex()
+                )
+                self._linux_pid_allocations[host] = allocations
+            allocations.add(at, logical_position)
         if patch.pid_bucket_offset is not None:
             key, offset = patch.pid_bucket_offset
             self._pid_bucket_offsets[key] = offset
         if patch.fixed_pid is not None:
             host, pid = patch.fixed_pid
-            self._fixed_pid_reservations.setdefault(host, set()).add(pid)
+            reservations = self._fixed_pid_reservations.get(host)
+            if reservations is None:
+                reservations = (
+                    prepared.fixed_pid_reservations_default
+                    if prepared is not None and prepared.fixed_pid_reservations_default is not None
+                    else set()
+                )
+                self._fixed_pid_reservations[host] = reservations
+            reservations.add(pid)
         self._pid_allocation_count += patch.pid_allocation_count_delta
         self._pid_candidate_probe_count += patch.pid_candidate_probe_delta
         if patch.thread_counter is not None:
@@ -7432,13 +9689,16 @@ class StateManager:
             self._thread_id_counters[host] = counter
         if patch.thread_rng_state is not None:
             host, rng_state = patch.thread_rng_state
-            rng = self._thread_id_rngs.setdefault(host, random.Random())
-            rng.setstate(rng_state)
+            if prepared is not None and prepared.thread_rng_replacement is not None:
+                self._thread_id_rngs[host] = prepared.thread_rng_replacement
+            else:
+                rng = self._thread_id_rngs.setdefault(host, random.Random())
+                rng.setstate(rng_state)
 
-        identity = plan.identity
         payload = plan._payload
         if update_state_time:
             self.state.current_time = payload.state_time
+        identity = plan.identity
         if payload.parent_activity_time is not None and identity.parent_pid:
             parent = self.state.running_processes.get((identity.hostname, identity.parent_pid))
             if parent is not None and (
@@ -7446,28 +9706,8 @@ class StateManager:
                 or parent.last_activity_time < payload.parent_activity_time
             ):
                 parent.last_activity_time = payload.parent_activity_time
-        primary_thread_identity = identity.primary_thread
-        assert primary_thread_identity is not None
-        process = RunningProcess(
-            pid=identity.pid,
-            parent_pid=identity.parent_pid,
-            image=identity.image,
-            command_line=identity.command_line,
-            username=identity.principal,
-            system=identity.hostname,
-            start_time=identity.started_at,
-            integrity_level=payload.integrity_level,
-            logon_id=identity.logon_id,
-            token_logon_id=identity.logon_id,
-            auth_session_id=payload.auth_session_id,
-            auth_logon_type=payload.auth_logon_type,
-            ecar_object_id=identity.object_id,
-            primary_tid=primary_thread_identity.tid,
-            lifecycle_group_id=identity.lifecycle_group_id,
-            parent_lifecycle_group_id=identity.parent_lifecycle_group_id,
-            concurrency_group_id=payload.concurrency_group_id,
-            pid_logical_position=payload.pid_logical_position,
-        )
+        prepared_start = prepared or self._prepare_action_cohort_process_start(plan)
+        process = prepared_start.process
         key = (process.system, process.pid)
         self.state.running_processes[key] = process
         self._active_pid_reservation_counts[process.system] = (
@@ -7476,25 +9716,18 @@ class StateManager:
         self._process_object_ids[key] = process.ecar_object_id
         self._processes_by_object_id[process.ecar_object_id] = process
         self._ended_processes_by_key.pop(key, None)
-        thread = RunningThread(
-            hostname=primary_thread_identity.hostname,
-            process_object_id=primary_thread_identity.process_object_id,
-            pid=primary_thread_identity.pid,
-            tid=primary_thread_identity.tid,
-            object_id=primary_thread_identity.object_id,
-            start_time=primary_thread_identity.started_at,
-            kind=primary_thread_identity.kind,
-        )
+        thread = prepared_start.thread
         self.state.running_threads[(thread.hostname, thread.process_object_id, thread.tid)] = thread
         self._ended_threads.pop((thread.hostname, thread.process_object_id, thread.tid), None)
         if advance_version:
             self._materialization_version += 1
-        logger.debug(
-            "Materialized process %s on %s: %s",
-            process.pid,
-            process.system,
-            process.image,
-        )
+        if emit_log:
+            logger.debug(
+                "Materialized process %s on %s: %s",
+                process.pid,
+                process.system,
+                process.image,
+            )
         return process
 
     def _linux_pid_epoch(self, system: str, current_time: datetime) -> datetime:
@@ -7709,8 +9942,15 @@ class StateManager:
         Detailed temporal records exist only for the still-open scheduling window.
         Sealed history is represented by one greatest logical position per host.
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "advance_pid_allocation_watermark"
+        )
         normalized_cutoff = ensure_utc(cutoff)
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "advance_pid_allocation_watermark",
+                admitted_at=admission_epoch,
+            )
             if (
                 self._pid_allocation_watermark is not None
                 and normalized_cutoff < self._pid_allocation_watermark
@@ -7906,7 +10146,14 @@ class StateManager:
         as canonical process evidence, so this method shares the Linux allocator
         and used-ID ledger without registering a durable RunningProcess.
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "allocate_transient_linux_pid"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "allocate_transient_linux_pid",
+                admitted_at=admission_epoch,
+            )
             if os_category != "linux":
                 raise StateError(f"Cannot allocate Linux transient PID for non-Linux host {system}")
             if self._pid_os.get(system) not in {None, "linux"}:
@@ -7959,22 +10206,27 @@ class StateManager:
         and Linux PID 1 that cannot use the ordinary PID allocator.
         """
 
-        plan = self.plan_process_materialization(
-            system=system,
-            fixed_pid=pid,
-            parent_pid=parent_pid,
-            image=image,
-            command_line=command_line,
-            username=username,
-            integrity_level=integrity_level,
-            os_category=os_category,
-            start_time=start_time,
-            logon_id=logon_id,
-            lifecycle_group_id=lifecycle_group_id,
-            parent_lifecycle_group_id=parent_lifecycle_group_id,
-        )
-        with self.materialization_guard(plan.expected_version):
-            return self.materialize_process(plan)
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("register_process")
+        with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "register_process", admitted_at=admission_epoch
+            )
+            plan = self.plan_process_materialization(
+                system=system,
+                fixed_pid=pid,
+                parent_pid=parent_pid,
+                image=image,
+                command_line=command_line,
+                username=username,
+                integrity_level=integrity_level,
+                os_category=os_category,
+                start_time=start_time,
+                logon_id=logon_id,
+                lifecycle_group_id=lifecycle_group_id,
+                parent_lifecycle_group_id=parent_lifecycle_group_id,
+            )
+            with self.materialization_guard(plan.expected_version):
+                return self.materialize_process(plan)
 
     def create_process(
         self,
@@ -8005,27 +10257,31 @@ class StateManager:
         Raises:
             StateError: If current_time not set, parent doesn't exist, or PID exhausted
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("create_process")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "create_process", admitted_at=admission_epoch
+            )
             if self.state.current_time is None:
                 raise StateError("Cannot create process: current_time not set")
             os_category = self._pid_os.get(system) or (
                 "windows" if "\\" in image or image.casefold().endswith(".exe") else "linux"
             )
-        plan = self.plan_process_materialization(
-            system=system,
-            parent_pid=parent_pid,
-            image=image,
-            command_line=command_line,
-            username=username,
-            integrity_level=integrity_level,
-            os_category=os_category,
-            logon_id=logon_id,
-            lifecycle_group_id=lifecycle_group_id,
-            parent_lifecycle_group_id=parent_lifecycle_group_id,
-            concurrency_group_id=concurrency_group_id,
-        )
-        with self.materialization_guard(plan.expected_version):
-            return self.materialize_process(plan).pid
+            plan = self.plan_process_materialization(
+                system=system,
+                parent_pid=parent_pid,
+                image=image,
+                command_line=command_line,
+                username=username,
+                integrity_level=integrity_level,
+                os_category=os_category,
+                logon_id=logon_id,
+                lifecycle_group_id=lifecycle_group_id,
+                parent_lifecycle_group_id=parent_lifecycle_group_id,
+                concurrency_group_id=concurrency_group_id,
+            )
+            with self.materialization_guard(plan.expected_version):
+                return self.materialize_process(plan).pid
 
     @staticmethod
     def _process_parent_lifecycle_group(
@@ -8123,7 +10379,12 @@ class StateManager:
     ) -> ThreadIdentity:
         """Create an explicit thread owned by a live canonical process."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("create_thread")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "create_thread",
+                admitted_at=admission_epoch,
+            )
             process = self._processes_by_object_id.get(process_object_id)
             if (
                 process is None
@@ -8197,7 +10458,12 @@ class StateManager:
     ) -> bool:
         """End one explicit thread without affecting identically numbered threads."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("end_thread")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "end_thread",
+                admitted_at=admission_epoch,
+            )
             key = (system, process_object_id, tid)
             thread = self.state.running_threads.pop(key, None)
             if thread is None:
@@ -8309,7 +10575,14 @@ class StateManager:
 
     def update_process_activity_time(self, system: str, pid: int, activity_time: datetime) -> bool:
         """Record the latest dependent activity timestamp for a running process."""
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "update_process_activity_time"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "update_process_activity_time",
+                admitted_at=admission_epoch,
+            )
             proc = self.state.running_processes.get((system, pid))
             if proc is None:
                 return False
@@ -8332,7 +10605,14 @@ class StateManager:
         the process was created; session membership is a lifecycle relationship,
         not a token replacement.
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "assign_process_to_session"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "assign_process_to_session",
+                admitted_at=admission_epoch,
+            )
             key = (system, pid)
             process = self.state.running_processes.get(key)
             resolved_logon_id = self._resolve_logon_id(logon_id)
@@ -8364,7 +10644,14 @@ class StateManager:
         logon_type: int,
     ) -> bool:
         """Freeze the authentication identity rendered for a process lifecycle."""
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "publish_process_auth_identity"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "publish_process_auth_identity",
+                admitted_at=admission_epoch,
+            )
             process = self.state.running_processes.get((system, pid))
             if process is None:
                 return False
@@ -8391,7 +10678,14 @@ class StateManager:
 
     def update_session_activity_time(self, logon_id: str, activity_time: datetime) -> bool:
         """Record the latest dependent activity timestamp for an active session."""
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "update_session_activity_time"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "update_session_activity_time",
+                admitted_at=admission_epoch,
+            )
             session = self.state.active_sessions.get(self._resolve_logon_id(logon_id))
             if session is None:
                 return False
@@ -8458,7 +10752,12 @@ class StateManager:
             system: System hostname
             pid: Process ID
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("mark_story_process")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "mark_story_process",
+                admitted_at=admission_epoch,
+            )
             proc = self.state.running_processes.get((system, pid))
             if proc:
                 proc.story_created = True
@@ -8478,7 +10777,12 @@ class StateManager:
         Returns:
             True if process was found and removed, False if not found
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("end_process")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "end_process",
+                admitted_at=admission_epoch,
+            )
             if self.state.running_processes.get((system, pid)) is None:
                 return False
             plan = self.plan_process_termination_materialization(
@@ -8683,7 +10987,7 @@ class StateManager:
     def begin_connection_planning(self, owner_rng: random.Random) -> ConnectionPlanningCursor:
         """Start an isolated, allocation-free connection-planning transaction."""
 
-        with self._lock:
+        with self._capability_minting_guard("begin_connection_planning"):
             entry_state = owner_rng.getstate()
             token = _connection_cursor_integrity_token(
                 self._materialization_secret,
@@ -8698,6 +11002,7 @@ class StateManager:
                 expected_version=self._materialization_version,
                 expected_state_time=self.state.current_time,
                 expected_connection_counter=self._connection_id_counter,
+                admission_epoch=self._prepared_state_admission_epoch,
                 owner_rng=owner_rng,
                 rng_state_entry=entry_state,
                 cursor_token=token,
@@ -8709,6 +11014,8 @@ class StateManager:
         if cursor._manager is not self:
             raise StateError("Connection planning cursor belongs to another StateManager")
         cursor._require_active()
+        if cursor._admission_epoch != self._prepared_state_admission_epoch:
+            raise StateError("Connection planning cursor crossed a prepared-State claim")
         expected = _connection_cursor_integrity_token(
             self._materialization_secret,
             expected_version=cursor._expected_version,
@@ -8734,7 +11041,7 @@ class StateManager:
     ) -> ConnectionIdentityPlan:
         """Perform the exact historical UID draw on a live isolated cursor."""
 
-        with self._lock:
+        with self._capability_minting_guard("ConnectionPlanningCursor.reserve_identity"):
             self._validate_connection_cursor(cursor)
             if cursor._identity is not None:
                 raise StateError("Connection planning cursor already reserved an identity")
@@ -8856,7 +11163,7 @@ class StateManager:
     ) -> ConnectionCompositeMaterializationPlan:
         """Seal one physical/child transaction and optional start batch without mutation."""
 
-        with self._lock:
+        with self._capability_minting_guard("finalize_connection_composite_materialization"):
             self._validate_connection_cursor(cursor)
             if not isinstance(mode, ConnectionMaterializationMode):
                 raise StateError("Connection composite requires an explicit typed mode")
@@ -9077,17 +11384,64 @@ class StateManager:
     ) -> Iterator[PreparedConnectionCompositeMaterialization]:
         """Claim the State guard after all composite validation has succeeded."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "prepared_connection_composite_materialization"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "prepared_connection_composite_materialization",
+                admitted_at=admission_epoch,
+            )
             self._validate_connection_composite_semantics(plan, owner_rng)
             prepared = PreparedConnectionCompositeMaterialization(
                 _manager=self,
                 _plan=plan,
                 _owner_rng=owner_rng,
             )
+            claim_epoch = self._prepared_state_admission_epoch + 1
+            record = _PreparedConnectionCompositeMaterializationRecord(
+                preparation=prepared,
+                plan=plan,
+                owner_rng=owner_rng,
+                claim_thread_id=get_ident(),
+                claim_epoch=claim_epoch,
+                claim_version=self._materialization_version,
+                claim_state_time=self.state.current_time,
+                rng_state=owner_rng.getstate(),
+            )
+            locator = id(prepared)
+            self._active_connection_composite_preparations[locator] = record
+            self._prepared_state_admission_epoch = claim_epoch
+            self._active_prepared_state_claim = record
+            primary_error: BaseException | None = None
             try:
                 yield prepared
+            except BaseException as error:
+                primary_error = error
+                raise
             finally:
+                cleanup_error: StateError | None = None
+                if (
+                    self._active_connection_composite_preparations.get(locator) is not record
+                    or self._active_prepared_state_claim is not record
+                ):
+                    cleanup_error = StateError(
+                        "Prepared connection composite no longer owns its State lane"
+                    )
+                if self._active_connection_composite_preparations.get(locator) is record:
+                    self._active_connection_composite_preparations.pop(locator)
+                if self._active_prepared_state_claim is record:
+                    self._active_prepared_state_claim = None
+                    self._prepared_state_admission_epoch += 1
+                record.terminal = True
                 prepared._active = False
+                prepared._committed = record.committed
+                prepared._result = record.result
+                if cleanup_error is not None:
+                    if primary_error is not None:
+                        primary_error.add_note(str(cleanup_error))
+                    else:
+                        raise cleanup_error
 
     def materialize_connection_composite(
         self,
@@ -9096,8 +11450,16 @@ class StateManager:
     ) -> ConnectionCompositeMaterializationResult:
         """Commit one fully finalized State-only connection transaction."""
 
-        with self.prepared_connection_composite_materialization(plan, owner_rng) as prepared:
-            return prepared.commit()
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "materialize_connection_composite"
+        )
+        with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "materialize_connection_composite",
+                admitted_at=admission_epoch,
+            )
+            with self.prepared_connection_composite_materialization(plan, owner_rng) as prepared:
+                return prepared.commit()
 
     def _commit_prevalidated_connection_composite(
         self,
@@ -9183,7 +11545,7 @@ class StateManager:
     def plan_connection_identity(self, rng: random.Random) -> ConnectionIdentityPlan:
         """Reserve deterministic connection/UID identity without advancing either owner."""
 
-        with self._lock:
+        with self._capability_minting_guard("plan_connection_identity"):
             if self._connection_id_counter > 999_999_999:
                 raise StateError("Connection ID counter exhausted")
             expected_version = self._materialization_version
@@ -9226,7 +11588,7 @@ class StateManager:
     ) -> ConnectionMaterializationPlan:
         """Freeze final connection/accounting truth without publishing allocator or state."""
 
-        with self._lock:
+        with self._capability_minting_guard("finalize_connection_materialization"):
             self._validate_connection_identity_plan(identity)
             if identity.expected_version != self._materialization_version:
                 raise StateError("Connection identity plan became stale before finalization")
@@ -9307,17 +11669,64 @@ class StateManager:
     ) -> Iterator[PreparedConnectionMaterialization]:
         """Validate one connection and retain the state guard until commit or cancel."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "prepared_connection_materialization"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "prepared_connection_materialization",
+                admitted_at=admission_epoch,
+            )
             self.validate_connection_materialization(plan, rng)
             prepared = PreparedConnectionMaterialization(
                 _manager=self,
                 _plan=plan,
                 _rng=rng,
             )
+            claim_epoch = self._prepared_state_admission_epoch + 1
+            record = _PreparedConnectionMaterializationRecord(
+                preparation=prepared,
+                plan=plan,
+                rng=rng,
+                claim_thread_id=get_ident(),
+                claim_epoch=claim_epoch,
+                claim_version=self._materialization_version,
+                claim_state_time=self.state.current_time,
+                rng_state=rng.getstate(),
+            )
+            locator = id(prepared)
+            self._active_connection_preparations[locator] = record
+            self._prepared_state_admission_epoch = claim_epoch
+            self._active_prepared_state_claim = record
+            primary_error: BaseException | None = None
             try:
                 yield prepared
+            except BaseException as error:
+                primary_error = error
+                raise
             finally:
+                cleanup_error: StateError | None = None
+                if (
+                    self._active_connection_preparations.get(locator) is not record
+                    or self._active_prepared_state_claim is not record
+                ):
+                    cleanup_error = StateError(
+                        "Prepared connection materialization no longer owns its State lane"
+                    )
+                if self._active_connection_preparations.get(locator) is record:
+                    self._active_connection_preparations.pop(locator)
+                if self._active_prepared_state_claim is record:
+                    self._active_prepared_state_claim = None
+                    self._prepared_state_admission_epoch += 1
+                record.terminal = True
                 prepared._active = False
+                prepared._committed = record.committed
+                prepared._result = record.result
+                if cleanup_error is not None:
+                    if primary_error is not None:
+                        primary_error.add_note(str(cleanup_error))
+                    else:
+                        raise cleanup_error
 
     def materialize_connection(
         self,
@@ -9326,8 +11735,13 @@ class StateManager:
     ) -> OpenConnection | None:
         """Compatibility commit for one already-finalized connection plan."""
 
-        with self.prepared_connection_materialization(plan, rng) as prepared:
-            return prepared.commit()
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("materialize_connection")
+        with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "materialize_connection", admitted_at=admission_epoch
+            )
+            with self.prepared_connection_materialization(plan, rng) as prepared:
+                return prepared.commit()
 
     def _commit_prevalidated_connection_materialization(
         self,
@@ -9399,7 +11813,11 @@ class StateManager:
         Raises:
             StateError: If current_time is not set or connection ID counter exhausted
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("open_connection")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "open_connection", admitted_at=admission_epoch
+            )
             if self.state.current_time is None:
                 raise StateError("Cannot open connection: current_time not set")
 
@@ -9440,9 +11858,16 @@ class StateManager:
         parent's rendered tuple and UID instead of creating a shadow OpenConnection.
         """
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "reserve_connection_identity"
+        )
         rng = _get_rng()
         plan = self.plan_connection_identity(rng)
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "reserve_connection_identity",
+                admitted_at=admission_epoch,
+            )
             self._validate_connection_identity_plan(plan)
             if plan.expected_version != self._materialization_version:
                 raise StateError("Connection identity plan became stale before commit")
@@ -9505,7 +11930,14 @@ class StateManager:
         close_time: datetime | None,
     ) -> bool:
         """Update the canonical source-visible interval for an open connection."""
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "update_connection_interval"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "update_connection_interval",
+                admitted_at=admission_epoch,
+            )
             conn = self.state.open_connections.get(conn_id)
             if conn is None:
                 return False
@@ -9525,7 +11957,14 @@ class StateManager:
         Returns:
             True if connection was found and updated, False if not found
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "update_connection_bytes"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "update_connection_bytes",
+                admitted_at=admission_epoch,
+            )
             conn = self.state.open_connections.get(conn_id)
             if conn:
                 conn.bytes_sent = bytes_sent
@@ -9540,7 +11979,14 @@ class StateManager:
     ) -> bool:
         """Persist finalized canonical connection truth in runtime state."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "update_connection_transaction"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "update_connection_transaction",
+                admitted_at=admission_epoch,
+            )
             conn = self.state.open_connections.get(conn_id)
             if conn is None:
                 return False
@@ -9604,7 +12050,11 @@ class StateManager:
         Returns:
             True if connection was found and removed, False if not found
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("close_connection")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "close_connection", admitted_at=admission_epoch
+            )
             if self._remove_connection(conn_id):
                 logger.debug(f"Closed connection {conn_id}")
                 return True
@@ -9635,7 +12085,14 @@ class StateManager:
         Returns:
             Number of connections evicted.
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "sweep_closed_connections"
+        )
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "sweep_closed_connections",
+                admitted_at=admission_epoch,
+            )
             effective_cutoff = (
                 ensure_utc(cutoff)
                 if cutoff is not None
@@ -9670,7 +12127,11 @@ class StateManager:
         Raises:
             StateError: If hostname already mapped to different IP
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("register_hostname")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "register_hostname", admitted_at=admission_epoch
+            )
             existing = self.state.dns_cache.get(hostname)
             if existing and existing != ip:
                 raise StateError(f"Cannot register {hostname} → {ip}: already mapped to {existing}")
@@ -9709,7 +12170,11 @@ class StateManager:
         Args:
             dt: New current time
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("set_current_time")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "set_current_time", admitted_at=admission_epoch
+            )
             self.state.current_time = dt
             self._expire_retained_identities(dt)
             logger.debug(f"Set current time to {dt}")
@@ -9732,7 +12197,11 @@ class StateManager:
         Raises:
             StateError: If current_time is not set
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("advance_time")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "advance_time", admitted_at=admission_epoch
+            )
             if self.state.current_time is None:
                 raise StateError("Cannot advance time: current_time not set")
 
@@ -9782,7 +12251,11 @@ class StateManager:
     def touch_smb_file(self, file: object) -> SmbFileState:
         """Return a mutable overlay view for one compiled storage file."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("touch_smb_file")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "touch_smb_file", admitted_at=admission_epoch
+            )
             existing = self._smb_file_overlay.get(file.file_id)
             if existing is not None:
                 return existing
@@ -9817,7 +12290,11 @@ class StateManager:
     ) -> SmbFileState:
         """Create a new file identity in the mutation overlay."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("create_smb_file")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "create_smb_file", admitted_at=admission_epoch
+            )
             if len(self._smb_file_overlay) >= _MAX_SMB_MUTATION_OVERLAY:
                 raise StateError(
                     f"SMB mutation overlay exceeds {_MAX_SMB_MUTATION_OVERLAY} touched files"
@@ -9844,7 +12321,11 @@ class StateManager:
     def update_smb_file(self, file_id: str, *, size_bytes: int) -> SmbFileState:
         """Advance a file content version and size."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("update_smb_file")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "update_smb_file", admitted_at=admission_epoch
+            )
             state = self._smb_file_overlay[file_id]
             if state.deleted:
                 raise StateError(f"cannot update deleted SMB file {file_id}")
@@ -9855,7 +12336,11 @@ class StateManager:
     def move_smb_file(self, file_id: str, *, share: str, path: str) -> SmbFileState:
         """Move a file while preserving its durable identity."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("move_smb_file")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "move_smb_file", admitted_at=admission_epoch
+            )
             state = self._smb_file_overlay[file_id]
             destination_key = (share.casefold(), path.casefold())
             destination_id = self._smb_file_by_share_path.get(destination_key)
@@ -9873,7 +12358,11 @@ class StateManager:
     def delete_smb_file(self, file_id: str) -> SmbFileState:
         """Tombstone a file identity."""
 
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("delete_smb_file")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "delete_smb_file", admitted_at=admission_epoch
+            )
             state = self._smb_file_overlay[file_id]
             state.deleted = True
             self._smb_file_by_share_path.pop(
@@ -9908,10 +12397,14 @@ class StateManager:
         Called during process tree seeding. Events with timestamps before
         boot_time will generate warnings.
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("register_boot_time")
         with self._lock:
             normalized = ensure_utc(boot_time)
             if self._system_boot_times.get(system) == normalized:
                 return
+            self._reject_mutation_during_action_cohort_claim(
+                "register_boot_time", admitted_at=admission_epoch
+            )
             self._system_boot_times[system] = normalized
             self._materialization_version += 1
 
@@ -9971,7 +12464,9 @@ class StateManager:
         building the CanonicalOccurrence. This method handles only teardown (logoff,
         process termination) and updates (connection bytes).
         """
+        admission_epoch = self._reject_mutation_during_action_cohort_claim("apply")
         with self._lock:
+            self._reject_mutation_during_action_cohort_claim("apply", admitted_at=admission_epoch)
             process_pid = -1
             process_host = ""
             if event.process is not None and event.src_host is not None:
