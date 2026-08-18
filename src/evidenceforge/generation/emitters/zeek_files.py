@@ -23,19 +23,17 @@
 """Zeek files.log emitter."""
 
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.activity.tls_realism import certificate_file_size
 from evidenceforge.generation.emitters.zeek_base import (
     SensorMultiplexEmitter,
-    planned_zeek_connection_interval,
+    direct_zeek_source_duration,
+    direct_zeek_source_time,
 )
-from evidenceforge.generation.source_timing import SourceTimingPlanner
-from evidenceforge.utils.rng import _stable_seed
-
-_SOURCE_TIMING = SourceTimingPlanner()
+from evidenceforge.generation.network_observation import network_source_timing_key
 
 
 class ZeekFilesEmitter(SensorMultiplexEmitter):
@@ -69,20 +67,12 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
             event.protocol.file_transfers, key=lambda transfer: not transfer.is_orig
         )
         sensor_metadata = self._sensor_metadata(event, self.format_def.name)
-        previous_file_ts: datetime | None = None
         for ft in file_transfers:
-            min_start = _related_http_analyzer_timestamp(event, ft)
-            if previous_file_ts is not None:
-                next_min_start = previous_file_ts + timedelta(microseconds=100)
-                min_start = (
-                    max(min_start, next_min_start) if min_start is not None else next_min_start
-                )
             file_ts, file_duration = _bounded_file_transfer_observation(
                 event,
-                min_start=min_start,
                 file_transfer=ft,
             )
-            previous_file_ts = file_ts
+            timing_key = network_source_timing_key("zeek_files", ft.fuid)
             event_data: dict[str, Any] = {
                 "ts": file_ts,
                 "fuid": ft.fuid,
@@ -107,6 +97,8 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "md5": ft.md5 or None,
                 "sha1": ft.sha1 or None,
                 "sha256": ft.sha256 or None,
+                "_source_timing_key": timing_key,
+                "_source_duration_key": timing_key,
                 **sensor_metadata,
             }
             self.emit_event(event_data)
@@ -123,6 +115,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 previous_file_timestamp=previous_cert_ts,
             )
             previous_cert_ts = cert_ts
+            timing_key = network_source_timing_key("zeek_files", cert.fuid)
             event_data = {
                 "ts": cert_ts,
                 "fuid": cert.fuid,
@@ -147,6 +140,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "md5": cert_hashes["md5"],
                 "sha1": cert_hashes["sha1"],
                 "sha256": cert_hashes["sha256"],
+                "_source_timing_key": timing_key,
                 **sensor_metadata,
             }
             self.emit_event(event_data)
@@ -187,93 +181,6 @@ def _certificate_file_hashes(fingerprint: str) -> dict[str, str | None]:
     }
 
 
-def _tls_connection_analysis_times(
-    event: CanonicalOccurrence,
-) -> tuple[datetime, tuple[datetime, datetime] | None, datetime]:
-    """Return conn bounds and the owning ssl.log analyzer timestamp."""
-    net = event.network
-    if net is None:
-        return event.timestamp, None, event.timestamp
-    planned_interval = planned_zeek_connection_interval(event)
-    if planned_interval is not None:
-        conn_ts, planned_close = planned_interval
-    else:
-        planned_close = None
-        conn_ts = _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_conn_start",
-            seed_parts=(
-                net.zeek_uid,
-                net.src_ip,
-                net.src_port,
-                net.dst_ip,
-                net.dst_port,
-                event.timestamp,
-            ),
-            not_before=event.timestamp,
-        )
-    within = None
-    if planned_close is not None:
-        within = (conn_ts, max(conn_ts, planned_close - timedelta(microseconds=1)))
-    elif net.duration is not None and net.duration > 0:
-        latest = conn_ts + timedelta(seconds=max(0.0, net.duration - 0.000001))
-        within = (conn_ts, latest)
-    ssl_ts = _SOURCE_TIMING.source_time(
-        event,
-        "source.zeek_ssl_analyzer",
-        seed_parts=(
-            net.zeek_uid,
-            net.src_ip,
-            net.src_port,
-            net.dst_ip,
-            net.dst_port,
-            event.timestamp,
-        ),
-        not_before=conn_ts,
-        within=within,
-    )
-    return conn_ts, within, ssl_ts
-
-
-def _tls_certificate_gap(
-    event: CanonicalOccurrence, fuid: str, position: int, label: str
-) -> timedelta:
-    """Return deterministic non-uniform spacing for certificate analyzer rows."""
-    seed = _stable_seed(
-        "zeek-tls-cert-gap:"
-        f"{label}:{getattr(event.network, 'zeek_uid', '')}:{fuid}:"
-        f"{position}:{event.timestamp.isoformat()}"
-    )
-    return timedelta(milliseconds=2 + (seed % 23), microseconds=103 + ((seed >> 8) % 853))
-
-
-def _constrained_tls_timestamp(
-    event: CanonicalOccurrence,
-    source_key: str,
-    seed_parts: tuple[Any, ...],
-    lower_bound: datetime,
-    conn_ts: datetime,
-    within: tuple[datetime, datetime] | None,
-) -> datetime:
-    """Return a bounded source timestamp without violating TLS row ordering."""
-    net = event.network
-    if within is not None and lower_bound > within[1]:
-        lower_bound = within[1]
-    preferred = _SOURCE_TIMING.source_time(
-        event,
-        source_key,
-        seed_parts=seed_parts,
-        not_before=lower_bound,
-        within=within,
-    )
-    timestamp = _bounded_in_connection_timestamp(
-        conn_ts,
-        net.duration if net is not None else None,
-        preferred,
-    )
-    return lower_bound if timestamp < lower_bound else timestamp
-
-
 def _tls_certificate_file_timestamp(
     event: CanonicalOccurrence,
     cert: Any,
@@ -281,32 +188,13 @@ def _tls_certificate_file_timestamp(
     *,
     previous_file_timestamp: datetime | None,
 ) -> datetime:
-    """Return the source-native files.log timestamp for one TLS certificate."""
-    net = event.network
-    if net is None:
-        lower_bound = (
-            event.timestamp
-            if previous_file_timestamp is None
-            else previous_file_timestamp + _tls_certificate_gap(event, cert.fuid, position, "file")
-        )
-        return _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_file_analyzer",
-            seed_parts=("tls-cert-file", cert.fuid, position, event.timestamp),
-            not_before=lower_bound,
-        )
-    conn_ts, within, ssl_ts = _tls_connection_analysis_times(event)
-    gap = _tls_certificate_gap(event, cert.fuid, position, "file")
-    lower_bound = ssl_ts + gap
-    if previous_file_timestamp is not None:
-        lower_bound = max(lower_bound, previous_file_timestamp + gap)
-    return _constrained_tls_timestamp(
+    """Return one planner-frozen TLS certificate files.log timestamp."""
+
+    del position, previous_file_timestamp
+    return _frozen_source_time(
         event,
-        "source.zeek_file_analyzer",
-        (net.zeek_uid, "tls-cert-file", cert.fuid, position, event.timestamp),
-        lower_bound,
-        conn_ts,
-        within,
+        network_source_timing_key("zeek_files", cert.fuid),
+        _canonical_network_anchor(event),
     )
 
 
@@ -318,62 +206,13 @@ def _tls_certificate_x509_timestamp(
     file_timestamp: datetime,
     previous_x509_timestamp: datetime | None,
 ) -> datetime:
-    """Return the source-native x509.log timestamp after its files.log object."""
-    net = event.network
-    gap = _tls_certificate_gap(event, cert.fuid, position, "x509")
-    lower_bound = file_timestamp + gap
-    if previous_x509_timestamp is not None:
-        lower_bound = max(lower_bound, previous_x509_timestamp + gap)
-    if net is None:
-        return _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_x509_analyzer",
-            seed_parts=("tls-cert-x509", cert.fuid, position, event.timestamp),
-            not_before=lower_bound,
-        )
-    conn_ts, within, _ssl_ts = _tls_connection_analysis_times(event)
-    return _constrained_tls_timestamp(
-        event,
-        "source.zeek_x509_analyzer",
-        (net.zeek_uid, "tls-cert-x509", cert.fuid, position, event.timestamp),
-        lower_bound,
-        conn_ts,
-        within,
-    )
+    """Return one planner-frozen x509.log timestamp."""
 
-
-def _file_transfer_analyzer_timestamp(
-    event: CanonicalOccurrence,
-    zeek_uid: str,
-    fuid: str,
-    conn_ts: datetime,
-) -> datetime:
-    """Return a deterministic files.log analysis time after the conn start."""
-    net = event.network
-    if event.protocol.http is not None and net is not None:
-        http_seed_parts = (
-            zeek_uid,
-            net.src_ip,
-            net.src_port,
-            net.dst_ip,
-            net.dst_port,
-            event.timestamp,
-        )
-        return _SOURCE_TIMING.source_time_after_source(
-            event,
-            "source.zeek_file_analyzer",
-            after_source_key="source.zeek_http_request",
-            gap_key="source.zeek_file_analyzer",
-            seed_parts=(zeek_uid, fuid, event.timestamp),
-            after_seed_parts=http_seed_parts,
-            after_not_before=conn_ts,
-            not_before=conn_ts + timedelta(milliseconds=1),
-        )
-    return _SOURCE_TIMING.source_time(
+    del position, file_timestamp, previous_x509_timestamp
+    return _frozen_source_time(
         event,
-        "source.zeek_file_analyzer",
-        seed_parts=(zeek_uid, fuid, event.timestamp),
-        not_before=conn_ts + timedelta(milliseconds=1),
+        network_source_timing_key("zeek_x509", cert.fuid),
+        _canonical_network_anchor(event),
     )
 
 
@@ -382,84 +221,31 @@ def _bounded_file_transfer_observation(
     min_start: datetime | None = None,
     file_transfer: Any | None = None,
 ) -> tuple[datetime, float]:
-    """Keep files.log observation timing inside the owning conn.log interval."""
-    net = event.network
+    """Return planner-frozen files.log timing for compatibility callers."""
+
     ft = file_transfer or event.protocol.primary_file_transfer
-    if net is None or ft is None:
+    if ft is None:
         return event.timestamp, 0.0
-    planned_interval = planned_zeek_connection_interval(event)
-    if planned_interval is not None:
-        conn_ts, planned_close = planned_interval
-        conn_duration = (
-            (planned_close - conn_ts).total_seconds() if planned_close is not None else None
+    key = network_source_timing_key("zeek_files", ft.fuid)
+    candidates = [
+        candidate
+        for candidate in (
+            _canonical_network_anchor(event),
+            min_start,
+            ft.observation_not_before,
         )
-    else:
-        conn_ts = _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_conn_start",
-            seed_parts=(
-                net.zeek_uid,
-                net.src_ip,
-                net.src_port,
-                net.dst_ip,
-                net.dst_port,
-                event.timestamp,
-            ),
-            not_before=event.timestamp,
-        )
-        conn_duration = net.duration
-    file_duration = ft.duration
-    file_ts = _file_transfer_analyzer_timestamp(event, net.zeek_uid, ft.fuid, conn_ts)
-    hard_lower_bound = max(conn_ts, min_start) if min_start is not None else conn_ts
-    lower_bound = hard_lower_bound
-    if ft.observation_not_before is not None:
-        lower_bound = max(lower_bound, ft.observation_not_before)
-    if file_ts < lower_bound:
-        file_ts = lower_bound
-    if conn_duration is None or conn_duration <= 0:
-        return file_ts, file_duration
-
-    close_margin = _SOURCE_TIMING.file_transfer_close_margin_seconds(event, ft, conn_duration)
-    conn_end = conn_ts + timedelta(seconds=conn_duration)
-    max_duration = max(0.0, conn_duration - close_margin)
-    bounded_duration = min(max(0.0, file_duration), max_duration)
-    latest_start = conn_end - timedelta(seconds=bounded_duration + close_margin)
-    if lower_bound > latest_start:
-        lower_bound = min(max(hard_lower_bound, latest_start), conn_end)
-        bounded_duration = max(0.0, (conn_end - lower_bound).total_seconds() - close_margin)
-        latest_start = lower_bound
-    if file_ts > latest_start and lower_bound <= latest_start:
-        file_ts = latest_start
-    if file_ts < lower_bound:
-        file_ts = lower_bound
-    if file_ts + timedelta(seconds=bounded_duration) > conn_end:
-        bounded_duration = max(0.0, (conn_end - file_ts).total_seconds() - close_margin)
-    return file_ts, bounded_duration
-
-
-def _bounded_in_connection_timestamp(
-    conn_ts: datetime,
-    conn_duration: float | None,
-    preferred_ts: datetime,
-) -> datetime:
-    """Keep source-side analyzer rows inside the owning conn.log lifetime."""
-    if conn_duration is None or conn_duration <= 0:
-        return max(conn_ts, preferred_ts)
-
-    epsilon = 0.001
-    conn_end = conn_ts + timedelta(seconds=conn_duration)
-    latest_ts = conn_end - timedelta(seconds=epsilon)
-    if preferred_ts > latest_ts:
-        return latest_ts if latest_ts > conn_ts else conn_ts
-    if preferred_ts < conn_ts:
-        return conn_ts
-    return preferred_ts
+        if candidate is not None
+    ]
+    timestamp = _frozen_source_time(event, key, max(candidates))
+    duration = _frozen_source_duration(event, key)
+    return timestamp, ft.duration if duration is None else duration
 
 
 def _related_http_analyzer_timestamp(
     event: CanonicalOccurrence, ft: Any | None = None
 ) -> datetime | None:
-    """Return the owning HTTP analyzer timestamp when this file belongs to http.log."""
+    """Return the planner-frozen owning HTTP analyzer timestamp."""
+
     net = event.network
     if ft is None:
         ft = event.protocol.primary_file_transfer
@@ -468,33 +254,43 @@ def _related_http_analyzer_timestamp(
         return None
     if ft.fuid not in (*http.orig_fuids, *http.resp_fuids):
         return None
-    planned_interval = planned_zeek_connection_interval(event)
-    if planned_interval is not None:
-        conn_ts = planned_interval[0]
-    else:
-        conn_ts = _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_conn_start",
-            seed_parts=(
-                net.zeek_uid,
-                net.src_ip,
-                net.src_port,
-                net.dst_ip,
-                net.dst_port,
-                event.timestamp,
-            ),
-            not_before=event.timestamp,
-        )
-    return _SOURCE_TIMING.source_time(
+    return _frozen_source_time(
         event,
-        "source.zeek_http_request",
-        seed_parts=(
-            net.zeek_uid,
-            net.src_ip,
-            net.src_port,
-            net.dst_ip,
-            net.dst_port,
-            event.timestamp,
-        ),
-        not_before=conn_ts,
-    ) + timedelta(milliseconds=1)
+        network_source_timing_key("zeek_http"),
+        http.canonical_request_time or net.started_at,
+    )
+
+
+def _canonical_network_anchor(event: CanonicalOccurrence) -> datetime:
+    """Return the immutable canonical network start for direct emitter callers."""
+
+    return event.network.started_at if event.network is not None else event.timestamp
+
+
+def _frozen_source_time(
+    event: CanonicalOccurrence,
+    key: str,
+    fallback: datetime,
+) -> datetime:
+    """Read one source-native timestamp without planning or repairing it."""
+
+    for observation in event.network_observations:
+        timestamp = observation.source_time(key)
+        if timestamp is not None:
+            return timestamp
+    if event.network_observations_planned:
+        return fallback
+    timestamp = direct_zeek_source_time(event, key)
+    return timestamp if timestamp is not None else fallback
+
+
+def _frozen_source_duration(event: CanonicalOccurrence, key: str) -> float | None:
+    """Read one source-native duration without emitter-side bounding."""
+
+    for observation in event.network_observations:
+        duration = observation.source_duration(key)
+        if duration is not None:
+            return duration
+    if event.network_observations_planned:
+        return None
+    return direct_zeek_source_duration(event, key)

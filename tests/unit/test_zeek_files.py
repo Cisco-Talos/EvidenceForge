@@ -455,8 +455,8 @@ class TestFilesUidCorrelation:
         assert file_row["ts"] > http_row["ts"]
         assert file_row["ts"] - http_row["ts"] > 0.005
 
-    def test_http_file_timestamp_uses_final_monotonic_http_timestamp(self):
-        """files.log should follow http.log after same-UID timestamp repairs."""
+    def test_http_file_timestamp_follows_its_own_frozen_http_transaction(self):
+        """files.log follows its transaction without emitter-order timestamp repair."""
         files_fmt = load_format("zeek_files")
         http_fmt = load_format("zeek_http")
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -513,8 +513,8 @@ class TestFilesUidCorrelation:
             file_row = json.loads(files_output.read_text().splitlines()[0])
 
         assert len(http_rows) == 2
-        assert http_rows[1]["ts"] > http_rows[0]["ts"]
-        assert file_row["ts"] > http_rows[1]["ts"]
+        http_by_depth = {row["trans_depth"]: row for row in http_rows}
+        assert file_row["ts"] > http_by_depth[2]["ts"]
 
     def test_pe_timestamp_follows_parent_http_file_timestamp(self):
         """pe.log analysis should not predate the owning HTTP/files.log artifact."""

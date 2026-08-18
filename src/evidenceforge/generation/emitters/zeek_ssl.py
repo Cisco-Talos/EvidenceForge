@@ -22,18 +22,15 @@
 
 """Zeek ssl.log emitter."""
 
-from datetime import timedelta
 from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import (
     SensorMultiplexEmitter,
-    planned_zeek_connection_interval,
+    direct_zeek_source_time,
     zeek_format_observed,
 )
-from evidenceforge.generation.source_timing import SourceTimingPlanner
-
-_SOURCE_TIMING = SourceTimingPlanner()
+from evidenceforge.generation.network_observation import network_source_timing_key
 
 
 class ZeekSslEmitter(SensorMultiplexEmitter):
@@ -58,44 +55,11 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
     def emit(self, event: CanonicalOccurrence) -> None:
         net = event.network
         ssl = event.protocol.ssl
-        planned_interval = planned_zeek_connection_interval(event)
-        if planned_interval is not None:
-            conn_ts, planned_close = planned_interval
-        else:
-            planned_close = None
-            conn_ts = _SOURCE_TIMING.source_time(
-                event,
-                "source.zeek_conn_start",
-                seed_parts=(
-                    net.zeek_uid,
-                    net.src_ip,
-                    net.src_port,
-                    net.dst_ip,
-                    net.dst_port,
-                    event.timestamp,
-                ),
-                not_before=event.timestamp,
-            )
-        within = None
-        if planned_close is not None:
-            latest = max(conn_ts, planned_close - timedelta(microseconds=1))
-            within = (conn_ts, latest)
-        elif net.duration is not None and net.duration > 0:
-            latest = conn_ts + timedelta(seconds=max(0.0, net.duration - 0.000001))
-            within = (conn_ts, latest)
-        event_ts = _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_ssl_analyzer",
-            seed_parts=(
-                net.zeek_uid,
-                net.src_ip,
-                net.src_port,
-                net.dst_ip,
-                net.dst_port,
-                event.timestamp,
-            ),
-            not_before=conn_ts,
-            within=within,
+        timing_key = network_source_timing_key("zeek_ssl")
+        event_ts = (
+            net.started_at
+            if event.network_observations_planned
+            else direct_zeek_source_time(event, timing_key)
         )
         cert_chain_fuids = ssl.cert_chain_fuids or None
         if cert_chain_fuids and (
@@ -117,6 +81,7 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
             "established": ssl.established,
             "ssl_history": ssl.ssl_history or None,
             "cert_chain_fuids": cert_chain_fuids,
+            "_source_timing_key": timing_key,
             **self._sensor_metadata(event, self.format_def.name),
         }
         self.emit_event(event_data)

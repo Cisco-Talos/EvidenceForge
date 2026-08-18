@@ -53,9 +53,30 @@ from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_ocsp import ZeekOcspEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 from evidenceforge.generation.emitters.zeek_x509 import ZeekX509Emitter
+from evidenceforge.generation.network_observation import NetworkObservationPlanner
 from tests.network_factories import network_plan
 
 SAMPLE_DATA_DIR = Path(__file__).parent.parent.parent / "sample_data" / "Zeek-JSON"
+
+
+def _with_planned_source_timing(
+    event: OccurrenceBuilder,
+    observation: NetworkSensorObservation,
+) -> NetworkSensorObservation:
+    """Attach the production planner's frozen source keys to a custom sensor view."""
+
+    planned = NetworkObservationPlanner(None).plan(
+        event,
+        set(observation.visible_formats),
+        sensor_formats={observation.sensor_identity: observation.visible_formats},
+    )[0]
+    return replace(
+        observation,
+        observed_start_time=planned.observed_start_time,
+        observed_close_time=planned.observed_close_time,
+        source_times=planned.source_times,
+        source_durations=planned.source_durations,
+    )
 
 
 class TestSslFormatAccuracy:
@@ -368,38 +389,44 @@ class TestSslUidCorrelation:
                     protocol="tcp",
                     zeek_uid="CIncompleteCert1",
                     conn_state="SF",
+                    duration=1.0,
+                    source_visible_start_time=event_time,
+                    source_visible_close_time=event_time + timedelta(seconds=1),
                 ),
                 x509=certificate,
             )
             event._sensor_hostnames_by_format = {"zeek_x509": ["core"]}
             event.network_observations = (
-                NetworkSensorObservation(
-                    sensor_identity="core",
-                    path_role="source_side",
-                    capture_profile="lossy",
-                    tuple_view=NetworkTuple(
-                        src_ip="10.0.0.1",
-                        src_port=50000,
-                        dst_ip="8.8.8.8",
-                        dst_port=443,
-                        protocol="tcp",
-                    ),
-                    connection_uid="CObservedIncomplete1",
-                    connection_ids=(),
-                    file_ids=((certificate.fuid, "FObservedIncomplete1"),),
-                    local_orig=True,
-                    local_resp=False,
-                    observed_start_time=event_time,
-                    observed_close_time=event_time + timedelta(seconds=1),
-                    traffic=event.network.traffic,
-                    visible_formats=frozenset({"zeek_x509"}),
-                    file_observations=(
-                        FileSensorObservation(
-                            canonical_id=certificate.fuid,
-                            seen_bytes=1276,
-                            total_bytes=1279,
-                            missing_bytes=3,
-                            analyzers_visible=False,
+                _with_planned_source_timing(
+                    event,
+                    NetworkSensorObservation(
+                        sensor_identity="core",
+                        path_role="source_side",
+                        capture_profile="lossy",
+                        tuple_view=NetworkTuple(
+                            src_ip="10.0.0.1",
+                            src_port=50000,
+                            dst_ip="8.8.8.8",
+                            dst_port=443,
+                            protocol="tcp",
+                        ),
+                        connection_uid="CObservedIncomplete1",
+                        connection_ids=(),
+                        file_ids=((certificate.fuid, "FObservedIncomplete1"),),
+                        local_orig=True,
+                        local_resp=False,
+                        observed_start_time=event_time,
+                        observed_close_time=event_time + timedelta(seconds=1),
+                        traffic=event.network.traffic,
+                        visible_formats=frozenset({"zeek_x509"}),
+                        file_observations=(
+                            FileSensorObservation(
+                                canonical_id=certificate.fuid,
+                                seen_bytes=1276,
+                                total_bytes=1279,
+                                missing_bytes=3,
+                                analyzers_visible=False,
+                            ),
                         ),
                     ),
                 ),
@@ -439,6 +466,9 @@ class TestSslUidCorrelation:
                     protocol="tcp",
                     zeek_uid="CIncompleteCert1",
                     conn_state="SF",
+                    duration=1.0,
+                    source_visible_start_time=event_time,
+                    source_visible_close_time=event_time + timedelta(seconds=1),
                 ),
                 ssl=SslContext(
                     version="TLSv12",
@@ -448,33 +478,36 @@ class TestSslUidCorrelation:
                 x509=certificate,
             )
             event.network_observations = (
-                NetworkSensorObservation(
-                    sensor_identity="core",
-                    path_role="source_side",
-                    capture_profile="lossy",
-                    tuple_view=NetworkTuple(
-                        src_ip="10.0.0.1",
-                        src_port=50000,
-                        dst_ip="8.8.8.8",
-                        dst_port=443,
-                        protocol="tcp",
-                    ),
-                    connection_uid="CObservedIncomplete1",
-                    connection_ids=(),
-                    file_ids=((certificate.fuid, "FObservedIncomplete1"),),
-                    local_orig=True,
-                    local_resp=False,
-                    observed_start_time=event_time,
-                    observed_close_time=event_time + timedelta(seconds=1),
-                    traffic=event.network.traffic,
-                    visible_formats=frozenset({"zeek_ssl", "zeek_files", "zeek_x509"}),
-                    file_observations=(
-                        FileSensorObservation(
-                            canonical_id=certificate.fuid,
-                            seen_bytes=1276,
-                            total_bytes=1279,
-                            missing_bytes=3,
-                            analyzers_visible=False,
+                _with_planned_source_timing(
+                    event,
+                    NetworkSensorObservation(
+                        sensor_identity="core",
+                        path_role="source_side",
+                        capture_profile="lossy",
+                        tuple_view=NetworkTuple(
+                            src_ip="10.0.0.1",
+                            src_port=50000,
+                            dst_ip="8.8.8.8",
+                            dst_port=443,
+                            protocol="tcp",
+                        ),
+                        connection_uid="CObservedIncomplete1",
+                        connection_ids=(),
+                        file_ids=((certificate.fuid, "FObservedIncomplete1"),),
+                        local_orig=True,
+                        local_resp=False,
+                        observed_start_time=event_time,
+                        observed_close_time=event_time + timedelta(seconds=1),
+                        traffic=event.network.traffic,
+                        visible_formats=frozenset({"zeek_ssl", "zeek_files", "zeek_x509"}),
+                        file_observations=(
+                            FileSensorObservation(
+                                canonical_id=certificate.fuid,
+                                seen_bytes=1276,
+                                total_bytes=1279,
+                                missing_bytes=3,
+                                analyzers_visible=False,
+                            ),
                         ),
                     ),
                 ),
@@ -507,6 +540,9 @@ class TestSslUidCorrelation:
                     dst_port=443,
                     protocol="tcp",
                     zeek_uid="CMySpecificUID123",
+                    duration=1.0,
+                    source_visible_start_time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    source_visible_close_time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
                 ),
                 x509=X509Context(
                     fuid="Fabcdef1234567890",
@@ -520,29 +556,32 @@ class TestSslUidCorrelation:
             )
             event._sensor_hostnames_by_format = {"zeek_files": ["zeek-dmz"]}
             event.network_observations = (
-                NetworkSensorObservation(
-                    sensor_identity="zeek-dmz",
-                    path_role="destination_side",
-                    capture_profile="well_synced",
-                    tuple_view=NetworkTuple(
-                        src_ip="185.70.41.45",
-                        src_port=50000,
-                        dst_ip="10.10.3.10",
-                        dst_port=443,
-                        protocol="tcp",
+                _with_planned_source_timing(
+                    event,
+                    NetworkSensorObservation(
+                        sensor_identity="zeek-dmz",
+                        path_role="destination_side",
+                        capture_profile="well_synced",
+                        tuple_view=NetworkTuple(
+                            src_ip="185.70.41.45",
+                            src_port=50000,
+                            dst_ip="10.10.3.10",
+                            dst_port=443,
+                            protocol="tcp",
+                        ),
+                        connection_uid="CMySpecificUID123",
+                        connection_ids=(),
+                        file_ids=(),
+                        local_orig=False,
+                        local_resp=True,
+                        observed_start_time=event.timestamp,
+                        observed_close_time=None,
+                        traffic=NetworkTrafficLedger(
+                            orig=DirectionalTrafficLedger(0, 0, 0),
+                            resp=DirectionalTrafficLedger(0, 0, 0),
+                        ),
+                        visible_formats=frozenset({"zeek_files"}),
                     ),
-                    connection_uid="CMySpecificUID123",
-                    connection_ids=(),
-                    file_ids=(),
-                    local_orig=False,
-                    local_resp=True,
-                    observed_start_time=event.timestamp,
-                    observed_close_time=None,
-                    traffic=NetworkTrafficLedger(
-                        orig=DirectionalTrafficLedger(0, 0, 0),
-                        resp=DirectionalTrafficLedger(0, 0, 0),
-                    ),
-                    visible_formats=frozenset({"zeek_files"}),
                 ),
             )
             event.network_observations_planned = True
@@ -1268,6 +1307,45 @@ class TestSslUidCorrelation:
         assert conn_row["duration"] > 1.2
         assert conn_row["duration"] != 1.2
 
+    @pytest.mark.parametrize("service", ["SSL", " ssl "])
+    def test_direct_tls_service_normalization_preserves_c009_conn_bytes(self, service: str):
+        """Direct service aliases retain the normalized parent's TLS duration texture."""
+
+        conn_fmt = load_format("zeek_conn")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "conn.json"
+            emitter = ZeekEmitter(conn_fmt, output)
+            emitter.emit(
+                OccurrenceBuilder(
+                    timestamp=base_ts,
+                    event_type="connection",
+                    network=network_plan(
+                        src_ip="10.0.0.1",
+                        src_port=50000,
+                        dst_ip="8.8.8.8",
+                        dst_port=443,
+                        protocol="tcp",
+                        service=service,
+                        zeek_uid="CServiceOnlyTLS123",
+                        conn_state="SF",
+                        duration=1.2,
+                    ),
+                )
+            )
+            emitter.close()
+
+            assert output.read_text(encoding="utf-8") == (
+                '{"ts":1705312800.0,"uid":"CServiceOnlyTLS123",'
+                '"id.orig_h":"10.0.0.1","id.orig_p":50000,'
+                '"id.resp_h":"8.8.8.8","id.resp_p":443,"proto":"tcp",'
+                '"service":"ssl","duration":1.564,"orig_bytes":0,'
+                '"resp_bytes":0,"conn_state":"SF","local_orig":true,'
+                '"local_resp":false,"missed_bytes":0,"orig_pkts":0,'
+                '"orig_ip_bytes":0,"resp_pkts":0,"resp_ip_bytes":0,'
+                '"ip_proto":6}\n'
+            )
+
     def test_tls_conn_duration_floor_breaks_ssl_context_duration_sentinel(self):
         """Completed TLS rows with SSL context should not keep the generic 1.2s duration."""
         conn_fmt = load_format("zeek_conn")
@@ -1300,6 +1378,40 @@ class TestSslUidCorrelation:
 
         assert conn_row["duration"] > 1.2
         assert conn_row["duration"] != 1.2
+
+    def test_direct_tls_minimum_duration_preserves_c009_floor(self):
+        """A direct completed TLS row at the exact floor retains c009 texture."""
+
+        conn_fmt = load_format("zeek_conn")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "conn.json"
+            emitter = ZeekEmitter(conn_fmt, output)
+            emitter.emit(
+                OccurrenceBuilder(
+                    timestamp=base_ts,
+                    event_type="connection",
+                    network=network_plan(
+                        src_ip="10.0.0.1",
+                        src_port=50000,
+                        dst_ip="8.8.8.8",
+                        dst_port=443,
+                        protocol="tcp",
+                        zeek_uid="CMinimumTLS123",
+                        conn_state="SF",
+                        duration=0.8,
+                    ),
+                    ssl=SslContext(
+                        version="TLSv12",
+                        cipher="TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                    ),
+                )
+            )
+            emitter.close()
+
+            row = json.loads(output.read_text(encoding="utf-8"))
+
+        assert row["duration"] == 2.482
 
     def test_tls_conn_duration_texture_never_shortens_canonical_interval(self, monkeypatch):
         """Source-native TLS texture must not close before the canonical transport."""

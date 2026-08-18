@@ -50,9 +50,26 @@ from evidenceforge.events.network import NetworkSensorObservation
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
+from evidenceforge.generation.network_observation import (
+    compatibility_network_source_duration,
+    compatibility_network_source_time,
+)
+from evidenceforge.models.exceptions import EventContractError
 from evidenceforge.utils.paths import sanitize_path_component
 
 logger = logging.getLogger(__name__)
+
+
+def direct_zeek_source_time(event: Any, key: str) -> datetime:
+    """Return one stateless direct-call source timestamp from the owning adapter."""
+
+    return compatibility_network_source_time(event, key)
+
+
+def direct_zeek_source_duration(event: Any, key: str) -> float | None:
+    """Return one stateless direct-call duration from the owning adapter."""
+
+    return compatibility_network_source_duration(event, key)
 
 
 def zeek_format_observed(event: Any, format_name: str) -> bool:
@@ -391,9 +408,17 @@ class SensorMultiplexEmitter(LogEmitter):
         render_data: dict[str, Any],
         observation: NetworkSensorObservation,
         canonical_start: datetime | None,
+        source_timing_key: str | None = None,
+        source_duration_key: str | None = None,
+        source_duration_field: str = "duration",
     ) -> None:
         """Project a frozen observation into source-native Zeek fields."""
 
+        self._require_frozen_source_keys(
+            observation,
+            source_timing_key=source_timing_key,
+            source_duration_key=source_duration_key,
+        )
         render_data["_sensor_traffic_observed"] = True
 
         original_src_ip = render_data.get("id.orig_h") or render_data.get("_id.orig_h")
@@ -446,7 +471,12 @@ class SensorMultiplexEmitter(LogEmitter):
 
         timestamp_field = "ts" if "ts" in render_data else "timestamp"
         ts = render_data.get(timestamp_field)
-        if canonical_start is not None and isinstance(ts, datetime):
+        frozen_source_time = (
+            observation.source_time(source_timing_key) if source_timing_key is not None else None
+        )
+        if frozen_source_time is not None:
+            projected_ts: datetime | float = frozen_source_time
+        elif canonical_start is not None and isinstance(ts, datetime):
             projected_ts: datetime | float = observation.observed_start_time + (
                 ts - canonical_start
             )
@@ -458,18 +488,33 @@ class SensorMultiplexEmitter(LogEmitter):
             )
         else:
             projected_ts = ts
-        if isinstance(projected_ts, datetime):
-            projected_ts = max(projected_ts, observation.observed_start_time)
-            if observation.observed_close_time is not None:
-                projected_ts = min(projected_ts, observation.observed_close_time)
-        elif isinstance(projected_ts, (int, float)):
-            projected_ts = max(projected_ts, observation.observed_start_time.timestamp())
-            if observation.observed_close_time is not None:
-                projected_ts = min(projected_ts, observation.observed_close_time.timestamp())
+        # TODO(v2-timing): unmigrated Zeek formats still use the legacy relative
+        # projection adapter. Migrated rows carry a frozen source timing key and
+        # bypass every emitter-side bound repair.
+        if source_timing_key is None:
+            if isinstance(projected_ts, datetime):
+                projected_ts = max(projected_ts, observation.observed_start_time)
+                if observation.observed_close_time is not None:
+                    projected_ts = min(projected_ts, observation.observed_close_time)
+            elif isinstance(projected_ts, (int, float)):
+                projected_ts = max(projected_ts, observation.observed_start_time.timestamp())
+                if observation.observed_close_time is not None:
+                    projected_ts = min(projected_ts, observation.observed_close_time.timestamp())
         if projected_ts is not None:
             render_data[timestamp_field] = projected_ts
 
-        if self.format_def.name != "zeek_conn" and observation.observed_close_time is not None:
+        frozen_duration = (
+            observation.source_duration(source_duration_key)
+            if source_duration_key is not None
+            else None
+        )
+        if frozen_duration is not None:
+            render_data[source_duration_field] = frozen_duration
+        elif (
+            source_timing_key is None
+            and self.format_def.name != "zeek_conn"
+            and observation.observed_close_time is not None
+        ):
             remaining_seconds = None
             if isinstance(projected_ts, datetime):
                 remaining_seconds = max(
@@ -494,7 +539,11 @@ class SensorMultiplexEmitter(LogEmitter):
             ledger = observation.traffic
             render_data.update(
                 {
-                    "duration": observation.observed_duration,
+                    "duration": (
+                        frozen_duration
+                        if source_duration_key is not None
+                        else observation.observed_duration
+                    ),
                     "orig_bytes": ledger.orig.payload_bytes,
                     "resp_bytes": ledger.resp.payload_bytes,
                     "orig_pkts": ledger.orig.packets,
@@ -560,6 +609,29 @@ class SensorMultiplexEmitter(LogEmitter):
                     else None
                 )
 
+    def _require_frozen_source_keys(
+        self,
+        observation: NetworkSensorObservation,
+        *,
+        source_timing_key: str | None,
+        source_duration_key: str | None,
+    ) -> None:
+        """Fail before rendering when a migrated row lacks its frozen timing contract."""
+
+        missing: list[str] = []
+        if source_timing_key is not None and observation.source_time(source_timing_key) is None:
+            missing.append(f"timestamp {source_timing_key!r}")
+        if (
+            source_duration_key is not None
+            and observation.source_duration(source_duration_key) is None
+        ):
+            missing.append(f"duration {source_duration_key!r}")
+        if missing:
+            raise EventContractError(
+                f"{self.format_def.name} observation {observation.sensor_identity!r} "
+                f"is missing frozen source {' and '.join(missing)}"
+            )
+
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Render and route to sensor writers.
 
@@ -572,10 +644,22 @@ class SensorMultiplexEmitter(LogEmitter):
         observations = event_data.pop("_network_sensor_observations", {})
         observations_planned = event_data.pop("_network_observations_planned", False)
         canonical_start = event_data.pop("_canonical_network_start", None)
+        source_timing_key = event_data.pop("_source_timing_key", None)
+        source_duration_key = event_data.pop("_source_duration_key", None)
+        source_duration_field = event_data.pop("_source_duration_field", "duration")
         event_data.pop("_allow_sensor_observation_variance", None)
         targets = (
             sensor_hostnames if observations_planned else sensor_hostnames or self._sensor_hostnames
         )
+
+        for hostname in targets or ():
+            observation = observations.get(hostname)
+            if observation is not None:
+                self._require_frozen_source_keys(
+                    observation,
+                    source_timing_key=source_timing_key,
+                    source_duration_key=source_duration_key,
+                )
 
         if not targets:
             if observations_planned:
@@ -601,6 +685,9 @@ class SensorMultiplexEmitter(LogEmitter):
                         render_data,
                         observation,
                         canonical_start,
+                        source_timing_key,
+                        source_duration_key,
+                        source_duration_field,
                     )
                 _enforce_http_body_invariants(render_data)
                 _enforce_ip_byte_invariants(render_data)
@@ -669,6 +756,13 @@ class SensorMultiplexEmitter(LogEmitter):
                 try:
                     if not self._handle_flush_request(event_data):
                         self._dispatch(event_data)
+                except Exception as exc:  # noqa: BLE001
+                    self._thread_error = exc
+                    logger.exception(
+                        "Unhandled exception in %s emitter thread; stopping thread",
+                        self.format_def.name,
+                    )
+                    self._stop_event.set()
                 finally:
                     self._event_queue.task_done()
             except Empty:
@@ -692,11 +786,27 @@ class SensorMultiplexEmitter(LogEmitter):
 
     def close(self) -> None:
         """Close emitter and flush all sensor writers."""
+        thread_failure: RuntimeError | None = None
         if self.threaded:
-            self.stop_thread()
+            try:
+                self.stop_thread()
+                self._raise_if_thread_failed()
+            except RuntimeError as exc:
+                thread_failure = exc
+        writer_failure: OSError | RuntimeError | None = None
         with self._writers_lock:
             for writer in self._writers.values():
-                writer.close()
+                try:
+                    writer.close()
+                except (OSError, RuntimeError) as exc:
+                    if writer_failure is None:
+                        writer_failure = exc
+        if thread_failure is not None:
+            if writer_failure is not None:
+                thread_failure.add_note(f"Writer cleanup also failed: {writer_failure}")
+            raise thread_failure
+        if writer_failure is not None:
+            raise writer_failure
 
     @property
     def event_count(self) -> int:

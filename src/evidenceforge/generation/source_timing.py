@@ -1768,7 +1768,9 @@ class SourceTimingPlanner:
     ) -> bool:
         """Return whether the shared runtime owns this migrated projection timestamp."""
 
-        from evidenceforge.generation.network_observation import RUNTIME_OWNED_ZEEK_FORMATS
+        from evidenceforge.generation.network_observation import (
+            network_observation_owns_format_timing,
+        )
 
         if format_name in {
             "ecar",
@@ -1777,11 +1779,7 @@ class SourceTimingPlanner:
             "windows_event_security",
         }:
             return True
-        return bool(
-            format_name in RUNTIME_OWNED_ZEEK_FORMATS
-            and event.network is not None
-            and event.event_type in {"connection", "dhcp_lease"}
-        )
+        return network_observation_owns_format_timing(event, format_name)
 
     def initialize_event(self, event: TimingOccurrence) -> TimingOccurrence:
         """Retain canonical time before source observation delay is applied.
@@ -4848,7 +4846,9 @@ class SourceTimingPlanner:
     def admission_time(self, event: TimingOccurrence, format_name: str) -> datetime:
         """Return the finalized source-visible timestamp used for window admission."""
 
-        from evidenceforge.generation.network_observation import RUNTIME_OWNED_ZEEK_FORMATS
+        from evidenceforge.generation.network_observation import (
+            network_observation_owns_format_timing,
+        )
 
         if event.source_timing is not None:
             if format_name in {
@@ -4907,7 +4907,7 @@ class SourceTimingPlanner:
                     )
                     if process_time is not None:
                         return process_time
-        if format_name in RUNTIME_OWNED_ZEEK_FORMATS and event.network_observations:
+        if network_observation_owns_format_timing(event, format_name):
             prefix = f"{format_name}:"
             source_times = [
                 timestamp

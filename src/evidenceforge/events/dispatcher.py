@@ -6864,6 +6864,15 @@ class EventDispatcher:
                 event,
                 network_observations=self._admit_network_sensor_observations(event),
             )
+        decisions = {
+            format_name: (
+                ObservationDecision(status="visible")
+                if self._runtime_owns_format_timing(event, format_name)
+                and decision.status != "dropped"
+                else decision
+            )
+            for format_name, decision in decisions.items()
+        }
 
         targets: list[_LegacyProjectionTarget] = []
         for format_name, emitter in matching_emitters:
@@ -7078,6 +7087,15 @@ class EventDispatcher:
                 matching_emitters,
                 network_identifiers_by_format,
             )
+        decisions = {
+            format_name: (
+                ObservationDecision(status="visible")
+                if self._runtime_owns_format_timing(event, format_name)
+                and decision.status != "dropped"
+                else decision
+            )
+            for format_name, decision in decisions.items()
+        }
         for format_name, emitter in matching_emitters:
             decision = decisions[format_name]
             if decision.status == "dropped":
@@ -7488,7 +7506,9 @@ class EventDispatcher:
     ) -> bool:
         """Return whether runtime timing replaces observation delay for one format."""
 
-        from evidenceforge.generation.network_observation import RUNTIME_OWNED_ZEEK_FORMATS
+        from evidenceforge.generation.network_observation import (
+            network_observation_owns_format_timing,
+        )
 
         if format_name == "ecar":
             return event.event_type in {
@@ -7503,11 +7523,7 @@ class EventDispatcher:
                 "system_process_create",
                 "process_terminate",
             }
-        return bool(
-            format_name in RUNTIME_OWNED_ZEEK_FORMATS
-            and event.network is not None
-            and event.event_type in {"connection", "dhcp_lease"}
-        )
+        return network_observation_owns_format_timing(event, format_name)
 
     def _enforce_compiled_source_contracts(
         self,
@@ -7612,6 +7628,14 @@ class EventDispatcher:
                 event,
                 network_observations=self._admit_network_sensor_observations(event),
             )
+        targets = [
+            replace(target, decision=ObservationDecision(status="visible"))
+            if target.decision is not None
+            and target.decision.status != "dropped"
+            and self._runtime_owns_format_timing(event, target.format_name)
+            else target
+            for target in targets
+        ]
         base_source_timing = event.source_timing
         planned_targets: list[_ProjectionTarget] = []
         for target in targets:
@@ -7866,15 +7890,16 @@ class EventDispatcher:
         ):
             return False
         visible_time = envelope.observed_time
+        output_end = self._projection_output_end(envelope)
         lifecycle = event.lifecycle
         if lifecycle is not None:
             source_start = visible_time + self._timestamp_delta(
                 lifecycle.canonical_start,
                 event.timestamp,
             )
-            if self.output_end_time is not None and not self._is_before(
+            if output_end is not None and not self._is_before(
                 source_start,
-                self.output_end_time,
+                output_end,
             ):
                 return False
         if self.output_start_time is not None and self._is_before(
@@ -7882,9 +7907,9 @@ class EventDispatcher:
             self.output_start_time,
         ):
             return False
-        return self.output_end_time is None or self._is_before(
+        return output_end is None or self._is_before(
             visible_time,
-            self.output_end_time,
+            output_end,
         )
 
     @staticmethod

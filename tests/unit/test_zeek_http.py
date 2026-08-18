@@ -422,21 +422,19 @@ class TestHttpRenderTiming:
         offset_us = round((data["ts"] - base_ts.timestamp()) * 1_000_000)
         assert offset_us % 1000 != 0
 
-    def test_emit_preserves_same_uid_transaction_timestamp_order(self, tmp_path, monkeypatch):
-        """Per-request analyzer jitter must not reorder same-UID transaction depths."""
+    def test_direct_calls_do_not_repair_same_uid_transaction_order(self, tmp_path, monkeypatch):
+        """Direct compatibility timing remains event-local instead of emitter-stateful."""
         fmt = load_format("zeek_http")
         output = tmp_path / "http.json"
         emitter = ZeekHttpEmitter(fmt, output, buffer_size=1)
         base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         deltas = [timedelta(milliseconds=450), timedelta(milliseconds=1)]
 
-        def fake_source_time(event, source_key, **_kwargs):
-            if source_key == "source.zeek_conn_start":
-                return event.timestamp
+        def fake_source_time(event, _timing_key):
             return event.timestamp + deltas.pop(0)
 
         monkeypatch.setattr(
-            "evidenceforge.generation.emitters.zeek_http._SOURCE_TIMING.source_time",
+            "evidenceforge.generation.emitters.zeek_http.direct_zeek_source_time",
             fake_source_time,
         )
 
@@ -466,14 +464,16 @@ class TestHttpRenderTiming:
         emitter.close()
 
         rows = [json.loads(line) for line in output.read_text().splitlines()]
-        assert [row["trans_depth"] for row in rows] == [1, 2]
-        assert rows[1]["ts"] > rows[0]["ts"]
+        assert [row["trans_depth"] for row in rows] == [2, 1]
+        assert rows[0]["ts"] < rows[1]["ts"]
 
-    def test_canonical_request_times_survive_out_of_order_emitter_calls(self, tmp_path):
-        """Canonical packet order wins when concurrent dispatch calls arrive out of order."""
+    def test_direct_request_times_are_independent_of_emitter_call_order(self, tmp_path):
+        """Stateless compatibility timing is invariant to direct emitter call order."""
         fmt = load_format("zeek_http")
-        output = tmp_path / "http.json"
-        emitter = ZeekHttpEmitter(fmt, output, buffer_size=10)
+        reverse_output = tmp_path / "http-reverse.json"
+        forward_output = tmp_path / "http-forward.json"
+        reverse_emitter = ZeekHttpEmitter(fmt, reverse_output, buffer_size=10)
+        forward_emitter = ZeekHttpEmitter(fmt, forward_output, buffer_size=10)
         base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
         def make_event(trans_depth: int, offset_ms: int) -> OccurrenceBuilder:
@@ -516,30 +516,32 @@ class TestHttpRenderTiming:
                 ),
             )
 
-        emitter.emit(make_event(2, 20))
-        emitter.emit(make_event(1, 10))
-        emitter.close()
+        reverse_emitter.emit(make_event(2, 20))
+        reverse_emitter.emit(make_event(1, 10))
+        reverse_emitter.close()
+        forward_emitter.emit(make_event(1, 10))
+        forward_emitter.emit(make_event(2, 20))
+        forward_emitter.close()
 
-        rows = [json.loads(line) for line in output.read_text().splitlines()]
-        assert [row["trans_depth"] for row in rows] == [1, 2]
-        assert rows[0]["ts"] < rows[1]["ts"]
+        reverse_rows = [json.loads(line) for line in reverse_output.read_text().splitlines()]
+        forward_rows = [json.loads(line) for line in forward_output.read_text().splitlines()]
+        assert reverse_rows == forward_rows
+        assert {row["trans_depth"] for row in reverse_rows} == {1, 2}
 
-    def test_application_layer_transaction_stays_inside_first_parent_lifetime(
+    def test_application_layer_transaction_does_not_reuse_emitter_parent_bounds(
         self, tmp_path, monkeypatch
     ):
-        """Repeated same-UID transactions reuse the first observed parent-flow bounds."""
+        """Repeated same-UID transactions do not retain emitter-local flow bounds."""
         fmt = load_format("zeek_http")
         output = tmp_path / "http.json"
         emitter = ZeekHttpEmitter(fmt, output, buffer_size=1)
         base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
-        def fake_source_time(event, source_key, **_kwargs):
-            if source_key == "source.zeek_conn_start":
-                return event.timestamp
+        def fake_source_time(event, _timing_key):
             return event.timestamp + timedelta(milliseconds=250)
 
         monkeypatch.setattr(
-            "evidenceforge.generation.emitters.zeek_http._SOURCE_TIMING.source_time",
+            "evidenceforge.generation.emitters.zeek_http.direct_zeek_source_time",
             fake_source_time,
         )
 
@@ -572,4 +574,4 @@ class TestHttpRenderTiming:
 
         rows = [json.loads(line) for line in output.read_text().splitlines()]
         parent_end = base_ts.timestamp() + 0.5
-        assert rows[1]["ts"] <= parent_end
+        assert rows[1]["ts"] > parent_end

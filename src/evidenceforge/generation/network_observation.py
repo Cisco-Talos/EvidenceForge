@@ -9,8 +9,9 @@ import hashlib
 import random
 import string
 from collections.abc import Collection, Mapping
+from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -29,6 +30,8 @@ from evidenceforge.generation.activity.timing_profiles import (
 )
 from evidenceforge.generation.activity.tls_realism import certificate_file_size
 from evidenceforge.generation.source_timing import (
+    SourceTimingPlan,
+    SourceTimingPlanner,
     SourceTimingPlanningRuntime,
     active_source_timing_planning_runtime,
 )
@@ -807,9 +810,13 @@ class NetworkObservationPlanner:
             if observed_close is not None:
                 source_durations[conn_key] = (observed_close - observed_start).total_seconds()
 
+        relative_phase_time = observed_start + (ensure_utc(event.timestamp) - canonical_start)
+        relative_phase_time = max(observed_start, relative_phase_time)
+        if observed_close is not None:
+            relative_phase_time = min(relative_phase_time, observed_close)
         for format_name in ("zeek_smb_files", "zeek_smb_mapping", "zeek_weird"):
             if format_name in visible_formats:
-                source_times[network_source_timing_key(format_name)] = observed_start
+                source_times[network_source_timing_key(format_name)] = relative_phase_time
 
         dns = event.dns
         if dns is not None and "zeek_dns" in visible_formats:
@@ -1006,6 +1013,8 @@ class NetworkObservationPlanner:
                 anchor = http_time
             elif ssl_time is not None and transfer.source.upper() == "SSL":
                 anchor = ssl_time
+            elif transfer.source.upper() == "SMB":
+                anchor = relative_phase_time
             if transfer.observation_not_before is not None:
                 projected_not_before = cls._project_phase_time(
                     ensure_utc(transfer.observation_not_before),
@@ -1389,10 +1398,36 @@ RUNTIME_OWNED_ZEEK_FORMATS = frozenset(
         "zeek_ocsp",
         "zeek_pe",
         "zeek_smtp",
+        "zeek_smb_files",
+        "zeek_smb_mapping",
         "zeek_ssl",
+        "zeek_weird",
         "zeek_x509",
     }
 )
+
+
+def network_observation_owns_format_timing(
+    event: CanonicalOccurrence,
+    format_name: str | None,
+) -> bool:
+    """Return whether one Zeek format has exact runtime-owned observation timing."""
+
+    if format_name not in RUNTIME_OWNED_ZEEK_FORMATS or event.network is None:
+        return False
+    if event.event_type in {"connection", "dhcp_lease"}:
+        return True
+    prefix = f"{format_name}:"
+    for observation in event.network_observations:
+        if format_name not in observation.visible_formats:
+            continue
+        keys = (
+            *(key for key, _timestamp in observation.source_times),
+            *(key for key, _duration in observation.source_durations),
+        )
+        if any(key == format_name or key.startswith(prefix) for key in keys):
+            return True
+    return False
 
 
 def compatibility_network_source_time(
@@ -1408,7 +1443,21 @@ def compatibility_network_source_time(
 
     if event.network is None:
         return _compatibility_context_source_time(event, key)
-    source_times, _source_durations = _compatibility_protocol_timing(event)
+    interval_us = _compatibility_direct_interval_microseconds(event)
+    if interval_us is not None and interval_us <= 2:
+        source_times, _source_durations = _compatibility_short_protocol_timing(event)
+        parent_start, parent_close = _compatibility_direct_parent_interval(event)
+        return dict(source_times).get(
+            key,
+            parent_close if interval_us > 0 and parent_close is not None else parent_start,
+        )
+    try:
+        source_times, _source_durations = _compatibility_protocol_timing(event)
+    except TimingDistributionError as exc:
+        if "has no microsecond interior before its owning close" not in str(exc):
+            raise
+        source_times, _source_durations = _compatibility_short_protocol_timing(event)
+        return dict(source_times).get(key, ensure_utc(event.timestamp))
     return dict(source_times).get(key, ensure_utc(event.timestamp))
 
 
@@ -1418,7 +1467,17 @@ def compatibility_network_source_duration(
 ) -> float | None:
     """Plan one direct-caller source duration outside an emitter instance."""
 
-    _source_times, source_durations = _compatibility_protocol_timing(event)
+    interval_us = _compatibility_direct_interval_microseconds(event)
+    if interval_us is not None and interval_us <= 2:
+        _source_times, source_durations = _compatibility_short_protocol_timing(event)
+        return dict(source_durations).get(key)
+    try:
+        _source_times, source_durations = _compatibility_protocol_timing(event)
+    except TimingDistributionError as exc:
+        if "has no microsecond interior before its owning close" not in str(exc):
+            raise
+        _source_times, source_durations = _compatibility_short_protocol_timing(event)
+        return dict(source_durations).get(key)
     duration = dict(source_durations).get(key)
     network = event.network
     if (
@@ -1427,28 +1486,625 @@ def compatibility_network_source_duration(
         and network.protocol == "tcp"
         and network.dst_port == 443
         and network.conn_state == "SF"
-        and (event.protocol.ssl is not None or network.service == "ssl")
+        and (event.protocol.ssl is not None or (network.service or "").strip().lower() == "ssl")
     ):
-        canonical = max(0.0, float(network.duration or 0.0))
-        window = get_timing_window(
-            "network.tls_completed_min_duration",
-            default_min_ms=800,
-            default_max_ms=2500,
-            default_position="after",
-            default_class="same_observation",
-        )
-        floor_seconds = window.min_ms / 1_000
-        if canonical <= floor_seconds or abs(canonical - 1.2) < 0.000001:
-            runtime = _compatibility_runtime(event)
-            scope = _compatibility_scope(event)
-            slack_us = runtime.sampler.sample_microseconds(
-                NetworkObservationPlanner._right_skew_distribution(15_000, 650_000),
-                relationship_key="network.tls_completed.duration_slack",
-                scope=scope,
-                sample_key="direct",
-            )
-            return max(canonical, floor_seconds) + slack_us / 1_000_000
+        return _compatibility_legacy_conn_duration(event)
     return duration
+
+
+def _compatibility_direct_interval_microseconds(event: CanonicalOccurrence) -> int | None:
+    """Return a closed direct transport interval in whole microseconds."""
+
+    network = event.network
+    if network is None or network.duration is None:
+        return None
+    return max(0, round(float(network.duration) * 1_000_000))
+
+
+def _compatibility_direct_network_seed(event: CanonicalOccurrence) -> tuple[object, ...]:
+    """Return the exact pre-migration direct Zeek timing seed."""
+
+    network = event.network
+    if network is None:
+        return (event.timestamp,)
+    return (
+        network.zeek_uid,
+        network.src_ip,
+        network.src_port,
+        network.dst_ip,
+        network.dst_port,
+        event.timestamp,
+    )
+
+
+def _compatibility_direct_parent_interval(
+    event: CanonicalOccurrence,
+) -> tuple[datetime, datetime | None]:
+    """Return the legacy direct interval anchored to the occurrence timestamp."""
+
+    parent_start = ensure_utc(event.timestamp)
+    network = event.network
+    duration = network.duration if network is not None else None
+    parent_close = parent_start + timedelta(seconds=duration) if duration is not None else None
+    return parent_start, parent_close
+
+
+def _compatibility_detached_event(event: CanonicalOccurrence) -> CanonicalOccurrence:
+    """Return an event-local timing carrier without mutating caller-owned state."""
+
+    return replace(
+        event,
+        source_timing=SourceTimingPlan(canonical_timestamp=ensure_utc(event.timestamp)),
+    )
+
+
+def _compatibility_legacy_http_time(
+    event: CanonicalOccurrence,
+    planner: SourceTimingPlanner,
+) -> datetime:
+    """Reproduce the parent direct HTTP timestamp for a non-interior interval."""
+
+    network = event.network
+    http = event.protocol.http
+    if network is None or http is None:
+        return ensure_utc(event.timestamp)
+    seed = _compatibility_direct_network_seed(event)
+    canonical_request_time = http.canonical_request_time
+    if canonical_request_time is not None:
+        connection_time = network.started_at
+        planned_close = network.closed_at
+    else:
+        connection_time = planner.source_time(
+            event,
+            "source.zeek_conn_start",
+            seed_parts=seed,
+            not_before=event.timestamp,
+        )
+        planned_close = None
+    within: tuple[datetime, datetime] | None = None
+    latest_time: datetime | None = None
+    has_files = bool(http.orig_fuids or http.resp_fuids)
+    tail_gap = timedelta(milliseconds=2) if has_files else timedelta(microseconds=1)
+    if planned_close is not None:
+        latest_time = max(connection_time, planned_close - tail_gap)
+        within = (connection_time, latest_time)
+    elif network.duration is not None and network.duration > 0:
+        latest_time = max(
+            connection_time,
+            connection_time + timedelta(seconds=network.duration) - tail_gap,
+        )
+        within = (connection_time, latest_time)
+
+    request_not_before = max(connection_time, canonical_request_time or connection_time)
+    if canonical_request_time is not None:
+        timestamp = max(connection_time, canonical_request_time)
+        if latest_time is not None:
+            timestamp = min(timestamp, latest_time)
+    else:
+        timestamp = planner.source_time(
+            event,
+            "source.zeek_http_request",
+            seed_parts=seed,
+            not_before=request_not_before,
+            within=within,
+        )
+    timestamp = planner.packet_child_time(
+        event,
+        "source.zeek_http_request",
+        seed_parts=seed,
+        preferred_time=timestamp,
+        not_before=request_not_before,
+        within=within,
+    )
+    planner.record_source_time(
+        event,
+        "source.zeek_http_request",
+        timestamp,
+        seed_parts=seed,
+    )
+    return timestamp
+
+
+def _compatibility_legacy_conn_time(
+    event: CanonicalOccurrence,
+    planner: SourceTimingPlanner,
+) -> datetime:
+    """Return the parent direct conn.log timestamp."""
+
+    return planner.source_time(
+        event,
+        "source.zeek_conn_start",
+        seed_parts=_compatibility_direct_network_seed(event),
+        not_before=event.timestamp,
+    )
+
+
+def _compatibility_legacy_conn_duration(event: CanonicalOccurrence) -> float | None:
+    """Return the parent direct conn.log duration, including its TLS floor."""
+
+    network = event.network
+    if network is None:
+        return None
+    duration = network.duration
+    is_completed_tls = (
+        network.protocol == "tcp"
+        and network.dst_port == 443
+        and network.conn_state == "SF"
+        and (event.protocol.ssl is not None or (network.service or "").strip().lower() == "ssl")
+    )
+    if not is_completed_tls:
+        return duration
+    window = get_timing_window(
+        "network.tls_completed_min_duration",
+        default_min_ms=800,
+        default_max_ms=2500,
+        default_position="after",
+        default_class="same_observation",
+    )
+    minimum = window.min_ms / 1_000
+    if (
+        duration is not None
+        and duration >= minimum
+        and abs(duration - minimum) >= 0.000001
+        and not (
+            (network.service or "").strip().lower() == "ssl" and abs(duration - 1.2) < 0.000001
+        )
+    ):
+        return duration
+    span_ms = max(1, window.max_ms - window.min_ms)
+    seed = _stable_seed(
+        "zeek_tls_duration_floor:"
+        f"{network.zeek_uid}:{network.src_ip}:{network.src_port}:"
+        f"{network.dst_ip}:{network.dst_port}:{event.timestamp.isoformat()}"
+    )
+    sampled = (window.min_ms + 1 + (seed % span_ms)) / 1_000
+    return max(sampled, float(duration or 0.0) + 0.001)
+
+
+def _compatibility_legacy_tls_times(
+    event: CanonicalOccurrence,
+    planner: SourceTimingPlanner,
+) -> tuple[datetime, tuple[datetime, datetime] | None, datetime]:
+    """Return the parent direct connection bounds and SSL analyzer time."""
+
+    network = event.network
+    if network is None:
+        timestamp = ensure_utc(event.timestamp)
+        return timestamp, None, timestamp
+    conn_time = _compatibility_legacy_conn_time(event, planner)
+    within: tuple[datetime, datetime] | None = None
+    if network.duration is not None and network.duration > 0:
+        latest = conn_time + timedelta(seconds=max(0.0, network.duration - 0.000001))
+        within = (conn_time, latest)
+    ssl_time = planner.source_time(
+        event,
+        "source.zeek_ssl_analyzer",
+        seed_parts=_compatibility_direct_network_seed(event),
+        not_before=conn_time,
+        within=within,
+    )
+    return conn_time, within, ssl_time
+
+
+def _compatibility_tls_certificate_gap(
+    event: CanonicalOccurrence,
+    fuid: str,
+    position: int,
+    label: str,
+) -> timedelta:
+    """Return the exact parent deterministic TLS certificate spacing."""
+
+    seed = _stable_seed(
+        "zeek-tls-cert-gap:"
+        f"{label}:{getattr(event.network, 'zeek_uid', '')}:{fuid}:"
+        f"{position}:{event.timestamp.isoformat()}"
+    )
+    return timedelta(milliseconds=2 + (seed % 23), microseconds=103 + ((seed >> 8) % 853))
+
+
+def _compatibility_bound_in_connection(
+    conn_time: datetime,
+    conn_duration: float | None,
+    preferred_time: datetime,
+) -> datetime:
+    """Apply the parent source-side analyzer timestamp bound."""
+
+    if conn_duration is None or conn_duration <= 0:
+        return max(conn_time, preferred_time)
+    conn_end = conn_time + timedelta(seconds=conn_duration)
+    latest = conn_end - timedelta(milliseconds=1)
+    if preferred_time > latest:
+        return latest if latest > conn_time else conn_time
+    return max(conn_time, preferred_time)
+
+
+def _compatibility_constrained_tls_time(
+    event: CanonicalOccurrence,
+    planner: SourceTimingPlanner,
+    source_key: str,
+    seed_parts: tuple[Any, ...],
+    lower_bound: datetime,
+    conn_time: datetime,
+    within: tuple[datetime, datetime] | None,
+) -> datetime:
+    """Apply the parent TLS ordering and connection constraints."""
+
+    if within is not None and lower_bound > within[1]:
+        lower_bound = within[1]
+    preferred = planner.source_time(
+        event,
+        source_key,
+        seed_parts=seed_parts,
+        not_before=lower_bound,
+        within=within,
+    )
+    duration = event.network.duration if event.network is not None else None
+    timestamp = _compatibility_bound_in_connection(conn_time, duration, preferred)
+    return lower_bound if timestamp < lower_bound else timestamp
+
+
+def _compatibility_legacy_certificate_file_time(
+    event: CanonicalOccurrence,
+    planner: SourceTimingPlanner,
+    certificate: Any,
+    position: int,
+    previous_time: datetime | None,
+) -> datetime:
+    """Return the parent direct files.log timestamp for one certificate."""
+
+    network = event.network
+    gap = _compatibility_tls_certificate_gap(event, certificate.fuid, position, "file")
+    if network is None:
+        lower = event.timestamp if previous_time is None else previous_time + gap
+        return planner.source_time(
+            event,
+            "source.zeek_file_analyzer",
+            seed_parts=("tls-cert-file", certificate.fuid, position, event.timestamp),
+            not_before=lower,
+        )
+    conn_time, within, ssl_time = _compatibility_legacy_tls_times(event, planner)
+    lower = ssl_time + gap
+    if previous_time is not None:
+        lower = max(lower, previous_time + gap)
+    return _compatibility_constrained_tls_time(
+        event,
+        planner,
+        "source.zeek_file_analyzer",
+        (network.zeek_uid, "tls-cert-file", certificate.fuid, position, event.timestamp),
+        lower,
+        conn_time,
+        within,
+    )
+
+
+def _compatibility_legacy_x509_time(
+    event: CanonicalOccurrence,
+    planner: SourceTimingPlanner,
+    certificate: Any,
+    position: int,
+    file_time: datetime,
+    previous_time: datetime | None,
+) -> datetime:
+    """Return the parent direct x509.log timestamp for one certificate."""
+
+    network = event.network
+    gap = _compatibility_tls_certificate_gap(event, certificate.fuid, position, "x509")
+    lower = file_time + gap
+    if previous_time is not None:
+        lower = max(lower, previous_time + gap)
+    if network is None:
+        return planner.source_time(
+            event,
+            "source.zeek_x509_analyzer",
+            seed_parts=("tls-cert-x509", certificate.fuid, position, event.timestamp),
+            not_before=lower,
+        )
+    conn_time, within, _ssl_time = _compatibility_legacy_tls_times(event, planner)
+    return _compatibility_constrained_tls_time(
+        event,
+        planner,
+        "source.zeek_x509_analyzer",
+        (network.zeek_uid, "tls-cert-x509", certificate.fuid, position, event.timestamp),
+        lower,
+        conn_time,
+        within,
+    )
+
+
+def _compatibility_related_http_time(
+    event: CanonicalOccurrence,
+    planner: SourceTimingPlanner,
+    transfer: Any,
+) -> datetime | None:
+    """Return the parent files-only HTTP analyzer anchor for one transfer."""
+
+    network = event.network
+    http = event.protocol.http
+    if network is None or http is None or transfer.fuid not in (*http.orig_fuids, *http.resp_fuids):
+        return None
+    conn_time = _compatibility_legacy_conn_time(event, planner)
+    return planner.source_time(
+        event,
+        "source.zeek_http_request",
+        seed_parts=_compatibility_direct_network_seed(event),
+        not_before=conn_time,
+    ) + timedelta(milliseconds=1)
+
+
+def _compatibility_legacy_file_analyzer_time(
+    event: CanonicalOccurrence,
+    planner: SourceTimingPlanner,
+    transfer: Any,
+    conn_time: datetime,
+) -> datetime:
+    """Return the parent unbounded files.log analyzer timestamp."""
+
+    network = event.network
+    if network is None:
+        return ensure_utc(event.timestamp)
+    seed_parts = (network.zeek_uid, transfer.fuid, event.timestamp)
+    if event.protocol.http is not None:
+        return planner.source_time_after_source(
+            event,
+            "source.zeek_file_analyzer",
+            after_source_key="source.zeek_http_request",
+            gap_key="source.zeek_file_analyzer",
+            seed_parts=seed_parts,
+            after_seed_parts=_compatibility_direct_network_seed(event),
+            after_not_before=conn_time,
+            not_before=conn_time + timedelta(milliseconds=1),
+        )
+    return planner.source_time(
+        event,
+        "source.zeek_file_analyzer",
+        seed_parts=seed_parts,
+        not_before=conn_time + timedelta(milliseconds=1),
+    )
+
+
+def _compatibility_legacy_transfer_observation(
+    event: CanonicalOccurrence,
+    planner: SourceTimingPlanner,
+    transfer: Any,
+    min_start: datetime | None,
+) -> tuple[datetime, float]:
+    """Return parent zero-flow file timing or the legal short-flow endpoint."""
+
+    interval_us = _compatibility_direct_interval_microseconds(event)
+    if interval_us is not None and interval_us > 0:
+        _parent_start, parent_close = _compatibility_direct_parent_interval(event)
+        if parent_close is not None:
+            return parent_close, 0.0
+    conn_time = _compatibility_legacy_conn_time(event, planner)
+    timestamp = _compatibility_legacy_file_analyzer_time(
+        event,
+        planner,
+        transfer,
+        conn_time,
+    )
+    lower = max(conn_time, min_start) if min_start is not None else conn_time
+    if transfer.observation_not_before is not None:
+        lower = max(lower, transfer.observation_not_before)
+    return max(timestamp, lower), transfer.duration
+
+
+def _compatibility_legacy_files_timing(
+    event: CanonicalOccurrence,
+) -> tuple[dict[str, datetime], dict[str, float]]:
+    """Replay the parent files.log loop once without emitter-local state."""
+
+    detached = _compatibility_detached_event(event)
+    planner = SourceTimingPlanner()
+    times: dict[str, datetime] = {}
+    durations: dict[str, float] = {}
+    previous_transfer: datetime | None = None
+    transfers = sorted(detached.protocol.file_transfers, key=lambda transfer: not transfer.is_orig)
+    for transfer in transfers:
+        minimum = _compatibility_related_http_time(detached, planner, transfer)
+        if previous_transfer is not None:
+            next_minimum = previous_transfer + timedelta(microseconds=100)
+            minimum = max(minimum, next_minimum) if minimum is not None else next_minimum
+        timestamp, duration = _compatibility_legacy_transfer_observation(
+            detached,
+            planner,
+            transfer,
+            minimum,
+        )
+        key = network_source_timing_key("zeek_files", transfer.fuid)
+        times[key] = timestamp
+        durations[key] = duration
+        previous_transfer = timestamp
+
+    previous_certificate: datetime | None = None
+    for position, certificate in enumerate(detached.protocol.x509_chain):
+        timestamp = _compatibility_legacy_certificate_file_time(
+            detached,
+            planner,
+            certificate,
+            position,
+            previous_certificate,
+        )
+        times[network_source_timing_key("zeek_files", certificate.fuid)] = timestamp
+        previous_certificate = timestamp
+    return times, durations
+
+
+def _compatibility_legacy_x509_timing(event: CanonicalOccurrence) -> dict[str, datetime]:
+    """Replay the parent x509.log loop once without emitter-local state."""
+
+    detached = _compatibility_detached_event(event)
+    planner = SourceTimingPlanner()
+    certificates = detached.protocol.x509_chain or (
+        (detached.protocol.leaf_certificate,)
+        if detached.protocol.leaf_certificate is not None
+        else ()
+    )
+    times: dict[str, datetime] = {}
+    previous_file: datetime | None = None
+    previous_x509: datetime | None = None
+    for position, certificate in enumerate(certificates):
+        file_time = _compatibility_legacy_certificate_file_time(
+            detached,
+            planner,
+            certificate,
+            position,
+            previous_file,
+        )
+        x509_time = _compatibility_legacy_x509_time(
+            detached,
+            planner,
+            certificate,
+            position,
+            file_time,
+            previous_x509,
+        )
+        times[network_source_timing_key("zeek_x509", certificate.fuid)] = x509_time
+        previous_file = file_time
+        previous_x509 = x509_time
+    return times
+
+
+def _compatibility_legacy_ocsp_time(event: CanonicalOccurrence) -> tuple[str, datetime] | None:
+    """Return the parent direct OCSP row key and timestamp."""
+
+    ocsp = event.protocol.ocsp
+    if ocsp is None:
+        return None
+    detached = _compatibility_detached_event(event)
+    planner = SourceTimingPlanner()
+    transfer = detached.protocol.primary_file_transfer
+    if detached.network is not None and transfer is not None:
+        minimum = _compatibility_related_http_time(detached, planner, transfer)
+        file_time, file_duration = _compatibility_legacy_transfer_observation(
+            detached,
+            planner,
+            transfer,
+            minimum,
+        )
+        duration_us = max(0, int(file_duration * 1_000_000))
+        if duration_us <= 1:
+            timestamp = file_time
+        else:
+            offset_us = 1 + (
+                _stable_seed(f"zeek_ocsp_ts:{ocsp.id}:{detached.network.zeek_uid}")
+                % (duration_us - 1)
+            )
+            timestamp = file_time + timedelta(microseconds=offset_us)
+    else:
+        delay_ms = 1 + (_stable_seed(f"zeek_ocsp_ts:{ocsp.id}") % 8)
+        timestamp = ensure_utc(detached.timestamp) + timedelta(milliseconds=delay_ms)
+        interval_us = _compatibility_direct_interval_microseconds(detached)
+        if interval_us is not None and interval_us > 0:
+            _parent_start, parent_close = _compatibility_direct_parent_interval(detached)
+            if parent_close is not None:
+                timestamp = min(timestamp, parent_close)
+    return network_source_timing_key("zeek_ocsp", ocsp.id), timestamp
+
+
+def _compatibility_legacy_pe_timing(event: CanonicalOccurrence) -> dict[str, datetime]:
+    """Return the parent direct PE analyzer timestamps."""
+
+    detached = _compatibility_detached_event(event)
+    planner = SourceTimingPlanner()
+    times: dict[str, datetime] = {}
+    for pe in detached.protocol.pe_analyses:
+        transfer = next(
+            (
+                candidate
+                for candidate in detached.protocol.file_transfers
+                if candidate.fuid == pe.id
+            ),
+            None,
+        )
+        if detached.network is not None and transfer is not None:
+            minimum = _compatibility_related_http_time(detached, planner, transfer)
+            file_time, file_duration = _compatibility_legacy_transfer_observation(
+                detached,
+                planner,
+                transfer,
+                minimum,
+            )
+            duration_us = max(0, int(file_duration * 1_000_000))
+            if duration_us <= 1:
+                timestamp = file_time
+            else:
+                maximum_offset = min(duration_us - 1, 250_000)
+                offset_us = 1 + (
+                    _stable_seed(f"zeek_pe_ts:{pe.id}:{detached.network.zeek_uid}") % maximum_offset
+                )
+                timestamp = file_time + timedelta(microseconds=offset_us)
+        else:
+            timestamp = ensure_utc(detached.timestamp) + timedelta(milliseconds=1)
+            interval_us = _compatibility_direct_interval_microseconds(detached)
+            if interval_us is not None and interval_us > 0:
+                _parent_start, parent_close = _compatibility_direct_parent_interval(detached)
+                if parent_close is not None:
+                    timestamp = min(timestamp, parent_close)
+        times[network_source_timing_key("zeek_pe", pe.id)] = timestamp
+    return times
+
+
+def _compatibility_short_protocol_timing(
+    event: CanonicalOccurrence,
+) -> tuple[tuple[tuple[str, datetime], ...], tuple[tuple[str, float], ...]]:
+    """Reproduce supported zero-flow rows and safely bridge positive microflows."""
+
+    network = event.network
+    if network is None:
+        return (), ()
+    source_times: dict[str, datetime] = {}
+    source_durations: dict[str, float] = {}
+
+    conn_event = _compatibility_detached_event(event)
+    source_times[network_source_timing_key("zeek_conn")] = _compatibility_legacy_conn_time(
+        conn_event,
+        SourceTimingPlanner(),
+    )
+    conn_duration = _compatibility_legacy_conn_duration(conn_event)
+    if conn_duration is not None:
+        source_durations[network_source_timing_key("zeek_conn")] = conn_duration
+
+    if event.protocol.http is not None:
+        http_event = _compatibility_detached_event(event)
+        source_times[network_source_timing_key("zeek_http")] = _compatibility_legacy_http_time(
+            http_event,
+            SourceTimingPlanner(),
+        )
+    if event.protocol.ssl is not None:
+        ssl_event = _compatibility_detached_event(event)
+        _conn_time, _within, ssl_time = _compatibility_legacy_tls_times(
+            ssl_event,
+            SourceTimingPlanner(),
+        )
+        source_times[network_source_timing_key("zeek_ssl")] = ssl_time
+
+    file_times, file_durations = _compatibility_legacy_files_timing(event)
+    source_times.update(file_times)
+    source_durations.update(file_durations)
+    source_times.update(_compatibility_legacy_x509_timing(event))
+    ocsp_timing = _compatibility_legacy_ocsp_time(event)
+    if ocsp_timing is not None:
+        source_times[ocsp_timing[0]] = ocsp_timing[1]
+    source_times.update(_compatibility_legacy_pe_timing(event))
+    interval_us = _compatibility_direct_interval_microseconds(event)
+    if interval_us is not None and interval_us > 0:
+        parent_start, parent_close = _compatibility_direct_parent_interval(event)
+        if parent_close is not None:
+            source_times = {
+                key: min(parent_close, max(parent_start, timestamp))
+                for key, timestamp in source_times.items()
+            }
+            source_durations = {
+                key: min(
+                    max(0.0, duration),
+                    max(
+                        0.0,
+                        (parent_close - source_times.get(key, parent_start)).total_seconds(),
+                    ),
+                )
+                for key, duration in source_durations.items()
+            }
+    return tuple(sorted(source_times.items())), tuple(sorted(source_durations.items()))
 
 
 def _compatibility_protocol_timing(

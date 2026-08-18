@@ -22,16 +22,13 @@
 
 """Zeek ocsp.log emitter."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
-from evidenceforge.generation.emitters.zeek_files import (
-    _bounded_file_transfer_observation,
-    _related_http_analyzer_timestamp,
-)
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.generation.emitters.zeek_files import _frozen_source_time
+from evidenceforge.generation.network_observation import network_source_timing_key
 
 
 class ZeekOcspEmitter(SensorMultiplexEmitter):
@@ -62,6 +59,7 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
             "nextUpdate": ocsp.next_update,
             "revoketime": ocsp.revoketime,
             "revokereason": ocsp.revokereason,
+            "_source_timing_key": network_source_timing_key("zeek_ocsp", ocsp.id),
             **self._sensor_metadata(
                 event,
                 self.format_def.name if self.format_def else "zeek_ocsp",
@@ -80,22 +78,14 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
 
 
 def _ocsp_analyzer_timestamp(event: CanonicalOccurrence) -> datetime | float:
-    """Return an OCSP analyzer time inside the owning HTTP response file window."""
+    """Return a planner-frozen OCSP analyzer timestamp."""
+
     ocsp = event.protocol.ocsp
     if ocsp is None:
         return event.timestamp
-    if event.network is not None and event.protocol.primary_file_transfer is not None:
-        file_ts, file_duration = _bounded_file_transfer_observation(
-            event,
-            min_start=_related_http_analyzer_timestamp(event),
-        )
-        duration_us = max(0, int(file_duration * 1_000_000))
-        if duration_us <= 1:
-            return file_ts
-        offset_us = 1 + (
-            _stable_seed(f"zeek_ocsp_ts:{ocsp.id}:{event.network.zeek_uid}") % (duration_us - 1)
-        )
-        return file_ts + timedelta(microseconds=offset_us)
-
-    analyzer_delay_ms = 1 + (_stable_seed(f"zeek_ocsp_ts:{ocsp.id}") % 8)
-    return event.timestamp + timedelta(milliseconds=analyzer_delay_ms)
+    fallback = event.network.started_at if event.network is not None else event.timestamp
+    return _frozen_source_time(
+        event,
+        network_source_timing_key("zeek_ocsp", ocsp.id),
+        fallback,
+    )

@@ -26,10 +26,12 @@ from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.network import normalize_zeek_history
-from evidenceforge.generation.activity.timing_profiles import get_timing_window
-from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
-from evidenceforge.generation.source_timing import SourceTimingPlanner
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.generation.emitters.zeek_base import (
+    SensorMultiplexEmitter,
+    direct_zeek_source_duration,
+    direct_zeek_source_time,
+)
+from evidenceforge.generation.network_observation import network_source_timing_key
 
 _ZEEK_SERVICE_ALIASES: dict[str, str] = {
     "kerberos": "krb",
@@ -39,22 +41,21 @@ _ZEEK_SERVICE_ALIASES: dict[str, str] = {
     "ms-sql": "tds",
     "rpc": "dce_rpc",
 }
-_SOURCE_TIMING = SourceTimingPlanner()
 
 
-def _tls_completed_duration_floor(event: CanonicalOccurrence, min_ms: int, max_ms: int) -> float:
-    """Return a deterministic TLS analyzer duration floor with source-native texture."""
-    net = event.network
-    if net is None:
-        return min_ms / 1000
-    span_ms = max(1, max_ms - min_ms)
-    seed = _stable_seed(
-        "zeek_tls_duration_floor:"
-        f"{net.zeek_uid}:{net.src_ip}:{net.src_port}:{net.dst_ip}:{net.dst_port}:"
-        f"{event.timestamp.isoformat()}"
+def _tls_completed_duration_floor(
+    event: CanonicalOccurrence,
+    min_ms: int,
+    max_ms: int,
+) -> float:
+    """Compatibility view of the planner-owned direct TLS duration."""
+
+    del min_ms, max_ms
+    duration = direct_zeek_source_duration(
+        event,
+        network_source_timing_key("zeek_conn"),
     )
-    extra_ms = 1 + (seed % span_ms)
-    return (min_ms + extra_ms) / 1000
+    return float(duration or 0.0)
 
 
 class ZeekEmitter(SensorMultiplexEmitter):
@@ -113,56 +114,15 @@ class ZeekEmitter(SensorMultiplexEmitter):
             if "DISCOVER" in msg_types:
                 src_ip = "0.0.0.0"
                 dst_ip = "255.255.255.255"
-        if (
-            net.protocol == "tcp"
-            and net.dst_port == 443
-            and net.conn_state == "SF"
-            and (event.protocol.ssl is not None or self._render_service_name(net.service) == "ssl")
-        ):
-            tls_min_window = get_timing_window(
-                "network.tls_completed_min_duration",
-                default_min_ms=800,
-                default_max_ms=2500,
-                default_position="after",
-                default_class="same_observation",
-            )
-            min_duration = tls_min_window.min_ms / 1000
-            if (
-                duration is None
-                or duration < min_duration
-                or abs(duration - min_duration) < 0.000001
-                or (
-                    self._render_service_name(net.service) == "ssl"
-                    and abs(float(duration) - 1.2) < 0.000001
-                )
-            ):
-                sampled_duration = _tls_completed_duration_floor(
-                    event,
-                    tls_min_window.min_ms,
-                    tls_min_window.max_ms,
-                )
-                canonical_duration = float(duration or 0.0)
-                duration = max(sampled_duration, canonical_duration + 0.001)
+        timing_key = network_source_timing_key("zeek_conn")
         if event.network_observations_planned:
-            # The observation planner owns the sensor-visible connection start.
-            # Protocol siblings are projected from this same canonical anchor by
-            # SensorMultiplexEmitter, so applying another conn-only source delay
-            # here can place HTTP/TLS rows before their parent connection.
             event_ts = net.started_at
+            planned_duration = net.duration
         else:
-            event_ts = _SOURCE_TIMING.source_time(
-                event,
-                "source.zeek_conn_start",
-                seed_parts=(
-                    net.zeek_uid,
-                    net.src_ip,
-                    net.src_port,
-                    net.dst_ip,
-                    net.dst_port,
-                    event.timestamp,
-                ),
-                not_before=event.timestamp,
-            )
+            event_ts = direct_zeek_source_time(event, timing_key)
+            planned_duration = direct_zeek_source_duration(event, timing_key)
+        if planned_duration is not None:
+            duration = planned_duration
         event_data = {
             "ts": event_ts,
             "uid": net.zeek_uid,
@@ -204,6 +164,8 @@ class ZeekEmitter(SensorMultiplexEmitter):
                 if event.protocol.http
                 else None
             ),
+            "_source_timing_key": timing_key,
+            "_source_duration_key": timing_key if duration is not None else None,
             **self._sensor_metadata(event, self.format_def.name),
         }
         self.emit_event(event_data)

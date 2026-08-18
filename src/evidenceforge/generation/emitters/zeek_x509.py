@@ -31,6 +31,7 @@ from evidenceforge.generation.emitters.zeek_files import (
     _tls_certificate_file_timestamp,
     _tls_certificate_x509_timestamp,
 )
+from evidenceforge.generation.network_observation import network_source_timing_key
 
 
 class ZeekX509Emitter(SensorMultiplexEmitter):
@@ -121,6 +122,7 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
             "basic_constraints_ca": x509.basic_constraints_ca,
             "host_cert": x509.host_cert,
             "client_cert": x509.client_cert,
+            "_source_timing_key": network_source_timing_key("zeek_x509", x509.fuid),
             **sensor_metadata,
         }
         self.emit_event(event_data)

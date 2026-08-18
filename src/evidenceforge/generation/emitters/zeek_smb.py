@@ -9,6 +9,7 @@ from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.network_observation import network_source_timing_key
 
 
 class ZeekSmbMappingEmitter(SensorMultiplexEmitter):
@@ -42,6 +43,7 @@ class ZeekSmbMappingEmitter(SensorMultiplexEmitter):
                 str(smb.filesystem).upper(),
             ),
             "share_type": "DISK",
+            "_source_timing_key": network_source_timing_key("zeek_smb_mapping"),
             **self._sensor_metadata(event, self.format_def.name),
         }
         self.emit_event(data)
@@ -83,6 +85,7 @@ class ZeekSmbFilesEmitter(SensorMultiplexEmitter):
             "size": smb.size_bytes if smb.phase in {"read", "write"} else None,
             "prev_name": smb.previous_path or None,
             "fuid": transfer.fuid if transfer is not None else None,
+            "_source_timing_key": network_source_timing_key("zeek_smb_files"),
             **self._sensor_metadata(event, self.format_def.name),
         }
         self.emit_event(data)
