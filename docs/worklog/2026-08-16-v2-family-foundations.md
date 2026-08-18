@@ -2291,3 +2291,24 @@ size/duration/isolation coverage. The revision-bound report is
 ``107a4e1bd0962ddd7405dcbf946763f338b7bf256fac8dda390fe5e743af2c99``. Release-only million-row,
 seven-/30-day, multiworker, multi-hash-seed, and 161-case gates correctly remain open until the
 production owner graph is integrated and frozen.
+
+### SourceTiming public composite boundary landed
+
+Commit ``9b28fafd3`` (``fix: bound source timing composite publication``) replaces the rejected
+whole-registry clone and private-reflection hardening attempts with the approved public transaction
+boundary. A single planner/runtime admission lane excludes supported concurrent and same-thread
+mutations while a preparation is claimed. The claimed plan retains only staged cache, audit, and
+clock deltas, authenticates an exact thread-bound expected receipt, and performs a bounded
+validation-free primitive tail after one-shot certification. Public audit and clock inputs are
+validated before primitive publication, abort and seal failures release both lanes, terminal
+capabilities discard staged payloads, and owner bookkeeping is bounded without scanning retained
+registries.
+
+Independent public-threat review found no P0/P1. The frozen five-path candidate has original parent
+``5845162ba`` and tree ``9bdbbad9``; its staged blobs were reproduced exactly on the current branch
+while all unrelated live worktree bytes remained unchanged. The committed revision passes 96/96
+SourceTiming, preparation, action-cohort, and scale-census tests in a fresh clean clone, plus Ruff,
+format, pre-commit, and diff checks. Version artifacts remain unchanged. The remaining critical
+owner prerequisite is the State public transaction lane; production lifecycle composition must
+then authenticate and certify this exact SourceTiming receipt before entering its wider no-fail
+publication tail.
