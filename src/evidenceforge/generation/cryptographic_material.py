@@ -12,12 +12,14 @@ import hmac
 import random
 import re
 import secrets
+from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
 from threading import RLock
-from typing import Any, Literal
+from typing import Any, Literal, Self
+from weakref import ReferenceType, ref
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -47,6 +49,23 @@ _TlsMaterialKey = tuple[Any, ...]
 _TlsMaterialPoint = tuple[_TlsMaterialFamily, _TlsMaterialKey]
 _TlsMaterialValue = bytes | CertificateAuthorityMaterial | CertificateIdentityPlan
 
+# The reviewed production cap counts semantic material points (public keys,
+# authorities, and certificates), not TLS sessions.  Passing ``None`` retains
+# the legacy unlimited behavior exactly.  Finite owners also bound each point
+# and their aggregate logical bytes without evicting scenario-lifetime IDs.
+_MAX_TLS_MATERIAL_POINT_RETAINED_BYTES = 1_048_576
+_MAX_TLS_MATERIAL_OWNER_RETAINED_BYTES = 1_073_741_824
+_MAX_TLS_PREPARATION_OWNER_RETAINED_BYTES = 2_147_483_648
+_TLS_PREPARATION_BASE_RETAINED_BYTES = 512
+_TLS_PREPARATION_POINT_RETAINED_BYTES = 1_024 + (2 * _MAX_TLS_MATERIAL_POINT_RETAINED_BYTES)
+_DEFAULT_TLS_MATERIAL_CAPACITY = 100_000
+_MAX_TLS_PREPARATION_ID = (1 << 64) - 1
+_MAX_TLS_MATERIAL_POINT_GENERATION = (1 << 64) - 1
+
+
+class CryptographicMaterialCapacityError(StateError):
+    """Raised when finite TLS material owner capacity would be exceeded."""
+
 
 @dataclass(frozen=True, slots=True)
 class _TlsMaterialPointPatch:
@@ -67,6 +86,27 @@ class _TlsMaterialPointPatch:
 
 
 @dataclass(frozen=True, slots=True)
+class _TlsMaterialPublication:
+    """One fully validated absent-to-present canonical mutation."""
+
+    family: _TlsMaterialFamily
+    key: _TlsMaterialKey
+    value: _TlsMaterialValue
+    reservation_id: int | None
+    generation: int
+    prior_state_component: int
+    next_state_component: int
+    retained_bytes: int
+    prior_retained_bytes: int
+
+    @property
+    def point(self) -> _TlsMaterialPoint:
+        """Return the exact registry point published by this plan."""
+
+        return self.family, self.key
+
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class CryptographicMaterialPreparationToken:
     """Opaque one-shot capability for a prepared TLS material overlay."""
 
@@ -132,10 +172,99 @@ class CryptographicMaterialPreparationCensus:
     reserved_points: int
 
 
+@dataclass(frozen=True, slots=True)
+class CryptographicMaterialPointCapacityCensus:
+    """Material-point bounds plus explicitly uncapped auxiliary-cache diagnostics.
+
+    The auxiliary counters are observational only: DKIM and OCSP retention is
+    outside this material-point policy and requires a separate retention tranche.
+    """
+
+    material_point_capacity: int | None
+    material_preparation_capacity: int | None
+    material_byte_capacity: int | None
+    material_preparation_byte_capacity: int | None
+    live_material_points: int
+    tombstone_material_points: int
+    reserved_new_material_points: int
+    retained_material_points: int
+    material_point_high_water: int
+    retained_material_bytes: int
+    reserved_material_bytes: int
+    material_byte_high_water: int
+    material_point_generation_high_water: int
+    material_point_generation_capacity: int | None
+    retained_material_preparation_bytes: int
+    material_preparation_high_water: int
+    material_preparation_byte_high_water: int
+    material_preparation_id_watermark: int
+    material_preparation_id_capacity: int | None
+    uncapped_dkim_key_entries: int
+    uncapped_dkim_key_estimated_bytes: int
+    uncapped_ocsp_status_entries: int
+    uncapped_ocsp_status_estimated_bytes: int
+
+
 def _tls_material_value_digest(value: _TlsMaterialValue) -> str:
     """Return a stable collision-resistant digest for one immutable value."""
 
     return hashlib.sha256(repr(value).encode("utf-8")).hexdigest()
+
+
+def _tls_material_tree_retained_bytes(value: object) -> int:
+    """Return a callback-free upper estimate for one validated immutable tree."""
+
+    if value is None:
+        return 16
+    if type(value) is bool:
+        return 32
+    if type(value) is int:
+        return 32 + max(0, (value.bit_length() + 7) // 8)
+    if type(value) is float:
+        return 32
+    if type(value) is str:
+        return 64 + (4 * len(value))
+    if type(value) is bytes:
+        return 64 + len(value)
+    if type(value) is tuple:
+        return (
+            64 + (8 * len(value)) + sum(_tls_material_tree_retained_bytes(item) for item in value)
+        )
+    if type(value) in {
+        CertificateAuthorityMaterial,
+        CertificateIdentityPlan,
+        DkimKeyPlan,
+    }:
+        members = fields(value)
+        return (
+            64
+            + (8 * len(members))
+            + sum(
+                _tls_material_tree_retained_bytes(getattr(value, member.name)) for member in members
+            )
+        )
+    raise StateError("TLS material retained-byte accounting received an invalid value")
+
+
+def _tls_material_live_point_retained_bytes(
+    point: _TlsMaterialPoint,
+    value: _TlsMaterialValue,
+) -> int:
+    """Return the logical retained bytes for one canonical live point."""
+
+    return 128 + _tls_material_tree_retained_bytes(point) + _tls_material_tree_retained_bytes(value)
+
+
+def _tls_material_tombstone_retained_bytes(point: _TlsMaterialPoint) -> int:
+    """Return the logical retained bytes for one ABA-safe tombstone."""
+
+    return 128 + _tls_material_tree_retained_bytes(point)
+
+
+def _tls_auxiliary_entry_estimated_bytes(key: object, value: object) -> int:
+    """Return an observational logical-byte estimate for one uncapped cache row."""
+
+    return 128 + _tls_material_tree_retained_bytes(key) + _tls_material_tree_retained_bytes(value)
 
 
 def _validate_tls_material_key(key: _TlsMaterialKey) -> None:
@@ -523,7 +652,19 @@ def certificate_serial_number(seed: str) -> str:
 class CryptographicMaterialRegistry:
     """Resolve deterministic public material once and reuse it across all consumers."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        tls_material_capacity: int | None = _DEFAULT_TLS_MATERIAL_CAPACITY,
+    ) -> None:
+        if tls_material_capacity is not None and (
+            type(tls_material_capacity) is not int
+            or tls_material_capacity <= 0
+            or tls_material_capacity > _MAX_TLS_PREPARATION_ID
+        ):
+            raise ValueError(
+                "TLS material capacity must be None or a positive exact integer at most 2^64 - 1"
+            )
         self._public_keys: dict[tuple[str, CertificateKeyType, int], bytes] = {}
         self._authorities: dict[
             tuple[str, str, CertificateKeyType, int], CertificateAuthorityMaterial
@@ -533,6 +674,8 @@ class CryptographicMaterialRegistry:
         self._ocsp_statuses: dict[
             tuple[str, str, tuple[Any, ...]], tuple[OcspCertificateStatus, str | None]
         ] = {}
+        self._dkim_key_estimated_bytes = 0
+        self._ocsp_status_estimated_bytes = 0
         self._tls_material_lock = RLock()
         self._tls_preparation_secret = secrets.token_bytes(32)
         self._next_tls_preparation_id = 1
@@ -543,13 +686,263 @@ class CryptographicMaterialRegistry:
         # without changing the preparation token format.
         self._tls_point_tombstones: dict[_TlsMaterialPoint, int] = {}
         self._tls_point_reservations: dict[_TlsMaterialPoint, int] = {}
-        self._tls_prepared_tokens: dict[int, CryptographicMaterialPreparationToken] = {}
+        self._tls_prepared_tokens: dict[
+            int,
+            CryptographicMaterialPreparationToken
+            | ReferenceType[CryptographicMaterialPreparationToken],
+        ] = {}
         self._tls_prepared_capabilities: dict[int, _CryptographicMaterialPreparationCapability] = {}
         self._tls_claimed_preparations: set[int] = set()
+        self._tls_claimed_transactions: dict[
+            int,
+            CryptographicMaterialPreparedCommit
+            | ReferenceType[CryptographicMaterialPreparedCommit],
+        ] = {}
+        self._tls_dead_preparations: deque[tuple[int, int]] = deque()
+        self._tls_dead_claims: deque[tuple[int, int]] = deque()
         self._tls_canonical_state_xor = 0
         self._tls_prepared_state_xor = 0
         self._tls_reservation_state_xor = 0
         self._tls_claimed_state_xor = 0
+        self._tls_prepared_state_components: dict[int, int] = {}
+        self._tls_reservation_state_components: dict[_TlsMaterialPoint, int] = {}
+        self._tls_claimed_state_components: dict[int, int] = {}
+        self._tls_material_capacity = tls_material_capacity
+        self._tls_new_slot_reservations: set[_TlsMaterialPoint] = set()
+        self._tls_reservation_byte_deltas: dict[_TlsMaterialPoint, int] = {}
+        self._tls_point_retained_bytes: dict[_TlsMaterialPoint, int] = {}
+        self._tls_retained_material_bytes = 0
+        self._tls_reserved_material_bytes = 0
+        self._tls_preparation_retained_bytes: dict[int, int] = {}
+        self._tls_retained_preparation_bytes = 0
+        self._tls_material_high_water_points = 0
+        self._tls_material_high_water_bytes = 0
+        self._tls_material_generation_high_water = 0
+        self._tls_preparation_high_water_overlays = 0
+        self._tls_preparation_high_water_bytes = 0
+
+    @property
+    def tls_material_point_capacity(self) -> int | None:
+        """Return the scenario-lifetime public-key/authority/certificate point cap."""
+
+        return self._tls_material_capacity
+
+    @property
+    def tls_material_capacity(self) -> int | None:
+        """Compatibility alias for :attr:`tls_material_point_capacity`."""
+
+        return self.tls_material_point_capacity
+
+    def _tls_live_material_points_locked(self) -> int:
+        """Return exact canonical TLS material cardinality in constant time."""
+
+        return len(self._public_keys) + len(self._authorities) + len(self._certificates)
+
+    def _tls_retained_material_slots_locked(self) -> int:
+        """Return unique live, tombstone, and virgin-reservation slots."""
+
+        return (
+            self._tls_live_material_points_locked()
+            + len(self._tls_point_tombstones)
+            + len(self._tls_new_slot_reservations)
+        )
+
+    def _tls_material_byte_capacity(self) -> int | None:
+        """Return the derived logical byte cap for canonical material."""
+
+        if self._tls_material_capacity is None:
+            return None
+        return min(
+            self._tls_material_capacity * _MAX_TLS_MATERIAL_POINT_RETAINED_BYTES,
+            _MAX_TLS_MATERIAL_OWNER_RETAINED_BYTES,
+        )
+
+    def _tls_preparation_byte_capacity(self) -> int | None:
+        """Return the derived logical byte cap for active preparation snapshots."""
+
+        if self._tls_material_capacity is None:
+            return None
+        return min(
+            self._tls_material_capacity
+            * (_TLS_PREPARATION_BASE_RETAINED_BYTES + _TLS_PREPARATION_POINT_RETAINED_BYTES),
+            _MAX_TLS_PREPARATION_OWNER_RETAINED_BYTES,
+        )
+
+    def _tls_preparation_retained_size_locked(
+        self,
+        patches: tuple[_TlsMaterialPointPatch, ...],
+    ) -> int:
+        """Return a bounded upper estimate for both retained patch snapshots."""
+
+        retained_bytes = _TLS_PREPARATION_BASE_RETAINED_BYTES
+        for patch in patches:
+            point_bytes = _tls_material_live_point_retained_bytes(patch.point, patch.value)
+            if point_bytes > _MAX_TLS_MATERIAL_POINT_RETAINED_BYTES:
+                raise CryptographicMaterialCapacityError(
+                    "TLS material point retained-byte capacity exceeded: "
+                    f"{point_bytes} > {_MAX_TLS_MATERIAL_POINT_RETAINED_BYTES}"
+                )
+            retained_bytes += 1_024 + (2 * point_bytes)
+        return retained_bytes
+
+    def _require_tls_material_capacity_locked(
+        self,
+        materials: tuple[tuple[_TlsMaterialPoint, _TlsMaterialValue], ...],
+        *,
+        reservation_id: int | None = None,
+    ) -> tuple[tuple[_TlsMaterialPoint, ...], dict[_TlsMaterialPoint, int]]:
+        """Preflight exact new slots and byte deltas without owner mutation."""
+
+        if self._tls_material_capacity is None:
+            return (), {}
+        new_slot_points: list[_TlsMaterialPoint] = []
+        byte_deltas: dict[_TlsMaterialPoint, int] = {}
+        seen: set[_TlsMaterialPoint] = set()
+        for point, proposed_value in materials:
+            if point in seen:
+                continue
+            seen.add(point)
+            family, key = point
+            reserved_by = self._tls_point_reservations.get(point)
+            if reserved_by is not None and reserved_by != reservation_id:
+                raise StateError(f"TLS material point {family}:{key!r} is reserved")
+            existing = self._tls_material_value_locked(family, key)
+            if existing is not None:
+                if existing != proposed_value:
+                    raise StateError(f"TLS material point {family}:{key!r} changed unexpectedly")
+                continue
+            if self._tls_point_generation_locked(point) >= _MAX_TLS_MATERIAL_POINT_GENERATION:
+                raise CryptographicMaterialCapacityError(
+                    "TLS material point generation capacity is exhausted"
+                )
+            live_bytes = _tls_material_live_point_retained_bytes(point, proposed_value)
+            if live_bytes > _MAX_TLS_MATERIAL_POINT_RETAINED_BYTES:
+                raise CryptographicMaterialCapacityError(
+                    "TLS material point retained-byte capacity exceeded: "
+                    f"{live_bytes} > {_MAX_TLS_MATERIAL_POINT_RETAINED_BYTES}"
+                )
+            current_bytes = self._tls_point_retained_bytes.get(point, 0)
+            if point not in self._tls_point_tombstones:
+                if point not in self._tls_new_slot_reservations:
+                    new_slot_points.append(point)
+            byte_deltas[point] = max(0, live_bytes - current_bytes)
+
+        retained_slots = self._tls_retained_material_slots_locked()
+        if len(new_slot_points) > self._tls_material_capacity - retained_slots:
+            raise CryptographicMaterialCapacityError(
+                "TLS material retained-key capacity exceeded: "
+                f"{retained_slots + len(new_slot_points)} > {self._tls_material_capacity}"
+            )
+        material_byte_capacity = self._tls_material_byte_capacity()
+        assert material_byte_capacity is not None
+        additional_bytes = sum(byte_deltas.values())
+        retained_bytes = self._tls_retained_material_bytes + self._tls_reserved_material_bytes
+        if additional_bytes > material_byte_capacity - retained_bytes:
+            raise CryptographicMaterialCapacityError(
+                "TLS material retained-byte capacity exceeded: "
+                f"{retained_bytes + additional_bytes} > {material_byte_capacity}"
+            )
+        return tuple(new_slot_points), byte_deltas
+
+    def _update_tls_capacity_high_water_locked(self) -> None:
+        """Advance finite owner high-water marks inside their hard bounds."""
+
+        if self._tls_material_capacity is None:
+            return
+        retained_slots = self._tls_retained_material_slots_locked()
+        retained_bytes = self._tls_retained_material_bytes + self._tls_reserved_material_bytes
+        self._tls_material_high_water_points = max(
+            self._tls_material_high_water_points,
+            retained_slots,
+        )
+        self._tls_material_high_water_bytes = max(
+            self._tls_material_high_water_bytes,
+            retained_bytes,
+        )
+        self._tls_preparation_high_water_overlays = max(
+            self._tls_preparation_high_water_overlays,
+            len(self._tls_prepared_tokens),
+        )
+        self._tls_preparation_high_water_bytes = max(
+            self._tls_preparation_high_water_bytes,
+            self._tls_retained_preparation_bytes,
+        )
+
+    def _tls_active_preparation_token_locked(
+        self,
+        preparation_id: int,
+    ) -> CryptographicMaterialPreparationToken | None:
+        """Resolve the strong unlimited token or finite weak public identity."""
+
+        retained = self._tls_prepared_tokens.get(preparation_id)
+        if retained is None:
+            return None
+        if type(retained) is CryptographicMaterialPreparationToken:
+            return retained
+        return retained()
+
+    def _tls_active_claim_transaction_locked(
+        self,
+        preparation_id: int,
+    ) -> CryptographicMaterialPreparedCommit | None:
+        """Resolve the strong unlimited or weak finite claim transaction."""
+
+        retained = self._tls_claimed_transactions.get(preparation_id)
+        if retained is None:
+            return None
+        if type(retained) is CryptographicMaterialPreparedCommit:
+            return retained
+        return retained()
+
+    def _tls_capability_for_exact_token_locked(
+        self,
+        token: CryptographicMaterialPreparationToken,
+    ) -> _CryptographicMaterialPreparationCapability | None:
+        """Locate one exact live public token without relying on reusable object IDs."""
+
+        if type(token) is not CryptographicMaterialPreparationToken:
+            return None
+        preparation_id = token.preparation_id
+        if type(preparation_id) is int and preparation_id > 0:
+            active = self._tls_active_preparation_token_locked(preparation_id)
+            capability = self._tls_prepared_capabilities.get(preparation_id)
+            if active is token and capability is not None and capability.token_id == id(token):
+                return capability
+        # Exceptional cleanup for an exact token whose public preparation ID
+        # was caller-mutated after seal. Normal valid-token lookup is O(1).
+        for candidate_id in self._tls_prepared_tokens:
+            if self._tls_active_preparation_token_locked(candidate_id) is not token:
+                continue
+            capability = self._tls_prepared_capabilities.get(candidate_id)
+            if capability is not None and capability.token_id == id(token):
+                return capability
+        return None
+
+    def _reap_abandoned_tls_preparations_locked(self) -> None:
+        """Release finite reservations whose public token or claim was collected."""
+
+        if self._tls_material_capacity is None:
+            return
+        while self._tls_dead_claims:
+            preparation_id, _transaction_id = self._tls_dead_claims.popleft()
+            retained = self._tls_claimed_transactions.get(preparation_id)
+            if retained is None or type(retained) is CryptographicMaterialPreparedCommit:
+                continue
+            if retained() is not None:
+                continue
+            capability = self._tls_prepared_capabilities.get(preparation_id)
+            if capability is not None:
+                CryptographicMaterialRegistry._release_tls_preparation_locked(self, capability)
+        while self._tls_dead_preparations:
+            preparation_id, token_id = self._tls_dead_preparations.popleft()
+            retained = self._tls_prepared_tokens.get(preparation_id)
+            if retained is None or type(retained) is CryptographicMaterialPreparationToken:
+                continue
+            if retained() is not None:
+                continue
+            capability = self._tls_prepared_capabilities.get(preparation_id)
+            if capability is not None and capability.token_id == token_id:
+                CryptographicMaterialRegistry._release_tls_preparation_locked(self, capability)
 
     def _tls_material_value_locked(
         self,
@@ -592,15 +985,15 @@ class CryptographicMaterialRegistry:
             ),
         )
 
-    def _publish_tls_material_locked(
+    def _prepare_tls_material_publication_locked(
         self,
         family: _TlsMaterialFamily,
         key: _TlsMaterialKey,
         value: _TlsMaterialValue,
         *,
         reservation_id: int | None = None,
-    ) -> int:
-        """Publish one absent point and advance its exact generation."""
+    ) -> int | _TlsMaterialPublication:
+        """Validate and fully derive one publication before owner mutation."""
 
         point = (family, key)
         reserved_by = self._tls_point_reservations.get(point)
@@ -611,34 +1004,123 @@ class CryptographicMaterialRegistry:
             if existing != value:
                 raise StateError(f"TLS material point {family}:{key!r} changed unexpectedly")
             return self._tls_point_generation_locked(point)
+        if family == "public_key":
+            if not isinstance(value, bytes):
+                raise StateError("TLS public-key point requires bytes")
+        elif family == "authority":
+            if not isinstance(value, CertificateAuthorityMaterial):
+                raise StateError("TLS authority point requires authority material")
+        elif not isinstance(value, CertificateIdentityPlan):
+            raise StateError("TLS certificate point requires a certificate identity")
+        capacity_live_bytes = 0
+        prior_retained_bytes = 0
+        if self._tls_material_capacity is not None:
+            capacity_live_bytes = _tls_material_live_point_retained_bytes(point, value)
+            prior_retained_bytes = self._tls_point_retained_bytes.get(point, 0)
+            if reservation_id is None:
+                self._require_tls_material_capacity_locked(((point, value),))
+            else:
+                reserved_delta = self._tls_reservation_byte_deltas.get(point, 0)
+                if capacity_live_bytes > prior_retained_bytes + reserved_delta:
+                    raise StateError("TLS material preparation lost its retained-byte reservation")
         prior_generation = self._tls_point_generation_locked(point)
-        prior_component = self._tls_point_state_component_locked(
+        if (
+            self._tls_material_capacity is not None
+            and prior_generation >= _MAX_TLS_MATERIAL_POINT_GENERATION
+        ):
+            raise CryptographicMaterialCapacityError(
+                "TLS material point generation capacity is exhausted"
+            )
+        prior_component = CryptographicMaterialRegistry._tls_point_state_component_locked(
+            self,
             point,
             None,
             prior_generation,
         )
         generation = prior_generation + 1
-        if family == "public_key":
-            if not isinstance(value, bytes):
-                raise StateError("TLS public-key point requires bytes")
-            self._public_keys[key] = value  # type: ignore[index]
-        elif family == "authority":
-            if not isinstance(value, CertificateAuthorityMaterial):
-                raise StateError("TLS authority point requires authority material")
-            self._authorities[key] = value  # type: ignore[index]
-        else:
-            if not isinstance(value, CertificateIdentityPlan):
-                raise StateError("TLS certificate point requires a certificate identity")
-            self._certificates[key] = value
-        self._tls_point_generations[point] = generation
-        self._tls_point_tombstones.pop(point, None)
-        self._tls_canonical_state_xor ^= prior_component
-        self._tls_canonical_state_xor ^= self._tls_point_state_component_locked(
+        next_component = CryptographicMaterialRegistry._tls_point_state_component_locked(
+            self,
             point,
             value,
             generation,
         )
-        return generation
+        return _TlsMaterialPublication(
+            family=family,
+            key=key,
+            value=value,
+            reservation_id=reservation_id,
+            generation=generation,
+            prior_state_component=prior_component,
+            next_state_component=next_component,
+            retained_bytes=capacity_live_bytes,
+            prior_retained_bytes=prior_retained_bytes,
+        )
+
+    def _apply_tls_material_publications_locked(
+        self,
+        publications: tuple[_TlsMaterialPublication, ...],
+    ) -> tuple[int, ...]:
+        """Apply fully derived publications in one non-dispatching mutation tail."""
+
+        points = tuple(publication.point for publication in publications)
+        if len(set(points)) != len(points):
+            raise StateError("TLS material publication batch contains a duplicate point")
+        for publication in publications:
+            family = publication.family
+            key = publication.key
+            value = publication.value
+            point = publication.point
+            if family == "public_key":
+                self._public_keys[key] = value  # type: ignore[assignment,index]
+            elif family == "authority":
+                self._authorities[key] = value  # type: ignore[assignment,index]
+            else:
+                self._certificates[key] = value  # type: ignore[assignment]
+            self._tls_point_generations[point] = publication.generation
+            self._tls_point_tombstones.pop(point, None)
+            self._tls_canonical_state_xor ^= publication.prior_state_component
+            self._tls_canonical_state_xor ^= publication.next_state_component
+            if self._tls_material_capacity is None:
+                continue
+            self._tls_material_generation_high_water = max(
+                self._tls_material_generation_high_water,
+                publication.generation,
+            )
+            self._tls_retained_material_bytes += (
+                publication.retained_bytes - publication.prior_retained_bytes
+            )
+            self._tls_point_retained_bytes[point] = publication.retained_bytes
+            if publication.reservation_id is not None:
+                self._tls_new_slot_reservations.discard(point)
+                reserved_delta = self._tls_reservation_byte_deltas.pop(point, 0)
+                self._tls_reserved_material_bytes -= reserved_delta
+        if self._tls_material_capacity is not None:
+            CryptographicMaterialRegistry._update_tls_capacity_high_water_locked(self)
+        return tuple(publication.generation for publication in publications)
+
+    def _publish_tls_material_locked(
+        self,
+        family: _TlsMaterialFamily,
+        key: _TlsMaterialKey,
+        value: _TlsMaterialValue,
+        *,
+        reservation_id: int | None = None,
+    ) -> int:
+        """Publish one absent point and advance its exact generation."""
+
+        prepared = CryptographicMaterialRegistry._prepare_tls_material_publication_locked(
+            self,
+            family,
+            key,
+            value,
+            reservation_id=reservation_id,
+        )
+        if type(prepared) is int:
+            return prepared
+        return CryptographicMaterialRegistry._apply_tls_material_publications_locked(
+            self,
+            (prepared,),
+        )[0]
 
     def _delete_tls_material_locked(
         self,
@@ -655,26 +1137,48 @@ class CryptographicMaterialRegistry:
         value = self._tls_material_value_locked(family, key)
         assert value is not None
         prior_generation = self._tls_point_generation_locked(point)
-        prior_component = self._tls_point_state_component_locked(
+        if (
+            self._tls_material_capacity is not None
+            and prior_generation >= _MAX_TLS_MATERIAL_POINT_GENERATION
+        ):
+            raise CryptographicMaterialCapacityError(
+                "TLS material point generation capacity is exhausted"
+            )
+        prior_component = CryptographicMaterialRegistry._tls_point_state_component_locked(
+            self,
             point,
             value,
             prior_generation,
         )
+        generation = prior_generation + 1
+        next_component = CryptographicMaterialRegistry._tls_point_state_component_locked(
+            self,
+            point,
+            None,
+            generation,
+        )
+        prior_retained_bytes = 0
+        tombstone_bytes = 0
+        if self._tls_material_capacity is not None:
+            prior_retained_bytes = self._tls_point_retained_bytes[point]
+            tombstone_bytes = _tls_material_tombstone_retained_bytes(point)
         if family == "public_key":
             self._public_keys.pop(key)  # type: ignore[arg-type]
         elif family == "authority":
             self._authorities.pop(key)  # type: ignore[arg-type]
         else:
             self._certificates.pop(key)
-        generation = prior_generation + 1
         self._tls_point_generations.pop(point, None)
         self._tls_point_tombstones[point] = generation
         self._tls_canonical_state_xor ^= prior_component
-        self._tls_canonical_state_xor ^= self._tls_point_state_component_locked(
-            point,
-            None,
-            generation,
-        )
+        self._tls_canonical_state_xor ^= next_component
+        if self._tls_material_capacity is not None:
+            self._tls_material_generation_high_water = max(
+                self._tls_material_generation_high_water,
+                generation,
+            )
+            self._tls_point_retained_bytes[point] = tombstone_bytes
+            self._tls_retained_material_bytes += tombstone_bytes - prior_retained_bytes
         return True
 
     def _tls_material_snapshot(
@@ -703,6 +1207,7 @@ class CryptographicMaterialRegistry:
         """Return exact canonical and transient TLS preparation counts."""
 
         with self._tls_material_lock:
+            self._reap_abandoned_tls_preparations_locked()
             return CryptographicMaterialPreparationCensus(
                 public_keys=len(self._public_keys),
                 authorities=len(self._authorities),
@@ -715,15 +1220,56 @@ class CryptographicMaterialRegistry:
             )
 
     def census(self) -> CryptographicMaterialPreparationCensus:
-        """Return the constant-time TLS material/preparation census."""
+        """Return the exact TLS material/preparation census."""
 
         return self.tls_preparation_census()
 
-    def state_digest(self) -> str:
-        """Return an O(1) digest of canonical and transient TLS registry state."""
+    def tls_material_point_capacity_census(self) -> CryptographicMaterialPointCapacityCensus:
+        """Return bounded material-point accounting and uncapped auxiliary observations."""
 
         with self._tls_material_lock:
-            canonical = (
+            self._reap_abandoned_tls_preparations_locked()
+            capacity = self._tls_material_capacity
+            return CryptographicMaterialPointCapacityCensus(
+                material_point_capacity=capacity,
+                material_preparation_capacity=capacity,
+                material_byte_capacity=self._tls_material_byte_capacity(),
+                material_preparation_byte_capacity=self._tls_preparation_byte_capacity(),
+                live_material_points=self._tls_live_material_points_locked(),
+                tombstone_material_points=len(self._tls_point_tombstones),
+                reserved_new_material_points=len(self._tls_new_slot_reservations),
+                retained_material_points=self._tls_retained_material_slots_locked(),
+                material_point_high_water=self._tls_material_high_water_points,
+                retained_material_bytes=self._tls_retained_material_bytes,
+                reserved_material_bytes=self._tls_reserved_material_bytes,
+                material_byte_high_water=self._tls_material_high_water_bytes,
+                material_point_generation_high_water=self._tls_material_generation_high_water,
+                material_point_generation_capacity=(
+                    _MAX_TLS_MATERIAL_POINT_GENERATION if capacity is not None else None
+                ),
+                retained_material_preparation_bytes=self._tls_retained_preparation_bytes,
+                material_preparation_high_water=self._tls_preparation_high_water_overlays,
+                material_preparation_byte_high_water=self._tls_preparation_high_water_bytes,
+                material_preparation_id_watermark=(
+                    _MAX_TLS_PREPARATION_ID
+                    if capacity is not None and self._next_tls_preparation_id == 0
+                    else self._next_tls_preparation_id - 1
+                ),
+                material_preparation_id_capacity=(
+                    _MAX_TLS_PREPARATION_ID if capacity is not None else None
+                ),
+                uncapped_dkim_key_entries=len(self._dkim_keys),
+                uncapped_dkim_key_estimated_bytes=self._dkim_key_estimated_bytes,
+                uncapped_ocsp_status_entries=len(self._ocsp_statuses),
+                uncapped_ocsp_status_estimated_bytes=self._ocsp_status_estimated_bytes,
+            )
+
+    def state_digest(self) -> str:
+        """Return an incremental digest of canonical and transient TLS registry state."""
+
+        with self._tls_material_lock:
+            self._reap_abandoned_tls_preparations_locked()
+            canonical: tuple[Any, ...] = (
                 "cryptographic-material-registry-state-v1",
                 self._tls_canonical_state_xor,
                 self._tls_prepared_state_xor,
@@ -738,6 +1284,15 @@ class CryptographicMaterialRegistry:
                 len(self._tls_claimed_preparations),
                 len(self._tls_point_reservations),
             )
+            if self._tls_material_capacity is not None:
+                canonical += (
+                    "finite-tls-material-capacity-v1",
+                    self._tls_material_capacity,
+                    len(self._tls_new_slot_reservations),
+                    self._tls_retained_material_bytes,
+                    self._tls_reserved_material_bytes,
+                    self._tls_retained_preparation_bytes,
+                )
             return hashlib.sha256(repr(canonical).encode("utf-8")).hexdigest()
 
     def authenticates_tls_preparation_token(
@@ -765,7 +1320,7 @@ class CryptographicMaterialRegistry:
 
         if type(receipt) is not CryptographicMaterialPreparationReceipt:
             return False
-        if receipt._registry_token != id(self):
+        if type(receipt._registry_token) is not int or receipt._registry_token != id(self):
             return False
         try:
             expected = _validated_tls_material_receipt_integrity_token(
@@ -803,14 +1358,17 @@ class CryptographicMaterialRegistry:
     ) -> _CryptographicMaterialPreparationCapability:
         """Return the registry-owned capability for an intact active token."""
 
+        self._reap_abandoned_tls_preparations_locked()
         if type(token) is not CryptographicMaterialPreparationToken:
             raise StateError("TLS material preparation token has an invalid type")
-        capability = self._tls_prepared_capabilities.get(id(token))
+        capability = self._tls_capability_for_exact_token_locked(token)
         if capability is None:
+            if type(token._registry_token) is not int:
+                raise StateError("TLS material preparation token integrity validation failed")
             if token._registry_token != id(self):
                 raise StateError("TLS material preparation token belongs to another registry")
             raise StateError("TLS material preparation token is stale or already consumed")
-        active = self._tls_prepared_tokens.get(capability.preparation_id)
+        active = self._tls_active_preparation_token_locked(capability.preparation_id)
         if active is not token:
             raise StateError("TLS material preparation token is stale or already consumed")
         try:
@@ -832,35 +1390,69 @@ class CryptographicMaterialRegistry:
     ) -> None:
         """Release reservations from the registry-owned immutable locator."""
 
-        active = self._tls_prepared_tokens.pop(capability.preparation_id, None)
-        retained = self._tls_prepared_capabilities.pop(capability.token_id, None)
+        preparation_id = capability.preparation_id
+        active = self._tls_prepared_tokens.get(preparation_id)
+        retained = self._tls_prepared_capabilities.get(preparation_id)
         if active is None or retained is not capability:
             return
-        self._tls_prepared_state_xor ^= _tls_material_state_component(
-            "tls-prepared-capability-v1",
-            capability,
-        )
-        if capability.preparation_id in self._tls_claimed_preparations:
-            self._tls_claimed_state_xor ^= _tls_material_state_component(
-                "tls-claimed-preparation-v1",
-                capability.preparation_id,
-            )
-            self._tls_claimed_preparations.discard(capability.preparation_id)
+        if preparation_id not in self._tls_prepared_state_components:
+            raise StateError("TLS material preparation lost its prepared state component")
+        prepared_component = self._tls_prepared_state_components[preparation_id]
+        claimed_component = self._tls_claimed_state_components.get(preparation_id)
+        reservation_components: list[tuple[_TlsMaterialPoint, int]] = []
         for point in capability.points:
-            if self._tls_point_reservations.get(point) == capability.preparation_id:
+            if self._tls_point_reservations.get(point) != preparation_id:
+                continue
+            if point not in self._tls_reservation_state_components:
+                raise StateError("TLS material preparation lost a reservation state component")
+            reservation_components.append((point, self._tls_reservation_state_components[point]))
+        if preparation_id in self._tls_claimed_preparations and claimed_component is None:
+            raise StateError("TLS material preparation lost its claimed state component")
+
+        self._tls_prepared_tokens.pop(preparation_id)
+        self._tls_prepared_capabilities.pop(preparation_id)
+        self._tls_prepared_state_components.pop(preparation_id)
+        self._tls_prepared_state_xor ^= prepared_component
+        if self._tls_material_capacity is not None:
+            preparation_bytes = self._tls_preparation_retained_bytes.pop(
+                preparation_id,
+                0,
+            )
+            self._tls_retained_preparation_bytes -= preparation_bytes
+        if preparation_id in self._tls_claimed_preparations:
+            assert claimed_component is not None
+            self._tls_claimed_state_components.pop(preparation_id)
+            self._tls_claimed_state_xor ^= claimed_component
+            self._tls_claimed_preparations.discard(preparation_id)
+        self._tls_claimed_transactions.pop(preparation_id, None)
+        for point, reservation_component in reservation_components:
+            if self._tls_point_reservations.get(point) == preparation_id:
+                if self._tls_material_capacity is not None:
+                    self._tls_new_slot_reservations.discard(point)
+                    reserved_delta = self._tls_reservation_byte_deltas.pop(point, 0)
+                    self._tls_reserved_material_bytes -= reserved_delta
                 self._tls_point_reservations.pop(point)
-                self._tls_reservation_state_xor ^= _tls_material_state_component(
-                    "tls-point-reservation-v1",
-                    (point, capability.preparation_id),
-                )
+                self._tls_reservation_state_components.pop(point)
+                self._tls_reservation_state_xor ^= reservation_component
         if not self._tls_prepared_tokens:
             self._tls_prepared_tokens.clear()
             self._tls_prepared_capabilities.clear()
             self._tls_claimed_preparations.clear()
+            self._tls_claimed_transactions.clear()
             self._tls_point_reservations.clear()
+            self._tls_prepared_state_components.clear()
+            self._tls_reservation_state_components.clear()
+            self._tls_claimed_state_components.clear()
             self._tls_prepared_state_xor = 0
             self._tls_reservation_state_xor = 0
             self._tls_claimed_state_xor = 0
+            self._tls_new_slot_reservations.clear()
+            self._tls_reservation_byte_deltas.clear()
+            self._tls_preparation_retained_bytes.clear()
+            self._tls_dead_preparations.clear()
+            self._tls_dead_claims.clear()
+            self._tls_reserved_material_bytes = 0
+            self._tls_retained_preparation_bytes = 0
 
     def _validate_tls_preparation_locked(
         self,
@@ -889,6 +1481,7 @@ class CryptographicMaterialRegistry:
 
         trusted_patches = _canonical_tls_material_patches(self, patches)
         with self._tls_material_lock:
+            self._reap_abandoned_tls_preparations_locked()
             retained: list[_TlsMaterialPointPatch] = []
             for patch in trusted_patches:
                 point = patch.point
@@ -909,11 +1502,39 @@ class CryptographicMaterialRegistry:
                 retained.append(patch)
 
             final_patches = tuple(retained)
+            reserved_new_points: tuple[_TlsMaterialPoint, ...] = ()
+            reserved_byte_deltas: dict[_TlsMaterialPoint, int] = {}
+            preparation_retained_bytes = 0
+            if self._tls_material_capacity is not None:
+                if len(self._tls_prepared_tokens) >= self._tls_material_capacity:
+                    raise CryptographicMaterialCapacityError(
+                        "TLS material preparation capacity is exhausted"
+                    )
+                reserved_new_points, reserved_byte_deltas = (
+                    self._require_tls_material_capacity_locked(
+                        tuple((patch.point, patch.value) for patch in final_patches)
+                    )
+                )
+                preparation_retained_bytes = self._tls_preparation_retained_size_locked(
+                    final_patches
+                )
+                preparation_byte_capacity = self._tls_preparation_byte_capacity()
+                assert preparation_byte_capacity is not None
+                if (
+                    self._tls_retained_preparation_bytes + preparation_retained_bytes
+                    > preparation_byte_capacity
+                ):
+                    raise CryptographicMaterialCapacityError(
+                        "TLS material preparation retained-byte capacity is exhausted"
+                    )
+                if self._next_tls_preparation_id == 0:
+                    raise CryptographicMaterialCapacityError(
+                        "TLS material preparation identity capacity is exhausted"
+                    )
             public_patches = deepcopy(final_patches)
             for patch in public_patches:
                 _validate_tls_material_patch(patch)
             preparation_id = self._next_tls_preparation_id
-            self._next_tls_preparation_id += 1
             overlay_digest = _tls_material_overlay_digest(final_patches)
             token = CryptographicMaterialPreparationToken(
                 preparation_id=preparation_id,
@@ -939,25 +1560,66 @@ class CryptographicMaterialRegistry:
                 trusted_token=trusted_token,
                 points=tuple(patch.point for patch in final_patches),
             )
-            self._tls_prepared_tokens[preparation_id] = token
-            self._tls_prepared_capabilities[id(token)] = capability
-            self._tls_prepared_state_xor ^= _tls_material_state_component(
+            prepared_component = _tls_material_state_component(
                 "tls-prepared-capability-v1",
                 capability,
             )
-            for point in capability.points:
-                self._tls_point_reservations[point] = preparation_id
-                self._tls_reservation_state_xor ^= _tls_material_state_component(
-                    "tls-point-reservation-v1",
-                    (point, preparation_id),
+            reservation_components = tuple(
+                (
+                    point,
+                    _tls_material_state_component(
+                        "tls-point-reservation-v1",
+                        (point, preparation_id),
+                    ),
                 )
+                for point in capability.points
+            )
+            if self._tls_material_capacity is None:
+                retained_public_token: (
+                    CryptographicMaterialPreparationToken
+                    | ReferenceType[CryptographicMaterialPreparationToken]
+                ) = token
+                next_preparation_id = preparation_id + 1
+            else:
+                dead_preparations = self._tls_dead_preparations
+
+                def token_collected(
+                    _token_reference: ReferenceType[CryptographicMaterialPreparationToken],
+                    *,
+                    dead: deque[tuple[int, int]] = dead_preparations,
+                    expired_preparation_id: int = preparation_id,
+                    expired_token_id: int = id(token),
+                ) -> None:
+                    dead.append((expired_preparation_id, expired_token_id))
+
+                retained_public_token = ref(token, token_collected)
+                next_preparation_id = (
+                    0 if preparation_id == _MAX_TLS_PREPARATION_ID else preparation_id + 1
+                )
+
+            self._tls_prepared_tokens[preparation_id] = retained_public_token
+            self._tls_prepared_capabilities[preparation_id] = capability
+            self._tls_prepared_state_components[preparation_id] = prepared_component
+            self._tls_prepared_state_xor ^= prepared_component
+            for point, reservation_component in reservation_components:
+                self._tls_point_reservations[point] = preparation_id
+                self._tls_reservation_state_components[point] = reservation_component
+                self._tls_reservation_state_xor ^= reservation_component
+            if self._tls_material_capacity is not None:
+                self._tls_new_slot_reservations.update(reserved_new_points)
+                self._tls_reservation_byte_deltas.update(reserved_byte_deltas)
+                self._tls_reserved_material_bytes += sum(reserved_byte_deltas.values())
+                self._tls_preparation_retained_bytes[preparation_id] = preparation_retained_bytes
+                self._tls_retained_preparation_bytes += preparation_retained_bytes
+                CryptographicMaterialRegistry._update_tls_capacity_high_water_locked(self)
+            self._next_tls_preparation_id = next_preparation_id
             return token
 
     def cancel_tls_preparation(self, token: CryptographicMaterialPreparationToken) -> bool:
         """Cancel one unclaimed overlay without publishing canonical material."""
 
         with self._tls_material_lock:
-            capability = self._tls_prepared_capabilities.get(id(token))
+            capability = self._tls_capability_for_exact_token_locked(token)
             if capability is None:
                 return False
             if capability.preparation_id in self._tls_claimed_preparations:
@@ -965,16 +1627,26 @@ class CryptographicMaterialRegistry:
             try:
                 capability = self._active_tls_preparation_locked(token)
             except StateError:
-                self._release_tls_preparation_locked(capability)
+                CryptographicMaterialRegistry._release_tls_preparation_locked(self, capability)
                 raise
-            self._release_tls_preparation_locked(capability)
+            CryptographicMaterialRegistry._release_tls_preparation_locked(self, capability)
             return True
 
-    def _claim_tls_preparation(self, token: CryptographicMaterialPreparationToken) -> None:
+    def _claim_tls_preparation(
+        self,
+        token: CryptographicMaterialPreparationToken,
+        transaction: CryptographicMaterialPreparedCommit,
+    ) -> None:
         """Claim and validate one overlay in a short registry-only section."""
 
         with self._tls_material_lock:
-            capability = self._tls_prepared_capabilities.get(id(token))
+            if (
+                type(transaction) is not CryptographicMaterialPreparedCommit
+                or transaction._registry is not self
+                or transaction._token is not token
+            ):
+                raise StateError("TLS material prepared commit has an invalid owner binding")
+            capability = self._tls_capability_for_exact_token_locked(token)
             if (
                 capability is not None
                 and capability.preparation_id in self._tls_claimed_preparations
@@ -984,34 +1656,65 @@ class CryptographicMaterialRegistry:
                 capability = self._active_tls_preparation_locked(token)
             except StateError:
                 if capability is not None:
-                    self._release_tls_preparation_locked(capability)
+                    CryptographicMaterialRegistry._release_tls_preparation_locked(self, capability)
                 raise
             self._validate_tls_preparation_locked(capability)
             self._active_tls_preparation_locked(token)
-            self._tls_claimed_preparations.add(capability.preparation_id)
-            self._tls_claimed_state_xor ^= _tls_material_state_component(
+            claimed_component = _tls_material_state_component(
                 "tls-claimed-preparation-v1",
                 capability.preparation_id,
             )
+            if self._tls_material_capacity is None:
+                retained_transaction: (
+                    CryptographicMaterialPreparedCommit
+                    | ReferenceType[CryptographicMaterialPreparedCommit]
+                ) = transaction
+            else:
+                dead_claims = self._tls_dead_claims
+
+                def transaction_collected(
+                    _transaction_reference: ReferenceType[CryptographicMaterialPreparedCommit],
+                    *,
+                    dead: deque[tuple[int, int]] = dead_claims,
+                    expired_preparation_id: int = capability.preparation_id,
+                    expired_transaction_id: int = id(transaction),
+                ) -> None:
+                    dead.append((expired_preparation_id, expired_transaction_id))
+
+                retained_transaction = ref(
+                    transaction,
+                    transaction_collected,
+                )
+
+            self._tls_claimed_transactions[capability.preparation_id] = retained_transaction
+            self._tls_claimed_preparations.add(capability.preparation_id)
+            self._tls_claimed_state_components[capability.preparation_id] = claimed_component
+            self._tls_claimed_state_xor ^= claimed_component
 
     def _cancel_claimed_tls_preparation(
         self,
         token: CryptographicMaterialPreparationToken,
+        transaction: CryptographicMaterialPreparedCommit,
     ) -> None:
         """Release an uncommitted claim after its external composite aborts."""
 
         with self._tls_material_lock:
-            capability = self._tls_prepared_capabilities.get(id(token))
+            capability = self._tls_capability_for_exact_token_locked(token)
             if capability is None:
                 return
             try:
                 self._active_tls_preparation_locked(token)
             except StateError:
-                self._release_tls_preparation_locked(capability)
+                CryptographicMaterialRegistry._release_tls_preparation_locked(self, capability)
                 return
             if capability.preparation_id not in self._tls_claimed_preparations:
                 raise StateError("TLS material preparation token is not claimed")
-            self._release_tls_preparation_locked(capability)
+            if (
+                self._tls_active_claim_transaction_locked(capability.preparation_id)
+                is not transaction
+            ):
+                raise StateError("TLS material prepared commit is not the claim owner")
+            CryptographicMaterialRegistry._release_tls_preparation_locked(self, capability)
 
     @contextmanager
     def prepared_tls_material(
@@ -1020,38 +1723,56 @@ class CryptographicMaterialRegistry:
     ) -> Iterator[CryptographicMaterialPreparedCommit]:
         """Claim one overlay without retaining the registry lock externally."""
 
-        self._claim_tls_preparation(token)
         transaction = CryptographicMaterialPreparedCommit(self, token)
+        CryptographicMaterialRegistry._claim_tls_preparation(self, token, transaction)
         try:
             yield transaction
         finally:
-            if not transaction.committed:
-                self._cancel_claimed_tls_preparation(token)
-            transaction._close()
+            try:
+                CryptographicMaterialRegistry._cancel_claimed_tls_preparation(
+                    self,
+                    token,
+                    transaction,
+                )
+            finally:
+                CryptographicMaterialPreparedCommit._close(transaction)
 
     def _commit_claimed_tls_preparation(
         self,
         token: CryptographicMaterialPreparationToken,
+        transaction: CryptographicMaterialPreparedCommit,
     ) -> CryptographicMaterialPreparationReceipt:
         """Apply already-validated point writes and sign their exact versions."""
 
         with self._tls_material_lock:
-            capability = self._tls_prepared_capabilities.get(id(token))
+            capability = self._tls_capability_for_exact_token_locked(token)
             if (
                 capability is None
-                or self._tls_prepared_tokens.get(capability.preparation_id) is not token
+                or self._tls_active_preparation_token_locked(capability.preparation_id) is not token
             ):
                 raise StateError("TLS material preparation token is stale or already consumed")
             if capability.preparation_id not in self._tls_claimed_preparations:
                 raise StateError("TLS material preparation token is not claimed")
+            if (
+                self._tls_active_claim_transaction_locked(capability.preparation_id)
+                is not transaction
+            ):
+                raise StateError("TLS material prepared commit is not the claim owner")
+            publications: list[_TlsMaterialPublication] = []
             committed_points: list[tuple[_TlsMaterialFamily, _TlsMaterialKey, int, str]] = []
             for patch in capability.trusted_token._patches:
-                generation = self._publish_tls_material_locked(
+                prepared = CryptographicMaterialRegistry._prepare_tls_material_publication_locked(
+                    self,
                     patch.family,
                     patch.key,
                     patch.value,
                     reservation_id=capability.preparation_id,
                 )
+                if type(prepared) is int:
+                    generation = prepared
+                else:
+                    publications.append(prepared)
+                    generation = prepared.generation
                 committed_points.append((patch.family, patch.key, generation, patch.value_digest))
             committed_digest = hashlib.sha256(
                 repr(tuple(committed_points)).encode("utf-8")
@@ -1074,7 +1795,14 @@ class CryptographicMaterialRegistry:
                     receipt,
                 ),
             )
-            self._release_tls_preparation_locked(capability)
+            CryptographicMaterialRegistry._apply_tls_material_publications_locked(
+                self,
+                tuple(publications),
+            )
+            CryptographicMaterialRegistry._release_tls_preparation_locked(
+                self,
+                capability,
+            )
             return receipt
 
     @staticmethod
@@ -1103,6 +1831,8 @@ class CryptographicMaterialRegistry:
         normalized_type, normalized_size = self._normalize_key_profile(key_type, key_size)
         cache_key = (identity, normalized_type, normalized_size)
         with self._tls_material_lock:
+            if self._tls_material_capacity is not None:
+                self._reap_abandoned_tls_preparations_locked()
             cached = self._public_keys.get(cache_key)
             if cached is not None:
                 return cached
@@ -1167,12 +1897,72 @@ class CryptographicMaterialRegistry:
         normalized_type, normalized_size = self._normalize_key_profile(key_type, key_size)
         cache_key = (subject_name, issuer_name, normalized_type, normalized_size)
         with self._tls_material_lock:
+            if self._tls_material_capacity is not None:
+                self._reap_abandoned_tls_preparations_locked()
             cached = self._authorities.get(cache_key)
             if cached is not None:
                 return deepcopy(cached)
             point: _TlsMaterialPoint = ("authority", cache_key)
             if point in self._tls_point_reservations:
                 raise StateError(f"TLS material point authority:{cache_key!r} is reserved")
+            if self._tls_material_capacity is not None:
+                public_key_cache_key = (
+                    f"certificate_authority:{subject_name}",
+                    normalized_type,
+                    normalized_size,
+                )
+                public_key_point: _TlsMaterialPoint = ("public_key", public_key_cache_key)
+                if public_key_point in self._tls_point_reservations:
+                    raise StateError(
+                        f"TLS material point public_key:{public_key_cache_key!r} is reserved"
+                    )
+                spki = self._public_keys.get(public_key_cache_key)
+                publish_public_key = spki is None
+                if spki is None:
+                    spki = self._build_public_key_spki(
+                        f"certificate_authority:{subject_name}",
+                        normalized_type=normalized_type,
+                        normalized_size=normalized_size,
+                    )
+                authority = self._build_authority_material(
+                    subject_name=subject_name,
+                    issuer_name=issuer_name,
+                    normalized_type=normalized_type,
+                    normalized_size=normalized_size,
+                    spki=spki,
+                )
+                self._require_tls_material_capacity_locked(
+                    ((public_key_point, spki), (point, authority))
+                )
+                publications: list[_TlsMaterialPublication] = []
+                if publish_public_key:
+                    prepared_public_key = (
+                        CryptographicMaterialRegistry._prepare_tls_material_publication_locked(
+                            self,
+                            "public_key",
+                            public_key_cache_key,
+                            spki,
+                        )
+                    )
+                    if type(prepared_public_key) is int:
+                        raise StateError("TLS authority public-key prerequisite changed")
+                    publications.append(prepared_public_key)
+                prepared_authority = (
+                    CryptographicMaterialRegistry._prepare_tls_material_publication_locked(
+                        self,
+                        "authority",
+                        cache_key,
+                        authority,
+                    )
+                )
+                if type(prepared_authority) is int:
+                    raise StateError("TLS authority point changed before publication")
+                publications.append(prepared_authority)
+                CryptographicMaterialRegistry._apply_tls_material_publications_locked(
+                    self,
+                    tuple(publications),
+                )
+                return deepcopy(authority)
             spki = self.public_key_spki(
                 f"certificate_authority:{subject_name}",
                 key_type=normalized_type,
@@ -1248,12 +2038,81 @@ class CryptographicMaterialRegistry:
             client_certificate,
         )
         with self._tls_material_lock:
+            if self._tls_material_capacity is not None:
+                self._reap_abandoned_tls_preparations_locked()
             cached = self._certificates.get(cache_key)
             if cached is not None:
                 return deepcopy(cached)
             point: _TlsMaterialPoint = ("certificate", cache_key)
             if point in self._tls_point_reservations:
                 raise StateError(f"TLS material point certificate:{cache_key!r} is reserved")
+            if self._tls_material_capacity is not None:
+                public_key_cache_key = (
+                    f"certificate:{backend_identity}:{subject_name}",
+                    normalized_type,
+                    normalized_size,
+                )
+                public_key_point: _TlsMaterialPoint = ("public_key", public_key_cache_key)
+                if public_key_point in self._tls_point_reservations:
+                    raise StateError(
+                        f"TLS material point public_key:{public_key_cache_key!r} is reserved"
+                    )
+                spki = self._public_keys.get(public_key_cache_key)
+                publish_public_key = spki is None
+                if spki is None:
+                    spki = self._build_public_key_spki(
+                        f"certificate:{backend_identity}:{subject_name}",
+                        normalized_type=normalized_type,
+                        normalized_size=normalized_size,
+                    )
+                certificate = self._build_certificate_identity(
+                    cache_key=cache_key,
+                    backend_identity=backend_identity,
+                    subject_name=subject_name,
+                    issuer_name=issuer_name,
+                    not_valid_before=not_valid_before,
+                    not_valid_after=not_valid_after,
+                    normalized_type=normalized_type,
+                    normalized_size=normalized_size,
+                    signature_algorithm=signature_algorithm,
+                    normalized_sans=normalized_sans,
+                    basic_constraints_ca=basic_constraints_ca,
+                    host_certificate=host_certificate,
+                    client_certificate=client_certificate,
+                    spki=spki,
+                )
+                self._require_tls_material_capacity_locked(
+                    ((public_key_point, spki), (point, certificate))
+                )
+                publications: list[_TlsMaterialPublication] = []
+                if publish_public_key:
+                    prepared_public_key = (
+                        CryptographicMaterialRegistry._prepare_tls_material_publication_locked(
+                            self,
+                            "public_key",
+                            public_key_cache_key,
+                            spki,
+                        )
+                    )
+                    if type(prepared_public_key) is int:
+                        raise StateError("TLS certificate public-key prerequisite changed")
+                    publications.append(prepared_public_key)
+                prepared_certificate = (
+                    CryptographicMaterialRegistry._prepare_tls_material_publication_locked(
+                        self,
+                        "certificate",
+                        cache_key,
+                        certificate,
+                    )
+                )
+                if type(prepared_certificate) is int:
+                    raise StateError("TLS certificate point changed before publication")
+                publications.append(prepared_certificate)
+                CryptographicMaterialRegistry._apply_tls_material_publications_locked(
+                    self,
+                    tuple(publications),
+                )
+                return deepcopy(certificate)
             spki = self.public_key_spki(
                 f"certificate:{backend_identity}:{subject_name}",
                 key_type=normalized_type,
@@ -1335,7 +2194,8 @@ class CryptographicMaterialRegistry:
         normalized_selector = selector.rstrip(".").lower()
         normalized_size = 3072 if key_size >= 3072 else 2048
         cache_key = (normalized_domain, normalized_selector, normalized_size)
-        cached = self._dkim_keys.get(cache_key)
+        with self._tls_material_lock:
+            cached = self._dkim_keys.get(cache_key)
         if cached is not None:
             return cached
         spki = self.public_key_spki(
@@ -1357,8 +2217,14 @@ class CryptographicMaterialRegistry:
             key_size=normalized_size,
             exponent=numbers.e,
         )
-        self._dkim_keys[cache_key] = plan
-        return plan
+        estimated_bytes = _tls_auxiliary_entry_estimated_bytes(cache_key, plan)
+        with self._tls_material_lock:
+            cached = self._dkim_keys.get(cache_key)
+            if cached is not None:
+                return cached
+            self._dkim_keys[cache_key] = plan
+            self._dkim_key_estimated_bytes += estimated_bytes
+            return plan
 
     def resolve_ocsp_status(
         self,
@@ -1397,7 +2263,8 @@ class CryptographicMaterialRegistry:
             reasons,
         )
         cache_key = (certificate.fingerprint, certificate.serial_number, profile_identity)
-        cached = self._ocsp_statuses.get(cache_key)
+        with self._tls_material_lock:
+            cached = self._ocsp_statuses.get(cache_key)
         if cached is not None:
             return cached
         rng = random.Random(
@@ -1413,14 +2280,20 @@ class CryptographicMaterialRegistry:
             result = (status, rng.choice(reasons))
         else:
             result = (status, None)
-        self._ocsp_statuses[cache_key] = result
-        return result
+        estimated_bytes = _tls_auxiliary_entry_estimated_bytes(cache_key, result)
+        with self._tls_material_lock:
+            cached = self._ocsp_statuses.get(cache_key)
+            if cached is not None:
+                return cached
+            self._ocsp_statuses[cache_key] = result
+            self._ocsp_status_estimated_bytes += estimated_bytes
+            return result
 
 
 class CryptographicMaterialPreparedCommit:
     """No-fail TLS material commit capability valid inside one claim context."""
 
-    __slots__ = ("_active", "_committed", "_receipt", "_registry", "_token")
+    __slots__ = ("_active", "_committed", "_receipt", "_registry", "_token", "__weakref__")
 
     def __init__(
         self,
@@ -1445,6 +2318,16 @@ class CryptographicMaterialPreparedCommit:
 
         return self._receipt
 
+    def __copy__(self) -> Self:
+        """Reject aliases of this exact context-bound commit capability."""
+
+        raise StateError("TLS material prepared commit capabilities cannot be copied")
+
+    def __deepcopy__(self, _memo: dict[int, object]) -> Self:
+        """Reject deep aliases of this exact context-bound commit capability."""
+
+        raise StateError("TLS material prepared commit capabilities cannot be copied")
+
     def commit_no_fail(self) -> CryptographicMaterialPreparationReceipt:
         """Publish the validated point writes as the final transaction step."""
 
@@ -1452,7 +2335,7 @@ class CryptographicMaterialPreparedCommit:
             raise StateError("TLS material prepared commit is no longer active")
         if self._committed:
             raise StateError("TLS material preparation was already committed")
-        self._receipt = self._registry._commit_claimed_tls_preparation(self._token)
+        self._receipt = self._registry._commit_claimed_tls_preparation(self._token, self)
         self._committed = True
         return self._receipt
 
@@ -1468,7 +2351,15 @@ class CryptographicMaterialPreparedCommit:
 class CryptographicMaterialPreparation:
     """Read-through point-COW overlay for one physical TLS transport."""
 
-    __slots__ = ("_cancelled", "_owner", "_patches", "_registry", "_sealed_token")
+    __slots__ = (
+        "_cancelled",
+        "_lock",
+        "_owner",
+        "_patches",
+        "_registry",
+        "_retained_bytes",
+        "_sealed_token",
+    )
 
     def __init__(
         self,
@@ -1477,8 +2368,10 @@ class CryptographicMaterialPreparation:
         owner: object | None = None,
     ) -> None:
         self._registry = registry
+        self._lock = RLock()
         self._owner = owner
         self._patches: dict[_TlsMaterialPoint, _TlsMaterialPointPatch] = {}
+        self._retained_bytes = 0
         self._sealed_token: CryptographicMaterialPreparationToken | None = None
         self._cancelled = False
 
@@ -1490,6 +2383,16 @@ class CryptographicMaterialPreparation:
         if self._sealed_token is not None:
             raise StateError("TLS material preparation was already sealed")
 
+    def __copy__(self) -> Self:
+        """Reject aliases with independent seal/cancel flags over shared patches."""
+
+        raise StateError("TLS material preparations cannot be copied")
+
+    def __deepcopy__(self, _memo: dict[int, object]) -> Self:
+        """Reject deep aliases of this mutable preparation boundary."""
+
+        raise StateError("TLS material preparations cannot be copied")
+
     def _resolve_or_stage(
         self,
         family: _TlsMaterialFamily,
@@ -1497,6 +2400,17 @@ class CryptographicMaterialPreparation:
         builder: Callable[[], _TlsMaterialValue],
     ) -> _TlsMaterialValue:
         """Resolve canonical state or stage one deterministic absent-point write."""
+
+        with self._lock:
+            return self._resolve_or_stage_locked(family, key, builder)
+
+    def _resolve_or_stage_locked(
+        self,
+        family: _TlsMaterialFamily,
+        key: _TlsMaterialKey,
+        builder: Callable[[], _TlsMaterialValue],
+    ) -> _TlsMaterialValue:
+        """Resolve or stage while holding this preparation's re-entrant lock."""
 
         self._require_open()
         point = (family, key)
@@ -1506,6 +2420,64 @@ class CryptographicMaterialPreparation:
         value, generation, digest = self._registry._tls_material_snapshot(family, key)
         if value is not None:
             return value
+        capacity = self._registry.tls_material_capacity
+        if capacity is not None:
+            if len(self._patches) >= capacity:
+                raise CryptographicMaterialCapacityError(
+                    "TLS material preparation exceeds the retained-key capacity"
+                )
+            prior_patch_count = len(self._patches)
+            prior_retained_bytes = self._retained_bytes
+            completed = False
+            try:
+                prepared_value = builder()
+                current, current_generation, current_digest = self._registry._tls_material_snapshot(
+                    family, key
+                )
+                if current is not None:
+                    if current != prepared_value:
+                        raise StateError(
+                            "TLS material point changed to a conflicting canonical value"
+                        )
+                    return current
+                if current_generation != generation or not hmac.compare_digest(
+                    current_digest,
+                    digest,
+                ):
+                    raise StateError("TLS material point generation changed during preparation")
+                if len(self._patches) >= capacity:
+                    raise CryptographicMaterialCapacityError(
+                        "TLS material preparation exceeds the retained-key capacity"
+                    )
+                patch = _TlsMaterialPointPatch(
+                    family=family,
+                    key=key,
+                    expected_generation=generation,
+                    expected_value_digest=digest,
+                    value_digest=_tls_material_value_digest(prepared_value),
+                    value=prepared_value,
+                )
+                retained_bytes = _tls_material_live_point_retained_bytes(point, prepared_value)
+                if retained_bytes > _MAX_TLS_MATERIAL_POINT_RETAINED_BYTES:
+                    raise CryptographicMaterialCapacityError(
+                        "TLS material point retained-byte capacity exceeded: "
+                        f"{retained_bytes} > {_MAX_TLS_MATERIAL_POINT_RETAINED_BYTES}"
+                    )
+                material_byte_capacity = self._registry._tls_material_byte_capacity()
+                assert material_byte_capacity is not None
+                if self._retained_bytes + retained_bytes > material_byte_capacity:
+                    raise CryptographicMaterialCapacityError(
+                        "TLS material preparation retained-byte capacity is exhausted"
+                    )
+                self._patches[point] = patch
+                self._retained_bytes += retained_bytes
+                completed = True
+                return prepared_value
+            finally:
+                if not completed:
+                    while len(self._patches) > prior_patch_count:
+                        self._patches.popitem()
+                    self._retained_bytes = prior_retained_bytes
         prepared_value: _TlsMaterialValue = builder()
         current, current_generation, current_digest = self._registry._tls_material_snapshot(
             family,
@@ -1663,40 +2635,45 @@ class CryptographicMaterialPreparation:
     ) -> CryptographicMaterialPreparationToken:
         """Reserve every staged point and return one idempotent opaque token."""
 
-        if owner is not self._owner:
-            raise StateError("TLS material preparation is owned by another composite")
-        if self._cancelled:
-            raise StateError("TLS material preparation was cancelled")
-        if self._sealed_token is not None:
+        with self._lock:
+            if owner is not self._owner:
+                raise StateError("TLS material preparation is owned by another composite")
+            if self._cancelled:
+                raise StateError("TLS material preparation was cancelled")
+            if self._sealed_token is not None:
+                return self._sealed_token
+            patches = tuple(
+                self._patches[point]
+                for point in sorted(self._patches, key=lambda candidate: repr(candidate))
+            )
+            self._sealed_token = self._registry._seal_tls_preparation(patches)
             return self._sealed_token
-        patches = tuple(
-            self._patches[point]
-            for point in sorted(self._patches, key=lambda candidate: repr(candidate))
-        )
-        self._sealed_token = self._registry._seal_tls_preparation(patches)
-        return self._sealed_token
 
     def cancel(self, *, owner: object | None = None) -> bool:
         """Cancel this overlay or its unclaimed sealed reservation."""
 
-        if owner is not self._owner:
-            raise StateError("TLS material preparation is owned by another composite")
-        if self._cancelled:
-            return False
-        if self._sealed_token is None:
-            self._patches.clear()
-            self._cancelled = True
-            return True
-        try:
-            cancelled = self._registry.cancel_tls_preparation(self._sealed_token)
-        except StateError:
-            self._patches.clear()
-            self._cancelled = True
-            raise
-        if cancelled:
-            self._patches.clear()
-            self._cancelled = True
-        return cancelled
+        with self._lock:
+            if owner is not self._owner:
+                raise StateError("TLS material preparation is owned by another composite")
+            if self._cancelled:
+                return False
+            if self._sealed_token is None:
+                self._patches.clear()
+                self._retained_bytes = 0
+                self._cancelled = True
+                return True
+            try:
+                cancelled = self._registry.cancel_tls_preparation(self._sealed_token)
+            except StateError:
+                self._patches.clear()
+                self._retained_bytes = 0
+                self._cancelled = True
+                raise
+            if cancelled:
+                self._patches.clear()
+                self._retained_bytes = 0
+                self._cancelled = True
+            return cancelled
 
 
 _SHARED_REGISTRY = CryptographicMaterialRegistry()
