@@ -39,7 +39,9 @@ from evidenceforge.generation.activity.http_content import (
     is_stable_resource_path,
     response_mime_types_for_status,
 )
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
@@ -124,6 +126,25 @@ class BrowserSessionActionBundle:
     executor: BrowserSessionExecutor
     rng: random.Random
     static_cache_seen: dict[tuple[str, str, str], int] | None = None
+    timing_runtime: TimingRuntime | None = None
+
+    @property
+    def resolved_timing_runtime(self) -> TimingRuntime | None:
+        """Return a real injected runtime without accepting mock-like adapters."""
+
+        if isinstance(self.timing_runtime, TimingRuntime):
+            return self.timing_runtime
+        candidate = getattr(self.executor, "timing_runtime", None)
+        return candidate if isinstance(candidate, TimingRuntime) else None
+
+    @property
+    def timing(self) -> BaselineTimingPlanner:
+        """Return the engine timing runtime or an isolated direct-call adapter."""
+
+        runtime = self.resolved_timing_runtime
+        if runtime is not None:
+            return BaselineTimingPlanner(runtime)
+        return BaselineTimingPlanner.compatibility(self.request.time)
 
     @property
     def anchor(self) -> ActionAnchor:
@@ -157,6 +178,8 @@ class BrowserSessionActionBundle:
                 require_browser_like_domain=request.require_browser_like_domain,
                 transfer_variant_key=request.transfer_variant_key,
                 request_time=request.time,
+                timing_runtime=self.resolved_timing_runtime,
+                timing_stable_id=request.stable_id,
             )
         visible_requests, page_load_count = self._visible_requests(session_requests)
         visible_requests = self._requests_before_deadline(visible_requests)
@@ -176,14 +199,14 @@ class BrowserSessionActionBundle:
         first_uid = ""
         request_count = 0
         for req_index, req in planned_requests:
-            group_key, trans_depth, first_in_group, emit_offset_ms = request_plan[req_index]
+            group_key, trans_depth, first_in_group, emit_offset_us = request_plan[req_index]
             group = request_groups[group_key]
             uid = self._emit_request(
                 req=req,
                 group=group,
                 trans_depth=trans_depth,
                 first_in_group=first_in_group,
-                emit_offset_ms=emit_offset_ms,
+                emit_offset_us=emit_offset_us,
             )
             if uid and not first_uid:
                 first_uid = uid
@@ -213,8 +236,8 @@ class BrowserSessionActionBundle:
         visible: list[browsing_session.BrowsingRequest] = []
         current_page_allowed = False
         for index, req in enumerate(requests):
-            _group_key, _trans_depth, _first_in_group, emit_offset_ms = request_plan[index]
-            req_ts = base_time + timedelta(milliseconds=emit_offset_ms)
+            _group_key, _trans_depth, _first_in_group, emit_offset_us = request_plan[index]
+            req_ts = base_time + timedelta(microseconds=emit_offset_us)
             if req_ts >= deadline:
                 if req.is_page_load:
                     current_page_allowed = False
@@ -241,6 +264,8 @@ class BrowserSessionActionBundle:
                 require_browser_like_domain=self.request.require_browser_like_domain,
                 transfer_variant_key=self.request.transfer_variant_key,
                 request_time=self.request.time,
+                timing_runtime=self.resolved_timing_runtime,
+                timing_stable_id=self.request.stable_id,
             )
 
         page_bounds = {
@@ -251,7 +276,7 @@ class BrowserSessionActionBundle:
         request_count = self.rng.randint(*page_bounds)
         route_weights = [float(getattr(route, "weight", 1.0)) for route in routes]
         requests: list[browsing_session.BrowsingRequest] = []
-        elapsed_ms = 0
+        elapsed_us = 0
         referrer = ""
         for index in range(request_count):
             route = self.rng.choices(routes, weights=route_weights, k=1)[0]
@@ -365,10 +390,25 @@ class BrowserSessionActionBundle:
                         client_family="generic",
                     )
                     response_body_len = response_multipart.body_len
-            elapsed_ms += self.rng.randint(250, 2400) if index else 0
+            if index:
+                elapsed_us += round(
+                    self.timing.right_skew_seconds(
+                        relationship_key="browser.route.request_gap",
+                        stable_id=self.request.stable_id,
+                        minimum=0.250,
+                        median=0.680,
+                        maximum=2.400,
+                        sigma=0.78,
+                        host=getattr(self.request.source_system, "hostname", ""),
+                        lifecycle_id=self.request.stable_id,
+                        ordinal=index,
+                    )
+                    * 1_000_000
+                )
             requests.append(
                 browsing_session.BrowsingRequest(
-                    time_offset_ms=elapsed_ms,
+                    time_offset_ms=elapsed_us // 1_000,
+                    time_offset_remainder_us=elapsed_us % 1_000,
                     hostname=self.request.hostname,
                     path=path,
                     method=method,
@@ -461,12 +501,12 @@ class BrowserSessionActionBundle:
         group: dict[str, int],
         trans_depth: int,
         first_in_group: bool,
-        emit_offset_ms: int,
+        emit_offset_us: int,
     ) -> str:
         """Emit one browser request as canonical connection/HTTP evidence."""
 
         request = self.request
-        req_ts = request.time + timedelta(milliseconds=emit_offset_ms)
+        req_ts = request.time + timedelta(microseconds=emit_offset_us)
         if request.set_current_time:
             self.executor.state_manager.set_current_time(req_ts)
 
@@ -474,7 +514,7 @@ class BrowserSessionActionBundle:
         conn_duration = self._connection_duration(
             group=group,
             first_in_group=first_in_group,
-            emit_offset_ms=emit_offset_ms,
+            emit_offset_us=emit_offset_us,
         )
         conn_orig_bytes = self._connection_orig_bytes(
             req=req,
@@ -557,14 +597,36 @@ class BrowserSessionActionBundle:
         *,
         group: dict[str, int],
         first_in_group: bool,
-        emit_offset_ms: int,
+        emit_offset_us: int,
     ) -> float:
         """Return a source-native duration for the parent TCP flow."""
 
+        host = getattr(self.request.source_system, "hostname", "")
+        stable_id = f"{self.request.stable_id}:{emit_offset_us}"
+
         if first_in_group:
-            remaining_ms = max(0, group["last_offset_ms"] - emit_offset_ms)
-            return (remaining_ms / 1000) + self.rng.uniform(1.25, 3.0)
-        return self.rng.uniform(self.request.secondary_duration_min, 2.0)
+            remaining_us = max(0, group["last_offset_us"] - emit_offset_us)
+            return (remaining_us / 1_000_000) + self.timing.right_skew_seconds(
+                relationship_key="browser.connection.primary_tail",
+                stable_id=stable_id,
+                minimum=1.250,
+                median=1.620,
+                maximum=3.000,
+                sigma=0.48,
+                host=host,
+                lifecycle_id=self.request.stable_id,
+            )
+        minimum = max(0.000001, self.request.secondary_duration_min)
+        return self.timing.right_skew_seconds(
+            relationship_key="browser.connection.secondary_duration",
+            stable_id=stable_id,
+            minimum=minimum,
+            median=min(2.0, max(minimum + 0.000001, minimum * 2.6)),
+            maximum=max(2.0, minimum + 0.000002),
+            sigma=0.72,
+            host=host,
+            lifecycle_id=self.request.stable_id,
+        )
 
     def _connection_orig_bytes(
         self,
@@ -696,24 +758,24 @@ def _plan_http_request_groups(
         group_key = active_group[hostname]
         depths[group_key] += 1
         trans_depth = depths[group_key]
-        emit_offset_ms = req.time_offset_ms
+        emit_offset_us = (req.time_offset_ms * 1_000) + req.time_offset_remainder_us
         if group_key in last_emit_offset:
-            emit_offset_ms = max(emit_offset_ms, last_emit_offset[group_key] + 600)
-        last_emit_offset[group_key] = emit_offset_ms
-        plan[index] = (group_key, trans_depth, trans_depth == 1, emit_offset_ms)
+            emit_offset_us = max(emit_offset_us, last_emit_offset[group_key] + 600_000)
+        last_emit_offset[group_key] = emit_offset_us
+        plan[index] = (group_key, trans_depth, trans_depth == 1, emit_offset_us)
 
         group = groups.setdefault(
             group_key,
             {
-                "first_offset_ms": emit_offset_ms,
-                "last_offset_ms": emit_offset_ms,
+                "first_offset_us": emit_offset_us,
+                "last_offset_us": emit_offset_us,
                 "request_body_len": 0,
                 "response_body_len": 0,
                 "request_count": 0,
             },
         )
-        group["first_offset_ms"] = min(group["first_offset_ms"], emit_offset_ms)
-        group["last_offset_ms"] = max(group["last_offset_ms"], emit_offset_ms)
+        group["first_offset_us"] = min(group["first_offset_us"], emit_offset_us)
+        group["last_offset_us"] = max(group["last_offset_us"], emit_offset_us)
         group["request_body_len"] += max(request_body_floor, req.request_body_len)
         group["response_body_len"] += req.response_body_len
         group["request_count"] += 1

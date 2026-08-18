@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from evidenceforge.events.contexts import HttpMultipartEntityContext
 from evidenceforge.generation.activity.http_content import (
@@ -35,6 +35,8 @@ from evidenceforge.generation.activity.site_maps import (
     get_site_map,
 )
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.utils.rng import _stable_seed
 
 
@@ -57,6 +59,7 @@ class BrowsingRequest:
     request_wire_filename: str = ""  # Filename exposed by request encoding, if any
     request_multipart: HttpMultipartEntityContext | None = None
     response_multipart: HttpMultipartEntityContext | None = None
+    time_offset_remainder_us: int = 0  # Sub-millisecond runtime timing texture
 
 
 _INTENSITY_PARAMS: dict[str, dict[str, tuple[int, int]]] = {
@@ -190,15 +193,20 @@ def _response_size_for_status_code(
     )
 
 
-def _sample_profile_timing_ms(
-    rng: random.Random,
+def _sample_profile_timing_us(
+    timing: BaselineTimingPlanner,
+    stable_id: str,
     key: str,
     *,
     default_min_ms: int,
     default_max_ms: int,
     default_class: str,
+    hostname: str,
+    ordinal: int,
+    sample_key: str,
 ) -> int:
-    """Sample a configured web-session timing window using the caller's RNG."""
+    """Sample one configured browser relationship through the timing runtime."""
+
     window = get_timing_window(
         key,
         default_min_ms=default_min_ms,
@@ -207,50 +215,91 @@ def _sample_profile_timing_ms(
         default_class=default_class,
     )
     if window.max_ms <= window.min_ms:
-        return window.min_ms
-    return rng.randint(window.min_ms, window.max_ms)
+        return window.min_ms * 1_000
+    minimum_seconds = window.min_ms / 1_000
+    maximum_seconds = window.max_ms / 1_000
+    seconds = timing.right_skew_seconds(
+        relationship_key=key,
+        stable_id=stable_id,
+        minimum=minimum_seconds,
+        median=minimum_seconds + ((maximum_seconds - minimum_seconds) * 0.31),
+        maximum=maximum_seconds,
+        sigma=0.67 if default_class == "burst_fanout" else 0.76,
+        host=hostname,
+        lifecycle_id=stable_id,
+        ordinal=ordinal,
+        sample_key=sample_key,
+    )
+    return round(seconds * 1_000_000)
 
 
-def _subresource_delay_ms(rng: random.Random, content_type: str) -> int:
+def _subresource_delay_us(
+    timing: BaselineTimingPlanner,
+    stable_id: str,
+    content_type: str,
+    *,
+    hostname: str,
+    ordinal: int,
+) -> int:
     """Return render-pipeline timing for a page subresource."""
     if content_type in ("text/css", "application/javascript"):
-        return _sample_profile_timing_ms(
-            rng,
+        return _sample_profile_timing_us(
+            timing,
+            stable_id,
             "web.asset_stylesheet_script_after_page",
             default_min_ms=50,
             default_max_ms=200,
             default_class="burst_fanout",
+            hostname=hostname,
+            ordinal=ordinal,
+            sample_key="stylesheet-script",
         )
     if content_type.startswith("font/"):
-        return _sample_profile_timing_ms(
-            rng,
+        return _sample_profile_timing_us(
+            timing,
+            stable_id,
             "web.asset_font_after_page",
             default_min_ms=300,
             default_max_ms=600,
             default_class="burst_fanout",
+            hostname=hostname,
+            ordinal=ordinal,
+            sample_key="font",
         )
     if content_type.startswith("image/"):
-        return _sample_profile_timing_ms(
-            rng,
+        return _sample_profile_timing_us(
+            timing,
+            stable_id,
             "web.asset_image_after_page",
             default_min_ms=200,
             default_max_ms=800,
             default_class="burst_fanout",
+            hostname=hostname,
+            ordinal=ordinal,
+            sample_key="image",
         )
     if content_type == "application/json":
-        return _sample_profile_timing_ms(
-            rng,
+        return _sample_profile_timing_us(
+            timing,
+            stable_id,
             "web.asset_api_after_page",
             default_min_ms=500,
             default_max_ms=2_000,
             default_class="burst_fanout",
+            hostname=hostname,
+            ordinal=ordinal,
+            sample_key="api",
         )
-    return _sample_profile_timing_ms(
-        rng,
+    return _sample_profile_timing_us(
+        timing,
+        stable_id,
         "web.asset_other_after_page",
         default_min_ms=100,
         default_max_ms=500,
         default_class="burst_fanout",
+        hostname=hostname,
+        ordinal=ordinal,
+        sample_key="other",
     )
 
 
@@ -319,6 +368,8 @@ def generate_browsing_session(
     require_browser_like_domain: bool = True,
     transfer_variant_key: str | None = None,
     request_time: datetime | None = None,
+    timing_runtime: TimingRuntime | None = None,
+    timing_stable_id: str = "",
 ) -> list[BrowsingRequest]:
     """Generate a complete browsing session as a list of HTTP requests.
 
@@ -341,6 +392,8 @@ def generate_browsing_session(
             content stable.
         request_time: Optional modeled session start time for time-relative API
             path templates.
+        timing_runtime: Optional engine-owned runtime for browser timing draws.
+        timing_stable_id: Stable semantic session identity for runtime timing.
 
     Returns:
         List of BrowsingRequest objects sorted by time_offset_ms.
@@ -351,6 +404,17 @@ def generate_browsing_session(
     ):
         return []
 
+    initial_state = rng.getstate()[1]
+    timing_scope = timing_stable_id or (
+        f"browser:{hostname}:{source_os}:{browsing_intensity}:{port}:"
+        f"{request_time.isoformat() if request_time is not None else ''}:"
+        f"{_stable_seed(':'.join(str(value) for value in initial_state[:8]))}"
+    )
+    timing = (
+        BaselineTimingPlanner(timing_runtime)
+        if timing_runtime is not None
+        else BaselineTimingPlanner.compatibility(request_time or datetime(1970, 1, 1, tzinfo=UTC))
+    )
     site_map = get_site_map(hostname, domain_tags, rng, request_time=request_time)
     params = _INTENSITY_PARAMS.get(browsing_intensity, _INTENSITY_PARAMS["normal"])
 
@@ -358,7 +422,7 @@ def generate_browsing_session(
         return []
 
     requests: list[BrowsingRequest] = []
-    current_ms = 0
+    current_us = 0
 
     landing_roll = rng.random()
     previous_page_url = ""  # Direct navigation / bookmark unless the landing page allows search.
@@ -401,12 +465,16 @@ def generate_browsing_session(
             next_idx = _pick_next_page(rng, site_map, current_page, visited_indices)
             current_page_idx = next_idx
 
-            current_ms += _sample_profile_timing_ms(
-                rng,
+            current_us += _sample_profile_timing_us(
+                timing,
+                timing_scope,
                 "web.session_navigation",
                 default_min_ms=3_000,
                 default_max_ms=30_000,
                 default_class="human_workflow",
+                hostname=hostname,
+                ordinal=page_num,
+                sample_key="navigation",
             )
 
         page = site_map.pages[current_page_idx]
@@ -428,7 +496,8 @@ def generate_browsing_session(
         # Emit the page load request
         requests.append(
             BrowsingRequest(
-                time_offset_ms=current_ms,
+                time_offset_ms=current_us // 1_000,
+                time_offset_remainder_us=current_us % 1_000,
                 hostname=hostname,
                 path=page.path,
                 method="GET",
@@ -469,11 +538,18 @@ def generate_browsing_session(
                 content_type=sub_content_type,
             )
 
-            delay = _subresource_delay_ms(rng, sub_content_type)
+            delay_us = _subresource_delay_us(
+                timing,
+                timing_scope,
+                sub_content_type,
+                hostname=sub_hostname,
+                ordinal=(page_num * 1_000) + sub_idx,
+            )
 
             requests.append(
                 BrowsingRequest(
-                    time_offset_ms=current_ms + delay,
+                    time_offset_ms=(current_us + delay_us) // 1_000,
+                    time_offset_remainder_us=(current_us + delay_us) % 1_000,
                     hostname=sub_hostname,
                     path=sub.path,
                     method=sub.method,
@@ -495,11 +571,25 @@ def generate_browsing_session(
             )
 
         # Advance time past subresource loading
-        current_ms += rng.randint(800, 2_000)
+        current_us += round(
+            timing.right_skew_seconds(
+                relationship_key="web.page.subresource_settle",
+                stable_id=timing_scope,
+                minimum=0.8,
+                median=1.12,
+                maximum=2.0,
+                sigma=0.58,
+                host=hostname,
+                lifecycle_id=timing_scope,
+                ordinal=page_num,
+                sample_key="page-settle",
+            )
+            * 1_000_000
+        )
         previous_page_url = page_url
 
     # Sort by time offset for chronological emission
-    requests.sort(key=lambda r: r.time_offset_ms)
+    requests.sort(key=lambda r: (r.time_offset_ms, r.time_offset_remainder_us))
     return requests
 
 
