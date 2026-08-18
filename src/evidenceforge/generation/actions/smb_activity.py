@@ -29,12 +29,15 @@ from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.network import NetworkTransactionPlan, NetworkTuple
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.activity.smb_profiles import load_smb_profiles
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.storage_world import (
     CompiledStorageFile,
     CompiledStorageShare,
     StorageWorldModel,
 )
+from evidenceforge.generation.timing import TimingRuntime
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import (
     SmbActivityEventSpec,
     SmbClientLocation,
@@ -112,6 +115,19 @@ class SmbActivityActionBundle:
             source=request.activity_source,
         )
         self.rng = random.Random(_stable_seed(f"smb-activity:{self.anchor.stable_id}"))
+
+    def _timing_planner(self) -> BaselineTimingPlanner:
+        """Return the shared engine timing planner for this SMB action."""
+
+        runtime = getattr(self.executor, "timing_runtime", None)
+        if not isinstance(runtime, TimingRuntime):
+            raise StateError("SMB activity requires the executor-owned TimingRuntime")
+        return BaselineTimingPlanner(runtime, source="smb")
+
+    def _timing_host(self) -> str:
+        """Return the semantic host when direct timing fixtures omit it."""
+
+        return str(getattr(getattr(self.request, "parent_system", None), "hostname", ""))
 
     def execute(self) -> SmbActivityResult:
         spec = self.request.spec
@@ -461,6 +477,7 @@ class SmbActivityActionBundle:
         if not isinstance(destination, SmbShareLocation) and spec.operation == "copy":
             return None
 
+        timing = self._timing_planner()
         selected = self._select(source)
         if not selected:
             raise ValueError(f"smb_activity selected no files on {source.share}")
@@ -539,15 +556,32 @@ class SmbActivityActionBundle:
             return self._combine_results(results)
         if spec.operation == "move":
             completed_at = max(result.completed_at for result in results)
-            delete_time = completed_at + sample_timing_delta(
+            destination_scope = getattr(destination, "share", "client")
+            delete_window = get_timing_window(
                 "smb.cross_server_delete_after_destination",
-                seed_parts=(
+                default_min_ms=250,
+                default_max_ms=1200,
+                default_position="after",
+            )
+            minimum_seconds = delete_window.min_ms / 1000
+            maximum_seconds = delete_window.max_ms / 1000
+            delete_gap_seconds = timing.triangular_seconds(
+                relationship_key="smb.cross_server_delete_after_destination",
+                stable_id=stable_uuid(
+                    "smb-cross-server-delete-gap",
                     self.anchor.stable_id,
                     source.share,
-                    getattr(destination, "share", "client"),
+                    destination_scope,
                     completed_at,
                 ),
+                minimum=minimum_seconds,
+                mode=minimum_seconds + ((maximum_seconds - minimum_seconds) * 0.5),
+                maximum=maximum_seconds,
+                host=self._timing_host(),
+                lifecycle_id=self.anchor.stable_id,
+                sample_key="cross_server_delete_gap",
             )
+            delete_time = completed_at + timedelta(seconds=delete_gap_seconds)
             delete_spec = SmbActivityEventSpec(
                 operation="delete",
                 purpose=spec.purpose,

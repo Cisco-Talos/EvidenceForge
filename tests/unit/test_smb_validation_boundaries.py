@@ -5,6 +5,7 @@
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
@@ -123,6 +124,21 @@ def test_authored_smb_duration_scales_operations_inside_transport_budget() -> No
 
     assert duration == pytest.approx(0.25)
     assert occupied < duration
+
+
+def test_non_composite_smb_preserves_direct_path_without_timing_runtime() -> None:
+    """Only composite transfer deletion requires the shared timing runtime."""
+
+    select = Mock()
+    bundle = object.__new__(SmbActivityActionBundle)
+    bundle.executor = SimpleNamespace(timing_runtime=None)
+    bundle.request = SimpleNamespace(
+        spec=SimpleNamespace(operation="read", source=None, destination=None)
+    )
+    bundle._select = select
+
+    assert bundle._execute_composite_transfer() is None
+    select.assert_not_called()
 
 
 @pytest.mark.parametrize(
