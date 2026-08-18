@@ -32,6 +32,7 @@ from .collection_deployment import (
 from .deployment_registry import (
     AssignmentCategoryIndexCensus,
     BinaryPathIndexCensus,
+    CompiledApplicationDescriptor,
     DeploymentCompilationCensus,
     DeploymentContentRegistry,
     DeploymentContentScaleCensus,
@@ -74,6 +75,7 @@ __all__ = [
     "AssignmentCategoryIndexCensus",
     "BinaryPathIndexCensus",
     "CollectionDeploymentCensus",
+    "CompiledApplicationDescriptor",
     "CompiledCollectionDeployment",
     "DeploymentCompilationCensus",
     "DeploymentContentRegistry",

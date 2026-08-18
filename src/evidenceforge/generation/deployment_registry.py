@@ -37,13 +37,16 @@ import json
 import math
 import ntpath
 import posixpath
+import random
+import re
 import secrets
 import sys
 import zlib
 from array import array
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
+from copy import copy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from itertools import islice
@@ -64,6 +67,7 @@ from evidenceforge.events.content_identity import (
     FileContentIdentity,
     FileVersionCanonicalKey,
     InstallationCanonicalKey,
+    InstallationScope,
     InstalledSoftwareReleaseCanonicalKey,
     InstalledSoftwareReleaseIdentity,
     LocalArtifactBinaryIdentity,
@@ -291,7 +295,159 @@ def _normalize_name(value: str, field_name: str, *, casefold: bool = False) -> s
 def _artifact_name(path: str, platform: Platform) -> str:
     if platform == "windows":
         return ntpath.basename(path.replace("/", "\\")).casefold()
-    return posixpath.basename(path.replace("\\", "/"))
+    return posixpath.basename(path)
+
+
+def _has_posix_path_backslash(path: str, platform: Platform) -> bool:
+    """Return whether POSIX would treat a retained backslash as literal path data."""
+
+    return platform != "windows" and "\\" in path
+
+
+def _canonical_software_installation(
+    source: object,
+) -> SoftwareInstallationIdentity:
+    """Return a detached exact installation and authenticate its derived ID."""
+
+    if type(source) is not SoftwareInstallationIdentity:
+        raise ValueError("installations must contain exact SoftwareInstallationIdentity values")
+    field_names = (
+        "hostname",
+        "application_id",
+        "release_id",
+        "platform",
+        "scope",
+        "principal",
+        "user_profile_id",
+        "installation_slot",
+        "install_root",
+    )
+    values = tuple(object.__getattribute__(source, name) for name in field_names)
+    image_paths = object.__getattribute__(source, "image_paths")
+    installation_id = object.__getattribute__(source, "installation_id")
+    if any(type(value) is not str for value in (*values, installation_id)):
+        raise ValueError("installation fields and installation_id must be exact str values")
+    if type(image_paths) is not tuple or any(type(path) is not str for path in image_paths):
+        raise ValueError("installation image_paths must be an exact tuple of exact str values")
+    canonical = SoftwareInstallationIdentity(
+        hostname=values[0],
+        application_id=values[1],
+        release_id=values[2],
+        platform=cast(Platform, values[3]),
+        scope=cast(InstallationScope, values[4]),
+        principal=values[5],
+        user_profile_id=values[6],
+        installation_slot=values[7],
+        install_root=values[8],
+        image_paths=image_paths,
+    )
+    canonical_values = tuple(object.__getattribute__(canonical, name) for name in field_names)
+    if values != canonical_values or installation_id != canonical.installation_id:
+        raise ValueError("installation fields must agree with its canonical derived identity")
+    return canonical
+
+
+def _canonical_local_artifact_identity(source: object) -> LocalArtifactIdentity:
+    """Return one detached exact artifact after authenticating both derived IDs."""
+
+    if type(source) is not LocalArtifactIdentity:
+        raise StateError("local artifact publication requires an exact identity value")
+    field_names = (
+        "hostname",
+        "principal",
+        "platform",
+        "user_profile_id",
+        "application_profile_id",
+        "application_id",
+        "family",
+        "source_object_id",
+        "native_path",
+        "content_id",
+        "slot",
+    )
+    values = tuple(object.__getattribute__(source, name) for name in field_names)
+    version = object.__getattribute__(source, "version")
+    artifact_id = object.__getattribute__(source, "artifact_id")
+    artifact_version_id = object.__getattribute__(source, "artifact_version_id")
+    if any(type(value) is not str for value in (*values, artifact_id, artifact_version_id)):
+        raise StateError("local artifact fields and derived IDs must be exact str values")
+    if type(version) is not int:
+        raise StateError("local artifact version must be an exact int")
+    canonical = LocalArtifactIdentity(
+        hostname=values[0],
+        principal=values[1],
+        platform=cast(Platform, values[2]),
+        user_profile_id=values[3],
+        application_profile_id=values[4],
+        application_id=values[5],
+        family=values[6],
+        source_object_id=values[7],
+        native_path=values[8],
+        content_id=values[9],
+        slot=values[10],
+        version=version,
+    )
+    canonical_values = tuple(object.__getattribute__(canonical, name) for name in field_names)
+    if (
+        values != canonical_values
+        or artifact_id != canonical.artifact_id
+        or artifact_version_id != canonical.artifact_version_id
+    ):
+        raise StateError("local artifact fields must agree with its canonical derived identity")
+    return canonical
+
+
+def _application_presentation_principal(
+    descriptor: CompiledApplicationDescriptor,
+    installation: SoftwareInstallationIdentity,
+    user_profile: UserProfileIdentity,
+) -> str:
+    """Derive exact rendered principal bytes from immutable deployment truth."""
+
+    image_template = descriptor.image_path
+    if "{username}" in image_template:
+        if descriptor.platform == "windows":
+            normalized_template = image_template.replace("/", "\\")
+            normalized_image = installation.image_paths[0].replace("/", "\\")
+            component_pattern = r"[^\\]+"
+            flags = re.IGNORECASE
+        else:
+            normalized_template = image_template
+            normalized_image = installation.image_paths[0]
+            component_pattern = r"[^/]+"
+            flags = 0
+        template_parts = normalized_template.split("{username}")
+        pattern = re.escape(template_parts[0]) + f"(?P<username>{component_pattern})"
+        for template_part in template_parts[1:-1]:
+            pattern += re.escape(template_part) + r"(?P=username)"
+        pattern += re.escape(template_parts[-1])
+        match = re.fullmatch(pattern, normalized_image, flags=flags)
+        if match is None:
+            raise ValueError(
+                "compiled application descriptor image must match the installation "
+                "primary executable"
+            )
+        presentation_principal = match.group("username")
+    elif descriptor.uses_username:
+        profile_root = user_profile.profile_root.rstrip(
+            "/\\" if descriptor.platform == "windows" else "/"
+        )
+        presentation_principal = (
+            ntpath.basename(profile_root.replace("/", "\\"))
+            if descriptor.platform == "windows"
+            else posixpath.basename(profile_root)
+        )
+        if not presentation_principal:
+            raise ValueError(
+                "compiled application command username requires an exact user profile root"
+            )
+    else:
+        presentation_principal = user_profile.principal
+    if _normalize_principal(presentation_principal, descriptor.platform) != user_profile.principal:
+        raise ValueError(
+            "compiled application presentation principal must match its user profile owner"
+        )
+    return presentation_principal
 
 
 def _stable_semantic_id(prefix: str, namespace: str, key: tuple[object, ...]) -> str:
@@ -342,6 +498,17 @@ _PACKED_INDEX_EMPTY_DIGEST = (1 << 64) - 1
 _PACKED_INDEX_EMPTY_HANDLE = (1 << 32) - 1
 _PACKED_INDEX_BUCKET_TAG = 1 << 31
 _PACKED_IDENTITY_COMPAT_LIMIT = 10_000
+_APPLICATION_COMMAND_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_MAX_COMPILED_COMMAND_EXECUTABLES = 1_024
+_MAX_APPLICATION_COMMAND_EXPANSIONS = 1_024
+_MAX_APPLICATION_COMMAND_LENGTH = 65_536
+_MAX_APPLICATION_COMMAND_PARAMETER_POOLS = 128
+_MAX_APPLICATION_COMMAND_PARAMETER_VALUES = 4_096
+_MAX_APPLICATION_COMMAND_TEMPLATES = 256
+_MAX_APPLICATION_DESCRIPTOR_CATEGORIES = 256
+_MAX_APPLICATION_DESCRIPTOR_TEXT_BYTES = 1_048_576
+_MAX_APPLICATION_DESCRIPTOR_REGISTRY_COUNT = 16_384
+_MAX_APPLICATION_DESCRIPTOR_REGISTRY_TEXT_BYTES = 16_777_216
 
 
 def _packed_index_key(value: Hashable) -> bytes:
@@ -638,6 +805,7 @@ class _PackedFrozenIndexedStore(Generic[K, V]):
         "_high_water_mark",
         "_indexers",
         "_indexes",
+        "_preserve_identity_limit",
         "_pack",
         "_primary",
         "_primary_key",
@@ -653,6 +821,7 @@ class _PackedFrozenIndexedStore(Generic[K, V]):
         unpack: Callable[[bytes], V],
         primary_key: Callable[[V], K],
         preserve_identity: bool = False,
+        preserve_identity_limit: int | None = _PACKED_IDENTITY_COMPAT_LIMIT,
         decoded_cache_capacity: int = 1_024,
         **indexers: Callable[[V], Hashable],
     ) -> None:
@@ -660,6 +829,11 @@ class _PackedFrozenIndexedStore(Generic[K, V]):
         self._unpack = unpack
         self._primary_key = primary_key
         self._preserve_identity = preserve_identity
+        if preserve_identity_limit is not None and (
+            type(preserve_identity_limit) is not int or preserve_identity_limit < 0
+        ):
+            raise ValueError("preserve_identity_limit must be a non-negative exact int or None")
+        self._preserve_identity_limit = preserve_identity_limit
         self._decoded_cache_capacity = decoded_cache_capacity
         self._decoded_cache: dict[int, V] = {}
         self._indexers = indexers
@@ -714,7 +888,9 @@ class _PackedFrozenIndexedStore(Generic[K, V]):
         self._rows.seal()
         self._decoded_cache.clear()
         self._decoded_cache_capacity = 0
-        if not self._preserve_identity or len(self) > _PACKED_IDENTITY_COMPAT_LIMIT:
+        if not self._preserve_identity or (
+            self._preserve_identity_limit is not None and len(self) > self._preserve_identity_limit
+        ):
             self._compat_values = None
 
     def get(self, key: K, default: V | None = None) -> V | None:
@@ -795,19 +971,20 @@ class _PackedFrozenIndexedStore(Generic[K, V]):
         )
 
     def metrics(self, *, estimate_bytes: bool = False) -> IndexMetrics:
+        retained_identity_entries = self.retained_identity_entries
         index_bytes = self._primary.estimated_bytes() + sum(
             index.estimated_bytes() for index in self._indexes.values()
         )
         return IndexMetrics(
             live_entries=len(self),
-            backing_entries=len(self),
-            allocated_slots=len(self),
+            backing_entries=len(self) + retained_identity_entries,
+            allocated_slots=len(self) + retained_identity_entries,
             secondary_buckets=sum(len(index) for index in self._indexes.values()),
             max_bucket_size=max(
                 (index.max_bucket_size for index in self._indexes.values()),
                 default=0,
             ),
-            high_water_mark=self._high_water_mark,
+            high_water_mark=self._high_water_mark + retained_identity_entries,
             estimated_bytes=(
                 sys.getsizeof(self)
                 + self._rows.estimated_bytes()
@@ -821,6 +998,12 @@ class _PackedFrozenIndexedStore(Generic[K, V]):
             primary_map_entries=len(self._primary),
             primary_map_backing_bytes=self._primary.estimated_bytes(),
         )
+
+    @property
+    def retained_identity_entries(self) -> int:
+        """Return owner snapshots retained in addition to canonical packed rows."""
+
+        return 0 if self._compat_values is None else len(self._compat_values)
 
     def estimated_bytes(self) -> int:
         return self.metrics(estimate_bytes=True).estimated_bytes
@@ -1324,8 +1507,8 @@ class UserApplicationAssignmentSpec:
         )
         if selection_weight <= 0:
             raise ValueError("selection_weight must be positive")
-        if self.selection_ordinal < 0:
-            raise ValueError("selection_ordinal must be non-negative")
+        if type(self.selection_ordinal) is not int or self.selection_ordinal < 0:
+            raise ValueError("selection_ordinal must be a non-negative exact int")
         object.__setattr__(self, "hostname", _normalize_hostname(self.hostname))
         object.__setattr__(self, "principal", _normalize_principal(self.principal, platform))
         if not self.principal:
@@ -1373,6 +1556,7 @@ class UserApplicationAssignment:
     assignment_id: str
     hostname: str
     principal: str
+    materialization_principal: str
     platform: Platform
     user_profile_id: str
     application_profile_id: str
@@ -1397,7 +1581,17 @@ class UserApplicationAssignment:
             self, "assignment_id", _normalize_name(self.assignment_id, "assignment_id")
         )
         object.__setattr__(self, "hostname", _normalize_hostname(self.hostname))
-        object.__setattr__(self, "principal", _normalize_principal(self.principal, platform))
+        principal = _normalize_principal(self.principal, platform)
+        materialization_principal = _normalize_name(
+            self.materialization_principal,
+            "materialization_principal",
+        )
+        if _normalize_principal(materialization_principal, platform) != principal:
+            raise ValueError(
+                "materialization_principal must identify the canonical assignment principal"
+            )
+        object.__setattr__(self, "principal", principal)
+        object.__setattr__(self, "materialization_principal", materialization_principal)
         object.__setattr__(self, "platform", platform)
         for field_name in (
             "user_profile_id",
@@ -1424,8 +1618,8 @@ class UserApplicationAssignment:
             raise ValueError("intensity must be a finite positive multiplier")
         if self.selection_weight <= 0:
             raise ValueError("selection_weight must be positive")
-        if self.selection_ordinal < 0:
-            raise ValueError("selection_ordinal must be non-negative")
+        if type(self.selection_ordinal) is not int or self.selection_ordinal < 0:
+            raise ValueError("selection_ordinal must be a non-negative exact int")
         for field_name in (
             "host_deployment_handle",
             "user_profile_handle",
@@ -1434,6 +1628,560 @@ class UserApplicationAssignment:
         ):
             if getattr(self, field_name) < 0:
                 raise ValueError(f"{field_name} cannot be negative")
+
+
+def _split_compiled_command_executable(
+    command_line: str,
+    platform: Platform,
+) -> tuple[str, str]:
+    """Parse the actual first executable token without an image fallback."""
+
+    stripped = command_line.strip()
+    if not stripped:
+        raise ValueError("compiled application command template must not be empty")
+    if platform == "windows" and stripped[0] == '"':
+        closing_quote = stripped.find('"', 1)
+        if closing_quote < 1:
+            raise ValueError("compiled application command template has an unclosed quote")
+        executable = stripped[1:closing_quote]
+        tail = stripped[closing_quote + 1 :]
+        if tail and not tail[0].isspace():
+            raise ValueError("compiled application command executable quote must end its token")
+        return executable, tail.lstrip()
+    if platform == "windows":
+        absolute = re.match(
+            r"^([A-Za-z]:[\\/].*?\.(?:exe|cmd|bat|com))(?=\s|$)",
+            stripped,
+            flags=re.IGNORECASE,
+        )
+        if absolute is not None:
+            return absolute.group(1), stripped[absolute.end() :].lstrip()
+        parts = stripped.split(maxsplit=1)
+        return parts[0], parts[1] if len(parts) == 2 else ""
+    return _split_posix_command_executable(stripped)
+
+
+def _split_posix_command_executable(command_line: str) -> tuple[str, str]:
+    """Return the first POSIX shell word and its exact unconsumed remainder."""
+
+    executable: list[str] = []
+    quote = ""
+    position = 0
+    while position < len(command_line):
+        character = command_line[position]
+        if not quote:
+            if character.isspace():
+                break
+            if character in {'"', "'"}:
+                quote = character
+            elif character == "\\":
+                position += 1
+                if position >= len(command_line):
+                    raise ValueError("compiled application command template has invalid quoting")
+                executable.append(command_line[position])
+            else:
+                executable.append(character)
+        elif character == quote:
+            quote = ""
+        elif quote == '"' and character == "\\":
+            position += 1
+            if position >= len(command_line):
+                raise ValueError("compiled application command template has invalid quoting")
+            escaped = command_line[position]
+            if escaped not in {"$", "`", '"', "\\", "\n"}:
+                executable.append("\\")
+            executable.append(escaped)
+        else:
+            executable.append(character)
+        position += 1
+    if quote:
+        raise ValueError("compiled application command template has invalid quoting")
+    if not executable:
+        raise ValueError("compiled application command template must name an executable")
+    return "".join(executable), command_line[position:].lstrip()
+
+
+def _compiled_command_executables(
+    command_line: str,
+    platform: Platform,
+    parameter_pools: dict[str, tuple[str, ...]],
+    *,
+    resolving: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Resolve every scoped first-token alternative for binary-parity validation."""
+
+    candidates: list[str] = []
+    for candidate in _iter_compiled_command_executables(
+        command_line,
+        platform,
+        parameter_pools,
+        resolving=resolving,
+    ):
+        if len(candidates) >= _MAX_COMPILED_COMMAND_EXECUTABLES:
+            raise ValueError(
+                "compiled application command executable alternatives exceed the bounded limit"
+            )
+        candidates.append(candidate)
+    return tuple(candidates)
+
+
+def _iter_compiled_command_executables(
+    command_line: str,
+    platform: Platform,
+    parameter_pools: dict[str, tuple[str, ...]],
+    *,
+    resolving: tuple[str, ...],
+) -> Iterator[str]:
+    """Yield actual executable alternatives while the public helper enforces its bound."""
+
+    executable, remainder = _split_compiled_command_executable(command_line, platform)
+    placeholder = _APPLICATION_COMMAND_PLACEHOLDER.fullmatch(executable)
+    if placeholder is not None:
+        name = placeholder.group(1)
+        values = parameter_pools.get(name)
+        if not values:
+            raise ValueError(
+                "compiled application command executable placeholder "
+                f"{executable!r} has no scoped parameter pool"
+            )
+        if name in resolving:  # pragma: no cover - descriptor cycle validation owns this
+            raise ValueError("compiled application command executable placeholder is cyclic")
+        for value in values:
+            yield from _iter_compiled_command_executables(
+                value,
+                platform,
+                parameter_pools,
+                resolving=(*resolving, name),
+            )
+        return
+    embedded_placeholders = {
+        match.group(1) for match in _APPLICATION_COMMAND_PLACEHOLDER.finditer(executable)
+    }
+    if embedded_placeholders - {"username"}:
+        raise ValueError(
+            "compiled application command executable contains an unsupported embedded placeholder"
+        )
+    if platform == "windows" and _artifact_name(executable, platform) in {
+        "cmd",
+        "cmd.exe",
+    }:
+        wrapper = re.match(r"^/(?:c|k)(?:\s+|$)(.*)$", remainder, flags=re.IGNORECASE)
+        if wrapper is None or not wrapper.group(1).strip():
+            raise ValueError("compiled cmd.exe command template must name its wrapped executable")
+        yield from _iter_compiled_command_executables(
+            wrapper.group(1),
+            platform,
+            parameter_pools,
+            resolving=resolving,
+        )
+        return
+    yield executable
+
+
+def _command_executable_matches(
+    command_executable: str,
+    declared_image: str,
+    platform: Platform,
+) -> bool:
+    """Return whether an actual command executable denotes the declared image."""
+
+    if platform != "windows" and "\\" in command_executable:
+        return False
+    command_drive, _command_tail = (
+        ntpath.splitdrive(command_executable) if platform == "windows" else ("", "")
+    )
+    has_path = bool(command_drive) or any(
+        separator in command_executable
+        for separator in (("/", "\\") if platform == "windows" else ("/",))
+    )
+    if has_path:
+        if platform == "windows":
+            return canonical_native_path(command_executable, platform) == canonical_native_path(
+                declared_image,
+                platform,
+            )
+        return posixpath.normpath(command_executable) == posixpath.normpath(declared_image)
+    command_name = _artifact_name(command_executable, platform)
+    declared_name = _artifact_name(declared_image, platform)
+    if command_name == declared_name:
+        return True
+    if platform != "windows":
+        return False
+    extensions = frozenset({".exe", ".cmd", ".bat", ".com"})
+    _command_stem, command_extension = ntpath.splitext(command_name)
+    declared_stem, declared_extension = ntpath.splitext(declared_name)
+    if command_extension and command_extension not in extensions:
+        return False
+    if declared_extension and declared_extension not in extensions:
+        return False
+    if command_extension:
+        return False
+    return bool(declared_extension) and command_name == declared_stem
+
+
+def _validate_application_command_expansion_bounds(
+    command_templates: tuple[str, ...],
+    parameter_pools: tuple[tuple[str, tuple[str, ...]], ...],
+    *,
+    literal_replacements: tuple[tuple[str, str], ...] = (),
+) -> None:
+    """Reject cyclic or explosively expanding scoped command parameters."""
+
+    pools = dict(parameter_pools)
+    pool_names = frozenset(pools)
+    replacements = dict(literal_replacements)
+    placeholder_count_cache: dict[str, tuple[tuple[str, int], ...]] = {}
+
+    def placeholder_counts(value: str) -> tuple[tuple[str, int], ...]:
+        cached = placeholder_count_cache.get(value)
+        if cached is not None:
+            return cached
+        counts: dict[str, int] = {}
+        for match in _APPLICATION_COMMAND_PLACEHOLDER.finditer(value):
+            name = match.group(1)
+            counts[name] = counts.get(name, 0) + 1
+        result = tuple(sorted(counts.items()))
+        placeholder_count_cache[value] = result
+        return result
+
+    dependencies = {
+        name: {
+            dependency
+            for value in values
+            for dependency, _count in placeholder_counts(value)
+            if dependency in pool_names
+        }
+        for name, values in pools.items()
+    }
+    states: dict[str, int] = {}
+
+    def visit(name: str, trail: tuple[str, ...]) -> None:
+        state = states.get(name, 0)
+        if state == 1:
+            cycle_start = trail.index(name)
+            cycle = (*trail[cycle_start:], name)
+            raise ValueError("command_parameter_pools contains a cycle: " + " -> ".join(cycle))
+        if state == 2:
+            return
+        states[name] = 1
+        for dependency in sorted(dependencies[name]):
+            visit(dependency, (*trail, name))
+        states[name] = 2
+
+    for name in sorted(pool_names):
+        visit(name, ())
+
+    expansion_costs: dict[str, int] = {}
+    expanded_lengths: dict[str, int] = {}
+
+    def text_expansion_cost(value: str) -> int:
+        cost = 0
+        for name, count in placeholder_counts(value):
+            if name in replacements:
+                cost += count
+            elif name in pool_names:
+                cost += count * pool_expansion_cost(name)
+        return cost
+
+    def pool_expansion_cost(name: str) -> int:
+        cached = expansion_costs.get(name)
+        if cached is not None:
+            return cached
+        cost = 1 + max((text_expansion_cost(value) for value in pools[name]), default=0)
+        expansion_costs[name] = cost
+        return cost
+
+    def text_expanded_length(value: str) -> int:
+        length = len(value)
+        for name, count in placeholder_counts(value):
+            placeholder = "{" + name + "}"
+            replacement = replacements.get(name)
+            if replacement is not None:
+                length += count * (len(replacement) - len(placeholder))
+            elif name in pool_names:
+                length += count * (pool_expanded_length(name) - len(placeholder))
+        return length
+
+    def pool_expanded_length(name: str) -> int:
+        cached = expanded_lengths.get(name)
+        if cached is not None:
+            return cached
+        length = max((text_expanded_length(value) for value in pools[name]), default=0)
+        expanded_lengths[name] = length
+        return length
+
+    for command_template in command_templates:
+        expansions = text_expansion_cost(command_template)
+        if expansions > _MAX_APPLICATION_COMMAND_EXPANSIONS:
+            raise ValueError(
+                "compiled application command expansion exceeds the bounded replacement limit"
+            )
+        if text_expanded_length(command_template) > _MAX_APPLICATION_COMMAND_LENGTH:
+            raise ValueError(
+                "compiled application command expansion exceeds the bounded output length"
+            )
+
+
+def _require_exact_application_descriptor_graph(
+    *,
+    application_id: object,
+    platform: object,
+    image_path: object,
+    command_templates: object,
+    categories: object,
+    command_parameter_pools: object,
+    singleton_per_session: object,
+    selection_ordinal: object,
+) -> None:
+    """Reject callback-capable descriptor values before any virtual operation."""
+
+    for field_name, value in (
+        ("application_id", application_id),
+        ("platform", platform),
+        ("image_path", image_path),
+    ):
+        if type(value) is not str:
+            raise ValueError(f"{field_name} must be an exact str")
+    if type(command_templates) is not tuple:
+        raise ValueError("command_templates must be an exact tuple")
+    if len(command_templates) > _MAX_APPLICATION_COMMAND_TEMPLATES:
+        raise ValueError("compiled application command_templates exceeds the bounded limit")
+    if any(type(value) is not str for value in command_templates):
+        raise ValueError("command_templates must contain exact str values")
+    if type(categories) is not tuple:
+        raise ValueError("categories must be an exact tuple")
+    if len(categories) > _MAX_APPLICATION_DESCRIPTOR_CATEGORIES:
+        raise ValueError("compiled application categories exceeds the bounded limit")
+    if any(type(value) is not str for value in categories):
+        raise ValueError("categories must contain exact str values")
+    if type(command_parameter_pools) is not tuple:
+        raise ValueError("command_parameter_pools must be an exact tuple")
+    if len(command_parameter_pools) > _MAX_APPLICATION_COMMAND_PARAMETER_POOLS:
+        raise ValueError("command_parameter_pools exceeds the bounded pool limit")
+    parameter_value_count = 0
+    for pool in command_parameter_pools:
+        if type(pool) is not tuple or len(pool) != 2:
+            raise ValueError("command_parameter_pools entries must be exact name/value tuples")
+        name = pool[0]
+        values = pool[1]
+        if type(name) is not str:
+            raise ValueError("command_parameter_pool names must be exact str values")
+        if type(values) is not tuple:
+            raise ValueError("command_parameter_pool values must be exact tuples")
+        parameter_value_count += len(values)
+        if parameter_value_count > _MAX_APPLICATION_COMMAND_PARAMETER_VALUES:
+            raise ValueError("command_parameter_pools exceeds the bounded value limit")
+        if any(type(value) is not str for value in values):
+            raise ValueError("command_parameter_pool values must contain exact str values")
+    if type(singleton_per_session) is not bool:
+        raise ValueError("singleton_per_session must be an exact bool")
+    if type(selection_ordinal) is not int or selection_ordinal < 0:
+        raise ValueError("selection_ordinal must be a non-negative exact int")
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledApplicationDescriptor:
+    """Immutable runtime descriptor for one compiled application platform."""
+
+    application_id: str
+    platform: Platform
+    image_path: str
+    command_templates: tuple[str, ...]
+    categories: tuple[str, ...]
+    command_parameter_pools: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    singleton_per_session: bool = False
+    selection_ordinal: int = 0
+    executable: str = field(init=False)
+    command_parameter_pool_names: tuple[str, ...] = field(init=False, repr=False)
+    uses_username: bool = field(init=False, repr=False)
+    retained_text_bytes: int = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Normalize immutable command truth and reject incomplete descriptors."""
+
+        _require_exact_application_descriptor_graph(
+            application_id=self.application_id,
+            platform=self.platform,
+            image_path=self.image_path,
+            command_templates=self.command_templates,
+            categories=self.categories,
+            command_parameter_pools=self.command_parameter_pools,
+            singleton_per_session=self.singleton_per_session,
+            selection_ordinal=self.selection_ordinal,
+        )
+        platform = _normalize_platform(self.platform)
+        application_id = _normalize_name(
+            self.application_id,
+            "application_id",
+            casefold=True,
+        )
+        image_path = _normalize_name(self.image_path, "image_path")
+        if platform != "windows" and "\\" in image_path:
+            raise ValueError("compiled POSIX application image_path cannot contain backslashes")
+        image_placeholders = {
+            match.group(1) for match in _APPLICATION_COMMAND_PLACEHOLDER.finditer(image_path)
+        }
+        if image_placeholders - {"username"}:
+            raise ValueError("compiled application image_path may contain only {username}")
+        image_basename = (
+            ntpath.basename(image_path.replace("/", "\\"))
+            if platform == "windows"
+            else posixpath.basename(image_path)
+        )
+        if _APPLICATION_COMMAND_PLACEHOLDER.search(image_basename) is not None:
+            raise ValueError(
+                "compiled application image_path executable basename cannot contain {username}"
+            )
+        retained_text_bytes = len(application_id.encode("utf-8")) + len(image_path.encode("utf-8"))
+        if retained_text_bytes > _MAX_APPLICATION_DESCRIPTOR_TEXT_BYTES:
+            raise ValueError("compiled application descriptor exceeds its bounded text budget")
+
+        def charge_text(value: str) -> None:
+            nonlocal retained_text_bytes
+            retained_text_bytes += len(value.encode("utf-8"))
+            if retained_text_bytes > _MAX_APPLICATION_DESCRIPTOR_TEXT_BYTES:
+                raise ValueError("compiled application descriptor exceeds its bounded text budget")
+
+        normalized_templates: list[str] = []
+        for raw_template in self.command_templates:
+            if len(normalized_templates) >= _MAX_APPLICATION_COMMAND_TEMPLATES:
+                raise ValueError("compiled application command_templates exceeds the bounded limit")
+            template = _normalize_name(raw_template, "command_template")
+            if len(template) > _MAX_APPLICATION_COMMAND_LENGTH:
+                raise ValueError("compiled application command template exceeds the bounded length")
+            charge_text(template)
+            normalized_templates.append(template)
+        command_templates = tuple(normalized_templates)
+        if not command_templates:
+            raise ValueError("compiled application command_templates must not be empty")
+        normalized_categories: list[str] = []
+        seen_categories: set[str] = set()
+        for raw_category in self.categories:
+            if len(normalized_categories) >= _MAX_APPLICATION_DESCRIPTOR_CATEGORIES:
+                raise ValueError("compiled application categories exceeds the bounded limit")
+            category = _normalize_name(raw_category, "categories", casefold=True)
+            if category in seen_categories:
+                raise ValueError("categories contains duplicate names")
+            charge_text(category)
+            normalized_categories.append(category)
+            seen_categories.add(category)
+        categories = tuple(sorted(normalized_categories))
+        if not categories:
+            raise ValueError("compiled application categories must not be empty")
+        parameter_pools: list[tuple[str, tuple[str, ...]]] = []
+        seen_pool_names: set[str] = set()
+        parameter_value_count = 0
+        for raw_name, raw_values in self.command_parameter_pools:
+            if len(parameter_pools) >= _MAX_APPLICATION_COMMAND_PARAMETER_POOLS:
+                raise ValueError("command_parameter_pools exceeds the bounded pool limit")
+            name = _normalize_name(raw_name, "command_parameter_pool name")
+            if _APPLICATION_COMMAND_PLACEHOLDER.fullmatch("{" + name + "}") is None:
+                raise ValueError("command_parameter_pool names must match [A-Za-z_][A-Za-z0-9_]*")
+            charge_text(name)
+            if name == "username":
+                raise ValueError("command_parameter_pools cannot redefine reserved name 'username'")
+            if name in seen_pool_names:
+                raise ValueError(f"command_parameter_pools contains duplicate name {name!r}")
+            normalized_values: list[str] = []
+            for raw_value in raw_values:
+                parameter_value_count += 1
+                if parameter_value_count > _MAX_APPLICATION_COMMAND_PARAMETER_VALUES:
+                    raise ValueError("command_parameter_pools exceeds the bounded value limit")
+                value = _normalize_name(raw_value, f"command_parameter_pools[{name!r}]")
+                if len(value) > _MAX_APPLICATION_COMMAND_LENGTH:
+                    raise ValueError(
+                        "compiled application command expansion exceeds the bounded output length"
+                    )
+                charge_text(value)
+                normalized_values.append(value)
+            values = tuple(normalized_values)
+            if not values:
+                raise ValueError(f"command_parameter_pools[{name!r}] must not be empty")
+            seen_pool_names.add(name)
+            parameter_pools.append((name, values))
+        if type(self.singleton_per_session) is not bool:
+            raise ValueError("singleton_per_session must be an exact bool")
+        if type(self.selection_ordinal) is not int or self.selection_ordinal < 0:
+            raise ValueError("selection_ordinal must be a non-negative exact int")
+        command_parameter_pools = tuple(sorted(parameter_pools, key=lambda item: item[0]))
+        _validate_application_command_expansion_bounds(
+            command_templates,
+            command_parameter_pools,
+        )
+        parameter_pool_values = dict(command_parameter_pools)
+        for command_template in command_templates:
+            mismatched = next(
+                (
+                    executable
+                    for executable in _compiled_command_executables(
+                        command_template,
+                        platform,
+                        parameter_pool_values,
+                    )
+                    if not _command_executable_matches(
+                        executable,
+                        image_path,
+                        platform,
+                    )
+                ),
+                None,
+            )
+            if mismatched is not None:
+                raise ValueError(
+                    f"application {application_id!r} command template launches "
+                    f"{mismatched!r}, not its declared image {image_path!r}"
+                )
+        object.__setattr__(self, "application_id", application_id)
+        object.__setattr__(self, "platform", platform)
+        object.__setattr__(self, "image_path", image_path)
+        object.__setattr__(self, "command_templates", command_templates)
+        object.__setattr__(self, "categories", categories)
+        object.__setattr__(
+            self,
+            "command_parameter_pools",
+            command_parameter_pools,
+        )
+        object.__setattr__(
+            self,
+            "command_parameter_pool_names",
+            tuple(name for name, _values in command_parameter_pools),
+        )
+        object.__setattr__(
+            self,
+            "uses_username",
+            "username" in image_placeholders
+            or any(
+                match.group(1) == "username"
+                for value in (
+                    *command_templates,
+                    *(
+                        pool_value
+                        for _pool_name, pool_values in command_parameter_pools
+                        for pool_value in pool_values
+                    ),
+                )
+                for match in _APPLICATION_COMMAND_PLACEHOLDER.finditer(value)
+            ),
+        )
+        object.__setattr__(self, "executable", _artifact_name(image_path, platform))
+        object.__setattr__(self, "retained_text_bytes", retained_text_bytes)
+
+    @property
+    def canonical_key(self) -> tuple[str, Platform]:
+        """Return the exact application/platform descriptor lookup key."""
+
+        return self.application_id, self.platform
+
+    def _command_parameter_values(self, name: str) -> tuple[str, ...] | None:
+        """Return one exact scoped pool without copying or scanning pool values."""
+
+        position = bisect_left(self.command_parameter_pool_names, name)
+        if (
+            position >= len(self.command_parameter_pool_names)
+            or self.command_parameter_pool_names[position] != name
+        ):
+            return None
+        return self.command_parameter_pools[position][1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1445,6 +2193,8 @@ class DeploymentRegistryCensus:
     installations: int
     user_profiles: int
     application_profiles: int
+    application_descriptors: int
+    application_executable_bindings: int
     file_versions: int
     local_artifact_versions: int
     binary_path_bindings: int
@@ -1495,10 +2245,11 @@ class DeploymentContentScaleCensus:
     """Public immutable deployment/content contribution to mixed scale gates.
 
     ``physical_records`` is the exact canonical-row denominator. It counts one
-    retained row for every release, installation, profile, file version, local
-    artifact descriptor, host deployment, user assignment, service identity,
-    and task identity. Relationship/index bindings are reported separately and
-    are never added to that denominator.
+    retained row for every release, installation, profile, compiled application
+    descriptor, file version, local artifact descriptor, host deployment, user
+    assignment, service identity, and task identity. Owner-private application
+    descriptor/assignment snapshots and relationship/index bindings are reported
+    as backing separately and are never added to that denominator.
     """
 
     logical_records: int
@@ -1514,14 +2265,18 @@ class DeploymentContentScaleCensus:
     installations: int
     user_profiles: int
     application_profiles: int
+    application_descriptors: int
+    application_descriptor_owner_snapshots: int
     file_versions: int
     local_artifact_versions: int
     host_deployments: int
     user_application_assignments: int
+    user_application_assignment_owner_snapshots: int
     service_identities: int
     task_identities: int
     binary_path_bindings: int
     local_artifact_path_bindings: int
+    application_executable_bindings: int
     assignment_category_bindings: int
     host_installation_bindings: int
     host_service_bindings: int
@@ -2143,6 +2898,8 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
     )
     if any(type(value) is not str for value in (*artifact_text, *content_text)):
         raise StateError("local artifact publication record contains malformed text")
+    if _has_posix_path_backslash(artifact.native_path, artifact.platform):
+        raise StateError("POSIX local artifact native_path cannot contain backslashes")
     if (
         type(artifact.version) is not int
         or artifact.version < 1
@@ -2217,7 +2974,7 @@ def _canonical_local_artifact_record(record: object) -> LocalArtifactVersionReco
 
     primitive = _local_artifact_record_primitive(record)
     assert type(record) is LocalArtifactVersionRecord
-    canonical_artifact = replace(record.artifact)
+    canonical_artifact = _canonical_local_artifact_identity(record.artifact)
     canonical_content = replace(record.content)
     canonical_binary: LocalArtifactBinaryIdentity | None = None
     if record.binary is not None:
@@ -2975,15 +3732,15 @@ class _PackedArtifactStore:
 
     def _execution_path_key(self, handle: int) -> str:
         platform = _ARTIFACT_PLATFORMS[self._platforms[handle]]
+        native_path = self._field(handle, self._FIELD_NATIVE_PATH)
+        if _has_posix_path_backslash(native_path, platform):  # pragma: no cover - admission guard
+            raise StateError("POSIX local artifact native_path cannot contain backslashes")
         return "\0".join(
             (
                 self._field(handle, self._FIELD_HOSTNAME),
                 self._field(handle, self._FIELD_PRINCIPAL),
                 platform,
-                canonical_native_path(
-                    self._field(handle, self._FIELD_NATIVE_PATH),
-                    platform,
-                ),
+                canonical_native_path(native_path, platform),
             )
         )
 
@@ -3153,6 +3910,8 @@ class _PackedArtifactStore:
     ) -> None:
         """Publish one reserved handle with rollback-safe index installation."""
 
+        if _has_posix_path_backslash(artifact.native_path, artifact.platform):
+            raise StateError("POSIX local artifact native_path cannot contain backslashes")
         artifact_digest = _semantic_artifact_digest(artifact.artifact_id, "artifact-")
         version_digest = _semantic_artifact_digest(
             artifact.artifact_version_id,
@@ -4129,6 +4888,38 @@ def _unpack_application_profile(row: bytes) -> ApplicationProfileIdentity:
     )
 
 
+def _pack_application_descriptor(value: CompiledApplicationDescriptor) -> bytes:
+    return _json_row(
+        (
+            value.application_id,
+            value.platform,
+            value.image_path,
+            value.command_templates,
+            value.categories,
+            value.command_parameter_pools,
+            value.singleton_per_session,
+            value.selection_ordinal,
+        )
+    )
+
+
+def _unpack_application_descriptor(row: bytes) -> CompiledApplicationDescriptor:
+    values = cast(list[object], json.loads(row))
+    return CompiledApplicationDescriptor(
+        application_id=cast(str, values[0]),
+        platform=cast(Platform, values[1]),
+        image_path=cast(str, values[2]),
+        command_templates=tuple(cast(list[str], values[3])),
+        categories=tuple(cast(list[str], values[4])),
+        command_parameter_pools=tuple(
+            (cast(str, pool[0]), tuple(cast(list[str], pool[1])))
+            for pool in cast(list[list[object]], values[5])
+        ),
+        singleton_per_session=cast(bool, values[6]),
+        selection_ordinal=cast(int, values[7]),
+    )
+
+
 def _pack_file_content(value: FileContentIdentity) -> bytes:
     return _json_row(
         (
@@ -4228,6 +5019,7 @@ def _pack_user_assignment(value: UserApplicationAssignment) -> bytes:
             value.assignment_id,
             value.hostname,
             value.principal,
+            value.materialization_principal,
             value.platform,
             value.user_profile_id,
             value.application_profile_id,
@@ -4248,33 +5040,59 @@ def _pack_user_assignment(value: UserApplicationAssignment) -> bytes:
 
 
 def _unpack_user_assignment(row: bytes) -> UserApplicationAssignment:
+    """Reconstruct a canonical assignment from a registry-owned trusted row.
+
+    Rows enter this store only after ``UserApplicationAssignment`` validation and
+    are immutable after sealing.  Runtime owner lookups therefore must not rerun
+    normalization or validation for every generated event.
+    """
+
     values = cast(list[object], json.loads(row))
-    return UserApplicationAssignment(
-        assignment_id=cast(str, values[0]),
-        hostname=cast(str, values[1]),
-        principal=cast(str, values[2]),
-        platform=cast(Platform, values[3]),
-        user_profile_id=cast(str, values[4]),
-        application_profile_id=cast(str, values[5]),
-        application_id=cast(str, values[6]),
-        product_id=cast(str, values[7]),
-        release_id=cast(str, values[8]),
-        persona=cast(str, values[9]),
-        eligible_categories=tuple(cast(list[str], values[10])),
-        intensity=cast(float, values[11]),
-        host_deployment_handle=cast(int, values[12]),
-        user_profile_handle=cast(int, values[13]),
-        installation_handle=cast(int, values[14]),
-        application_profile_handle=cast(int, values[15]),
-        selection_weight=cast(int, values[16]),
-        selection_ordinal=cast(int, values[17]),
-    )
+    assignment = object.__new__(UserApplicationAssignment)
+    for field_name, value in zip(
+        (
+            "assignment_id",
+            "hostname",
+            "principal",
+            "materialization_principal",
+            "platform",
+            "user_profile_id",
+            "application_profile_id",
+            "application_id",
+            "product_id",
+            "release_id",
+            "persona",
+        ),
+        values[:11],
+        strict=True,
+    ):
+        object.__setattr__(assignment, field_name, value)
+    object.__setattr__(assignment, "eligible_categories", tuple(cast(list[str], values[11])))
+    for field_name, value in zip(
+        (
+            "intensity",
+            "host_deployment_handle",
+            "user_profile_handle",
+            "installation_handle",
+            "application_profile_handle",
+            "selection_weight",
+            "selection_ordinal",
+        ),
+        values[12:],
+        strict=True,
+    ):
+        object.__setattr__(assignment, field_name, value)
+    return assignment
 
 
 class DeploymentContentRegistry:
     """Scenario-scoped immutable deployment and content identity registry."""
 
     __slots__ = (
+        "_application_descriptor_ids_by_executable",
+        "_application_descriptors",
+        "_application_executable_links",
+        "_application_executable_max_bucket",
         "_application_profiles",
         "_assignment_category_cumulative_weights",
         "_assignment_category_handles",
@@ -4313,6 +5131,7 @@ class DeploymentContentRegistry:
         user_profiles: Iterable[UserProfileIdentity] = (),
         installations: Iterable[SoftwareInstallationIdentity] = (),
         application_profiles: Iterable[ApplicationProfileIdentity] = (),
+        application_descriptors: Iterable[CompiledApplicationDescriptor] = (),
         host_deployments: Iterable[HostDeploymentSpec] = (),
         user_application_assignments: Iterable[UserApplicationAssignmentSpec] = (),
         file_contents: Iterable[FileContentIdentity] = (),
@@ -4330,7 +5149,6 @@ class DeploymentContentRegistry:
         preserve_host_deployment_identity = isinstance(host_deployments, Sequence)
         preserve_assignment_identity = isinstance(user_application_assignments, Sequence)
         preserve_file_content_identity = isinstance(file_contents, Sequence)
-        preserve_local_artifact_identity = isinstance(local_artifacts, Sequence)
         self._releases = _PackedFrozenIndexedStore[
             BinaryReleaseCanonicalKey, BinaryReleaseIdentity
         ](
@@ -4386,6 +5204,20 @@ class DeploymentContentRegistry:
             user_profile=lambda item: item.user_profile_id,
             installation=lambda item: item.installation_id,
         )
+        self._application_descriptors = _PackedFrozenIndexedStore[
+            tuple[str, Platform], CompiledApplicationDescriptor
+        ](
+            pack=_pack_application_descriptor,
+            unpack=_unpack_application_descriptor,
+            primary_key=lambda item: item.canonical_key,
+            preserve_identity=True,
+            preserve_identity_limit=None,
+        )
+        self._application_descriptor_ids_by_executable: dict[
+            tuple[Platform, str], tuple[str, ...]
+        ] = {}
+        self._application_executable_links = 0
+        self._application_executable_max_bucket = 0
         self._file_contents = _PackedFrozenIndexedStore[
             FileVersionCanonicalKey, FileContentIdentity
         ](
@@ -4403,7 +5235,6 @@ class DeploymentContentRegistry:
             pack=_pack_local_artifact,
             unpack=_unpack_local_artifact,
             primary_key=lambda item: item.canonical_key,
-            preserve_identity=preserve_local_artifact_identity,
             artifact_version_id=lambda item: item.artifact_version_id,
             artifact_object=lambda item: item.artifact_id,
             application_profile=lambda item: item.application_profile_id,
@@ -4465,6 +5296,7 @@ class DeploymentContentRegistry:
         self._compile_user_profiles(user_profiles)
         self._compile_installations(installations)
         self._compile_application_profiles(application_profiles)
+        self._compile_application_descriptors(application_descriptors)
         self._compile_host_deployments(host_deployments)
         self._releases.seal()
         self._services.seal()
@@ -4480,6 +5312,7 @@ class DeploymentContentRegistry:
             self._installed_software_releases,
             self._user_profiles,
             self._application_profiles,
+            self._application_descriptors,
             self._file_contents,
             self._local_artifacts,
             self._host_deployments,
@@ -4501,6 +5334,7 @@ class DeploymentContentRegistry:
             self._installed_software_releases,
             self._user_profiles,
             self._application_profiles,
+            self._application_descriptors,
             self._file_contents,
             self._local_artifacts,
             self._host_deployments,
@@ -4513,6 +5347,7 @@ class DeploymentContentRegistry:
             + self._tasks.estimated_bytes()
             + self.binary_path_index_census(estimate_bytes=True).estimated_bytes
             + self.assignment_category_index_census(estimate_bytes=True).estimated_bytes
+            + _owned_graph_size(self._application_descriptor_ids_by_executable)
             + self._local_artifact_path_index.estimated_bytes()
         )
 
@@ -4524,6 +5359,7 @@ class DeploymentContentRegistry:
             self._installed_software_releases,
             self._user_profiles,
             self._application_profiles,
+            self._application_descriptors,
             self._file_contents,
             self._local_artifacts,
             self._host_deployments,
@@ -4536,6 +5372,7 @@ class DeploymentContentRegistry:
             + self._installations.estimated_index_bytes()
             + self.binary_path_index_census(estimate_bytes=True).estimated_bytes
             + self.assignment_category_index_census(estimate_bytes=True).estimated_bytes
+            + _owned_graph_size(self._application_descriptor_ids_by_executable)
             + self._local_artifact_path_index.estimated_bytes()
         )
 
@@ -4710,7 +5547,14 @@ class DeploymentContentRegistry:
         self,
         installations: Iterable[SoftwareInstallationIdentity],
     ) -> None:
-        for installation in installations:
+        for source in installations:
+            installation = _canonical_software_installation(source)
+            if installation.platform != "windows" and any(
+                "\\" in image_path for image_path in installation.image_paths
+            ):
+                raise ValueError(
+                    "compiled POSIX application installation image_paths cannot contain backslashes"
+                )
             release_artifacts = tuple(
                 self._releases.find_iter("release_id", installation.release_id)
             )
@@ -4854,6 +5698,68 @@ class DeploymentContentRegistry:
                 "application profile",
             )
 
+    def _compile_application_descriptors(
+        self,
+        descriptors: Iterable[CompiledApplicationDescriptor],
+    ) -> None:
+        """Compile exact application/platform command and executable truth."""
+
+        routes: dict[tuple[Platform, str], list[tuple[int, str]]] = {}
+        descriptor_count = 0
+        retained_text_bytes = 0
+        for source in descriptors:
+            if type(source) is not CompiledApplicationDescriptor:
+                raise ValueError(
+                    "application_descriptors must contain exact "
+                    "CompiledApplicationDescriptor values"
+                )
+            descriptor_count += 1
+            if descriptor_count > _MAX_APPLICATION_DESCRIPTOR_REGISTRY_COUNT:
+                raise ValueError("application_descriptors exceeds the bounded registry count")
+            descriptor = CompiledApplicationDescriptor(
+                application_id=source.application_id,
+                platform=source.platform,
+                image_path=source.image_path,
+                command_templates=source.command_templates,
+                categories=source.categories,
+                command_parameter_pools=source.command_parameter_pools,
+                singleton_per_session=source.singleton_per_session,
+                selection_ordinal=source.selection_ordinal,
+            )
+            retained_text_bytes += descriptor.retained_text_bytes
+            if retained_text_bytes > _MAX_APPLICATION_DESCRIPTOR_REGISTRY_TEXT_BYTES:
+                raise ValueError("application_descriptors exceeds the bounded registry text budget")
+            _insert_unique(
+                self._application_descriptors,
+                descriptor.canonical_key,
+                descriptor,
+                "compiled application descriptor",
+            )
+            routes.setdefault((descriptor.platform, descriptor.executable), []).append(
+                (descriptor.selection_ordinal, descriptor.application_id)
+            )
+        self._application_descriptor_ids_by_executable = {
+            key: tuple(
+                application_id
+                for _ordinal, application_id in sorted(
+                    values,
+                    key=lambda value: (value[0], value[1]),
+                )
+            )
+            for key, values in routes.items()
+        }
+        self._application_executable_links = sum(
+            len(application_ids)
+            for application_ids in self._application_descriptor_ids_by_executable.values()
+        )
+        self._application_executable_max_bucket = max(
+            (
+                len(application_ids)
+                for application_ids in self._application_descriptor_ids_by_executable.values()
+            ),
+            default=0,
+        )
+
     def _compile_host_deployments(self, specs: Iterable[HostDeploymentSpec]) -> None:
         for spec in specs:
             installation_handles: list[int] = []
@@ -4946,6 +5852,7 @@ class DeploymentContentRegistry:
         self,
         specs: Iterable[UserApplicationAssignmentSpec],
     ) -> None:
+        command_bound_cache: dict[tuple[tuple[str, Platform], int], bool] = {}
         for spec in specs:
             deployment = self.host_deployment(spec.hostname)
             user_profile = self.user_profile_by_id(spec.user_profile_id)
@@ -4961,6 +5868,73 @@ class DeploymentContentRegistry:
             installation = self.installation_by_id(application_profile.installation_id)
             if installation is None:  # pragma: no cover - protected by profile compilation
                 raise ValueError("application profile references an unknown installation")
+            materialization_principal = user_profile.principal
+            if len(self._application_descriptors):
+                descriptor = self._owned_application_descriptor(
+                    application_profile.application_id,
+                    spec.platform,
+                )
+                if descriptor is None:
+                    raise ValueError(
+                        "user application assignment references an unknown compiled "
+                        f"application descriptor: {application_profile.application_id!r}, "
+                        f"{spec.platform!r}"
+                    )
+                if spec.selection_ordinal != descriptor.selection_ordinal:
+                    raise ValueError(
+                        "user application assignment selection_ordinal must match its "
+                        "compiled application descriptor"
+                    )
+                materialization_principal = _application_presentation_principal(
+                    descriptor,
+                    installation,
+                    user_profile,
+                )
+                expected_image = descriptor.image_path.replace(
+                    "{username}",
+                    materialization_principal,
+                )
+                if spec.platform == "windows":
+                    image_matches = canonical_native_path(
+                        expected_image,
+                        spec.platform,
+                    ) == canonical_native_path(
+                        installation.image_paths[0],
+                        spec.platform,
+                    )
+                else:
+                    image_matches = posixpath.normpath(expected_image) == posixpath.normpath(
+                        installation.image_paths[0]
+                    )
+                if not image_matches:
+                    raise ValueError(
+                        "compiled application descriptor image must match the installation "
+                        "primary executable"
+                    )
+                if descriptor.categories != spec.eligible_categories:
+                    raise ValueError(
+                        "compiled application descriptor categories must match the user "
+                        "application assignment"
+                    )
+                bound_key = (descriptor.canonical_key, len(materialization_principal))
+                command_is_bounded = command_bound_cache.get(bound_key)
+                if command_is_bounded is None:
+                    try:
+                        _validate_application_command_expansion_bounds(
+                            descriptor.command_templates,
+                            descriptor.command_parameter_pools,
+                            literal_replacements=(("username", materialization_principal),),
+                        )
+                    except ValueError:
+                        command_is_bounded = False
+                    else:
+                        command_is_bounded = True
+                    command_bound_cache[bound_key] = command_is_bounded
+                if not command_is_bounded:
+                    raise ValueError(
+                        "compiled application command cannot be materialized for its assigned "
+                        "principal within the bounded output contract"
+                    )
             expected_principal = _normalize_principal(spec.principal, user_profile.platform)
             if (
                 deployment.platform != spec.platform
@@ -4984,6 +5958,7 @@ class DeploymentContentRegistry:
                 assignment_id=spec.assignment_id,
                 hostname=spec.hostname,
                 principal=spec.principal,
+                materialization_principal=materialization_principal,
                 platform=spec.platform,
                 user_profile_id=user_profile.profile_id,
                 application_profile_id=application_profile.application_profile_id,
@@ -5088,7 +6063,13 @@ class DeploymentContentRegistry:
             )
 
     def _compile_local_artifacts(self, artifacts: Iterable[LocalArtifactIdentity]) -> None:
-        for artifact in artifacts:
+        for source in artifacts:
+            try:
+                artifact = _canonical_local_artifact_identity(source)
+            except StateError as exc:
+                raise ValueError(str(exc)) from None
+            if _has_posix_path_backslash(artifact.native_path, artifact.platform):
+                raise ValueError("POSIX local artifact native_path cannot contain backslashes")
             application_profile = self.application_profile_by_id(artifact.application_profile_id)
             user_profile = self.user_profile_by_id(artifact.user_profile_id)
             if application_profile is None or user_profile is None:
@@ -5644,6 +6625,8 @@ class DeploymentContentRegistry:
         principal: str,
     ) -> tuple[int, int] | None:
         normalized_platform = _normalize_platform(platform)
+        if _has_posix_path_backslash(image_path, normalized_platform):
+            return None
         host = _normalize_hostname(hostname)
         user = _normalize_principal(principal, normalized_platform)
         path = canonical_native_path(image_path, normalized_platform)
@@ -5783,6 +6766,169 @@ class DeploymentContentRegistry:
             limit=limit,
             cursor=cursor,
         )
+
+    def application_descriptor(
+        self,
+        application_id: str,
+        platform: Platform,
+    ) -> CompiledApplicationDescriptor | None:
+        """Return one detached exact application/platform descriptor."""
+
+        descriptor = self._owned_application_descriptor(application_id, platform)
+        return None if descriptor is None else copy(descriptor)
+
+    def _owned_application_descriptor(
+        self,
+        application_id: str,
+        platform: Platform,
+    ) -> CompiledApplicationDescriptor | None:
+        """Return one owner-private canonical descriptor for runtime use."""
+
+        key = (
+            _normalize_name(application_id, "application_id", casefold=True),
+            _normalize_platform(platform),
+        )
+        return self._application_descriptors.get(key)
+
+    def application_ids_for_executable(
+        self,
+        platform: Platform,
+        executable: str,
+    ) -> tuple[str, ...]:
+        """Return the retained stable IDs for one exact executable basename."""
+
+        normalized_platform = _normalize_platform(platform)
+        normalized_executable = _normalize_name(executable, "executable")
+        if normalized_platform != "windows" and "\\" in normalized_executable:
+            return ()
+        return self._application_descriptor_ids_by_executable.get(
+            (
+                normalized_platform,
+                _artifact_name(normalized_executable, normalized_platform),
+            ),
+            (),
+        )
+
+    def application_descriptor_for_assignment(
+        self,
+        assignment: UserApplicationAssignment,
+    ) -> CompiledApplicationDescriptor | None:
+        """Resolve descriptor truth for one exact assignment without a profile scan."""
+
+        resolved = self._application_runtime_for_assignment(assignment)
+        return None if resolved is None else copy(resolved[1])
+
+    def _application_runtime_for_assignment(
+        self,
+        assignment: UserApplicationAssignment,
+    ) -> (
+        tuple[
+            UserApplicationAssignment,
+            CompiledApplicationDescriptor,
+            SoftwareInstallationIdentity,
+        ]
+        | None
+    ):
+        """Authenticate and resolve one registry-owned assignment relationship."""
+
+        registered = self._owned_user_application_assignment(assignment.assignment_id)
+        if registered is None or registered != assignment:
+            return None
+        descriptor = self._owned_application_descriptor(
+            registered.application_id,
+            registered.platform,
+        )
+        installation = self.installation_by_handle(registered.installation_handle)
+        if (
+            descriptor is None
+            or installation is None
+            or installation.application_id != registered.application_id
+            or installation.platform != registered.platform
+            or installation.hostname != registered.hostname
+            or installation.release_id != registered.release_id
+            or not installation.image_paths
+        ):
+            return None
+        if installation.scope == "user" and (
+            installation.principal != registered.principal
+            or installation.user_profile_id != registered.user_profile_id
+        ):
+            return None
+        return registered, descriptor, installation
+
+    def application_executable_for_assignment(
+        self,
+        assignment: UserApplicationAssignment,
+    ) -> str | None:
+        """Return the compiler-owned primary executable for one assignment."""
+
+        resolved = self._application_runtime_for_assignment(assignment)
+        if resolved is None:
+            return None
+        registered, descriptor, installation = resolved
+        image_path = installation.image_paths[0]
+        if _artifact_name(image_path, registered.platform) != descriptor.executable:
+            return None
+        return image_path
+
+    def materialize_application_command(
+        self,
+        rng: random.Random,
+        assignment: UserApplicationAssignment,
+        *,
+        username: str = "",
+        category: str | None = None,
+    ) -> tuple[str, str] | None:
+        """Materialize one exact assignment from immutable compiled command truth."""
+
+        resolved = self._application_runtime_for_assignment(assignment)
+        if resolved is None:
+            return None
+        registered, descriptor, installation = resolved
+        image_path = installation.image_paths[0]
+        if _artifact_name(image_path, registered.platform) != descriptor.executable:
+            return None
+        if category is not None:
+            normalized_category = _normalize_name(category, "category", casefold=True)
+            if (
+                normalized_category not in descriptor.categories
+                or normalized_category not in registered.eligible_categories
+            ):
+                return None
+        if username:
+            normalized_username = _normalize_principal(username, registered.platform)
+            if normalized_username != registered.principal:
+                return None
+        output: list[str] = []
+        stack: list[tuple[str, str]] = [("text", rng.choice(descriptor.command_templates))]
+        while stack:
+            kind, value = stack.pop()
+            if kind == "literal":
+                output.append(value)
+                continue
+            if kind == "placeholder":
+                name = value[1:-1]
+                if name == "username":
+                    output.append(registered.materialization_principal)
+                    continue
+                values = descriptor._command_parameter_values(name)
+                if values is None:
+                    output.append(value)
+                else:
+                    stack.append(("text", rng.choice(values)))
+                continue
+            segments: list[tuple[str, str]] = []
+            cursor = 0
+            for match in _APPLICATION_COMMAND_PLACEHOLDER.finditer(value):
+                if match.start() > cursor:
+                    segments.append(("literal", value[cursor : match.start()]))
+                segments.append(("placeholder", match.group(0)))
+                cursor = match.end()
+            if cursor < len(value):
+                segments.append(("literal", value[cursor:]))
+            for segment_kind, segment_value in reversed(segments):
+                stack.append((segment_kind, segment_value))
+        return image_path, "".join(output)
 
     def host_deployment(self, hostname: str) -> HostDeployment | None:
         """Return the immutable compiled deployment for one exact host."""
@@ -6059,7 +7205,16 @@ class DeploymentContentRegistry:
         self,
         assignment_id: str,
     ) -> UserApplicationAssignment | None:
-        """Return one exact compiled persona/application intersection."""
+        """Return one detached exact compiled persona/application intersection."""
+
+        assignment = self._owned_user_application_assignment(assignment_id)
+        return None if assignment is None else copy(assignment)
+
+    def _owned_user_application_assignment(
+        self,
+        assignment_id: str,
+    ) -> UserApplicationAssignment | None:
+        """Return one owner-private canonical assignment for runtime authentication."""
 
         return self._user_assignments.get(assignment_id.strip())
 
@@ -6070,17 +7225,18 @@ class DeploymentContentRegistry:
     ) -> UserApplicationAssignment | None:
         """Return one exact profile/application intersection."""
 
-        return self._user_assignments.find_one(
+        assignment = self._user_assignments.find_one(
             "profile_application",
             (user_profile_id.strip(), application_profile_id.strip()),
         )
+        return None if assignment is None else copy(assignment)
 
-    def user_application_assignment_for_application(
+    def _owned_user_application_assignment_for_application(
         self,
         user_profile_id: str,
         application_id: str,
     ) -> UserApplicationAssignment | None:
-        """Return one exact installed/eligible application for a user profile."""
+        """Return one owner-private exact profile/application assignment."""
 
         assignment = self._user_assignments.find_one(
             "profile_application_id",
@@ -6092,6 +7248,19 @@ class DeploymentContentRegistry:
         if assignment is not None:
             self._assignment_category_lookup_candidates += 1
         return assignment
+
+    def user_application_assignment_for_application(
+        self,
+        user_profile_id: str,
+        application_id: str,
+    ) -> UserApplicationAssignment | None:
+        """Return one exact installed/eligible application for a user profile."""
+
+        assignment = self._owned_user_application_assignment_for_application(
+            user_profile_id,
+            application_id,
+        )
+        return None if assignment is None else copy(assignment)
 
     @staticmethod
     def _profile_category_key(
@@ -6112,7 +7281,7 @@ class DeploymentContentRegistry:
 
         key = self._profile_category_key(user_profile_id, category)
         for handle in self._assignment_category_handles.get(key, ()):
-            yield self._user_assignments.get_by_handle(handle)
+            yield copy(self._user_assignments.get_by_handle(handle))
 
     def count_user_application_assignments_for_category(
         self,
@@ -6144,7 +7313,7 @@ class DeploymentContentRegistry:
         )
         if ordinal >= len(handles):
             return None
-        return self._user_assignments.get_by_handle(handles[ordinal])
+        return copy(self._user_assignments.get_by_handle(handles[ordinal]))
 
     def select_user_application_assignment_for_category(
         self,
@@ -6165,7 +7334,7 @@ class DeploymentContentRegistry:
         target = unit_interval * cumulative[-1]
         position = min(len(handles) - 1, bisect_right(cumulative, target))
         self._assignment_category_lookup_candidates += 1
-        return self._user_assignments.get_by_handle(handles[position])
+        return copy(self._user_assignments.get_by_handle(handles[position]))
 
     def select_user_application_assignment_for_applications(
         self,
@@ -6187,7 +7356,7 @@ class DeploymentContentRegistry:
         )
         total = 0
         for application_id in ordered_ids:
-            assignment = self.user_application_assignment_for_application(
+            assignment = self._owned_user_application_assignment_for_application(
                 profile_id,
                 application_id,
             )
@@ -6199,7 +7368,7 @@ class DeploymentContentRegistry:
         cumulative = 0
         last: UserApplicationAssignment | None = None
         for application_id in ordered_ids:
-            assignment = self.user_application_assignment_for_application(
+            assignment = self._owned_user_application_assignment_for_application(
                 profile_id,
                 application_id,
             )
@@ -6208,8 +7377,10 @@ class DeploymentContentRegistry:
             last = assignment
             cumulative += assignment.selection_weight
             if target < cumulative:
-                return assignment
-        return last  # pragma: no cover - floating boundary guarded by unit interval
+                return copy(assignment)
+        return (
+            None if last is None else copy(last)
+        )  # pragma: no cover - floating boundary guarded by unit interval
 
     def page_user_application_assignments_for_category(
         self,
@@ -6239,7 +7410,7 @@ class DeploymentContentRegistry:
         handles = self._assignment_category_handles.get(key, ())
         end = min(len(handles), offset + limit)
         page = tuple(
-            self._user_assignments.get_by_handle(handles[position])
+            copy(self._user_assignments.get_by_handle(handles[position]))
             for position in range(offset, end)
         )
         next_cursor = (
@@ -6267,7 +7438,7 @@ class DeploymentContentRegistry:
         if position is None or position >= len(handles):
             return None
         self._assignment_category_lookup_candidates += 1
-        return self._user_assignments.get_by_handle(handles[position])
+        return copy(self._user_assignments.get_by_handle(handles[position]))
 
     def browser_alternative_assignment_at(
         self,
@@ -6291,7 +7462,7 @@ class DeploymentContentRegistry:
             return None
         position = ordinal if ordinal < preferred_position else ordinal + 1
         self._assignment_category_lookup_candidates += 1
-        return self._user_assignments.get_by_handle(handles[position])
+        return copy(self._user_assignments.get_by_handle(handles[position]))
 
     def user_application_assignments_for_profile(
         self,
@@ -6307,7 +7478,8 @@ class DeploymentContentRegistry:
     ) -> Iterator[UserApplicationAssignment]:
         """Iterate persona-eligible applications for one exact user profile."""
 
-        yield from self._user_assignments.find_iter("profile", user_profile_id.strip())
+        for assignment in self._user_assignments.find_iter("profile", user_profile_id.strip()):
+            yield copy(assignment)
 
     def count_user_application_assignments_for_profile(self, user_profile_id: str) -> int:
         """Return exact assignment count for one user profile."""
@@ -6324,13 +7496,14 @@ class DeploymentContentRegistry:
         """Return one bounded page of assignments for one user profile."""
 
         queries = (("profile", user_profile_id.strip()),)
-        return self._page_group(
+        page, next_cursor = self._page_group(
             self._user_assignments,
             "user_application_assignments_for_profile",
             queries,
             limit=limit,
             cursor=cursor,
         )
+        return tuple(copy(assignment) for assignment in page), next_cursor
 
     def user_application_assignments_for_product(
         self,
@@ -6348,10 +7521,11 @@ class DeploymentContentRegistry:
     ) -> Iterator[UserApplicationAssignment]:
         """Iterate exact host/user intersections for one product identity."""
 
-        yield from self._user_assignments.find_iter(
+        for assignment in self._user_assignments.find_iter(
             "host_product",
             self._host_product_key(hostname, product_id),
-        )
+        ):
+            yield copy(assignment)
 
     def count_user_application_assignments_for_product(
         self,
@@ -6376,13 +7550,14 @@ class DeploymentContentRegistry:
         """Return one bounded exact host/product assignment page."""
 
         queries = (("host_product", self._host_product_key(hostname, product_id)),)
-        return self._page_group(
+        page, next_cursor = self._page_group(
             self._user_assignments,
             "user_application_assignments_for_product",
             queries,
             limit=limit,
             cursor=cursor,
         )
+        return tuple(copy(assignment) for assignment in page), next_cursor
 
     def user_application_assignments_for_release(
         self,
@@ -6400,10 +7575,11 @@ class DeploymentContentRegistry:
     ) -> Iterator[UserApplicationAssignment]:
         """Iterate exact host/user intersections for one product release."""
 
-        yield from self._user_assignments.find_iter(
+        for assignment in self._user_assignments.find_iter(
             "host_release",
             self._host_release_key(hostname, release_id),
-        )
+        ):
+            yield copy(assignment)
 
     def count_user_application_assignments_for_release(
         self,
@@ -6428,13 +7604,14 @@ class DeploymentContentRegistry:
         """Return one bounded exact host/release assignment page."""
 
         queries = (("host_release", self._host_release_key(hostname, release_id)),)
-        return self._page_group(
+        page, next_cursor = self._page_group(
             self._user_assignments,
             "user_application_assignments_for_release",
             queries,
             limit=limit,
             cursor=cursor,
         )
+        return tuple(copy(assignment) for assignment in page), next_cursor
 
     def file_content(
         self,
@@ -6486,6 +7663,8 @@ class DeploymentContentRegistry:
         """Return one exact application/profile/path/version artifact binding."""
 
         normalized_platform = _normalize_platform(platform)
+        if _has_posix_path_backslash(native_path, normalized_platform):
+            return None
         path_key = (
             normalized_platform,
             user_profile_id.strip(),
@@ -6511,6 +7690,8 @@ class DeploymentContentRegistry:
             installations=len(self._installations),
             user_profiles=len(self._user_profiles),
             application_profiles=len(self._application_profiles),
+            application_descriptors=len(self._application_descriptors),
+            application_executable_bindings=self._application_executable_links,
             file_versions=len(self._file_contents),
             local_artifact_versions=len(self._local_artifacts),
             binary_path_bindings=len(self._binary_path_index),
@@ -6611,6 +7792,7 @@ class DeploymentContentRegistry:
             + registry.installations
             + registry.user_profiles
             + registry.application_profiles
+            + registry.application_descriptors
             + registry.file_versions
             + registry.local_artifact_versions
             + deployment.host_deployments
@@ -6621,17 +7803,30 @@ class DeploymentContentRegistry:
         relationship_bindings = (
             registry.binary_path_bindings
             + registry.local_artifact_path_bindings
+            + registry.application_executable_bindings
             + deployment.assignment_category_links
             + self._host_installation_links
             + self._host_service_links
             + self._host_task_links
             + self._host_module_links
         )
+        application_descriptor_owner_snapshots = (
+            self._application_descriptors.retained_identity_entries
+        )
+        user_application_assignment_owner_snapshots = (
+            self._user_assignments.retained_identity_entries
+        )
+        retained_entries = (
+            physical_records
+            + application_descriptor_owner_snapshots
+            + user_application_assignment_owner_snapshots
+        )
         stores = (
             self._releases,
             self._installed_software_releases,
             self._user_profiles,
             self._application_profiles,
+            self._application_descriptors,
             self._file_contents,
             self._local_artifacts,
             self._services,
@@ -6644,24 +7839,30 @@ class DeploymentContentRegistry:
             logical_records=physical_records,
             physical_records=physical_records,
             live_entries=physical_records,
-            retained_entries=physical_records,
-            backing_entries=physical_records + relationship_bindings,
+            retained_entries=retained_entries,
+            backing_entries=retained_entries + relationship_bindings,
             stale_entries=0,
             leased_entries=0,
-            high_water_mark=physical_records,
+            high_water_mark=retained_entries,
             binary_releases=registry.binary_releases,
             installed_software_releases=registry.installed_software_releases,
             installations=registry.installations,
             user_profiles=registry.user_profiles,
             application_profiles=registry.application_profiles,
+            application_descriptors=registry.application_descriptors,
+            application_descriptor_owner_snapshots=application_descriptor_owner_snapshots,
             file_versions=registry.file_versions,
             local_artifact_versions=registry.local_artifact_versions,
             host_deployments=deployment.host_deployments,
             user_application_assignments=deployment.user_application_assignments,
+            user_application_assignment_owner_snapshots=(
+                user_application_assignment_owner_snapshots
+            ),
             service_identities=deployment.interned_services,
             task_identities=deployment.interned_tasks,
             binary_path_bindings=registry.binary_path_bindings,
             local_artifact_path_bindings=registry.local_artifact_path_bindings,
+            application_executable_bindings=(registry.application_executable_bindings),
             assignment_category_bindings=deployment.assignment_category_links,
             host_installation_bindings=self._host_installation_links,
             host_service_bindings=self._host_service_links,
@@ -6670,6 +7871,7 @@ class DeploymentContentRegistry:
             relationship_bindings=relationship_bindings,
             maximum_bucket_size=max(
                 self._assignment_category_max_bucket,
+                self._application_executable_max_bucket,
                 self._installations.max_host_bucket_size,
                 *(metric.max_bucket_size for metric in store_metrics),
             ),
@@ -8606,12 +9808,15 @@ class LocalArtifactVersionRegistry:
     ) -> int:
         """Publish or refresh one immutable artifact version and return its handle."""
 
+        canonical_artifact = _canonical_local_artifact_identity(artifact)
+        if _has_posix_path_backslash(canonical_artifact.native_path, canonical_artifact.platform):
+            raise StateError("POSIX local artifact native_path cannot contain backslashes")
         event_time = ensure_utc(observed_at)
         effective_retention = retention or self._retention
         if effective_retention <= timedelta(0):
             raise ValueError("artifact retention must be positive")
         deadline = (event_time + effective_retention).timestamp()
-        version_id = artifact.artifact_version_id
+        version_id = canonical_artifact.artifact_version_id
         with self._gate.mutation():
             self._require_after_watermark_locked(
                 event_time,
@@ -8631,7 +9836,7 @@ class LocalArtifactVersionRegistry:
                         shard.store.is_live_handle(handle)
                         and shard.store.artifact_version_id(handle) == version_id
                     ):
-                        return self._publish_locked(shard, handle, artifact, deadline)
+                        return self._publish_locked(shard, handle, canonical_artifact, deadline)
             with self._capacity_lock:
                 if version_id in self._prepared_versions:
                     raise StateError(
@@ -8645,15 +9850,22 @@ class LocalArtifactVersionRegistry:
                             shard.store.is_live_handle(handle)
                             and shard.store.artifact_version_id(handle) == version_id
                         ):
-                            return self._publish_locked(shard, handle, artifact, deadline)
+                            return self._publish_locked(
+                                shard,
+                                handle,
+                                canonical_artifact,
+                                deadline,
+                            )
                 routing_identity = (
-                    artifact.artifact_id if self._capacity < 1_024 else artifact.artifact_version_id
+                    canonical_artifact.artifact_id
+                    if self._capacity < 1_024
+                    else canonical_artifact.artifact_version_id
                 )
                 shard = self._reserve_capacity_slot_locked(routing_identity)
                 with shard.lock:
                     self._live_count += 1
                     self._high_water_mark = max(self._high_water_mark, self._live_count)
-                    return self._publish_locked(shard, None, artifact, deadline)
+                    return self._publish_locked(shard, None, canonical_artifact, deadline)
 
     def _publish_locked(
         self,
@@ -8959,6 +10171,8 @@ class LocalArtifactVersionRegistry:
         """Return one exact retained profile/path/version binding."""
 
         normalized_platform = _normalize_platform(platform)
+        if _has_posix_path_backslash(native_path, normalized_platform):
+            return None
         normalized_path = canonical_native_path(native_path, normalized_platform)
         user_profile = user_profile_id.strip()
         application_profile = application_profile_id.strip()
@@ -8994,6 +10208,8 @@ class LocalArtifactVersionRegistry:
         """
 
         normalized_platform = _normalize_platform(platform)
+        if _has_posix_path_backslash(native_path, normalized_platform):
+            return None
         key = "\0".join(
             (
                 _normalize_hostname(hostname),

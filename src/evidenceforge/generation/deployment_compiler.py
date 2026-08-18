@@ -15,7 +15,9 @@ import posixpath
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import replace
+from itertools import islice
 
+import evidenceforge.generation.deployment_registry as deployment_registry
 from evidenceforge.config.schemas import (
     ApplicationDeploymentEntry,
     ApplicationEntry,
@@ -69,6 +71,7 @@ from evidenceforge.generation.activity.systemd_schedules import (
     schedule_deployment_paths,
 )
 from evidenceforge.generation.deployment_registry import (
+    CompiledApplicationDescriptor,
     DeploymentContentRegistry,
     HostDeploymentSpec,
     UserApplicationAssignmentSpec,
@@ -187,10 +190,19 @@ def _deployment_application_entries(
     """Load every typed application and the full persona namespace."""
 
     if entries is not None:
-        configured = tuple(entries)
+        configured = tuple(
+            islice(
+                entries,
+                deployment_registry._MAX_APPLICATION_DESCRIPTOR_REGISTRY_COUNT + 1,
+            )
+        )
+        if len(configured) > deployment_registry._MAX_APPLICATION_DESCRIPTOR_REGISTRY_COUNT:
+            raise ValueError("application_entries exceeds the bounded registry count")
         known_personas = {persona.casefold() for entry in configured for persona in entry.personas}
     else:
         raw_entries = load_catalog().get("applications", [])
+        if len(raw_entries) > deployment_registry._MAX_APPLICATION_DESCRIPTOR_REGISTRY_COUNT:
+            raise ValueError("application catalog exceeds the bounded registry count")
         known_personas = {
             str(persona).casefold()
             for raw_entry in raw_entries
@@ -221,12 +233,35 @@ def _deployment_application_entries(
     return enabled, frozenset(known_personas), selection_ordinals
 
 
+def _compiled_application_descriptor(
+    application: ApplicationEntry,
+    platform: Platform,
+    platform_config: PlatformConfig,
+    selection_ordinal: int,
+) -> CompiledApplicationDescriptor:
+    """Compile one complete platform command descriptor."""
+
+    return CompiledApplicationDescriptor(
+        application_id=application.id,
+        platform=platform,
+        image_path=platform_config.image_path,
+        command_templates=tuple(platform_config.command_templates or ()),
+        categories=tuple(application.categories),
+        command_parameter_pools=tuple(
+            (name, tuple(values))
+            for name, values in sorted((platform_config.command_parameter_pools or {}).items())
+        ),
+        singleton_per_session=application.singleton_per_session,
+        selection_ordinal=selection_ordinal,
+    )
+
+
 def _artifact_name(path: str, platform: Platform) -> str:
     """Extract a source-native artifact name from a non-materialized path template."""
 
     if platform == "windows":
         return ntpath.basename(path.replace("/", "\\"))
-    return posixpath.basename(path.replace("\\", "/"))
+    return posixpath.basename(path)
 
 
 def _pe_version_info(metadata: dict[str, str] | None) -> PeVersionInfo | None:
@@ -731,6 +766,40 @@ def compile_deployment_registry(
     }
     applications, known_personas, application_selection_ordinals = _deployment_application_entries(
         application_entries
+    )
+    compiled_application_descriptors: list[CompiledApplicationDescriptor] = []
+    application_descriptor_text_bytes = 0
+    for application in applications:
+        for platform, platform_config in application.platforms.items():
+            if platform not in {"windows", "linux", "macos"} or platform_config.deployment is None:
+                continue
+            if (
+                len(compiled_application_descriptors)
+                >= deployment_registry._MAX_APPLICATION_DESCRIPTOR_REGISTRY_COUNT
+            ):
+                raise ValueError("application descriptors exceeds the bounded registry count")
+            descriptor = _compiled_application_descriptor(
+                application,
+                platform,
+                platform_config,
+                application_selection_ordinals[application.id.casefold()],
+            )
+            application_descriptor_text_bytes += descriptor.retained_text_bytes
+            if (
+                application_descriptor_text_bytes
+                > deployment_registry._MAX_APPLICATION_DESCRIPTOR_REGISTRY_TEXT_BYTES
+            ):
+                raise ValueError("application descriptors exceeds the bounded registry text budget")
+            compiled_application_descriptors.append(descriptor)
+    application_descriptors = tuple(
+        sorted(
+            compiled_application_descriptors,
+            key=lambda descriptor: (
+                descriptor.selection_ordinal,
+                descriptor.application_id,
+                descriptor.platform,
+            ),
+        )
     )
     service_process_families = tuple(
         sorted(
@@ -1558,6 +1627,7 @@ def compile_deployment_registry(
             key=lambda item: item.canonical_key,
         ),
         application_profiles=application_profiles,
+        application_descriptors=application_descriptors,
         host_deployments=deployment_specs,
         user_application_assignments=assignments,
         file_contents=file_contents,

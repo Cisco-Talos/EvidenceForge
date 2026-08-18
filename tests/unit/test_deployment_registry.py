@@ -3,6 +3,9 @@
 
 """Tests for path-independent content and exact deployment identity indexes."""
 
+import copy
+import random
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
@@ -10,6 +13,7 @@ from threading import Barrier, Event, Lock
 
 import pytest
 
+import evidenceforge.generation.deployment_compiler as deployment_compiler
 import evidenceforge.generation.deployment_registry as deployment_registry
 from evidenceforge.events.content_identity import (
     ApplicationProfileIdentity,
@@ -28,10 +32,12 @@ from evidenceforge.events.content_identity import (
     UserProfileIdentity,
 )
 from evidenceforge.generation.deployment_registry import (
+    CompiledApplicationDescriptor,
     DeploymentContentRegistry,
     HostDeploymentSpec,
     LocalArtifactCapacityError,
     LocalArtifactVersionRegistry,
+    UserApplicationAssignment,
     UserApplicationAssignmentSpec,
 )
 from evidenceforge.models.exceptions import StateError
@@ -636,17 +642,17 @@ def test_application_profiles_and_local_artifacts_are_scope_isolated() -> None:
     assert alice_app.native_profile_token != bob_app.native_profile_token
     assert alice_artifact.artifact_id != bob_artifact.artifact_id
     assert alice_artifact.content_id == bob_artifact.content_id
-    assert registry.local_artifact(alice_artifact.artifact_id, 1) is alice_artifact
-    assert (
-        registry.local_artifact_for_path(
-            alice.profile_id,
-            alice_app.application_profile_id,
-            alice_artifact.native_path.lower(),
-            "windows",
-            1,
-        )
-        is alice_artifact
+    artifact_by_id = registry.local_artifact(alice_artifact.artifact_id, 1)
+    artifact_by_path = registry.local_artifact_for_path(
+        alice.profile_id,
+        alice_app.application_profile_id,
+        alice_artifact.native_path.lower(),
+        "windows",
+        1,
     )
+    assert artifact_by_id == artifact_by_path == alice_artifact
+    assert artifact_by_id is not alice_artifact
+    assert artifact_by_path is not alice_artifact
 
 
 def test_registry_rejects_unknown_content_and_duplicate_path_bindings() -> None:
@@ -1048,19 +1054,443 @@ def test_user_application_assignment_is_one_validated_persona_intersection() -> 
     assert assignment.persona == "developer"
     assert assignment.intensity == 0.85
     assert registry.installation_by_handle(assignment.installation_handle) == installation
-    assert (
-        registry.user_application_assignment_for_profile(
-            profile.profile_id,
-            app_profile.application_profile_id,
-        )
-        is assignment
+    profile_assignment = registry.user_application_assignment_for_profile(
+        profile.profile_id,
+        app_profile.application_profile_id,
     )
+    assert profile_assignment == assignment
+    assert profile_assignment is not assignment
     assert registry.user_application_assignments_for_product("WS-01", "slack") == (assignment,)
     assert registry.user_application_assignments_for_release("WS-01", release.release_id) == (
         assignment,
     )
     assert not hasattr(assignment, "installations")
     assert not hasattr(assignment, "installation_ids")
+
+
+def test_direct_registry_materialization_uses_installed_principal_presentation() -> None:
+    """Direct assignment/caller aliases cannot rewrite installation-owned command bytes."""
+
+    aliases = ("Alice", "ALICE", "aLiCe")
+    profile = _user_profile("WS-01", "Alice")
+    release = _windows_release(
+        product_id="custom_slack",
+        artifact_name="custom-slack.exe",
+        variant="custom",
+    )
+    installation = _user_installation(
+        release,
+        profile,
+        r"C:\Users\Alice\AppData\Local\Custom\custom-slack.exe",
+        application_id="custom_slack",
+    )
+    application_profile = _application_profile(
+        profile,
+        installation,
+        application_id="custom_slack",
+    )
+    descriptor = CompiledApplicationDescriptor(
+        application_id="custom_slack",
+        platform="windows",
+        image_path=r"C:\Users\{username}\AppData\Local\Custom\custom-slack.exe",
+        command_templates=(
+            r'"C:\Users\{username}\AppData\Local\Custom\custom-slack.exe" '
+            r"--user {username}",
+        ),
+        categories=("user_app",),
+    )
+    deployment = HostDeploymentSpec(
+        hostname="WS-01",
+        roles=("workstation",),
+        platform="windows",
+        os_build="22621.3155",
+        architecture="x64",
+        installation_ids=(installation.installation_id,),
+    )
+    expected_materialization = (
+        r"C:\Users\Alice\AppData\Local\Custom\custom-slack.exe",
+        r'"C:\Users\Alice\AppData\Local\Custom\custom-slack.exe" --user Alice',
+    )
+
+    for assignment_alias in aliases:
+        assignment_spec = UserApplicationAssignmentSpec(
+            hostname="WS-01",
+            principal=assignment_alias,
+            platform="windows",
+            user_profile_id=profile.profile_id,
+            application_profile_id=application_profile.application_profile_id,
+            persona="developer",
+            eligible_categories=("user_app",),
+            intensity=1.0,
+        )
+        registry = DeploymentContentRegistry(
+            binary_releases=(release,),
+            user_profiles=(profile,),
+            installations=(installation,),
+            application_profiles=(application_profile,),
+            application_descriptors=(descriptor,),
+            host_deployments=(deployment,),
+            user_application_assignments=(assignment_spec,),
+        )
+        assignment = registry.user_application_assignment(assignment_spec.assignment_id)
+        assert assignment is not None
+        assert assignment.principal == "alice"
+        assert assignment.materialization_principal == "Alice"
+        assert registry.application_ids_for_executable(
+            "windows",
+            "custom-slack.exe",
+        ) == ("custom_slack",)
+        assert (
+            registry.application_executable_for_assignment(assignment)
+            == expected_materialization[0]
+        )
+        census_before = (
+            registry.census(),
+            registry.deployment_census(),
+            registry.assignment_category_index_census(),
+            registry.scale_census(),
+        )
+        for caller_alias in aliases:
+            rng = random.Random(8675309)
+            expected_rng = random.Random(8675309)
+            expected_rng.choice(descriptor.command_templates)
+            assert (
+                registry.materialize_application_command(
+                    rng,
+                    assignment,
+                    username=caller_alias,
+                )
+                == expected_materialization
+            )
+            assert rng.getstate() == expected_rng.getstate()
+        assert (
+            registry.census(),
+            registry.deployment_census(),
+            registry.assignment_category_index_census(),
+            registry.scale_census(),
+        ) == census_before
+
+    retained_census = (
+        registry.census(),
+        registry.deployment_census(),
+        registry.assignment_category_index_census(),
+        registry.scale_census(),
+    )
+    source_templates = descriptor.command_templates
+    object.__setattr__(descriptor, "command_templates", ("calc.exe --unexpected",))
+    object.__setattr__(descriptor, "selection_ordinal", 99)
+    retained_descriptor = registry.application_descriptor("custom_slack", "windows")
+    assert retained_descriptor is not None and retained_descriptor is not descriptor
+    assert retained_descriptor.command_templates == source_templates
+    assert retained_descriptor.selection_ordinal == 0
+    object.__setattr__(retained_descriptor, "command_templates", ("calc.exe --returned",))
+    object.__setattr__(retained_descriptor, "selection_ordinal", 101)
+    canonical_descriptor = registry.application_descriptor("custom_slack", "windows")
+    assert canonical_descriptor is not None and canonical_descriptor is not retained_descriptor
+    assert canonical_descriptor.command_templates == source_templates
+    assert canonical_descriptor.selection_ordinal == 0
+    assignment_descriptor = registry.application_descriptor_for_assignment(assignment)
+    assert assignment_descriptor == canonical_descriptor
+    assert assignment_descriptor is not canonical_descriptor
+    object.__setattr__(assignment_descriptor, "command_templates", ("calc.exe --assignment",))
+    object.__setattr__(assignment_descriptor, "selection_ordinal", 102)
+    assert registry.application_descriptor_for_assignment(assignment) == canonical_descriptor
+    rng = random.Random(8675309)
+    expected_rng = random.Random(8675309)
+    expected_rng.choice(source_templates)
+    assert (
+        registry.materialize_application_command(
+            rng,
+            assignment,
+            username="aLiCe",
+        )
+        == expected_materialization
+    )
+    assert rng.getstate() == expected_rng.getstate()
+    assert registry.application_ids_for_executable(
+        "windows",
+        "custom-slack.exe",
+    ) == ("custom_slack",)
+    assert (
+        registry.census(),
+        registry.deployment_census(),
+        registry.assignment_category_index_census(),
+        registry.scale_census(),
+    ) == retained_census
+
+    canonical_assignment = registry.user_application_assignment(assignment.assignment_id)
+    assert canonical_assignment == assignment
+    assert canonical_assignment is not assignment
+    object.__setattr__(assignment, "selection_ordinal", 99)
+    rejected_rng = random.Random(8675309)
+    rejected_rng_before = rejected_rng.getstate()
+    assert registry.application_descriptor_for_assignment(assignment) is None
+    assert registry.application_executable_for_assignment(assignment) is None
+    assert (
+        registry.materialize_application_command(
+            rejected_rng,
+            assignment,
+            username="Alice",
+        )
+        is None
+    )
+    assert rejected_rng.getstate() == rejected_rng_before
+    assert (
+        registry.census(),
+        registry.deployment_census(),
+        registry.assignment_category_index_census(),
+        registry.scale_census(),
+    ) == retained_census
+    fresh_assignment = registry.user_application_assignment(assignment.assignment_id)
+    assert fresh_assignment == canonical_assignment
+    fresh_rng = random.Random(8675309)
+    assert (
+        registry.materialize_application_command(
+            fresh_rng,
+            fresh_assignment,
+            username="Alice",
+        )
+        == expected_materialization
+    )
+
+
+def test_direct_registry_charges_username_and_nested_pool_replacement_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct assignment admission enforces literal and scoped expansion work together."""
+
+    profile = _user_profile("WS-01", "alice")
+    release = _windows_release(
+        product_id="custom_slack",
+        artifact_name="custom-slack.exe",
+        variant="custom",
+    )
+    installation = _user_installation(
+        release,
+        profile,
+        r"C:\Custom\custom-slack.exe",
+        application_id="custom_slack",
+    )
+    application_profile = _application_profile(
+        profile,
+        installation,
+        application_id="custom_slack",
+    )
+    deployment = HostDeploymentSpec(
+        hostname="WS-01",
+        roles=("workstation",),
+        platform="windows",
+        os_build="22621.3155",
+        architecture="x64",
+        installation_ids=(installation.installation_id,),
+    )
+    assignment_spec = UserApplicationAssignmentSpec(
+        hostname="WS-01",
+        principal="alice",
+        platform="windows",
+        user_profile_id=profile.profile_id,
+        application_profile_id=application_profile.application_profile_id,
+        persona="developer",
+        eligible_categories=("user_app",),
+        intensity=1.0,
+    )
+
+    def compile_descriptor(
+        descriptor: CompiledApplicationDescriptor,
+    ) -> DeploymentContentRegistry:
+        return DeploymentContentRegistry(
+            binary_releases=(release,),
+            user_profiles=(profile,),
+            installations=(installation,),
+            application_profiles=(application_profile,),
+            application_descriptors=(descriptor,),
+            host_deployments=(deployment,),
+            user_application_assignments=(assignment_spec,),
+        )
+
+    prefix = r'"C:\Custom\custom-slack.exe"'
+    accepted_template = prefix + (" {username}" * 1_024)
+    accepted = CompiledApplicationDescriptor(
+        application_id="custom_slack",
+        platform="windows",
+        image_path=r"C:\Custom\custom-slack.exe",
+        command_templates=(accepted_template,),
+        categories=("user_app",),
+    )
+    registry = compile_descriptor(accepted)
+    assignment = registry.user_application_assignment(assignment_spec.assignment_id)
+    assert assignment is not None
+    rng = random.Random(8675309)
+    expected_rng = random.Random(8675309)
+    expected_rng.choice((accepted_template,))
+    assert registry.materialize_application_command(rng, assignment, username="alice") == (
+        r"C:\Custom\custom-slack.exe",
+        prefix + (" alice" * 1_024),
+    )
+    assert rng.getstate() == expected_rng.getstate()
+    census_before = (registry.census(), registry.deployment_census(), registry.scale_census())
+
+    rejected = CompiledApplicationDescriptor(
+        application_id="custom_slack",
+        platform="windows",
+        image_path=r"C:\Custom\custom-slack.exe",
+        command_templates=(prefix + (" {username}" * 1_025),),
+        categories=("user_app",),
+    )
+    rejected_rng = random.Random(8675309)
+    rejected_rng_before = rejected_rng.getstate()
+    with pytest.raises(ValueError, match="bounded output contract"):
+        compile_descriptor(rejected)
+
+    nested_accepted = CompiledApplicationDescriptor(
+        application_id="custom_slack",
+        platform="windows",
+        image_path=r"C:\Custom\custom-slack.exe",
+        command_templates=(prefix + " {outer}",),
+        command_parameter_pools=(("outer", ("{username}" * 1_023,)),),
+        categories=("user_app",),
+    )
+    compile_descriptor(nested_accepted)
+    nested_rejected = CompiledApplicationDescriptor(
+        application_id="custom_slack",
+        platform="windows",
+        image_path=r"C:\Custom\custom-slack.exe",
+        command_templates=(prefix + " {outer}",),
+        command_parameter_pools=(("outer", ("{username}" * 1_024,)),),
+        categories=("user_app",),
+    )
+    with pytest.raises(ValueError, match="bounded output contract"):
+        compile_descriptor(nested_rejected)
+
+    assert rejected_rng.getstate() == rejected_rng_before
+    assert (registry.census(), registry.deployment_census(), registry.scale_census()) == (
+        census_before
+    )
+
+    packed_registry = DeploymentContentRegistry(
+        binary_releases=(release,),
+        user_profiles=(profile,),
+        installations=(installation,),
+        application_profiles=(application_profile,),
+        application_descriptors=(accepted,),
+        host_deployments=(deployment,),
+        user_application_assignments=(spec for spec in (assignment_spec,)),
+    )
+    assert packed_registry._user_assignments._compat_values is None
+    assert packed_registry._user_assignments.retained_identity_entries == 0
+    assert packed_registry.scale_census().user_application_assignment_owner_snapshots == 0
+    validation_calls = 0
+    original_post_init = UserApplicationAssignment.__post_init__
+
+    def count_validation(value: UserApplicationAssignment) -> None:
+        nonlocal validation_calls
+        validation_calls += 1
+        original_post_init(value)
+
+    monkeypatch.setattr(UserApplicationAssignment, "__post_init__", count_validation)
+    packed_assignment = packed_registry.user_application_assignment(assignment_spec.assignment_id)
+    assert packed_assignment is not None
+    packed_census = (
+        packed_registry.census(),
+        packed_registry.deployment_census(),
+        packed_registry.scale_census(),
+    )
+    packed_rng = random.Random(8675309)
+    expected_packed_rng = random.Random(8675309)
+    for _ in range(32):
+        expected_packed_rng.choice((accepted_template,))
+        assert packed_registry.application_descriptor_for_assignment(packed_assignment) == accepted
+        assert (
+            packed_registry.application_executable_for_assignment(packed_assignment)
+            == r"C:\Custom\custom-slack.exe"
+        )
+        assert packed_registry.materialize_application_command(
+            packed_rng,
+            packed_assignment,
+            username="alice",
+        ) == (
+            r"C:\Custom\custom-slack.exe",
+            prefix + (" alice" * 1_024),
+        )
+    assert validation_calls == 0
+    assert packed_rng.getstate() == expected_packed_rng.getstate()
+    assert (
+        packed_registry.census(),
+        packed_registry.deployment_census(),
+        packed_registry.scale_census(),
+    ) == packed_census
+
+
+def test_trusted_assignment_decoder_stays_validation_free_above_snapshot_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Packed owner rows never re-enter validation after compatibility snapshots drop."""
+
+    stores: list[
+        tuple[
+            deployment_registry._PackedFrozenIndexedStore[str, UserApplicationAssignment],
+            int,
+        ]
+    ] = []
+    for count, preserve_limit in (
+        (1, 0),
+        (
+            deployment_registry._PACKED_IDENTITY_COMPAT_LIMIT + 1,
+            deployment_registry._PACKED_IDENTITY_COMPAT_LIMIT,
+        ),
+    ):
+        store = deployment_registry._PackedFrozenIndexedStore[str, UserApplicationAssignment](
+            pack=deployment_registry._pack_user_assignment,
+            unpack=deployment_registry._unpack_user_assignment,
+            primary_key=lambda assignment: assignment.assignment_id,
+            preserve_identity=True,
+            preserve_identity_limit=preserve_limit,
+        )
+        for ordinal in range(count):
+            assignment = UserApplicationAssignment(
+                assignment_id=f"assignment-{ordinal:05d}",
+                hostname="ws-01",
+                principal="alice",
+                materialization_principal="Alice",
+                platform="windows",
+                user_profile_id="profile-1",
+                application_profile_id="application-profile-1",
+                application_id="custom_slack",
+                product_id="custom_slack",
+                release_id="release-1",
+                persona="developer",
+                eligible_categories=("user_app",),
+                intensity=1.0,
+                host_deployment_handle=0,
+                user_profile_handle=0,
+                installation_handle=0,
+                application_profile_handle=0,
+                selection_ordinal=ordinal,
+            )
+            store[assignment.assignment_id] = assignment
+        store.seal()
+        assert store._compat_values is None
+        assert store.retained_identity_entries == 0
+        assert store.metrics().backing_entries == store.metrics().high_water_mark == count
+        stores.append((store, count))
+
+    validation_calls = 0
+    original_post_init = UserApplicationAssignment.__post_init__
+
+    def count_validation(value: UserApplicationAssignment) -> None:
+        nonlocal validation_calls
+        validation_calls += 1
+        original_post_init(value)
+
+    monkeypatch.setattr(UserApplicationAssignment, "__post_init__", count_validation)
+    for store, count in stores:
+        target_id = f"assignment-{count - 1:05d}"
+        for _ in range(32):
+            decoded = store.get(target_id)
+            assert decoded is not None
+            assert decoded.assignment_id == target_id
+            assert decoded.selection_ordinal == count - 1
+    assert validation_calls == 0
 
 
 def test_assignment_category_index_selects_without_profile_bucket_materialization() -> None:
@@ -1212,18 +1642,128 @@ def test_assignment_category_index_selects_without_profile_bucket_materializatio
     )
     assert alternative is not None
     assert {preferred.application_id, alternative.application_id} == {"firefox", "chrome"}
-    assert (
-        registry.user_application_assignment_for_application(
-            profile.profile_id,
-            "POSTMAN",
-        )
-        is routed[0]
+    application_assignment = registry.user_application_assignment_for_application(
+        profile.profile_id,
+        "POSTMAN",
     )
+    assert application_assignment == routed[0]
+    assert application_assignment is not routed[0]
     census = registry.assignment_category_index_census(estimate_bytes=True)
     assert (census.buckets, census.links, census.max_bucket_size) == (2, 5, 3)
     assert census.browser_affinities == census.exact_selection_candidates == 1
     assert census.lookup_candidates_inspected > 0
     assert census.estimated_bytes > 0
+
+    profile_page, _profile_cursor = registry.page_user_application_assignments_for_profile(
+        profile.profile_id,
+        limit=10,
+    )
+    profile_assignment = registry.user_application_assignment_for_profile(
+        profile.profile_id,
+        application_profiles[0].application_profile_id,
+    )
+    assert profile_assignment == routed[0]
+    assert profile_assignment is not routed[0]
+    product_page, _product_cursor = registry.page_user_application_assignments_for_product(
+        "WS-01",
+        "postman",
+        limit=10,
+    )
+    release_page, _release_cursor = registry.page_user_application_assignments_for_release(
+        "WS-01",
+        releases[0].release_id,
+        limit=10,
+    )
+
+    def postman_from(values: tuple[UserApplicationAssignment, ...]) -> UserApplicationAssignment:
+        return next(value for value in values if value.application_id == "postman")
+
+    postman_views = (
+        routed[0],
+        registry.user_application_assignment(routed[0].assignment_id),
+        profile_assignment,
+        application_assignment,
+        registry.user_application_assignment_for_category_at(
+            profile.profile_id,
+            "user_app",
+            0,
+        ),
+        registry.select_user_application_assignment_for_category(
+            profile.profile_id,
+            "user_app",
+            unit_interval=0.0,
+        ),
+        registry.select_user_application_assignment_for_applications(
+            profile.profile_id,
+            ("postman",),
+            unit_interval=0.0,
+        ),
+        first[0],
+        postman_from(registry.user_application_assignments_for_profile(profile.profile_id)),
+        postman_from(
+            tuple(registry.iter_user_application_assignments_for_profile(profile.profile_id))
+        ),
+        postman_from(profile_page),
+        registry.user_application_assignments_for_product("WS-01", "postman")[0],
+        tuple(registry.iter_user_application_assignments_for_product("WS-01", "postman"))[0],
+        product_page[0],
+        registry.user_application_assignments_for_release("WS-01", releases[0].release_id)[0],
+        tuple(
+            registry.iter_user_application_assignments_for_release(
+                "WS-01",
+                releases[0].release_id,
+            )
+        )[0],
+        release_page[0],
+    )
+    assert all(view is not None for view in postman_views)
+    detached_postman_views = tuple(
+        view for view in postman_views if isinstance(view, UserApplicationAssignment)
+    )
+    owner_postman = registry._owned_user_application_assignment(routed[0].assignment_id)
+    assert owner_postman is not None
+    assert all(
+        view == owner_postman and view is not owner_postman for view in detached_postman_views
+    )
+    assert len({id(view) for view in detached_postman_views}) == len(detached_postman_views)
+
+    preferred_view = registry.preferred_browser_assignment(profile.profile_id)
+    assert preferred_view is not None
+    alternative_view = registry.browser_alternative_assignment_at(
+        profile.profile_id,
+        preferred_view.assignment_id,
+        0,
+    )
+    assert alternative_view is not None
+    owner_preferred = registry._owned_user_application_assignment(preferred_view.assignment_id)
+    owner_alternative = registry._owned_user_application_assignment(alternative_view.assignment_id)
+    assert owner_preferred is not None and owner_alternative is not None
+    assert preferred_view == owner_preferred and preferred_view is not owner_preferred
+    assert alternative_view == owner_alternative and alternative_view is not owner_alternative
+
+    mutation_census = (
+        registry.census(),
+        registry.deployment_census(),
+        registry.assignment_category_index_census(),
+        registry.scale_census(),
+    )
+    expected_assignments = {
+        owner.assignment_id: (owner.application_id, owner.selection_ordinal)
+        for owner in (owner_postman, owner_preferred, owner_alternative)
+    }
+    for view in (*detached_postman_views, preferred_view, alternative_view):
+        object.__setattr__(view, "application_id", "forged")
+        object.__setattr__(view, "selection_ordinal", 99_999)
+    assert (
+        registry.census(),
+        registry.deployment_census(),
+        registry.assignment_category_index_census(),
+        registry.scale_census(),
+    ) == mutation_census
+    for assignment_id, expected in expected_assignments.items():
+        fresh = registry.user_application_assignment(assignment_id)
+        assert fresh is not None
+        assert (fresh.application_id, fresh.selection_ordinal) == expected
 
     before = registry.scale_census()
     for ordinal in range(30 * 24):
@@ -1237,10 +1777,18 @@ def test_assignment_category_index_selects_without_profile_bucket_materializatio
         )
     after = registry.scale_census()
     assert before.physical_records == after.physical_records == 14
-    assert before.live_entries == before.retained_entries == 14
+    assert before.live_entries == 14
+    assert before.retained_entries == before.high_water_mark == 17
+    assert before.application_descriptor_owner_snapshots == 0
+    assert before.user_application_assignment_owner_snapshots == 3
+    assert (
+        registry._user_assignments._preserve_identity_limit
+        == deployment_registry._PACKED_IDENTITY_COMPAT_LIMIT
+    )
+    assert registry._user_assignments.retained_identity_entries == 3
     assert before.stale_entries == before.leased_entries == 0
     assert before.relationship_bindings == 11
-    assert before.backing_entries == 25
+    assert before.backing_entries == 28
     assert before.maximum_bucket_size == 3
     assert 0 < before.estimated_index_bytes <= before.estimated_bytes
     assert after.lookup_candidates_inspected == before.lookup_candidates_inspected + 30 * 24
@@ -1270,6 +1818,1080 @@ def test_assignment_category_index_selects_without_profile_bucket_materializatio
                 )
             )
         assert selected == expected
+
+
+def test_compiled_application_descriptor_lookup_is_exact_bounded_and_order_independent() -> None:
+    """Executable routes are frozen once and exact descriptor lookups never revisit inputs."""
+
+    descriptors = tuple(
+        CompiledApplicationDescriptor(
+            application_id=f"application-{ordinal:05d}",
+            platform="windows",
+            image_path=r"C:\Apps\shared.exe",
+            command_templates=(r'"C:\Apps\shared.exe"',),
+            categories=("user_app",),
+            selection_ordinal=ordinal,
+        )
+        for ordinal in range(4_096)
+    )
+    mutable_input = list(descriptors)
+    registry = DeploymentContentRegistry(
+        application_descriptors=(descriptor for descriptor in mutable_input)
+    )
+    mutable_input.clear()
+
+    executable_ids = registry.application_ids_for_executable("windows", "SHARED.EXE")
+    assert len(executable_ids) == 4_096
+    assert executable_ids[0] == "application-00000"
+    assert executable_ids[-1] == "application-04095"
+    assert executable_ids is registry.application_ids_for_executable(
+        "windows",
+        r"C:\Apps\shared.exe",
+    )
+    assert (
+        registry.application_descriptor(
+            "application-02048",
+            "windows",
+        )
+        == descriptors[2_048]
+    )
+    census = registry.census()
+    assert census.application_descriptors == 4_096
+    assert census.application_executable_bindings == 4_096
+    scale = registry.scale_census()
+    assert scale.physical_records == scale.live_entries == 4_096
+    assert scale.retained_entries == scale.high_water_mark == 8_192
+    assert scale.application_descriptor_owner_snapshots == 4_096
+    assert scale.user_application_assignment_owner_snapshots == 0
+    assert scale.relationship_bindings == scale.application_executable_bindings == 4_096
+    assert scale.backing_entries == 12_288
+    assert scale.maximum_bucket_size == 4_096
+    assert 0 < scale.estimated_index_bytes <= scale.estimated_bytes
+
+    reversed_registry = DeploymentContentRegistry(
+        application_descriptors=tuple(reversed(descriptors))
+    )
+    assert (
+        reversed_registry.application_ids_for_executable(
+            "windows",
+            "shared.exe",
+        )
+        == executable_ids
+    )
+    tied = (
+        CompiledApplicationDescriptor(
+            application_id="zeta",
+            platform="windows",
+            image_path=r"C:\Apps\tie.exe",
+            command_templates=(r'"C:\Apps\tie.exe"',),
+            categories=("user_app",),
+            selection_ordinal=7,
+        ),
+        CompiledApplicationDescriptor(
+            application_id="alpha",
+            platform="windows",
+            image_path=r"C:\Apps\tie.exe",
+            command_templates=(r'"C:\Apps\tie.exe"',),
+            categories=("user_app",),
+            selection_ordinal=7,
+        ),
+    )
+    tied_registry = DeploymentContentRegistry(application_descriptors=tied)
+    assert tied_registry.application_ids_for_executable("windows", "tie.exe") == (
+        "alpha",
+        "zeta",
+    )
+
+
+def test_descriptor_owner_snapshot_survives_generic_compatibility_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime ownership and detached public reads stay constant above the generic limit."""
+
+    count = deployment_registry._PACKED_IDENTITY_COMPAT_LIMIT + 1
+    descriptors = tuple(
+        CompiledApplicationDescriptor(
+            application_id=f"application-{ordinal:05d}",
+            platform="windows",
+            image_path=r"C:\Apps\shared.exe",
+            command_templates=(r'"C:\Apps\shared.exe" --flag',),
+            categories=("user_app",),
+            selection_ordinal=ordinal,
+        )
+        for ordinal in range(count)
+    )
+    registry = DeploymentContentRegistry(application_descriptors=descriptors)
+    census_before = (registry.census(), registry.deployment_census(), registry.scale_census())
+
+    monkeypatch.setattr(
+        deployment_registry,
+        "_validate_application_command_expansion_bounds",
+        lambda *_args, **_kwargs: pytest.fail("retained descriptor was revalidated"),
+    )
+    target_id = f"application-{count - 1:05d}"
+    public_descriptor = registry.application_descriptor(target_id, "windows")
+    assert public_descriptor == descriptors[-1]
+    owned_descriptor = registry._owned_application_descriptor(target_id, "windows")
+    assert owned_descriptor == public_descriptor
+    assert owned_descriptor is not public_descriptor
+    object.__setattr__(public_descriptor, "command_templates", ("calc.exe --returned",))
+    object.__setattr__(public_descriptor, "selection_ordinal", count + 1)
+    assert registry.application_descriptor(target_id, "windows") == descriptors[-1]
+    executable_ids = registry.application_ids_for_executable("windows", "shared.exe")
+    assert len(executable_ids) == count
+    assert executable_ids[-1] == target_id
+    scale = registry.scale_census()
+    assert scale.physical_records == count
+    assert scale.retained_entries == scale.high_water_mark == count * 2
+    assert scale.application_descriptor_owner_snapshots == count
+    assert scale.user_application_assignment_owner_snapshots == 0
+    assert scale.relationship_bindings == count
+    assert scale.backing_entries == count * 3
+    descriptor_store = registry._application_descriptors
+    descriptor_metrics = descriptor_store.metrics(estimate_bytes=True)
+    retained_snapshots = descriptor_store._compat_values
+    assert retained_snapshots is not None and len(retained_snapshots) == count
+    retained_snapshot_bytes = deployment_registry._owned_graph_size(retained_snapshots)
+    assert descriptor_metrics.backing_entries == descriptor_metrics.high_water_mark == count * 2
+    assert descriptor_metrics.estimated_bytes >= (
+        descriptor_store._rows.estimated_bytes() + retained_snapshot_bytes
+    )
+    assert scale.estimated_bytes >= descriptor_metrics.estimated_bytes
+    assert (registry.census(), registry.deployment_census(), scale) == census_before
+
+
+def test_descriptor_registry_bounds_owner_snapshot_graph_neutrally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shared admission bounds both descriptor count and cumulative owner text."""
+
+    descriptors = tuple(
+        CompiledApplicationDescriptor(
+            application_id=f"custom-{ordinal}",
+            platform="windows",
+            image_path=r"C:\Apps\shared.exe",
+            command_templates=(r'"C:\Apps\shared.exe" --flag',),
+            categories=("user_app",),
+            selection_ordinal=ordinal,
+        )
+        for ordinal in range(2)
+    )
+    baseline = DeploymentContentRegistry(application_descriptors=(descriptors[0],))
+    census_before = (baseline.census(), baseline.deployment_census(), baseline.scale_census())
+    rng = random.Random(8675309)
+    rng_before = rng.getstate()
+    count_limit = deployment_registry._MAX_APPLICATION_DESCRIPTOR_REGISTRY_COUNT
+
+    monkeypatch.setattr(deployment_registry, "_MAX_APPLICATION_DESCRIPTOR_REGISTRY_COUNT", 1)
+    with pytest.raises(ValueError, match="bounded registry count"):
+        DeploymentContentRegistry(application_descriptors=descriptors)
+
+    monkeypatch.setattr(
+        deployment_registry,
+        "_MAX_APPLICATION_DESCRIPTOR_REGISTRY_COUNT",
+        count_limit,
+    )
+    monkeypatch.setattr(
+        deployment_registry,
+        "_MAX_APPLICATION_DESCRIPTOR_REGISTRY_TEXT_BYTES",
+        descriptors[0].retained_text_bytes,
+    )
+    with pytest.raises(ValueError, match="bounded registry text budget"):
+        DeploymentContentRegistry(application_descriptors=descriptors)
+
+    assert rng.getstate() == rng_before
+    assert (baseline.census(), baseline.deployment_census(), baseline.scale_census()) == (
+        census_before
+    )
+
+
+def test_descriptor_graph_rejects_callback_capable_values_before_virtual_operations() -> None:
+    """Only exact inert builtins may enter descriptor normalization or packed ownership."""
+
+    callbacks: list[str] = []
+
+    class HostileString(str):
+        def strip(self, *_args: object, **_kwargs: object) -> str:
+            callbacks.append("strip")
+            raise AssertionError("hostile strip callback ran")
+
+        def __len__(self) -> int:
+            callbacks.append("len")
+            raise AssertionError("hostile len callback ran")
+
+        def encode(self, *_args: object, **_kwargs: object) -> bytes:
+            callbacks.append("encode")
+            raise AssertionError("hostile encode callback ran")
+
+        def casefold(self) -> str:
+            callbacks.append("casefold")
+            raise AssertionError("hostile casefold callback ran")
+
+    class HostileTuple(tuple[object, ...]):
+        def __iter__(self) -> Iterator[object]:
+            callbacks.append("iter")
+            raise AssertionError("hostile iter callback ran")
+
+        def __len__(self) -> int:
+            callbacks.append("len")
+            raise AssertionError("hostile len callback ran")
+
+        def __getitem__(self, key: object) -> object:
+            callbacks.append("getitem")
+            raise AssertionError("hostile getitem callback ran")
+
+    base: dict[str, object] = {
+        "application_id": "custom_slack",
+        "platform": "windows",
+        "image_path": r"C:\Custom\custom-slack.exe",
+        "command_templates": (r'"C:\Custom\custom-slack.exe" --flag',),
+        "categories": ("user_app",),
+        "command_parameter_pools": (("tenant", ("blue",)),),
+        "singleton_per_session": False,
+        "selection_ordinal": 0,
+    }
+    hostile_text = HostileString("x" * 70_005)
+    invalid_overrides: tuple[tuple[str, object], ...] = (
+        ("application_id", hostile_text),
+        ("platform", HostileString("windows")),
+        ("image_path", HostileString(r"C:\Custom\custom-slack.exe")),
+        ("command_templates", HostileTuple((base["command_templates"],))),
+        ("command_templates", [r'"C:\Custom\custom-slack.exe"']),
+        ("command_templates", iter((r'"C:\Custom\custom-slack.exe"',))),
+        ("command_templates", (hostile_text,)),
+        ("categories", HostileTuple(("user_app",))),
+        ("categories", (HostileString("user_app"),)),
+        ("command_parameter_pools", HostileTuple((("tenant", ("blue",)),))),
+        ("command_parameter_pools", ((HostileString("tenant"), ("blue",)),)),
+        ("command_parameter_pools", (("tenant", HostileTuple(("blue",))),)),
+        ("command_parameter_pools", (("tenant", (HostileString("blue"),)),)),
+    )
+    for field_name, value in invalid_overrides:
+        values = {**base, field_name: value}
+        with pytest.raises(ValueError, match="exact"):
+            CompiledApplicationDescriptor(**values)  # type: ignore[arg-type]
+    assert callbacks == []
+
+    valid = CompiledApplicationDescriptor(**base)  # type: ignore[arg-type]
+    baseline = DeploymentContentRegistry(application_descriptors=(valid,))
+    census_before = (baseline.census(), baseline.deployment_census(), baseline.scale_census())
+    rng = random.Random(8675309)
+    rng_before = rng.getstate()
+    object.__setattr__(valid, "command_templates", (hostile_text,))
+    with pytest.raises(ValueError, match="exact str"):
+        DeploymentContentRegistry(application_descriptors=(valid,))
+    assert callbacks == []
+
+    retained = baseline.application_descriptor("custom_slack", "windows")
+    assert retained is not None
+    assert type(retained.application_id) is str
+    assert type(retained.platform) is str
+    assert type(retained.image_path) is str
+    assert type(retained.command_templates) is tuple
+    assert all(type(value) is str for value in retained.command_templates)
+    assert type(retained.categories) is tuple
+    assert all(type(value) is str for value in retained.categories)
+    assert type(retained.command_parameter_pools) is tuple
+    assert len(baseline._application_descriptors._rows.get(0)) < 65_536
+    assert rng.getstate() == rng_before
+    assert (baseline.census(), baseline.deployment_census(), baseline.scale_census()) == (
+        census_before
+    )
+
+
+def test_direct_descriptor_rejects_command_image_mismatch_neutrally() -> None:
+    """Direct admission shares compiler executable parity before registry publication."""
+
+    valid = CompiledApplicationDescriptor(
+        application_id="custom_slack",
+        platform="windows",
+        image_path=r"C:\Custom\custom-slack.exe",
+        command_templates=(r'"C:\Custom\custom-slack.exe" --flag',),
+        categories=("user_app",),
+    )
+    baseline = DeploymentContentRegistry(application_descriptors=(valid,))
+    stored_before = baseline.application_descriptor("custom_slack", "windows")
+    assert stored_before is not None and stored_before is not valid
+    assert copy.copy(stored_before) == stored_before
+    assert copy.deepcopy(stored_before) == stored_before
+    census_before = (baseline.census(), baseline.deployment_census(), baseline.scale_census())
+    rng = random.Random(8675309)
+    rng_before = rng.getstate()
+
+    with pytest.raises(ValueError, match="not its declared image"):
+        CompiledApplicationDescriptor(
+            application_id="custom_slack",
+            platform="windows",
+            image_path=r"C:\Custom\custom-slack.exe",
+            command_templates=("calc.exe --stale",),
+            categories=("user_app",),
+        )
+    with pytest.raises(ValueError, match="not its declared image"):
+        CompiledApplicationDescriptor(
+            application_id="custom_slack",
+            platform="windows",
+            image_path=r"C:\Custom\custom-slack.exe",
+            command_templates=("C:custom-slack.exe --stale",),
+            categories=("user_app",),
+        )
+    for quoted_command in (
+        r"'/opt/acme\bin/tool' --flag",
+        r'"/opt/acme\bin/tool" --flag',
+    ):
+        with pytest.raises(ValueError, match="not its declared image"):
+            CompiledApplicationDescriptor(
+                application_id="posix_tool",
+                platform="linux",
+                image_path="/opt/acme/bin/tool",
+                command_templates=(quoted_command,),
+                categories=("user_app",),
+            )
+    with pytest.raises(ValueError, match="image_path cannot contain backslashes"):
+        CompiledApplicationDescriptor(
+            application_id="posix_tool",
+            platform="linux",
+            image_path=r"/opt/acme\bin/tool",
+            command_templates=(r"'/opt/acme\bin/tool' --flag",),
+            categories=("user_app",),
+        )
+    escaped_space = CompiledApplicationDescriptor(
+        application_id="posix_tool",
+        platform="linux",
+        image_path="/opt/acme bin/tool",
+        command_templates=(r"/opt/acme\ bin/tool --flag",),
+        categories=("user_app",),
+    )
+    assert escaped_space.executable == "tool"
+
+    tampered_before_admission = CompiledApplicationDescriptor(
+        application_id="custom_slack",
+        platform="windows",
+        image_path=r"C:\Custom\custom-slack.exe",
+        command_templates=(r'"C:\Custom\custom-slack.exe" --flag',),
+        categories=("user_app",),
+    )
+    object.__setattr__(tampered_before_admission, "command_templates", ("calc.exe --stale",))
+    with pytest.raises(ValueError, match="not its declared image"):
+        DeploymentContentRegistry(application_descriptors=(tampered_before_admission,))
+    with pytest.raises(ValueError, match="exact CompiledApplicationDescriptor"):
+        DeploymentContentRegistry(
+            application_descriptors=(object(),),  # type: ignore[arg-type]
+        )
+
+    object.__setattr__(valid, "command_templates", ("calc.exe --unexpected",))
+    object.__setattr__(valid, "selection_ordinal", 99)
+    stored_after = baseline.application_descriptor("custom_slack", "windows")
+    assert stored_after is not None and stored_after is not valid
+    assert stored_after.command_templates == (r'"C:\Custom\custom-slack.exe" --flag',)
+    assert stored_after.selection_ordinal == 0
+    assert baseline.application_ids_for_executable(
+        "windows",
+        "custom-slack.exe",
+    ) == ("custom_slack",)
+    assert rng.getstate() == rng_before
+    assert (baseline.census(), baseline.deployment_census(), baseline.scale_census()) == (
+        census_before
+    )
+
+
+def test_direct_registry_rejects_posix_installation_backslashes_neutrally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POSIX installation truth cannot collapse a literal backslash into a path separator."""
+
+    release = BinaryReleaseIdentity(
+        key=BinaryReleaseKey(
+            product_id="posix_tool",
+            version="1.0.0",
+            build="1",
+            architecture="x64",
+            platform="linux",
+            artifact_name="tool",
+            variant="stable",
+        )
+    )
+    profile = UserProfileIdentity(
+        hostname="LINUX-01",
+        principal="alice",
+        platform="linux",
+        profile_name="default",
+        profile_root="/home/alice",
+    )
+
+    def installation(image_path: str) -> SoftwareInstallationIdentity:
+        return SoftwareInstallationIdentity(
+            hostname="LINUX-01",
+            application_id="posix_tool",
+            release_id=release.release_id,
+            platform="linux",
+            scope="user",
+            principal="alice",
+            user_profile_id=profile.profile_id,
+            install_root="/opt/acme",
+            image_paths=(image_path,),
+        )
+
+    valid_installation = installation("/opt/acme/bin/tool")
+    application_profile = ApplicationProfileIdentity(
+        hostname="LINUX-01",
+        principal="alice",
+        platform="linux",
+        user_profile_id=profile.profile_id,
+        installation_id=valid_installation.installation_id,
+        application_id="posix_tool",
+        profile_name="default",
+        profile_root="/home/alice/.config/posix-tool",
+    )
+    descriptor = CompiledApplicationDescriptor(
+        application_id="posix_tool",
+        platform="linux",
+        image_path="/opt/acme/bin/tool",
+        command_templates=("/opt/acme/bin/tool --user {username}",),
+        categories=("user_app",),
+    )
+    deployment = HostDeploymentSpec(
+        hostname="LINUX-01",
+        roles=("workstation",),
+        platform="linux",
+        os_build="ubuntu-24.04",
+        architecture="x64",
+        installation_ids=(valid_installation.installation_id,),
+    )
+    assignment_spec = UserApplicationAssignmentSpec(
+        hostname="LINUX-01",
+        principal="alice",
+        platform="linux",
+        user_profile_id=profile.profile_id,
+        application_profile_id=application_profile.application_profile_id,
+        persona="developer",
+        eligible_categories=("user_app",),
+        intensity=1.0,
+    )
+    content = FileContentIdentity(
+        file_object_id="posix-tool-cache",
+        version=1,
+        size_bytes=4_096,
+        mime_type="application/octet-stream",
+        seed_ref="posix-tool-cache",
+    )
+
+    def local_artifact(
+        native_path: str,
+        *,
+        source_object_id: str = "cache-entry-1",
+    ) -> LocalArtifactIdentity:
+        return LocalArtifactIdentity(
+            hostname="LINUX-01",
+            principal="alice",
+            platform="linux",
+            user_profile_id=profile.profile_id,
+            application_profile_id=application_profile.application_profile_id,
+            application_id="posix_tool",
+            family="message-cache",
+            source_object_id=source_object_id,
+            native_path=native_path,
+            content_id=content.content_id,
+            version=1,
+        )
+
+    valid_artifact_path = "/home/alice/.config/posix-tool/cache/entry.bin"
+    valid_artifact = local_artifact(valid_artifact_path)
+    valid_artifact_binary = LocalArtifactBinaryIdentity(
+        artifact_version_id=valid_artifact.artifact_version_id,
+        content_id=content.content_id,
+        digests=content.digests,
+        platform="linux",
+        architecture="x64",
+        artifact_name="entry.bin",
+    )
+    valid_artifact_record = LocalArtifactVersionRecord(
+        artifact=valid_artifact,
+        content=content,
+        binary=valid_artifact_binary,
+    )
+
+    def compile_registry(
+        selected_installation: SoftwareInstallationIdentity,
+        selected_profile: UserProfileIdentity = profile,
+        selected_artifact: LocalArtifactIdentity = valid_artifact,
+    ) -> DeploymentContentRegistry:
+        return DeploymentContentRegistry(
+            binary_releases=(release,),
+            user_profiles=(selected_profile,),
+            installations=(selected_installation,),
+            application_profiles=(application_profile,),
+            application_descriptors=(descriptor,),
+            host_deployments=(deployment,),
+            user_application_assignments=(assignment_spec,),
+            file_contents=(content,),
+            local_artifacts=(selected_artifact,),
+        )
+
+    source_installation = copy.copy(valid_installation)
+    source_artifact = copy.copy(valid_artifact)
+    baseline = compile_registry(source_installation, profile, source_artifact)
+    object.__setattr__(source_installation, "installation_id", "forged-installation")
+    object.__setattr__(source_installation, "image_paths", (r"/opt/acme\bin/tool",))
+    object.__setattr__(
+        source_artifact,
+        "native_path",
+        r"/home/alice/.config/posix-tool/cache\entry.bin",
+    )
+    object.__setattr__(source_artifact, "artifact_id", "forged-artifact")
+    object.__setattr__(source_artifact, "artifact_version_id", "forged-version")
+    assignment = baseline.user_application_assignment(assignment_spec.assignment_id)
+    assert assignment is not None
+    baseline_rng = random.Random(8675309)
+    expected_rng = random.Random(8675309)
+    expected_rng.choice(descriptor.command_templates)
+    assert baseline.materialize_application_command(
+        baseline_rng,
+        assignment,
+        username="alice",
+    ) == ("/opt/acme/bin/tool", "/opt/acme/bin/tool --user alice")
+    assert baseline_rng.getstate() == expected_rng.getstate()
+    census_before = (baseline.census(), baseline.deployment_census(), baseline.scale_census())
+    retained_artifacts = LocalArtifactVersionRegistry(
+        capacity=4,
+        retention=timedelta(hours=1),
+    )
+    observed_at = datetime(2026, 8, 18, 12, 0, tzinfo=UTC)
+    retained_artifacts.publish_version(valid_artifact_record, observed_at)
+    retained_census_before = retained_artifacts.census()
+    assert baseline.application_ids_for_executable("linux", "tool") == ("posix_tool",)
+    assert baseline.application_ids_for_executable("linux", "/opt/acme/bin/tool") == ("posix_tool",)
+    assert (
+        baseline.resolve_binary(
+            "LINUX-01",
+            "/opt/acme/./bin/tool",
+            "linux",
+            principal="alice",
+        )
+        == release
+    )
+    assert (
+        baseline.installation_for_image(
+            "LINUX-01",
+            "/opt//acme/bin/tool",
+            "linux",
+            principal="alice",
+        )
+        == valid_installation
+    )
+    assert (
+        baseline.local_artifact_for_path(
+            profile.profile_id,
+            application_profile.application_profile_id,
+            "/home/alice/.config/posix-tool/cache/./entry.bin",
+            "linux",
+            1,
+        )
+        == valid_artifact
+    )
+    retained_direct_artifact = baseline.local_artifact(valid_artifact.artifact_id, 1)
+    assert retained_direct_artifact == valid_artifact
+    assert retained_direct_artifact is not source_artifact
+    object.__setattr__(
+        retained_direct_artifact,
+        "native_path",
+        r"/home/alice/.config/posix-tool/cache\entry.bin",
+    )
+    assert baseline.local_artifact(valid_artifact.artifact_id, 1) == valid_artifact
+    assert (
+        retained_artifacts.get_for_path(
+            profile.profile_id,
+            application_profile.application_profile_id,
+            "/home/alice/.config/posix-tool//cache/entry.bin",
+            "linux",
+            1,
+        )
+        == valid_artifact
+    )
+    assert (
+        retained_artifacts.resolve_record_for_execution_path(
+            "LINUX-01",
+            "alice",
+            "/home/alice/.config/posix-tool/cache/./entry.bin",
+            "linux",
+        )
+        == valid_artifact_record
+    )
+    assert (
+        retained_artifacts.resolve_binary_for_path(
+            "LINUX-01",
+            "alice",
+            valid_artifact_path,
+            "linux",
+        )
+        == valid_artifact_binary
+    )
+
+    invalid_binary_paths = (
+        r"/opt/acme\bin/tool",
+        r"/opt/acme/bin\tool",
+        r"\opt\acme\bin\tool",
+    )
+    invalid_artifact_paths = (
+        r"/home/alice/.config/posix-tool/cache\entry.bin",
+        r"/home/alice/.config/posix-tool\cache/entry.bin",
+        r"\home\alice\.config\posix-tool\cache\entry.bin",
+    )
+    for invalid_path in invalid_binary_paths:
+        assert (
+            baseline.installation_for_image(
+                "LINUX-01",
+                invalid_path,
+                "linux",
+                principal="alice",
+            ),
+            baseline.resolve_binary(
+                "LINUX-01",
+                invalid_path,
+                "linux",
+                principal="alice",
+            ),
+        ) == (None, None)
+        assert baseline.application_ids_for_executable("linux", invalid_path) == ()
+    for invalid_path in invalid_artifact_paths:
+        assert (
+            baseline.local_artifact_for_path(
+                profile.profile_id,
+                application_profile.application_profile_id,
+                invalid_path,
+                "linux",
+                1,
+            ),
+            retained_artifacts.get_for_path(
+                profile.profile_id,
+                application_profile.application_profile_id,
+                invalid_path,
+                "linux",
+                1,
+            ),
+            retained_artifacts.resolve_record_for_execution_path(
+                "LINUX-01",
+                "alice",
+                invalid_path,
+                "linux",
+            ),
+            retained_artifacts.resolve_binary_for_path(
+                "LINUX-01",
+                "alice",
+                invalid_path,
+                "linux",
+            ),
+        ) == (None, None, None, None)
+    assert deployment_compiler._artifact_name(r"/tmp\redis-cli", "linux") == (r"tmp\redis-cli")
+    with pytest.raises(ValueError, match="artifact_name must not contain an installation path"):
+        BinaryReleaseIdentity(
+            key=BinaryReleaseKey(
+                product_id="redis",
+                version="1.0.0",
+                build="1",
+                architecture="x64",
+                platform="linux",
+                artifact_name=deployment_compiler._artifact_name(
+                    r"/tmp\redis-cli",
+                    "linux",
+                ),
+                variant="stable",
+            )
+        )
+    rejected_rng = random.Random(8675309)
+    rejected_rng_before = rejected_rng.getstate()
+    forged_installation = copy.copy(valid_installation)
+    object.__setattr__(forged_installation, "installation_id", "forged-installation")
+    with pytest.raises(ValueError, match="canonical derived identity"):
+        compile_registry(forged_installation)
+    for derived_field in ("artifact_id", "artifact_version_id"):
+        forged_artifact = copy.copy(valid_artifact)
+        object.__setattr__(forged_artifact, derived_field, f"forged-{derived_field}")
+        with pytest.raises(ValueError, match="canonical derived identity"):
+            compile_registry(valid_installation, profile, forged_artifact)
+    with pytest.raises(ValueError, match="POSIX.*image_paths cannot contain backslashes"):
+        compile_registry(installation(r"/opt/acme\bin/tool"))
+    invalid_artifact = local_artifact(invalid_artifact_paths[0])
+    with pytest.raises(ValueError, match="POSIX local artifact native_path"):
+        compile_registry(valid_installation, profile, invalid_artifact)
+    invalid_artifact_binary = LocalArtifactBinaryIdentity(
+        artifact_version_id=invalid_artifact.artifact_version_id,
+        content_id=content.content_id,
+        digests=content.digests,
+        platform="linux",
+        architecture="x64",
+        artifact_name="entry.bin",
+    )
+    invalid_artifact_record = LocalArtifactVersionRecord(
+        artifact=invalid_artifact,
+        content=content,
+        binary=invalid_artifact_binary,
+    )
+    with pytest.raises(StateError, match="POSIX local artifact native_path"):
+        retained_artifacts.publish(invalid_artifact, observed_at)
+    with pytest.raises(StateError, match="POSIX local artifact native_path"):
+        retained_artifacts.publish_version(invalid_artifact_record, observed_at)
+
+    atomic_artifacts = LocalArtifactVersionRegistry(
+        capacity=1,
+        retention=timedelta(hours=1),
+    )
+    atomic_artifacts.publish(valid_artifact, observed_at)
+    publication_source = local_artifact(
+        "/home/alice/.config/posix-tool/cache/entry-2.bin",
+        source_object_id="cache-entry-2",
+    )
+    expected_publication = copy.copy(publication_source)
+    expected_publication_id = publication_source.artifact_version_id
+    snapshot_ready = Event()
+    resume_publication = Event()
+    original_canonical_artifact = deployment_registry._canonical_local_artifact_identity
+
+    def pause_after_snapshot(source: object) -> LocalArtifactIdentity:
+        canonical = original_canonical_artifact(source)
+        if source is publication_source:
+            snapshot_ready.set()
+            if not resume_publication.wait(timeout=2):
+                raise AssertionError("publication snapshot test timed out")
+        return canonical
+
+    monkeypatch.setattr(
+        deployment_registry,
+        "_canonical_local_artifact_identity",
+        pause_after_snapshot,
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        publication = executor.submit(
+            atomic_artifacts.publish,
+            publication_source,
+            observed_at,
+        )
+        assert snapshot_ready.wait(timeout=2)
+        object.__setattr__(publication_source, "native_path", invalid_artifact_paths[0])
+        object.__setattr__(publication_source, "artifact_id", "forged-after-snapshot")
+        object.__setattr__(publication_source, "artifact_version_id", "forged-after-snapshot")
+        resume_publication.set()
+        assert publication.result(timeout=2) >= 0
+    published = atomic_artifacts.get(expected_publication_id)
+    assert published == expected_publication
+    assert published is not publication_source
+    assert atomic_artifacts.census().live_versions == 1
+    for profile_root in ("/home/alice\\", "/home/alice\\/"):
+        invalid_profile = UserProfileIdentity(
+            hostname="LINUX-01",
+            principal="alice",
+            platform="linux",
+            profile_name="default",
+            profile_root=profile_root,
+        )
+        assert invalid_profile.profile_id == profile.profile_id
+        with pytest.raises(ValueError, match="presentation principal must match"):
+            compile_registry(valid_installation, invalid_profile)
+    assert rejected_rng.getstate() == rejected_rng_before
+    assert (baseline.census(), baseline.deployment_census(), baseline.scale_census()) == (
+        census_before
+    )
+    assert retained_artifacts.census() == retained_census_before
+
+
+def test_assignment_ordinal_must_match_descriptor_before_publication() -> None:
+    """Direct assignment order is authenticated against immutable descriptor order."""
+
+    profile = _user_profile("WS-01", "alice")
+    release = _windows_release()
+    installation = _user_installation(
+        release,
+        profile,
+        r"C:\Users\alice\AppData\Local\slack\slack.exe",
+    )
+    application_profile = _application_profile(profile, installation)
+    descriptor = CompiledApplicationDescriptor(
+        application_id="slack",
+        platform="windows",
+        image_path=r"C:\Users\{username}\AppData\Local\slack\slack.exe",
+        command_templates=(
+            r'"C:\Users\{username}\AppData\Local\slack\slack.exe" --user {username}',
+        ),
+        categories=("user_app",),
+        selection_ordinal=7,
+    )
+    deployment = HostDeploymentSpec(
+        hostname="WS-01",
+        roles=("workstation",),
+        platform="windows",
+        os_build="22621.3155",
+        architecture="x64",
+        installation_ids=(installation.installation_id,),
+    )
+
+    def assignment_spec(ordinal: int) -> UserApplicationAssignmentSpec:
+        return UserApplicationAssignmentSpec(
+            hostname="WS-01",
+            principal="ALICE",
+            platform="windows",
+            user_profile_id=profile.profile_id,
+            application_profile_id=application_profile.application_profile_id,
+            persona="developer",
+            eligible_categories=("user_app",),
+            intensity=1.0,
+            selection_ordinal=ordinal,
+        )
+
+    valid_spec = assignment_spec(7)
+    baseline = DeploymentContentRegistry(
+        binary_releases=(release,),
+        user_profiles=(profile,),
+        installations=(installation,),
+        application_profiles=(application_profile,),
+        application_descriptors=(descriptor,),
+        host_deployments=(deployment,),
+        user_application_assignments=(valid_spec,),
+    )
+    assignment = baseline.user_application_assignment(valid_spec.assignment_id)
+    assert assignment is not None and assignment.selection_ordinal == 7
+    census_before = (
+        baseline.census(),
+        baseline.deployment_census(),
+        baseline.assignment_category_index_census(),
+        baseline.scale_census(),
+    )
+    rng = random.Random(8675309)
+    rng_before = rng.getstate()
+
+    for forged_ordinal in (6, 8):
+        with pytest.raises(ValueError, match="selection_ordinal must match"):
+            DeploymentContentRegistry(
+                binary_releases=(release,),
+                user_profiles=(profile,),
+                installations=(installation,),
+                application_profiles=(application_profile,),
+                application_descriptors=(descriptor,),
+                host_deployments=(deployment,),
+                user_application_assignments=(assignment_spec(forged_ordinal),),
+            )
+
+    tampered_before_admission = CompiledApplicationDescriptor(
+        application_id="slack",
+        platform="windows",
+        image_path=r"C:\Users\{username}\AppData\Local\slack\slack.exe",
+        command_templates=(
+            r'"C:\Users\{username}\AppData\Local\slack\slack.exe" --user {username}',
+        ),
+        categories=("user_app",),
+        selection_ordinal=7,
+    )
+    object.__setattr__(tampered_before_admission, "selection_ordinal", 99)
+    with pytest.raises(ValueError, match="selection_ordinal must match"):
+        DeploymentContentRegistry(
+            binary_releases=(release,),
+            user_profiles=(profile,),
+            installations=(installation,),
+            application_profiles=(application_profile,),
+            application_descriptors=(tampered_before_admission,),
+            host_deployments=(deployment,),
+            user_application_assignments=(valid_spec,),
+        )
+
+    assert rng.getstate() == rng_before
+    assert (
+        baseline.census(),
+        baseline.deployment_census(),
+        baseline.assignment_category_index_census(),
+        baseline.scale_census(),
+    ) == census_before
+
+
+def test_release_minimum_deployment_population_preserves_direct_constructor_census() -> None:
+    """The exact 11-family release fixture remains valid without compiled descriptors."""
+
+    from scripts.deployment_population_scale_probe import build_deployment_population
+
+    registry = build_deployment_population(11)
+    census = registry.census()
+    scale = registry.scale_census()
+
+    assert census.application_descriptors == 0
+    assert scale.application_descriptor_owner_snapshots == 0
+    assert census.application_executable_bindings == 0
+    assert scale.physical_records == scale.live_entries == scale.retained_entries == 11
+    assert scale.high_water_mark == 11
+    assert scale.relationship_bindings == 8
+    assert scale.backing_entries == 19
+    assert 0 < scale.estimated_index_bytes <= scale.estimated_bytes
+
+
+@pytest.mark.parametrize(
+    "ordinal",
+    [True, False, 1.0, float("nan"), float("inf"), float("-inf"), -1],
+)
+def test_compiled_application_descriptor_rejects_non_exact_ordinals(
+    ordinal: object,
+) -> None:
+    """Catalog ordering accepts only finite, non-negative exact integers."""
+
+    with pytest.raises(ValueError, match="non-negative exact int"):
+        CompiledApplicationDescriptor(
+            application_id="invalid-ordinal",
+            platform="windows",
+            image_path=r"C:\Apps\invalid.exe",
+            command_templates=(r'"C:\Apps\invalid.exe"',),
+            categories=("user_app",),
+            selection_ordinal=ordinal,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    "ordinal",
+    [True, False, 1.0, float("nan"), float("inf"), float("-inf"), -1],
+)
+def test_assignment_spec_rejects_non_exact_ordinals(ordinal: object) -> None:
+    """Assignment ordering accepts only finite, non-negative exact integers."""
+
+    with pytest.raises(ValueError, match="non-negative exact int"):
+        UserApplicationAssignmentSpec(
+            hostname="WS-01",
+            principal="alice",
+            platform="windows",
+            user_profile_id="profile-1",
+            application_profile_id="application-profile-1",
+            persona="developer",
+            eligible_categories=("user_app",),
+            intensity=1.0,
+            selection_ordinal=ordinal,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    "pools",
+    [
+        (("self", ("{self}",)),),
+        (("first", ("{second}",)), ("second", ("{first}",))),
+    ],
+)
+def test_compiled_application_descriptor_rejects_parameter_pool_cycles(
+    pools: tuple[tuple[str, tuple[str, ...]], ...],
+) -> None:
+    """Scoped command parameters cannot recurse directly or mutually."""
+
+    with pytest.raises(ValueError, match="contains a cycle"):
+        CompiledApplicationDescriptor(
+            application_id="cyclic",
+            platform="linux",
+            image_path="/usr/bin/tool",
+            command_templates=("tool {first}",),
+            command_parameter_pools=pools,
+            categories=("user_app",),
+        )
+
+
+@pytest.mark.parametrize(
+    "pools",
+    [
+        (("self-cycle", ("{self-cycle}",)),),
+        (("first-pool", ("{second-pool}",)), ("second-pool", ("{first-pool}",))),
+    ],
+)
+def test_compiled_application_descriptor_rejects_non_identifier_pool_names(
+    pools: tuple[tuple[str, tuple[str, ...]], ...],
+) -> None:
+    """Invalid placeholder names reject before cycle analysis can recurse."""
+
+    with pytest.raises(ValueError, match="names must match"):
+        CompiledApplicationDescriptor(
+            application_id="invalid-pool-name",
+            platform="linux",
+            image_path="/usr/bin/tool",
+            command_templates=("tool {self-cycle}",),
+            command_parameter_pools=pools,
+            categories=("user_app",),
+        )
+
+
+def test_compiled_application_descriptor_rejects_unbounded_expansion() -> None:
+    """Acyclic replacement bombs fail before runtime RNG or output allocation."""
+
+    bounded = CompiledApplicationDescriptor(
+        application_id="bounded-expansion",
+        platform="linux",
+        image_path="/usr/bin/tool",
+        command_templates=("tool " + ("{value}" * 1_024),),
+        command_parameter_pools=(("value", ("x",)),),
+        categories=("user_app",),
+    )
+    assert bounded.command_templates[0].count("{value}") == 1_024
+
+    with pytest.raises(ValueError, match="bounded replacement limit"):
+        CompiledApplicationDescriptor(
+            application_id="one-too-many-expansions",
+            platform="linux",
+            image_path="/usr/bin/tool",
+            command_templates=("tool " + ("{value}" * 1_025),),
+            command_parameter_pools=(("value", ("x",)),),
+            categories=("user_app",),
+        )
+
+    exponential_pools = tuple(
+        (
+            f"level_{level}",
+            (("x" if level == 0 else f"{{level_{level - 1}}}{{level_{level - 1}}}"),),
+        )
+        for level in range(11)
+    )
+    with pytest.raises(ValueError, match="bounded replacement limit"):
+        CompiledApplicationDescriptor(
+            application_id="expansion-bomb",
+            platform="linux",
+            image_path="/usr/bin/tool",
+            command_templates=("tool {level_10}",),
+            command_parameter_pools=exponential_pools,
+            categories=("user_app",),
+        )
+
+    with pytest.raises(ValueError, match="bounded output length"):
+        CompiledApplicationDescriptor(
+            application_id="output-bomb",
+            platform="linux",
+            image_path="/usr/bin/tool",
+            command_templates=("tool {payload}",),
+            command_parameter_pools=(("payload", ("x" * 65_537,)),),
+            categories=("user_app",),
+        )
+
+    with pytest.raises(ValueError, match="bounded pool limit"):
+        CompiledApplicationDescriptor(
+            application_id="pool-count-bomb",
+            platform="linux",
+            image_path="/usr/bin/tool",
+            command_templates=("tool {pool_0}",),
+            command_parameter_pools=tuple(
+                (f"pool_{ordinal}", ("value",)) for ordinal in range(129)
+            ),
+            categories=("user_app",),
+        )
+
+    with pytest.raises(ValueError, match="reserved name 'username'"):
+        CompiledApplicationDescriptor(
+            application_id="reserved-pool",
+            platform="linux",
+            image_path="/usr/bin/tool",
+            command_templates=("tool {username}",),
+            command_parameter_pools=(("username", ("mallory",)),),
+            categories=("user_app",),
+        )
+
+    with pytest.raises(ValueError, match="bounded text budget"):
+        CompiledApplicationDescriptor(
+            application_id="descriptor-text-bomb",
+            platform="linux",
+            image_path="/usr/bin/tool",
+            command_templates=("tool {payload}",),
+            command_parameter_pools=(
+                (
+                    "payload",
+                    tuple(f"{ordinal:04d}" + ("x" * 1_020) for ordinal in range(1_025)),
+                ),
+            ),
+            categories=("user_app",),
+        )
 
 
 def test_assignment_rejects_an_application_absent_from_host_deployment() -> None:

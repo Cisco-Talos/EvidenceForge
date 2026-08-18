@@ -1042,6 +1042,13 @@ applications:
           architectures: [x86, x64, arm64]
         command_templates:
           - "{redis_cmd}"
+        command_parameter_pools:
+          redis_cmd:
+            - "redis-cli INFO memory"
+            - "redis-cli DBSIZE"
+            - "redis-cli GET session:active_count"
+            - 'redis-cli KEYS "cache:*" | head -20'
+            - "redis-cli MONITOR"
     categories: [query]
     personas: [developer, sysadmin]
 
