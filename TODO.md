@@ -115,6 +115,12 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] Continue current-dev realism assessment only if a separately approved future loop is needed;
   use [current-dev assessment worklog](docs/worklog/2026-05-current-dev-assessment-continuation.md)
   for handoff notes, latest loop outcomes, and next target selection.
+- [ ] **P1** Complete the V2 family-level realism foundations: scalable indexed state,
+  execution/effect reconciliation, append-only lifecycle authority, one timing/clock runtime,
+  compiled deployment/content identity, explicit collection policy, and persistent application
+  channels. Preserve legacy authored inputs through boundary normalization and prove flat lookup,
+  bounded retention, deterministic output, and fresh blind-panel improvement. See the
+  [implementation worklog](docs/worklog/2026-08-16-v2-family-foundations.md).
 - [ ] **P1** Feed the latest post-fix Host-review priors into the next
   assessment loop: dataset-wide uniform Sysmon collection/event-family shape,
   tight eCAR wrapper/child timing around DC service/task execution, residual
