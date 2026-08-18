@@ -30,6 +30,7 @@ import math
 import re
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1357,7 +1358,7 @@ def validate_config(
     observation_profiles_data = load_observation_profiles()
     tls_realism_data = load_tls_realism()
     windows_auth_data = load_windows_auth_realism()
-    timing_profiles_data = load_timing_profiles()
+    timing_profiles_data = deepcopy(load_timing_profiles())
     web_session_profiles_data = load_web_session_profiles()
     try:
         load_smb_profiles()

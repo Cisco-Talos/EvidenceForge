@@ -35,6 +35,7 @@ LLM expansion or complex parsing. Phase 2/3 will add:
 import ipaddress
 import math
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
@@ -2454,10 +2455,12 @@ class NetworkSensor(BaseModel):
 
         network_observation = load_timing_profiles().get("network_sensor_observation", {})
         profiles = (
-            network_observation.get("profiles", {}) if isinstance(network_observation, dict) else {}
+            network_observation.get("profiles", {})
+            if isinstance(network_observation, Mapping)
+            else {}
         )
-        if not isinstance(profiles, dict) or profile_name not in profiles:
-            available = sorted(profiles) if isinstance(profiles, dict) else []
+        if not isinstance(profiles, Mapping) or profile_name not in profiles:
+            available = sorted(profiles) if isinstance(profiles, Mapping) else []
             raise ValueError(
                 f"Unknown network sensor capture_profile {profile_name!r}. "
                 f"Available profiles: {available}"

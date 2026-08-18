@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.config.provider import _register_trusted_derived_cache
 from evidenceforge.generation.activity.smb_profiles import advertised_filesystem_default
 from evidenceforge.models.scenario import (
     Scenario,
@@ -46,6 +47,14 @@ def _load_catalog_config() -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("storage_catalog.yaml must contain a mapping")
     return data
+
+
+_register_trusted_derived_cache(
+    __name__,
+    "_load_catalog_config",
+    globals(),
+    _load_catalog_config,
+)
 
 
 class CompiledStorageVolume(BaseModel):

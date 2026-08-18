@@ -14,6 +14,7 @@ import psutil
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from evidenceforge.config import get_config_directory
+from evidenceforge.config.provider import _register_trusted_derived_cache
 from evidenceforge.events.dispatcher import expand_formats
 from evidenceforge.generation.workload import (
     RETAINED_STATE_FAMILIES,
@@ -515,6 +516,14 @@ def load_resource_forecast_calibration() -> ResourceForecastCalibration:
     """Load the versioned resource forecast coefficients."""
     path = get_config_directory() / "resource_forecast.yaml"
     return ResourceForecastCalibration.model_validate(load_yaml(path))
+
+
+_register_trusted_derived_cache(
+    __name__,
+    "load_resource_forecast_calibration",
+    globals(),
+    load_resource_forecast_calibration,
+)
 
 
 def _nearest_existing_path(path: Path) -> Path:

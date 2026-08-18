@@ -29,6 +29,7 @@ All domain↔IP data is loaded from dns_registry.yaml via dns_registry.py.
 import ipaddress
 import random
 
+from evidenceforge.config.provider import _register_legacy_network_module
 from evidenceforge.generation.activity.dns_registry import (
     generate_long_tail_domain,
     get_cdn_ranges,
@@ -81,6 +82,8 @@ for _act_type, _tag in _TAG_TO_ACTIVITY.items():
 # active provider dynamically; this list remains for public inspection compatibility.
 _CDN_RANGES = [tuple(value) for value in get_cdn_ranges()]
 _IPV6_MAP: dict[str, str] = get_ipv6_map()
+
+_register_legacy_network_module(__name__, globals())
 
 # AD SRV record templates for domain service discovery
 _AD_SRV_QUERIES = [

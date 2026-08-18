@@ -318,10 +318,10 @@ network_sensor_observation:
   default_profile: lab
   profiles:
     lab:
-      clock_skew_us:
+      clock_offset_us:
         min: -250
         max: 250
-      path_delay_us:
+      route_delay_us:
         min: 25
         max: 500
 endpoint_clock:
@@ -629,10 +629,10 @@ network_sensor_observation:
   default_profile: bad
   profiles:
     bad:
-      clock_skew_us:
+      clock_offset_us:
         min: later
         max: -later
-      path_delay_us:
+      route_delay_us:
         min: 5000
         max: 100
 """.lstrip()
