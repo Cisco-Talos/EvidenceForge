@@ -39,7 +39,6 @@ from evidenceforge.events.contexts import (
     ProcessTargetSecurityContext,
 )
 from evidenceforge.formats import load_format
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.activity.windows_auth_realism import min_unlock_gap_seconds
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.emitters.host_base import sanitize_host_routing_key
@@ -51,9 +50,32 @@ from evidenceforge.generation.emitters.windows import (
     _special_privilege_fallback,
     _windows_pid_hex,
 )
+from evidenceforge.generation.source_timing import (
+    compatibility_endpoint_event_times,
+    compatibility_relationship_time,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils import generate_zeek_uid
 from tests.network_factories import network_plan
+
+
+def _compatibility_timing_delta(
+    relationship_key: str,
+    *,
+    seed_parts: tuple[object, ...],
+) -> timedelta:
+    """Return the stateless raw-row relationship adapter as a legacy delta."""
+
+    anchor = seed_parts[-1]
+    assert isinstance(anchor, datetime)
+    return (
+        compatibility_relationship_time(
+            anchor,
+            relationship_key=relationship_key,
+            identity_parts=seed_parts,
+        )
+        - anchor
+    )
 
 
 class TestWindowsEventEmitter:
@@ -661,7 +683,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_logoffs_after_dependents()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.logoff_after_rendered_dependents",
             seed_parts=("WIN-TEST-01.corp.local", "0xabc123", process_time),
         )
@@ -691,7 +713,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_logoffs_after_dependents()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.logoff_after_rendered_dependents",
             seed_parts=("WIN-TEST-01.corp.local", "0xabc123", logon_time),
         )
@@ -722,7 +744,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_logoffs_after_dependents()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.logoff_after_rendered_dependents",
             seed_parts=("WIN-TEST-01.corp.local", "0xabc123", process_time),
         )
@@ -752,7 +774,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_process_terminations_after_dependents()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.process_exit_after_visible_child",
             seed_parts=("WIN-TEST-01.corp.local", "0x116c", child_time),
         )
@@ -944,7 +966,7 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_logoffs_after_dependents_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.logoff_after_rendered_dependents",
             seed_parts=("WIN-TEST-01.corp.local", "0xabc123", process_time),
         )
@@ -977,7 +999,7 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_logoffs_after_dependents_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.logoff_after_rendered_dependents",
             seed_parts=("WIN-TEST-01.corp.local", "0xabc123", logon_time),
         )
@@ -1012,7 +1034,7 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_process_terminations_after_dependents_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.process_exit_after_visible_child",
             seed_parts=("WIN-TEST-01.corp.local", "0x116c", child_time),
         )
@@ -1044,7 +1066,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_process_terminations_after_dependents()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.process_exit_after_visible_dependent",
             seed_parts=(
                 "WIN-TEST-01.corp.local",
@@ -1083,7 +1105,7 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_process_terminations_after_dependents_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.process_exit_after_visible_dependent",
             seed_parts=(
                 "WIN-TEST-01.corp.local",
@@ -1120,7 +1142,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_process_dependents_after_create()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.process_exit_after_visible_create",
             seed_parts=(
                 "WIN-TEST-01.corp.local",
@@ -1155,7 +1177,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_process_dependents_after_create()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "source.windows_wfp_connection",
             seed_parts=(
                 "WIN-TEST-01.corp.local",
@@ -1192,7 +1214,7 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_process_dependents_after_create_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "source.windows_wfp_connection",
             seed_parts=(
                 "WIN-TEST-01.corp.local",
@@ -1233,7 +1255,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_network_logons_after_transport()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.network_logon_after_transport",
             seed_parts=("FILE-SRV-01.corp.local", "10.10.1.35", "59430", wfp_time),
         )
@@ -1270,7 +1292,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_network_logons_after_transport()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.network_logon_after_transport",
             seed_parts=("WS-TEST-01.corp.local", "10.10.1.35", "53256", wfp_time),
         )
@@ -1314,12 +1336,12 @@ class TestWindowsEventEmitter:
         emitter._shift_network_logons_after_transport()
         emitter._shift_special_privileges_after_logons()
 
-        transport_delta = sample_timing_delta(
+        transport_delta = _compatibility_timing_delta(
             "windows.network_logon_after_transport",
             seed_parts=("FILE-SRV-01.corp.local", "10.10.1.35", "59430", wfp_time),
         )
         expected_logon_time = wfp_time + transport_delta
-        expected_privilege_delta = sample_timing_delta(
+        expected_privilege_delta = _compatibility_timing_delta(
             "windows.special_privilege_after_logon",
             seed_parts=("FILE-SRV-01.corp.local", "0xf63a33e", expected_logon_time),
         )
@@ -1500,7 +1522,7 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_network_logons_after_transport_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.network_logon_after_transport",
             seed_parts=("FILE-SRV-01.corp.local", "10.10.1.35", "59430", wfp_time),
         )
@@ -1549,12 +1571,12 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_special_privileges_after_logons_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        transport_delta = sample_timing_delta(
+        transport_delta = _compatibility_timing_delta(
             "windows.network_logon_after_transport",
             seed_parts=("FILE-SRV-01.corp.local", "10.10.1.35", "59430", wfp_time),
         )
         expected_logon_time = wfp_time + transport_delta
-        expected_privilege_delta = sample_timing_delta(
+        expected_privilege_delta = _compatibility_timing_delta(
             "windows.special_privilege_after_logon",
             seed_parts=("FILE-SRV-01.corp.local", "0xf63a33e", expected_logon_time),
         )
@@ -2759,11 +2781,13 @@ class TestWindowsEventEmitter:
 
         emitter.emit(event)
 
-        expected_delta = sample_timing_delta(
-            "source.windows_wfp_connection",
-            seed_parts=("WKS-01", 4, "10.0.0.50", 49263, "93.184.216.34", 443, event_time),
+        _, expected_render_time = compatibility_endpoint_event_times(
+            event,
+            "windows_event_security",
+            "WKS-01",
         )
-        assert emitter._event_dicts[0]["TimeCreated"] == event_time + expected_delta
+        assert emitter._event_dicts[0]["TimeCreated"] == expected_render_time
+        assert expected_render_time > event_time
 
     def test_wfp_connection_reuses_filter_rtid_per_policy_bucket(self, format_def, temp_output):
         """WFP 5156 should reuse runtime filter IDs for the same host policy bucket."""

@@ -44,10 +44,7 @@ from typing import Any
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.contexts import AuthContext, HostContext
 from evidenceforge.formats.format_def import FormatDefinition
-from evidenceforge.generation.activity.timing_profiles import (
-    sample_timing_delta,
-    windows_collision_spacing_config,
-)
+from evidenceforge.generation.activity.timing_profiles import windows_collision_spacing_config
 from evidenceforge.generation.activity.windows_auth_realism import min_unlock_gap_seconds
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
@@ -69,7 +66,11 @@ from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SECURITY_SNARE_FILENAME,
     render_windows_security_snare_syslog,
 )
-from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.generation.source_timing import (
+    compatibility_endpoint_event_times,
+    compatibility_relationship_time,
+    finalized_endpoint_event_times,
+)
 from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
@@ -77,7 +78,7 @@ from evidenceforge.utils.time import ensure_utc
 from evidenceforge.utils.windows_ids import normalize_windows_id_value
 
 win_logger = logging.getLogger(__name__)
-_SOURCE_TIMING = SourceTimingPlanner()
+_FROZEN_TIMING_MARKER = "windows-security-frozen-timing-v1"
 
 # Well-known service accounts that always use "NT AUTHORITY" as their domain
 _NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE", "ANONYMOUS LOGON"}
@@ -663,6 +664,56 @@ class WindowsEventEmitter(LogEmitter):
             )
         return random.Random(_stable_seed("|".join(str(part) for part in parts)))
 
+    @staticmethod
+    def _timing_phase(event: CanonicalOccurrence, event_id: int | None = None) -> str:
+        """Return the frozen endpoint phase rendered by one Security row."""
+
+        if event.event_type in {"process_create", "system_process_create"}:
+            return "process_create"
+        if event.event_type == "process_terminate":
+            return "process_terminate"
+        if event.event_type in {"logon", "machine_logon"} and event_id == 4672:
+            return "privilege"
+        if event.event_type == "smb_file_open" and event_id == 4656:
+            return "smb_object_open"
+        return "base"
+
+    def _render_timestamp(
+        self,
+        event: CanonicalOccurrence,
+        phase: str | None = None,
+    ) -> datetime:
+        """Return frozen Security time, with explicit stateless compatibility."""
+
+        host = self._get_host(event)
+        hostname = host.hostname if host is not None else ""
+        effective_phase = phase or self._timing_phase(event)
+        finalized = finalized_endpoint_event_times(
+            event,
+            "windows_event_security",
+            hostname,
+            effective_phase,
+        )
+        if finalized is None:
+            if event.source_timing is not None and not event.source_timing.compatibility_mode:
+                raise RuntimeError(
+                    "Windows Security production projection requires frozen endpoint timing: "
+                    f"host={hostname} event_type={event.event_type} phase={effective_phase}"
+                )
+            finalized = compatibility_endpoint_event_times(
+                event,
+                "windows_event_security",
+                hostname,
+                effective_phase,
+            )
+        return finalized[1]
+
+    @staticmethod
+    def _timing_is_finalized(event_data: dict[str, Any]) -> bool:
+        """Return whether a row carries this emitter's frozen timing marker."""
+
+        return event_data.get("_TimingFinalized") == _FROZEN_TIMING_MARKER
+
     # Event types where the Windows host is dst_host (target of the action)
     _DST_HOST_TYPES: set[str] = {
         "logon",
@@ -770,11 +821,13 @@ class WindowsEventEmitter(LogEmitter):
             raise NotImplementedError(
                 f"WindowsEventEmitter: no render method for {event.event_type}"
             )
+        self._emission_context.canonical_event = event
         try:
             renderer(event)
         finally:
             self._current_storyline_origin = False
             self._emission_context.host_type = ""
+            self._emission_context.canonical_event = None
 
     def _render_logon(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4624 (successful logon) + optional 4672 (special privileges)."""
@@ -984,19 +1037,11 @@ class WindowsEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
-        process_start_time = proc.start_time or event.timestamp
-        process_seed = (host.hostname, proc.pid, process_start_time)
-        render_time = _SOURCE_TIMING.source_time(
-            event,
-            "source.windows_security_process_create",
-            seed_parts=process_seed,
-            not_before=process_start_time,
-        )
         target = proc.target_security_context
 
         event_data = {
             "EventID": 4688,
-            "TimeCreated": render_time,
+            "TimeCreated": event.timestamp,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -1028,17 +1073,10 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         if _windows_path_basename(proc.image) in _SECURITY_4689_NOISY_GUI_EXES:
             return
-        process_start_time = proc.start_time or event.timestamp
-        render_time = _SOURCE_TIMING.source_time(
-            event,
-            "source.windows_security_process_terminate",
-            seed_parts=(host.hostname, proc.pid, process_start_time, event.timestamp),
-            not_before=event.timestamp,
-        )
 
         event_data = {
             "EventID": 4689,
-            "TimeCreated": render_time,
+            "TimeCreated": event.timestamp,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -1060,19 +1098,11 @@ class WindowsEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
-        process_start_time = proc.start_time or event.timestamp
-        process_seed = (host.hostname, proc.pid, process_start_time)
-        render_time = _SOURCE_TIMING.source_time(
-            event,
-            "source.windows_security_process_create",
-            seed_parts=process_seed,
-            not_before=process_start_time,
-        )
         target = proc.target_security_context
 
         event_data = {
             "EventID": 4688,
-            "TimeCreated": render_time,
+            "TimeCreated": event.timestamp,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -1480,26 +1510,11 @@ class WindowsEventEmitter(LogEmitter):
                 image = "System"
             else:
                 return
-        render_time = _SOURCE_TIMING.source_time(
-            event,
-            "source.windows_wfp_connection",
-            seed_parts=(
-                host.hostname,
-                pid,
-                net.src_ip,
-                net.src_port,
-                net.dst_ip,
-                net.dst_port,
-                event.timestamp,
-            ),
-            not_before=event.timestamp,
-        )
-
         direction = "%%14593" if is_outbound else "%%14592"
         layer_name, layer_rtid = _wfp_layer_fields(direction)
         event_data = {
             "EventID": 5156,
-            "TimeCreated": render_time,
+            "TimeCreated": event.timestamp,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -1912,9 +1927,16 @@ class WindowsEventEmitter(LogEmitter):
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Buffer a Windows Event dict for deferred rendering."""
         event_data = self._normalize_execution_ids(event_data)
+        event_data.pop("_TimingFinalized", None)
         if "EventID" in event_data:
             event_data["EventID"] = normalize_windows_event_id_value(event_data["EventID"])
         _normalize_wfp_layer_fields(event_data)
+        canonical_event = getattr(self._emission_context, "canonical_event", None)
+        if canonical_event is not None:
+            event_id = coerce_windows_event_id(event_data.get("EventID"))
+            phase = self._timing_phase(canonical_event, event_id)
+            event_data["TimeCreated"] = self._render_timestamp(canonical_event, phase)
+            event_data["_TimingFinalized"] = _FROZEN_TIMING_MARKER
         if getattr(self, "_current_storyline_origin", False):
             event_data["_storyline_origin"] = True
         host_type = getattr(self._emission_context, "host_type", "")
@@ -1935,6 +1957,7 @@ class WindowsEventEmitter(LogEmitter):
         # Strip internal metadata keys before rendering
         event_data.pop("_storyline_origin", None)
         event_data.pop("_auth_occurrence_id", None)
+        event_data.pop("_TimingFinalized", None)
 
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
@@ -2127,6 +2150,7 @@ class WindowsEventEmitter(LogEmitter):
                     candidate
                     for candidate in tgts_by_key.get(key, [])
                     if candidate[0] not in moved
+                    and candidate[1].get("_TimingFinalized") != _FROZEN_TIMING_MARKER
                     and candidate[2] > ts
                     and candidate[2] - ts <= timedelta(seconds=1)
                 ),
@@ -2209,7 +2233,7 @@ class WindowsEventEmitter(LogEmitter):
             changed = False
             updates: list[tuple[str, str, int]] = []
             for rowid, event in self._iter_spooled_rows_unlocked():
-                if event.get("EventID") != 4688:
+                if event.get("EventID") != 4688 or self._timing_is_finalized(event):
                     continue
                 ts = event.get("TimeCreated")
                 process_pid = str(event.get("NewProcessId") or "").lower()
@@ -2250,7 +2274,11 @@ class WindowsEventEmitter(LogEmitter):
         updates: list[tuple[str, str, int]] = []
         for rowid, event in self._iter_spooled_rows_unlocked():
             ts = event.get("TimeCreated")
-            if not isinstance(ts, datetime) or event.get("EventID") != 4688:
+            if (
+                not isinstance(ts, datetime)
+                or event.get("EventID") != 4688
+                or self._timing_is_finalized(event)
+            ):
                 continue
             logon_id = str(event.get("SubjectLogonId") or "")
             if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
@@ -2283,7 +2311,11 @@ class WindowsEventEmitter(LogEmitter):
 
         updates: list[tuple[str, str, int]] = []
         for rowid, event in self._iter_spooled_rows_unlocked():
-            if event.get("EventID") != 4624 or str(event.get("LogonType") or "") not in {"3", "10"}:
+            if (
+                event.get("EventID") != 4624
+                or str(event.get("LogonType") or "") not in {"3", "10"}
+                or self._timing_is_finalized(event)
+            ):
                 continue
             ts = event.get("TimeCreated")
             key = _windows_auth_transport_tuple(event)
@@ -2293,9 +2325,10 @@ class WindowsEventEmitter(LogEmitter):
                 else None
             )
             if isinstance(ts, datetime) and transport_time is not None and ts <= transport_time:
-                event["TimeCreated"] = transport_time + sample_timing_delta(
-                    "windows.network_logon_after_transport",
-                    seed_parts=(*key, transport_time),
+                event["TimeCreated"] = compatibility_relationship_time(
+                    transport_time,
+                    relationship_key="windows.network_logon_after_transport",
+                    identity_parts=(*key, transport_time),
                 )
                 updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
                 if len(updates) >= 1000:
@@ -2320,7 +2353,7 @@ class WindowsEventEmitter(LogEmitter):
 
         updates: list[tuple[str, str, int]] = []
         for rowid, event in self._iter_spooled_rows_unlocked():
-            if event.get("EventID") != 4672:
+            if event.get("EventID") != 4672 or self._timing_is_finalized(event):
                 continue
             ts = event.get("TimeCreated")
             key = _windows_logon_session_key(event, "SubjectLogonId")
@@ -2332,9 +2365,10 @@ class WindowsEventEmitter(LogEmitter):
                 and logon_time is not None
                 and ts <= logon_time
             ):
-                event["TimeCreated"] = logon_time + sample_timing_delta(
-                    "windows.special_privilege_after_logon",
-                    seed_parts=(
+                event["TimeCreated"] = compatibility_relationship_time(
+                    logon_time,
+                    relationship_key="windows.special_privilege_after_logon",
+                    identity_parts=(
                         (*key, occurrence_id, logon_time) if occurrence_id else (*key, logon_time)
                     ),
                 )
@@ -2368,15 +2402,20 @@ class WindowsEventEmitter(LogEmitter):
         updates: list[tuple[str, str, int]] = []
         for rowid, event in self._iter_spooled_rows_unlocked():
             ts = event.get("TimeCreated")
-            if not isinstance(ts, datetime) or event.get("EventID") != 4634:
+            if (
+                not isinstance(ts, datetime)
+                or event.get("EventID") != 4634
+                or self._timing_is_finalized(event)
+            ):
                 continue
             logon_id = str(event.get("TargetLogonId") or event.get("SubjectLogonId") or "")
             key = (str(event.get("Computer", "")), logon_id)
             latest = latest_dependent.get(key)
             if logon_id and latest is not None and ts <= latest:
-                event["TimeCreated"] = latest + sample_timing_delta(
-                    "windows.logoff_after_rendered_dependents",
-                    seed_parts=(key[0], key[1], latest),
+                event["TimeCreated"] = compatibility_relationship_time(
+                    latest,
+                    relationship_key="windows.logoff_after_rendered_dependents",
+                    identity_parts=(key[0], key[1], latest),
                 )
                 updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
                 if len(updates) >= 1000:
@@ -2413,7 +2452,11 @@ class WindowsEventEmitter(LogEmitter):
         updates: list[tuple[str, str, int]] = []
         for rowid, event in self._iter_spooled_rows_unlocked():
             ts = event.get("TimeCreated")
-            if not isinstance(ts, datetime) or event.get("EventID") != 4689:
+            if (
+                not isinstance(ts, datetime)
+                or event.get("EventID") != 4689
+                or self._timing_is_finalized(event)
+            ):
                 continue
             process_pid = str(event.get("ProcessId") or "")
             computer = str(event.get("Computer", ""))
@@ -2452,9 +2495,10 @@ class WindowsEventEmitter(LogEmitter):
                 continue
             latest, relationship_key, seed_parts = max(candidates, key=lambda item: item[0])
             if ts <= latest:
-                event["TimeCreated"] = latest + sample_timing_delta(
-                    relationship_key,
-                    seed_parts=seed_parts,
+                event["TimeCreated"] = compatibility_relationship_time(
+                    latest,
+                    relationship_key=relationship_key,
+                    identity_parts=seed_parts,
                 )
                 updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
                 if len(updates) >= 1000:
@@ -2481,7 +2525,11 @@ class WindowsEventEmitter(LogEmitter):
         for rowid, event in self._iter_spooled_rows_unlocked():
             ts = event.get("TimeCreated")
             event_id = event.get("EventID")
-            if not isinstance(ts, datetime) or event_id not in {4689, 5156}:
+            if (
+                not isinstance(ts, datetime)
+                or event_id not in {4689, 5156}
+                or self._timing_is_finalized(event)
+            ):
                 continue
             if event_id == 4689:
                 key = _security_process_key(
@@ -2499,9 +2547,10 @@ class WindowsEventEmitter(LogEmitter):
                 relationship_key = "source.windows_wfp_connection"
             create_time = process_create_times.get(key) if key is not None else None
             if create_time is not None and ts <= create_time:
-                event["TimeCreated"] = create_time + sample_timing_delta(
-                    relationship_key,
-                    seed_parts=(key[0], key[1], key[2], create_time),
+                event["TimeCreated"] = compatibility_relationship_time(
+                    create_time,
+                    relationship_key=relationship_key,
+                    identity_parts=(key[0], key[1], key[2], create_time),
                 )
                 updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
                 if len(updates) >= 1000:
@@ -2574,21 +2623,27 @@ class WindowsEventEmitter(LogEmitter):
 
         if self._spooled_count:
             self._spool_event_dicts_unlocked()
-            self._shift_spooled_kerberos_tgts_before_service_tickets_unlocked()
-            self._shift_spooled_process_creates_after_logons_unlocked()
-            self._shift_spooled_process_creates_after_visible_parent_unlocked()
-            self._shift_spooled_process_dependents_after_create_unlocked()
-            self._shift_spooled_special_privileges_after_logons_unlocked()
-            self._shift_spooled_process_terminations_after_dependents_unlocked()
+            all_finalized = all(
+                self._timing_is_finalized(event) for _, event in self._iter_spooled_rows_unlocked()
+            )
+            if not all_finalized:
+                self._shift_spooled_kerberos_tgts_before_service_tickets_unlocked()
+                self._shift_spooled_process_creates_after_logons_unlocked()
+                self._shift_spooled_process_creates_after_visible_parent_unlocked()
+                self._shift_spooled_process_dependents_after_create_unlocked()
+                self._shift_spooled_special_privileges_after_logons_unlocked()
+                self._shift_spooled_process_terminations_after_dependents_unlocked()
             self._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
             events = self._iter_spooled_events_unlocked()
         else:
-            self._shift_kerberos_tgts_before_service_tickets()
-            self._shift_process_creates_after_logons()
-            self._shift_process_creates_after_visible_parent()
-            self._shift_process_dependents_after_create()
-            self._shift_special_privileges_after_logons()
-            self._shift_process_terminations_after_dependents()
+            all_finalized = all(self._timing_is_finalized(event) for event in self._event_dicts)
+            if not all_finalized:
+                self._shift_kerberos_tgts_before_service_tickets()
+                self._shift_process_creates_after_logons()
+                self._shift_process_creates_after_visible_parent()
+                self._shift_process_dependents_after_create()
+                self._shift_special_privileges_after_logons()
+                self._shift_process_terminations_after_dependents()
             self._suppress_duplicate_lock_unlock_transitions()
 
             def _sort_key(event: dict) -> Any:
@@ -2602,26 +2657,30 @@ class WindowsEventEmitter(LogEmitter):
 
         # Assign per-computer EventRecordIDs in sorted order
         for sequence, event in enumerate(events):
-            _shift_windows_lock_lifecycle_after_rendered_clock(
-                event,
-                self._last_time_created_by_computer,
-                self._lock_lifecycle_shift_by_session,
-            )
-            _normalize_windows_time_created(
-                event,
-                self._last_time_created_by_computer,
-                self._time_collision_count_by_computer,
-                sequence,
-                "windows_time_created",
-            )
-            _enforce_windows_lock_dwell_after_normalization(
-                event,
-                self._rendered_lock_time_by_session,
-            )
+            timing_finalized = self._timing_is_finalized(event)
+            if not timing_finalized:
+                _shift_windows_lock_lifecycle_after_rendered_clock(
+                    event,
+                    self._last_time_created_by_computer,
+                    self._lock_lifecycle_shift_by_session,
+                )
+                _normalize_windows_time_created(
+                    event,
+                    self._last_time_created_by_computer,
+                    self._time_collision_count_by_computer,
+                    sequence,
+                    "windows_time_created",
+                )
+                _enforce_windows_lock_dwell_after_normalization(
+                    event,
+                    self._rendered_lock_time_by_session,
+                )
             normalized_event_time = event.get("TimeCreated")
             event_computer = str(event.get("Computer", ""))
             if isinstance(normalized_event_time, datetime) and event_computer:
-                self._last_time_created_by_computer[event_computer] = normalized_event_time
+                previous_event_time = self._last_time_created_by_computer.get(event_computer)
+                if previous_event_time is None or normalized_event_time > previous_event_time:
+                    self._last_time_created_by_computer[event_computer] = normalized_event_time
             computer = sanitize_path_component(event.get("Computer", ""))
             counter_key = computer.split(".")[0] if "." in computer else computer
             sequence_model = self._record_id_sequences.setdefault(
@@ -2640,15 +2699,21 @@ class WindowsEventEmitter(LogEmitter):
             if isinstance(normalized_time, datetime):
                 current_time = ensure_utc(normalized_time)
                 previous_record_time = self._last_record_time_created_by_computer.get(counter_key)
-                if previous_record_time is not None and current_time <= previous_record_time:
+                if (
+                    not timing_finalized
+                    and previous_record_time is not None
+                    and current_time <= previous_record_time
+                ):
                     current_time = previous_record_time + timedelta(microseconds=1)
                     event["TimeCreated"] = current_time
-                self._last_record_time_created_by_computer[counter_key] = current_time
+                if previous_record_time is None or current_time > previous_record_time:
+                    self._last_record_time_created_by_computer[counter_key] = current_time
 
             host_fqdn = str(event.get("Computer") or "")
             if not host_fqdn and not self._direct_file_path:
                 continue
             snare_timestamp = event.get("TimeCreated")
+            event.pop("_TimingFinalized", None)
             if self.output_target == OutputTarget.SOF_ELK and isinstance(snare_timestamp, datetime):
                 snare_rendered = render_windows_security_snare_syslog(event)
                 self._get_snare_writer(host_fqdn, snare_timestamp).write(snare_rendered)
@@ -2679,7 +2744,7 @@ class WindowsEventEmitter(LogEmitter):
             computer = str(event.get("Computer", ""))
             if event_id == 4634:
                 logon_id = str(event.get("TargetLogonId") or event.get("SubjectLogonId") or "")
-                if logon_id:
+                if logon_id and not self._timing_is_finalized(event):
                     logoffs.append(((computer, logon_id), event))
                 continue
             if event_id not in {4624, 4688, 4689, 4801}:
@@ -2699,9 +2764,10 @@ class WindowsEventEmitter(LogEmitter):
             ts = event.get("TimeCreated")
             latest = latest_dependent.get(key)
             if isinstance(ts, datetime) and latest is not None and ts <= latest:
-                event["TimeCreated"] = latest + sample_timing_delta(
-                    "windows.logoff_after_rendered_dependents",
-                    seed_parts=(key[0], key[1], latest),
+                event["TimeCreated"] = compatibility_relationship_time(
+                    latest,
+                    relationship_key="windows.logoff_after_rendered_dependents",
+                    identity_parts=(key[0], key[1], latest),
                 )
 
     def _suppress_duplicate_lock_unlock_transitions(self) -> None:
@@ -2780,7 +2846,11 @@ class WindowsEventEmitter(LogEmitter):
 
         for event in self._event_dicts:
             ts = event.get("TimeCreated")
-            if not isinstance(ts, datetime) or event.get("EventID") != 4688:
+            if (
+                not isinstance(ts, datetime)
+                or event.get("EventID") != 4688
+                or self._timing_is_finalized(event)
+            ):
                 continue
             logon_id = str(event.get("SubjectLogonId") or "")
             if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
@@ -2807,7 +2877,11 @@ class WindowsEventEmitter(LogEmitter):
                 transport_times.setdefault(key, []).append(ts)
 
         for event in self._event_dicts:
-            if event.get("EventID") != 4624 or str(event.get("LogonType") or "") not in {"3", "10"}:
+            if (
+                event.get("EventID") != 4624
+                or str(event.get("LogonType") or "") not in {"3", "10"}
+                or self._timing_is_finalized(event)
+            ):
                 continue
             ts = event.get("TimeCreated")
             key = _windows_auth_transport_tuple(event)
@@ -2817,9 +2891,10 @@ class WindowsEventEmitter(LogEmitter):
                 else None
             )
             if isinstance(ts, datetime) and transport_time is not None and ts <= transport_time:
-                event["TimeCreated"] = transport_time + sample_timing_delta(
-                    "windows.network_logon_after_transport",
-                    seed_parts=(*key, transport_time),
+                event["TimeCreated"] = compatibility_relationship_time(
+                    transport_time,
+                    relationship_key="windows.network_logon_after_transport",
+                    identity_parts=(*key, transport_time),
                 )
 
     def _shift_special_privileges_after_logons(self) -> None:
@@ -2838,7 +2913,7 @@ class WindowsEventEmitter(LogEmitter):
                     occurrence_times[occurrence_id] = ts
 
         for event in self._event_dicts:
-            if event.get("EventID") != 4672:
+            if event.get("EventID") != 4672 or self._timing_is_finalized(event):
                 continue
             ts = event.get("TimeCreated")
             key = _windows_logon_session_key(event, "SubjectLogonId")
@@ -2850,9 +2925,10 @@ class WindowsEventEmitter(LogEmitter):
                 and logon_time is not None
                 and ts <= logon_time
             ):
-                event["TimeCreated"] = logon_time + sample_timing_delta(
-                    "windows.special_privilege_after_logon",
-                    seed_parts=(
+                event["TimeCreated"] = compatibility_relationship_time(
+                    logon_time,
+                    relationship_key="windows.special_privilege_after_logon",
+                    identity_parts=(
                         (*key, occurrence_id, logon_time) if occurrence_id else (*key, logon_time)
                     ),
                 )
@@ -2913,7 +2989,7 @@ class WindowsEventEmitter(LogEmitter):
                     process_create_times[key] = ts
 
             for key, event in process_create_events.items():
-                if key in cyclic_keys:
+                if key in cyclic_keys or self._timing_is_finalized(event):
                     continue
                 ts = event.get("TimeCreated")
                 parent_key = parent_keys.get(key)
@@ -2962,7 +3038,7 @@ class WindowsEventEmitter(LogEmitter):
                     )
             elif event_id == 4689:
                 process_pid = str(event.get("ProcessId") or "")
-                if process_pid:
+                if process_pid and not self._timing_is_finalized(event):
                     terminations.append(((computer, process_pid.lower()), event))
 
         for child_key, event in terminations:
@@ -3003,9 +3079,10 @@ class WindowsEventEmitter(LogEmitter):
                 continue
             latest, relationship_key, seed_parts = max(candidates, key=lambda item: item[0])
             if ts <= latest:
-                event["TimeCreated"] = latest + sample_timing_delta(
-                    relationship_key,
-                    seed_parts=seed_parts,
+                event["TimeCreated"] = compatibility_relationship_time(
+                    latest,
+                    relationship_key=relationship_key,
+                    identity_parts=seed_parts,
                 )
 
     def _shift_process_dependents_after_create(self) -> None:
@@ -3026,7 +3103,11 @@ class WindowsEventEmitter(LogEmitter):
         for event in self._event_dicts:
             ts = event.get("TimeCreated")
             event_id = event.get("EventID")
-            if not isinstance(ts, datetime) or event_id not in {4689, 5156}:
+            if (
+                not isinstance(ts, datetime)
+                or event_id not in {4689, 5156}
+                or self._timing_is_finalized(event)
+            ):
                 continue
             if event_id == 4689:
                 key = _security_process_key(
@@ -3044,9 +3125,10 @@ class WindowsEventEmitter(LogEmitter):
                 relationship_key = "source.windows_wfp_connection"
             create_time = process_create_times.get(key) if key is not None else None
             if create_time is not None and ts <= create_time:
-                event["TimeCreated"] = create_time + sample_timing_delta(
-                    relationship_key,
-                    seed_parts=(key[0], key[1], key[2], create_time),
+                event["TimeCreated"] = compatibility_relationship_time(
+                    create_time,
+                    relationship_key=relationship_key,
+                    identity_parts=(key[0], key[1], key[2], create_time),
                 )
 
     def flush(self, *, force: bool = False) -> None:
