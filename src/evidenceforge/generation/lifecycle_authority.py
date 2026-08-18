@@ -2655,6 +2655,8 @@ class GeneratorLifecycleAuthority:
         """
 
         runtime_receipt: NetworkTransactionPreparationReceipt | None = None
+        expected_timing_receipt: SourceTimingPreparationReceipt | None = None
+        timing_receipt: SourceTimingPreparationReceipt | None = None
         try:
             connection_prerequisites = self._validate_prepared_network_transaction(
                 root,
@@ -2664,14 +2666,22 @@ class GeneratorLifecycleAuthority:
                 prerequisite_receipts,
             )
             runtime = self._network_runtime
-            assert runtime is not None
-            with source_timing_preparation.claimed_commit():
+            planner = self._source_timing_planner
+            assert runtime is not None and planner is not None
+            with source_timing_preparation.claimed_commit() as timing_commit:
+                expected_timing_receipt = timing_commit.expected_receipt
+                if not planner.authenticates_expected_preparation_receipt(
+                    expected_timing_receipt,
+                    preparation=timing_commit,
+                ):
+                    raise StateError("Prepared network source timing receipt failed authentication")
                 with runtime.claimed_preparation(root.runtime_token) as runtime_commit:
+                    timing_commit.certify_composite_commit(expected_timing_receipt)
 
                     def _finalize_prepared_network_no_fail() -> None:
-                        nonlocal runtime_receipt
+                        nonlocal runtime_receipt, timing_receipt
                         runtime_receipt = runtime_commit.commit_no_fail()
-                        source_timing_preparation.commit_no_fail()
+                        timing_receipt = timing_commit.commit_no_fail()
 
                     connection_result = self.materialize_connection_composite(
                         root.state_plan,
@@ -2690,9 +2700,10 @@ class GeneratorLifecycleAuthority:
             )
             raise
 
-        timing_receipt = source_timing_preparation.receipt
-        if runtime_receipt is None or timing_receipt is None:
+        if runtime_receipt is None or expected_timing_receipt is None or timing_receipt is None:
             raise AssertionError("Prepared network finalizer returned no complete receipts")
+        if timing_receipt is not expected_timing_receipt:
+            raise AssertionError("Source timing finalizer returned a different receipt object")
         runtime = self._network_runtime
         planner = self._source_timing_planner
         assert runtime is not None and planner is not None

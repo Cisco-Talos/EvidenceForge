@@ -62,6 +62,7 @@ from evidenceforge.generation.proxy_channels import (
 from evidenceforge.generation.source_timing import (
     SourceTimingPlanner,
     SourceTimingPreparation,
+    SourceTimingPreparationReceipt,
 )
 from evidenceforge.generation.state_manager import (
     ConnectionCompositeMaterializationPlan,
@@ -1133,6 +1134,9 @@ def test_prepared_network_commits_full_authority_chain_in_exact_order(
     original_http = HttpApplicationChannelManager._commit_claimed_admission
     original_runtime = NetworkTransactionPreparedCommit.commit_no_fail
     original_timing = SourceTimingPreparation.commit_no_fail
+    original_timing_authentication = SourceTimingPlanner.authenticates_expected_preparation_receipt
+    original_timing_certification = SourceTimingPreparation.certify_composite_commit
+    expected_timing_receipts: list[SourceTimingPreparationReceipt] = []
 
     def _lifecycle_commit(
         registry: LifecycleRegistry,
@@ -1163,9 +1167,33 @@ def test_prepared_network_commits_full_authority_chain_in_exact_order(
         order.append("runtime")
         return original_runtime(prepared)
 
-    def _timing_commit(preparation: SourceTimingPreparation) -> None:
+    def _timing_authentication(
+        planner: SourceTimingPlanner,
+        receipt: object,
+        *,
+        preparation: object,
+    ) -> bool:
+        order.append("timing-authentication")
+        if isinstance(receipt, SourceTimingPreparationReceipt):
+            expected_timing_receipts.append(receipt)
+        return original_timing_authentication(
+            planner,
+            receipt,
+            preparation=preparation,
+        )
+
+    def _timing_certification(
+        preparation: SourceTimingPreparation,
+        expected_receipt: SourceTimingPreparationReceipt,
+    ) -> None:
+        order.append("timing-certification")
+        original_timing_certification(preparation, expected_receipt)
+
+    def _timing_commit(
+        preparation: SourceTimingPreparation,
+    ) -> SourceTimingPreparationReceipt:
         order.append("timing")
-        original_timing(preparation)
+        return original_timing(preparation)
 
     monkeypatch.setattr(
         LifecycleRegistry,
@@ -1179,6 +1207,16 @@ def test_prepared_network_commits_full_authority_chain_in_exact_order(
     )
     monkeypatch.setattr(HttpApplicationChannelManager, "_commit_claimed_admission", _http_commit)
     monkeypatch.setattr(NetworkTransactionPreparedCommit, "commit_no_fail", _runtime_commit)
+    monkeypatch.setattr(
+        SourceTimingPlanner,
+        "authenticates_expected_preparation_receipt",
+        _timing_authentication,
+    )
+    monkeypatch.setattr(
+        SourceTimingPreparation,
+        "certify_composite_commit",
+        _timing_certification,
+    )
     monkeypatch.setattr(SourceTimingPreparation, "commit_no_fail", _timing_commit)
     authority._materialization_precommit_hook = lambda: order.append("precommit")
 
@@ -1190,11 +1228,24 @@ def test_prepared_network_commits_full_authority_chain_in_exact_order(
         application_token=application_token,
     )
 
-    assert order == ["precommit", "lifecycle", "state", "application", "runtime", "timing"]
+    assert order == [
+        "timing-authentication",
+        "timing-certification",
+        "timing-authentication",
+        "precommit",
+        "lifecycle",
+        "state",
+        "application",
+        "runtime",
+        "timing",
+    ]
     assert isinstance(result.receipt, LifecyclePreparedNetworkReceipt)
     assert authority.authenticates_prepared_network_receipt(root, result.receipt)
     assert runtime.authenticates_preparation_receipt(result.runtime, token=root.runtime_token)
-    assert result.timing == timing_preparation.receipt
+    assert len(expected_timing_receipts) == 2
+    assert expected_timing_receipts[1] is expected_timing_receipts[0]
+    assert result.timing is expected_timing_receipts[0]
+    assert result.timing is timing_preparation.receipt
     assert timing.authenticates_preparation_receipt(result.timing)
     assert result.connection.state.connection is not None
     committed_version = state.materialization_version
@@ -1228,6 +1279,62 @@ def test_prepared_network_rejects_deferred_session_and_cleans_every_capability()
     timing_preparation = _sealed_source_timing(timing)
 
     with pytest.raises(StateError, match="Deferred-session"):
+        authority.materialize_prepared_network_transaction(
+            root,
+            owner_rng,
+            source_timing_preparation=timing_preparation,
+            lifecycle_token=lifecycle_token,
+        )
+
+    assert owner_rng.getstate() == rng_before
+    assert state.materialization_digest() == state_before
+    assert runtime.state_digest() == runtime_before
+    assert crypto.state_digest() == crypto_before
+    assert timing.state_digest() == timing_before
+    assert runtime.census().prepared_transactions == 0
+    assert adapter.closed_transport_preparation_census().reservations == 0
+    assert registry.transport_for_transport_id(root.transaction.stable_id) is None
+    assert not timing_preparation.sealed
+
+
+def test_prepared_network_rejects_unauthenticated_expected_timing_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority, state, registry, adapter, runtime, crypto, timing = _prepared_authority()
+    owner_rng = random.Random(106)
+    rng_before = owner_rng.getstate()
+    state_before = state.materialization_digest()
+    runtime_before = runtime.state_digest()
+    crypto_before = crypto.state_digest()
+    timing_before = timing.state_digest()
+    root, lifecycle_token = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        owner_rng,
+        stable_id="unauthenticated-timing-receipt",
+    )
+    timing_preparation = _sealed_source_timing(timing)
+
+    def _reject_expected_receipt(
+        _planner: SourceTimingPlanner,
+        _receipt: object,
+        *,
+        preparation: object,
+    ) -> bool:
+        assert preparation is timing_preparation
+        return False
+
+    monkeypatch.setattr(
+        SourceTimingPlanner,
+        "authenticates_expected_preparation_receipt",
+        _reject_expected_receipt,
+    )
+
+    with pytest.raises(
+        StateError,
+        match="source timing receipt failed authentication",
+    ):
         authority.materialize_prepared_network_transaction(
             root,
             owner_rng,
