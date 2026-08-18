@@ -2335,3 +2335,44 @@ the State/lifecycle/dispatcher owner foundation. Its exact four-path chain close
 multi-occurrence cardinality, equal-time identity, latest process/session frontiers, artifact-group
 atomicity, and the prior scanner and State-only-session regressions. Scanner transport aggregation
 itself remains a later execution-family milestone.
+
+### Lifecycle SourceTiming publication certified
+
+Commit ``9cada8072`` (``fix: certify source timing in lifecycle publication``) wires the public
+SourceTiming expected-receipt contract into the production lifecycle coordinator. The coordinator
+now captures the exact prospective receipt while the preparation is claimed, authenticates and
+one-shot certifies it before entering the wider State, lifecycle, application, runtime, or timing
+publication tail, then requires ``commit_no_fail`` to return that same object and authenticates its
+terminal form before issuing the outer receipt. Failure before or during certification leaves every
+owner neutral.
+
+Independent review found no public-boundary P0/P1. The exact two-path candidate passed 126 focused
+SourceTiming/caller tests and 277 adjacent lifecycle, State, and runtime tests. Its exact-parent
+negative control reproduced the former split: rejecting the expected timing receipt after the other
+owners had published left State/RNG and lifecycle transport residue. The committed ordering rejects
+that failure before any canonical mutation. Ruff, format, diff, and cleanup gates pass; version
+artifacts remain unchanged.
+
+### State public composite transaction boundary landed
+
+Commit ``3334dc705`` (``feat: add State composite transaction boundary``) supplies the remaining
+public owner prerequisite for dispatcher action cohorts. Exact manager-owned capability records bind
+the prepared object, manager, thread, plan, RNG, version, State time, and admission epoch. One unified
+prepared-State lane excludes supported concurrent and same-thread mutations, copied or replayed
+simple/composite tickets are revoked at terminalization, and touched preimages plus retention victims
+are rolled back in ``O(delta)`` without restoring unrelated State.
+
+Two independent-review blockers were repaired before landing. A post-certification apply or finalize
+validation failure now consumes the exact ticket, so restoring a drifted preimage cannot revive it.
+Every public capability-producing State builder, cursor, planner, and finalizer is also lane-fenced
+and epoch-bound, preventing a capability minted from provisional State from surviving rollback plus
+version/time/counter ABA realignment. Independent rereview found no P0/P1; the final exact two-path
+tree passed 186 scoped State tests and a 318-node wider selection whose eight failures reproduced on
+the exact parent. The committed-current State/action/lifecycle cohort passed 216/216, with repository
+Ruff/format, compile, and diff checks green. Arbitrary direct mutation of compatibility read objects
+remains outside the approved public-method threat model. Version artifacts remain unchanged.
+
+The next dependency-ordered integration is the dispatcher action-cohort production coordinator plus
+its exact artifact-publication group. It must be reconstructed from the reviewed live preimage onto
+this committed State/SourceTiming/Intent/Audit foundation without sweeping the overlapping lifecycle,
+execution bridge, or SMB overlays.
