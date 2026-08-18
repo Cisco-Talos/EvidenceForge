@@ -1273,15 +1273,17 @@ def test_default_capacity_reference_tls_workload_plateaus_far_below_high_water()
     assert run(1) == run(7) == run(30)
 
 
-def test_auxiliary_census_exposes_uncapped_ocsp_residual_without_total_bound_claim() -> None:
-    """One full material-point owner can still retain 1,000 uncapped OCSP rows."""
+def test_auxiliary_census_reports_recomputed_ocsp_and_bounded_dkim_retention() -> None:
+    """Auxiliary material is either recomputed or covered by an explicit cap."""
 
     registry = CryptographicMaterialRegistry(tls_material_capacity=2)
     certificate = _certificate(registry, identity="ocsp-residual.example")
     before = registry.tls_material_point_capacity_census()
     digest_before = registry.state_digest()
     assert before.live_material_points == before.material_point_capacity == 2
-    assert before.uncapped_ocsp_status_entries == before.uncapped_ocsp_status_estimated_bytes == 0
+    assert before.ocsp_status_capacity == before.ocsp_status_byte_capacity == 0
+    assert before.retained_ocsp_status_entries == 0
+    assert before.retained_ocsp_status_estimated_bytes == 0
 
     for ordinal in range(1_000):
         registry.resolve_ocsp_status(
@@ -1296,23 +1298,18 @@ def test_auxiliary_census_exposes_uncapped_ocsp_residual_without_total_bound_cla
         )
 
     after = registry.tls_material_point_capacity_census()
-    assert after.uncapped_ocsp_status_entries == 1_000
-    assert after.uncapped_ocsp_status_estimated_bytes > 0
-    assert (
-        replace(
-            after,
-            uncapped_ocsp_status_entries=before.uncapped_ocsp_status_entries,
-            uncapped_ocsp_status_estimated_bytes=before.uncapped_ocsp_status_estimated_bytes,
-        )
-        == before
-    )
+    assert after == before
     assert registry.state_digest() == digest_before
 
     dkim_registry = CryptographicMaterialRegistry(tls_material_capacity=1)
     dkim_registry.resolve_dkim_key(domain="example.test", selector="mail", key_size=2048)
     dkim = dkim_registry.tls_material_point_capacity_census()
-    assert dkim.uncapped_dkim_key_entries == 1
-    assert dkim.uncapped_dkim_key_estimated_bytes > 0
+    assert dkim.dkim_key_capacity == 1
+    assert dkim.retained_dkim_key_entries == dkim.dkim_key_high_water == 1
+    assert dkim.retained_dkim_key_estimated_bytes == dkim.dkim_key_byte_high_water
+    assert 0 < dkim.retained_dkim_key_estimated_bytes <= dkim.dkim_key_byte_capacity
+    assert dkim.uncapped_dkim_key_entries == dkim.retained_dkim_key_entries
+    assert dkim.uncapped_dkim_key_estimated_bytes == dkim.retained_dkim_key_estimated_bytes
 
 
 @pytest.mark.slow

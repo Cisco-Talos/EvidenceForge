@@ -56,6 +56,8 @@ _TlsMaterialValue = bytes | CertificateAuthorityMaterial | CertificateIdentityPl
 _MAX_TLS_MATERIAL_POINT_RETAINED_BYTES = 1_048_576
 _MAX_TLS_MATERIAL_OWNER_RETAINED_BYTES = 1_073_741_824
 _MAX_TLS_PREPARATION_OWNER_RETAINED_BYTES = 2_147_483_648
+_MAX_DKIM_KEY_RETAINED_BYTES = 1_048_576
+_MAX_DKIM_KEY_OWNER_RETAINED_BYTES = 1_073_741_824
 _TLS_PREPARATION_BASE_RETAINED_BYTES = 512
 _TLS_PREPARATION_POINT_RETAINED_BYTES = 1_024 + (2 * _MAX_TLS_MATERIAL_POINT_RETAINED_BYTES)
 _DEFAULT_TLS_MATERIAL_CAPACITY = 100_000
@@ -174,10 +176,11 @@ class CryptographicMaterialPreparationCensus:
 
 @dataclass(frozen=True, slots=True)
 class CryptographicMaterialPointCapacityCensus:
-    """Material-point bounds plus explicitly uncapped auxiliary-cache diagnostics.
+    """Material-point bounds plus complete auxiliary-retention accounting.
 
-    The auxiliary counters are observational only: DKIM and OCSP retention is
-    outside this material-point policy and requires a separate retention tranche.
+    The four legacy ``uncapped_*`` fields remain as compatibility mirrors.  DKIM
+    values mirror the bounded counters and OCSP values remain zero because status
+    is recomputed without registry retention.
     """
 
     material_point_capacity: int | None
@@ -203,6 +206,16 @@ class CryptographicMaterialPointCapacityCensus:
     uncapped_dkim_key_estimated_bytes: int
     uncapped_ocsp_status_entries: int
     uncapped_ocsp_status_estimated_bytes: int
+    dkim_key_capacity: int | None = None
+    dkim_key_byte_capacity: int | None = None
+    retained_dkim_key_entries: int = 0
+    retained_dkim_key_estimated_bytes: int = 0
+    dkim_key_high_water: int = 0
+    dkim_key_byte_high_water: int = 0
+    ocsp_status_capacity: int = 0
+    ocsp_status_byte_capacity: int = 0
+    retained_ocsp_status_entries: int = 0
+    retained_ocsp_status_estimated_bytes: int = 0
 
 
 def _tls_material_value_digest(value: _TlsMaterialValue) -> str:
@@ -262,9 +275,40 @@ def _tls_material_tombstone_retained_bytes(point: _TlsMaterialPoint) -> int:
 
 
 def _tls_auxiliary_entry_estimated_bytes(key: object, value: object) -> int:
-    """Return an observational logical-byte estimate for one uncapped cache row."""
+    """Return a callback-free logical-byte estimate for one auxiliary row."""
 
     return 128 + _tls_material_tree_retained_bytes(key) + _tls_material_tree_retained_bytes(value)
+
+
+def _detached_dkim_key_plan(value: DkimKeyPlan) -> DkimKeyPlan:
+    """Return a detached exact-field DKIM wrapper without invoking public hooks."""
+
+    snapshot = object.__new__(DkimKeyPlan)
+    for member in fields(DkimKeyPlan):
+        object.__setattr__(
+            snapshot,
+            member.name,
+            object.__getattribute__(value, member.name),
+        )
+    return snapshot
+
+
+def _dkim_key_state_component(
+    cache_key: tuple[str, str, int],
+    value: DkimKeyPlan,
+) -> int:
+    """Return the order-independent state component for one validated wrapper."""
+
+    canonical = (
+        cache_key,
+        value.domain,
+        value.selector,
+        value.public_key_spki_der,
+        value.public_key_base64,
+        value.key_size,
+        value.exponent,
+    )
+    return _tls_material_state_component("dkim-key-wrapper-v1", canonical)
 
 
 def _validate_tls_material_key(key: _TlsMaterialKey) -> None:
@@ -671,11 +715,10 @@ class CryptographicMaterialRegistry:
         ] = {}
         self._certificates: dict[tuple[Any, ...], CertificateIdentityPlan] = {}
         self._dkim_keys: dict[tuple[str, str, int], DkimKeyPlan] = {}
-        self._ocsp_statuses: dict[
-            tuple[str, str, tuple[Any, ...]], tuple[OcspCertificateStatus, str | None]
-        ] = {}
         self._dkim_key_estimated_bytes = 0
-        self._ocsp_status_estimated_bytes = 0
+        self._dkim_key_high_water = 0
+        self._dkim_key_byte_high_water = 0
+        self._dkim_key_state_xor = 0
         self._tls_material_lock = RLock()
         self._tls_preparation_secret = secrets.token_bytes(32)
         self._next_tls_preparation_id = 1
@@ -732,6 +775,28 @@ class CryptographicMaterialRegistry:
         """Compatibility alias for :attr:`tls_material_point_capacity`."""
 
         return self.tls_material_point_capacity
+
+    @property
+    def dkim_key_capacity(self) -> int | None:
+        """Return the bounded DKIM-wrapper cache capacity.
+
+        The wrapper cache follows the TLS point capacity so the default owner is
+        fully bounded while explicit ``tls_material_capacity=None`` preserves the
+        legacy unlimited constructor mode.
+        """
+
+        return self._tls_material_capacity
+
+    def _dkim_key_byte_capacity(self) -> int | None:
+        """Return the derived logical byte cap for retained DKIM wrappers."""
+
+        capacity = self._tls_material_capacity
+        if capacity is None:
+            return None
+        return min(
+            capacity * _MAX_DKIM_KEY_RETAINED_BYTES,
+            _MAX_DKIM_KEY_OWNER_RETAINED_BYTES,
+        )
 
     def _tls_live_material_points_locked(self) -> int:
         """Return exact canonical TLS material cardinality in constant time."""
@@ -1225,11 +1290,12 @@ class CryptographicMaterialRegistry:
         return self.tls_preparation_census()
 
     def tls_material_point_capacity_census(self) -> CryptographicMaterialPointCapacityCensus:
-        """Return bounded material-point accounting and uncapped auxiliary observations."""
+        """Return complete constant-time material and auxiliary-retention accounting."""
 
         with self._tls_material_lock:
             self._reap_abandoned_tls_preparations_locked()
             capacity = self._tls_material_capacity
+            dkim_byte_capacity = CryptographicMaterialRegistry._dkim_key_byte_capacity(self)
             return CryptographicMaterialPointCapacityCensus(
                 material_point_capacity=capacity,
                 material_preparation_capacity=capacity,
@@ -1260,8 +1326,18 @@ class CryptographicMaterialRegistry:
                 ),
                 uncapped_dkim_key_entries=len(self._dkim_keys),
                 uncapped_dkim_key_estimated_bytes=self._dkim_key_estimated_bytes,
-                uncapped_ocsp_status_entries=len(self._ocsp_statuses),
-                uncapped_ocsp_status_estimated_bytes=self._ocsp_status_estimated_bytes,
+                uncapped_ocsp_status_entries=0,
+                uncapped_ocsp_status_estimated_bytes=0,
+                dkim_key_capacity=capacity,
+                dkim_key_byte_capacity=dkim_byte_capacity,
+                retained_dkim_key_entries=len(self._dkim_keys),
+                retained_dkim_key_estimated_bytes=self._dkim_key_estimated_bytes,
+                dkim_key_high_water=self._dkim_key_high_water,
+                dkim_key_byte_high_water=self._dkim_key_byte_high_water,
+                ocsp_status_capacity=0,
+                ocsp_status_byte_capacity=0,
+                retained_ocsp_status_entries=0,
+                retained_ocsp_status_estimated_bytes=0,
             )
 
     def state_digest(self) -> str:
@@ -1284,6 +1360,13 @@ class CryptographicMaterialRegistry:
                 len(self._tls_claimed_preparations),
                 len(self._tls_point_reservations),
             )
+            if self._dkim_keys:
+                canonical += (
+                    "bounded-dkim-key-wrapper-v1",
+                    self._dkim_key_state_xor,
+                    len(self._dkim_keys),
+                    self._dkim_key_estimated_bytes,
+                )
             if self._tls_material_capacity is not None:
                 canonical += (
                     "finite-tls-material-capacity-v1",
@@ -2192,12 +2275,14 @@ class CryptographicMaterialRegistry:
 
         normalized_domain = domain.rstrip(".").lower()
         normalized_selector = selector.rstrip(".").lower()
+        if not normalized_domain or not normalized_selector:
+            raise ValueError("DKIM key planning requires non-empty domain and selector identities")
         normalized_size = 3072 if key_size >= 3072 else 2048
         cache_key = (normalized_domain, normalized_selector, normalized_size)
         with self._tls_material_lock:
             cached = self._dkim_keys.get(cache_key)
         if cached is not None:
-            return cached
+            return _detached_dkim_key_plan(cached)
         spki = self.public_key_spki(
             f"dkim:{normalized_domain}:{normalized_selector}",
             key_type="rsa",
@@ -2218,20 +2303,46 @@ class CryptographicMaterialRegistry:
             exponent=numbers.e,
         )
         estimated_bytes = _tls_auxiliary_entry_estimated_bytes(cache_key, plan)
+        state_component = _dkim_key_state_component(cache_key, plan)
+        detached = _detached_dkim_key_plan(plan)
         with self._tls_material_lock:
             cached = self._dkim_keys.get(cache_key)
             if cached is not None:
-                return cached
+                return detached
+            capacity = self._tls_material_capacity
+            byte_capacity = CryptographicMaterialRegistry._dkim_key_byte_capacity(self)
+            if capacity is not None and (
+                len(self._dkim_keys) >= capacity
+                or estimated_bytes > _MAX_DKIM_KEY_RETAINED_BYTES
+                or byte_capacity is None
+                or estimated_bytes > byte_capacity - self._dkim_key_estimated_bytes
+            ):
+                return detached
+            next_estimated_bytes = self._dkim_key_estimated_bytes + estimated_bytes
+            next_state_xor = self._dkim_key_state_xor ^ state_component
+            next_high_water = max(self._dkim_key_high_water, len(self._dkim_keys) + 1)
+            next_byte_high_water = max(
+                self._dkim_key_byte_high_water,
+                next_estimated_bytes,
+            )
             self._dkim_keys[cache_key] = plan
-            self._dkim_key_estimated_bytes += estimated_bytes
-            return plan
+            self._dkim_key_estimated_bytes = next_estimated_bytes
+            self._dkim_key_state_xor = next_state_xor
+            self._dkim_key_high_water = next_high_water
+            self._dkim_key_byte_high_water = next_byte_high_water
+            return detached
 
     def resolve_ocsp_status(
         self,
         certificate: CertificateIdentityPlan,
         profiles: list[dict[str, Any]],
     ) -> tuple[OcspCertificateStatus, str | None]:
-        """Return the durable status identity assigned to one certificate."""
+        """Deterministically recompute the durable status assigned to one certificate.
+
+        The result depends only on immutable certificate identity and the exact
+        matching profile.  Retaining a second copy therefore adds no semantic
+        value and formerly allowed profile-identity churn to grow without bound.
+        """
 
         matching = [
             profile
@@ -2262,11 +2373,6 @@ class CryptographicMaterialRegistry:
             numeric_weights,
             reasons,
         )
-        cache_key = (certificate.fingerprint, certificate.serial_number, profile_identity)
-        with self._tls_material_lock:
-            cached = self._ocsp_statuses.get(cache_key)
-        if cached is not None:
-            return cached
         rng = random.Random(
             _stable_seed(
                 "ocsp_certificate_status:"
@@ -2280,14 +2386,7 @@ class CryptographicMaterialRegistry:
             result = (status, rng.choice(reasons))
         else:
             result = (status, None)
-        estimated_bytes = _tls_auxiliary_entry_estimated_bytes(cache_key, result)
-        with self._tls_material_lock:
-            cached = self._ocsp_statuses.get(cache_key)
-            if cached is not None:
-                return cached
-            self._ocsp_statuses[cache_key] = result
-            self._ocsp_status_estimated_bytes += estimated_bytes
-            return result
+        return result
 
 
 class CryptographicMaterialPreparedCommit:
