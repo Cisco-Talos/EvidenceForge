@@ -419,6 +419,7 @@ class IntentExecutionBatchReceipt:
     plan_digest: str
     committed_digest: str
     _integrity: str = field(repr=False)
+    _terminal_proof: str = field(default="", repr=False)
 
     @property
     def publication_token(self) -> str:
@@ -456,12 +457,20 @@ class IntentExecutionBatchCensus:
     prepared_delta_capacity: int
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class _PreparedIntentExecutionBatchPlan:
-    """Prevalidated immutable receipt retained by one claimed reservation."""
+    """Prevalidated receipt and bounded canonical replay for one claim."""
 
     token: IntentExecutionBatchToken
     receipt: IntentExecutionBatchReceipt
+    terminal_proof: str
+    aggregate_replacements: tuple[tuple[str, _IntentExecutionAggregate], ...]
+    watermark_us: int | None
+    hot_heap_pops: tuple[tuple[int, tuple[str, str, str]], ...]
+    hot_identity_deletions: tuple[tuple[str, str, str], ...]
+    hot_identity_insertions: tuple[tuple[tuple[str, str, str], int], ...]
+    hot_heap_insertions: tuple[tuple[int, tuple[str, str, str]], ...]
+    stale_preparation_ids: tuple[int, ...]
 
 
 @dataclass(slots=True)
@@ -473,6 +482,7 @@ class _IntentExecutionBatchReservation:
     intent_ids: tuple[str, ...]
     claimed: bool = False
     claim_thread_id: int | None = None
+    claim_capability_id: int | None = None
     commit_plan: _PreparedIntentExecutionBatchPlan | None = None
     retained_bytes: int = 0
 
@@ -545,11 +555,22 @@ def _intent_execution_batch_retained_bytes(value: object, seen: set[int] | None 
     if object_id in active:
         return 0
     active.add(object_id)
-    if value is None or type(value) in {bool, int, str, datetime, OccurrenceRole}:
+    if value is None or type(value) in {bool, bytes, int, str, datetime, OccurrenceRole}:
         return sys.getsizeof(value)
     if type(value) is tuple:
         return sys.getsizeof(value) + sum(
             _intent_execution_batch_retained_bytes(item, active) for item in value
+        )
+    if type(value) in {dict, Counter}:
+        return sys.getsizeof(value) + sum(
+            _intent_execution_batch_retained_bytes(key, active)
+            + _intent_execution_batch_retained_bytes(item, active)
+            for key, item in value.items()
+        )
+    if type(value) in {_CompactIdentityAggregate, _IntentExecutionAggregate}:
+        return sys.getsizeof(value) + sum(
+            _intent_execution_batch_retained_bytes(getattr(value, item.name), active)
+            for item in fields(value)
         )
     if type(value) in _BATCH_RETAINED_RECORD_TYPES:
         return sys.getsizeof(value) + sum(
@@ -635,15 +656,41 @@ class _IntentExecutionAggregate:
 class PreparedIntentExecutionBatch:
     """One-shot no-validation commit capability for a claimed execution batch."""
 
-    __slots__ = ("_active", "_committed", "_ledger", "_receipt", "_token")
+    __slots__ = (
+        "_active",
+        "_capability_id",
+        "_certified_receipt",
+        "_claim_thread_id",
+        "_committed",
+        "_expected_receipt",
+        "_ledger",
+        "_plan",
+        "_preparation_id",
+        "_receipt",
+        "_reservation",
+        "_token",
+    )
 
     def __init__(
         self,
         ledger: IntentExecutionLedger,
         token: IntentExecutionBatchToken,
+        expected_receipt: IntentExecutionBatchReceipt,
+        *,
+        claim_thread_id: int,
+        plan: _PreparedIntentExecutionBatchPlan,
+        preparation_id: int,
+        reservation: _IntentExecutionBatchReservation,
     ) -> None:
         self._ledger = ledger
         self._token = token
+        self._expected_receipt = expected_receipt
+        self._capability_id = id(self)
+        self._certified_receipt: IntentExecutionBatchReceipt | None = None
+        self._claim_thread_id = claim_thread_id
+        self._plan = plan
+        self._preparation_id = preparation_id
+        self._reservation = reservation
         self._active = True
         self._committed = False
         self._receipt: IntentExecutionBatchReceipt | None = None
@@ -660,6 +707,33 @@ class PreparedIntentExecutionBatch:
 
         return self._receipt
 
+    @property
+    def expected_receipt(self) -> IntentExecutionBatchReceipt:
+        """Return the exact immutable receipt authenticated by the active claim."""
+
+        if not self._active or self._committed:
+            raise IntentExecutionBatchError(
+                "Prepared intent execution batch has no active expected receipt"
+            )
+        return self._ledger._expected_claimed_batch_receipt(self)
+
+    def certify_composite_commit(
+        self,
+        expected_receipt: IntentExecutionBatchReceipt,
+    ) -> None:
+        """Authenticate this exact claim once for a later composite commit tail."""
+
+        if self._certified_receipt is not None:
+            raise IntentExecutionBatchError(
+                "Prepared intent execution batch is already composite-certified"
+            )
+        if self.expected_receipt is not expected_receipt:
+            raise IntentExecutionBatchError(
+                "Intent execution batch composite certification requires its exact "
+                "expected receipt object"
+            )
+        self._certified_receipt = expected_receipt
+
     def commit_no_fail(self) -> IntentExecutionBatchReceipt:
         """Publish the prevalidated bounded delta exactly once under the ledger lock."""
 
@@ -667,9 +741,27 @@ class PreparedIntentExecutionBatch:
             raise IntentExecutionBatchError("Prepared intent execution batch is no longer active")
         if self._committed:
             raise IntentExecutionBatchError("Prepared intent execution batch is already committed")
-        self._receipt = self._ledger._commit_claimed_batch(self._token)
-        self._committed = True
-        return self._receipt
+        if self._capability_id != id(self):
+            raise IntentExecutionBatchError(
+                "Prepared intent execution batch capability is foreign or copied"
+            )
+        if self._claim_thread_id != get_ident():
+            raise IntentExecutionBatchError(
+                "Intent execution batch must commit on its claiming thread"
+            )
+        if (
+            self._certified_receipt is not None
+            and self._certified_receipt is not self._expected_receipt
+        ):
+            raise IntentExecutionBatchError(
+                "Intent execution batch composite certification is stale"
+            )
+        return self._ledger._commit_claimed_batch(
+            capability=self,
+            plan=self._plan,
+            preparation_id=self._preparation_id,
+            reservation=self._reservation,
+        )
 
     def _close(self) -> None:
         self._active = False
@@ -797,6 +889,19 @@ class IntentExecutionLedger:
         ).encode()
         return hmac.new(self._batch_secret, payload, hashlib.sha256).hexdigest()
 
+    def _batch_terminal_receipt_proof(
+        self,
+        receipt: IntentExecutionBatchReceipt,
+    ) -> str:
+        """Return the proof installed only after canonical batch publication."""
+
+        payload = (
+            f"intent-execution-batch-terminal\0{self._batch_ledger_id}\0"
+            f"{receipt.preparation_id}\0{receipt.plan_digest}\0"
+            f"{receipt.committed_digest}\0{receipt._integrity}"
+        ).encode()
+        return hmac.new(self._batch_secret, payload, hashlib.sha256).hexdigest()
+
     @staticmethod
     def _batch_committed_digest(
         request: IntentExecutionBatchRequest,
@@ -866,15 +971,262 @@ class IntentExecutionLedger:
             ).hexdigest(),
         )
 
+    @staticmethod
+    def _clone_compact_identity_aggregate(
+        aggregate: _CompactIdentityAggregate,
+    ) -> _CompactIdentityAggregate:
+        """Copy one fixed-sample identity aggregate before canonical publication."""
+
+        clone = _CompactIdentityAggregate(aggregate.sample_limit)
+        clone.reference_count = aggregate.reference_count
+        clone.digest_xor = aggregate.digest_xor
+        clone.digest_sum = aggregate.digest_sum
+        clone.sample = aggregate.sample.copy()
+        return clone
+
+    @classmethod
+    def _clone_execution_aggregate(
+        cls,
+        aggregate: _IntentExecutionAggregate,
+    ) -> _IntentExecutionAggregate:
+        """Copy one affected intent aggregate without scanning unrelated intents."""
+
+        clone = _IntentExecutionAggregate(aggregate.sample_limit)
+        clone.planned = aggregate.planned
+        clone.duplicate_occurrence_count = aggregate.duplicate_occurrence_count
+        clone.action_ids = cls._clone_compact_identity_aggregate(aggregate.action_ids)
+        clone.occurrence_ids = cls._clone_compact_identity_aggregate(aggregate.occurrence_ids)
+        clone.source_counts = aggregate.source_counts.copy()
+        clone.occurrence_hour_counts = aggregate.occurrence_hour_counts.copy()
+        return clone
+
+    def _derive_batch_hot_replay_locked(
+        self,
+        request: IntentExecutionBatchRequest,
+        timestamp_us_by_delta: tuple[int, ...],
+        *,
+        resulting_watermark_us: int | None,
+    ) -> tuple[
+        tuple[bool, ...],
+        tuple[tuple[int, tuple[str, str, str]], ...],
+        tuple[tuple[str, str, str], ...],
+        tuple[tuple[tuple[str, str, str], int], ...],
+        tuple[tuple[int, tuple[str, str, str]], ...],
+    ]:
+        """Precompute bounded hot-cache replay without copying the complete cache."""
+
+        horizon_us = int(_HOT_IDENTITY_HORIZON.total_seconds() * 1_000_000)
+        cutoff = None if resulting_watermark_us is None else resulting_watermark_us - horizon_us
+        popped_existing: list[tuple[int, tuple[str, str, str]]] = []
+        deleted_live_keys: set[tuple[str, str, str]] = set()
+        duplicate_by_delta = [False] * len(request.deltas)
+
+        def pop_existing() -> None:
+            row = heappop(self._hot_identity_heap)
+            popped_existing.append(row)
+            timestamp_us, key = row
+            if self._hot_identities.get(key) == timestamp_us:
+                deleted_live_keys.add(key)
+
+        try:
+            if cutoff is not None:
+                while self._hot_identity_heap and self._hot_identity_heap[0][0] < cutoff:
+                    pop_existing()
+
+            new_rows: list[tuple[int, tuple[str, str, str]]] = []
+            for ordinal, (delta, timestamp_us) in enumerate(
+                zip(request.deltas, timestamp_us_by_delta, strict=True)
+            ):
+                if type(delta) is not IntentOccurrenceDelta:
+                    continue
+                key = (delta.intent_id, "occurrence", delta.occurrence_key.occurrence_id)
+                if key in self._hot_identities and key not in deleted_live_keys:
+                    duplicate_by_delta[ordinal] = True
+                    continue
+                if cutoff is not None and timestamp_us < cutoff:
+                    continue
+                heappush(new_rows, (timestamp_us, key))
+
+            live_count = len(self._hot_identities) - len(deleted_live_keys) + len(new_rows)
+            while live_count > self._hot_identity_capacity:
+                existing_row = self._hot_identity_heap[0] if self._hot_identity_heap else None
+                new_row = new_rows[0] if new_rows else None
+                if new_row is None or (existing_row is not None and existing_row <= new_row):
+                    prior_deleted_count = len(deleted_live_keys)
+                    pop_existing()
+                    if len(deleted_live_keys) > prior_deleted_count:
+                        live_count -= 1
+                else:
+                    heappop(new_rows)
+                    live_count -= 1
+
+            hot_heap_insertions = tuple(sorted(new_rows))
+            return (
+                tuple(duplicate_by_delta),
+                tuple(popped_existing),
+                tuple(sorted(deleted_live_keys)),
+                tuple((key, timestamp_us) for timestamp_us, key in hot_heap_insertions),
+                hot_heap_insertions,
+            )
+        finally:
+            for row in popped_existing:
+                heappush(self._hot_identity_heap, row)
+
+    def _derive_batch_commit_plan_locked(
+        self,
+        token: IntentExecutionBatchToken,
+        receipt: IntentExecutionBatchReceipt,
+    ) -> _PreparedIntentExecutionBatchPlan:
+        """Derive every bounded canonical replacement before yielding a claim."""
+
+        request = token.request
+        timestamp_us_by_delta: list[int] = []
+        resulting_watermark_us = self._watermark_us
+        for delta in request.deltas:
+            timestamp_us = (
+                _datetime_to_epoch_us(delta.timestamp)
+                if delta.timestamp is not None
+                else resulting_watermark_us
+                if resulting_watermark_us is not None
+                else 0
+            )
+            timestamp_us_by_delta.append(timestamp_us)
+            if resulting_watermark_us is None or timestamp_us > resulting_watermark_us:
+                resulting_watermark_us = timestamp_us
+        timestamp_tuple = tuple(timestamp_us_by_delta)
+        (
+            duplicate_by_delta,
+            hot_heap_pops,
+            hot_identity_deletions,
+            hot_identity_insertions,
+            hot_heap_insertions,
+        ) = self._derive_batch_hot_replay_locked(
+            request,
+            timestamp_tuple,
+            resulting_watermark_us=resulting_watermark_us,
+        )
+
+        minimum_hour = (
+            None
+            if resulting_watermark_us is None
+            else resulting_watermark_us // 3_600_000_000 - (_WINDOW_HORIZON_HOURS - 1)
+        )
+        replacements: dict[str, _IntentExecutionAggregate] = {}
+        if minimum_hour is not None:
+            for intent_id, aggregate in self._aggregates.items():
+                if any(hour < minimum_hour for hour in aggregate.occurrence_hour_counts):
+                    replacement = self._clone_execution_aggregate(aggregate)
+                    replacement.occurrence_hour_counts = Counter(
+                        {
+                            hour: count
+                            for hour, count in replacement.occurrence_hour_counts.items()
+                            if hour >= minimum_hour
+                        }
+                    )
+                    replacements[intent_id] = replacement
+
+        def affected_aggregate(intent_id: str) -> _IntentExecutionAggregate:
+            replacement = replacements.get(intent_id)
+            if replacement is not None:
+                return replacement
+            canonical = self._aggregates.get(intent_id)
+            replacement = (
+                _IntentExecutionAggregate(self._identity_sample_limit)
+                if canonical is None
+                else self._clone_execution_aggregate(canonical)
+            )
+            replacements[intent_id] = replacement
+            return replacement
+
+        for ordinal, (delta, timestamp_us) in enumerate(
+            zip(request.deltas, timestamp_tuple, strict=True)
+        ):
+            aggregate = affected_aggregate(delta.intent_id)
+            if type(delta) is IntentOccurrenceDelta:
+                aggregate.action_ids.record(delta.occurrence_key.action_id)
+                aggregate.occurrence_ids.record(delta.occurrence_key.occurrence_id)
+                if duplicate_by_delta[ordinal]:
+                    aggregate.duplicate_occurrence_count += 1
+                if delta.timestamp is not None:
+                    occurrence_hour = timestamp_us // 3_600_000_000
+                    if minimum_hour is None or occurrence_hour >= minimum_hour:
+                        aggregate.occurrence_hour_counts[occurrence_hour] += 1
+            else:
+                aggregate.source_counts[(delta.source, delta.status)] += 1
+
+        stale_preparation_ids = tuple(
+            sorted(
+                preparation_id
+                for preparation_id, reservation in self._batch_reservations.items()
+                if preparation_id != token.preparation_id
+                and not reservation.claimed
+                and not self._batch_watermark_value_matches(
+                    reservation.canonical_token.expected_watermark,
+                    resulting_watermark_us,
+                )
+            )
+        )
+        return _PreparedIntentExecutionBatchPlan(
+            token=token,
+            receipt=receipt,
+            terminal_proof=self._batch_terminal_receipt_proof(receipt),
+            aggregate_replacements=tuple(sorted(replacements.items())),
+            watermark_us=resulting_watermark_us,
+            hot_heap_pops=hot_heap_pops,
+            hot_identity_deletions=hot_identity_deletions,
+            hot_identity_insertions=hot_identity_insertions,
+            hot_heap_insertions=hot_heap_insertions,
+            stale_preparation_ids=stale_preparation_ids,
+        )
+
+    @staticmethod
+    def _batch_watermark_value_matches(
+        expected: datetime | None,
+        watermark_us: int | None,
+    ) -> bool:
+        """Return whether one admission frontier survives an exact integer frontier."""
+
+        current = None if watermark_us is None else _epoch_us_to_datetime(watermark_us)
+        return current == expected or (
+            expected is None and watermark_us == 0 and current == datetime.fromtimestamp(0, tz=UTC)
+        )
+
+    def _batch_commit_plan_is_valid_locked(
+        self,
+        reservation: _IntentExecutionBatchReservation,
+    ) -> bool:
+        """Authenticate every precreated replay value during a precommit sweep."""
+
+        plan = reservation.commit_plan
+        if (
+            type(plan) is not _PreparedIntentExecutionBatchPlan
+            or plan.token is not reservation.canonical_token
+            or type(plan.receipt) is not IntentExecutionBatchReceipt
+        ):
+            return False
+        try:
+            _intent_execution_batch_retained_bytes(plan)
+            expected = self._derive_batch_commit_plan_locked(
+                reservation.canonical_token,
+                plan.receipt,
+            )
+        except (AssertionError, AttributeError, KeyError, OverflowError, TypeError, ValueError):
+            return False
+        return bool(
+            plan.aggregate_replacements == expected.aggregate_replacements
+            and plan.terminal_proof == expected.terminal_proof
+            and plan.watermark_us == expected.watermark_us
+            and plan.hot_heap_pops == expected.hot_heap_pops
+            and plan.hot_identity_deletions == expected.hot_identity_deletions
+            and plan.hot_identity_insertions == expected.hot_identity_insertions
+            and plan.hot_heap_insertions == expected.hot_heap_insertions
+            and plan.stale_preparation_ids == expected.stale_preparation_ids
+        )
+
     def _batch_watermark_matches_locked(self, expected: datetime | None) -> bool:
         """Accept only the one harmless no-timestamp frontier initialization."""
 
-        current = self._watermark_datetime_locked()
-        return current == expected or (
-            expected is None
-            and self._watermark_us == 0
-            and current == datetime.fromtimestamp(0, tz=UTC)
-        )
+        return self._batch_watermark_value_matches(expected, self._watermark_us)
 
     def _validate_batch_token_locked(self, token: IntentExecutionBatchToken) -> None:
         try:
@@ -1004,6 +1356,23 @@ class IntentExecutionLedger:
         _validate_intent_execution_batch_request(public_request)
         with self._lock:
             self._release_stale_batch_reservations_locked()
+            claimed_preparation_id = self._batch_claimed_preparation_id
+            if claimed_preparation_id is not None:
+                claimed_reservation = self._batch_reservations.get(claimed_preparation_id)
+                claimed_plan = (
+                    claimed_reservation.commit_plan if claimed_reservation is not None else None
+                )
+                if (
+                    type(claimed_plan) is not _PreparedIntentExecutionBatchPlan
+                    or not self._batch_watermark_value_matches(
+                        self._watermark_datetime_locked(),
+                        claimed_plan.watermark_us,
+                    )
+                ):
+                    raise IntentExecutionBatchInProgressError(
+                        "A claimed intent execution batch will advance the ledger frontier; "
+                        "prepare another batch after it commits"
+                    )
             conflicting_ids = {
                 preparation_id
                 for intent_id in public_request.intent_ids
@@ -1093,6 +1462,22 @@ class IntentExecutionLedger:
             reservation = self._active_batch_reservation_locked(token)
             if reservation.claimed:
                 raise IntentExecutionBatchError("Claimed intent execution batch cannot cancel")
+            claimed_preparation_id = self._batch_claimed_preparation_id
+            claimed_reservation = (
+                self._batch_reservations.get(claimed_preparation_id)
+                if claimed_preparation_id is not None
+                else None
+            )
+            claimed_plan = (
+                claimed_reservation.commit_plan if claimed_reservation is not None else None
+            )
+            if (
+                type(claimed_plan) is _PreparedIntentExecutionBatchPlan
+                and reservation.canonical_token.preparation_id in claimed_plan.stale_preparation_ids
+            ):
+                raise IntentExecutionBatchInProgressError(
+                    "A claimed intent execution batch already owns this stale-reservation cleanup"
+                )
             self._release_batch_reservation_locked(reservation)
 
     def authenticates_batch_token(
@@ -1155,20 +1540,19 @@ class IntentExecutionLedger:
                 raise IntentExecutionBatchError(
                     "Intent execution batch admission is stale after watermark advance"
                 )
-            result = self._batch_result_locked(
-                reservation.canonical_token.request,
-                preparation_id=reservation.canonical_token.preparation_id,
-                expected_watermark=reservation.canonical_token.expected_watermark,
-                plan_digest=reservation.canonical_token.plan_digest,
-            )
-            committed_digest = self._batch_committed_digest(
-                reservation.canonical_token.request,
-                result,
-                expected_watermark=reservation.canonical_token.expected_watermark,
-            )
-            reservation.commit_plan = _PreparedIntentExecutionBatchPlan(
-                token=reservation.canonical_token,
-                receipt=IntentExecutionBatchReceipt(
+            try:
+                result = self._batch_result_locked(
+                    request=reservation.canonical_token.request,
+                    preparation_id=reservation.canonical_token.preparation_id,
+                    expected_watermark=reservation.canonical_token.expected_watermark,
+                    plan_digest=reservation.canonical_token.plan_digest,
+                )
+                committed_digest = self._batch_committed_digest(
+                    reservation.canonical_token.request,
+                    result,
+                    expected_watermark=reservation.canonical_token.expected_watermark,
+                )
+                receipt = IntentExecutionBatchReceipt(
                     request=reservation.canonical_token.request,
                     result=result,
                     ledger_id=self._batch_ledger_id,
@@ -1184,18 +1568,35 @@ class IntentExecutionLedger:
                         plan_digest=reservation.canonical_token.plan_digest,
                         committed_digest=committed_digest,
                     ),
-                ),
-            )
-            reservation.claimed = True
-            reservation.claim_thread_id = get_ident()
-            self._batch_claimed_reservations += 1
-            self._batch_prepared_commit_plans += 1
-            self._batch_claimed_preparation_id = token.preparation_id
-            prior_retained_bytes = reservation.retained_bytes
-            reservation.retained_bytes = _intent_execution_batch_retained_bytes(reservation)
-            self._batch_retained_bytes += reservation.retained_bytes - prior_retained_bytes
+                )
+                commit_plan = self._derive_batch_commit_plan_locked(
+                    reservation.canonical_token,
+                    receipt,
+                )
+                reservation.commit_plan = commit_plan
+                self._batch_prepared_commit_plans += 1
+                claim_thread_id = get_ident()
+                capability = PreparedIntentExecutionBatch(
+                    self,
+                    token,
+                    receipt,
+                    claim_thread_id=claim_thread_id,
+                    plan=commit_plan,
+                    preparation_id=token.preparation_id,
+                    reservation=reservation,
+                )
+                reservation.claim_thread_id = claim_thread_id
+                reservation.claim_capability_id = id(capability)
+                self._batch_claimed_reservations += 1
+                reservation.claimed = True
+                self._batch_claimed_preparation_id = token.preparation_id
+                prior_retained_bytes = reservation.retained_bytes
+                reservation.retained_bytes = _intent_execution_batch_retained_bytes(reservation)
+                self._batch_retained_bytes += reservation.retained_bytes - prior_retained_bytes
+            except BaseException:
+                self._release_batch_reservation_locked(reservation)
+                raise
 
-        capability = PreparedIntentExecutionBatch(self, token)
         try:
             yield capability
         except BaseException:
@@ -1222,13 +1623,13 @@ class IntentExecutionLedger:
             if reservation is not None and reservation.token is token:
                 self._release_batch_reservation_locked(reservation)
 
-    def authenticates_batch_receipt(
+    def _authenticates_prospective_batch_receipt(
         self,
         receipt: object,
         *,
         request: IntentExecutionBatchRequest | None = None,
     ) -> bool:
-        """Totally authenticate one immutable committed batch receipt."""
+        """Authenticate immutable receipt fields without inferring terminal commit."""
 
         try:
             if type(receipt) is not IntentExecutionBatchReceipt:
@@ -1300,49 +1701,180 @@ class IntentExecutionLedger:
         except Exception:
             return False
 
-    def _commit_claimed_batch(
+    def authenticates_batch_receipt(
         self,
-        token: IntentExecutionBatchToken,
+        receipt: object,
+        *,
+        request: IntentExecutionBatchRequest | None = None,
+    ) -> bool:
+        """Totally authenticate one immutable committed batch receipt."""
+
+        if not self._authenticates_prospective_batch_receipt(receipt, request=request):
+            return False
+        if type(receipt) is not IntentExecutionBatchReceipt:
+            return False
+        terminal_proof = receipt._terminal_proof
+        return bool(
+            type(terminal_proof) is str
+            and terminal_proof
+            and hmac.compare_digest(
+                terminal_proof,
+                self._batch_terminal_receipt_proof(receipt),
+            )
+        )
+
+    def authenticates_expected_batch_receipt(
+        self,
+        receipt: object,
+        *,
+        preparation: object,
+        request: IntentExecutionBatchRequest | None = None,
+    ) -> bool:
+        """Totally authenticate one exact receipt exposed by an active batch claim."""
+
+        if type(preparation) is not PreparedIntentExecutionBatch:
+            return False
+        try:
+            with self._lock:
+                reservation = self._active_batch_reservation_locked(preparation._token)
+                plan = reservation.commit_plan
+                if (
+                    preparation._ledger is not self
+                    or preparation._capability_id != id(preparation)
+                    or reservation.claim_capability_id != id(preparation)
+                    or preparation._claim_thread_id != reservation.claim_thread_id
+                    or preparation._plan is not plan
+                    or preparation._preparation_id != reservation.canonical_token.preparation_id
+                    or preparation._reservation is not reservation
+                    or not preparation._active
+                    or preparation._committed
+                    or preparation._receipt is not None
+                    or not reservation.claimed
+                    or reservation.claim_thread_id != get_ident()
+                    or plan is None
+                    or plan.token is not reservation.canonical_token
+                    or preparation._expected_receipt is not receipt
+                    or plan.receipt is not receipt
+                    or (
+                        preparation._certified_receipt is not None
+                        and preparation._certified_receipt is not receipt
+                    )
+                    or not self._batch_commit_plan_is_valid_locked(reservation)
+                ):
+                    return False
+                return bool(
+                    type(receipt._terminal_proof) is str
+                    and not receipt._terminal_proof
+                    and self._authenticates_prospective_batch_receipt(
+                        receipt,
+                        request=request,
+                    )
+                )
+        except Exception:
+            return False
+
+    def _expected_claimed_batch_receipt(
+        self,
+        preparation: PreparedIntentExecutionBatch,
     ) -> IntentExecutionBatchReceipt:
-        """Commit one claimed token exactly once under the sole ledger lock."""
+        """Return the active claim's exact precomputed receipt or fail before mutation."""
 
         with self._lock:
-            reservation = self._active_batch_reservation_locked(token)
-            canonical_token = reservation.canonical_token
-            plan = reservation.commit_plan
-            if not reservation.claimed or plan is None:
-                raise IntentExecutionBatchError("Intent execution batch token is not claimed")
+            try:
+                reservation = self._active_batch_reservation_locked(preparation._token)
+            except IntentExecutionBatchError as error:
+                raise IntentExecutionBatchError(
+                    "Prepared intent execution batch has no authentic expected receipt"
+                ) from error
             if reservation.claim_thread_id != get_ident():
                 raise IntentExecutionBatchError(
                     "Intent execution batch must commit on its claiming thread"
                 )
-            if not self._batch_watermark_matches_locked(canonical_token.expected_watermark):
+            if not self.authenticates_expected_batch_receipt(
+                preparation._expected_receipt,
+                preparation=preparation,
+            ):
                 raise IntentExecutionBatchError(
-                    "Intent execution batch admission is stale after watermark advance"
+                    "Prepared intent execution batch has no authentic expected receipt"
                 )
-            for intent_id in reservation.intent_ids:
-                if self._batch_reserved_intents.get(intent_id) != token.preparation_id:
-                    raise IntentExecutionBatchError(
-                        f"Intent execution batch lost reservation for {intent_id!r}"
-                    )
-            self._validate_batch_token_locked(token)
+            return preparation._expected_receipt
 
-            for delta in canonical_token.request.deltas:
-                if type(delta) is IntentOccurrenceDelta:
-                    self._record_occurrence_locked(
-                        delta.intent_id,
-                        delta.occurrence_key,
-                        delta.timestamp,
-                    )
-                else:
-                    self._record_observation_locked(
-                        delta.intent_id,
-                        delta.source,
-                        delta.status,
-                        delta.timestamp,
-                    )
-            self._release_batch_reservation_locked(reservation)
-            self._release_stale_batch_reservations_locked()
+    def _commit_claimed_batch(
+        self,
+        *,
+        capability: PreparedIntentExecutionBatch,
+        plan: _PreparedIntentExecutionBatchPlan,
+        preparation_id: int,
+        reservation: _IntentExecutionBatchReservation,
+    ) -> IntentExecutionBatchReceipt:
+        """Replay only the trusted primitives retained by a claim-certified plan."""
+
+        with self._lock:
+            # Every replacement, heap row, cleanup ordinal, and the exact
+            # receipt was derived and authenticated before this method. From
+            # here onward the tail uses only trusted built-in mutations.
+            for intent_id, aggregate in plan.aggregate_replacements:
+                self._aggregates[intent_id] = aggregate
+            object.__setattr__(self, "_watermark_us", plan.watermark_us)
+            for _row in plan.hot_heap_pops:
+                heappop(self._hot_identity_heap)
+            for key in plan.hot_identity_deletions:
+                self._hot_identities.pop(key, None)
+            for key, timestamp_us in plan.hot_identity_insertions:
+                self._hot_identities[key] = timestamp_us
+            for row in plan.hot_heap_insertions:
+                heappush(self._hot_identity_heap, row)
+
+            self._batch_reservations.pop(preparation_id, None)
+            self._batch_capability_locators.pop(id(reservation.token), None)
+            object.__setattr__(
+                self,
+                "_batch_claimed_reservations",
+                self._batch_claimed_reservations - 1,
+            )
+            object.__setattr__(
+                self,
+                "_batch_prepared_commit_plans",
+                self._batch_prepared_commit_plans - 1,
+            )
+            object.__setattr__(
+                self,
+                "_batch_prepared_deltas",
+                self._batch_prepared_deltas - len(reservation.canonical_token.request.deltas),
+            )
+            object.__setattr__(
+                self,
+                "_batch_retained_bytes",
+                self._batch_retained_bytes - reservation.retained_bytes,
+            )
+            object.__setattr__(self, "_batch_claimed_preparation_id", None)
+            for intent_id in reservation.intent_ids:
+                self._batch_reserved_intents.pop(intent_id, None)
+
+            for stale_preparation_id in plan.stale_preparation_ids:
+                stale = self._batch_reservations.pop(stale_preparation_id, None)
+                if stale is None:
+                    continue
+                self._batch_capability_locators.pop(id(stale.token), None)
+                object.__setattr__(
+                    self,
+                    "_batch_prepared_deltas",
+                    self._batch_prepared_deltas - len(stale.canonical_token.request.deltas),
+                )
+                object.__setattr__(
+                    self,
+                    "_batch_retained_bytes",
+                    self._batch_retained_bytes - stale.retained_bytes,
+                )
+                for intent_id in stale.intent_ids:
+                    self._batch_reserved_intents.pop(intent_id, None)
+
+            reservation.claimed = False
+            reservation.claim_thread_id = None
+            reservation.claim_capability_id = None
+            object.__setattr__(plan.receipt, "_terminal_proof", plan.terminal_proof)
+            object.__setattr__(capability, "_receipt", plan.receipt)
+            object.__setattr__(capability, "_committed", True)
             return plan.receipt
 
     def mark_planned(self, intent_id: str) -> None:

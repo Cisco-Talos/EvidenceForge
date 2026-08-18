@@ -1517,6 +1517,8 @@ class ExecutionEffectAuditPreparationCensus:
     retained_byte_capacity: int
     cohort_member_capacity: int
     cohort_byte_capacity: int
+    prepared_commit_plans: int
+    mutation_fences: int
 
     @property
     def active(self) -> int:
@@ -1539,6 +1541,23 @@ class _ExecutionEffectAuditDelta:
     published_occurrence_count: int
     published_occurrence_xor: int
     published_occurrence_sum: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ExecutionEffectAuditPreparedCommitPlan:
+    """Fully derived canonical replacement retained by one exclusive claim."""
+
+    counts: Counter[str]
+    digest_count: int
+    digest_xor: int
+    digest_sum: int
+    realized_occurrence_count: int
+    realized_occurrence_xor: int
+    realized_occurrence_sum: int
+    published_occurrence_count: int
+    published_occurrence_xor: int
+    published_occurrence_sum: int
+    receipt: ExecutionEffectAuditCommitReceipt
 
 
 @dataclass(frozen=True, slots=True)
@@ -1580,6 +1599,12 @@ class PreparedExecutionEffectAuditCommit:
     __slots__ = (
         "_cancelled",
         "_binding",
+        "_capability_id",
+        "_certified_receipt",
+        "_claim_plan",
+        "_claim_preparation_id",
+        "_claim_record",
+        "_claim_thread_id",
         "_committed",
         "_counter",
         "_delta",
@@ -1599,8 +1624,14 @@ class PreparedExecutionEffectAuditCommit:
         self._binding = binding
         self._delta = delta
         self._token = token
+        self._capability_id = id(self)
         self._committed = False
         self._cancelled = False
+        self._certified_receipt: ExecutionEffectAuditCommitReceipt | None = None
+        self._claim_plan: _ExecutionEffectAuditPreparedCommitPlan | None = None
+        self._claim_preparation_id: str | None = None
+        self._claim_record: _ExecutionEffectAuditPreparationRecord | None = None
+        self._claim_thread_id: int | None = None
         self._receipt: ExecutionEffectAuditCommitReceipt | None = None
 
     @property
@@ -1621,10 +1652,67 @@ class PreparedExecutionEffectAuditCommit:
 
         return self._receipt
 
+    @property
+    def expected_receipt(self) -> ExecutionEffectAuditCommitReceipt:
+        """Return the exact immutable receipt authenticated by the active claim."""
+
+        return self._counter._expected_action_cohort_receipt(self)
+
+    def certify_composite_commit(
+        self,
+        expected_receipt: ExecutionEffectAuditCommitReceipt,
+    ) -> None:
+        """Authenticate this exact claim once for a later composite commit tail."""
+
+        if self._certified_receipt is not None:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "execution-effect audit preparation is already composite-certified",
+            )
+        if self.expected_receipt is not expected_receipt:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "execution-effect audit composite certification requires its exact "
+                "expected receipt object",
+            )
+        self._certified_receipt = expected_receipt
+
     def commit_no_fail(self) -> ExecutionEffectAuditCommitReceipt:
         """Atomically apply the already validated fixed-size delta exactly once."""
 
-        return self._counter._commit_prepared_action_cohort(self)
+        if self._capability_id != id(self) or self._cancelled:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "execution-effect audit preparation is foreign, copied, or stale",
+            )
+        if self._committed:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "execution-effect audit preparation is stale after commit",
+            )
+        if self._claim_thread_id != get_ident():
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "execution-effect audit preparation must commit on its claiming thread",
+            )
+        plan = self._claim_plan
+        record = self._claim_record
+        preparation_id = self._claim_preparation_id
+        if plan is None or record is None or preparation_id is None:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "execution-effect audit preparation is not actively claimed",
+            )
+        if self._certified_receipt is not None and self._certified_receipt is not plan.receipt:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "execution-effect audit composite certification is stale",
+            )
+        return self._counter._commit_prepared_action_cohort(
+            preparation_id=preparation_id,
+            record=record,
+            plan=plan,
+        )
 
 
 @dataclass(slots=True)
@@ -1639,6 +1727,7 @@ class _ExecutionEffectAuditPreparationRecord:
     retained_bytes: int
     state: str = "prepared"
     claiming_thread: int | None = None
+    commit_plan: _ExecutionEffectAuditPreparedCommitPlan | None = None
 
 
 def _closed_datetime_payload(value: datetime | None) -> object:
@@ -2030,10 +2119,12 @@ class ExecutionEffectAuditCounter:
     __slots__ = (
         "_action_cohort_capability_locators",
         "_action_cohort_byte_capacity",
+        "_action_cohort_claimed_preparation_id",
         "_action_cohort_member_capacity",
         "_action_cohort_owner_id",
         "_action_cohort_preparation_capacity",
         "_action_cohort_prepared_count",
+        "_action_cohort_prepared_commit_plans",
         "_action_cohort_preparation_locators",
         "_action_cohort_preparations",
         "_action_cohort_retained_byte_capacity",
@@ -2132,6 +2223,8 @@ class ExecutionEffectAuditCounter:
         self._action_cohort_capability_locators: dict[int, str] = {}
         self._action_cohort_prepared_count = 0
         self._action_cohort_claimed_count = 0
+        self._action_cohort_prepared_commit_plans = 0
+        self._action_cohort_claimed_preparation_id: str | None = None
         self._action_cohort_retained_members = 0
         self._action_cohort_retained_bytes = 0
         self._counts: Counter[str] = Counter()
@@ -2344,26 +2437,43 @@ class ExecutionEffectAuditCounter:
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
                     "execution-effect audit preparation integrity check failed",
                 )
+            if self._action_cohort_claimed_preparation_id is not None:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "another execution-effect audit preparation is already claimed",
+                )
+            try:
+                commit_plan = self._derive_action_cohort_commit_plan_locked(record)
+            except BaseException:
+                self._release_action_cohort_record_locked(record)
+                raise
             record.state = "claimed"
             record.claiming_thread = get_ident()
+            record.commit_plan = commit_plan
+            record.preparation._claim_plan = commit_plan
+            record.preparation._claim_preparation_id = record.token._preparation_id
+            record.preparation._claim_record = record
+            record.preparation._claim_thread_id = record.claiming_thread
+            self._action_cohort_claimed_preparation_id = record.token._preparation_id
             self._action_cohort_prepared_count -= 1
             self._action_cohort_claimed_count += 1
+            self._action_cohort_prepared_commit_plans += 1
             claimed = record.preparation
         try:
             yield claimed
         except BaseException:
-            with self._lock:
-                active = self._active_action_cohort_record_locked(claimed)
-                if active is record:
-                    self._release_action_cohort_record_locked(active)
+            if not claimed.committed:
+                with self._lock:
+                    active = self._active_action_cohort_record_locked(claimed)
+                    if active is record:
+                        self._release_action_cohort_record_locked(active)
             raise
         else:
-            with self._lock:
-                active = self._active_action_cohort_record_locked(claimed)
-                uncommitted = active is record
-                if uncommitted:
-                    self._release_action_cohort_record_locked(active)
-            if uncommitted or not claimed.committed:
+            if not claimed.committed:
+                with self._lock:
+                    active = self._active_action_cohort_record_locked(claimed)
+                    if active is record:
+                        self._release_action_cohort_record_locked(active)
                 raise ExecutionEffectPlanError(
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
                     "claimed execution-effect audit preparation exited without commit_no_fail",
@@ -2448,6 +2558,38 @@ class ExecutionEffectAuditCounter:
             return bool(
                 type(record) is _ExecutionEffectAuditPreparationRecord
                 and record.token is token
+                and self._action_cohort_record_authenticates_total_locked(record)
+            )
+
+    def authenticates_expected_action_cohort_receipt(
+        self,
+        receipt: object,
+        *,
+        preparation: object,
+        root_action_id: object | None = None,
+        entries: object | None = None,
+        owned_plans: object | None = None,
+        published_provenances: object | None = None,
+    ) -> bool:
+        """Totally authenticate the exact receipt exposed by an active claim."""
+
+        if type(receipt) is not ExecutionEffectAuditCommitReceipt:
+            return False
+        if not self.authenticates_action_cohort_preparation(
+            preparation,
+            root_action_id=root_action_id,
+            entries=entries,
+            owned_plans=owned_plans,
+            published_provenances=published_provenances,
+        ):
+            return False
+        with self._lock:
+            record = self._active_action_cohort_record_locked(preparation)
+            return bool(
+                record is not None
+                and record.state == "claimed"
+                and record.claiming_thread == get_ident()
+                and record.receipt is receipt
                 and self._action_cohort_record_authenticates_total_locked(record)
             )
 
@@ -2557,6 +2699,8 @@ class ExecutionEffectAuditCounter:
                 retained_byte_capacity=self._action_cohort_retained_byte_capacity,
                 cohort_member_capacity=self._action_cohort_member_capacity,
                 cohort_byte_capacity=self._action_cohort_byte_capacity,
+                prepared_commit_plans=self._action_cohort_prepared_commit_plans,
+                mutation_fences=int(self._action_cohort_claimed_preparation_id is not None),
             )
 
     @staticmethod
@@ -3418,6 +3562,70 @@ class ExecutionEffectAuditCounter:
             return None
         return record
 
+    def _derive_action_cohort_commit_plan_locked(
+        self,
+        record: _ExecutionEffectAuditPreparationRecord,
+    ) -> _ExecutionEffectAuditPreparedCommitPlan:
+        """Derive every fallible replacement before exposing a claimed capability."""
+
+        delta = record.preparation._delta
+        updated_counts = self._counts.copy()
+        for key, value in delta.counts:
+            updated_counts[key] += value
+        return _ExecutionEffectAuditPreparedCommitPlan(
+            counts=updated_counts,
+            digest_count=self._digest_count + delta.digest_count,
+            digest_xor=self._digest_xor ^ delta.digest_xor,
+            digest_sum=(self._digest_sum + delta.digest_sum) % (1 << 256),
+            realized_occurrence_count=(
+                self._realized_occurrence_count + delta.realized_occurrence_count
+            ),
+            realized_occurrence_xor=(self._realized_occurrence_xor ^ delta.realized_occurrence_xor),
+            realized_occurrence_sum=(self._realized_occurrence_sum + delta.realized_occurrence_sum)
+            % (1 << 256),
+            published_occurrence_count=(
+                self._published_occurrence_count + delta.published_occurrence_count
+            ),
+            published_occurrence_xor=(
+                self._published_occurrence_xor ^ delta.published_occurrence_xor
+            ),
+            published_occurrence_sum=(
+                self._published_occurrence_sum + delta.published_occurrence_sum
+            )
+            % (1 << 256),
+            receipt=record.receipt,
+        )
+
+    def _action_cohort_commit_plan_is_valid_locked(
+        self,
+        record: _ExecutionEffectAuditPreparationRecord,
+    ) -> bool:
+        """Authenticate one precomputed replacement during the final precommit sweep."""
+
+        plan = record.commit_plan
+        if (
+            type(plan) is not _ExecutionEffectAuditPreparedCommitPlan
+            or type(plan.counts) is not Counter
+            or plan.receipt is not record.receipt
+        ):
+            return False
+        try:
+            expected = self._derive_action_cohort_commit_plan_locked(record)
+        except (AttributeError, KeyError, OverflowError, TypeError, UnicodeError, ValueError):
+            return False
+        return bool(
+            plan.counts == expected.counts
+            and plan.digest_count == expected.digest_count
+            and plan.digest_xor == expected.digest_xor
+            and plan.digest_sum == expected.digest_sum
+            and plan.realized_occurrence_count == expected.realized_occurrence_count
+            and plan.realized_occurrence_xor == expected.realized_occurrence_xor
+            and plan.realized_occurrence_sum == expected.realized_occurrence_sum
+            and plan.published_occurrence_count == expected.published_occurrence_count
+            and plan.published_occurrence_xor == expected.published_occurrence_xor
+            and plan.published_occurrence_sum == expected.published_occurrence_sum
+        )
+
     def _action_cohort_record_authenticates_locked(
         self,
         record: _ExecutionEffectAuditPreparationRecord,
@@ -3429,6 +3637,7 @@ class ExecutionEffectAuditCounter:
         return bool(
             type(preparation) is PreparedExecutionEffectAuditCommit
             and preparation._counter is self
+            and preparation._capability_id == id(preparation)
             and preparation._binding is record.binding
             and preparation._token is token
             and type(preparation._committed) is bool
@@ -3446,9 +3655,30 @@ class ExecutionEffectAuditCounter:
             and type(record.state) is str
             and record.state in {"prepared", "claimed"}
             and (
-                record.claiming_thread is None
+                (
+                    record.claiming_thread is None
+                    and record.commit_plan is None
+                    and preparation._claim_plan is None
+                    and preparation._claim_preparation_id is None
+                    and preparation._claim_record is None
+                    and preparation._claim_thread_id is None
+                    and preparation._certified_receipt is None
+                    and self._action_cohort_claimed_preparation_id != record.token._preparation_id
+                )
                 if record.state == "prepared"
-                else type(record.claiming_thread) is int
+                else (
+                    type(record.claiming_thread) is int
+                    and preparation._claim_plan is record.commit_plan
+                    and preparation._claim_preparation_id == record.token._preparation_id
+                    and preparation._claim_record is record
+                    and preparation._claim_thread_id == record.claiming_thread
+                    and (
+                        preparation._certified_receipt is None
+                        or preparation._certified_receipt is record.receipt
+                    )
+                    and self._action_cohort_claimed_preparation_id == record.token._preparation_id
+                    and self._action_cohort_commit_plan_is_valid_locked(record)
+                )
             )
             and self._action_cohort_token_shape_is_valid(token)
             and token._cohort_digest == record.binding.cohort_digest
@@ -3492,87 +3722,125 @@ class ExecutionEffectAuditCounter:
             self._action_cohort_prepared_count -= 1
         elif record.state == "claimed":
             self._action_cohort_claimed_count -= 1
+            self._action_cohort_prepared_commit_plans -= 1
+            if self._action_cohort_claimed_preparation_id == record.token._preparation_id:
+                self._action_cohort_claimed_preparation_id = None
         self._action_cohort_retained_members -= record.retained_members
         self._action_cohort_retained_bytes -= record.retained_bytes
         record.preparation._cancelled = True
+        record.preparation._certified_receipt = None
+        record.preparation._claim_plan = None
+        record.preparation._claim_preparation_id = None
+        record.preparation._claim_record = None
+        record.preparation._claim_thread_id = None
         record.claiming_thread = None
+        record.commit_plan = None
         record.state = "cancelled"
 
-    def _commit_prepared_action_cohort(
+    def _reject_action_cohort_mutation_fence_locked(self) -> None:
+        """Reject direct mutation while one exclusive replacement is claimed."""
+
+        if self._action_cohort_claimed_preparation_id is not None:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "a claimed execution-effect audit preparation temporarily fences mutation",
+            )
+
+    def _expected_action_cohort_receipt(
         self,
         preparation: object,
     ) -> ExecutionEffectAuditCommitReceipt:
-        """Apply one already validated claimed delta under one atomic lock update."""
+        """Return one claim-owned receipt without allocating or authenticating after commit."""
 
         with self._lock:
-            record = self._active_action_cohort_record_locked(preparation)
-            if record is None:
+            if type(preparation) is not PreparedExecutionEffectAuditCommit:
                 raise ExecutionEffectPlanError(
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "execution-effect audit preparation is foreign, copied, or stale",
+                    "execution-effect audit expected receipt requires its exact preparation",
                 )
+            if preparation._counter is not self:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "execution-effect audit preparation belongs to another counter",
+                )
+            if preparation._committed:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "execution-effect audit preparation has no active expected receipt",
+                )
+            record = self._active_action_cohort_record_locked(preparation)
             if (
-                record.state != "claimed"
+                record is None
+                or record.state != "claimed"
                 or record.claiming_thread != get_ident()
                 or not self._action_cohort_record_authenticates_total_locked(record)
             ):
                 raise ExecutionEffectPlanError(
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "execution-effect audit preparation is not authentically claimed",
+                    "execution-effect audit preparation has no active expected receipt",
                 )
-            delta = record.preparation._delta
-            receipt = record.receipt
+            return record.receipt
 
-            # Derive the entire fixed-cardinality replacement before changing
-            # any canonical field.  A failure here leaves the main counter
-            # byte-for-byte untouched and the claim context cleans the ticket.
-            updated_counts = self._counts.copy()
-            for key, value in delta.counts:
-                updated_counts[key] += value
-            digest_count = self._digest_count + delta.digest_count
-            digest_xor = self._digest_xor ^ delta.digest_xor
-            digest_sum = (self._digest_sum + delta.digest_sum) % (1 << 256)
-            realized_occurrence_count = (
-                self._realized_occurrence_count + delta.realized_occurrence_count
-            )
-            realized_occurrence_xor = self._realized_occurrence_xor ^ delta.realized_occurrence_xor
-            realized_occurrence_sum = (
-                self._realized_occurrence_sum + delta.realized_occurrence_sum
-            ) % (1 << 256)
-            published_occurrence_count = (
-                self._published_occurrence_count + delta.published_occurrence_count
-            )
-            published_occurrence_xor = (
-                self._published_occurrence_xor ^ delta.published_occurrence_xor
-            )
-            published_occurrence_sum = (
-                self._published_occurrence_sum + delta.published_occurrence_sum
-            ) % (1 << 256)
+    def _commit_prepared_action_cohort(
+        self,
+        *,
+        preparation_id: str,
+        record: _ExecutionEffectAuditPreparationRecord,
+        plan: _ExecutionEffectAuditPreparedCommitPlan,
+    ) -> ExecutionEffectAuditCommitReceipt:
+        """Apply only the trusted swaps retained by one claim-certified plan."""
 
-            # This is the sole canonical mutation block.  It performs only
-            # object assignments under the one counter lock; the receipt stays
-            # inaccessible until every aggregate field has been replaced.
-            self._counts = updated_counts
-            self._digest_count = digest_count
-            self._digest_xor = digest_xor
-            self._digest_sum = digest_sum
-            self._realized_occurrence_count = realized_occurrence_count
-            self._realized_occurrence_xor = realized_occurrence_xor
-            self._realized_occurrence_sum = realized_occurrence_sum
-            self._published_occurrence_count = published_occurrence_count
-            self._published_occurrence_xor = published_occurrence_xor
-            self._published_occurrence_sum = published_occurrence_sum
-            record.preparation._committed = True
-            record.preparation._receipt = receipt
-            preparation_id = self._action_cohort_preparation_locators.pop(id(record.preparation))
-            del self._action_cohort_preparations[preparation_id]
+        with self._lock:
+            # All values and the exact receipt were derived and authenticated
+            # before the capability was yielded. This tail performs only
+            # trusted reference/integer swaps and bounded locator cleanup.
+            object.__setattr__(self, "_counts", plan.counts)
+            object.__setattr__(self, "_digest_count", plan.digest_count)
+            object.__setattr__(self, "_digest_xor", plan.digest_xor)
+            object.__setattr__(self, "_digest_sum", plan.digest_sum)
+            object.__setattr__(
+                self,
+                "_realized_occurrence_count",
+                plan.realized_occurrence_count,
+            )
+            object.__setattr__(self, "_realized_occurrence_xor", plan.realized_occurrence_xor)
+            object.__setattr__(self, "_realized_occurrence_sum", plan.realized_occurrence_sum)
+            object.__setattr__(
+                self,
+                "_published_occurrence_count",
+                plan.published_occurrence_count,
+            )
+            object.__setattr__(self, "_published_occurrence_xor", plan.published_occurrence_xor)
+            object.__setattr__(self, "_published_occurrence_sum", plan.published_occurrence_sum)
+            object.__setattr__(record.preparation, "_receipt", plan.receipt)
+            object.__setattr__(record.preparation, "_committed", True)
+            self._action_cohort_preparation_locators.pop(id(record.preparation), None)
+            self._action_cohort_preparations.pop(preparation_id, None)
             self._action_cohort_capability_locators.pop(id(record.token), None)
-            self._action_cohort_claimed_count -= 1
-            self._action_cohort_retained_members -= record.retained_members
-            self._action_cohort_retained_bytes -= record.retained_bytes
+            object.__setattr__(
+                self,
+                "_action_cohort_claimed_count",
+                self._action_cohort_claimed_count - 1,
+            )
+            object.__setattr__(
+                self,
+                "_action_cohort_prepared_commit_plans",
+                self._action_cohort_prepared_commit_plans - 1,
+            )
+            object.__setattr__(self, "_action_cohort_claimed_preparation_id", None)
+            object.__setattr__(
+                self,
+                "_action_cohort_retained_members",
+                self._action_cohort_retained_members - record.retained_members,
+            )
+            object.__setattr__(
+                self,
+                "_action_cohort_retained_bytes",
+                self._action_cohort_retained_bytes - record.retained_bytes,
+            )
             record.claiming_thread = None
             record.state = "committed"
-            return receipt
+            return plan.receipt
 
     def record(self, reconciliation: ExecutionEffectReconciliation) -> None:
         """Record one reconciliation without retaining its detailed graph."""
@@ -3589,6 +3857,7 @@ class ExecutionEffectAuditCounter:
             "big",
         )
         with self._lock:
+            self._reject_action_cohort_mutation_fence_locked()
             self._counts["plan_count"] += 1
             self._counts["no_effect_plan_count"] += int(summary.planned_count == 0)
             self._counts["planned_node_count"] += summary.planned_count
@@ -3649,6 +3918,7 @@ class ExecutionEffectAuditCounter:
         if error.code != ExecutionEffectPlanErrorCode.DUPLICATE_OUTCOME:
             return
         with self._lock:
+            self._reject_action_cohort_mutation_fence_locked()
             self._counts["duplicate_outcome_count"] += 1
             self._counts["incomplete_reconciliation_count"] += 1
 
@@ -3661,6 +3931,7 @@ class ExecutionEffectAuditCounter:
                 f"unsupported owned effect occurrence plan {type(plan).__name__}",
             )
         with self._lock:
+            self._reject_action_cohort_mutation_fence_locked()
             self._counts["owned_effect_plan_count"] += 1
             self._counts["owned_effect_expected_occurrence_count"] += plan.occurrence_count
             for ordinal in range(plan.occurrence_count):
@@ -3684,6 +3955,7 @@ class ExecutionEffectAuditCounter:
         """Record one independently published file/registry occurrence without history."""
 
         with self._lock:
+            self._reject_action_cohort_mutation_fence_locked()
             if provenance is None or provenance.kind != effect_kind:
                 self._counts["unprovenanced_effect_occurrence_count"] += 1
                 return
