@@ -39,16 +39,29 @@ that explicitly request one file.
 
 import json
 import logging
+import os
 from collections.abc import Callable
+from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
 from queue import Empty
-from threading import Lock
+from threading import Condition, Lock, get_ident
 from typing import Any
 
 from evidenceforge.events.network import NetworkSensorObservation
 from evidenceforge.formats.format_def import FormatDefinition
-from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.generation.emitters.base import (
+    ExactPublicationError,
+    ExactPublicationKey,
+    ExactPublicationParticipantKey,
+    LogEmitter,
+    complete_exact_publication_queue_item,
+    exact_publication_attempt_active,
+    exact_publication_queue_payload,
+    exact_publication_worker_attempt,
+    fsync_directory,
+    stage_exact_publication_row,
+)
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.network_observation import (
     compatibility_network_source_duration,
@@ -192,6 +205,7 @@ class _SingleZeekWriter:
         self._lock = Lock()
         self._sort_before_flush = sort_before_flush
         self._sort_key = sort_key
+        self._closed = False
         self._sorted_writer = (
             ExternalSortedLineWriter(
                 output_path,
@@ -202,32 +216,162 @@ class _SingleZeekWriter:
             if sort_before_flush and external_sorting
             else None
         )
+        self._exact_publication_receipts: dict[ExactPublicationKey, str] = {}
+        self._exact_file_pending: dict[ExactPublicationKey, tuple[str, int, int]] = {}
+        self._exact_publication_condition = Condition(Lock())
+        self._active_exact_publication_keys: set[ExactPublicationParticipantKey] = set()
+        self._close_state = "open"
+        self._close_thread: int | None = None
 
     def write(self, rendered: str) -> None:
         if self._sorted_writer is not None:
-            self._sorted_writer.write(rendered)
-            self.event_count = self._sorted_writer.event_count
+            with self._exact_publication_condition:
+                self._require_open_locked()
+                self._sorted_writer.write(rendered)
+                self.event_count = self._sorted_writer.event_count
             return
-        with self._lock:
-            self.buffer.append(rendered)
-            self.event_count += 1
-            if len(self.buffer) >= self.buffer_size:
+        if self._sort_before_flush and exact_publication_attempt_active():
+            raise ExactPublicationError(
+                "Exact sorted sensor output requires its external final-writer journal"
+            )
+        if stage_exact_publication_row(
+            self,
+            rendered,
+            publish=self._commit_exact_row,
+            release=self._release_exact_row,
+        ):
+            return
+        with self._exact_publication_condition:
+            while self._active_exact_publication_keys:
+                self._exact_publication_condition.wait()
+            self._require_open_locked()
+            with self._lock:
+                self.buffer.append(rendered)
+                self.event_count += 1
+                if len(self.buffer) >= self.buffer_size:
+                    self._flush_unlocked()
+
+    def _commit_exact_row(
+        self,
+        key: ExactPublicationKey,
+        digest: str,
+        frozen: object,
+    ) -> None:
+        if type(frozen) is not str:
+            raise ExactPublicationError("Exact sensor row must retain one exact str")
+        rendered = frozen
+        payload = (rendered if rendered.endswith("\n") else f"{rendered}\n").encode("utf-8")
+        participant_key = key[:2]
+        with self._exact_publication_condition:
+            if participant_key not in self._active_exact_publication_keys:
+                raise ExactPublicationError("Exact sensor row lost its writer fence")
+            with self._lock:
+                retained = self._exact_publication_receipts.get(key)
+                if retained is not None:
+                    if retained != digest:
+                        raise ExactPublicationError("Exact sensor publication row changed on retry")
+                    return
                 self._flush_unlocked()
+                self.output_path.parent.mkdir(parents=True, exist_ok=True)
+                pending = self._exact_file_pending.get(key)
+                if pending is None:
+                    offset = self.output_path.stat().st_size if self.output_path.exists() else 0
+                    pending = (digest, offset, len(payload))
+                    self._exact_file_pending[key] = pending
+                pending_digest, offset, payload_length = pending
+                if pending_digest != digest or payload_length != len(payload):
+                    raise ExactPublicationError("Exact sensor admission changed on retry")
+                mode = "r+b" if self.output_path.exists() else "w+b"
+                with open(self.output_path, mode) as output:
+                    output.seek(offset)
+                    retained_payload = output.read(payload_length)
+                    if retained_payload == payload:
+                        output.flush()
+                        os.fsync(output.fileno())
+                    else:
+                        if retained_payload:
+                            if not payload.startswith(retained_payload):
+                                raise ExactPublicationError(
+                                    "Exact sensor admission found conflicting bytes"
+                                )
+                            output.seek(0, os.SEEK_END)
+                            if output.tell() != offset + len(retained_payload):
+                                raise ExactPublicationError(
+                                    "Exact sensor partial admission was overtaken"
+                                )
+                            output.truncate(offset)
+                        output.seek(offset)
+                        output.write(payload)
+                        output.flush()
+                        os.fsync(output.fileno())
+                        output.seek(offset)
+                        if output.read(payload_length) != payload:
+                            raise ExactPublicationError(
+                                "Exact sensor admission did not retain its bytes"
+                            )
+                fsync_directory(self.output_path.parent)
+                self.event_count += 1
+                self._exact_publication_receipts[key] = digest
+
+    def _release_exact_row(self, key: ExactPublicationKey) -> None:
+        with self._lock:
+            self._exact_publication_receipts.pop(key, None)
+            self._exact_file_pending.pop(key, None)
+
+    def _register_exact_publication_batch(
+        self,
+        key: ExactPublicationParticipantKey,
+    ) -> None:
+        with self._exact_publication_condition:
+            foreign = self._active_exact_publication_keys - {key}
+            if foreign:
+                raise ExactPublicationError(
+                    "Sensor writer already has an unresolved exact publication"
+                )
+            if self._close_state != "open" and key not in self._active_exact_publication_keys:
+                raise ExactPublicationError(
+                    "Sensor writer is closing or closed during exact publication"
+                )
+            self._active_exact_publication_keys.add(key)
+
+    def _complete_exact_publication_batch(
+        self,
+        key: ExactPublicationParticipantKey,
+    ) -> None:
+        with self._exact_publication_condition:
+            self._active_exact_publication_keys.discard(key)
+            self._exact_publication_condition.notify_all()
+
+    def _abort_exact_publication_batch(
+        self,
+        key: ExactPublicationParticipantKey,
+    ) -> None:
+        self._complete_exact_publication_batch(key)
+
+    def _require_open_locked(self) -> None:
+        if self._close_state != "open":
+            raise RuntimeError("cannot write to a closed sensor writer")
 
     def flush(self) -> None:
         if self._sorted_writer is not None:
-            self._sorted_writer.flush()
+            with self._exact_publication_condition:
+                self._require_open_locked()
+                self._sorted_writer.flush()
             return
-        with self._lock:
-            self._flush_unlocked()
-            if not self._sort_before_flush or not self.output_path.exists():
-                return
-            lines = self.output_path.read_text(encoding="utf-8").splitlines()
-            lines.sort(key=self._sort_key or (lambda line: line))
-            with self.output_path.open("w", encoding="utf-8", newline="\n") as stream:
-                for line in lines:
-                    stream.write(line)
-                    stream.write("\n")
+        with self._exact_publication_condition:
+            while self._active_exact_publication_keys:
+                self._exact_publication_condition.wait()
+            self._require_open_locked()
+            with self._lock:
+                self._flush_unlocked()
+                if not self._sort_before_flush or not self.output_path.exists():
+                    return
+                lines = self.output_path.read_text(encoding="utf-8").splitlines()
+                lines.sort(key=self._sort_key or (lambda line: line))
+                with self.output_path.open("w", encoding="utf-8", newline="\n") as stream:
+                    for line in lines:
+                        stream.write(line)
+                        stream.write("\n")
 
     def _flush_unlocked(self) -> None:
         if not self.buffer:
@@ -247,12 +391,38 @@ class _SingleZeekWriter:
 
     def close(self) -> None:
         """Flush pending lines and publish deterministic timestamp ordering."""
-        if self._sorted_writer is not None:
-            self._sorted_writer.close()
-            self.event_count = self._sorted_writer.event_count
-            return
-        with self._lock:
-            self._flush_unlocked()
+        owner_thread = get_ident()
+        with self._exact_publication_condition:
+            while self._close_state == "closing":
+                if self._close_thread == owner_thread:
+                    raise RuntimeError("Sensor writer close cannot be re-entered")
+                self._exact_publication_condition.wait()
+            if self._close_state == "closed":
+                return
+            self._close_state = "closing"
+            self._close_thread = owner_thread
+            while self._active_exact_publication_keys:
+                self._exact_publication_condition.wait()
+        try:
+            if self._sorted_writer is not None:
+                self._sorted_writer.close()
+                self.event_count = self._sorted_writer.event_count
+            else:
+                with self._lock:
+                    self._flush_unlocked()
+        except BaseException:
+            with self._exact_publication_condition:
+                self._close_state = "open"
+                self._close_thread = None
+                self._exact_publication_condition.notify_all()
+            raise
+        with self._exact_publication_condition:
+            if self._active_exact_publication_keys:
+                raise ExactPublicationError("Sensor writer cannot close with unresolved exact rows")
+            self._closed = True
+            self._close_state = "closed"
+            self._close_thread = None
+            self._exact_publication_condition.notify_all()
 
 
 class SensorMultiplexEmitter(LogEmitter):
@@ -355,7 +525,11 @@ class SensorMultiplexEmitter(LogEmitter):
         if self.threaded:
             self._emit_threaded(event_data)
         else:
-            self._dispatch(event_data)
+            self._begin_queue_admission()
+            try:
+                self._dispatch(deepcopy(event_data))
+            finally:
+                self._finish_queue_admission()
 
     @staticmethod
     def _offset_timestamp(ts: datetime | int | float, milliseconds: int) -> datetime | float:
@@ -752,10 +926,24 @@ class SensorMultiplexEmitter(LogEmitter):
         logger.debug(f"Emitter thread started for {self.format_def.name}")
         while not self._stop_event.is_set():
             try:
-                event_data = self._event_queue.get(timeout=0.1)
+                queue_item = self._event_queue.get(timeout=0.1)
+                queued = None
                 try:
-                    if not self._handle_flush_request(event_data):
-                        self._dispatch(event_data)
+                    if self._handle_flush_request(queue_item):
+                        continue
+                    event_data, queued = exact_publication_queue_payload(queue_item)
+                    if not isinstance(event_data, dict):
+                        raise TypeError("Emitter queue item must contain an event dictionary")
+                    self._wait_for_exact_publication_turn(queued)
+                    try:
+                        with exact_publication_worker_attempt(queued):
+                            self._dispatch(event_data)
+                    except BaseException as error:
+                        complete_exact_publication_queue_item(queued, error)
+                        if queued is None:
+                            raise
+                        continue
+                    complete_exact_publication_queue_item(queued, None)
                 except Exception as exc:  # noqa: BLE001
                     self._thread_error = exc
                     logger.exception(
@@ -772,6 +960,7 @@ class SensorMultiplexEmitter(LogEmitter):
 
     def flush(self) -> None:
         """Flush all sensor writers."""
+        self._wait_for_exact_publication_turn(None)
         with self._writers_lock:
             for writer in self._writers.values():
                 writer.flush()
@@ -786,6 +975,8 @@ class SensorMultiplexEmitter(LogEmitter):
 
     def close(self) -> None:
         """Close emitter and flush all sensor writers."""
+        if not self._begin_close():
+            return
         thread_failure: RuntimeError | None = None
         if self.threaded:
             try:
@@ -804,9 +995,14 @@ class SensorMultiplexEmitter(LogEmitter):
         if thread_failure is not None:
             if writer_failure is not None:
                 thread_failure.add_note(f"Writer cleanup also failed: {writer_failure}")
+                self._fail_close()
+            else:
+                self._finish_close()
             raise thread_failure
         if writer_failure is not None:
+            self._fail_close()
             raise writer_failure
+        self._finish_close()
 
     @property
     def event_count(self) -> int:

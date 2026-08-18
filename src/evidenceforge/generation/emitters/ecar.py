@@ -208,6 +208,7 @@ class EcarEmitter(HostMultiplexEmitter):
     _sort_flat_file = True
     _sort_key = staticmethod(_ecar_sort_key)
     _defer_sorted_flush_until_close = True
+    _external_sorting = True
 
     _supported_types: set[str] = {
         "logon",

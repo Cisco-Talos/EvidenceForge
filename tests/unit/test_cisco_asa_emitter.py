@@ -39,6 +39,7 @@ from evidenceforge.events.network import (
     NetworkTuple,
 )
 from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters.base import ExactPublicationAuthority
 from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 from tests.network_factories import network_plan
 
@@ -212,6 +213,46 @@ class TestConnectionIdCounter:
         assert visible_ids == sorted(visible_ids)
         assert any(gap > 5 for gap in gaps)
         assert len(set(gaps)) >= 20
+
+    def test_exact_publication_freezes_matching_built_and_teardown_ids(
+        self,
+        asa_emitter: CiscoAsaEmitter,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failed first render cannot pair a retained Built row with a new teardown ID."""
+
+        batch = ExactPublicationAuthority(capacity=1).issue_batch()
+        event = _make_connection_event()
+        original = asa_emitter._emit_teardown
+        fail_before = True
+
+        def fail_first_teardown(*args, **kwargs):
+            nonlocal fail_before
+            if fail_before:
+                fail_before = False
+                raise RuntimeError("teardown failed before publication")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(asa_emitter, "_emit_teardown", fail_first_teardown)
+        with pytest.raises(RuntimeError, match="teardown failed"):
+            batch.publish(lambda: asa_emitter.emit(event))
+        assert len(asa_emitter._writers) == 1
+        writer = next(iter(asa_emitter._writers.values()))
+        assert writer.event_count == 0
+
+        batch.publish(lambda: asa_emitter.emit(event))
+        batch.release_no_fail()
+        assert writer._sorted_writer is not None
+        assert writer._sorted_writer.event_count == 2
+        asa_emitter.close()
+        lines = writer.output_path.read_text(encoding="utf-8").splitlines()
+        built_line = next(line for line in lines if "Built" in line)
+        teardown_line = next(line for line in lines if "Teardown" in line)
+        built_id = re.search(r"Built .* connection (\d+)", built_line)
+        teardown_id = re.search(r"Teardown .* connection (\d+)", teardown_line)
+        assert built_id is not None
+        assert teardown_id is not None
+        assert built_id.group(1) == teardown_id.group(1)
 
     def test_connection_id_mapping_preserves_same_second_file_order(self, tmp_path):
         """Same-second rows should keep the order already present in the final log file."""
