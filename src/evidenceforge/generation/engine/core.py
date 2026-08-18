@@ -353,6 +353,26 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             network_config=self.scenario.environment.network,
             systems=self.scenario.environment.systems,
         )
+        from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG, SourceOwnerKind
+        from evidenceforge.generation.source_deployment_compiler import (
+            compile_scenario_source_deployment,
+        )
+
+        # Compile one immutable source deployment after concrete emitters and
+        # topology are known. Sensor-backed formats retain their legacy
+        # no-output behavior when no sensor is configured.
+        network = self.scenario.environment.network
+        has_network_sensors = network is not None and bool(network.sensors)
+        deployment_formats = tuple(
+            format_name
+            for format_name in self.emitters
+            if has_network_sensors
+            or DEFAULT_SOURCE_CATALOG.descriptor(format_name).owner is SourceOwnerKind.HOST
+        )
+        self.source_deployment_compilation = compile_scenario_source_deployment(
+            self.scenario,
+            emitter_formats=deployment_formats,
+        )
 
         # Resolve logical people and platform accounts once, then expose the
         # legacy SID registry view for older Windows callers during migration.
@@ -384,6 +404,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             output_end_time=self.end_time,
             observation_policy=ObservationPolicy(self.scenario.observation_profile),
             intent_execution_ledger=self.intent_execution_ledger,
+            collection_deployment=self.source_deployment_compilation.deployment,
         )
         self.activity_generator = ActivityGenerator(
             state_manager=self.state_manager,
@@ -706,6 +727,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self.ground_truth_dir / OBSERVATION_MANIFEST_FILENAME,
             self.scenario,
             source_evidence_status,
+            source_deployment_digest=(
+                self.source_deployment_compilation.digest
+                if self.scenario.environment.observation_overrides
+                else None
+            ),
         )
         write_output_target_marker(self.ground_truth_dir, self.output_target)
         logger.info(f"Ground truth documentation generated: {output_path}")

@@ -99,7 +99,9 @@ class CausalityScorer(DimensionScorer):
     ) -> PillarScore:
         context = context or EvaluationContext()
         if context.observation_manifest is not None and not observation_manifest_matches_scenario(
-            context.observation_manifest, scenario
+            context.observation_manifest,
+            scenario,
+            effective_config=context.effective_config,
         ):
             context = replace(context, observation_manifest=None)
         # storyline_id -> rendered spillage values (from GROUND_TRUTH.json), used
@@ -585,7 +587,7 @@ class CausalityScorer(DimensionScorer):
         context: EvaluationContext,
     ) -> ObservationManifestEvent | None:
         manifest = context.observation_manifest
-        if manifest is None or manifest.observation_profile == "complete":
+        if manifest is None:
             return None
         return manifest.storyline_by_id().get(event.storyline_id)
 

@@ -30,6 +30,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from evidenceforge.composition.models import EffectiveConfig
 from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.dimensions import DimensionScorer, ProgressCallback, _noop_callback
 from evidenceforge.evaluation.limits import EvaluationCapacity, EvaluationLimits
@@ -264,6 +265,7 @@ class EvaluationEngine:
         progress_callback: ProgressCallback = _noop_callback,
         limits: EvaluationLimits | None = None,
         allow_large_evaluation: bool = False,
+        effective_config: EffectiveConfig | None = None,
     ):
         self.output_dir = output_dir
         self.scenario = scenario
@@ -273,6 +275,7 @@ class EvaluationEngine:
         self.output_target = read_output_target_marker(output_dir)
         self.limits = limits or EvaluationLimits()
         self.allow_large_evaluation = allow_large_evaluation
+        self.effective_config = effective_config
         self.capacity = EvaluationCapacity(
             files=0,
             corpus_bytes=0,
@@ -404,7 +407,11 @@ class EvaluationEngine:
         )
 
         logger.info(f"Parsed {total_records} records across {len(source_counts)} sources")
-        observation_manifest = load_observation_manifest(self.output_dir, self.scenario)
+        observation_manifest = load_observation_manifest(
+            self.output_dir,
+            self.scenario,
+            effective_config=self.effective_config,
+        )
         ground_truth = load_ground_truth_document(self.output_dir, self.scenario)
         context = EvaluationContext(
             observation_manifest=observation_manifest,
@@ -412,6 +419,7 @@ class EvaluationEngine:
             spillage_ground_truth=self._load_spillage_ground_truth(),
             adversarial_payload_ground_truth=self._load_adversarial_payload_ground_truth(),
             email_ground_truth=self._load_email_ground_truth(),
+            effective_config=self.effective_config,
         )
 
         # 2. Run each available pillar scorer

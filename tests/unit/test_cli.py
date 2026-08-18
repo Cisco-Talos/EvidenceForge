@@ -39,6 +39,7 @@ from evidenceforge.cli.commands import (
     _generation_progress,
     app,
 )
+from evidenceforge.composition import compile_scenario
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
@@ -359,6 +360,7 @@ class TestEvalCommand:
         output_dir = tmp_path / "data"
         output_dir.mkdir()
         scenario_file = _write_included_minimal_scenario(tmp_path, name="include-eval-test")
+        expected = compile_scenario(scenario_file)
 
         with (
             patch("evidenceforge.evaluation.engine.EvaluationEngine") as mock_engine_class,
@@ -380,8 +382,34 @@ class TestEvalCommand:
         assert result.exit_code == EXIT_SUCCESS
         assert mock_engine_class.called
         assert mock_engine_class.call_args.kwargs["scenario"].name == "include-eval-test"
+        assert mock_engine_class.call_args.kwargs["effective_config"] == expected.effective_config
         mock_format_text.assert_called_once()
         assert mock_format_text.call_args.args[0] is mock_report
+
+    def test_eval_passes_authoritative_bundle_effective_config(self, tmp_path):
+        """Authoritative evaluation should retain the serialized configuration snapshot."""
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+        (bundle / "GENERATION_MANIFEST.json").write_text("{}", encoding="utf-8")
+        compiled = compile_scenario("tests/fixtures/scenarios/minimal.yaml")
+        manifest = {
+            "compiled_sha256": compiled.digests["compiled_sha256"],
+            "generation_seed": compiled.scenario.generation_seed,
+            "formats": ["windows", "zeek"],
+        }
+
+        with (
+            patch("evidenceforge.cli.commands.verify_generation_bundle", return_value=manifest),
+            patch("evidenceforge.cli.commands.compile_scenario", return_value=compiled),
+            patch("evidenceforge.evaluation.engine.EvaluationEngine") as mock_engine_class,
+            patch("evidenceforge.evaluation.report.format_text_report"),
+        ):
+            mock_engine_class.return_value.run.return_value = Mock()
+            result = runner.invoke(app, ["eval", str(bundle)])
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        assert mock_engine_class.call_args.kwargs["scenario"] is compiled.scenario
+        assert mock_engine_class.call_args.kwargs["effective_config"] is compiled.effective_config
 
     def test_eval_reports_include_conflict_as_schema_validation(self, tmp_path):
         """eforge eval should treat include conflicts as scenario validation errors."""

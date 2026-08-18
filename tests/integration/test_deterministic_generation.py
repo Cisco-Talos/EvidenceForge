@@ -28,6 +28,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+from typer.testing import CliRunner
+
+from evidenceforge.cli.commands import app
+from evidenceforge.composition import compile_scenario
+from evidenceforge.composition.artifacts import RESOLVED_SCENARIO_FILENAME
+from evidenceforge.events.observation_manifest import load_observation_manifest
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.files import load_yaml
@@ -50,6 +57,14 @@ def _windows_smb_scenario_path() -> Path:
     return Path(__file__).parent.parent / "fixtures" / "scenarios" / "smb-resource-calibration.yaml"
 
 
+class _LegacyProjectionEngine(GenerationEngine):
+    """Test-only engine retaining the pre-deployment dispatcher projection path."""
+
+    def _initialize(self) -> None:
+        super()._initialize()
+        self.dispatcher.collection_deployment = None
+
+
 def test_minimal_generation_is_bit_perfect_for_identical_inputs(tmp_path: Path) -> None:
     """Identical scenario input should produce byte-identical generated artifacts."""
     scenario_path = Path(__file__).parent.parent / "fixtures" / "scenarios" / "minimal.yaml"
@@ -62,6 +77,111 @@ def test_minimal_generation_is_bit_perfect_for_identical_inputs(tmp_path: Path) 
     GenerationEngine(Scenario(**scenario_data), second_dir).generate()
 
     assert _snapshot_generated_files(first_dir) == _snapshot_generated_files(second_dir)
+
+
+def test_complete_profile_compiled_projection_preserves_legacy_bytes(tmp_path: Path) -> None:
+    """Exact source fan-out must not alter a complete run without overrides."""
+
+    scenario_path = Path(__file__).parent.parent / "fixtures" / "scenarios" / "minimal.yaml"
+    scenario_data = load_yaml(scenario_path)
+    scenario_data["output"]["logs"].extend(
+        [
+            {"format": "ecar"},
+            {"format": "cisco_asa"},
+        ]
+    )
+    compiled_dir = tmp_path / "compiled"
+    legacy_dir = tmp_path / "legacy"
+
+    GenerationEngine(Scenario(**scenario_data), compiled_dir).generate()
+    _LegacyProjectionEngine(Scenario(**scenario_data), legacy_dir).generate()
+
+    assert _snapshot_generated_files(compiled_dir) == _snapshot_generated_files(legacy_dir)
+
+
+def test_authoritative_eval_uses_project_observation_config(tmp_path: Path) -> None:
+    """Bundle config must bind exact deployment matching through causality scoring."""
+
+    project_root = tmp_path / "project"
+    overlay_dir = project_root / ".eforge" / "config" / "activity"
+    overlay_dir.mkdir(parents=True)
+    (overlay_dir / "observation_profiles.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 2,
+                "profiles": {
+                    "complete": {
+                        "sources": {"windows_security": {"missingness": 1.0}},
+                    }
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    scenario_data = load_yaml(
+        Path(__file__).parent.parent / "fixtures" / "scenarios" / "minimal.yaml"
+    )
+    scenario_data["baseline_activity"]["intensity"] = "low"
+    scenario_data["output"]["logs"] = [{"format": "windows_event_security"}]
+    scenario_data["environment"]["observation_overrides"] = [
+        {
+            "source_instance": "windows_security:test-01",
+            "enabled": True,
+        }
+    ]
+    scenario_data["storyline"] = [
+        {
+            "id": "step-001",
+            "time": "+10m",
+            "actor": "test_user",
+            "system": "TEST-01",
+            "activity": "Run Calculator",
+            "events": [
+                {
+                    "type": "process",
+                    "process_name": "calc.exe",
+                    "command_line": "calc.exe",
+                }
+            ],
+        }
+    ]
+    scenario_path = project_root / "scenario.yaml"
+    scenario_path.write_text(yaml.safe_dump(scenario_data, sort_keys=False), encoding="utf-8")
+    compiled = compile_scenario(scenario_path, project_root=project_root)
+    bundle = tmp_path / "bundle"
+    data_dir = bundle / "data"
+
+    GenerationEngine(
+        compiled.scenario,
+        data_dir,
+        ground_truth_dir=bundle,
+        scenario_root=project_root,
+        compiled_scenario=compiled,
+    ).generate()
+
+    authoritative = compile_scenario(bundle / RESOLVED_SCENARIO_FILENAME)
+    assert load_observation_manifest(data_dir, authoritative.scenario) is None
+    assert (
+        load_observation_manifest(
+            data_dir,
+            authoritative.scenario,
+            effective_config=authoritative.effective_config,
+        )
+        is not None
+    )
+
+    result = CliRunner().invoke(app, ["eval", str(bundle), "--format", "json"])
+
+    assert result.exit_code == 0, result.stdout
+    report = json.loads(result.stdout)
+    assert report["supplementary"]["observation_profile"]["manifest_present"] is True
+    causality = next(pillar for pillar in report["pillars"] if pillar["name"] == "Causality")
+    event_presence = next(
+        score for score in causality["sub_scores"] if score["key"] == "event_presence"
+    )
+    assert event_presence["adjusted"] is True
+    assert event_presence["score"] == 100.0
 
 
 def test_public_seed_is_repeatable_and_changes_generated_evidence(tmp_path: Path) -> None:

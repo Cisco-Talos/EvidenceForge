@@ -1735,6 +1735,7 @@ def eval_cmd(
                     "generation manifest compiled digest does not match resolved scenario"
                 )
             scenario = bundle_compiled.scenario
+            effective_config = bundle_compiled.effective_config
             if output_dir == bundle_root and (bundle_root / "data").is_dir():
                 evaluation_output_dir = bundle_root / "data"
             status_console.print(f"[green]✓[/green] Verified authoritative bundle: {scenario.name}")
@@ -1763,7 +1764,9 @@ def eval_cmd(
                 raise FileNotFoundError(
                     "legacy bundle has no authoritative artifacts; pass --scenario"
                 )
-            scenario = compile_scenario(scenario_file).scenario
+            legacy_compiled = compile_scenario(scenario_file)
+            scenario = legacy_compiled.scenario
+            effective_config = legacy_compiled.effective_config
             status_console.print(f"[green]✓[/green] Loaded legacy scenario: {scenario.name}")
     except ScenarioIncludeError as e:
         status_console.print(
@@ -1887,6 +1890,7 @@ def eval_cmd(
                 verbose=verbose,
                 progress_callback=eval_progress,
                 allow_large_evaluation=allow_large_evaluation,
+                effective_config=effective_config,
             )
             report = engine.run()
 

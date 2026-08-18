@@ -8,13 +8,16 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.paths import safe_write_text
 from evidenceforge.utils.time import resolve_time_window
+
+if TYPE_CHECKING:
+    from evidenceforge.composition.models import EffectiveConfig
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +84,26 @@ class ObservationManifest(BaseModel):
     scenario_name: str
     observation_profile: str
     collection_window: dict[str, str | None]
+    source_deployment_digest: str | None = None
     source_summary: ObservationStatusCounts = Field(default_factory=dict)
     storyline_events: list[ObservationManifestEvent] = Field(default_factory=list)
     red_herring_events: list[ObservationManifestEvent] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("source_deployment_digest")
+    @classmethod
+    def validate_source_deployment_digest(cls, value: str | None) -> str | None:
+        """Require a canonical SHA-256 digest when exact overrides are bound."""
+
+        if value is None:
+            return None
+        normalized = value.strip().casefold()
+        if len(normalized) != 64 or any(
+            character not in "0123456789abcdef" for character in normalized
+        ):
+            raise ValueError("source_deployment_digest must be a 64-character SHA-256 hex digest")
+        return normalized
 
     def storyline_by_id(self) -> dict[str, ObservationManifestEvent]:
         """Return storyline events keyed by scenario storyline ID."""
@@ -95,12 +113,15 @@ class ObservationManifest(BaseModel):
 def build_observation_manifest(
     scenario: Scenario,
     source_evidence_status: SourceEvidenceStatus,
+    *,
+    source_deployment_digest: str | None = None,
 ) -> ObservationManifest:
     """Build the observation manifest for a generated scenario."""
     return ObservationManifest(
         scenario_name=scenario.name,
         observation_profile=scenario.observation_profile,
         collection_window=_collection_window(scenario),
+        source_deployment_digest=source_deployment_digest,
         source_summary=_source_summary(source_evidence_status),
         storyline_events=[
             ObservationManifestEvent(
@@ -135,10 +156,20 @@ def write_observation_manifest(
     output_path: Path,
     scenario: Scenario,
     source_evidence_status: SourceEvidenceStatus,
+    *,
+    source_deployment_digest: str | None = None,
 ) -> None:
     """Write OBSERVATION_MANIFEST.json next to GROUND_TRUTH.md."""
-    manifest = build_observation_manifest(scenario, source_evidence_status)
-    safe_write_text(output_path, manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    manifest = build_observation_manifest(
+        scenario,
+        source_evidence_status,
+        source_deployment_digest=source_deployment_digest,
+    )
+    safe_write_text(
+        output_path,
+        manifest.model_dump_json(indent=2, exclude_none=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def find_observation_manifest(output_dir: Path) -> Path | None:
@@ -172,9 +203,11 @@ def find_observation_manifest(output_dir: Path) -> Path | None:
 def load_observation_manifest(
     output_dir: Path,
     scenario: Scenario | None = None,
+    *,
+    effective_config: EffectiveConfig | None = None,
 ) -> ObservationManifest | None:
     """Load an observation manifest for eval, returning None if absent/invalid."""
-    if scenario is not None and scenario.observation_profile == "complete":
+    if scenario is not None and _complete_profile_has_no_overrides(scenario):
         return None
     path = find_observation_manifest(output_dir)
     if path is None:
@@ -184,7 +217,11 @@ def load_observation_manifest(
     except (OSError, ValidationError, ValueError) as exc:
         logger.warning("Ignoring invalid observation manifest %s: %s", path, exc)
         return None
-    if scenario is not None and not observation_manifest_matches_scenario(manifest, scenario):
+    if scenario is not None and not observation_manifest_matches_scenario(
+        manifest,
+        scenario,
+        effective_config=effective_config,
+    ):
         logger.warning("Ignoring observation manifest %s because it does not match scenario", path)
         return None
     return manifest
@@ -193,9 +230,11 @@ def load_observation_manifest(
 def observation_manifest_matches_scenario(
     manifest: ObservationManifest,
     scenario: Scenario,
+    *,
+    effective_config: EffectiveConfig | None = None,
 ) -> bool:
     """Return whether a manifest is bound to the supplied scenario metadata."""
-    if scenario.observation_profile == "complete":
+    if _complete_profile_has_no_overrides(scenario):
         return False
     if manifest.scenario_name != scenario.name:
         return False
@@ -203,11 +242,56 @@ def observation_manifest_matches_scenario(
         return False
     if manifest.collection_window != _collection_window(scenario):
         return False
+    if scenario.environment.observation_overrides:
+        if manifest.source_deployment_digest is None:
+            return False
+        if effective_config is None:
+            source_deployment_digest = _source_deployment_digest(scenario)
+        else:
+            from evidenceforge.config.provider import effective_config_scope
+
+            with effective_config_scope(effective_config):
+                source_deployment_digest = _source_deployment_digest(scenario)
+        if manifest.source_deployment_digest != source_deployment_digest:
+            return False
     return _manifest_events_match_scenario(
         manifest.storyline_events, scenario.storyline or [], "storyline"
     ) and _manifest_events_match_scenario(
         manifest.red_herring_events, scenario.red_herrings or [], "red_herring"
     )
+
+
+def _complete_profile_has_no_overrides(scenario: Scenario) -> bool:
+    """Return whether complete-profile compatibility can skip the sidecar."""
+
+    return (
+        scenario.observation_profile == "complete"
+        and not scenario.environment.observation_overrides
+    )
+
+
+def _source_deployment_digest(scenario: Scenario) -> str:
+    """Compile the same exact-source identity used by generation."""
+
+    from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG, SourceOwnerKind
+    from evidenceforge.generation.source_deployment_compiler import (
+        compile_scenario_source_deployment,
+    )
+
+    formats = DEFAULT_SOURCE_CATALOG.expand(
+        str(log["format"]) for log in scenario.output.logs if "format" in log
+    )
+    network = scenario.environment.network
+    if network is None or not network.sensors:
+        formats = tuple(
+            format_name
+            for format_name in formats
+            if DEFAULT_SOURCE_CATALOG.descriptor(format_name).owner is SourceOwnerKind.HOST
+        )
+    return compile_scenario_source_deployment(
+        scenario,
+        emitter_formats=formats,
+    ).digest
 
 
 def _manifest_events_match_scenario(

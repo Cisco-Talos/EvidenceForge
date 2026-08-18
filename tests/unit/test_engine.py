@@ -35,8 +35,10 @@ from evidenceforge.generation.engine.storyline import _estimate_process_lifetime
 from evidenceforge.models import (
     BaselineActivity,
     Environment,
+    NetworkConfig,
     OutputSpec,
     Scenario,
+    SourceObservationOverride,
     StorylineEvent,
     System,
     TimeWindow,
@@ -48,6 +50,8 @@ from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME
 
 def _mock_activity_generator_factory(mock_instance: Mock):
     """Bind mocked generation to the bundle-owned session postcondition."""
+
+    mock_instance.timing_runtime = None
 
     def factory(**kwargs):
         state_manager = kwargs["state_manager"]
@@ -274,6 +278,20 @@ class TestGenerationEngine:
         mock_format_def.output.file_extension = ".log"
         mock_load_format.return_value = mock_format_def
 
+        minimal_scenario.environment.network = NetworkConfig.model_validate(
+            {
+                "segments": [
+                    {
+                        "name": "workstations",
+                        "cidr": "10.0.0.0/24",
+                        "exposure": "internal",
+                        "systems": ["TEST-01"],
+                    }
+                ],
+                "sensors": [],
+            }
+        )
+
         engine = GenerationEngine(minimal_scenario, tmp_path)
         engine._initialize()
 
@@ -288,6 +306,58 @@ class TestGenerationEngine:
         assert "zeek_files" in engine.emitters
         assert "zeek_smb_mapping" in engine.emitters
         assert "zeek_smb_files" in engine.emitters
+        assert engine.source_deployment_compilation.census.sensor_sources == 0
+        assert engine.source_deployment_compilation.source_instances == (
+            "sysmon:test-01",
+            "windows_security:test-01",
+        )
+        assert (
+            engine.dispatcher.collection_deployment
+            is engine.source_deployment_compilation.deployment
+        )
+
+    @patch("evidenceforge.generation.engine.core.ActivityGenerator")
+    def test_initialize_compiles_and_injects_sensor_deployment(
+        self,
+        mock_activity_gen,
+        minimal_scenario,
+        tmp_path,
+    ):
+        """Engine should retain and inject the exact sensor-backed compilation."""
+        scenario_data = minimal_scenario.model_dump(mode="json")
+        scenario_data["environment"]["network"] = {
+            "segments": [
+                {
+                    "name": "workstations",
+                    "cidr": "10.0.0.0/24",
+                    "exposure": "internal",
+                    "systems": ["TEST-01"],
+                }
+            ],
+            "sensors": [
+                {
+                    "type": "network",
+                    "name": "core-zeek",
+                    "monitoring_segments": ["workstations"],
+                    "log_formats": ["zeek_conn"],
+                }
+            ],
+        }
+        scenario = Scenario.model_validate(scenario_data)
+        engine = GenerationEngine(scenario, tmp_path)
+
+        def initialize_fake_emitter() -> None:
+            engine.emitters = {"zeek_conn": Mock()}
+
+        with patch.object(engine, "_init_emitters", side_effect=initialize_fake_emitter):
+            engine._initialize()
+
+        compilation = engine.source_deployment_compilation
+        assert compilation.census.sensor_sources == 1
+        assert compilation.source_instances == ("zeek:core-zeek",)
+        assert engine.dispatcher.collection_deployment is compilation.deployment
+        assert len(compilation.digest) == 64
+        assert mock_activity_gen.called
 
     @patch("evidenceforge.generation.engine.core.ActivityGenerator")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")
@@ -982,6 +1052,8 @@ class TestGenerationEngine:
         assert mock_gt_gen.call_args.kwargs["red_herring_events"] == []
         assert mock_gt_instance.generate.called
         assert (tmp_path / OBSERVATION_MANIFEST_FILENAME).exists()
+        payload = json.loads((tmp_path / OBSERVATION_MANIFEST_FILENAME).read_text(encoding="utf-8"))
+        assert "source_deployment_digest" not in payload
 
     @patch("evidenceforge.generation.engine.core.ActivityGenerator")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")
@@ -1031,6 +1103,13 @@ class TestGenerationEngine:
         mock_activity_instance.get_baseline_pattern.return_value = []
         mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
+        minimal_scenario.environment.observation_overrides = [
+            SourceObservationOverride(
+                source_instance="windows_security:test-01",
+                enabled=False,
+            )
+        ]
+
         data_dir = tmp_path / "data"
         engine = GenerationEngine(
             minimal_scenario,
@@ -1058,6 +1137,10 @@ class TestGenerationEngine:
         assert "storyline" not in profile_text.lower()
         assert "verdict" not in profile_text.lower()
         assert profile["output_target"] == "default"
+        observation = json.loads(manifest.read_text(encoding="utf-8"))
+        assert (
+            observation["source_deployment_digest"] == engine.source_deployment_compilation.digest
+        )
         endpoint_family = next(
             family
             for family in profile["source_families"]
