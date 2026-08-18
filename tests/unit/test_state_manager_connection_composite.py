@@ -23,7 +23,7 @@
 """Atomic StateManager connection-planning and composite-publication contracts."""
 
 import random
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -33,10 +33,22 @@ from evidenceforge.events.network import (
     NetworkTrafficLedger,
     NetworkTransactionPlan,
 )
+from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
+from evidenceforge.generation.deferred_session_preseal import (
+    DeferredSessionBindingDisposition,
+    DeferredSessionProtocol,
+)
+from evidenceforge.generation.network_runtime import NetworkTransactionRuntime
 from evidenceforge.generation.state_manager import (
+    ConnectionExistingSessionPatch,
+    ConnectionExistingSessionProcessRolesPatch,
     ConnectionMaterializationMode,
+    ConnectionPlanningCursor,
+    DeferredSessionStateAuthority,
+    MaterializationBatchPlan,
     PhysicalTransportFingerprint,
     ProcessActivityPatch,
+    ProcessMaterializationPlan,
     SessionActivityPatch,
     StateManager,
 )
@@ -62,6 +74,10 @@ def _transaction(
     duration: float = 1.25,
     traffic: NetworkTrafficLedger | None = None,
     application_layer_only: bool = False,
+    dst_port: int = 443,
+    service: str = "https",
+    initiating_pid: int = -1,
+    responding_pid: int = -1,
 ) -> NetworkTransactionPlan:
     closed_at = started_at + timedelta(seconds=duration)
     return NetworkTransactionPlan(
@@ -74,15 +90,17 @@ def _transaction(
         src_ip="10.0.0.10",
         src_port=50_001,
         dst_ip="10.0.0.20",
-        dst_port=443,
+        dst_port=dst_port,
         protocol="tcp",
-        service="https",
+        service=service,
         zeek_uid=zeek_uid,
         conn_id=conn_id,
         duration=duration,
         conn_state="SF",
         history="ShADadFf",
         traffic=traffic or _traffic(),
+        initiating_pid=initiating_pid,
+        responding_pid=responding_pid,
         application_layer_only=application_layer_only,
     )
 
@@ -107,6 +125,286 @@ def _physical_plan(
         initiating_pid=4242,
     )
     return cursor, identity, plan
+
+
+@dataclass(frozen=True, slots=True)
+class _ExistingSshRoleInputs:
+    manager: StateManager
+    owner: random.Random
+    cursor: ConnectionPlanningCursor
+    transaction: NetworkTransactionPlan
+    session_patch: ConnectionExistingSessionPatch
+    batch: MaterializationBatchPlan
+    receiver: ProcessMaterializationPlan
+    shell: ProcessMaterializationPlan
+    source_process: ProcessMaterializationPlan | None = None
+    foreign_session_process: ProcessMaterializationPlan | None = None
+
+
+def _existing_ssh_role_inputs(
+    *,
+    extras: bool = False,
+    live_shell: bool = False,
+) -> _ExistingSshRoleInputs:
+    manager = StateManager()
+    manager.set_current_time(_START)
+    target_logon_id = manager.create_session(
+        username="analyst",
+        system="TARGET-01",
+        logon_type=10,
+        source_ip="10.0.0.10",
+        source_port=50_001,
+        session_kind="ssh",
+    )
+    target_identity = manager.get_session_identity(target_logon_id)
+    assert target_identity is not None
+    if live_shell:
+        old_shell_pid = manager.create_process(
+            "TARGET-01",
+            4,
+            "/bin/bash",
+            "-bash",
+            "analyst",
+            "Medium",
+            logon_id=target_logon_id,
+        )
+        target_session = manager.get_session(target_logon_id)
+        assert target_session is not None
+        target_session.session_shell_pid = old_shell_pid
+
+    source_logon_id = ""
+    source_identity = None
+    foreign_logon_id = ""
+    foreign_identity = None
+    if extras:
+        source_logon_id = manager.create_session(
+            username="analyst",
+            system="SOURCE-01",
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        source_identity = manager.get_session_identity(source_logon_id)
+        foreign_logon_id = manager.create_session(
+            username="other",
+            system="TARGET-01",
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        foreign_identity = manager.get_session_identity(foreign_logon_id)
+        assert source_identity is not None and foreign_identity is not None
+
+    owner = random.Random(73)
+    cursor = manager.begin_connection_planning(owner)
+    connection_identity = cursor.reserve_identity()
+    builder = manager.begin_materialization_batch()
+    source_process = None
+    if source_identity is not None:
+        source_process = builder.plan_process(
+            system="SOURCE-01",
+            parent_pid=4,
+            image="/usr/bin/ssh",
+            command_line="ssh analyst@TARGET-01",
+            username="analyst",
+            integrity_level="Medium",
+            os_category="linux",
+            logon_id=source_logon_id,
+            start_time=_START + timedelta(milliseconds=10),
+            require_session=True,
+            auth_session_id=source_identity.session_id,
+            auth_logon_type=2,
+        )
+    foreign_session_process = None
+    if foreign_identity is not None:
+        foreign_session_process = builder.plan_process(
+            system="TARGET-01",
+            parent_pid=4,
+            image="/bin/sh",
+            command_line="sh",
+            username="other",
+            integrity_level="Medium",
+            os_category="linux",
+            logon_id=foreign_logon_id,
+            start_time=_START + timedelta(milliseconds=115),
+            require_session=True,
+            auth_session_id=foreign_identity.session_id,
+            auth_logon_type=2,
+        )
+    receiver = builder.plan_process(
+        system="TARGET-01",
+        parent_pid=0,
+        image="/usr/sbin/sshd",
+        command_line="sshd: analyst [priv]",
+        username="root",
+        integrity_level="System",
+        os_category="linux",
+        logon_id=target_logon_id,
+        start_time=_START + timedelta(milliseconds=110),
+        require_session=True,
+        auth_session_id=target_identity.session_id,
+        auth_logon_type=10,
+    )
+    shell = builder.plan_process(
+        system="TARGET-01",
+        parent_pid=receiver.identity.pid,
+        parent_plan=receiver,
+        image="/bin/bash",
+        command_line="-bash",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="linux",
+        logon_id=target_logon_id,
+        start_time=_START + timedelta(milliseconds=120),
+        require_session=True,
+        auth_session_id=target_identity.session_id,
+        auth_logon_type=10,
+    )
+    batch = builder.seal()
+    transaction = _transaction(
+        conn_id=connection_identity.conn_id,
+        zeek_uid=connection_identity.zeek_uid,
+        started_at=_START,
+        duration=3,
+        dst_port=22,
+        service="ssh",
+        responding_pid=receiver.identity.pid,
+    )
+    session_patch = manager.prepare_connection_existing_session_start_patch(
+        target_identity,
+        username="analyst",
+        target_system="TARGET-01",
+        start_time=_START + timedelta(milliseconds=100),
+        source_ready_time=_START + timedelta(milliseconds=100),
+        source_ip=transaction.src_ip,
+        source_port=transaction.src_port,
+        transport_pid=receiver.identity.pid,
+        lifecycle_group_id="deferred-session-lifecycle",
+        network_close_time=transaction.closed_at,
+        session_kind="ssh",
+    )
+    return _ExistingSshRoleInputs(
+        manager=manager,
+        owner=owner,
+        cursor=cursor,
+        transaction=transaction,
+        session_patch=session_patch,
+        batch=batch,
+        receiver=receiver,
+        shell=shell,
+        source_process=source_process,
+        foreign_session_process=foreign_session_process,
+    )
+
+
+def _preallocated_ssh_state_authority(
+    *,
+    extras: bool = False,
+) -> tuple[
+    _ExistingSshRoleInputs,
+    ConnectionExistingSessionProcessRolesPatch,
+    DeferredSessionStateAuthority,
+]:
+    """Return one exact strict PREALLOCATED SSH State payload."""
+
+    inputs = _existing_ssh_role_inputs(extras=extras)
+    roles = inputs.manager.prepare_connection_existing_session_process_roles_patch(
+        inputs.session_patch,
+        inputs.batch,
+        transport_plan=inputs.receiver,
+        shell_plan=inputs.shell,
+        process_tree_root_plan=inputs.receiver,
+    )
+    payload = inputs.manager.prepare_deferred_session_state_authority(
+        protocol=DeferredSessionProtocol.SSH,
+        binding_disposition=(DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START),
+        bound_at=inputs.session_patch.after.source_ready_time
+        or inputs.session_patch.after.identity.started_at,
+        batch=inputs.batch,
+        existing_session_patch=inputs.session_patch,
+        existing_session_process_roles_patch=roles,
+    )
+    return inputs, roles, payload
+
+
+def _active_rdp_state_inputs(
+    *,
+    include_target_process: bool = False,
+    foreign_source_session: bool = False,
+) -> tuple[
+    StateManager,
+    MaterializationBatchPlan,
+    ConnectionExistingSessionPatch,
+    ProcessMaterializationPlan | None,
+]:
+    """Return one ACTIVE RDP process-only batch and exact live-session patch."""
+
+    manager = StateManager()
+    manager.set_current_time(_START)
+    target_logon_id = manager.create_session(
+        username="analyst",
+        system="TARGET-01",
+        logon_type=10,
+        source_ip="10.0.0.10",
+        source_port=50_001,
+        session_kind="rdp",
+    )
+    source_logon_id = manager.create_session(
+        username="analyst",
+        system="SOURCE-01",
+        logon_type=2,
+        source_ip="-",
+        session_kind="interactive",
+    )
+    target_identity = manager.get_session_identity(target_logon_id)
+    source_identity = manager.get_session_identity(source_logon_id)
+    assert target_identity is not None and source_identity is not None
+    builder = manager.begin_materialization_batch()
+    source_process_logon_id = target_logon_id if foreign_source_session else source_logon_id
+    source_process_session_id = (
+        target_identity.session_id if foreign_source_session else source_identity.session_id
+    )
+    source_process_logon_type = 10 if foreign_source_session else 2
+    builder.plan_process(
+        system="SOURCE-01",
+        parent_pid=4,
+        image=r"C:\Windows\System32\mstsc.exe",
+        command_line="mstsc.exe /v:TARGET-01",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="windows",
+        logon_id=source_process_logon_id,
+        start_time=_START + timedelta(milliseconds=10),
+        require_session=True,
+        auth_session_id=source_process_session_id,
+        auth_logon_type=source_process_logon_type,
+    )
+    target_plan = None
+    if include_target_process:
+        target_plan = builder.plan_process(
+            system="TARGET-01",
+            parent_pid=4,
+            image=r"C:\Windows\System32\userinit.exe",
+            command_line="userinit.exe",
+            username="analyst",
+            integrity_level="Medium",
+            os_category="windows",
+            logon_id=target_logon_id,
+            start_time=_START + timedelta(milliseconds=110),
+            require_session=True,
+            auth_session_id=target_identity.session_id,
+            auth_logon_type=10,
+        )
+    batch = builder.seal()
+    patch = manager.prepare_connection_live_session_patch(
+        target_identity,
+        source_ip="10.0.0.10",
+        source_port=50_001,
+        transport_pid=batch.processes[0].identity.pid,
+        source_ready_time=_START + timedelta(milliseconds=100),
+        network_close_time=_START + timedelta(seconds=3),
+    )
+    return manager, batch, patch, target_plan
 
 
 def test_connection_cursor_preserves_uid_draw_point_and_owner_rng_parity() -> None:
@@ -341,6 +639,824 @@ def test_connection_composite_commits_connection_and_batch_in_one_version() -> N
     assert manager.get_process("LNX-01", shell.identity.pid).last_activity_time == activity_time
     assert manager.get_session(session_plan.identity.logon_id).last_activity_time == activity_time
     assert manager.state.current_time == plan.final_state_time
+
+
+def test_connection_composite_commits_preallocated_ssh_roles_once() -> None:
+    manager = StateManager()
+    manager.set_current_time(_START)
+    logon_id = manager.create_session(
+        username="analyst",
+        system="TARGET-01",
+        logon_type=10,
+        source_ip="10.0.0.10",
+        source_port=50_001,
+        session_kind="ssh",
+    )
+    session_identity = manager.get_session_identity(logon_id)
+    assert session_identity is not None
+    owner = random.Random(37)
+    cursor = manager.begin_connection_planning(owner)
+    connection_identity = cursor.reserve_identity()
+    builder = manager.begin_materialization_batch()
+    receiver = builder.plan_process(
+        system="TARGET-01",
+        parent_pid=0,
+        image="/usr/sbin/sshd",
+        command_line="sshd: analyst [priv]",
+        username="root",
+        integrity_level="System",
+        os_category="linux",
+        logon_id=logon_id,
+        start_time=_START + timedelta(milliseconds=110),
+        require_session=True,
+        auth_session_id=session_identity.session_id,
+        auth_logon_type=10,
+        parent_lifecycle_group_id="deferred-session-lifecycle",
+    )
+    shell = builder.plan_process(
+        system="TARGET-01",
+        parent_pid=receiver.identity.pid,
+        parent_plan=receiver,
+        image="/bin/bash",
+        command_line="-bash",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="linux",
+        logon_id=logon_id,
+        start_time=_START + timedelta(milliseconds=120),
+        require_session=True,
+        auth_session_id=session_identity.session_id,
+        auth_logon_type=10,
+        parent_lifecycle_group_id="deferred-session-lifecycle",
+    )
+    batch = builder.seal()
+    transaction = _transaction(
+        conn_id=connection_identity.conn_id,
+        zeek_uid=connection_identity.zeek_uid,
+        started_at=_START,
+        duration=3,
+        dst_port=22,
+        service="ssh",
+        responding_pid=receiver.identity.pid,
+    )
+    patch = manager.prepare_connection_existing_session_start_patch(
+        session_identity,
+        username="analyst",
+        target_system="TARGET-01",
+        start_time=_START + timedelta(milliseconds=100),
+        source_ready_time=_START + timedelta(milliseconds=100),
+        source_ip=transaction.src_ip,
+        source_port=transaction.src_port,
+        transport_pid=receiver.identity.pid,
+        lifecycle_group_id="deferred-session-lifecycle",
+        network_close_time=transaction.closed_at,
+        session_kind="ssh",
+    )
+    roles_patch = manager.prepare_connection_existing_session_process_roles_patch(
+        patch,
+        batch,
+        transport_plan=receiver,
+        shell_plan=shell,
+        process_tree_root_plan=receiver,
+    )
+    activity_time = transaction.closed_at
+    assert activity_time is not None
+    plan = manager.finalize_connection_composite_materialization(
+        cursor,
+        transaction,
+        initiating_pid=transaction.initiating_pid,
+        batch=batch,
+        rdp_existing_session_patch=patch,
+        existing_session_process_roles_patch=roles_patch,
+        process_activity=(
+            ProcessActivityPatch(receiver.identity, activity_time),
+            ProcessActivityPatch(shell.identity, activity_time),
+        ),
+        session_activity=(SessionActivityPatch(patch.after.identity, activity_time),),
+    )
+    prior_version = manager.materialization_version
+
+    result = manager.materialize_connection_composite(plan, owner)
+
+    assert manager.materialization_version == prior_version + 1
+    assert result.session is manager.get_session(logon_id)
+    assert result.session is not None
+    assert result.session.lifecycle_group_id == "deferred-session-lifecycle"
+    assert result.session.transport_pid == receiver.identity.pid
+    assert result.session.session_shell_pid == shell.identity.pid
+    assert result.session.process_tree_root == receiver.identity.pid
+    assert tuple(item.ecar_object_id for item in result.processes) == (
+        receiver.identity.object_id,
+        shell.identity.object_id,
+    )
+    assert manager.get_process("TARGET-01", receiver.identity.pid) is result.processes[0]
+    assert manager.get_process("TARGET-01", shell.identity.pid) is result.processes[1]
+    assert all(process.last_activity_time == activity_time for process in result.processes)
+    assert result.session.last_activity_time == activity_time
+
+
+def test_connection_composite_keeps_rdp_source_outside_target_role_patch() -> None:
+    manager = StateManager()
+    manager.set_current_time(_START)
+    source_logon_id = manager.create_session(
+        username="analyst",
+        system="SOURCE-01",
+        logon_type=2,
+        source_ip="-",
+        session_kind="interactive",
+    )
+    source_session_identity = manager.get_session_identity(source_logon_id)
+    assert source_session_identity is not None
+    target_logon_id = manager.create_session(
+        username="analyst",
+        system="TARGET-01",
+        logon_type=10,
+        source_ip="10.0.0.10",
+        source_port=50_001,
+        session_kind="rdp",
+    )
+    target_session_identity = manager.get_session_identity(target_logon_id)
+    assert target_session_identity is not None
+    owner = random.Random(38)
+    cursor = manager.begin_connection_planning(owner)
+    connection_identity = cursor.reserve_identity()
+    builder = manager.begin_materialization_batch()
+    source_client = builder.plan_process(
+        system="SOURCE-01",
+        parent_pid=4,
+        image=r"C:\Windows\System32\mstsc.exe",
+        command_line="mstsc.exe /v:TARGET-01",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="windows",
+        logon_id=source_logon_id,
+        start_time=_START + timedelta(milliseconds=10),
+        require_session=True,
+        auth_session_id=source_session_identity.session_id,
+        auth_logon_type=2,
+    )
+    winlogon = builder.plan_process(
+        system="TARGET-01",
+        parent_pid=4,
+        image=r"C:\Windows\System32\winlogon.exe",
+        command_line="winlogon.exe",
+        username="SYSTEM",
+        integrity_level="System",
+        os_category="windows",
+        logon_id="0x3e7",
+        start_time=_START + timedelta(milliseconds=105),
+    )
+    userinit = builder.plan_process(
+        system="TARGET-01",
+        parent_pid=winlogon.identity.pid,
+        parent_plan=winlogon,
+        image=r"C:\Windows\System32\userinit.exe",
+        command_line="userinit.exe",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="windows",
+        logon_id=target_logon_id,
+        start_time=_START + timedelta(milliseconds=110),
+        require_session=True,
+        auth_session_id=target_session_identity.session_id,
+        auth_logon_type=10,
+    )
+    explorer = builder.plan_process(
+        system="TARGET-01",
+        parent_pid=userinit.identity.pid,
+        parent_plan=userinit,
+        image=r"C:\Windows\explorer.exe",
+        command_line="explorer.exe",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="windows",
+        logon_id=target_logon_id,
+        start_time=_START + timedelta(milliseconds=120),
+        require_session=True,
+        auth_session_id=target_session_identity.session_id,
+        auth_logon_type=10,
+    )
+    batch = builder.seal()
+    transaction = _transaction(
+        conn_id=connection_identity.conn_id,
+        zeek_uid=connection_identity.zeek_uid,
+        started_at=_START,
+        duration=3,
+        dst_port=3389,
+        service="rdp",
+        initiating_pid=source_client.identity.pid,
+    )
+    session_patch = manager.prepare_connection_existing_session_start_patch(
+        target_session_identity,
+        username="analyst",
+        target_system="TARGET-01",
+        start_time=_START + timedelta(milliseconds=100),
+        source_ready_time=_START + timedelta(milliseconds=100),
+        source_ip=transaction.src_ip,
+        source_port=transaction.src_port,
+        transport_pid=source_client.identity.pid,
+        lifecycle_group_id="deferred-rdp-lifecycle",
+        network_close_time=transaction.closed_at,
+        session_kind="rdp",
+    )
+    roles_patch = manager.prepare_connection_existing_session_process_roles_patch(
+        session_patch,
+        batch,
+        user_manager_plan=userinit,
+        winlogon_plan=winlogon,
+        explorer_plan=explorer,
+        process_tree_root_plan=winlogon,
+    )
+    plan = manager.finalize_connection_composite_materialization(
+        cursor,
+        transaction,
+        source_system="SOURCE-01",
+        initiating_pid=source_client.identity.pid,
+        batch=batch,
+        rdp_existing_session_patch=session_patch,
+        existing_session_process_roles_patch=roles_patch,
+    )
+
+    result = manager.materialize_connection_composite(plan, owner)
+
+    assert result.session is manager.get_session(target_logon_id)
+    assert result.session is not None
+    assert result.session.transport_pid == source_client.identity.pid
+    assert result.session.session_winlogon_pid == winlogon.identity.pid
+    assert result.session.session_user_manager_pid == userinit.identity.pid
+    assert result.session.explorer_pid == explorer.identity.pid
+    assert result.session.initial_explorer_pid == explorer.identity.pid
+    assert result.session.process_tree_root == winlogon.identity.pid
+    assert result.session.windows_shell_bootstrapped
+    assert manager.get_process("SOURCE-01", source_client.identity.pid) is result.processes[0]
+    assert tuple(process.system for process in result.processes) == (
+        "SOURCE-01",
+        "TARGET-01",
+        "TARGET-01",
+        "TARGET-01",
+    )
+
+
+def test_existing_session_role_patch_rejects_copy_and_after_state_tamper_neutrally() -> None:
+    inputs = _existing_ssh_role_inputs()
+    roles_patch = inputs.manager.prepare_connection_existing_session_process_roles_patch(
+        inputs.session_patch,
+        inputs.batch,
+        transport_plan=inputs.receiver,
+        shell_plan=inputs.shell,
+        process_tree_root_plan=inputs.receiver,
+    )
+    digest = inputs.manager.materialization_digest()
+    owner_state = inputs.owner.getstate()
+
+    copied = replace(roles_patch)
+    with pytest.raises(StateError, match="exact capability"):
+        inputs.manager.finalize_connection_composite_materialization(
+            inputs.cursor,
+            inputs.transaction,
+            batch=inputs.batch,
+            rdp_existing_session_patch=inputs.session_patch,
+            existing_session_process_roles_patch=copied,
+        )
+    assert inputs.manager.materialization_digest() == digest
+    assert inputs.owner.getstate() == owner_state
+
+    object.__setattr__(
+        roles_patch,
+        "after",
+        replace(
+            roles_patch.after,
+            session_shell_pid=roles_patch.after.session_shell_pid + 1,  # type: ignore[operator]
+        ),
+    )
+    with pytest.raises(StateError, match="integrity validation failed"):
+        inputs.manager.finalize_connection_composite_materialization(
+            inputs.cursor,
+            inputs.transaction,
+            batch=inputs.batch,
+            rdp_existing_session_patch=inputs.session_patch,
+            existing_session_process_roles_patch=roles_patch,
+        )
+    assert inputs.manager.materialization_digest() == digest
+    assert inputs.owner.getstate() == owner_state
+
+
+def test_existing_session_role_patch_rejects_foreign_unstaged_and_live_overwrite() -> None:
+    inputs = _existing_ssh_role_inputs(extras=True)
+    assert inputs.source_process is not None
+    assert inputs.foreign_session_process is not None
+
+    with pytest.raises(StateError, match="another host"):
+        inputs.manager.prepare_connection_existing_session_process_roles_patch(
+            inputs.session_patch,
+            inputs.batch,
+            transport_plan=inputs.source_process,
+        )
+    with pytest.raises(StateError, match="another session"):
+        inputs.manager.prepare_connection_existing_session_process_roles_patch(
+            inputs.session_patch,
+            inputs.batch,
+            shell_plan=inputs.foreign_session_process,
+        )
+    with pytest.raises(StateError, match="exact batch member"):
+        inputs.manager.prepare_connection_existing_session_process_roles_patch(
+            inputs.session_patch,
+            inputs.batch,
+            shell_plan=replace(inputs.shell),
+        )
+
+    live = _existing_ssh_role_inputs(live_shell=True)
+    with pytest.raises(StateError, match="cannot overwrite a live process"):
+        live.manager.prepare_connection_existing_session_process_roles_patch(
+            live.session_patch,
+            live.batch,
+            transport_plan=live.receiver,
+            shell_plan=live.shell,
+            process_tree_root_plan=live.receiver,
+        )
+
+
+def test_existing_session_role_composite_cancel_and_replay_are_exact() -> None:
+    inputs = _existing_ssh_role_inputs()
+    roles_patch = inputs.manager.prepare_connection_existing_session_process_roles_patch(
+        inputs.session_patch,
+        inputs.batch,
+        transport_plan=inputs.receiver,
+        shell_plan=inputs.shell,
+        process_tree_root_plan=inputs.receiver,
+    )
+    plan = inputs.manager.finalize_connection_composite_materialization(
+        inputs.cursor,
+        inputs.transaction,
+        batch=inputs.batch,
+        rdp_existing_session_patch=inputs.session_patch,
+        existing_session_process_roles_patch=roles_patch,
+    )
+    digest = inputs.manager.materialization_digest()
+    owner_state = inputs.owner.getstate()
+
+    with inputs.manager.prepared_connection_composite_materialization(plan, inputs.owner):
+        pass
+
+    assert inputs.manager.materialization_digest() == digest
+    assert inputs.owner.getstate() == owner_state
+    assert inputs.manager.list_open_connections() == []
+    assert inputs.manager.get_process("TARGET-01", inputs.receiver.identity.pid) is None
+    with pytest.raises(StateError, match="admission fence"):
+        inputs.manager.materialize_connection_composite(plan, inputs.owner)
+
+    retry = _existing_ssh_role_inputs()
+    retry_roles = retry.manager.prepare_connection_existing_session_process_roles_patch(
+        retry.session_patch,
+        retry.batch,
+        transport_plan=retry.receiver,
+        shell_plan=retry.shell,
+        process_tree_root_plan=retry.receiver,
+    )
+    retry_plan = retry.manager.finalize_connection_composite_materialization(
+        retry.cursor,
+        retry.transaction,
+        batch=retry.batch,
+        rdp_existing_session_patch=retry.session_patch,
+        existing_session_process_roles_patch=retry_roles,
+    )
+    retry.manager.materialize_connection_composite(retry_plan, retry.owner)
+    committed_digest = retry.manager.materialization_digest()
+    with pytest.raises(StateError, match="stale before commit"):
+        retry.manager.materialize_connection_composite(retry_plan, retry.owner)
+    assert retry.manager.materialization_digest() == committed_digest
+
+
+def test_boot_batch_claim_matches_only_its_exact_plan_and_rejects_epoch_aba() -> None:
+    manager = StateManager()
+    manager.set_current_time(_START)
+    builder = manager.begin_materialization_batch()
+    builder.plan_boot_time("BOOT-01", _START - timedelta(hours=2))
+    plan = builder.seal()
+    copied_plan = replace(plan)
+    tampered_epoch = replace(plan, _admission_epoch=plan.admission_epoch + 1)
+    digest = manager.materialization_digest()
+    version = manager.materialization_version
+
+    assert manager.authenticates_materialization_plan(copied_plan)
+    assert not manager.authenticates_materialization_plan(tampered_epoch)
+    with pytest.raises(StateError, match="integrity validation failed"):
+        manager.validate_materialization_batch(tampered_epoch)
+    with manager.prepared_materialization_batch(plan):
+        manager.validate_materialization_batch(plan)
+        with pytest.raises(StateError, match="admission fence"):
+            manager.validate_materialization_batch(copied_plan)
+
+    assert manager.materialization_digest() == digest
+    assert manager.materialization_version == version
+    assert manager.get_boot_time("BOOT-01") is None
+    with pytest.raises(StateError, match="admission fence"):
+        manager.validate_materialization_batch(plan)
+
+
+def test_connection_composite_claim_matches_only_its_exact_nested_batch() -> None:
+    inputs = _existing_ssh_role_inputs()
+    roles_patch = inputs.manager.prepare_connection_existing_session_process_roles_patch(
+        inputs.session_patch,
+        inputs.batch,
+        transport_plan=inputs.receiver,
+        shell_plan=inputs.shell,
+        process_tree_root_plan=inputs.receiver,
+    )
+    plan = inputs.manager.finalize_connection_composite_materialization(
+        inputs.cursor,
+        inputs.transaction,
+        batch=inputs.batch,
+        rdp_existing_session_patch=inputs.session_patch,
+        existing_session_process_roles_patch=roles_patch,
+    )
+    copied_batch = replace(inputs.batch)
+    digest = inputs.manager.materialization_digest()
+    version = inputs.manager.materialization_version
+
+    assert inputs.manager.authenticates_materialization_plan(copied_batch)
+    with inputs.manager.prepared_connection_composite_materialization(plan, inputs.owner):
+        inputs.manager.validate_materialization_batch(inputs.batch)
+        with pytest.raises(StateError, match="admission fence"):
+            inputs.manager.validate_materialization_batch(copied_batch)
+
+    assert inputs.manager.materialization_digest() == digest
+    assert inputs.manager.materialization_version == version
+    with pytest.raises(StateError, match="admission fence"):
+        inputs.manager.validate_materialization_batch(inputs.batch)
+
+
+def test_existing_session_process_batch_rejects_second_session_and_epoch_aba() -> None:
+    manager = StateManager()
+    manager.set_current_time(_START)
+    logon_id = manager.create_session(
+        username="analyst",
+        system="TARGET-01",
+        logon_type=10,
+        source_ip="10.0.0.10",
+        source_port=50_001,
+        session_kind="ssh",
+    )
+    session_identity = manager.get_session_identity(logon_id)
+    assert session_identity is not None
+    owner = random.Random(39)
+    cursor = manager.begin_connection_planning(owner)
+    connection_identity = cursor.reserve_identity()
+    builder = manager.begin_materialization_batch()
+    builder.plan_session(
+        username="second",
+        system="TARGET-01",
+        logon_type=10,
+        source_ip="10.0.0.11",
+        start_time=_START + timedelta(milliseconds=100),
+        session_kind="ssh",
+    )
+    second_session_batch = builder.seal()
+    transaction = _transaction(
+        conn_id=connection_identity.conn_id,
+        zeek_uid=connection_identity.zeek_uid,
+        dst_port=22,
+        service="ssh",
+    )
+    patch = manager.prepare_connection_existing_session_start_patch(
+        session_identity,
+        username="analyst",
+        target_system="TARGET-01",
+        start_time=_START + timedelta(milliseconds=100),
+        source_ready_time=_START + timedelta(milliseconds=100),
+        source_ip=transaction.src_ip,
+        source_port=transaction.src_port,
+        transport_pid=None,
+        lifecycle_group_id="deferred-session-lifecycle",
+        network_close_time=transaction.closed_at,
+        session_kind="ssh",
+    )
+
+    with pytest.raises(StateError, match="new State session"):
+        manager.finalize_connection_composite_materialization(
+            cursor,
+            transaction,
+            batch=second_session_batch,
+            rdp_existing_session_patch=patch,
+        )
+
+    process_builder = manager.begin_materialization_batch()
+    process_builder.plan_process(
+        system="TARGET-01",
+        parent_pid=0,
+        image="/usr/sbin/sshd",
+        command_line="sshd: analyst [priv]",
+        username="root",
+        integrity_level="System",
+        os_category="linux",
+        logon_id=logon_id,
+        start_time=_START + timedelta(milliseconds=110),
+        require_session=True,
+        auth_session_id=session_identity.session_id,
+        auth_logon_type=10,
+    )
+    stale_batch = process_builder.seal()
+    other_owner = random.Random(41)
+    _cursor, _identity, other = _physical_plan(manager, other_owner)
+    with manager.prepared_connection_composite_materialization(other, other_owner):
+        pass
+    assert stale_batch.expected_version == manager.materialization_version
+
+    retry_cursor = manager.begin_connection_planning(owner)
+    retry_identity = retry_cursor.reserve_identity()
+    retry_transaction = _transaction(
+        conn_id=retry_identity.conn_id,
+        zeek_uid=retry_identity.zeek_uid,
+        dst_port=22,
+        service="ssh",
+    )
+    retry_patch = manager.prepare_connection_existing_session_start_patch(
+        session_identity,
+        username="analyst",
+        target_system="TARGET-01",
+        start_time=_START + timedelta(milliseconds=100),
+        source_ready_time=_START + timedelta(milliseconds=100),
+        source_ip=retry_transaction.src_ip,
+        source_port=retry_transaction.src_port,
+        transport_pid=None,
+        lifecycle_group_id="deferred-session-lifecycle",
+        network_close_time=retry_transaction.closed_at,
+        session_kind="ssh",
+    )
+    with pytest.raises(StateError, match="admission fence"):
+        manager.finalize_connection_composite_materialization(
+            retry_cursor,
+            retry_transaction,
+            batch=stale_batch,
+            rdp_existing_session_patch=retry_patch,
+        )
+
+
+def test_strict_preallocated_state_authority_is_exact_and_allocation_neutral() -> None:
+    inputs = _existing_ssh_role_inputs()
+    roles = inputs.manager.prepare_connection_existing_session_process_roles_patch(
+        inputs.session_patch,
+        inputs.batch,
+        transport_plan=inputs.receiver,
+        shell_plan=inputs.shell,
+        process_tree_root_plan=inputs.receiver,
+    )
+    digest = inputs.manager.materialization_digest()
+    payload = inputs.manager.prepare_deferred_session_state_authority(
+        protocol=DeferredSessionProtocol.SSH,
+        binding_disposition=(DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START),
+        bound_at=inputs.session_patch.after.source_ready_time
+        or inputs.session_patch.after.identity.started_at,
+        batch=inputs.batch,
+        existing_session_patch=inputs.session_patch,
+        existing_session_process_roles_patch=roles,
+    )
+
+    assert inputs.manager.materialization_digest() == digest
+    assert inputs.manager.authenticates_deferred_session_state_authority(payload)
+    assert not inputs.manager.authenticates_deferred_session_state_authority(replace(payload))
+    assert not StateManager().authenticates_deferred_session_state_authority(payload)
+    assert not payload.outer_bound
+
+
+def test_network_runtime_seals_exact_strict_batch_patch_and_roles() -> None:
+    inputs, roles, payload = _preallocated_ssh_state_authority()
+    runtime = NetworkTransactionRuntime(
+        state_manager=inputs.manager,
+        cryptographic_material=CryptographicMaterialRegistry(),
+        window_start=_START,
+        window_end=_START + timedelta(days=1),
+    )
+    owner = random.Random(101)
+    preparation = runtime.begin(
+        owner_rng=owner,
+        stable_id="strict-ssh-transport",
+        linearization_time=_START,
+    )
+    identity = preparation.reserve_physical_identity()
+    transaction = _transaction(
+        conn_id=identity.conn_id,
+        zeek_uid=identity.zeek_uid,
+        stable_id="strict-ssh-transport",
+        dst_port=22,
+        service="ssh",
+        responding_pid=inputs.receiver.identity.pid,
+        duration=3,
+    )
+    digest = inputs.manager.materialization_digest()
+
+    root = preparation.seal(
+        transaction=transaction,
+        lifecycle_mode="deferred_session",
+        materialization_mode=ConnectionMaterializationMode.PHYSICAL,
+        batch=payload.batch,
+        rdp_existing_session_patch=payload.existing_session_patch,
+        existing_session_process_roles_patch=(payload.existing_session_process_roles_patch),
+    )
+
+    assert root.state_plan.batch is payload.batch
+    assert root.state_plan.existing_session_patch is payload.existing_session_patch
+    assert root.state_plan.existing_session_process_roles_patch is roles
+    assert inputs.manager.materialization_digest() == digest
+
+
+def test_strict_new_ssh_state_authority_requires_session_process_role_order() -> None:
+    manager = StateManager()
+    manager.set_current_time(_START)
+    builder = manager.begin_materialization_batch()
+    session = builder.plan_session(
+        username="analyst",
+        system="TARGET-01",
+        logon_type=10,
+        source_ip="10.0.0.10",
+        source_port=50_001,
+        session_kind="ssh",
+        start_time=_START + timedelta(milliseconds=100),
+        source_ready_time=_START + timedelta(milliseconds=120),
+        network_close_time=_START + timedelta(seconds=3),
+    )
+    receiver = builder.plan_process(
+        system="TARGET-01",
+        parent_pid=0,
+        image="/usr/sbin/sshd",
+        command_line="sshd: analyst [priv]",
+        username="root",
+        integrity_level="System",
+        os_category="linux",
+        logon_id=session.identity.logon_id,
+        start_time=_START + timedelta(milliseconds=110),
+        require_session=True,
+        session_plan=session,
+        auth_session_id=session.identity.session_id,
+        auth_logon_type=10,
+    )
+    builder.bind_session_processes(
+        session,
+        transport_plan=receiver,
+        process_tree_root_plan=receiver,
+    )
+    batch = builder.seal()
+    digest = manager.materialization_digest()
+
+    payload = manager.prepare_deferred_session_state_authority(
+        protocol=DeferredSessionProtocol.SSH,
+        binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION,
+        bound_at=_START + timedelta(milliseconds=120),
+        batch=batch,
+    )
+
+    assert manager.materialization_digest() == digest
+    assert payload.batch.session is session
+    assert payload.batch.processes == (receiver,)
+    assert manager.authenticates_deferred_session_state_authority(payload)
+
+
+@pytest.mark.parametrize(
+    ("disposition", "roles", "message"),
+    (
+        (
+            DeferredSessionBindingDisposition.NEW_SESSION,
+            True,
+            "NEW deferred session authority",
+        ),
+        (
+            DeferredSessionBindingDisposition.ACTIVE_SESSION,
+            True,
+            "binding disposition disagrees",
+        ),
+        (
+            DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START,
+            False,
+            "require an exact session role patch",
+        ),
+    ),
+)
+def test_strict_existing_state_authority_rejects_wrong_shape_neutrally(
+    disposition: DeferredSessionBindingDisposition,
+    roles: bool,
+    message: str,
+) -> None:
+    inputs = _existing_ssh_role_inputs()
+    role_patch = inputs.manager.prepare_connection_existing_session_process_roles_patch(
+        inputs.session_patch,
+        inputs.batch,
+        transport_plan=inputs.receiver,
+        shell_plan=inputs.shell,
+        process_tree_root_plan=inputs.receiver,
+    )
+    digest = inputs.manager.materialization_digest()
+
+    with pytest.raises(StateError, match=message):
+        inputs.manager.prepare_deferred_session_state_authority(
+            protocol=DeferredSessionProtocol.SSH,
+            binding_disposition=disposition,
+            bound_at=inputs.session_patch.after.source_ready_time
+            or inputs.session_patch.after.identity.started_at,
+            batch=inputs.batch,
+            existing_session_patch=inputs.session_patch,
+            existing_session_process_roles_patch=role_patch if roles else None,
+        )
+
+    assert inputs.manager.materialization_digest() == digest
+
+
+def test_strict_state_authority_rejects_disguised_same_host_member_neutrally() -> None:
+    inputs = _existing_ssh_role_inputs(extras=True)
+    roles = inputs.manager.prepare_connection_existing_session_process_roles_patch(
+        inputs.session_patch,
+        inputs.batch,
+        transport_plan=inputs.receiver,
+        shell_plan=inputs.shell,
+        process_tree_root_plan=inputs.receiver,
+    )
+    digest = inputs.manager.materialization_digest()
+
+    with pytest.raises(StateError, match="disagree exactly"):
+        inputs.manager.prepare_deferred_session_state_authority(
+            protocol=DeferredSessionProtocol.SSH,
+            binding_disposition=(DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START),
+            bound_at=inputs.session_patch.after.source_ready_time
+            or inputs.session_patch.after.identity.started_at,
+            batch=inputs.batch,
+            existing_session_patch=inputs.session_patch,
+            existing_session_process_roles_patch=roles,
+        )
+
+    assert inputs.manager.materialization_digest() == digest
+
+
+def test_strict_state_authority_rejects_admission_epoch_aba() -> None:
+    inputs, _roles, payload = _preallocated_ssh_state_authority()
+    other_owner = random.Random(97)
+    _cursor, _identity, other_plan = _physical_plan(inputs.manager, other_owner)
+    digest = inputs.manager.materialization_digest()
+
+    with inputs.manager.prepared_connection_composite_materialization(
+        other_plan,
+        other_owner,
+    ):
+        pass
+
+    assert inputs.manager.materialization_digest() == digest
+    assert payload.batch.expected_version == inputs.manager.materialization_version
+    assert not inputs.manager.authenticates_deferred_session_state_authority(payload)
+
+
+def test_strict_active_rdp_source_only_authority_excludes_target_roles() -> None:
+    manager, batch, patch, target_plan = _active_rdp_state_inputs()
+    assert target_plan is None
+    digest = manager.materialization_digest()
+
+    payload = manager.prepare_deferred_session_state_authority(
+        protocol=DeferredSessionProtocol.RDP,
+        binding_disposition=DeferredSessionBindingDisposition.ACTIVE_SESSION,
+        bound_at=patch.after.source_ready_time or patch.after.identity.started_at,
+        batch=batch,
+        existing_session_patch=patch,
+    )
+
+    assert manager.materialization_digest() == digest
+    assert payload.existing_session_process_roles_patch is None
+    assert manager.authenticates_deferred_session_state_authority(payload)
+
+
+def test_strict_active_rdp_rejects_mixed_source_and_target_members_neutrally() -> None:
+    manager, batch, patch, target_plan = _active_rdp_state_inputs(include_target_process=True)
+    assert target_plan is not None
+    roles = manager.prepare_connection_existing_session_process_roles_patch(
+        patch,
+        batch,
+        user_manager_plan=target_plan,
+    )
+    digest = manager.materialization_digest()
+
+    with pytest.raises(StateError, match="cannot start target-session processes"):
+        manager.prepare_deferred_session_state_authority(
+            protocol=DeferredSessionProtocol.RDP,
+            binding_disposition=DeferredSessionBindingDisposition.ACTIVE_SESSION,
+            bound_at=patch.after.source_ready_time or patch.after.identity.started_at,
+            batch=batch,
+            existing_session_patch=patch,
+            existing_session_process_roles_patch=roles,
+        )
+
+    assert manager.materialization_digest() == digest
+
+
+def test_strict_active_rdp_rejects_foreign_source_session_neutrally() -> None:
+    manager, batch, patch, _target_plan = _active_rdp_state_inputs(foreign_source_session=True)
+    digest = manager.materialization_digest()
+
+    with pytest.raises(StateError, match="target LogonID across hosts"):
+        manager.prepare_deferred_session_state_authority(
+            protocol=DeferredSessionProtocol.RDP,
+            binding_disposition=DeferredSessionBindingDisposition.ACTIVE_SESSION,
+            bound_at=patch.after.source_ready_time or patch.after.identity.started_at,
+            batch=batch,
+            existing_session_patch=patch,
+        )
+
+    assert manager.materialization_digest() == digest
 
 
 def test_application_child_accounts_parent_once_without_identity_or_counter_advance() -> None:

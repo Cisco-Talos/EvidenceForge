@@ -31,6 +31,7 @@ from evidenceforge.events.application import (
     ApplicationTransportBinding,
 )
 from evidenceforge.events.dispatcher import PreparedDispatch
+from evidenceforge.events.identity import SessionIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleHold,
     ProcessLifecycleIdentity,
@@ -41,6 +42,9 @@ from evidenceforge.events.lifecycle import (
 from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.events.rdp import RdpSessionSnapshot, RdpSessionState
 from evidenceforge.generation.application_channels import ApplicationChannelAdmissionToken
+from evidenceforge.generation.deferred_session_preseal import (
+    DeferredSessionBindingDisposition,
+)
 from evidenceforge.generation.lifecycle_registry import (
     LifecycleClosedTransportAdmissionToken,
     LifecycleClosedTransportPublicationRequest,
@@ -68,7 +72,10 @@ from evidenceforge.generation.ssh_channels import (
 )
 from evidenceforge.generation.state_manager import (
     ConnectionCompositeMaterializationPlan,
+    ConnectionExistingSessionLifecycleDisposition,
+    ConnectionExistingSessionPatch,
     ConnectionMaterializationMode,
+    DeferredSessionStateAuthority,
     MaterializationBatchPlan,
     ProcessActivityPatch,
     ProcessMaterializationPlan,
@@ -120,6 +127,33 @@ class DeferredSessionStateMemberBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class DeferredSessionExistingStateBinding:
+    """Pair one exact live-session State patch with its lifecycle start."""
+
+    state_patch: ConnectionExistingSessionPatch
+    lifecycle_member: LifecycleClosedTransportStartMember | None
+
+    def __post_init__(self) -> None:
+        """Reject replaced patch/member objects or mismatched after-identities."""
+
+        if type(self.state_patch) is not ConnectionExistingSessionPatch:
+            raise TypeError("Deferred existing State binding requires an exact session patch")
+        disposition = self.state_patch.lifecycle_disposition
+        if disposition is ConnectionExistingSessionLifecycleDisposition.START:
+            if type(self.lifecycle_member) is not LifecycleClosedTransportStartMember:
+                raise TypeError("Deferred session start binding requires an exact lifecycle member")
+            request = self.lifecycle_member.request
+            if type(request) is not LifecycleSessionStartRequest:
+                raise ValueError("Deferred session start binding requires a session start")
+            _validate_session_identity(self.state_patch.after.identity, request.identity)
+        elif disposition is ConnectionExistingSessionLifecycleDisposition.EXISTING:
+            if self.lifecycle_member is not None:
+                raise ValueError("Existing lifecycle session cannot carry another start member")
+        else:
+            raise ValueError("Deferred existing State binding has an unsupported disposition")
+
+
+@dataclass(frozen=True, slots=True)
 class DeferredSessionComposition:
     """One signed inert carrier for a complete deferred SSH/RDP publication."""
 
@@ -131,6 +165,9 @@ class DeferredSessionComposition:
     application_token: DeferredSessionApplicationToken | None
     transport_dispatch: PreparedDispatch
     dependent_dispatches: tuple[PreparedDispatch, ...]
+    existing_state_session: DeferredSessionExistingStateBinding | None
+    binding_disposition: DeferredSessionBindingDisposition | None
+    state_authority: DeferredSessionStateAuthority | None
     coordinator_id: str
     _integrity: str = field(repr=False)
 
@@ -143,6 +180,19 @@ class DeferredSessionComposition:
             raise TypeError("Deferred session State member bindings must be an exact tuple")
         if type(self.dependent_dispatches) is not tuple:
             raise TypeError("Deferred session dependent dispatches must be an exact tuple")
+        if (
+            self.existing_state_session is not None
+            and type(self.existing_state_session) is not DeferredSessionExistingStateBinding
+        ):
+            raise TypeError("Deferred session existing State binding has an unsupported type")
+        if self.binding_disposition is not None and (
+            type(self.binding_disposition) is not DeferredSessionBindingDisposition
+        ):
+            raise TypeError("Deferred session binding disposition has an unsupported type")
+        if self.state_authority is not None and (
+            type(self.state_authority) is not DeferredSessionStateAuthority
+        ):
+            raise TypeError("Deferred session State authority has an unsupported type")
         if type(self.coordinator_id) is not str or not self.coordinator_id:
             raise ValueError("Deferred session composition requires a coordinator identity")
         if type(self._integrity) is not str or not self._integrity:
@@ -212,6 +262,9 @@ class DeferredSessionCompositionCoordinator:
         application_token: DeferredSessionApplicationToken | None,
         transport_dispatch: PreparedDispatch,
         dependent_dispatches: tuple[PreparedDispatch, ...] = (),
+        existing_state_session: DeferredSessionExistingStateBinding | None = None,
+        binding_disposition: DeferredSessionBindingDisposition | None = None,
+        state_authority: DeferredSessionStateAuthority | None = None,
     ) -> DeferredSessionComposition:
         """Validate and sign one exact carrier without retaining or consuming it."""
 
@@ -224,8 +277,15 @@ class DeferredSessionCompositionCoordinator:
             application_token=application_token,
             transport_dispatch=transport_dispatch,
             dependent_dispatches=dependent_dispatches,
+            existing_state_session=existing_state_session,
+            binding_disposition=binding_disposition,
+            state_authority=state_authority,
         )
-        _validate_composition_values(values)
+        _validate_composition_values(
+            values,
+            coordinator_id=self._coordinator_id,
+            require_outer_bound=False,
+        )
         integrity = self._integrity(values)
         return DeferredSessionComposition(
             kind=values.kind,
@@ -236,6 +296,9 @@ class DeferredSessionCompositionCoordinator:
             application_token=values.application_token,
             transport_dispatch=values.transport_dispatch,
             dependent_dispatches=values.dependent_dispatches,
+            existing_state_session=values.existing_state_session,
+            binding_disposition=values.binding_disposition,
+            state_authority=values.state_authority,
             coordinator_id=self._coordinator_id,
             _integrity=integrity,
         )
@@ -260,9 +323,16 @@ class DeferredSessionCompositionCoordinator:
             application_token=composition.application_token,
             transport_dispatch=composition.transport_dispatch,
             dependent_dispatches=composition.dependent_dispatches,
+            existing_state_session=composition.existing_state_session,
+            binding_disposition=composition.binding_disposition,
+            state_authority=composition.state_authority,
         )
         try:
-            _validate_composition_values(values)
+            _validate_composition_values(
+                values,
+                coordinator_id=self._coordinator_id,
+                require_outer_bound=True,
+            )
             expected = self._integrity(values)
         except (AttributeError, StateError, TypeError, ValueError):
             return False
@@ -288,15 +358,28 @@ class _DeferredSessionCompositionValues:
     application_token: DeferredSessionApplicationToken | None
     transport_dispatch: PreparedDispatch
     dependent_dispatches: tuple[PreparedDispatch, ...]
+    existing_state_session: DeferredSessionExistingStateBinding | None
+    binding_disposition: DeferredSessionBindingDisposition | None
+    state_authority: DeferredSessionStateAuthority | None
 
 
 def _validate_session_member_identity(
     state_member: SessionMaterializationPlan,
     lifecycle_identity: SessionLifecycleIdentity,
 ) -> None:
+    _validate_session_identity(state_member.identity, lifecycle_identity)
+
+
+def _validate_session_identity(
+    identity: SessionIdentity,
+    lifecycle_identity: SessionLifecycleIdentity,
+) -> None:
+    """Require exact shared identity across State and lifecycle projections."""
+
+    if type(identity) is not SessionIdentity:
+        raise ValueError("Deferred State session identity has an unsupported exact type")
     if type(lifecycle_identity) is not SessionLifecycleIdentity:
         raise ValueError("Deferred session lifecycle identity has an unsupported exact type")
-    identity = state_member.identity
     shared = (
         identity.hostname,
         identity.object_id,
@@ -363,7 +446,12 @@ def _validate_process_member_identity(
         raise ValueError("Deferred process lifecycle logon type disagrees with State")
 
 
-def _validate_composition_values(values: _DeferredSessionCompositionValues) -> None:
+def _validate_composition_values(
+    values: _DeferredSessionCompositionValues,
+    *,
+    coordinator_id: str,
+    require_outer_bound: bool,
+) -> None:
     if type(values.kind) is not DeferredSessionKind:
         raise TypeError("Deferred session composition kind must be exact")
     _validate_prepared_root(values.kind, values.prepared_root)
@@ -372,7 +460,24 @@ def _validate_composition_values(values: _DeferredSessionCompositionValues) -> N
         values.prepared_root.state_plan,
         values.lifecycle_token,
         values.state_members,
+        values.existing_state_session,
     )
+    _validate_binding_disposition(
+        values.kind,
+        values.binding_disposition,
+        values.state_authority,
+        values.prepared_root.state_plan,
+        coordinator_id=coordinator_id,
+        application_token=values.application_token,
+        require_outer_bound=require_outer_bound,
+    )
+    if values.state_authority is not None:
+        lifecycle_binding = values.lifecycle_token.request.binding_identity
+        if (
+            lifecycle_binding is None
+            or lifecycle_binding.bound_at != values.state_authority.bound_at
+        ):
+            raise StateError("Strict deferred State and lifecycle binding times disagree")
     _validate_application_token(
         values.kind,
         values.prepared_root,
@@ -380,6 +485,79 @@ def _validate_composition_values(values: _DeferredSessionCompositionValues) -> N
         values.application_token,
     )
     _validate_dispatches(values.transport_dispatch, values.dependent_dispatches)
+
+
+def _validate_binding_disposition(
+    kind: DeferredSessionKind,
+    disposition: DeferredSessionBindingDisposition | None,
+    state_authority: DeferredSessionStateAuthority | None,
+    state_plan: ConnectionCompositeMaterializationPlan,
+    *,
+    coordinator_id: str,
+    application_token: DeferredSessionApplicationToken | None,
+    require_outer_bound: bool,
+) -> None:
+    """Bind the strict semantic disposition to the exact State plan shape."""
+
+    if disposition is None:
+        if state_authority is not None:
+            raise StateError("Legacy deferred composition cannot carry strict State authority")
+        return
+    if type(disposition) is not DeferredSessionBindingDisposition:
+        raise TypeError("Deferred session binding disposition must be exact")
+    if type(state_authority) is not DeferredSessionStateAuthority:
+        raise StateError("Strict deferred composition requires exact State authority")
+    if not state_authority._owner.authenticates_deferred_session_state_payload(state_authority):
+        raise StateError("Strict deferred composition State authority failed authentication")
+    if require_outer_bound and not state_authority.outer_bound:
+        raise StateError("Strict deferred composition State authority lacks its outer binding")
+    if require_outer_bound:
+        outer = state_authority._capability.outer_authority
+        assert outer is not None
+        if (
+            getattr(getattr(outer, "coordinator", None), "coordinator_id", "") != coordinator_id
+            or getattr(outer, "kind", None) is not kind
+            or getattr(outer, "binding_disposition", None) is not disposition
+            or getattr(outer, "strict_state_authority", None) is not state_authority
+            or getattr(outer, "application_token", None) is not application_token
+        ):
+            raise StateError("Strict deferred composition owns another outer network authority")
+    if (
+        state_authority.binding_disposition is not disposition
+        or state_authority.protocol.value != kind.value
+        or state_authority.batch is not state_plan.batch
+        or state_authority.existing_session_patch is not state_plan.existing_session_patch
+        or state_authority.existing_session_process_roles_patch
+        is not state_plan.existing_session_process_roles_patch
+    ):
+        raise StateError("Strict deferred composition replaced its exact State authority")
+    batch = state_plan.batch
+    patch = state_plan.existing_session_patch
+    roles = state_plan.existing_session_process_roles_patch
+    if batch is None or not batch.processes:
+        raise StateError("Strict deferred session composition requires process members")
+    if disposition is DeferredSessionBindingDisposition.NEW_SESSION:
+        if batch.session is None or patch is not None or roles is not None:
+            raise StateError("NEW deferred composition changed its exact State shape")
+        return
+    if batch.session is not None or patch is None:
+        raise StateError("Existing deferred composition changed its exact State shape")
+    expected = (
+        ConnectionExistingSessionLifecycleDisposition.START
+        if disposition is DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START
+        else ConnectionExistingSessionLifecycleDisposition.EXISTING
+    )
+    if patch.lifecycle_disposition is not expected:
+        raise StateError("Deferred composition disposition disagrees with its session patch")
+    target_processes = tuple(
+        process
+        for process in batch.processes
+        if process.identity.hostname == patch.after.identity.hostname
+    )
+    if target_processes and roles is None:
+        raise StateError("Deferred target process composition lost its exact role patch")
+    if not target_processes and roles is not None:
+        raise StateError("Deferred source-only composition gained a target role patch")
 
 
 def _validate_prepared_root(
@@ -476,6 +654,7 @@ def _validate_state_and_lifecycle(
     state_plan: ConnectionCompositeMaterializationPlan,
     lifecycle_token: LifecycleClosedTransportAdmissionToken,
     bindings: tuple[DeferredSessionStateMemberBinding, ...],
+    existing_binding: DeferredSessionExistingStateBinding | None,
 ) -> None:
     if type(lifecycle_token) is not LifecycleClosedTransportAdmissionToken:
         raise TypeError("Deferred session requires an exact lifecycle admission token")
@@ -483,6 +662,11 @@ def _validate_state_and_lifecycle(
         raise TypeError("Deferred session State member bindings must be an exact tuple")
     if any(type(binding) is not DeferredSessionStateMemberBinding for binding in bindings):
         raise TypeError("Deferred session State member binding has an unsupported exact type")
+    if (
+        existing_binding is not None
+        and type(existing_binding) is not DeferredSessionExistingStateBinding
+    ):
+        raise TypeError("Deferred existing State binding has an unsupported exact type")
     request = lifecycle_token.request
     if type(request) is not LifecycleClosedTransportPublicationRequest:
         raise StateError("Deferred session lifecycle token has an unsupported request type")
@@ -525,24 +709,54 @@ def _validate_state_and_lifecycle(
         )
     )
     lifecycle_members = request.start_members
-    if len(bindings) != len(expected_state_members) or len(bindings) != len(lifecycle_members):
+    existing_patch = state_plan.existing_session_patch
+    existing_start_required = (
+        existing_patch is not None
+        and existing_patch.lifecycle_disposition
+        is ConnectionExistingSessionLifecycleDisposition.START
+    )
+    expected_lifecycle_count = len(expected_state_members) + (1 if existing_start_required else 0)
+    if len(bindings) != len(expected_state_members) or len(lifecycle_members) != (
+        expected_lifecycle_count
+    ):
         raise StateError("Deferred State and lifecycle start member counts disagree")
     for binding, state_member, lifecycle_member in zip(
         bindings,
         expected_state_members,
-        lifecycle_members,
+        lifecycle_members[: len(expected_state_members)],
         strict=True,
     ):
         if binding.state_member is not state_member:
             raise StateError("Deferred State member binding replaced an exact plan object")
         if binding.lifecycle_member is not lifecycle_member:
             raise StateError("Deferred lifecycle member binding replaced an exact request object")
-    if request.start_plan_tokens != tuple(
-        member.publication_token for member in expected_state_members
-    ):
+    if existing_patch is None:
+        if existing_binding is not None:
+            raise StateError("Deferred composition carries an unexpected existing State binding")
+    else:
+        if existing_binding is None or existing_binding.state_patch is not existing_patch:
+            raise StateError("Deferred existing State binding replaced its exact authority")
+        if existing_start_required:
+            if (
+                existing_binding.lifecycle_member is not lifecycle_members[-1]
+                or existing_binding.lifecycle_member.publication_token
+                != state_plan.publication_token
+            ):
+                raise StateError("Deferred session start binding replaced its exact authority")
+        elif existing_binding.lifecycle_member is not None:
+            raise StateError("Existing lifecycle session unexpectedly carries a start member")
+    expected_start_tokens = (
+        *(member.publication_token for member in expected_state_members),
+        *((state_plan.publication_token,) if existing_start_required else ()),
+    )
+    if request.start_plan_tokens != expected_start_tokens:
         raise StateError("Deferred lifecycle member tokens disagree with the State batch")
     _validate_parent_order(batch, bindings)
-    _validate_transport_session_binding(batch, request.binding_identity)
+    _validate_transport_session_binding(
+        batch,
+        existing_patch,
+        request.binding_identity,
+    )
     _validate_connection_holds(
         state_plan.process_activity,
         state_plan.session_activity,
@@ -578,6 +792,7 @@ def _validate_parent_order(
 
 def _validate_transport_session_binding(
     batch: MaterializationBatchPlan | None,
+    existing_patch: ConnectionExistingSessionPatch | None,
     binding: TransportSessionBindingIdentity | None,
 ) -> None:
     if binding is not None and type(binding) is not TransportSessionBindingIdentity:
@@ -586,6 +801,9 @@ def _validate_transport_session_binding(
     if session_plan is not None:
         if binding is None or binding.session_object_id != session_plan.identity.object_id:
             raise StateError("Deferred transport binding does not target the staged session")
+    if existing_patch is not None:
+        if binding is None or binding.session_object_id != existing_patch.after.identity.object_id:
+            raise StateError("Deferred transport binding does not target the patched session")
 
 
 def _validate_connection_holds(
@@ -642,7 +860,9 @@ def _validate_application_token(
     token: DeferredSessionApplicationToken | None,
 ) -> None:
     if token is None:
-        return
+        raise StateError(
+            "Strict deferred SSH/RDP composition requires its persistent manager admission"
+        )
     expected_type = (
         SshChannelAdmissionToken if kind is DeferredSessionKind.SSH else RdpSessionAdmissionToken
     )
@@ -789,13 +1009,13 @@ def _validate_ssh_process_holds(
         if (
             identity.hostname.casefold(),
             identity.pid,
-            identity.principal.casefold(),
+            identity.object_id,
             identity.started_at,
             patch.activity_time,
         ) != (
             hold.hostname,
             hold.pid,
-            hold.principal,
+            hold.process_object_id,
             hold.started_at,
             hold.required_until,
         ):
@@ -864,28 +1084,55 @@ def _validate_rdp_token(
 
     batch = root.state_plan.batch
     session_plan = batch.session if batch is not None else None
-    if token.kind == "open":
-        if session_plan is None:
-            raise StateError("Deferred RDP open requires one staged State session")
-        identity = session_plan.identity
-        if session_plan.logon_type != 10 or identity.session_kind.casefold() != "rdp":
-            raise StateError("Deferred RDP open requires a staged Type 10 RDP session")
+    existing_patch = root.state_plan.existing_session_patch
+    identity = (
+        session_plan.identity
+        if session_plan is not None
+        else existing_patch.after.identity
+        if existing_patch is not None
+        else None
+    )
+    logon_type = (
+        session_plan.logon_type
+        if session_plan is not None
+        else existing_patch.after.logon_type
+        if existing_patch is not None
+        else None
+    )
+    if identity is None or logon_type != 10 or identity.session_kind.casefold() != "rdp":
+        raise StateError("Deferred RDP admission requires an exact Type 10 State session")
+    if (
+        token.session.identity.logical_session_id,
+        affinity.target_host,
+        affinity.principal,
+        affinity.logon_id,
+        affinity.session_id,
+    ) != (
+        identity.object_id,
+        identity.hostname.casefold().rstrip("."),
+        identity.principal.casefold(),
+        identity.logon_id.casefold(),
+        identity.session_id,
+    ):
+        raise StateError("Deferred RDP manager session disagrees with its State identity")
+    end_plan = (
+        session_plan.end_plan
+        if session_plan is not None
+        else existing_patch.after.end_plan
+        if existing_patch is not None
+        else None
+    )
+    if end_plan is not None and end_plan.canonical_end != token.session.identity.hard_deadline:
+        raise StateError("Deferred RDP manager deadline disagrees with its State end plan")
+    if token.kind == "reconnect":
+        if session_plan is not None:
+            raise StateError("Deferred RDP reconnect cannot stage a second session identity")
         if (
-            token.session.identity.logical_session_id,
-            affinity.target_host,
-            affinity.principal,
-            affinity.logon_id,
-            affinity.session_id,
-        ) != (
-            identity.object_id,
-            identity.hostname.casefold().rstrip("."),
-            identity.principal.casefold(),
-            identity.logon_id.casefold(),
-            identity.session_id,
+            existing_patch is None
+            or existing_patch.lifecycle_disposition
+            is not ConnectionExistingSessionLifecycleDisposition.EXISTING
         ):
-            raise StateError("Deferred RDP manager session disagrees with staged State identity")
-    elif session_plan is not None:
-        raise StateError("Deferred RDP reconnect cannot stage a second session identity")
+            raise StateError("Deferred RDP reconnect requires an existing live State session")
 
     lifecycle_binding = lifecycle_token.request.binding_identity
     if lifecycle_binding is None or (
@@ -947,14 +1194,51 @@ def _composition_integrity_preimage(
         )
         for binding in values.state_members
     )
+    existing_binding = values.existing_state_session
+    existing_preimage = (
+        ()
+        if existing_binding is None
+        else (
+            id(existing_binding),
+            id(existing_binding.state_patch),
+            existing_binding.state_patch,
+            (
+                ()
+                if existing_binding.lifecycle_member is None
+                else (
+                    id(existing_binding.lifecycle_member),
+                    existing_binding.lifecycle_member.publication_token,
+                    existing_binding.lifecycle_member.request.identity.object_id,
+                )
+            ),
+        )
+    )
     dispatch_preimage = tuple(
         (id(dispatch), dispatch.occurrence_id)
         for dispatch in (values.transport_dispatch, *values.dependent_dispatches)
     )
+    state_authority = values.state_authority
+    state_authority_preimage = (
+        ()
+        if state_authority is None
+        else (
+            id(state_authority),
+            state_authority.publication_token,
+            state_authority.protocol,
+            state_authority.binding_disposition,
+            state_authority.bound_at,
+            id(state_authority.batch),
+            state_authority.batch.publication_token,
+            id(state_authority.existing_session_patch),
+            id(state_authority.existing_session_process_roles_patch),
+        )
+    )
     return (
-        "deferred-session-composition-v1",
+        "deferred-session-composition-v3",
         coordinator_id,
         values.kind.value,
+        values.binding_disposition,
+        state_authority_preimage,
         id(root),
         id(root.transaction),
         id(state_plan),
@@ -982,6 +1266,7 @@ def _composition_integrity_preimage(
         request.binding_identity,
         request.process_holds,
         member_preimage,
+        existing_preimage,
         application_preimage,
         dispatch_preimage,
     )
@@ -991,6 +1276,7 @@ __all__ = [
     "DeferredSessionApplicationToken",
     "DeferredSessionComposition",
     "DeferredSessionCompositionCoordinator",
+    "DeferredSessionExistingStateBinding",
     "DeferredSessionKind",
     "DeferredSessionStateMemberBinding",
 ]

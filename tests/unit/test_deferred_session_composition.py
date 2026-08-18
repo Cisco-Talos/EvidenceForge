@@ -8,6 +8,7 @@ import random
 from copy import copy, deepcopy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from threading import Barrier, Thread
 
 import pytest
 
@@ -29,6 +30,7 @@ from evidenceforge.events.rdp import (
     RdpSessionAffinity,
     RdpTransportPlan,
 )
+from evidenceforge.generation.actions.network_connection import DeferredSessionNetworkAuthority
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.generation.deferred_session_composition import (
@@ -36,6 +38,10 @@ from evidenceforge.generation.deferred_session_composition import (
     DeferredSessionCompositionCoordinator,
     DeferredSessionKind,
     DeferredSessionStateMemberBinding,
+)
+from evidenceforge.generation.deferred_session_preseal import (
+    DeferredSessionBindingDisposition,
+    DeferredSessionProtocol,
 )
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.lifecycle_production_adapters import (
@@ -91,6 +97,7 @@ class _Fixture:
     lifecycle_registry: LifecycleRegistry
     application_owner: object | None
     timing_planner: SourceTimingPlanner
+    owner_rng: random.Random
     prepared_root: PreparedNetworkTransactionRoot
     source_timing_preparation: SourceTimingPreparation
     lifecycle_token: LifecycleClosedTransportAdmissionToken
@@ -341,8 +348,9 @@ def _fixture(
         window_start=_START,
         window_end=_END,
     )
+    owner_rng = random.Random(17)
     preparation = runtime.begin(
-        owner_rng=random.Random(17),
+        owner_rng=owner_rng,
         stable_id=f"{kind.value}-transport-1",
         linearization_time=_START,
     )
@@ -355,6 +363,9 @@ def _fixture(
         logon_type=10,
         source_ip="10.0.0.10",
         start_time=_START + timedelta(milliseconds=100),
+        source_ready_time=(
+            _START + timedelta(milliseconds=120 if kind is DeferredSessionKind.SSH else 100)
+        ),
         session_kind=kind.value,
     )
     process_plan: ProcessMaterializationPlan | None = None
@@ -487,6 +498,7 @@ def _fixture(
         lifecycle_registry=lifecycle_registry,
         application_owner=application_owner,
         timing_planner=timing_planner,
+        owner_rng=owner_rng,
         prepared_root=root,
         source_timing_preparation=_sealed_timing(timing_planner),
         lifecycle_token=lifecycle_token,
@@ -499,6 +511,25 @@ def _fixture(
         binding_time=binding_time,
         process_holds=process_holds,
     )
+
+
+def _bound_authority(fixture: _Fixture) -> GeneratorLifecycleAuthority:
+    """Return a facade bound to every exact owner retained by the fixture."""
+
+    authority = GeneratorLifecycleAuthority(
+        fixture.state,
+        LifecycleShadow(fixture.state, fixture.lifecycle_registry),
+        shard_count=8,
+    )
+    authority.bind_network_transaction_runtime(fixture.runtime)
+    authority.bind_source_timing_planner(fixture.timing_planner)
+    if fixture.kind is DeferredSessionKind.SSH:
+        assert type(fixture.application_owner) is SshApplicationChannelManager
+        authority.bind_ssh_channel_manager(fixture.application_owner)
+    else:
+        assert type(fixture.application_owner) is RdpReconnectStateManager
+        authority.bind_rdp_session_manager(fixture.application_owner)
+    return authority
 
 
 def _replacement_lifecycle_token(
@@ -547,20 +578,11 @@ def _state_members_for_token(
     )
 
 
-@pytest.mark.parametrize(
-    ("kind", "with_application"),
-    (
-        (DeferredSessionKind.SSH, True),
-        (DeferredSessionKind.SSH, False),
-        (DeferredSessionKind.RDP, True),
-        (DeferredSessionKind.RDP, False),
-    ),
-)
+@pytest.mark.parametrize("kind", (DeferredSessionKind.SSH, DeferredSessionKind.RDP))
 def test_coordinator_issues_valid_ssh_and_rdp_compositions(
     kind: DeferredSessionKind,
-    with_application: bool,
 ) -> None:
-    fixture = _fixture(kind, with_application=with_application)
+    fixture = _fixture(kind)
 
     composition = fixture.issue()
 
@@ -578,6 +600,351 @@ def test_coordinator_issues_valid_ssh_and_rdp_compositions(
     assert composition.physical_transport_id == fixture.prepared_root.transaction.stable_id
     assert composition.expected_state_version == fixture.prepared_root.state_plan.expected_version
     assert composition.publication_token
+
+
+@pytest.mark.parametrize("kind", (DeferredSessionKind.SSH, DeferredSessionKind.RDP))
+def test_coordinator_rejects_missing_persistent_manager_admission_neutrally(
+    kind: DeferredSessionKind,
+) -> None:
+    """Strict deferred protocol authority cannot omit its persistent sidecar owner."""
+
+    fixture = _fixture(kind, with_application=False)
+    before_referents = tuple(sorted(id(item) for item in gc.get_referents(fixture.coordinator)))
+    before_state_version = fixture.state.materialization_version
+    before_lifecycle = fixture.lifecycle_registry.census()
+    before_runtime = fixture.runtime.census()
+    before_timing = fixture.timing_planner.census()
+
+    with pytest.raises(StateError, match="persistent manager admission"):
+        fixture.issue()
+
+    assert (
+        tuple(sorted(id(item) for item in gc.get_referents(fixture.coordinator)))
+        == before_referents
+    )
+    assert fixture.state.materialization_version == before_state_version
+    assert fixture.lifecycle_registry.census() == before_lifecycle
+    assert fixture.runtime.census() == before_runtime
+    assert fixture.timing_planner.census() == before_timing
+
+
+@pytest.mark.parametrize("kind", (DeferredSessionKind.SSH, DeferredSessionKind.RDP))
+def test_strict_network_authority_rejects_missing_manager_before_preparation(
+    kind: DeferredSessionKind,
+) -> None:
+    fixture = _fixture(kind, with_application=False)
+    batch = fixture.prepared_root.state_plan.batch
+    assert batch is not None
+
+    with pytest.raises(ValueError, match="persistent manager admission"):
+        DeferredSessionNetworkAuthority(
+            kind=kind,
+            coordinator=fixture.coordinator,
+            bound_at=fixture.binding_time,
+            session_object_id=fixture.session_plan.identity.object_id,
+            state_batch=batch,
+        )
+
+    assert fixture.state.get_session(fixture.session_plan.identity.logon_id) is None
+    assert fixture.lifecycle_registry.get_session(fixture.session_plan.identity.object_id) is None
+
+
+def test_strict_state_payload_binds_exact_outer_network_authority_once() -> None:
+    fixture = _fixture(DeferredSessionKind.SSH)
+    batch = fixture.prepared_root.state_plan.batch
+    assert batch is not None and batch.session is fixture.session_plan
+    assert fixture.application_token is not None
+    assert type(fixture.application_owner) is SshApplicationChannelManager
+    bound_at = fixture.binding_time
+    digest = fixture.state.materialization_digest()
+    payload = fixture.state.prepare_deferred_session_state_authority(
+        protocol=DeferredSessionProtocol.SSH,
+        binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION,
+        bound_at=bound_at,
+        batch=batch,
+    )
+    with pytest.raises(ValueError, match="disposition changed"):
+        DeferredSessionNetworkAuthority(
+            kind=DeferredSessionKind.SSH,
+            coordinator=fixture.coordinator,
+            bound_at=bound_at,
+            binding_disposition=DeferredSessionBindingDisposition.ACTIVE_SESSION,
+            strict_state_authority=payload,
+            application_manager=fixture.application_owner,
+            application_token=fixture.application_token,
+        )
+    assert not payload.outer_bound
+    authority = DeferredSessionNetworkAuthority(
+        kind=DeferredSessionKind.SSH,
+        coordinator=fixture.coordinator,
+        bound_at=bound_at,
+        binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION,
+        strict_state_authority=payload,
+        application_manager=fixture.application_owner,
+        application_token=fixture.application_token,
+    )
+
+    assert authority.has_strict_state_authority
+    assert not authority.strict_state_authority_bound
+    with pytest.raises(StateError, match="another owner"):
+        authority.bind_strict_state_authority(StateManager())
+    assert not payload.outer_bound
+    authority.bind_strict_state_authority(fixture.state)
+    assert authority.strict_state_authority_bound
+    assert fixture.state.authenticates_deferred_session_state_authority(
+        payload,
+        outer_authority=authority,
+    )
+    assert not fixture.state.authenticates_deferred_session_state_authority(
+        payload,
+        outer_authority=copy(authority),
+    )
+    with pytest.raises(StateError, match="already owns a network handoff"):
+        authority.bind_strict_state_authority(fixture.state)
+    with pytest.raises(ValueError, match="failed authentication"):
+        replace(authority)
+    object.__setattr__(authority, "session_object_id", "tampered-session")
+    assert not fixture.state.authenticates_deferred_session_state_authority(
+        payload,
+        outer_authority=authority,
+    )
+    assert fixture.state.materialization_digest() == digest
+
+
+def test_composition_hmac_binds_strict_state_disposition() -> None:
+    fixture = _fixture(DeferredSessionKind.SSH)
+    batch = fixture.prepared_root.state_plan.batch
+    assert batch is not None
+    payload = fixture.state.prepare_deferred_session_state_authority(
+        protocol=DeferredSessionProtocol.SSH,
+        binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION,
+        bound_at=fixture.binding_time,
+        batch=batch,
+    )
+    composition = fixture.issue(
+        binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION,
+        state_authority=payload,
+    )
+
+    assert not fixture.coordinator.authenticates(composition)
+    assert fixture.application_token is not None
+    assert type(fixture.application_owner) is SshApplicationChannelManager
+    authority = DeferredSessionNetworkAuthority(
+        kind=DeferredSessionKind.SSH,
+        coordinator=fixture.coordinator,
+        bound_at=payload.bound_at,
+        binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION,
+        strict_state_authority=payload,
+        application_manager=fixture.application_owner,
+        application_token=fixture.application_token,
+    )
+    authority.bind_strict_state_authority(fixture.state)
+    assert fixture.coordinator.authenticates(composition)
+    assert composition.binding_disposition is DeferredSessionBindingDisposition.NEW_SESSION
+    tampered = replace(
+        composition,
+        binding_disposition=DeferredSessionBindingDisposition.ACTIVE_SESSION,
+    )
+    assert not fixture.coordinator.authenticates(tampered)
+    with pytest.raises(StateError, match="requires exact State authority"):
+        fixture.issue(binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION)
+    with pytest.raises(StateError, match="replaced its exact State authority"):
+        fixture.issue(
+            binding_disposition=DeferredSessionBindingDisposition.ACTIVE_SESSION,
+            state_authority=payload,
+        )
+
+
+def test_strict_state_payload_allows_only_one_competing_outer_authority() -> None:
+    fixture = _fixture(DeferredSessionKind.SSH)
+    batch = fixture.prepared_root.state_plan.batch
+    assert batch is not None and fixture.application_token is not None
+    assert type(fixture.application_owner) is SshApplicationChannelManager
+    payload = fixture.state.prepare_deferred_session_state_authority(
+        protocol=DeferredSessionProtocol.SSH,
+        binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION,
+        bound_at=fixture.binding_time,
+        batch=batch,
+    )
+
+    def authority() -> DeferredSessionNetworkAuthority:
+        return DeferredSessionNetworkAuthority(
+            kind=DeferredSessionKind.SSH,
+            coordinator=fixture.coordinator,
+            bound_at=fixture.binding_time,
+            binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION,
+            strict_state_authority=payload,
+            application_manager=fixture.application_owner,
+            application_token=fixture.application_token,
+        )
+
+    candidates = (authority(), authority())
+    digest = fixture.state.materialization_digest()
+    barrier = Barrier(3)
+    outcomes: list[tuple[str, DeferredSessionNetworkAuthority]] = []
+
+    def bind(candidate: DeferredSessionNetworkAuthority) -> None:
+        barrier.wait()
+        try:
+            candidate.bind_strict_state_authority(fixture.state)
+        except StateError:
+            outcomes.append(("rejected", candidate))
+        else:
+            outcomes.append(("bound", candidate))
+
+    threads = tuple(Thread(target=bind, args=(candidate,)) for candidate in candidates)
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(status for status, _candidate in outcomes) == ["bound", "rejected"]
+    winner = next(candidate for status, candidate in outcomes if status == "bound")
+    assert fixture.state.authenticates_deferred_session_state_authority(
+        payload,
+        outer_authority=winner,
+    )
+    assert fixture.state.materialization_digest() == digest
+
+
+@pytest.mark.parametrize("kind", (DeferredSessionKind.SSH, DeferredSessionKind.RDP))
+def test_deferred_application_sidecar_commits_with_state_network_and_lifecycle(
+    kind: DeferredSessionKind,
+) -> None:
+    """The protocol sidecar publishes in the exact prepared network transaction."""
+
+    fixture = _fixture(kind)
+    authority = _bound_authority(fixture)
+    result = authority.materialize_prepared_deferred_session_transaction(
+        fixture.issue(),
+        fixture.coordinator,
+        fixture.owner_rng,
+    )
+
+    assert authority.authenticates_prepared_network_receipt(
+        fixture.prepared_root,
+        result.receipt,
+    )
+    assert fixture.state.get_session(fixture.session_plan.identity.logon_id) is not None
+    assert (
+        fixture.state.get_connection_by_zeek_uid(fixture.prepared_root.transaction.zeek_uid)
+        is not None
+    )
+    assert (
+        fixture.lifecycle_registry.transport_for_transport_id(
+            fixture.prepared_root.transaction.stable_id
+        )
+        is not None
+    )
+    assert result.connection.application is not None
+    if kind is DeferredSessionKind.SSH:
+        assert type(fixture.application_owner) is SshApplicationChannelManager
+        assert (
+            fixture.application_owner.session_view(fixture.application_token.session.channel_id)
+            == fixture.application_token.session
+        )
+    else:
+        assert type(fixture.application_owner) is RdpReconnectStateManager
+        assert (
+            fixture.application_owner.get(fixture.session_plan.identity.object_id)
+            == fixture.application_token.session
+        )
+
+
+@pytest.mark.parametrize("kind", (DeferredSessionKind.SSH, DeferredSessionKind.RDP))
+def test_deferred_application_sidecar_ordinary_rejection_is_neutral(
+    kind: DeferredSessionKind,
+) -> None:
+    """A final validation failure releases every uncommitted owner capability."""
+
+    fixture = _fixture(kind)
+    authority = _bound_authority(fixture)
+
+    def reject() -> None:
+        raise StateError("injected deferred-session rejection")
+
+    authority._materialization_precommit_hook = reject
+    with pytest.raises(StateError, match="injected deferred-session rejection"):
+        authority.materialize_prepared_deferred_session_transaction(
+            fixture.issue(),
+            fixture.coordinator,
+            fixture.owner_rng,
+        )
+
+    assert fixture.state.get_session(fixture.session_plan.identity.logon_id) is None
+    assert (
+        fixture.state.get_connection_by_zeek_uid(fixture.prepared_root.transaction.zeek_uid) is None
+    )
+    assert (
+        fixture.lifecycle_registry.transport_for_transport_id(
+            fixture.prepared_root.transaction.stable_id
+        )
+        is None
+    )
+    assert fixture.application_token is not None
+    if kind is DeferredSessionKind.SSH:
+        assert type(fixture.application_owner) is SshApplicationChannelManager
+    else:
+        assert type(fixture.application_owner) is RdpReconnectStateManager
+    assert not fixture.application_owner.authenticates_admission_token(fixture.application_token)
+
+
+@pytest.mark.parametrize("kind", (DeferredSessionKind.SSH, DeferredSessionKind.RDP))
+def test_deferred_application_sidecar_replay_cannot_publish_twice(
+    kind: DeferredSessionKind,
+) -> None:
+    """A consumed composition is not a replayable protocol or State capability."""
+
+    fixture = _fixture(kind)
+    authority = _bound_authority(fixture)
+    composition = fixture.issue()
+    authority.materialize_prepared_deferred_session_transaction(
+        composition,
+        fixture.coordinator,
+        fixture.owner_rng,
+    )
+    version = fixture.state.materialization_version
+
+    with pytest.raises(StateError):
+        authority.materialize_prepared_deferred_session_transaction(
+            composition,
+            fixture.coordinator,
+            fixture.owner_rng,
+        )
+
+    assert fixture.state.materialization_version == version
+    assert fixture.application_token is not None
+    assert not fixture.application_owner.authenticates_admission_token(fixture.application_token)
+
+
+@pytest.mark.parametrize("kind", (DeferredSessionKind.SSH, DeferredSessionKind.RDP))
+def test_deferred_application_sidecar_rejects_preclaim_state_drift(
+    kind: DeferredSessionKind,
+) -> None:
+    """Concurrent State drift before claim cannot leave a transport or sidecar."""
+
+    fixture = _fixture(kind)
+    authority = _bound_authority(fixture)
+    composition = fixture.issue()
+    fixture.state.set_current_time(_START + timedelta(microseconds=1))
+
+    with pytest.raises(StateError):
+        authority.materialize_prepared_deferred_session_transaction(
+            composition,
+            fixture.coordinator,
+            fixture.owner_rng,
+        )
+
+    assert fixture.state.get_session(fixture.session_plan.identity.logon_id) is None
+    assert (
+        fixture.lifecycle_registry.transport_for_transport_id(
+            fixture.prepared_root.transaction.stable_id
+        )
+        is None
+    )
+    assert fixture.application_token is not None
+    assert not fixture.application_owner.authenticates_admission_token(fixture.application_token)
 
 
 def test_authentication_accepts_replace_with_the_same_nested_objects_only() -> None:
@@ -663,7 +1030,7 @@ def test_authentication_rejects_member_order_pairing_and_occurrence_object_subst
 def test_issue_rejects_duplicate_dispatch_objects_or_occurrence_ids(
     duplicate_position: str,
 ) -> None:
-    fixture = _fixture(DeferredSessionKind.RDP, with_application=False)
+    fixture = _fixture(DeferredSessionKind.RDP)
     duplicate = (
         fixture.transport_dispatch
         if duplicate_position == "transport"
@@ -677,19 +1044,16 @@ def test_issue_rejects_duplicate_dispatch_objects_or_occurrence_ids(
 def test_issue_rejects_wrong_root_mode_and_protocol_port() -> None:
     ordinary_root = _fixture(
         DeferredSessionKind.SSH,
-        with_application=False,
         lifecycle_mode="network",
-    )
-    wrong_port = _fixture(
-        DeferredSessionKind.SSH,
-        with_application=False,
-        dst_port=443,
     )
 
     with pytest.raises(StateError, match="deferred|mode"):
         ordinary_root.issue()
-    with pytest.raises(StateError, match="port|SSH"):
-        wrong_port.issue()
+    with pytest.raises(ValueError, match="server_port must be 22"):
+        _fixture(
+            DeferredSessionKind.SSH,
+            dst_port=443,
+        )
 
 
 def test_issue_rejects_lifecycle_transport_fingerprint_and_hold_drift() -> None:
@@ -738,7 +1102,7 @@ def test_issue_rejects_committed_source_timing_preparation() -> None:
 
 
 def test_coordinator_retains_no_caller_objects_and_failed_issue_is_shape_neutral() -> None:
-    fixture = _fixture(DeferredSessionKind.RDP, with_application=False)
+    fixture = _fixture(DeferredSessionKind.RDP)
     coordinator = fixture.coordinator
     before_failure = tuple(sorted(id(item) for item in gc.get_referents(coordinator)))
 

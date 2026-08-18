@@ -70,6 +70,8 @@ from evidenceforge.generation.cryptographic_material import (
 )
 from evidenceforge.generation.state_manager import (
     ConnectionCompositeMaterializationPlan,
+    ConnectionExistingSessionPatch,
+    ConnectionExistingSessionProcessRolesPatch,
     ConnectionIdentityPlan,
     ConnectionMaterializationMode,
     ConnectionPlanningCursor,
@@ -1441,6 +1443,10 @@ class NetworkTransactionPreparation:
         hostname: str = "",
         initiating_pid: int = -1,
         batch: MaterializationBatchPlan | None = None,
+        rdp_existing_session_patch: ConnectionExistingSessionPatch | None = None,
+        existing_session_process_roles_patch: (
+            ConnectionExistingSessionProcessRolesPatch | None
+        ) = None,
         process_activity: tuple[ProcessActivityPatch, ...] = (),
         session_activity: tuple[SessionActivityPatch, ...] = (),
         result: NetworkConnectionCommitResult | None = None,
@@ -1458,6 +1464,17 @@ class NetworkTransactionPreparation:
             if materialization_mode is ConnectionMaterializationMode.PHYSICAL:
                 if lifecycle_mode == "application_child" or transaction.application_layer_only:
                     raise StateError("Physical preparation cannot publish an application child")
+                if rdp_existing_session_patch is not None and lifecycle_mode != "deferred_session":
+                    raise StateError(
+                        "RDP existing-session patch requires deferred_session lifecycle mode"
+                    )
+                if (
+                    existing_session_process_roles_patch is not None
+                    and lifecycle_mode != "deferred_session"
+                ):
+                    raise StateError(
+                        "Existing-session process roles require deferred_session lifecycle mode"
+                    )
             elif materialization_mode is ConnectionMaterializationMode.APPLICATION_CHILD:
                 if lifecycle_mode != "application_child" or not transaction.application_layer_only:
                     raise StateError(
@@ -1504,6 +1521,8 @@ class NetworkTransactionPreparation:
                 initiating_pid=initiating_pid,
                 mode=materialization_mode,
                 batch=batch,
+                rdp_existing_session_patch=rdp_existing_session_patch,
+                existing_session_process_roles_patch=(existing_session_process_roles_patch),
                 process_activity=process_activity,
                 session_activity=session_activity,
             )
@@ -2497,6 +2516,8 @@ class NetworkTransactionRuntime:
         initiating_pid: int,
         mode: ConnectionMaterializationMode,
         batch: MaterializationBatchPlan | None,
+        rdp_existing_session_patch: ConnectionExistingSessionPatch | None,
+        existing_session_process_roles_patch: ConnectionExistingSessionProcessRolesPatch | None,
         process_activity: tuple[ProcessActivityPatch, ...],
         session_activity: tuple[SessionActivityPatch, ...],
     ) -> ConnectionCompositeMaterializationPlan:
@@ -2511,6 +2532,8 @@ class NetworkTransactionRuntime:
             initiating_pid=initiating_pid,
             mode=mode,
             batch=batch,
+            rdp_existing_session_patch=rdp_existing_session_patch,
+            existing_session_process_roles_patch=existing_session_process_roles_patch,
             process_activity=process_activity,
             session_activity=session_activity,
         )

@@ -43,6 +43,10 @@ from evidenceforge.generation.application_channels import (
     ApplicationChannelAdmissionToken,
     ApplicationChannelRegistry,
 )
+from evidenceforge.generation.deferred_session_composition import (
+    DeferredSessionComposition,
+    DeferredSessionCompositionCoordinator,
+)
 from evidenceforge.generation.http_channels import (
     HttpApplicationChannelManager,
     HttpChannelAdmissionResult,
@@ -82,16 +86,27 @@ from evidenceforge.generation.proxy_channels import (
     ExplicitProxyAdmissionToken,
     ExplicitProxyChannelManager,
 )
+from evidenceforge.generation.rdp_sessions import (
+    RdpReconnectStateManager,
+    RdpSessionAdmissionResult,
+    RdpSessionAdmissionToken,
+)
 from evidenceforge.generation.source_timing import (
     SourceTimingPlanner,
     SourceTimingPreparation,
     SourceTimingPreparationReceipt,
     SourceTimingPreparationToken,
 )
+from evidenceforge.generation.ssh_channels import (
+    SshApplicationChannelManager,
+    SshChannelAdmissionResult,
+    SshChannelAdmissionToken,
+)
 from evidenceforge.generation.state_manager import (
     ActionCohortMaterializationPlan,
     ConnectionCompositeMaterializationPlan,
     ConnectionCompositeMaterializationResult,
+    ConnectionExistingSessionLifecycleDisposition,
     ConnectionMaterializationMode,
     MaterializationBatchPlan,
     PhysicalTransportFingerprint,
@@ -118,12 +133,18 @@ _MAX_MATERIALIZATION_BATCH_PAYLOAD_NODES = 65_536
 _MAX_MATERIALIZATION_BATCH_SCALAR_BYTES = 64 * 1024
 
 _ApplicationAdmissionToken = (
-    ApplicationChannelAdmissionToken | HttpChannelAdmissionToken | ExplicitProxyAdmissionToken
+    ApplicationChannelAdmissionToken
+    | HttpChannelAdmissionToken
+    | ExplicitProxyAdmissionToken
+    | SshChannelAdmissionToken
+    | RdpSessionAdmissionToken
 )
 _ApplicationAdmissionResult = (
     ApplicationChannelAdmissionResult
     | HttpChannelAdmissionResult
     | ExplicitProxyAdmissionCommitResult
+    | SshChannelAdmissionResult
+    | RdpSessionAdmissionResult
 )
 
 
@@ -873,7 +894,7 @@ class LifecycleProcessServiceClosureCompositeResult:
 class ApplicationChannelCompositeProof:
     """Normalized authenticated proof from one engine-owned application manager."""
 
-    manager_kind: Literal["protocol_neutral", "http", "explicit_proxy"]
+    manager_kind: Literal["protocol_neutral", "http", "explicit_proxy", "ssh", "rdp"]
     manager_id: str
     manager_receipt_token: str
     common_receipt_token: str
@@ -1639,6 +1660,8 @@ class GeneratorLifecycleAuthority:
         self._application_registry: ApplicationChannelRegistry | None = None
         self._http_channel_manager: HttpApplicationChannelManager | None = None
         self._explicit_proxy_manager: ExplicitProxyChannelManager | None = None
+        self._ssh_channel_manager: SshApplicationChannelManager | None = None
+        self._rdp_session_manager: RdpReconnectStateManager | None = None
         self._network_runtime: NetworkTransactionRuntime | None = None
         self._source_timing_planner: SourceTimingPlanner | None = None
 
@@ -2316,6 +2339,28 @@ class GeneratorLifecycleAuthority:
             raise StateError("Lifecycle authority is already bound to another proxy manager")
         self._explicit_proxy_manager = manager
 
+    def bind_ssh_channel_manager(self, manager: SshApplicationChannelManager) -> None:
+        """Bind the one engine-owned SSH sidecar verifier."""
+
+        if type(manager) is not SshApplicationChannelManager:
+            raise TypeError("Lifecycle authority requires a typed SSH channel manager")
+        self.bind_application_channel_registry(manager.application_registry)
+        current = self._ssh_channel_manager
+        if current is not None and current is not manager:
+            raise StateError("Lifecycle authority is already bound to another SSH manager")
+        self._ssh_channel_manager = manager
+
+    def bind_rdp_session_manager(self, manager: RdpReconnectStateManager) -> None:
+        """Bind the one engine-owned RDP logical-session verifier."""
+
+        if type(manager) is not RdpReconnectStateManager:
+            raise TypeError("Lifecycle authority requires a typed RDP session manager")
+        self.bind_application_channel_registry(manager.application_registry)
+        current = self._rdp_session_manager
+        if current is not None and current is not manager:
+            raise StateError("Lifecycle authority is already bound to another RDP manager")
+        self._rdp_session_manager = manager
+
     def bind_network_transaction_runtime(self, runtime: NetworkTransactionRuntime) -> None:
         """Bind the one runtime sharing this authority's StateManager."""
 
@@ -2398,15 +2443,24 @@ class GeneratorLifecycleAuthority:
         """Return the exact State member order bound into lifecycle publication."""
 
         batch = plan.batch
-        if batch is None:
-            return ()
-        return tuple(
-            member.publication_token
-            for member in (
-                *((batch.session,) if batch.session is not None else ()),
-                *batch.processes,
+        batch_tokens = (
+            ()
+            if batch is None
+            else tuple(
+                member.publication_token
+                for member in (
+                    *((batch.session,) if batch.session is not None else ()),
+                    *batch.processes,
+                )
             )
         )
+        if (
+            plan.existing_session_patch is not None
+            and plan.existing_session_patch.lifecycle_disposition
+            is ConnectionExistingSessionLifecycleDisposition.START
+        ):
+            return (plan.publication_token, *batch_tokens)
+        return batch_tokens
 
     @staticmethod
     def _action_cohort_id(
@@ -2976,10 +3030,22 @@ class GeneratorLifecycleAuthority:
         if not self._state_manager.authenticates_materialization_plan(plan):
             raise StateError("Connection composite plan integrity validation failed")
         batch = plan.batch
-        if batch is None:
+        if batch is None and plan.existing_session_patch is None:
             return ()
-        session_plan = batch.session
-        staged_session = session_plan.identity if session_plan is not None else None
+        session_plan = batch.session if batch is not None else None
+        existing_session_patch = plan.existing_session_patch
+        existing_session_starts = bool(
+            existing_session_patch is not None
+            and existing_session_patch.lifecycle_disposition
+            is ConnectionExistingSessionLifecycleDisposition.START
+        )
+        staged_session = (
+            session_plan.identity
+            if session_plan is not None
+            else existing_session_patch.after.identity
+            if existing_session_starts and existing_session_patch is not None
+            else None
+        )
         members: list[LifecycleClosedTransportStartMember] = []
         if session_plan is not None:
             session_identity = self._shadow.project_session_start(session_plan.identity)
@@ -3001,9 +3067,32 @@ class GeneratorLifecycleAuthority:
                     publication_token=session_plan.publication_token,
                 )
             )
+        elif existing_session_starts:
+            assert existing_session_patch is not None
+            session_identity = self._shadow.project_session_start(
+                existing_session_patch.after.identity
+            )
+            members.append(
+                LifecycleClosedTransportStartMember(
+                    request=LifecycleSessionStartRequest(
+                        identity=session_identity,
+                        action_id=stable_uuid(
+                            "lifecycle-authority-start-action",
+                            "existing-session",
+                            session_identity.object_id,
+                        ),
+                        transition_id=stable_uuid(
+                            "lifecycle-authority-start-transition",
+                            "existing-session",
+                            session_identity.object_id,
+                        ),
+                    ),
+                    publication_token=plan.publication_token,
+                )
+            )
 
         staged_processes: dict[tuple[str, int], ProcessIdentity] = {}
-        for process_plan in batch.processes:
+        for process_plan in batch.processes if batch is not None else ():
             identity = process_plan.identity
             parent_object_id = ""
             if identity.parent_pid:
@@ -3051,6 +3140,8 @@ class GeneratorLifecycleAuthority:
             session_logon_type = (
                 session_plan.logon_type
                 if session is staged_session and session_plan is not None
+                else existing_session_patch.after.logon_type
+                if session is staged_session and existing_session_patch is not None
                 else self._state_manager.get_session_logon_type(identity.logon_id)
                 if session is not None
                 else None
@@ -3206,6 +3297,18 @@ class GeneratorLifecycleAuthority:
             if token.kind == "request":
                 return tunnel.client_transport_id, ()
             raise StateError(f"Unsupported explicit-proxy admission kind {token.kind!r}")
+        if isinstance(token, SshChannelAdmissionToken):
+            manager = self._ssh_channel_manager
+            if manager is None or not manager.authenticates_admission_token(token):
+                raise StateError("Connection composite has no authentic SSH admission token")
+            self._common_application_token_identity(token.application_token)
+            return token.session.transport.transport_id, ()
+        if isinstance(token, RdpSessionAdmissionToken):
+            manager = self._rdp_session_manager
+            if manager is None or not manager.authenticates_admission_token(token):
+                raise StateError("Connection composite has no authentic RDP admission token")
+            self._common_application_token_identity(token.application_token)
+            return token.transport_ids[-1], ()
         identity = self._common_application_token_identity(token)
         if identity.protocol in {"http", "explicit-proxy", "smb", "ssh", "rdp"}:
             raise StateError(
@@ -3357,6 +3460,42 @@ class GeneratorLifecycleAuthority:
                 prerequisite_transport_ids=receipt.prerequisite_transport_ids,
                 sidecar_result_digest=receipt.sidecar_result_digest,
             )
+        if isinstance(token, SshChannelAdmissionToken):
+            manager = self._ssh_channel_manager
+            if manager is None or not isinstance(result, SshChannelAdmissionResult):
+                raise AssertionError("SSH application commit returned an incompatible result")
+            receipt = result.receipt
+            if not manager.authenticates_admission_receipt(receipt):
+                raise AssertionError("SSH manager returned an unauthenticated receipt")
+            return ApplicationChannelCompositeProof(
+                manager_kind="ssh",
+                manager_id=receipt.manager_id,
+                manager_receipt_token=receipt.receipt_token,
+                common_receipt_token=receipt.application_receipt_token,
+                channel_id=receipt.channel_id,
+                operation_id=receipt.operation_id,
+                current_transport_id=receipt.transport_ids[-1],
+                prerequisite_transport_ids=(),
+                sidecar_result_digest=receipt.sidecar_result_digest,
+            )
+        if isinstance(token, RdpSessionAdmissionToken):
+            manager = self._rdp_session_manager
+            if manager is None or not isinstance(result, RdpSessionAdmissionResult):
+                raise AssertionError("RDP application commit returned an incompatible result")
+            receipt = result.receipt
+            if not manager.authenticates_admission_receipt(receipt):
+                raise AssertionError("RDP manager returned an unauthenticated receipt")
+            return ApplicationChannelCompositeProof(
+                manager_kind="rdp",
+                manager_id=receipt.manager_id,
+                manager_receipt_token=receipt.receipt_token,
+                common_receipt_token=receipt.application_receipt_token,
+                channel_id=receipt.channel_id,
+                operation_id=receipt.operation_id,
+                current_transport_id=receipt.transport_ids[-1],
+                prerequisite_transport_ids=(),
+                sidecar_result_digest=receipt.sidecar_result_digest,
+            )
         registry = self._application_registry
         if registry is None or not isinstance(result, ApplicationChannelAdmissionResult):
             raise AssertionError("Common application commit returned an incompatible result")
@@ -3474,6 +3613,16 @@ class GeneratorLifecycleAuthority:
             if manager is None:
                 raise StateError("Lifecycle authority has no bound proxy manager")
             return stack.enter_context(manager.prepared_admission(token))
+        if isinstance(token, SshChannelAdmissionToken):
+            manager = self._ssh_channel_manager
+            if manager is None:
+                raise StateError("Lifecycle authority has no bound SSH manager")
+            return stack.enter_context(manager.prepared_admission(token))
+        if isinstance(token, RdpSessionAdmissionToken):
+            manager = self._rdp_session_manager
+            if manager is None:
+                raise StateError("Lifecycle authority has no bound RDP manager")
+            return stack.enter_context(manager.prepared_admission(token))
         registry = self._application_registry
         if registry is None:
             raise StateError("Lifecycle authority has no bound application registry")
@@ -3492,6 +3641,14 @@ class GeneratorLifecycleAuthority:
                     manager.cancel_prepared_admission(token)
             elif isinstance(token, ExplicitProxyAdmissionToken):
                 manager = self._explicit_proxy_manager
+                if manager is not None:
+                    manager.cancel_prepared_admission(token)
+            elif isinstance(token, SshChannelAdmissionToken):
+                manager = self._ssh_channel_manager
+                if manager is not None:
+                    manager.cancel_prepared_admission(token)
+            elif isinstance(token, RdpSessionAdmissionToken):
+                manager = self._rdp_session_manager
                 if manager is not None:
                     manager.cancel_prepared_admission(token)
             elif isinstance(token, ApplicationChannelAdmissionToken):
@@ -3530,6 +3687,8 @@ class GeneratorLifecycleAuthority:
                 ApplicationChannelAdmissionResult,
                 HttpChannelAdmissionResult,
                 ExplicitProxyAdmissionCommitResult,
+                SshChannelAdmissionResult,
+                RdpSessionAdmissionResult,
             ),
         ):
             raise AssertionError("Application manager returned an incompatible commit result")
@@ -3698,7 +3857,8 @@ class GeneratorLifecycleAuthority:
                 or type(receipt._transaction_id) is not str
                 or not receipt._transaction_id
                 or type(receipt._materialization_mode) is not ConnectionMaterializationMode
-                or receipt._lifecycle_mode not in {"network", "application_child"}
+                or receipt._lifecycle_mode
+                not in {"network", "deferred_session", "application_child"}
                 or type(receipt._physical_transport) is not PhysicalTransportFingerprint
                 or type(receipt._result_digest) is not str
                 or not receipt._result_digest
@@ -3728,7 +3888,7 @@ class GeneratorLifecycleAuthority:
                 return False
             if receipt._materialization_mode is ConnectionMaterializationMode.PHYSICAL:
                 return (
-                    receipt._lifecycle_mode == "network"
+                    receipt._lifecycle_mode in {"network", "deferred_session"}
                     and connection_receipt.materializes_connection
                 )
             return (
@@ -3754,6 +3914,8 @@ class GeneratorLifecycleAuthority:
         lifecycle_token: LifecycleClosedTransportAdmissionToken | None,
         application_token: _ApplicationAdmissionToken | None,
         prerequisite_receipts: tuple[LifecyclePreparedNetworkReceipt, ...],
+        *,
+        allow_deferred_session: bool = False,
     ) -> tuple[LifecycleConnectionCompositeReceipt, ...]:
         """Validate every full prepared-network authority input before claiming locks."""
 
@@ -3767,13 +3929,20 @@ class GeneratorLifecycleAuthority:
             raise StateError("Prepared network materialization requires an exact root")
         if not runtime.authenticates_preparation_root(root):
             raise StateError("Prepared network root failed runtime authentication")
-        if root.runtime_token.lifecycle_mode == "deferred_session":
+        if root.runtime_token.lifecycle_mode == "deferred_session" and not allow_deferred_session:
             raise StateError("Deferred-session network roots require their session authority")
-        if root.runtime_token.lifecycle_mode not in {"network", "application_child"}:
+        if root.runtime_token.lifecycle_mode not in {
+            "network",
+            "deferred_session",
+            "application_child",
+        }:
             raise StateError("Prepared network root has an unsupported lifecycle mode")
         if root.state_plan.mode is ConnectionMaterializationMode.PHYSICAL:
-            if root.runtime_token.lifecycle_mode != "network":
-                raise StateError("Physical prepared network root requires network lifecycle mode")
+            expected_modes = (
+                {"network", "deferred_session"} if allow_deferred_session else {"network"}
+            )
+            if root.runtime_token.lifecycle_mode not in expected_modes:
+                raise StateError("Physical prepared network root has incompatible lifecycle mode")
         elif root.state_plan.mode is ConnectionMaterializationMode.APPLICATION_CHILD:
             if root.runtime_token.lifecycle_mode != "application_child":
                 raise StateError(
@@ -3850,6 +4019,53 @@ class GeneratorLifecycleAuthority:
         application_token: _ApplicationAdmissionToken | None = None,
         prerequisite_receipts: tuple[LifecyclePreparedNetworkReceipt, ...] = (),
     ) -> LifecyclePreparedNetworkResult:
+        """Publish one ordinary prepared network root through its owning authorities."""
+
+        return self._materialize_prepared_network_transaction(
+            root,
+            owner_rng,
+            source_timing_preparation=source_timing_preparation,
+            lifecycle_token=lifecycle_token,
+            application_token=application_token,
+            prerequisite_receipts=prerequisite_receipts,
+            allow_deferred_session=False,
+        )
+
+    def materialize_prepared_deferred_session_transaction(
+        self,
+        composition: DeferredSessionComposition,
+        coordinator: DeferredSessionCompositionCoordinator,
+        owner_rng: random.Random,
+    ) -> LifecyclePreparedNetworkResult:
+        """Atomically publish one coordinator-authenticated deferred session root."""
+
+        if type(coordinator) is not DeferredSessionCompositionCoordinator:
+            raise StateError("Deferred session materialization requires its exact coordinator")
+        if type(composition) is not DeferredSessionComposition or not coordinator.authenticates(
+            composition
+        ):
+            raise StateError("Deferred session composition failed owner authentication")
+        return self._materialize_prepared_network_transaction(
+            composition.prepared_root,
+            owner_rng,
+            source_timing_preparation=composition.source_timing_preparation,
+            lifecycle_token=composition.lifecycle_token,
+            application_token=composition.application_token,
+            prerequisite_receipts=(),
+            allow_deferred_session=True,
+        )
+
+    def _materialize_prepared_network_transaction(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        owner_rng: random.Random,
+        *,
+        source_timing_preparation: SourceTimingPreparation,
+        lifecycle_token: LifecycleClosedTransportAdmissionToken | None,
+        application_token: _ApplicationAdmissionToken | None,
+        prerequisite_receipts: tuple[LifecyclePreparedNetworkReceipt, ...],
+        allow_deferred_session: bool,
+    ) -> LifecyclePreparedNetworkResult:
         """Atomically publish a sealed network root through every owning authority.
 
         Source timing is claimed first, followed by the network runtime, application
@@ -3868,6 +4084,7 @@ class GeneratorLifecycleAuthority:
                 lifecycle_token,
                 application_token,
                 prerequisite_receipts,
+                allow_deferred_session=allow_deferred_session,
             )
             runtime = self._network_runtime
             planner = self._source_timing_planner

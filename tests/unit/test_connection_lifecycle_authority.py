@@ -91,6 +91,7 @@ def _transaction(
     src_port: int = 50_001,
     dst_ip: str = "203.0.113.20",
     dst_port: int = 443,
+    responding_pid: int = -1,
 ) -> NetworkTransactionPlan:
     closed_at = started_at + timedelta(seconds=duration)
     return NetworkTransactionPlan(
@@ -112,6 +113,7 @@ def _transaction(
         conn_state="SF",
         history="ShADadFf",
         traffic=NetworkTrafficLedger(),
+        responding_pid=responding_pid,
         application_layer_only=application_layer_only,
     )
 
@@ -543,6 +545,84 @@ def test_connection_composite_commits_staged_start_members_and_exact_holds() -> 
     assert registry.hold(hold.hold_id) == hold
     assert state.get_process("LNX-01", process.identity.pid).last_activity_time == hold_until
     assert state.get_session(session.identity.logon_id).last_activity_time == hold_until
+
+
+def test_preallocated_session_start_precedes_its_process_members_in_one_composite() -> None:
+    authority, state, registry, adapter = _authority()
+    state.set_current_time(_START)
+    logon_id = state.create_session(
+        username="analyst",
+        system="LNX-01",
+        logon_type=10,
+        source_ip="10.0.0.10",
+        source_port=50_001,
+        session_kind="ssh",
+    )
+    identity = state.get_session_identity(logon_id)
+    assert identity is not None
+    builder = state.begin_materialization_batch()
+    receiver = builder.plan_process(
+        system="LNX-01",
+        parent_pid=0,
+        image="/usr/sbin/sshd",
+        command_line="sshd: analyst [priv]",
+        username="root",
+        integrity_level="System",
+        os_category="linux",
+        logon_id=logon_id,
+        start_time=_START + timedelta(milliseconds=110),
+        require_session=True,
+        auth_session_id=identity.session_id,
+        auth_logon_type=10,
+    )
+    batch = builder.seal()
+    owner_rng = random.Random(21)
+    cursor = state.begin_connection_planning(owner_rng)
+    connection_identity = cursor.reserve_identity()
+    transaction = _transaction(
+        conn_id=connection_identity.conn_id,
+        zeek_uid=connection_identity.zeek_uid,
+        stable_id="preallocated-ssh-transport",
+        dst_port=22,
+        responding_pid=receiver.identity.pid,
+    )
+    session_patch = state.prepare_connection_existing_session_start_patch(
+        identity,
+        username="analyst",
+        target_system="LNX-01",
+        start_time=_START + timedelta(milliseconds=100),
+        source_ready_time=_START + timedelta(milliseconds=100),
+        source_ip=transaction.src_ip,
+        source_port=transaction.src_port,
+        transport_pid=receiver.identity.pid,
+        lifecycle_group_id="preallocated-ssh-lifecycle",
+        network_close_time=transaction.closed_at,
+        session_kind="ssh",
+    )
+    plan = state.finalize_connection_composite_materialization(
+        cursor,
+        transaction,
+        batch=batch,
+        rdp_existing_session_patch=session_patch,
+    )
+    members = authority.connection_composite_start_members(plan)
+    token = _lifecycle_token(authority, adapter, plan)
+
+    assert tuple(member.request.identity.object_id for member in members) == (
+        session_patch.after.identity.object_id,
+        receiver.identity.object_id,
+    )
+    result = authority.materialize_connection_composite(
+        plan,
+        owner_rng,
+        lifecycle_token=token,
+    )
+
+    assert result.state.session is state.get_session(logon_id)
+    assert registry.get_session(session_patch.after.identity.object_id) is not None
+    process = registry.get_process(receiver.identity.object_id)
+    assert process is not None
+    assert process.membership.session_object_id == session_patch.after.identity.object_id
 
 
 def test_connection_composite_rejects_unowned_session_activity_patch() -> None:

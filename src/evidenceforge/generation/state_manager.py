@@ -46,6 +46,10 @@ from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTrafficLedger, NetworkTransactionPlan
+from evidenceforge.generation.deferred_session_preseal import (
+    DeferredSessionBindingDisposition,
+    DeferredSessionProtocol,
+)
 from evidenceforge.generation.indexes import (
     ExpiringIndex,
     GroupedTemporalIndex,
@@ -217,6 +221,10 @@ class _SessionMaterializationPayload:
     effective_uid: int | None
     effective_gid: int | None
     state_time: datetime
+    network_close_time: datetime | None = None
+    source_ready_time: datetime | None = None
+    closure_owned_by_bundle: bool = False
+    end_plan: SessionEndPlan | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +265,12 @@ class SessionMaterializationPlan:
         """Return the immutable source-native logon type required by lifecycle token plans."""
 
         return self._payload.logon_type
+
+    @property
+    def end_plan(self) -> SessionEndPlan | None:
+        """Return the immutable session-closure plan carried by this start."""
+
+        return self._payload.end_plan
 
     @property
     def external_rng_state_after(self) -> object | None:
@@ -656,6 +670,7 @@ class MaterializationBatchPlan:
 
     _expected_version: int
     _expected_state_time: datetime | None
+    _admission_epoch: int
     _final_state_time: datetime
     _session: SessionMaterializationPlan | None
     _processes: tuple[ProcessMaterializationPlan, ...]
@@ -668,6 +683,12 @@ class MaterializationBatchPlan:
         """Return the single StateManager fence consumed by this batch."""
 
         return self._expected_version
+
+    @property
+    def admission_epoch(self) -> int:
+        """Return the prepared-State lane epoch captured by this batch."""
+
+        return self._admission_epoch
 
     @property
     def session(self) -> SessionMaterializationPlan | None:
@@ -899,6 +920,470 @@ class SessionActivityPatch:
     activity_time: datetime
 
 
+class ConnectionExistingSessionLifecycleDisposition(StrEnum):
+    """Lifecycle treatment for an existing State session bound to a transport."""
+
+    START = "start"
+    EXISTING = "existing"
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionExistingSessionState:
+    """Exact RDP-relevant projection of one already-live State session."""
+
+    identity: SessionIdentity
+    logon_type: int
+    source_ip: str
+    source_port: int
+    transport_pid: int | None
+    network_close_time: datetime | None
+    source_ready_time: datetime | None
+    closure_owned_by_bundle: bool
+    end_plan: SessionEndPlan | None = None
+
+    def __post_init__(self) -> None:
+        """Normalize times and reject ambiguous values at the typed boundary."""
+
+        if type(self.identity) is not SessionIdentity:
+            raise TypeError("Connection session state requires an exact session identity")
+        if type(self.logon_type) is not int or self.logon_type <= 0:
+            raise TypeError("Connection session state requires a positive logon type")
+        if type(self.source_ip) is not str or not self.source_ip:
+            raise TypeError("Connection session state requires a source address")
+        if type(self.source_port) is not int or not 0 <= self.source_port <= 65_535:
+            raise TypeError("Connection session state requires a valid source port")
+        if self.transport_pid is not None and (
+            type(self.transport_pid) is not int or self.transport_pid <= 0
+        ):
+            raise TypeError("Connection session state transport PID must be positive")
+        for name in ("network_close_time", "source_ready_time"):
+            value = getattr(self, name)
+            if value is not None:
+                if type(value) is not datetime:
+                    raise TypeError(f"Connection session {name} requires an exact datetime")
+                object.__setattr__(self, name, ensure_utc(value))
+        if type(self.closure_owned_by_bundle) is not bool:
+            raise TypeError("Connection session closure ownership requires an exact bool")
+        if self.end_plan is not None:
+            if type(self.end_plan) is not SessionEndPlan:
+                raise TypeError("Connection session end plan requires an exact SessionEndPlan")
+            object.__setattr__(
+                self,
+                "end_plan",
+                replace(
+                    self.end_plan,
+                    canonical_end=ensure_utc(self.end_plan.canonical_end),
+                ),
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionExistingSessionPatch:
+    """Authenticated old-to-new RDP session transition owned by one transport."""
+
+    before: ConnectionExistingSessionState
+    after: ConnectionExistingSessionState
+    lifecycle_disposition: ConnectionExistingSessionLifecycleDisposition
+    _expected_version: int
+    _expected_state_time: datetime | None
+    _admission_epoch: int
+    _integrity_token: str = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Keep immutable session identity fields stable across the transition."""
+
+        if (
+            type(self.before) is not ConnectionExistingSessionState
+            or type(self.after) is not ConnectionExistingSessionState
+        ):
+            raise TypeError("Connection session patch requires exact before/after states")
+        if type(self.lifecycle_disposition) is not ConnectionExistingSessionLifecycleDisposition:
+            raise TypeError("Connection session patch requires an exact lifecycle disposition")
+        if type(self._expected_version) is not int or self._expected_version < 0:
+            raise TypeError("Connection session patch requires an exact State version")
+        if self._expected_state_time is not None:
+            if type(self._expected_state_time) is not datetime:
+                raise TypeError("Connection session patch State time must be an exact datetime")
+            object.__setattr__(self, "_expected_state_time", ensure_utc(self._expected_state_time))
+        if type(self._admission_epoch) is not int or self._admission_epoch < 0:
+            raise TypeError("Connection session patch requires an exact admission epoch")
+        before = self.before.identity
+        after = self.after.identity
+        if (
+            before.hostname,
+            before.object_id,
+            before.logon_id,
+            before.session_id,
+            before.parent_lifecycle_group_id,
+        ) != (
+            after.hostname,
+            after.object_id,
+            after.logon_id,
+            after.session_id,
+            after.parent_lifecycle_group_id,
+        ):
+            raise ValueError("Connection session patch changed immutable session identity")
+        if before.logon_guid and before.logon_guid != after.logon_guid:
+            raise ValueError("Connection session patch replaced a finalized LogonGuid")
+        if self.before.logon_type != self.after.logon_type:
+            raise ValueError("Connection session patch changed its logon type")
+        if (
+            self.lifecycle_disposition is ConnectionExistingSessionLifecycleDisposition.EXISTING
+            and self.before.identity != self.after.identity
+        ):
+            raise ValueError("Existing lifecycle session patch changed immutable identity")
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionExistingSessionProcessRolesState:
+    """Closed process-role projection for one patched protocol session."""
+
+    transport_pid: int | None = None
+    session_shell_pid: int | None = None
+    session_user_manager_pid: int | None = None
+    session_winlogon_pid: int | None = None
+    explorer_pid: int | None = None
+    initial_explorer_pid: int | None = None
+    process_tree_root: int | None = None
+    windows_shell_bootstrapped: bool = False
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous PID and shell-bootstrap values."""
+
+        for name in (
+            "transport_pid",
+            "session_shell_pid",
+            "session_user_manager_pid",
+            "session_winlogon_pid",
+            "explorer_pid",
+            "initial_explorer_pid",
+            "process_tree_root",
+        ):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not int or value <= 0):
+                raise TypeError(f"Connection session role {name} requires a positive PID")
+        if type(self.windows_shell_bootstrapped) is not bool:
+            raise TypeError("Connection session shell bootstrap requires an exact bool")
+
+
+class _ConnectionExistingSessionProcessRolesCapability:
+    """Process-local identity that rejects copied role-patch wrappers."""
+
+    __slots__ = ("patch",)
+
+    def __init__(self) -> None:
+        self.patch: ConnectionExistingSessionProcessRolesPatch | None = None
+
+    def bind(self, patch: "ConnectionExistingSessionProcessRolesPatch") -> None:
+        """Bind exactly once to the manager-issued wrapper."""
+
+        if self.patch is not None:
+            raise StateError("Connection session process-role capability is already bound")
+        self.patch = patch
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionExistingSessionProcessRolesPatch:
+    """Authenticated exact role transition backed by one process-only batch."""
+
+    target: SessionIdentity
+    before: ConnectionExistingSessionProcessRolesState
+    after: ConnectionExistingSessionProcessRolesState
+    transport_plan: ProcessMaterializationPlan | None
+    shell_plan: ProcessMaterializationPlan | None
+    user_manager_plan: ProcessMaterializationPlan | None
+    winlogon_plan: ProcessMaterializationPlan | None
+    explorer_plan: ProcessMaterializationPlan | None
+    process_tree_root_plan: ProcessMaterializationPlan | None
+    _expected_version: int
+    _expected_state_time: datetime | None
+    _admission_epoch: int
+    _capability: _ConnectionExistingSessionProcessRolesCapability = field(
+        repr=False,
+        compare=False,
+    )
+    _integrity_token: str = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Validate the inert public shape before manager authentication."""
+
+        if type(self.target) is not SessionIdentity:
+            raise TypeError("Connection session role patch requires an exact target identity")
+        if (
+            type(self.before) is not ConnectionExistingSessionProcessRolesState
+            or type(self.after) is not ConnectionExistingSessionProcessRolesState
+        ):
+            raise TypeError("Connection session role patch requires exact before/after states")
+        for name in (
+            "transport_plan",
+            "shell_plan",
+            "user_manager_plan",
+            "winlogon_plan",
+            "explorer_plan",
+            "process_tree_root_plan",
+        ):
+            value = getattr(self, name)
+            if value is not None and type(value) is not ProcessMaterializationPlan:
+                raise TypeError(f"Connection session role {name} requires an exact process plan")
+        if type(self._expected_version) is not int or self._expected_version < 0:
+            raise TypeError("Connection session role patch requires an exact State version")
+        if self._expected_state_time is not None:
+            if type(self._expected_state_time) is not datetime:
+                raise TypeError("Connection session role patch State time must be exact")
+            object.__setattr__(self, "_expected_state_time", ensure_utc(self._expected_state_time))
+        if type(self._admission_epoch) is not int or self._admission_epoch < 0:
+            raise TypeError("Connection session role patch requires an exact admission epoch")
+        if type(self._capability) is not _ConnectionExistingSessionProcessRolesCapability:
+            raise TypeError("Connection session role patch capability has an unsupported type")
+
+    @property
+    def publication_token(self) -> str:
+        """Return the manager-authenticated exact role transition token."""
+
+        return self._integrity_token
+
+
+class _DeferredSessionStateAuthorityCapability:
+    """Exact identity for one State-issued deferred-session handoff."""
+
+    __slots__ = ("outer_authority", "outer_integrity", "payload")
+
+    def __init__(self) -> None:
+        self.payload: DeferredSessionStateAuthority | None = None
+        self.outer_authority: object | None = None
+        self.outer_integrity = ""
+
+    def bind_payload(self, payload: "DeferredSessionStateAuthority") -> None:
+        """Bind the capability to exactly one manager-issued payload."""
+
+        if self.payload is not None:
+            raise StateError("Deferred session State capability is already bound")
+        self.payload = payload
+
+    def bind_outer(self, outer_authority: object, integrity: str) -> None:
+        """Bind exactly once to the final resolved network-authority wrapper."""
+
+        if self.outer_authority is not None:
+            raise StateError("Deferred session State authority already owns a network handoff")
+        self.outer_authority = outer_authority
+        self.outer_integrity = integrity
+
+
+@dataclass(frozen=True, slots=True)
+class DeferredSessionStateAuthority:
+    """Exact State-owned batch/patch handoff for one deferred protocol root."""
+
+    protocol: DeferredSessionProtocol
+    binding_disposition: DeferredSessionBindingDisposition
+    bound_at: datetime
+    batch: MaterializationBatchPlan
+    existing_session_patch: ConnectionExistingSessionPatch | None
+    existing_session_process_roles_patch: ConnectionExistingSessionProcessRolesPatch | None
+    _owner: "StateManager" = field(repr=False, compare=False)
+    _owner_identity: int = field(repr=False)
+    _admission_epoch: int
+    _capability: _DeferredSessionStateAuthorityCapability = field(repr=False, compare=False)
+    _integrity_token: str = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Reject freely shaped wrappers before owner authentication."""
+
+        if type(self.protocol) is not DeferredSessionProtocol:
+            raise TypeError("Deferred session State authority requires an exact protocol")
+        if type(self.binding_disposition) is not DeferredSessionBindingDisposition:
+            raise TypeError("Deferred session State authority requires an exact disposition")
+        if type(self.bound_at) is not datetime:
+            raise TypeError("Deferred session State authority requires an exact binding time")
+        object.__setattr__(self, "bound_at", ensure_utc(self.bound_at))
+        if type(self.batch) is not MaterializationBatchPlan:
+            raise TypeError("Deferred session State authority requires an exact batch")
+        if self.existing_session_patch is not None and (
+            type(self.existing_session_patch) is not ConnectionExistingSessionPatch
+        ):
+            raise TypeError("Deferred session State authority has an unsupported session patch")
+        if self.existing_session_process_roles_patch is not None and (
+            type(self.existing_session_process_roles_patch)
+            is not ConnectionExistingSessionProcessRolesPatch
+        ):
+            raise TypeError("Deferred session State authority has an unsupported role patch")
+        if type(self._owner_identity) is not int or self._owner_identity <= 0:
+            raise TypeError("Deferred session State authority requires its exact owner identity")
+        if type(self._admission_epoch) is not int or self._admission_epoch < 0:
+            raise TypeError("Deferred session State authority requires an admission epoch")
+        if type(self._capability) is not _DeferredSessionStateAuthorityCapability:
+            raise TypeError("Deferred session State authority capability has an unsupported type")
+        if type(self._integrity_token) is not str or not self._integrity_token:
+            raise TypeError("Deferred session State authority requires an integrity token")
+
+    @property
+    def publication_token(self) -> str:
+        """Return the State-owner proof over every exact nested plan identity."""
+
+        return self._integrity_token
+
+    @property
+    def outer_bound(self) -> bool:
+        """Return whether the exact final network authority consumed this handoff."""
+
+        return self._capability.outer_authority is not None
+
+
+def _connection_existing_session_patch_integrity_token(
+    authority_secret: bytes,
+    before: ConnectionExistingSessionState,
+    after: ConnectionExistingSessionState,
+    *,
+    lifecycle_disposition: ConnectionExistingSessionLifecycleDisposition,
+    expected_version: int,
+    expected_state_time: datetime | None,
+    admission_epoch: int,
+) -> str:
+    """Authenticate one exact old-to-new existing-session transition."""
+
+    canonical = repr(
+        (
+            "connection-existing-session-patch-v2",
+            before,
+            after,
+            lifecycle_disposition,
+            expected_version,
+            expected_state_time,
+            admission_epoch,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+def _connection_existing_session_process_roles_integrity_token(
+    authority_secret: bytes,
+    patch: ConnectionExistingSessionProcessRolesPatch,
+) -> str:
+    """Authenticate one exact existing-session process-role transition."""
+
+    canonical = repr(
+        (
+            "connection-existing-session-process-roles-v1",
+            patch.target,
+            patch.before,
+            patch.after,
+            tuple(
+                (id(plan), plan.publication_token) if plan is not None else (0, "")
+                for plan in (
+                    patch.transport_plan,
+                    patch.shell_plan,
+                    patch.user_manager_plan,
+                    patch.winlogon_plan,
+                    patch.explorer_plan,
+                    patch.process_tree_root_plan,
+                )
+            ),
+            patch._expected_version,
+            patch._expected_state_time,
+            patch._admission_epoch,
+            id(patch._capability),
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+def _deferred_session_state_authority_integrity_token(
+    authority_secret: bytes,
+    *,
+    protocol: DeferredSessionProtocol,
+    binding_disposition: DeferredSessionBindingDisposition,
+    bound_at: datetime,
+    batch: MaterializationBatchPlan,
+    existing_session_patch: ConnectionExistingSessionPatch | None,
+    existing_session_process_roles_patch: ConnectionExistingSessionProcessRolesPatch | None,
+    owner_identity: int,
+    admission_epoch: int,
+    capability: _DeferredSessionStateAuthorityCapability,
+) -> str:
+    """Authenticate exact nested State plan identities and their stable order."""
+
+    canonical = repr(
+        (
+            "deferred-session-state-authority-v1",
+            protocol,
+            binding_disposition,
+            ensure_utc(bound_at),
+            owner_identity,
+            admission_epoch,
+            id(capability),
+            id(batch),
+            batch.publication_token,
+            (
+                (id(batch.session), batch.session.publication_token)
+                if batch.session is not None
+                else (0, "")
+            ),
+            tuple((id(plan), plan.publication_token) for plan in batch.processes),
+            (
+                (
+                    id(existing_session_patch),
+                    existing_session_patch._integrity_token,
+                )
+                if existing_session_patch is not None
+                else (0, "")
+            ),
+            (
+                (
+                    id(existing_session_process_roles_patch),
+                    existing_session_process_roles_patch.publication_token,
+                )
+                if existing_session_process_roles_patch is not None
+                else (0, "")
+            ),
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+def _deferred_session_outer_authority_integrity_token(
+    authority_secret: bytes,
+    payload: DeferredSessionStateAuthority,
+    outer_authority: object,
+) -> str:
+    """Bind one State payload to the exact final network-authority wrapper."""
+
+    batch = getattr(outer_authority, "state_batch", None)
+    patch = getattr(outer_authority, "existing_state_patch", None)
+    application_token = getattr(outer_authority, "application_token", None)
+    canonical = repr(
+        (
+            "deferred-session-state-outer-authority-v1",
+            id(payload),
+            payload.publication_token,
+            id(outer_authority),
+            getattr(outer_authority, "kind", None),
+            id(getattr(outer_authority, "coordinator", None)),
+            getattr(getattr(outer_authority, "coordinator", None), "coordinator_id", ""),
+            getattr(outer_authority, "bound_at", None),
+            getattr(outer_authority, "binding_disposition", None),
+            id(getattr(outer_authority, "strict_state_authority", None)),
+            getattr(outer_authority, "session_object_id", ""),
+            (id(batch), getattr(batch, "publication_token", "")),
+            (
+                id(patch),
+                getattr(patch, "_integrity_token", ""),
+            ),
+            id(getattr(outer_authority, "state_intent", None)),
+            id(getattr(outer_authority, "existing_state_intent", None)),
+            id(getattr(outer_authority, "live_state_intent", None)),
+            id(getattr(outer_authority, "application_intent", None)),
+            id(getattr(outer_authority, "application_manager", None)),
+            (
+                id(application_token),
+                getattr(application_token, "publication_token", ""),
+            ),
+            repr(getattr(outer_authority, "application_process_activity", ())),
+            repr(getattr(outer_authority, "application_session_activity", ())),
+            repr(getattr(outer_authority, "application_process_holds", ())),
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class PhysicalTransportFingerprint:
     """Immutable State-authenticated identity of one physical network transport."""
@@ -974,6 +1459,8 @@ class ConnectionCompositeMaterializationPlan:
     _mode: ConnectionMaterializationMode
     _parent_patch: _ConnectionParentAccountingPatch | None
     _batch: MaterializationBatchPlan | None
+    _existing_session_patch: ConnectionExistingSessionPatch | None
+    _existing_session_process_roles_patch: ConnectionExistingSessionProcessRolesPatch | None
     _process_activity: tuple[ProcessActivityPatch, ...]
     _session_activity: tuple[SessionActivityPatch, ...]
     _final_state_time: datetime
@@ -1059,6 +1546,20 @@ class ConnectionCompositeMaterializationPlan:
         """Return the optional session/process start batch."""
 
         return self._batch
+
+    @property
+    def existing_session_patch(self) -> ConnectionExistingSessionPatch | None:
+        """Return the optional exact protocol-session transition."""
+
+        return self._existing_session_patch
+
+    @property
+    def existing_session_process_roles_patch(
+        self,
+    ) -> ConnectionExistingSessionProcessRolesPatch | None:
+        """Return the optional exact target-session process-role transition."""
+
+        return self._existing_session_process_roles_patch
 
     @property
     def process_activity(self) -> tuple[ProcessActivityPatch, ...]:
@@ -2222,6 +2723,8 @@ def _connection_composite_integrity_token(
     mode: ConnectionMaterializationMode,
     parent_patch: _ConnectionParentAccountingPatch | None,
     batch: MaterializationBatchPlan | None,
+    existing_session_patch: ConnectionExistingSessionPatch | None,
+    existing_session_process_roles_patch: ConnectionExistingSessionProcessRolesPatch | None,
     process_activity: tuple[ProcessActivityPatch, ...],
     session_activity: tuple[SessionActivityPatch, ...],
     final_state_time: datetime,
@@ -2247,6 +2750,12 @@ def _connection_composite_integrity_token(
             mode,
             parent_patch,
             batch.publication_token if batch is not None else "",
+            existing_session_patch,
+            (
+                existing_session_process_roles_patch.publication_token
+                if existing_session_process_roles_patch is not None
+                else ""
+            ),
             process_activity,
             session_activity,
             final_state_time,
@@ -2260,6 +2769,7 @@ def _materialization_batch_integrity_token(
     *,
     expected_version: int,
     expected_state_time: datetime | None,
+    admission_epoch: int,
     final_state_time: datetime,
     session: SessionMaterializationPlan | None,
     processes: tuple[ProcessMaterializationPlan, ...],
@@ -2273,6 +2783,7 @@ def _materialization_batch_integrity_token(
             "materialization-batch",
             expected_version,
             expected_state_time,
+            admission_epoch,
             final_state_time,
             session.publication_token if session is not None else "",
             tuple(plan.publication_token for plan in processes),
@@ -3874,6 +4385,8 @@ class StateManager:
             mode=plan._mode,
             parent_patch=plan._parent_patch,
             batch=plan._batch,
+            existing_session_patch=plan._existing_session_patch,
+            existing_session_process_roles_patch=(plan._existing_session_process_roles_patch),
             process_activity=plan._process_activity,
             session_activity=plan._session_activity,
             final_state_time=plan._final_state_time,
@@ -3882,6 +4395,10 @@ class StateManager:
             raise StateError("Connection composite plan integrity validation failed")
 
     def _validate_materialization_batch_plan(self, plan: MaterializationBatchPlan) -> None:
+        if type(plan) is not MaterializationBatchPlan:
+            raise StateError("Materialization batch requires an exact plan type")
+        if type(plan._admission_epoch) is not int or plan._admission_epoch < 0:
+            raise StateError("Materialization batch admission epoch is malformed")
         session = plan._session
         if session is not None:
             self._validate_session_materialization_plan(session)
@@ -3917,6 +4434,7 @@ class StateManager:
             self._materialization_secret,
             expected_version=plan._expected_version,
             expected_state_time=plan._expected_state_time,
+            admission_epoch=plan._admission_epoch,
             final_state_time=plan._final_state_time,
             session=session,
             processes=plan._processes,
@@ -4953,6 +5471,7 @@ class StateManager:
             plan = MaterializationBatchPlan(
                 _expected_version=builder.expected_version,
                 _expected_state_time=builder._expected_state_time,
+                _admission_epoch=builder._admission_epoch,
                 _final_state_time=final_state_time,
                 _session=builder._session,
                 _processes=processes,
@@ -4962,6 +5481,7 @@ class StateManager:
                     self._materialization_secret,
                     expected_version=builder.expected_version,
                     expected_state_time=builder._expected_state_time,
+                    admission_epoch=builder._admission_epoch,
                     final_state_time=final_state_time,
                     session=builder._session,
                     processes=processes,
@@ -5084,6 +5604,10 @@ class StateManager:
         auth_session_ref: str = "",
         effective_uid: int | None = None,
         effective_gid: int | None = None,
+        network_close_time: datetime | None = None,
+        source_ready_time: datetime | None = None,
+        closure_owned_by_bundle: bool = False,
+        end_plan: SessionEndPlan | None = None,
     ) -> SessionMaterializationPlan:
         """Plan one exact session identity without consuming LUID/session allocators."""
 
@@ -5091,6 +5615,25 @@ class StateManager:
             if start_time is None and self.state.current_time is None:
                 raise StateError("Cannot plan session: current_time not set")
             session_start = ensure_utc(start_time or self.state.current_time)
+            ready_at = ensure_utc(source_ready_time) if source_ready_time is not None else None
+            closes_at = ensure_utc(network_close_time) if network_close_time is not None else None
+            if type(closure_owned_by_bundle) is not bool:
+                raise TypeError("Session closure ownership requires an exact bool")
+            if ready_at is not None and ready_at < session_start:
+                raise StateError("Session readiness cannot precede session start")
+            if closes_at is not None and closes_at < session_start:
+                raise StateError("Session network close cannot precede session start")
+            if ready_at is not None and closes_at is not None and ready_at >= closes_at:
+                raise StateError("Session readiness must precede its network close")
+            if end_plan is not None:
+                if type(end_plan) is not SessionEndPlan:
+                    raise TypeError("Session materialization requires an exact end plan")
+                end_plan = replace(
+                    end_plan,
+                    canonical_end=ensure_utc(end_plan.canonical_end),
+                )
+                if end_plan.canonical_end < session_start:
+                    raise StateError("Session end plan cannot precede session start")
             provided_logon_id = logon_id is not None
             host_base_patch: tuple[str, int] | None = None
             host_epoch_patch: tuple[str, datetime] | None = None
@@ -5175,6 +5718,10 @@ class StateManager:
                 effective_uid=effective_uid,
                 effective_gid=effective_gid,
                 state_time=session_start,
+                network_close_time=closes_at,
+                source_ready_time=ready_at,
+                closure_owned_by_bundle=closure_owned_by_bundle,
+                end_plan=end_plan,
             )
             allocator_patch = _SessionAllocatorPatch(
                 host_base=host_base_patch,
@@ -8215,6 +8762,10 @@ class StateManager:
             auth_session_ref=payload.auth_session_ref,
             effective_uid=payload.effective_uid,
             effective_gid=payload.effective_gid,
+            network_close_time=payload.network_close_time,
+            source_ready_time=payload.source_ready_time,
+            closure_owned_by_bundle=payload.closure_owned_by_bundle,
+            end_plan=payload.end_plan,
         )
         linux_logind = plan._allocator_patch.linux_logind
         return _PreparedActionCohortSessionStart(
@@ -9777,6 +10328,8 @@ class StateManager:
                 raise StateError("Materialization batch became stale before commit")
             if self.state.current_time != plan._expected_state_time:
                 raise StateError("Materialization batch state-time fence changed before commit")
+            if not self._materialization_batch_admission_epoch_matches(plan):
+                raise StateError("Materialization batch crossed its State admission fence")
             session = plan.session
             if session is not None:
                 identity = session.identity
@@ -11320,6 +11873,1018 @@ class StateManager:
             duration=connection.duration,
         )
 
+    def _connection_existing_session_state(
+        self,
+        identity: SessionIdentity,
+    ) -> ConnectionExistingSessionState:
+        """Snapshot one exact active session for an RDP transport transition."""
+
+        session = self._active_sessions.get(self._resolve_logon_id(identity.logon_id))
+        if (
+            session is None
+            or session.ecar_object_id != identity.object_id
+            or self.get_session_identity(session.logon_id) != identity
+        ):
+            raise StateError("RDP connection session identity is absent or drifted")
+        return ConnectionExistingSessionState(
+            identity=identity,
+            logon_type=session.logon_type,
+            source_ip=session.source_ip,
+            source_port=session.source_port,
+            transport_pid=session.transport_pid,
+            network_close_time=session.network_close_time,
+            source_ready_time=session.source_ready_time,
+            closure_owned_by_bundle=session.closure_owned_by_bundle,
+            end_plan=session.end_plan,
+        )
+
+    def _connection_existing_session_process_roles_state(
+        self,
+        identity: SessionIdentity,
+    ) -> ConnectionExistingSessionProcessRolesState:
+        """Snapshot every mutable process role for one exact live session."""
+
+        session = self._active_sessions.get(self._resolve_logon_id(identity.logon_id))
+        if (
+            session is None
+            or session.ecar_object_id != identity.object_id
+            or self.get_session_identity(session.logon_id) != identity
+        ):
+            raise StateError("Connection session process-role identity is absent or drifted")
+        return ConnectionExistingSessionProcessRolesState(
+            transport_pid=session.transport_pid,
+            session_shell_pid=session.session_shell_pid,
+            session_user_manager_pid=session.session_user_manager_pid,
+            session_winlogon_pid=session.session_winlogon_pid,
+            explorer_pid=session.explorer_pid,
+            initial_explorer_pid=session.initial_explorer_pid,
+            process_tree_root=session.process_tree_root,
+            windows_shell_bootstrapped=session.windows_shell_bootstrapped,
+        )
+
+    def prepare_connection_existing_session_start_patch(
+        self,
+        identity: SessionIdentity,
+        *,
+        username: str,
+        target_system: str,
+        start_time: datetime,
+        source_ready_time: datetime,
+        source_ip: str,
+        source_port: int,
+        transport_pid: int | None,
+        lifecycle_group_id: str,
+        network_close_time: datetime,
+        session_kind: str,
+        closure_owned_by_bundle: bool = False,
+        end_plan: SessionEndPlan | None = None,
+    ) -> ConnectionExistingSessionPatch:
+        """Prepare an exact unpublished RDP/SSH session transition."""
+
+        with self._capability_minting_guard("prepare_connection_existing_session_start_patch"):
+            if type(identity) is not SessionIdentity:
+                raise TypeError("Connection session start patch requires an exact identity")
+            if identity.hostname != target_system:
+                raise StateError("Connection session start patch targets another session host")
+            if session_kind not in {"rdp", "ssh"}:
+                raise StateError("Connection session start patch requires RDP or SSH ownership")
+            if not username.strip() or not lifecycle_group_id.strip():
+                raise StateError(
+                    "Connection session start patch requires a principal and lifecycle group"
+                )
+            if type(closure_owned_by_bundle) is not bool:
+                raise TypeError("Connection session closure ownership requires an exact bool")
+            before = self._connection_existing_session_state(identity)
+            if before.logon_type != 10 or identity.session_kind != session_kind:
+                raise StateError(
+                    "Connection session start patch requires a live Type-10 protocol session"
+                )
+            if before.network_close_time is not None or before.source_ready_time is not None:
+                raise StateError(
+                    "Connection session start patch cannot repurpose a transport-bound session"
+                )
+            started_at = ensure_utc(start_time)
+            ready_at = ensure_utc(source_ready_time)
+            closed_at = ensure_utc(network_close_time)
+            if ready_at < started_at or closed_at <= ready_at:
+                raise StateError(
+                    "Connection session start patch requires ordered start/readiness/close"
+                )
+            normalized_end = end_plan
+            if normalized_end is not None:
+                if type(normalized_end) is not SessionEndPlan:
+                    raise TypeError("Connection session start requires an exact end plan")
+                normalized_end = replace(
+                    normalized_end,
+                    canonical_end=ensure_utc(normalized_end.canonical_end),
+                )
+                if normalized_end.canonical_end < closed_at:
+                    raise StateError("Connection session end plan precedes its network close")
+            after_identity = replace(
+                identity,
+                principal=username,
+                session_kind=session_kind,
+                started_at=started_at,
+                lifecycle_group_id=lifecycle_group_id,
+                logon_guid=(
+                    identity.logon_guid
+                    or self._stable_logon_guid(identity.hostname, identity.logon_id)
+                ),
+            )
+            after = ConnectionExistingSessionState(
+                identity=after_identity,
+                logon_type=10,
+                source_ip=source_ip,
+                source_port=source_port,
+                transport_pid=transport_pid,
+                network_close_time=closed_at,
+                source_ready_time=ready_at,
+                closure_owned_by_bundle=closure_owned_by_bundle,
+                end_plan=normalized_end,
+            )
+            expected_version = self._materialization_version
+            expected_state_time = self.state.current_time
+            admission_epoch = self._prepared_state_admission_epoch
+            disposition = ConnectionExistingSessionLifecycleDisposition.START
+            return ConnectionExistingSessionPatch(
+                before=before,
+                after=after,
+                lifecycle_disposition=disposition,
+                _expected_version=expected_version,
+                _expected_state_time=expected_state_time,
+                _admission_epoch=admission_epoch,
+                _integrity_token=_connection_existing_session_patch_integrity_token(
+                    self._materialization_secret,
+                    before,
+                    after,
+                    lifecycle_disposition=disposition,
+                    expected_version=expected_version,
+                    expected_state_time=expected_state_time,
+                    admission_epoch=admission_epoch,
+                ),
+            )
+
+    def prepare_rdp_connection_existing_session_patch(
+        self,
+        identity: SessionIdentity,
+        *,
+        username: str,
+        target_system: str,
+        start_time: datetime,
+        source_ip: str,
+        source_port: int,
+        transport_pid: int | None,
+        lifecycle_group_id: str,
+        network_close_time: datetime,
+    ) -> ConnectionExistingSessionPatch:
+        """Prepare an allocation-free exact preallocated-session RDP transition."""
+
+        return self.prepare_connection_existing_session_start_patch(
+            identity,
+            username=username,
+            target_system=target_system,
+            start_time=start_time,
+            source_ready_time=start_time,
+            source_ip=source_ip,
+            source_port=source_port,
+            transport_pid=transport_pid,
+            lifecycle_group_id=lifecycle_group_id,
+            network_close_time=network_close_time,
+            session_kind="rdp",
+        )
+
+    def prepare_connection_live_session_patch(
+        self,
+        identity: SessionIdentity,
+        *,
+        source_ip: str,
+        source_port: int,
+        transport_pid: int | None,
+        source_ready_time: datetime | None,
+        network_close_time: datetime,
+        end_plan: SessionEndPlan | None = None,
+    ) -> ConnectionExistingSessionPatch:
+        """Prepare an exact metadata transition for an already-published session."""
+
+        with self._capability_minting_guard("prepare_connection_live_session_patch"):
+            if type(identity) is not SessionIdentity:
+                raise TypeError("Live connection patch requires an exact session identity")
+            before = self._connection_existing_session_state(identity)
+            if identity.session_kind not in {"rdp", "ssh"}:
+                raise StateError("Live connection patch requires an RDP or SSH session")
+            closed_at = ensure_utc(network_close_time)
+            ready_at = ensure_utc(source_ready_time) if source_ready_time is not None else None
+            if ready_at is not None and closed_at <= ready_at:
+                raise StateError("Live connection patch requires close after readiness")
+            selected_end = before.end_plan
+            if end_plan is not None:
+                if type(end_plan) is not SessionEndPlan:
+                    raise TypeError("Live connection patch requires an exact end plan")
+                normalized_end = replace(
+                    end_plan,
+                    canonical_end=ensure_utc(end_plan.canonical_end),
+                )
+                if normalized_end.canonical_end < closed_at:
+                    raise StateError("Live connection session end plan precedes network close")
+                if (
+                    selected_end is not None
+                    and selected_end.is_hard_deadline
+                    and selected_end != normalized_end
+                ):
+                    raise StateError("Live connection cannot replace a hard session end plan")
+                selected_end = normalized_end
+            after = ConnectionExistingSessionState(
+                identity=identity,
+                logon_type=before.logon_type,
+                source_ip=source_ip,
+                source_port=source_port,
+                transport_pid=transport_pid,
+                network_close_time=closed_at,
+                source_ready_time=ready_at,
+                closure_owned_by_bundle=before.closure_owned_by_bundle,
+                end_plan=selected_end,
+            )
+            expected_version = self._materialization_version
+            expected_state_time = self.state.current_time
+            admission_epoch = self._prepared_state_admission_epoch
+            disposition = ConnectionExistingSessionLifecycleDisposition.EXISTING
+            return ConnectionExistingSessionPatch(
+                before=before,
+                after=after,
+                lifecycle_disposition=disposition,
+                _expected_version=expected_version,
+                _expected_state_time=expected_state_time,
+                _admission_epoch=admission_epoch,
+                _integrity_token=_connection_existing_session_patch_integrity_token(
+                    self._materialization_secret,
+                    before,
+                    after,
+                    lifecycle_disposition=disposition,
+                    expected_version=expected_version,
+                    expected_state_time=expected_state_time,
+                    admission_epoch=admission_epoch,
+                ),
+            )
+
+    def _validate_connection_existing_session_patch_preimage(
+        self,
+        patch: ConnectionExistingSessionPatch,
+    ) -> None:
+        """Authenticate one exact live-session transition and its State fence."""
+
+        if type(patch) is not ConnectionExistingSessionPatch:
+            raise StateError("Connection composite has an unsupported session patch")
+        expected_integrity = _connection_existing_session_patch_integrity_token(
+            self._materialization_secret,
+            patch.before,
+            patch.after,
+            lifecycle_disposition=patch.lifecycle_disposition,
+            expected_version=patch._expected_version,
+            expected_state_time=patch._expected_state_time,
+            admission_epoch=patch._admission_epoch,
+        )
+        if not hmac.compare_digest(patch._integrity_token, expected_integrity):
+            raise StateError("Connection session patch integrity validation failed")
+        admission_epoch_matches = patch._admission_epoch == self._prepared_state_admission_epoch
+        active_claim = self._active_prepared_state_claim
+        if (
+            not admission_epoch_matches
+            and type(active_claim) is _PreparedConnectionCompositeMaterializationRecord
+            and active_claim.plan.existing_session_patch is patch
+            and active_claim.claim_epoch == self._prepared_state_admission_epoch
+            and patch._admission_epoch + 1 == active_claim.claim_epoch
+        ):
+            admission_epoch_matches = True
+        if (
+            patch._expected_version != self._materialization_version
+            or patch._expected_state_time != self.state.current_time
+            or not admission_epoch_matches
+        ):
+            raise StateError("Connection session patch crossed its State admission fence")
+        if self._connection_existing_session_state(patch.before.identity) != patch.before:
+            raise StateError("Connection session before-state drifted")
+
+    def _validate_rdp_connection_existing_session_patch(
+        self,
+        patch: ConnectionExistingSessionPatch,
+        transaction: NetworkTransactionPlan,
+        *,
+        initiating_pid: int,
+    ) -> None:
+        """Recheck an exact preallocated-session transition at the State fence."""
+
+        self._validate_connection_existing_session_patch_preimage(patch)
+        after = patch.after
+        identity = after.identity
+        disposition = patch.lifecycle_disposition
+        expected_port = 3389 if identity.session_kind == "rdp" else 22
+        if (
+            transaction.protocol.casefold() != "tcp"
+            or transaction.dst_port != expected_port
+            or transaction.outcome != "success"
+            or transaction.conn_state.upper() != "SF"
+            or transaction.closed_at is None
+        ):
+            raise StateError("Connection session patch requires a successful protocol root")
+        if (
+            after.source_ip != transaction.src_ip
+            or after.source_port != transaction.src_port
+            or after.network_close_time != transaction.closed_at
+        ):
+            raise StateError("Connection session source/timing disagrees with its transport")
+        if disposition is ConnectionExistingSessionLifecycleDisposition.START:
+            if after.logon_type != 10 or identity.session_kind not in {"rdp", "ssh"}:
+                raise StateError("Connection session start patch lost its Type-10 identity")
+            if not transaction.started_at <= identity.started_at < transaction.closed_at:
+                raise StateError("Connection session start falls outside its transport")
+            if after.source_ready_time is None or not (
+                identity.started_at <= after.source_ready_time < transaction.closed_at
+            ):
+                raise StateError("Connection session readiness disagrees with authentication")
+            if identity.session_kind == "rdp" and after.source_ready_time != identity.started_at:
+                raise StateError("RDP session readiness must equal its authentication start")
+            expected_transport_pid = (
+                initiating_pid
+                if identity.session_kind == "rdp" and initiating_pid > 0
+                else transaction.responding_pid
+                if identity.session_kind == "ssh" and transaction.responding_pid > 0
+                else None
+            )
+            if after.transport_pid != expected_transport_pid:
+                raise StateError("Connection session process disagrees with its transport owner")
+        else:
+            if identity.session_kind not in {"rdp", "ssh"}:
+                raise StateError("Existing connection session has an unsupported kind")
+            if after.source_ready_time is not None and not (
+                transaction.started_at <= after.source_ready_time < transaction.closed_at
+            ):
+                raise StateError("Existing connection session readiness falls outside transport")
+
+    def _validate_connection_existing_session_process_batch(
+        self,
+        patch: ConnectionExistingSessionPatch,
+        batch: MaterializationBatchPlan,
+    ) -> None:
+        """Bind a process-only start batch to one exact patched session preimage."""
+
+        if type(patch) is not ConnectionExistingSessionPatch:
+            raise StateError("Existing-session process batch requires an exact session patch")
+        if type(batch) is not MaterializationBatchPlan or batch.session is not None:
+            raise StateError("Existing-session process batch cannot contain a State session")
+        if (
+            batch.expected_version != patch._expected_version
+            or batch._expected_state_time != patch._expected_state_time
+            or batch.admission_epoch != patch._admission_epoch
+        ):
+            raise StateError("Existing-session process batch crossed its session patch State fence")
+        target = patch.after
+        target_identity = target.identity
+        target_logon_id = self._resolve_logon_id(target_identity.logon_id)
+        seen_objects: set[str] = set()
+        seen_instances: set[tuple[str, int]] = set()
+        for process in batch.processes:
+            identity = process.identity
+            instance = (identity.hostname, identity.pid)
+            if identity.object_id in seen_objects or instance in seen_instances:
+                raise StateError("Existing-session process batch repeats a process member")
+            seen_objects.add(identity.object_id)
+            seen_instances.add(instance)
+            if not identity.logon_id:
+                continue
+            process_logon_id = self._resolve_logon_id(identity.logon_id)
+            if process_logon_id != target_logon_id:
+                continue
+            if identity.hostname != target_identity.hostname:
+                raise StateError(
+                    "Existing-session process cannot bind the target LogonID across hosts"
+                )
+            if identity.started_at < target_identity.started_at:
+                raise StateError(
+                    "Existing-session process cannot predate its patched target session"
+                )
+            if (
+                process.auth_session_id != target_identity.session_id
+                or process.auth_logon_type != target.logon_type
+            ):
+                raise StateError(
+                    "Existing-session process authentication disagrees with its target session"
+                )
+
+    @staticmethod
+    def _connection_existing_session_role_plans(
+        patch: ConnectionExistingSessionProcessRolesPatch,
+    ) -> tuple[tuple[str, ProcessMaterializationPlan | None], ...]:
+        """Return one stable ordered view of every target-session role plan."""
+
+        return (
+            ("transport", patch.transport_plan),
+            ("shell", patch.shell_plan),
+            ("user_manager", patch.user_manager_plan),
+            ("winlogon", patch.winlogon_plan),
+            ("explorer", patch.explorer_plan),
+            ("process_tree_root", patch.process_tree_root_plan),
+        )
+
+    @staticmethod
+    def _connection_existing_session_expected_role_state(
+        patch: ConnectionExistingSessionProcessRolesPatch,
+    ) -> ConnectionExistingSessionProcessRolesState:
+        """Derive the only valid role postimage from exact member plans."""
+
+        before = patch.before
+        explorer_pid = (
+            patch.explorer_plan.identity.pid
+            if patch.explorer_plan is not None
+            else before.explorer_pid
+        )
+        return replace(
+            before,
+            transport_pid=(
+                patch.transport_plan.identity.pid
+                if patch.transport_plan is not None
+                else before.transport_pid
+            ),
+            session_shell_pid=(
+                patch.shell_plan.identity.pid
+                if patch.shell_plan is not None
+                else before.session_shell_pid
+            ),
+            session_user_manager_pid=(
+                patch.user_manager_plan.identity.pid
+                if patch.user_manager_plan is not None
+                else before.session_user_manager_pid
+            ),
+            session_winlogon_pid=(
+                patch.winlogon_plan.identity.pid
+                if patch.winlogon_plan is not None
+                else before.session_winlogon_pid
+            ),
+            explorer_pid=explorer_pid,
+            initial_explorer_pid=(
+                explorer_pid
+                if patch.explorer_plan is not None and before.initial_explorer_pid is None
+                else before.initial_explorer_pid
+            ),
+            process_tree_root=(
+                patch.process_tree_root_plan.identity.pid
+                if patch.process_tree_root_plan is not None
+                else before.process_tree_root
+            ),
+            windows_shell_bootstrapped=(
+                True if patch.explorer_plan is not None else before.windows_shell_bootstrapped
+            ),
+        )
+
+    def prepare_connection_existing_session_process_roles_patch(
+        self,
+        existing_session_patch: ConnectionExistingSessionPatch,
+        batch: MaterializationBatchPlan,
+        *,
+        transport_plan: ProcessMaterializationPlan | None = None,
+        shell_plan: ProcessMaterializationPlan | None = None,
+        user_manager_plan: ProcessMaterializationPlan | None = None,
+        winlogon_plan: ProcessMaterializationPlan | None = None,
+        explorer_plan: ProcessMaterializationPlan | None = None,
+        process_tree_root_plan: ProcessMaterializationPlan | None = None,
+    ) -> ConnectionExistingSessionProcessRolesPatch:
+        """Prepare target-session roles backed by exact process-only batch members."""
+
+        with self._capability_minting_guard(
+            "prepare_connection_existing_session_process_roles_patch"
+        ):
+            self._validate_connection_existing_session_patch_preimage(existing_session_patch)
+            self.validate_materialization_batch(batch)
+            self._validate_connection_existing_session_process_batch(
+                existing_session_patch,
+                batch,
+            )
+            plans = (
+                transport_plan,
+                shell_plan,
+                user_manager_plan,
+                winlogon_plan,
+                explorer_plan,
+                process_tree_root_plan,
+            )
+            if not any(plan is not None for plan in plans):
+                raise StateError("Connection session process-role patch cannot be empty")
+            current = self._connection_existing_session_process_roles_state(
+                existing_session_patch.before.identity
+            )
+            before = replace(
+                current,
+                transport_pid=existing_session_patch.after.transport_pid,
+            )
+            capability = _ConnectionExistingSessionProcessRolesCapability()
+            patch = ConnectionExistingSessionProcessRolesPatch(
+                target=existing_session_patch.after.identity,
+                before=before,
+                after=before,
+                transport_plan=transport_plan,
+                shell_plan=shell_plan,
+                user_manager_plan=user_manager_plan,
+                winlogon_plan=winlogon_plan,
+                explorer_plan=explorer_plan,
+                process_tree_root_plan=process_tree_root_plan,
+                _expected_version=existing_session_patch._expected_version,
+                _expected_state_time=existing_session_patch._expected_state_time,
+                _admission_epoch=existing_session_patch._admission_epoch,
+                _capability=capability,
+                _integrity_token="",
+            )
+            object.__setattr__(
+                patch,
+                "after",
+                self._connection_existing_session_expected_role_state(patch),
+            )
+            object.__setattr__(
+                patch,
+                "_integrity_token",
+                _connection_existing_session_process_roles_integrity_token(
+                    self._materialization_secret,
+                    patch,
+                ),
+            )
+            capability.bind(patch)
+            self._validate_connection_existing_session_process_roles_patch(
+                patch,
+                existing_session_patch=existing_session_patch,
+                batch=batch,
+            )
+            return patch
+
+    def prepare_deferred_session_state_authority(
+        self,
+        *,
+        protocol: DeferredSessionProtocol,
+        binding_disposition: DeferredSessionBindingDisposition,
+        bound_at: datetime,
+        batch: MaterializationBatchPlan,
+        existing_session_patch: ConnectionExistingSessionPatch | None = None,
+        existing_session_process_roles_patch: (
+            ConnectionExistingSessionProcessRolesPatch | None
+        ) = None,
+    ) -> DeferredSessionStateAuthority:
+        """Issue one exact strict deferred-session State handoff."""
+
+        with self._capability_minting_guard("prepare_deferred_session_state_authority"):
+            capability = _DeferredSessionStateAuthorityCapability()
+            owner_identity = id(self)
+            admission_epoch = batch.admission_epoch
+            integrity = _deferred_session_state_authority_integrity_token(
+                self._materialization_secret,
+                protocol=protocol,
+                binding_disposition=binding_disposition,
+                bound_at=bound_at,
+                batch=batch,
+                existing_session_patch=existing_session_patch,
+                existing_session_process_roles_patch=(existing_session_process_roles_patch),
+                owner_identity=owner_identity,
+                admission_epoch=admission_epoch,
+                capability=capability,
+            )
+            payload = DeferredSessionStateAuthority(
+                protocol=protocol,
+                binding_disposition=binding_disposition,
+                bound_at=bound_at,
+                batch=batch,
+                existing_session_patch=existing_session_patch,
+                existing_session_process_roles_patch=(existing_session_process_roles_patch),
+                _owner=self,
+                _owner_identity=owner_identity,
+                _admission_epoch=admission_epoch,
+                _capability=capability,
+                _integrity_token=integrity,
+            )
+            capability.bind_payload(payload)
+            self._validate_deferred_session_state_authority(payload)
+            return payload
+
+    def authenticates_deferred_session_state_authority(
+        self,
+        payload: object,
+        *,
+        outer_authority: object | None = None,
+    ) -> bool:
+        """Return whether this owner issued the intact exact payload and outer binding."""
+
+        try:
+            with self._capability_minting_guard("authenticates_deferred_session_state_authority"):
+                self._validate_deferred_session_state_authority(
+                    payload,
+                    outer_authority=outer_authority,
+                )
+        except (AttributeError, StateError, TypeError, ValueError):
+            return False
+        return True
+
+    def authenticates_deferred_session_state_payload(self, payload: object) -> bool:
+        """Authenticate payload contents before or after its exact outer binding."""
+
+        try:
+            with self._capability_minting_guard("authenticates_deferred_session_state_payload"):
+                self._validate_deferred_session_state_authority(
+                    payload,
+                    allow_bound_without_outer=True,
+                )
+        except (AttributeError, StateError, TypeError, ValueError):
+            return False
+        return True
+
+    def bind_deferred_session_state_authority(
+        self,
+        payload: DeferredSessionStateAuthority,
+        outer_authority: object,
+    ) -> None:
+        """Bind a strict State handoff to its final resolved network authority once."""
+
+        from evidenceforge.generation.actions.network_connection import (
+            DeferredSessionNetworkAuthority,
+        )
+
+        with self._capability_minting_guard("bind_deferred_session_state_authority"):
+            self._validate_deferred_session_state_authority(payload)
+            if type(outer_authority) is not DeferredSessionNetworkAuthority:
+                raise StateError(
+                    "Deferred session State authority requires the exact network wrapper"
+                )
+            if outer_authority.strict_state_authority is not payload:
+                raise StateError("Deferred session State authority was replaced in transit")
+            if outer_authority.strict_state_authority_bound:
+                raise StateError("Deferred session State authority network handoff was replayed")
+            if outer_authority.kind.value != payload.protocol.value:
+                raise StateError("Deferred session State authority crossed protocol owners")
+            if outer_authority.binding_disposition is not payload.binding_disposition:
+                raise StateError("Deferred session State disposition changed in transit")
+            integrity = _deferred_session_outer_authority_integrity_token(
+                self._materialization_secret,
+                payload,
+                outer_authority,
+            )
+            payload._capability.bind_outer(outer_authority, integrity)
+
+    def _validate_deferred_session_state_authority(
+        self,
+        payload: object,
+        *,
+        outer_authority: object | None = None,
+        allow_bound_without_outer: bool = False,
+    ) -> None:
+        """Authenticate one strict payload without changing State or its capability."""
+
+        if type(payload) is not DeferredSessionStateAuthority:
+            raise StateError("Deferred session State authority has an unsupported exact type")
+        assert isinstance(payload, DeferredSessionStateAuthority)
+        if payload._owner is not self or payload._owner_identity != id(self):
+            raise StateError("Deferred session State authority belongs to another owner")
+        if payload._capability.payload is not payload:
+            raise StateError("Deferred session State authority is not its exact capability")
+        if payload._admission_epoch != payload.batch.admission_epoch:
+            raise StateError("Deferred session State authority changed its admission epoch")
+        expected = _deferred_session_state_authority_integrity_token(
+            self._materialization_secret,
+            protocol=payload.protocol,
+            binding_disposition=payload.binding_disposition,
+            bound_at=payload.bound_at,
+            batch=payload.batch,
+            existing_session_patch=payload.existing_session_patch,
+            existing_session_process_roles_patch=(payload.existing_session_process_roles_patch),
+            owner_identity=payload._owner_identity,
+            admission_epoch=payload._admission_epoch,
+            capability=payload._capability,
+        )
+        if not hmac.compare_digest(payload.publication_token, expected):
+            raise StateError("Deferred session State authority integrity validation failed")
+        self.validate_materialization_batch(payload.batch)
+        if not payload.batch.processes:
+            raise StateError("Deferred session State authority requires process members")
+        self._validate_deferred_session_state_authority_semantics(payload)
+        if outer_authority is None:
+            if payload._capability.outer_authority is not None and not allow_bound_without_outer:
+                raise StateError("Deferred session State authority already owns a network handoff")
+            return
+        if payload._capability.outer_authority is not outer_authority:
+            raise StateError("Deferred session State authority owns another network wrapper")
+        outer_integrity = _deferred_session_outer_authority_integrity_token(
+            self._materialization_secret,
+            payload,
+            outer_authority,
+        )
+        if not hmac.compare_digest(payload._capability.outer_integrity, outer_integrity):
+            raise StateError("Deferred session outer network authority integrity failed")
+
+    def _validate_deferred_session_state_authority_semantics(
+        self,
+        payload: DeferredSessionStateAuthority,
+    ) -> None:
+        """Require the exact NEW/PREALLOCATED/ACTIVE State member shape."""
+
+        disposition = payload.binding_disposition
+        batch = payload.batch
+        patch = payload.existing_session_patch
+        roles = payload.existing_session_process_roles_patch
+        if disposition is DeferredSessionBindingDisposition.NEW_SESSION:
+            if patch is not None or roles is not None or batch.session is None:
+                raise StateError(
+                    "NEW deferred session authority requires only a session+process batch"
+                )
+            if batch.session.identity.session_kind != payload.protocol.value:
+                raise StateError("NEW deferred session authority changed protocol identity")
+            expected_bound = (
+                batch.session._payload.source_ready_time or batch.session.identity.started_at
+            )
+            if payload.bound_at != expected_bound:
+                raise StateError("NEW deferred session authority changed its binding time")
+            self._validate_new_deferred_session_process_shape(payload)
+            return
+
+        if batch.session is not None or patch is None:
+            raise StateError(
+                "Existing deferred session authority requires a process-only batch and patch"
+            )
+        expected_lifecycle_disposition = (
+            ConnectionExistingSessionLifecycleDisposition.START
+            if disposition is DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START
+            else ConnectionExistingSessionLifecycleDisposition.EXISTING
+        )
+        if patch.lifecycle_disposition is not expected_lifecycle_disposition:
+            raise StateError("Deferred session binding disposition disagrees with its patch")
+        if patch.after.identity.session_kind != payload.protocol.value:
+            raise StateError("Deferred existing session authority changed protocol identity")
+        expected_bound = patch.after.source_ready_time or patch.after.identity.started_at
+        if payload.bound_at != expected_bound:
+            raise StateError("Deferred existing session authority changed its binding time")
+        self._validate_connection_existing_session_patch_preimage(patch)
+        self._validate_connection_existing_session_process_batch(patch, batch)
+        target_plans = tuple(
+            plan
+            for plan in batch.processes
+            if plan.identity.hostname == patch.after.identity.hostname
+        )
+        self._validate_deferred_cross_host_processes(payload, target_plans)
+        if (
+            disposition is DeferredSessionBindingDisposition.ACTIVE_SESSION
+            and payload.protocol is DeferredSessionProtocol.RDP
+            and target_plans
+        ):
+            raise StateError("ACTIVE RDP reconnect cannot start target-session processes")
+        if (
+            disposition is DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START
+            and not target_plans
+        ):
+            raise StateError("PREALLOCATED deferred session requires target process members")
+        if target_plans:
+            if roles is None:
+                raise StateError(
+                    "Deferred target process members require an exact session role patch"
+                )
+            self._validate_connection_existing_session_process_roles_patch(
+                roles,
+                existing_session_patch=patch,
+                batch=batch,
+            )
+            role_plans = {
+                id(plan)
+                for _role, plan in self._connection_existing_session_role_plans(roles)
+                if plan is not None
+            }
+            if role_plans != {id(plan) for plan in target_plans}:
+                raise StateError("Deferred target process members and role patch disagree exactly")
+        elif roles is not None:
+            raise StateError("Source-only deferred session cannot carry target role bindings")
+
+    def _validate_new_deferred_session_process_shape(
+        self,
+        payload: DeferredSessionStateAuthority,
+    ) -> None:
+        """Require new target members to be exact session-linked process roles."""
+
+        batch = payload.batch
+        session = batch.session
+        assert session is not None
+        target_plans = tuple(
+            plan for plan in batch.processes if plan.identity.hostname == session.identity.hostname
+        )
+        if not target_plans:
+            raise StateError("NEW deferred session requires target process members")
+        self._validate_deferred_cross_host_processes(payload, target_plans)
+        links = batch._session_process_links
+        ordered_indexes = (
+            links.transport,
+            links.shell,
+            links.user_manager,
+            links.winlogon,
+            links.explorer,
+            links.process_tree_root,
+        )
+        linked_plans = {id(batch.processes[index]) for index in ordered_indexes if index >= 0}
+        if linked_plans != {id(plan) for plan in target_plans}:
+            raise StateError("NEW deferred target processes lack exact session role bindings")
+        if payload.protocol is DeferredSessionProtocol.SSH:
+            if (
+                links.transport < 0
+                or links.process_tree_root != links.transport
+                or any(index >= 0 for index in (links.user_manager, links.winlogon, links.explorer))
+            ):
+                raise StateError("NEW SSH session has invalid receiver process roles")
+        elif (
+            links.transport >= 0
+            or links.shell >= 0
+            or min(
+                links.user_manager,
+                links.winlogon,
+                links.explorer,
+                links.process_tree_root,
+            )
+            < 0
+            or links.process_tree_root != links.winlogon
+        ):
+            raise StateError("NEW RDP session has invalid target process roles")
+
+    def _validate_deferred_cross_host_processes(
+        self,
+        payload: DeferredSessionStateAuthority,
+        target_plans: tuple[ProcessMaterializationPlan, ...],
+    ) -> None:
+        """Reject disguised same-host sources and foreign cross-host sessions."""
+
+        target_ids = {id(plan) for plan in target_plans}
+        target_identity = (
+            payload.batch.session.identity
+            if payload.batch.session is not None
+            else payload.existing_session_patch.after.identity
+            if payload.existing_session_patch is not None
+            else None
+        )
+        assert target_identity is not None
+        for plan in payload.batch.processes:
+            identity = plan.identity
+            if id(plan) in target_ids:
+                continue
+            if identity.hostname == target_identity.hostname:
+                raise StateError(
+                    "Deferred source process cannot disguise itself on the target host"
+                )
+            if not identity.logon_id:
+                continue
+            source_session = self.get_session_identity(identity.logon_id)
+            if (
+                source_session is None
+                or source_session.hostname != identity.hostname
+                or plan.auth_session_id != source_session.session_id
+            ):
+                raise StateError(
+                    "Deferred cross-host process requires its exact live State session"
+                )
+
+    def _validate_connection_existing_session_process_roles_patch(
+        self,
+        patch: ConnectionExistingSessionProcessRolesPatch,
+        *,
+        existing_session_patch: ConnectionExistingSessionPatch,
+        batch: MaterializationBatchPlan,
+    ) -> None:
+        """Authenticate exact role membership and before/after projections."""
+
+        if type(patch) is not ConnectionExistingSessionProcessRolesPatch:
+            raise StateError("Connection session process-role patch has an unsupported type")
+        if patch._capability.patch is not patch:
+            raise StateError("Connection session process-role patch is not its exact capability")
+        expected_integrity = _connection_existing_session_process_roles_integrity_token(
+            self._materialization_secret,
+            patch,
+        )
+        if not hmac.compare_digest(patch._integrity_token, expected_integrity):
+            raise StateError("Connection session process-role patch integrity validation failed")
+        if (
+            patch.target != existing_session_patch.after.identity
+            or patch._expected_version != existing_session_patch._expected_version
+            or patch._expected_state_time != existing_session_patch._expected_state_time
+            or patch._admission_epoch != existing_session_patch._admission_epoch
+            or batch.expected_version != patch._expected_version
+            or batch._expected_state_time != patch._expected_state_time
+            or batch.admission_epoch != patch._admission_epoch
+        ):
+            raise StateError("Connection session process-role patch crossed its exact State fence")
+        current = self._connection_existing_session_process_roles_state(
+            existing_session_patch.before.identity
+        )
+        expected_before = replace(
+            current,
+            transport_pid=existing_session_patch.after.transport_pid,
+        )
+        if patch.before != expected_before:
+            raise StateError("Connection session process-role before-state drifted")
+
+        role_plans = self._connection_existing_session_role_plans(patch)
+        if not any(plan is not None for _role, plan in role_plans):
+            raise StateError("Connection session process-role patch cannot be empty")
+        target = patch.target
+        target_logon_id = self._resolve_logon_id(target.logon_id)
+        for role, plan in role_plans:
+            if plan is None:
+                continue
+            if not any(plan is member for member in batch.processes):
+                raise StateError(f"Connection session {role} role replaced its exact batch member")
+            identity = plan.identity
+            if identity.hostname != target.hostname:
+                raise StateError(f"Connection session {role} role belongs to another host")
+            if identity.started_at < target.started_at:
+                raise StateError(f"Connection session {role} role predates its target session")
+            is_rdp_system_root = (
+                target.session_kind == "rdp"
+                and role in {"winlogon", "process_tree_root"}
+                and plan is patch.winlogon_plan
+            )
+            if is_rdp_system_root:
+                basename = identity.image.replace("/", "\\").rsplit("\\", 1)[-1].casefold()
+                if (
+                    identity.logon_id.casefold() != "0x3e7"
+                    or identity.principal.casefold() != "system"
+                    or basename != "winlogon.exe"
+                ):
+                    raise StateError("Connection session winlogon role is incompatible")
+            else:
+                process_logon_id = self._resolve_logon_id(identity.logon_id)
+                if process_logon_id != target_logon_id:
+                    raise StateError(f"Connection session {role} role belongs to another session")
+                if (
+                    plan.auth_session_id != target.session_id
+                    or plan.auth_logon_type != existing_session_patch.after.logon_type
+                ):
+                    raise StateError(
+                        f"Connection session {role} role has incompatible authentication"
+                    )
+                if role in {"shell", "user_manager", "explorer"} and (
+                    identity.principal.casefold() != target.principal.casefold()
+                ):
+                    raise StateError(f"Connection session {role} principal is incompatible")
+            if role == "transport":
+                if (
+                    target.session_kind != "ssh"
+                    or identity.pid != existing_session_patch.after.transport_pid
+                ):
+                    raise StateError("Connection session transport role is incompatible")
+            if role == "explorer" and target.session_kind != "rdp":
+                raise StateError("Connection session Explorer role requires RDP")
+
+            before_pid = (
+                existing_session_patch.before.transport_pid
+                if role == "transport"
+                else getattr(patch.before, f"session_{role}_pid", None)
+                if role in {"shell", "user_manager", "winlogon"}
+                else patch.before.explorer_pid
+                if role == "explorer"
+                else patch.before.process_tree_root
+            )
+            if (
+                before_pid is not None
+                and before_pid != identity.pid
+                and self.is_process_active_at(target.hostname, before_pid, identity.started_at)
+            ):
+                raise StateError(f"Connection session {role} role cannot overwrite a live process")
+
+        if target.session_kind == "rdp":
+            if (patch.winlogon_plan is None) != (patch.process_tree_root_plan is None):
+                raise StateError("RDP winlogon and process-tree root must be staged together")
+            if (
+                patch.winlogon_plan is not None
+                and patch.process_tree_root_plan is not patch.winlogon_plan
+            ):
+                raise StateError("RDP process-tree root must be its exact staged winlogon")
+            if patch.transport_plan is not None or patch.shell_plan is not None:
+                raise StateError("RDP source transport cannot enter target-session roles")
+        else:
+            if patch.winlogon_plan is not None or patch.explorer_plan is not None:
+                raise StateError("SSH target-session roles cannot contain Windows desktop plans")
+            if (
+                patch.process_tree_root_plan is not None
+                and patch.process_tree_root_plan is not patch.transport_plan
+            ):
+                raise StateError("SSH process-tree root must be its exact receiver process")
+
+        expected_after = self._connection_existing_session_expected_role_state(patch)
+        if patch.after != expected_after:
+            raise StateError("Connection session process-role after-state drifted")
+
+    def _materialization_batch_admission_epoch_matches(
+        self,
+        plan: MaterializationBatchPlan,
+    ) -> bool:
+        """Return whether a batch still owns its exact prepared-State lane epoch."""
+
+        if plan.admission_epoch == self._prepared_state_admission_epoch:
+            return True
+        active = self._active_prepared_state_claim
+        current_epoch = self._prepared_state_admission_epoch
+        if plan.admission_epoch + 1 != current_epoch:
+            return False
+        if type(active) is _PreparedConnectionCompositeMaterializationRecord:
+            return active.plan.batch is plan and active.claim_epoch == current_epoch
+        if type(active) is _PreparedMaterializationBatchRecord:
+            return active.plan is plan and active.claim_epoch == current_epoch
+        return False
+
     @staticmethod
     def _normalize_process_activity_patches(
         patches: tuple[ProcessActivityPatch, ...],
@@ -11503,6 +13068,7 @@ class StateManager:
         process_activity: tuple[ProcessActivityPatch, ...],
         session_activity: tuple[SessionActivityPatch, ...],
         batch: MaterializationBatchPlan | None,
+        existing_session_patch: ConnectionExistingSessionPatch | None = None,
     ) -> None:
         """Validate exact live or staged owners for all activity frontiers."""
 
@@ -11512,6 +13078,8 @@ class StateManager:
             else {}
         )
         staged_session = batch.session.identity if batch is not None and batch.session else None
+        if staged_session is None and existing_session_patch is not None:
+            staged_session = existing_session_patch.after.identity
         for patch in process_activity:
             expected = staged_processes.get(patch.identity.object_id)
             if expected is None:
@@ -11550,6 +13118,10 @@ class StateManager:
         initiating_pid: int = -1,
         mode: ConnectionMaterializationMode = ConnectionMaterializationMode.PHYSICAL,
         batch: MaterializationBatchPlan | None = None,
+        rdp_existing_session_patch: ConnectionExistingSessionPatch | None = None,
+        existing_session_process_roles_patch: (
+            ConnectionExistingSessionProcessRolesPatch | None
+        ) = None,
         process_activity: tuple[ProcessActivityPatch, ...] = (),
         session_activity: tuple[SessionActivityPatch, ...] = (),
     ) -> ConnectionCompositeMaterializationPlan:
@@ -11567,10 +13139,38 @@ class StateManager:
                     raise StateError("Connection composite batch uses another State version")
                 if batch._expected_state_time != cursor._expected_state_time:
                     raise StateError("Connection composite batch uses another state-time fence")
+            if rdp_existing_session_patch is not None:
+                if batch is not None and batch.session is not None:
+                    raise StateError(
+                        "Existing-session patch cannot also materialize a new State session"
+                    )
+                if mode is not ConnectionMaterializationMode.PHYSICAL:
+                    raise StateError("RDP existing-session patch requires a physical transport")
+                self._validate_rdp_connection_existing_session_patch(
+                    rdp_existing_session_patch,
+                    transaction,
+                    initiating_pid=initiating_pid,
+                )
+                if batch is not None:
+                    self._validate_connection_existing_session_process_batch(
+                        rdp_existing_session_patch,
+                        batch,
+                    )
+            if existing_session_process_roles_patch is not None:
+                if rdp_existing_session_patch is None or batch is None:
+                    raise StateError(
+                        "Connection session process roles require one session patch and batch"
+                    )
+                self._validate_connection_existing_session_process_roles_patch(
+                    existing_session_process_roles_patch,
+                    existing_session_patch=rdp_existing_session_patch,
+                    batch=batch,
+                )
             self._validate_connection_activity_patches(
                 normalized_process_activity,
                 normalized_session_activity,
                 batch,
+                rdp_existing_session_patch,
             )
 
             identity = cursor._identity
@@ -11649,6 +13249,8 @@ class StateManager:
                 _mode=mode,
                 _parent_patch=parent_patch,
                 _batch=batch,
+                _existing_session_patch=rdp_existing_session_patch,
+                _existing_session_process_roles_patch=(existing_session_process_roles_patch),
                 _process_activity=normalized_process_activity,
                 _session_activity=normalized_session_activity,
                 _final_state_time=final_state_time,
@@ -11672,6 +13274,8 @@ class StateManager:
                 mode=plan._mode,
                 parent_patch=plan._parent_patch,
                 batch=plan._batch,
+                existing_session_patch=plan._existing_session_patch,
+                existing_session_process_roles_patch=(plan._existing_session_process_roles_patch),
                 process_activity=plan._process_activity,
                 session_activity=plan._session_activity,
                 final_state_time=plan._final_state_time,
@@ -11741,10 +13345,37 @@ class StateManager:
 
         if plan.batch is not None:
             self.validate_materialization_batch(plan.batch)
+        if plan.existing_session_patch is not None:
+            if not plan.materializes_connection:
+                raise StateError("Session patch lost its physical connection ownership")
+            if plan.batch is not None and plan.batch.session is not None:
+                raise StateError("Session patch cannot carry a second State session")
+            self._validate_rdp_connection_existing_session_patch(
+                plan.existing_session_patch,
+                plan.transaction,
+                initiating_pid=plan._initiating_pid,
+            )
+            if plan.batch is not None:
+                self._validate_connection_existing_session_process_batch(
+                    plan.existing_session_patch,
+                    plan.batch,
+                )
+        roles_patch = plan.existing_session_process_roles_patch
+        if roles_patch is not None:
+            if plan.existing_session_patch is None or plan.batch is None:
+                raise StateError(
+                    "Connection session process roles lost their session patch or batch"
+                )
+            self._validate_connection_existing_session_process_roles_patch(
+                roles_patch,
+                existing_session_patch=plan.existing_session_patch,
+                batch=plan.batch,
+            )
         self._validate_connection_activity_patches(
             plan.process_activity,
             plan.session_activity,
             plan.batch,
+            plan.existing_session_patch,
         )
         times = [ensure_utc(plan.transaction.started_at)]
         if plan.transaction.closed_at is not None:
@@ -11909,6 +13540,38 @@ class StateManager:
                 advance_version=False,
                 update_state_time=False,
             )
+        existing_session_patch = plan.existing_session_patch
+        if existing_session_patch is not None:
+            before_identity = existing_session_patch.before.identity
+            session = self._active_sessions[self._resolve_logon_id(before_identity.logon_id)]
+            after = existing_session_patch.after
+            self._authoritative_session_ends.remove(session.logon_id)
+            session.username = after.identity.principal
+            session.start_time = after.identity.started_at
+            session.source_ip = after.source_ip
+            session.source_port = after.source_port
+            session.session_kind = after.identity.session_kind
+            session.transport_pid = after.transport_pid
+            session.network_close_time = after.network_close_time
+            session.source_ready_time = after.source_ready_time
+            session.closure_owned_by_bundle = after.closure_owned_by_bundle
+            session.lifecycle_group_id = after.identity.lifecycle_group_id
+            session.logon_guid = after.identity.logon_guid
+            session.end_plan = after.end_plan
+            self._active_sessions.refresh(session.logon_id)
+            self._index_authoritative_session_end(session)
+        roles_patch = plan.existing_session_process_roles_patch
+        if roles_patch is not None:
+            session = self._active_sessions[self._resolve_logon_id(roles_patch.target.logon_id)]
+            roles_after = roles_patch.after
+            session.transport_pid = roles_after.transport_pid
+            session.session_shell_pid = roles_after.session_shell_pid
+            session.session_user_manager_pid = roles_after.session_user_manager_pid
+            session.session_winlogon_pid = roles_after.session_winlogon_pid
+            session.explorer_pid = roles_after.explorer_pid
+            session.initial_explorer_pid = roles_after.initial_explorer_pid
+            session.process_tree_root = roles_after.process_tree_root
+            session.windows_shell_bootstrapped = roles_after.windows_shell_bootstrapped
         for patch in plan.process_activity:
             process = self._processes_by_object_id[patch.identity.object_id]
             if (

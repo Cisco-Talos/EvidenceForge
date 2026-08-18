@@ -36,7 +36,10 @@ from evidenceforge.generation.network_runtime import (
     NetworkConnectionCommitResult,
     NetworkRuntimePointFamily,
 )
-from evidenceforge.generation.state_manager import ConnectionMaterializationMode
+from evidenceforge.generation.state_manager import (
+    ConnectionExistingSessionLifecycleDisposition,
+    ConnectionMaterializationMode,
+)
 from evidenceforge.generation.timing import (
     ClockWanderSpec,
     ConstantDistribution,
@@ -1174,6 +1177,23 @@ class NetworkTransactionPlanner:
                 merged[object_id] = patch
         return tuple(merged.values())
 
+    @staticmethod
+    def _merge_session_activity_patches(
+        existing: tuple[Any, ...],
+        additions: tuple[Any, ...],
+    ) -> tuple[Any, ...]:
+        """Merge exact session frontiers without changing first-occurrence ordering."""
+
+        merged: dict[str, Any] = {}
+        for patch in (*existing, *additions):
+            object_id = patch.identity.object_id
+            prior = merged.get(object_id)
+            if prior is not None and prior.identity != patch.identity:
+                raise StateError("Network session activity identity changed during merge")
+            if prior is None or patch.activity_time > prior.activity_time:
+                merged[object_id] = patch
+        return tuple(merged.values())
+
     def execute(self, request: NetworkConnectionRequest) -> str:
         """Expand one request while retaining exact cancellation ownership."""
 
@@ -1203,6 +1223,7 @@ class NetworkTransactionPlanner:
         from evidenceforge.generation.activity import generator as generator_module
 
         executor = self._executor
+        deferred_authority = request.deferred_session_authority
         prepared_application_token = request.prepared_application_token
         explicit_proxy_request_preparation = request.explicit_proxy_request_preparation
         if prepared_application_token is not None:
@@ -4113,6 +4134,26 @@ class NetworkTransactionPlanner:
             if event.network.application_layer_only
             else ConnectionMaterializationMode.PHYSICAL
         )
+        if lifecycle_mode == "deferred_session":
+            if deferred_authority is None:
+                raise StateError(
+                    "Deferred-session network request requires its prepared session authority"
+                )
+            if materialization_mode is not ConnectionMaterializationMode.PHYSICAL:
+                raise StateError("Deferred-session authority requires a physical transport")
+            deferred_authority = deferred_authority.prepare_state_authority(
+                executor.state_manager,
+                event.network,
+            )
+            deferred_authority = deferred_authority.prepare_application_authority(
+                event.network,
+            )
+            boundary.track_application(
+                deferred_authority.application_manager,
+                deferred_authority.application_token,
+            )
+        elif deferred_authority is not None:
+            raise StateError("Ordinary network root cannot consume deferred session authority")
         process_activity = ()
         session_activity = ()
         process_holds = ()
@@ -4249,6 +4290,39 @@ class NetworkTransactionPlanner:
             http=event.protocol.http,
             file_transfers=event.protocol.file_transfers,
         )
+        deferred_batch = deferred_authority.state_batch if deferred_authority is not None else None
+        deferred_existing_session_patch = (
+            deferred_authority.existing_state_patch if deferred_authority is not None else None
+        )
+        deferred_existing_session_process_roles_patch = (
+            deferred_authority.strict_state_authority.existing_session_process_roles_patch
+            if deferred_authority is not None
+            and deferred_authority.strict_state_authority is not None
+            else None
+        )
+        if deferred_authority is not None:
+            process_activity = self._merge_process_activity_patches(
+                process_activity,
+                deferred_authority.application_process_activity,
+            )
+            session_activity = self._merge_session_activity_patches(
+                session_activity,
+                deferred_authority.application_session_activity,
+            )
+            held_processes = {hold.subject.object_id for hold in process_holds}
+            process_holds = (
+                *process_holds,
+                *(
+                    hold
+                    for hold in deferred_authority.application_process_holds
+                    if hold.subject.object_id not in held_processes
+                ),
+            )
+        responder_batch = prepared_responder.batch if prepared_responder is not None else None
+        if (deferred_batch is not None or deferred_existing_session_patch is not None) and (
+            responder_batch is not None
+        ):
+            raise StateError("Deferred session root cannot also own a responder State batch")
         root = network_preparation.seal(
             transaction=event.network,
             lifecycle_mode=lifecycle_mode,
@@ -4257,7 +4331,9 @@ class NetworkTransactionPlanner:
             source_hostname=state_source_hostname,
             hostname=hostname or event.network.dst_ip,
             initiating_pid=pid,
-            batch=(prepared_responder.batch if prepared_responder is not None else None),
+            batch=deferred_batch or responder_batch,
+            rdp_existing_session_patch=deferred_existing_session_patch,
+            existing_session_process_roles_patch=(deferred_existing_session_process_roles_patch),
             process_activity=process_activity,
             session_activity=session_activity,
             result=commit_result,
@@ -4281,6 +4357,15 @@ class NetworkTransactionPlanner:
                 if target_system is not None
                 else (hostname or event.network.dst_ip)
             )
+            deferred_lifecycle_kwargs = (
+                {
+                    "session_object_id": deferred_authority.session_object_id,
+                    "binding_role": "session",
+                    "bound_at": deferred_authority.bound_at,
+                }
+                if deferred_authority is not None
+                else {}
+            )
             lifecycle_plan = closed_transport_publication_plan(
                 transaction=event.network,
                 authority_hostname=authority_hostname,
@@ -4290,6 +4375,7 @@ class NetworkTransactionPlanner:
                     "network-transport-lifecycle",
                     event.network.stable_id,
                 ),
+                **deferred_lifecycle_kwargs,
             )
             lifecycle_token = lifecycle_adapter.prepare_closed_transport_publication(
                 lifecycle_plan,
@@ -4303,7 +4389,9 @@ class NetworkTransactionPlanner:
 
         prepared_dispatch = None
         prepared_multipart_dispatches = ()
-        if lifecycle_mode != "deferred_session" and (
+        if lifecycle_mode == "deferred_session" and committed_suppressed:
+            raise StateError("Deferred-session transport cannot suppress its root occurrence")
+        if lifecycle_mode == "deferred_session" or (
             not committed_suppressed or multipart_reads is not None
         ):
             from evidenceforge.events.dispatcher import PreparedDispatchStateIntent
@@ -4311,7 +4399,11 @@ class NetworkTransactionPlanner:
             if not committed_suppressed:
                 prepared_dispatch = executor.dispatcher.prepare_builder(
                     event,
-                    state_intent=PreparedDispatchStateIntent.EXTERNAL_TRANSPORT,
+                    state_intent=(
+                        PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT
+                        if lifecycle_mode == "deferred_session"
+                        else PreparedDispatchStateIntent.EXTERNAL_TRANSPORT
+                    ),
                     lifecycle_ticket=root,
                     source_timing_preparation=boundary.timing_preparation,
                 )
@@ -4348,14 +4440,79 @@ class NetworkTransactionPlanner:
             )
         boundary.validate_network_dependent_batch()
         boundary.validate_identity_capture_claim()
+        deferred_composition = None
+        if deferred_authority is not None:
+            from evidenceforge.generation.deferred_session_composition import (
+                DeferredSessionExistingStateBinding,
+                DeferredSessionStateMemberBinding,
+            )
+
+            if lifecycle_token is None or prepared_dispatch is None:
+                raise StateError("Deferred session root lost its lifecycle or transport authority")
+            state_batch = root.state_plan.batch
+            state_plans = (
+                ()
+                if state_batch is None
+                else (
+                    *((state_batch.session,) if state_batch.session is not None else ()),
+                    *state_batch.processes,
+                )
+            )
+            lifecycle_by_token = {
+                member.publication_token: member for member in lifecycle_token.request.start_members
+            }
+            state_members = tuple(
+                DeferredSessionStateMemberBinding(
+                    state_member=state_plan,
+                    lifecycle_member=lifecycle_by_token[state_plan.publication_token],
+                )
+                for state_plan in state_plans
+            )
+            existing_state_session = (
+                None
+                if deferred_existing_session_patch is None
+                else DeferredSessionExistingStateBinding(
+                    state_patch=deferred_existing_session_patch,
+                    lifecycle_member=(
+                        lifecycle_by_token[root.state_plan.publication_token]
+                        if deferred_existing_session_patch.lifecycle_disposition
+                        is ConnectionExistingSessionLifecycleDisposition.START
+                        else None
+                    ),
+                )
+            )
+            deferred_composition = deferred_authority.coordinator.issue(
+                prepared_root=root,
+                source_timing_preparation=boundary.timing_preparation,
+                lifecycle_token=lifecycle_token,
+                state_members=state_members,
+                application_token=deferred_authority.application_token,
+                transport_dispatch=prepared_dispatch,
+                existing_state_session=existing_state_session,
+                binding_disposition=(
+                    deferred_authority.binding_disposition
+                    if deferred_authority.has_strict_state_authority
+                    else None
+                ),
+                state_authority=deferred_authority.strict_state_authority,
+            )
+            deferred_authority.bind_strict_state_authority(executor.state_manager)
         boundary.transfer()
-        materialized = executor._lifecycle_authority.materialize_prepared_network_transaction(
-            root,
-            owner_rng,
-            source_timing_preparation=boundary.timing_preparation,
-            lifecycle_token=lifecycle_token,
-            application_token=boundary.application_token,
-            prerequisite_receipts=boundary.prerequisite_receipts,
+        materialized = (
+            executor._lifecycle_authority.materialize_prepared_deferred_session_transaction(
+                deferred_composition,
+                deferred_authority.coordinator,
+                owner_rng,
+            )
+            if deferred_composition is not None and deferred_authority is not None
+            else executor._lifecycle_authority.materialize_prepared_network_transaction(
+                root,
+                owner_rng,
+                source_timing_preparation=boundary.timing_preparation,
+                lifecycle_token=lifecycle_token,
+                application_token=boundary.application_token,
+                prerequisite_receipts=boundary.prerequisite_receipts,
+            )
         )
         if not executor._lifecycle_authority.authenticates_prepared_network_receipt(
             root,

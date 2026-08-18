@@ -36,6 +36,20 @@ class DeferredSessionProtocol(StrEnum):
     RDP = "rdp"
 
 
+class DeferredSessionBindingDisposition(StrEnum):
+    """State/lifecycle treatment of the target protocol session.
+
+    Protocol open/reconnect semantics remain a separate concern.  This value
+    describes whether the final connection composite creates the State session,
+    starts lifecycle ownership for an exact preallocated State session, or binds
+    another transport to an already-live State/lifecycle session.
+    """
+
+    NEW_SESSION = "new_session"
+    PREALLOCATED_SESSION_START = "preallocated_session_start"
+    ACTIVE_SESSION = "active_session"
+
+
 class DeferredSessionOsFamily(StrEnum):
     """Normalized endpoint operating-system family used by protocol admission."""
 
@@ -681,6 +695,7 @@ class DeferredSessionBoundSessionSpec:
     """Authenticated-later metadata intent for the exact target session."""
 
     reference_id: str
+    binding_disposition: DeferredSessionBindingDisposition
     identity: SessionIdentity
     source_address: str
     source_port: int
@@ -700,6 +715,11 @@ class DeferredSessionBoundSessionSpec:
         identity = _validate_session_identity(
             self.identity,
             "Deferred bound session identity",
+        )
+        _exact(
+            self.binding_disposition,
+            DeferredSessionBindingDisposition,
+            "Deferred bound session binding disposition",
         )
         source_address = _address(self.source_address, "Deferred bound session source address")
         source_port = _port(self.source_port, "Deferred bound session source port")
@@ -965,6 +985,7 @@ class DeferredSessionPresealPayload:
 
 
 def _validate_payload_pairing(payload: DeferredSessionPresealPayload) -> None:
+    disposition = payload.bound_session.binding_disposition
     if payload.protocol is DeferredSessionProtocol.SSH:
         _revalidate(payload.intent, SshDeferredSessionIntent, "SSH deferred payload intent")
         _revalidate(
@@ -979,12 +1000,19 @@ def _validate_payload_pairing(payload: DeferredSessionPresealPayload) -> None:
     _revalidate(payload.intent, RdpDeferredSessionIntent, "RDP deferred payload intent")
     assert isinstance(payload.intent, RdpDeferredSessionIntent)
     if payload.intent.mode is RdpDeferredSessionMode.OPEN:
+        if disposition not in {
+            DeferredSessionBindingDisposition.NEW_SESSION,
+            DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START,
+        }:
+            raise ValueError("RDP open requires a new or preallocated session binding")
         _revalidate(
             payload.application_admission,
             RdpOpenAdmissionSpec,
             "RDP open payload admission",
         )
     else:
+        if disposition is not DeferredSessionBindingDisposition.ACTIVE_SESSION:
+            raise ValueError("RDP reconnect requires an active-session binding")
         _revalidate(
             payload.application_admission,
             RdpReconnectAdmissionSpec,
@@ -1085,6 +1113,8 @@ def _validate_payload_members(
     payload: DeferredSessionPresealPayload,
 ) -> dict[str, DeferredSessionStateMemberSpec]:
     members: dict[str, DeferredSessionStateMemberSpec] = {}
+    disposition = payload.bound_session.binding_disposition
+    bound_reference = payload.bound_session.reference_id
     session_members = 0
     process_object_ids: set[str] = set()
     session_object_ids: set[str] = set()
@@ -1138,33 +1168,46 @@ def _validate_payload_members(
                     )
             if member.session_member_id:
                 session = members.get(member.session_member_id)
-                if type(session) is not DeferredSessionSessionMemberSpec:
-                    raise ValueError("Deferred process session must be an earlier session member")
-                assert isinstance(session, DeferredSessionSessionMemberSpec)
-                if member.identity.logon_id != session.identity.logon_id:
-                    raise ValueError("Deferred process LogonID differs from its session member")
+                if session is None and (
+                    disposition
+                    in {
+                        DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START,
+                        DeferredSessionBindingDisposition.ACTIVE_SESSION,
+                    }
+                    and member.session_member_id == bound_reference
+                ):
+                    if member.identity.logon_id != payload.bound_session.identity.logon_id:
+                        raise ValueError(
+                            "Deferred process LogonID differs from its bound existing session"
+                        )
+                else:
+                    if type(session) is not DeferredSessionSessionMemberSpec:
+                        raise ValueError(
+                            "Deferred process session must be an earlier or bound session"
+                        )
+                    assert isinstance(session, DeferredSessionSessionMemberSpec)
+                    if member.identity.logon_id != session.identity.logon_id:
+                        raise ValueError("Deferred process LogonID differs from its session member")
             process_object_ids.add(member.identity.object_id)
         members[member.member_id] = member
     if session_members > 1:
         raise ValueError("Deferred payload may start at most one session member")
-    if payload.protocol is DeferredSessionProtocol.SSH and session_members != 1:
-        raise ValueError("SSH deferred payload requires exactly one new session member")
-    if payload.protocol is DeferredSessionProtocol.RDP:
-        assert isinstance(payload.intent, RdpDeferredSessionIntent)
-        if payload.intent.mode is RdpDeferredSessionMode.OPEN and session_members != 1:
-            raise ValueError("RDP open requires exactly one new session member")
-        if payload.intent.mode is RdpDeferredSessionMode.RECONNECT and session_members != 0:
-            raise ValueError("RDP reconnect cannot start a second target session")
-    bound_reference = payload.bound_session.reference_id
+    if disposition is DeferredSessionBindingDisposition.NEW_SESSION:
+        if session_members != 1:
+            raise ValueError("New deferred session binding requires exactly one State session")
+    elif session_members != 0:
+        raise ValueError("Existing deferred session binding cannot start another State session")
     referenced_member = members.get(bound_reference)
-    if referenced_member is not None:
+    if disposition is DeferredSessionBindingDisposition.NEW_SESSION:
+        if referenced_member is None:
+            raise ValueError("New deferred session binding must reference its State member")
         if type(referenced_member) is not DeferredSessionSessionMemberSpec:
             raise ValueError("Deferred bound-session reference collides with a process member")
         assert isinstance(referenced_member, DeferredSessionSessionMemberSpec)
         if referenced_member.identity != payload.bound_session.identity:
             raise ValueError("Deferred bound-session reference identifies a different session")
-    elif session_members:
-        raise ValueError("Deferred new session member must own the bound-session reference")
+    elif referenced_member is not None:
+        raise ValueError("Existing deferred session binding must use an external reference")
     return members
 
 

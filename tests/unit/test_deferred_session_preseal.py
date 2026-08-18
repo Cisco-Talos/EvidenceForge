@@ -18,6 +18,7 @@ from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, Thre
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.deferred_session_preseal import (
     DeferredSessionActivitySpec,
+    DeferredSessionBindingDisposition,
     DeferredSessionBoundSessionSpec,
     DeferredSessionDependentOccurrenceSpec,
     DeferredSessionEndpoint,
@@ -326,6 +327,7 @@ def _ssh_payload() -> DeferredSessionPresealPayload:
         ),
         bound_session=DeferredSessionBoundSessionSpec(
             reference_id="session",
+            binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION,
             identity=session_identity,
             source_address=intent.source.address,
             source_port=50_001,
@@ -420,6 +422,11 @@ def _rdp_payload(
         process_holds=(),
         bound_session=DeferredSessionBoundSessionSpec(
             reference_id=bound_session_reference,
+            binding_disposition=(
+                DeferredSessionBindingDisposition.NEW_SESSION
+                if is_open
+                else DeferredSessionBindingDisposition.ACTIVE_SESSION
+            ),
             identity=identity,
             source_address=intent.source.address,
             source_port=50_001,
@@ -472,6 +479,121 @@ def test_valid_preseal_payloads_are_frozen_inert_and_transport_first(
     assert not hasattr(payload, "__dict__")
     with pytest.raises((FrozenInstanceError, AttributeError)):
         payload.protocol = DeferredSessionProtocol.RDP
+
+
+@pytest.mark.parametrize(
+    "disposition",
+    (
+        DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START,
+        DeferredSessionBindingDisposition.ACTIVE_SESSION,
+    ),
+)
+def test_ssh_existing_binding_reuses_exact_bound_session_without_second_start(
+    disposition: DeferredSessionBindingDisposition,
+) -> None:
+    payload = _ssh_payload()
+    session, responder, shell = payload.state_members
+    assert isinstance(session, DeferredSessionSessionMemberSpec)
+    assert isinstance(responder, DeferredSessionProcessMemberSpec)
+    assert isinstance(shell, DeferredSessionProcessMemberSpec)
+    reference_id = "existing-ssh-session"
+    responder = replace(responder, session_member_id=reference_id)
+    shell = replace(shell, session_member_id=reference_id)
+    starts = tuple(
+        replace(start, publication_ordinal=ordinal)
+        for ordinal, start in enumerate(payload.state_starts[1:], start=1)
+    )
+    dependents = tuple(
+        replace(
+            dependent,
+            member_references=tuple(
+                reference_id if reference == "session" else reference
+                for reference in dependent.member_references
+            ),
+            publication_ordinal=len(starts) + ordinal,
+        )
+        for ordinal, dependent in enumerate(payload.dependents, start=1)
+    )
+
+    existing = replace(
+        payload,
+        state_members=(responder, shell),
+        bound_session=replace(
+            payload.bound_session,
+            reference_id=reference_id,
+            binding_disposition=disposition,
+        ),
+        state_starts=starts,
+        dependents=dependents,
+    )
+
+    assert existing.bound_session.binding_disposition is disposition
+    assert all(
+        not isinstance(member, DeferredSessionSessionMemberSpec)
+        for member in existing.state_members
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "disposition", "message"),
+    (
+        (
+            RdpDeferredSessionMode.OPEN,
+            DeferredSessionBindingDisposition.ACTIVE_SESSION,
+            "RDP open",
+        ),
+        (
+            RdpDeferredSessionMode.RECONNECT,
+            DeferredSessionBindingDisposition.NEW_SESSION,
+            "RDP reconnect",
+        ),
+        (
+            RdpDeferredSessionMode.RECONNECT,
+            DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START,
+            "RDP reconnect",
+        ),
+    ),
+)
+def test_rdp_protocol_mode_rejects_wrong_binding_disposition(
+    mode: RdpDeferredSessionMode,
+    disposition: DeferredSessionBindingDisposition,
+    message: str,
+) -> None:
+    payload = _rdp_payload(mode)
+
+    with pytest.raises(ValueError, match=message):
+        replace(
+            payload,
+            bound_session=replace(
+                payload.bound_session,
+                binding_disposition=disposition,
+            ),
+        )
+
+
+def test_binding_disposition_rejects_wrong_state_session_cardinality() -> None:
+    new_payload = _ssh_payload()
+    with pytest.raises(ValueError, match="session"):
+        replace(new_payload, state_members=new_payload.state_members[1:])
+
+    with pytest.raises(ValueError, match="cannot start another State session"):
+        replace(
+            new_payload,
+            bound_session=replace(
+                new_payload.bound_session,
+                binding_disposition=(DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START),
+            ),
+        )
+
+
+def test_bound_session_requires_exact_binding_disposition_type() -> None:
+    payload = _ssh_payload()
+
+    with pytest.raises(TypeError, match="binding disposition|exact type"):
+        replace(
+            payload.bound_session,
+            binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION.value,
+        )
 
 
 def _forged_instance(type_: type[object]) -> object:
