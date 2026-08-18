@@ -29,6 +29,10 @@ import pytest
 
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters import SysmonEventEmitter
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanner,
+    sysmon_process_render_key,
+)
 
 
 class TestSysmonEventEmitter:
@@ -381,6 +385,7 @@ class TestSysmonEventEmitter:
         )
 
         assert emitter.can_handle(event) is True
+        SourceTimingPlanner().plan_event(event, "windows_event_sysmon")
         emitter.emit(event)
         emitter.close()
 
@@ -546,8 +551,12 @@ class TestSysmonEventEmitter:
             auth=AuthContext(username="jsmith"),
         )
 
-        expected_guid = emitter._get_stable_process_guid("WKS-01", 8052, start_time)
-        terminate_time_guid = emitter._get_stable_process_guid("WKS-01", 8052, terminate_time)
+        SourceTimingPlanner().plan_event(event, "windows_event_sysmon")
+        create_render_time = event.source_timing.finalized_times[
+            sysmon_process_render_key("create", host.hostname)
+        ]
+        expected_guid = emitter._generate_process_guid("WKS-01", 8052, create_render_time)
+        terminate_time_guid = emitter._generate_process_guid("WKS-01", 8052, terminate_time)
 
         emitter.emit(event)
         emitter.close()
@@ -880,10 +889,14 @@ class TestSysmonEventEmitter:
             auth=AuthContext(username="jsmith", logon_id="0xabc123"),
         )
 
-        expected_parent_guid = emitter._get_stable_process_guid("WKS-01", 4200, parent_start)
-        later_parent_guid = emitter._get_stable_process_guid(
-            "WKS-01", 4200, later_reused_parent_start
+        expected_parent_time = emitter._compatibility_parent_process_render_time(
+            host, event.process, parent_start
         )
+        later_parent_time = emitter._compatibility_parent_process_render_time(
+            host, event.process, later_reused_parent_start
+        )
+        expected_parent_guid = emitter._generate_process_guid("WKS-01", 4200, expected_parent_time)
+        later_parent_guid = emitter._generate_process_guid("WKS-01", 4200, later_parent_time)
 
         emitter.emit(event)
         emitter.close()

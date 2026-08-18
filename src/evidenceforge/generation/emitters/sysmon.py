@@ -38,6 +38,7 @@ from typing import Any
 from evidenceforge.config.sysmon_filters import load_sysmon_filters
 from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext, ProcessContext
+from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
@@ -63,7 +64,15 @@ from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SYSMON_SNARE_FILENAME,
     render_windows_sysmon_snare_syslog,
 )
-from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.generation.source_timing import (
+    compatibility_endpoint_event_times,
+    compatibility_process_create_time,
+    compatibility_sysmon_envelope_time,
+    finalized_endpoint_event_times,
+    sysmon_parent_process_render_key,
+    sysmon_process_identity_render_key,
+    sysmon_process_pid_render_key,
+)
 from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
@@ -73,8 +82,6 @@ from evidenceforge.utils.windows_ids import (
     normalize_windows_id_value,
     windows_id_randint,
 )
-
-_SOURCE_TIMING = SourceTimingPlanner()
 
 # Well-known Windows port names for Sysmon Event 3
 _PORT_NAMES: dict[int, str] = {
@@ -122,6 +129,7 @@ _PROCESS_GUID_FIELDS: tuple[str, ...] = (
     "SourceProcessGUID",
     "TargetProcessGUID",
 )
+_FROZEN_TIMING_MARKER = object()
 
 
 def _format_sysmon_utc_time(timestamp: datetime) -> str:
@@ -196,6 +204,69 @@ class SysmonEventEmitter(LogEmitter):
                 )
             )
         return random.Random(_stable_seed("|".join(str(part) for part in parts)))
+
+    @staticmethod
+    def _timing_phase(event: CanonicalOccurrence, event_id: int | None = None) -> str:
+        """Return the frozen endpoint phase rendered by one Sysmon row."""
+
+        if event.event_type in {"process_create", "system_process_create"}:
+            return "process_create"
+        if event.event_type == "process_terminate":
+            return "process_terminate"
+        if event.event_type == "connection":
+            return "dns" if event_id == 22 else "network"
+        return "base"
+
+    def _render_times(
+        self,
+        event: CanonicalOccurrence,
+        phase: str | None = None,
+    ) -> tuple[datetime, datetime]:
+        """Return frozen Sysmon payload/envelope times with direct compatibility."""
+
+        host = event.src_host or event.dst_host
+        hostname = host.hostname if host is not None else ""
+        effective_phase = phase or self._timing_phase(event)
+        finalized = finalized_endpoint_event_times(
+            event,
+            "windows_event_sysmon",
+            hostname,
+            effective_phase,
+        )
+        if finalized is None:
+            if event.source_timing is not None and not event.source_timing.compatibility_mode:
+                raise RuntimeError(
+                    "Sysmon production projection requires frozen endpoint timing: "
+                    f"host={hostname} event_type={event.event_type} phase={effective_phase}"
+                )
+            finalized = compatibility_endpoint_event_times(
+                event,
+                "windows_event_sysmon",
+                hostname,
+                effective_phase,
+            )
+        return finalized
+
+    @staticmethod
+    def _apply_finalized_times(
+        event_data: dict[str, Any],
+        native_time: datetime,
+        envelope_time: datetime,
+    ) -> None:
+        """Attach an upstream-frozen Sysmon payload/envelope pair to one row."""
+
+        event_data["_SysmonNativeTime"] = native_time
+        event_data["_SysmonInitialEnvelopeTime"] = envelope_time
+        event_data["TimeCreated"] = envelope_time
+        if "UtcTime" in event_data:
+            event_data["UtcTime"] = _format_sysmon_utc_time(native_time)
+        event_data["_TimingFinalized"] = _FROZEN_TIMING_MARKER
+
+    @staticmethod
+    def _timing_is_finalized(event_data: dict[str, Any]) -> bool:
+        """Return whether a row carries this module's unforgeable timing marker."""
+
+        return event_data.get("_TimingFinalized") is _FROZEN_TIMING_MARKER
 
     # PE metadata for common Windows binaries (FileVersion, Description, Product, Company, OriginalFileName)
     _PE_METADATA: dict[str, tuple[str, str, str, str, str]] = {
@@ -736,6 +807,30 @@ class SysmonEventEmitter(LogEmitter):
         return (pid, "-")
 
     @staticmethod
+    def _carrier_owned_process(
+        event: CanonicalOccurrence,
+        host: HostContext,
+    ) -> tuple[int, str, str, datetime] | None:
+        """Return process fields whose Sysmon identity was frozen upstream."""
+
+        process = event.process
+        if process is not None and process.pid > 0:
+            return (
+                process.pid,
+                process.image,
+                process.username,
+                process.start_time or event.timestamp,
+            )
+        actor = event.identity_plan.actor if event.identity_plan is not None else None
+        if (
+            isinstance(actor, ProcessIdentity)
+            and actor.pid > 0
+            and actor.hostname.casefold() == host.hostname.casefold()
+        ):
+            return actor.pid, actor.image or "-", actor.principal, actor.started_at
+        return None
+
+    @staticmethod
     def _resolve_destination_hostname(ip: str, dst_port: int = 0) -> str:
         """Resolve destination IP to hostname via REVERSE_DNS.
 
@@ -749,7 +844,12 @@ class SysmonEventEmitter(LogEmitter):
         return hostname
 
     def _get_stable_process_guid(
-        self, hostname: str, pid: int, fallback_timestamp: datetime
+        self,
+        hostname: str,
+        pid: int,
+        fallback_timestamp: datetime,
+        *,
+        rendered_create_time: datetime | None = None,
     ) -> str:
         """Generate ProcessGuid using the rendered process-create time.
 
@@ -757,20 +857,63 @@ class SysmonEventEmitter(LogEmitter):
         deterministic process-create source offset so Event 1 and all follow-on
         events share the same source-native identifier.
         """
-        ts = fallback_timestamp
-        sm = getattr(self, "_state_manager", None)
-        if sm and pid > 0:
-            proc = sm.get_process(hostname, pid)
-            if proc is not None and proc.start_time <= fallback_timestamp:
-                ts = proc.start_time
-        rendered_create_time = _SOURCE_TIMING.source_time(
-            OccurrenceBuilder(timestamp=ts, event_type="process_create"),
-            "source.sysmon_process_create",
-            seed_parts=(hostname, pid, ts),
-            not_before=ts,
-        )
+        if rendered_create_time is None:
+            ts = fallback_timestamp
+            canonical_event = getattr(self._emission_context, "canonical_event", None)
+            timing_plan = canonical_event.source_timing if canonical_event is not None else None
+            if timing_plan is None or timing_plan.compatibility_mode:
+                sm = getattr(self, "_state_manager", None)
+                if sm and pid > 0:
+                    proc = sm.get_process(hostname, pid)
+                    if proc is not None and proc.start_time <= fallback_timestamp:
+                        ts = proc.start_time
+            if timing_plan is not None:
+                rendered_create_time = timing_plan.finalized_times.get(
+                    sysmon_process_identity_render_key(hostname, pid, ts)
+                ) or timing_plan.finalized_times.get(sysmon_process_pid_render_key(hostname, pid))
+                if rendered_create_time is None and not timing_plan.compatibility_mode:
+                    raise RuntimeError(
+                        "Sysmon ProcessGuid requires a frozen process-create source time: "
+                        f"host={hostname} pid={pid} started_at={ensure_utc(ts).isoformat()}"
+                    )
+            if rendered_create_time is None:
+                rendered_create_time = compatibility_process_create_time(
+                    ts,
+                    format_name="windows_event_sysmon",
+                    hostname=hostname,
+                    pid=pid,
+                )
         base_guid = self._generate_process_guid(hostname, pid, rendered_create_time)
         return self._final_process_guids.get((hostname, pid, base_guid), base_guid)
+
+    @staticmethod
+    def _compatibility_parent_process_render_time(
+        host: HostContext,
+        process: ProcessContext,
+        parent_started_at: datetime,
+    ) -> datetime:
+        """Return the stateless direct-render envelope for an Event 1 parent."""
+
+        parent_event = OccurrenceBuilder(
+            timestamp=parent_started_at,
+            event_type="process_create",
+            src_host=host,
+            process=ProcessContext(
+                pid=process.parent_pid,
+                parent_pid=0,
+                image=process.parent_image or "-",
+                command_line=process.parent_command_line or "-",
+                username="",
+                start_time=parent_started_at,
+            ),
+        )
+        _native_time, render_time = compatibility_endpoint_event_times(
+            parent_event,
+            "windows_event_sysmon",
+            host.hostname,
+            "process_create",
+        )
+        return render_time
 
     def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Sysmon emitter handles supported event types on Windows hosts."""
@@ -782,6 +925,7 @@ class SysmonEventEmitter(LogEmitter):
 
     def emit(self, event: CanonicalOccurrence) -> None:
         """Dispatch to per-type render method, applying Sysmon filters."""
+        self._emission_context.canonical_event = event
         self._emission_context.host_type = (
             event.src_host.system_type if event.src_host is not None else ""
         )
@@ -814,6 +958,7 @@ class SysmonEventEmitter(LogEmitter):
                     self._render_sysmon_image_loaded(event)
         finally:
             self._emission_context.host_type = ""
+            self._emission_context.canonical_event = None
 
     @staticmethod
     def _format_user(username: str, netbios_domain: str) -> str:
@@ -932,17 +1077,14 @@ class SysmonEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = event.src_host
-        process_start_time = proc.start_time or event.timestamp
-        render_time = _SOURCE_TIMING.source_time(
-            event,
-            "source.sysmon_process_create",
-            seed_parts=(host.hostname, proc.pid, process_start_time),
-            not_before=process_start_time,
-        )
-
-        utc_time = _format_sysmon_utc_time(render_time)
+        native_time, render_time = self._render_times(event, "process_create")
+        plan = event.source_timing
+        utc_time = _format_sysmon_utc_time(native_time)
         process_guid = self._get_stable_process_guid(
-            host.hostname, proc.pid, proc.start_time or event.timestamp
+            host.hostname,
+            proc.pid,
+            proc.start_time or event.timestamp,
+            rendered_create_time=render_time,
         )
         parent_proc = None
         sm = getattr(self, "_state_manager", None)
@@ -956,10 +1098,28 @@ class SysmonEventEmitter(LogEmitter):
             if parent_proc is not None and parent_proc.start_time <= child_start
             else self._host_boot_times.get(host.hostname, child_start - timedelta(days=7))
         )
+        parent_render_time = (
+            plan.finalized_times.get(sysmon_parent_process_render_key(host.hostname))
+            if plan is not None
+            else None
+        )
+        if parent_render_time is None:
+            if plan is not None and not plan.compatibility_mode:
+                raise RuntimeError(
+                    "Sysmon Event 1 requires a frozen parent process-create source time: "
+                    f"host={host.hostname} parent_pid={proc.parent_pid} "
+                    f"started_at={ensure_utc(_parent_ts).isoformat()}"
+                )
+            parent_render_time = self._compatibility_parent_process_render_time(
+                host,
+                proc,
+                _parent_ts,
+            )
         parent_guid = self._get_stable_process_guid(
             host.hostname,
             proc.parent_pid,
             _parent_ts,
+            rendered_create_time=parent_render_time,
         )
 
         # Determine user string
@@ -1001,6 +1161,7 @@ class SysmonEventEmitter(LogEmitter):
             "ParentUser": parent_user,
             "CurrentDirectory": proc.current_directory or self._default_current_directory(proc),
         }
+        self._apply_finalized_times(event_data, native_time, render_time)
         # Populate PE metadata from known binary lookup
         fv, desc, prod, company, orig = self._get_pe_metadata(proc.image, host)
         event_data["FileVersion"] = fv
@@ -1044,37 +1205,13 @@ class SysmonEventEmitter(LogEmitter):
             return image.rsplit("\\", 1)[0] + "\\"
         return f"C:\\Users\\{username}\\"
 
-    @staticmethod
-    def _source_offset(
-        event_type: str,
-        hostname: str,
-        pid: int,
-        timestamp: datetime,
-        *,
-        minimum_ms: int,
-        maximum_ms: int,
-    ) -> timedelta:
-        """Deterministic Sysmon collection latency for cross-source events."""
-        span = maximum_ms - minimum_ms
-        offset = minimum_ms + (
-            _stable_seed(f"sysmon:{event_type}:{hostname}:{pid}:{timestamp}") % span
-        )
-        return timedelta(milliseconds=offset)
-
     def _render_sysmon_process_terminate(self, event: CanonicalOccurrence) -> None:
         """Render Sysmon Event 5 (ProcessTerminate)."""
         proc = event.process
         auth = event.auth
         host = event.src_host
-        process_start_time = proc.start_time or event.timestamp
-        render_time = _SOURCE_TIMING.source_time(
-            event,
-            "source.sysmon_process_terminate",
-            seed_parts=(host.hostname, proc.pid, process_start_time, event.timestamp),
-            not_before=event.timestamp,
-        )
-
-        utc_time = _format_sysmon_utc_time(render_time)
+        native_time, render_time = self._render_times(event, "process_terminate")
+        utc_time = _format_sysmon_utc_time(native_time)
         process_guid = self._get_stable_process_guid(
             host.hostname, proc.pid, proc.start_time or event.timestamp
         )
@@ -1098,6 +1235,7 @@ class SysmonEventEmitter(LogEmitter):
             "Image": proc.image,
             "User": user,
         }
+        self._apply_finalized_times(event_data, native_time, render_time)
         self.emit_event(event_data)
 
     @staticmethod
@@ -1287,12 +1425,15 @@ class SysmonEventEmitter(LogEmitter):
             return False
 
         # Check include rules — pass if image matches OR dest port matches.
-        # Resolve image from ProcessContext first, then fall back to PID lookup
-        # via StateManager (connection events often lack ProcessContext but carry
-        # initiating_pid on NetworkTransactionPlan).
+        # Production resolves only a carrier-owned process whose Sysmon identity
+        # was frozen upstream. PID lookup remains a direct-compatibility fallback.
         image = ""
-        if event.process:
-            image = event.process.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        host = event.src_host
+        carrier_process = self._carrier_owned_process(event, host) if host is not None else None
+        if carrier_process is not None:
+            image = carrier_process[1].rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        elif event.source_timing is not None and not event.source_timing.compatibility_mode:
+            return False
         elif event.network and event.network.initiating_pid > 0 and event.src_host:
             _pid, resolved_image = self._resolve_process_from_pid(
                 event.src_host.hostname, event.network.initiating_pid
@@ -1433,51 +1574,38 @@ class SysmonEventEmitter(LogEmitter):
         """Render Sysmon Event 3 (NetworkConnect)."""
         host = event.src_host
         net = event.network
-        proc = event.process
-        seed_parts = (
-            host.hostname,
-            net.initiating_pid if net else -1,
-            net.src_ip if net else "",
-            net.src_port if net else 0,
-            net.dst_ip if net else "",
-            net.dst_port if net else 0,
-            event.timestamp,
-        )
-
-        render_time = _SOURCE_TIMING.source_time(
-            event,
-            "source.sysmon_network_connection",
-            seed_parts=seed_parts,
-            not_before=_SOURCE_TIMING.canonical_time_in_source_clock(
-                event,
-                "source.sysmon_network_connection",
-                event.timestamp,
-                seed_parts,
-            ),
-        )
-        utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
         # Process info — use ProcessContext if available, else resolve from
         # initiating_pid via StateManager lookup. Real Sysmon always knows the
-        # originating process; skip Event 3 if we can't resolve one.
-        if proc:
-            pid = proc.pid
-            image = proc.image
+        # originating process. Production consumes only a carrier-owned process
+        # whose ProcessGuid seed was frozen upstream; StateManager lookup remains
+        # a direct-compatibility fallback.
+        carrier_process = self._carrier_owned_process(event, host)
+        process_username = ""
+        if carrier_process is not None:
+            pid, image, process_username, process_start_time = carrier_process
+        elif event.source_timing is not None and not event.source_timing.compatibility_mode:
+            return
         else:
             initiating_pid = net.initiating_pid if net else -1
             pid, image = self._resolve_process_from_pid(host.hostname, initiating_pid)
+            process_start_time = event.timestamp
         if pid <= 0 or image == "-":
             return  # Cannot attribute to a process — don't emit phantom Event 3
+        native_time, render_time = self._render_times(event, "network")
+        utc_time = _format_sysmon_utc_time(native_time)
         process_guid = self._get_stable_process_guid(
-            host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
+            host.hostname,
+            pid,
+            process_start_time,
         )
 
         # User — resolve from AuthContext, ProcessContext, or StateManager
         user = ""
         if event.auth and event.auth.username:
             user = self._format_user(event.auth.username, host.netbios_domain)
-        elif proc and proc.username:
-            user = self._format_user(proc.username, host.netbios_domain)
+        elif process_username:
+            user = self._format_user(process_username, host.netbios_domain)
         elif pid > 0:
             sm = getattr(self, "_state_manager", None)
             if sm:
@@ -1519,6 +1647,7 @@ class SysmonEventEmitter(LogEmitter):
             "DestinationPort": dst_port,
             "DestinationPortName": _PORT_NAMES.get(dst_port, "-"),
         }
+        self._apply_finalized_times(event_data, native_time, render_time)
         self.emit_event(event_data)
 
     def _render_sysmon_image_loaded(self, event: CanonicalOccurrence) -> None:
@@ -1528,21 +1657,14 @@ class SysmonEventEmitter(LogEmitter):
         proc = event.process
         il = event.image_load
 
+        if (proc is None or proc.pid <= 0) and event.source_timing is not None:
+            if not event.source_timing.compatibility_mode:
+                return
         pid = proc.pid if proc else rng.randint(1000, 5000)
         image = proc.image if proc else r"C:\Windows\System32\svchost.exe"
         process_start_time = proc.start_time if proc and proc.start_time else event.timestamp
-        process_create_time = _SOURCE_TIMING.source_time(
-            event,
-            "source.sysmon_process_create",
-            seed_parts=(host.hostname, pid, process_start_time),
-            not_before=process_start_time,
-        )
-        render_time = _SOURCE_TIMING.process_module_source_time(
-            event,
-            "sysmon",
-            process_create_time,
-        )
-        utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        native_time, render_time = self._render_times(event)
+        utc_time = _format_sysmon_utc_time(native_time)
         process_guid = self._get_stable_process_guid(host.hostname, pid, process_start_time)
 
         # PE metadata for the loaded DLL
@@ -1595,34 +1717,41 @@ class SysmonEventEmitter(LogEmitter):
             "SignatureStatus": signature_status,
             "User": user,
         }
+        self._apply_finalized_times(event_data, native_time, render_time)
         self.emit_event(event_data)
 
     def _render_sysmon_file_create(self, event: CanonicalOccurrence) -> None:
         """Render Sysmon Event 11 (FileCreate)."""
         host = event.src_host
-        proc = event.process
         fc = event.file
 
-        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        if proc:
-            pid = proc.pid
-            image = proc.image
+        carrier_process = self._carrier_owned_process(event, host)
+        process_username = ""
+        if carrier_process is not None:
+            pid, image, process_username, process_start_time = carrier_process
+        elif event.source_timing is not None and not event.source_timing.compatibility_mode:
+            return
         else:
             file_pid = fc.pid if fc else 0
             pid, image = self._resolve_process_from_pid(host.hostname, file_pid)
+            process_start_time = event.timestamp
+        native_time, render_time = self._render_times(event, "base")
+        utc_time = _format_sysmon_utc_time(native_time)
         process_guid = self._get_stable_process_guid(
-            host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
+            host.hostname,
+            pid,
+            process_start_time,
         )
         if event.auth and event.auth.username:
             user = self._format_user(event.auth.username, host.netbios_domain)
-        elif proc and proc.username:
-            user = self._format_user(proc.username, host.netbios_domain)
+        elif process_username:
+            user = self._format_user(process_username, host.netbios_domain)
         else:
             user = "NT AUTHORITY\\SYSTEM"
 
         event_data = {
             "EventID": 11,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
@@ -1636,6 +1765,7 @@ class SysmonEventEmitter(LogEmitter):
             "CreationUtcTime": utc_time,
             "User": user,
         }
+        self._apply_finalized_times(event_data, native_time, render_time)
         self.emit_event(event_data)
 
     def _render_sysmon_registry_event(self, event: CanonicalOccurrence) -> None:
@@ -1644,22 +1774,27 @@ class SysmonEventEmitter(LogEmitter):
         if not self._passes_event12_13_filter(event):
             return
         host = event.src_host
-        proc = event.process
 
-        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        if proc:
-            pid = proc.pid
-            image = proc.image
+        carrier_process = self._carrier_owned_process(event, host)
+        process_username = ""
+        if carrier_process is not None:
+            pid, image, process_username, process_start_time = carrier_process
+        elif event.source_timing is not None and not event.source_timing.compatibility_mode:
+            return
         else:
             reg_pid = reg.pid if reg else 0
             pid, image = self._resolve_process_from_pid(host.hostname, reg_pid)
+            process_start_time = event.timestamp
+        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         process_guid = self._get_stable_process_guid(
-            host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
+            host.hostname,
+            pid,
+            process_start_time,
         )
         if event.auth and event.auth.username:
             user = self._format_user(event.auth.username, host.netbios_domain)
-        elif proc and proc.username:
-            user = self._format_user(proc.username, host.netbios_domain)
+        elif process_username:
+            user = self._format_user(process_username, host.netbios_domain)
         else:
             user = "NT AUTHORITY\\SYSTEM"
 
@@ -1709,47 +1844,53 @@ class SysmonEventEmitter(LogEmitter):
         host = event.src_host
         dns = event.dns
 
-        render_time = _SOURCE_TIMING.source_time(
-            event,
-            "source.sysmon_dns_query",
-            seed_parts=(
-                host.hostname,
-                dns.query if dns else "",
-                dns.query_type if dns else "",
-                event.timestamp,
-            ),
-            not_before=event.timestamp,
-        )
-        utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-
         # Sysmon Event 22 attributes the query to the initiating application,
         # while WFP/eCAR may separately identify the DNS Client service that
         # owns UDP/53 transport. Fall back to that service only when the
-        # canonical DNS action could not safely preserve a query process.
+        # direct compatibility call has no carrier-owned process identity.
         query_process = dns.query_process
-        if query_process is not None:
+        if query_process is not None and query_process.pid > 0:
             dns_client_pid = query_process.pid
             process_start_time = query_process.start_time or event.timestamp
-            process_guid = self._get_stable_process_guid(
-                host.hostname,
-                dns_client_pid,
-                process_start_time,
-            )
             image = query_process.image
             user = self._format_user(query_process.username, host.netbios_domain)
+        elif event.process is not None and event.process.pid > 0:
+            dns_client_pid = event.process.pid
+            process_start_time = event.process.start_time or event.timestamp
+            image = event.process.image
+            user = self._format_user(event.process.username, host.netbios_domain)
         else:
-            sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
-            dns_client_pid = sys_pids.get(
-                "svchost_local_svc",
-                sys_pids.get("svchost_netsvcs", self._get_dns_client_pid(host.hostname)),
-            )
-            process_guid = self._get_stable_process_guid(
-                host.hostname,
-                dns_client_pid,
-                event.timestamp,
-            )
-            image = r"C:\Windows\System32\svchost.exe"
-            user = "NT AUTHORITY\\LOCAL SERVICE"
+            actor = event.identity_plan.actor if event.identity_plan is not None else None
+            if isinstance(actor, ProcessIdentity) and (
+                actor.pid > 0 and actor.hostname.casefold() == host.hostname.casefold()
+            ):
+                dns_client_pid = actor.pid
+                process_start_time = actor.started_at
+                image = actor.image or "-"
+                user = (
+                    self._format_user(actor.principal, host.netbios_domain)
+                    if actor.principal
+                    else "NT AUTHORITY\\SYSTEM"
+                )
+            elif event.source_timing is not None and not event.source_timing.compatibility_mode:
+                return
+            else:
+                sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
+                dns_client_pid = sys_pids.get(
+                    "svchost_local_svc",
+                    sys_pids.get("svchost_netsvcs", self._get_dns_client_pid(host.hostname)),
+                )
+                process_start_time = event.timestamp
+                image = r"C:\Windows\System32\svchost.exe"
+                user = "NT AUTHORITY\\LOCAL SERVICE"
+
+        native_time, render_time = self._render_times(event, "dns")
+        utc_time = _format_sysmon_utc_time(native_time)
+        process_guid = self._get_stable_process_guid(
+            host.hostname,
+            dns_client_pid,
+            process_start_time,
+        )
 
         # Map DNS rcode to Windows QueryStatus
         query_status = _DNS_STATUS_MAP.get(dns.rcode, "0")
@@ -1777,6 +1918,7 @@ class SysmonEventEmitter(LogEmitter):
             "Image": image,
             "User": user,
         }
+        self._apply_finalized_times(event_data, native_time, render_time)
         self.emit_event(event_data)
 
     def _get_dns_client_pid(self, hostname: str) -> int:
@@ -1879,8 +2021,18 @@ class SysmonEventEmitter(LogEmitter):
             event_data[field] = normalize_windows_id_value(value)
         if "EventID" in event_data:
             event_data["EventID"] = normalize_windows_event_id_value(event_data["EventID"])
+        canonical_event = getattr(self._emission_context, "canonical_event", None)
+        if canonical_event is not None:
+            event_id = coerce_windows_event_id(event_data.get("EventID"))
+            phase = self._timing_phase(canonical_event, event_id)
+            native_time, envelope_time = self._render_times(canonical_event, phase)
+            self._apply_finalized_times(event_data, native_time, envelope_time)
         native_time = event_data.get("TimeCreated")
-        if isinstance(native_time, datetime) and "UtcTime" in event_data:
+        if (
+            isinstance(native_time, datetime)
+            and "UtcTime" in event_data
+            and not self._timing_is_finalized(event_data)
+        ):
             computer = str(event_data.get("Computer") or "")
             hostname = computer.split(".", 1)[0] if computer else ""
             event_id = coerce_windows_event_id(event_data.get("EventID"))
@@ -1891,7 +2043,7 @@ class SysmonEventEmitter(LogEmitter):
                 event_data.get("SourcePort"),
                 native_time,
             )
-            envelope_time = _SOURCE_TIMING.sysmon_envelope_time(
+            envelope_time = compatibility_sysmon_envelope_time(
                 native_time,
                 hostname=hostname,
                 event_id=event_id,
@@ -1914,6 +2066,7 @@ class SysmonEventEmitter(LogEmitter):
     def _render_event(self, event_data: dict[str, Any]) -> str:
         from xml.sax.saxutils import escape as xml_escape
 
+        event_data.pop("_TimingFinalized", None)
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
@@ -1944,9 +2097,11 @@ class SysmonEventEmitter(LogEmitter):
         if not self._event_dicts:
             return
 
-        self._shift_process_creates_after_visible_parent()
-        self._shift_followons_after_process_create()
-        self._shift_terminations_after_followons()
+        all_finalized = all(self._timing_is_finalized(event) for event in self._event_dicts)
+        if not all_finalized:
+            self._shift_process_creates_after_visible_parent()
+            self._shift_followons_after_process_create()
+            self._shift_terminations_after_followons()
 
         def _sort_key(event: dict) -> Any:
             ts = event.get("TimeCreated", "")
@@ -1957,14 +2112,22 @@ class SysmonEventEmitter(LogEmitter):
         self._event_dicts.sort(key=_sort_key)
 
         for sequence, event in enumerate(self._event_dicts):
-            _normalize_windows_time_created(
-                event,
-                self._last_time_created_by_computer,
-                self._time_collision_count_by_computer,
-                sequence,
-                "sysmon_time_created",
-                jitter_existing_microseconds=True,
-            )
+            if self._timing_is_finalized(event):
+                timestamp = event.get("TimeCreated")
+                computer = str(event.get("Computer", ""))
+                if isinstance(timestamp, datetime):
+                    previous = self._last_time_created_by_computer.get(computer)
+                    if previous is None or timestamp > previous:
+                        self._last_time_created_by_computer[computer] = timestamp
+            else:
+                _normalize_windows_time_created(
+                    event,
+                    self._last_time_created_by_computer,
+                    self._time_collision_count_by_computer,
+                    sequence,
+                    "sysmon_time_created",
+                    jitter_existing_microseconds=True,
+                )
             computer = event.get("Computer", "")
             counter_key = computer.split(".")[0] if "." in computer else computer
             sequence_model = self._record_id_sequences.setdefault(
@@ -1980,14 +2143,16 @@ class SysmonEventEmitter(LogEmitter):
                 coerce_windows_event_id(event.get("EventID")),
             )
         self._sync_utc_time_fields()
-        self._shift_followon_utc_times_after_process_create()
-        self._sync_process_guids_to_event1_times()
+        if not all_finalized:
+            self._shift_followon_utc_times_after_process_create()
+            self._sync_process_guids_to_event1_times()
 
         for event in self._event_dicts:
             host_fqdn = str(event.get("Computer") or "")
             if not host_fqdn and not self._direct_file_path:
                 continue
             snare_timestamp = event.get("TimeCreated")
+            event.pop("_TimingFinalized", None)
             if self.output_target == OutputTarget.SOF_ELK and isinstance(snare_timestamp, datetime):
                 snare_rendered = render_windows_sysmon_snare_syslog(event)
                 self._get_snare_writer(host_fqdn, snare_timestamp).write(snare_rendered)
@@ -2048,6 +2213,8 @@ class SysmonEventEmitter(LogEmitter):
 
             for key, event in process_create_events.items():
                 if key in cyclic_keys:
+                    continue
+                if self._timing_is_finalized(event):
                     continue
                 ts = event.get("TimeCreated")
                 parent_key = parent_keys.get(key)
@@ -2111,7 +2278,7 @@ class SysmonEventEmitter(LogEmitter):
 
         for event in self._event_dicts:
             event_id = event.get("EventID")
-            if event_id == 1:
+            if event_id == 1 or self._timing_is_finalized(event):
                 continue
             ts = event.get("TimeCreated")
             computer = str(event.get("Computer", ""))
@@ -2156,7 +2323,7 @@ class SysmonEventEmitter(LogEmitter):
                 create_times[(str(event.get("Computer", "")), str(event["ProcessGuid"]))] = utc_time
 
         for event in self._event_dicts:
-            if event.get("EventID") == 1:
+            if event.get("EventID") == 1 or self._timing_is_finalized(event):
                 continue
             guid = (
                 event.get("ProcessGuid")
@@ -2199,6 +2366,8 @@ class SysmonEventEmitter(LogEmitter):
             latest_followon[key] = max(ts, latest_followon.get(key, ts))
 
         for key, event in terminations:
+            if self._timing_is_finalized(event):
+                continue
             ts = event.get("TimeCreated")
             latest = latest_followon.get(key)
             if isinstance(ts, datetime) and latest is not None and ts <= latest:

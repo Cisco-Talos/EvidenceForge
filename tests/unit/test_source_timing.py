@@ -158,6 +158,31 @@ def _process_identity(
     )
 
 
+def _sysmon_process_create_identity_plan(
+    host: HostContext,
+    process: ProcessContext,
+) -> EventIdentityPlan:
+    """Return exact child/parent identities required by a planned Sysmon Event 1."""
+
+    started_at = process.start_time or _base_time()
+    parent_started_at = process.parent_start_time or started_at - timedelta(days=7)
+    subject = _process_identity(
+        hostname=host.hostname,
+        pid=process.pid,
+        parent_pid=process.parent_pid,
+        started_at=started_at,
+        image=process.image,
+    )
+    actor = _process_identity(
+        hostname=host.hostname,
+        pid=process.parent_pid,
+        parent_pid=4,
+        started_at=parent_started_at,
+        image=process.parent_image or "-",
+    )
+    return EventIdentityPlan(subject=subject, actor=actor)
+
+
 def _context_from_identity(identity: ProcessIdentity) -> ProcessContext:
     return ProcessContext(
         pid=identity.pid,
@@ -1141,16 +1166,19 @@ def test_source_time_after_source_uses_temporal_constraint_graph() -> None:
 def test_windows_security_process_create_tracks_sysmon_source_time(tmp_path: Path) -> None:
     """Security 4688 and Sysmon Event 1 for one process should stay source-native-close."""
     process_start = _base_time()
+    host = _host_context()
+    process = _unresolved_process_context(process_start)
     event = OccurrenceBuilder(
         timestamp=process_start,
         event_type="process_create",
-        src_host=_host_context(),
-        process=_unresolved_process_context(process_start),
+        src_host=host,
+        process=process,
         auth=AuthContext(
             username="alice",
             user_sid="S-1-5-21-100-200-300-1101",
             logon_id="0x12345",
         ),
+        identity_plan=_sysmon_process_create_identity_plan(host, process),
     )
     windows = WindowsEventEmitter(
         load_format("windows_event_security"),
@@ -1441,6 +1469,7 @@ def test_sysmon_startup_module_renders_after_process_create(tmp_path: Path) -> N
         src_host=host,
         process=proc,
         auth=auth,
+        identity_plan=_sysmon_process_create_identity_plan(host, proc),
     )
     module_event = OccurrenceBuilder(
         timestamp=base + timedelta(milliseconds=2),
@@ -2093,6 +2122,7 @@ def test_sysmon_process_access_timestamp_follows_process_create(tmp_path: Path) 
         src_host=host,
         process=proc,
         auth=auth,
+        identity_plan=_sysmon_process_create_identity_plan(host, proc),
     )
     access_event = OccurrenceBuilder(
         timestamp=base,

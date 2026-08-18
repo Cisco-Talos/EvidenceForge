@@ -4,7 +4,7 @@
 """Unit tests for new Sysmon events: 3, 7, 11, 12/13, 22."""
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -22,7 +22,6 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.dll_load_profiles import get_module_pe_metadata
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import SysmonEventEmitter
 from tests.network_factories import network_plan
 
@@ -491,16 +490,13 @@ class TestRenderEvent3:
 
         emitter.emit(event)
 
-        expected_delta = sample_timing_delta(
-            "source.sysmon_network_connection",
-            seed_parts=("WKS-01", 4567, "10.0.1.10", 49152, "10.0.2.20", 4444, event_time),
-        )
-        expected_time = event_time + expected_delta
-        assert emitter._event_dicts[0]["TimeCreated"] > expected_time
-        assert emitter._event_dicts[0]["_SysmonNativeTime"] == expected_time
+        native_time = emitter._event_dicts[0]["_SysmonNativeTime"]
+        assert event_time + timedelta(milliseconds=35) <= native_time
+        assert native_time <= event_time + timedelta(milliseconds=750)
+        assert native_time.microsecond % 1_000 != 0
+        assert emitter._event_dicts[0]["TimeCreated"] > native_time
         assert (
-            emitter._event_dicts[0]["UtcTime"]
-            == expected_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            emitter._event_dicts[0]["UtcTime"] == native_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         )
 
     def test_event3_normalizes_mail_hostname_to_port_family(self, emitter):
@@ -1227,13 +1223,11 @@ class TestRenderEvent22:
 
         emitter._render_sysmon_dns_query(event)
 
-        expected_delta = sample_timing_delta(
-            "source.sysmon_dns_query",
-            seed_parts=("WKS-01", "example.com", "A", event_time),
-        )
-        native_time = event_time + expected_delta
+        native_time = emitter._event_dicts[0]["_SysmonNativeTime"]
+        assert event_time + timedelta(milliseconds=25) <= native_time
+        assert native_time <= event_time + timedelta(milliseconds=420)
+        assert native_time.microsecond % 1_000 != 0
         assert emitter._event_dicts[0]["TimeCreated"] > native_time
-        assert emitter._event_dicts[0]["_SysmonNativeTime"] == native_time
 
     def test_nxdomain_query_status(self, emitter):
         event = OccurrenceBuilder(
