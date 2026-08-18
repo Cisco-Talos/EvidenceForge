@@ -1210,6 +1210,267 @@ class WorldPlanner:
         """
         os_cat = self.world_model.hosts[system.hostname].os_category
         persona = (user.persona or "default").lower()
+        deployment_registry = getattr(
+            getattr(self.activity_generator, "dispatcher", None),
+            "deployment_registry",
+            None,
+        )
+        if deployment_registry is not None:
+            host_deployment = deployment_registry.host_deployment(system.hostname)
+            if host_deployment is None:
+                return -1
+            deployment_platform = host_deployment.platform
+            user_profile = deployment_registry.user_profile_for(
+                system.hostname,
+                user.username,
+                deployment_platform,
+            )
+            if user_profile is None:
+                return -1
+
+            explicit_applications = application_ids is not None
+            if explicit_applications:
+                requested_application_ids = tuple(
+                    sorted(
+                        {
+                            application_id.strip().casefold()
+                            for application_id in application_ids
+                            if application_id.strip()
+                        }
+                    )
+                )
+            else:
+                compatible_executables = get_service_to_exes().get(service, ())
+                requested_ids: set[str] = set()
+                for executable in sorted(
+                    set(compatible_executables),
+                    key=lambda value: (value.casefold(), value),
+                ):
+                    requested_ids.update(
+                        deployment_registry.application_ids_for_executable(
+                            deployment_platform,
+                            executable,
+                        )
+                    )
+                requested_application_ids = tuple(sorted(requested_ids))
+            if not requested_application_ids:
+                return -1
+
+            is_server_admin = effective_persona == "_server_admin"
+            server_excluded_categories = {"browser", "office", "code", "build"}
+            candidates = []
+            for application_id in requested_application_ids:
+                assignment = deployment_registry.user_application_assignment_for_application(
+                    user_profile.profile_id,
+                    application_id,
+                )
+                if assignment is None:
+                    continue
+                descriptor = deployment_registry.application_descriptor_for_assignment(assignment)
+                image = deployment_registry.application_executable_for_assignment(assignment)
+                if descriptor is None or image is None:
+                    continue
+                if descriptor.executable.casefold() in _SHELL_EXES:
+                    continue
+                if is_server_admin and server_excluded_categories.intersection(
+                    descriptor.categories
+                ):
+                    continue
+                candidates.append((assignment, descriptor, image))
+            candidates.sort(
+                key=lambda candidate: (
+                    candidate[1].selection_ordinal,
+                    candidate[1].application_id,
+                )
+            )
+            if not candidates:
+                return -1
+
+            lock_time = getattr(self.activity_generator, "_last_workstation_lock_time", {}).get(
+                (system.hostname, user.username, session.logon_id)
+            )
+            if lock_time is not None and ensure_utc(lock_time) <= ensure_utc(time):
+                return -1
+
+            destination_tags: set[str] = set()
+            exe_tag_index: dict[str, set[str]] = {}
+            if not explicit_applications and destination_hostname:
+                from evidenceforge.generation.activity.dns_registry import get_domain_tags
+                from evidenceforge.generation.activity.process_network import get_exe_to_service
+
+                destination_tags = set(get_domain_tags(destination_hostname))
+                exe_tag_index = {
+                    exe.casefold(): set(info.get("dns_tags") or ())
+                    for exe, info in get_exe_to_service().items()
+                }
+
+            broad_tags = {
+                "web",
+                "saas",
+                "cdn",
+                "social",
+                "background",
+                "windows",
+                "linux",
+            }
+
+            def _compiled_destination_score(executable: str) -> int:
+                if not destination_tags:
+                    return 1
+                executable_tags = exe_tag_index.get(executable.casefold(), set())
+                if not executable_tags:
+                    return 0
+                specific = destination_tags - broad_tags
+                specific_hits = len(executable_tags & specific)
+                broad_hits = len(executable_tags & destination_tags & broad_tags)
+                return specific_hits * 100 + broad_hits
+
+            if destination_tags:
+                scored_candidates = [
+                    (candidate, _compiled_destination_score(candidate[1].executable))
+                    for candidate in candidates
+                ]
+                maximum_score = max(
+                    (score for _candidate, score in scored_candidates),
+                    default=0,
+                )
+                if maximum_score <= 0:
+                    return -1
+                candidates = [
+                    candidate for candidate, score in scored_candidates if score == maximum_score
+                ]
+
+            def _compiled_image_key(image_path: str) -> str:
+                if os_cat == "windows":
+                    return image_path.replace("/", "\\").casefold()
+                return image_path
+
+            candidate_image_keys = {_compiled_image_key(candidate[2]) for candidate in candidates}
+            effective_time = ensure_utc(time)
+            if explicit_applications:
+                active_exact_processes = [
+                    process
+                    for process in self.state_manager.get_processes_for_session(
+                        session.logon_id,
+                        system.hostname,
+                    )
+                    if process.username.casefold() == user.username.casefold()
+                    and ensure_utc(process.start_time) <= effective_time
+                    and _compiled_image_key(process.image) in candidate_image_keys
+                ]
+                if active_exact_processes:
+                    return max(
+                        active_exact_processes,
+                        key=lambda process: (ensure_utc(process.start_time), process.pid),
+                    ).pid
+            else:
+                history_key = (system.hostname, user.username)
+                history = self.activity_generator._user_process_history.get(history_key, ())[-10:]
+                for pid, _recorded_image in reversed(history):
+                    process = self.state_manager.get_process(system.hostname, pid)
+                    if process is None or ensure_utc(process.start_time) > effective_time:
+                        continue
+                    if process.logon_id and process.logon_id != session.logon_id:
+                        continue
+                    if process.username.casefold() != user.username.casefold():
+                        continue
+                    if _compiled_image_key(process.image) in candidate_image_keys:
+                        return pid
+
+            if len(candidates) == 1:
+                selected_assignment = candidates[0][0]
+            else:
+                selected_assignment = (
+                    deployment_registry.select_user_application_assignment_for_applications(
+                        user_profile.profile_id,
+                        tuple(candidate[0].application_id for candidate in candidates),
+                        unit_interval=rng.random(),
+                    )
+                )
+                if selected_assignment is None:
+                    return -1
+            selected = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if candidate[0].assignment_id == selected_assignment.assignment_id
+                ),
+                None,
+            )
+            if selected is None:
+                return -1
+            _registered_assignment, selected_descriptor, _registered_image = selected
+            materialized = deployment_registry.materialize_application_command(
+                rng,
+                selected_assignment,
+                username=user.username,
+            )
+            if materialized is None:
+                return -1
+            image, command_line = materialized
+            command_line = self.activity_generator._parameterize_command_for_system(
+                rng,
+                command_line,
+                username=user.username,
+                system=system,
+            )
+            target_exe = selected_descriptor.executable
+
+            singleton_key = None
+            if selected_descriptor.singleton_per_session:
+                singleton_key = self.activity_generator._singleton_application_key(
+                    system,
+                    user.username,
+                    session.logon_id,
+                    image,
+                )
+
+            proc_time = time - timedelta(seconds=rng.uniform(0.5, 3.0))
+            min_proc_time = session.start_time + timedelta(milliseconds=100)
+            if proc_time < min_proc_time:
+                proc_time = min_proc_time
+            if singleton_key is not None:
+                interval_end = (
+                    self.state_manager.get_session_end_time(session.logon_id)
+                    or self.activity_generator._scenario_end_time
+                )
+                if not self.activity_generator.claim_singleton_application_interval(
+                    singleton_key,
+                    proc_time,
+                    interval_end,
+                ):
+                    return -1
+            self.state_manager.set_current_time(proc_time)
+            parent_pid = self.activity_generator._resolve_parent(
+                system,
+                user,
+                proc_time,
+                session.logon_id,
+                image,
+            )
+            pid = self.activity_generator.generate_process(
+                user=user,
+                system=system,
+                time=proc_time,
+                logon_id=session.logon_id,
+                process_name=image,
+                command_line=command_line,
+                parent_pid=parent_pid,
+            )
+            if target_exe.casefold() == "ldapsearch":
+                lifetime = _linux_foreground_lifetime(image, command_line) or (0.5, 4.0)
+                termination_time = time + timedelta(seconds=rng.uniform(*lifetime))
+                self.activity_generator._remember_foreground_process_finalizer(
+                    system=system,
+                    user=user,
+                    pid=pid,
+                    process_name=image,
+                    logon_id=session.logon_id,
+                    termination_time=termination_time,
+                )
+            self.activity_generator._record_user_process(system, user, pid, image)
+            return pid
+
         exact_applications: list[dict[str, Any]] = []
         if application_ids:
             from evidenceforge.generation.activity.application_catalog import (

@@ -24765,30 +24765,109 @@ class ActivityGenerator:
             ):
                 return
 
-            # Try unified application catalog first (persona-aware, PE-metadata-rich)
+            # Prefer compiled assignment truth; retain the catalog only for legacy callers.
             if catalog_category:
-                from evidenceforge.generation.activity.application_catalog import (
-                    pick_app_and_command,
-                )
-
                 rng = _get_rng()
-                result = pick_app_and_command(
-                    rng,
-                    user.persona or "default",
-                    os_category,
-                    catalog_category,
-                    username=user.username,
-                    system_type=system.type,
-                    deployment_key=self._software_deployment_key,
-                )
-                if result:
-                    process_name, command_line = result
+                deployment_registry = getattr(self.dispatcher, "deployment_registry", None)
+                result: tuple[str, str] | None = None
+                singleton_per_session = False
+                if deployment_registry is not None:
+                    host_deployment = deployment_registry.host_deployment(system.hostname)
+                    user_profile = (
+                        deployment_registry.user_profile_for(
+                            system.hostname,
+                            user.username,
+                            host_deployment.platform,
+                        )
+                        if host_deployment is not None
+                        else None
+                    )
+                    selected_assignment = None
+                    if user_profile is not None:
+                        candidate_count = (
+                            deployment_registry.count_user_application_assignments_for_category(
+                                user_profile.profile_id,
+                                catalog_category,
+                            )
+                        )
+                        if candidate_count:
+                            selected_assignment = (
+                                deployment_registry.select_user_application_assignment_for_category(
+                                    user_profile.profile_id,
+                                    catalog_category,
+                                    unit_interval=rng.random(),
+                                )
+                            )
+                    if (
+                        selected_assignment is not None
+                        and "browser" in selected_assignment.eligible_categories
+                        and user_profile is not None
+                    ):
+                        browser_count = (
+                            deployment_registry.count_user_application_assignments_for_category(
+                                user_profile.profile_id,
+                                "browser",
+                            )
+                        )
+                        if browser_count > 1:
+                            preferred = deployment_registry.preferred_browser_assignment(
+                                user_profile.profile_id
+                            )
+                            if (
+                                preferred is not None
+                                and catalog_category in preferred.eligible_categories
+                            ):
+                                if rng.random() < 0.90:
+                                    selected_assignment = preferred
+                                else:
+                                    alternative = (
+                                        deployment_registry.browser_alternative_assignment_at(
+                                            user_profile.profile_id,
+                                            preferred.assignment_id,
+                                            rng.randrange(browser_count - 1),
+                                        )
+                                    )
+                                    if (
+                                        alternative is not None
+                                        and catalog_category in alternative.eligible_categories
+                                    ):
+                                        selected_assignment = alternative
+                    if selected_assignment is not None:
+                        descriptor = deployment_registry.application_descriptor_for_assignment(
+                            selected_assignment
+                        )
+                        if descriptor is not None:
+                            result = deployment_registry.materialize_application_command(
+                                rng,
+                                selected_assignment,
+                                username=user.username,
+                                category=catalog_category,
+                            )
+                            singleton_per_session = descriptor.singleton_per_session
+                else:
                     from evidenceforge.generation.activity.application_catalog import (
                         is_singleton_application_image,
+                        pick_app_and_command,
                     )
 
+                    result = pick_app_and_command(
+                        rng,
+                        user.persona or "default",
+                        os_category,
+                        catalog_category,
+                        username=user.username,
+                        system_type=system.type,
+                        deployment_key=self._software_deployment_key,
+                    )
+                    if result is not None:
+                        singleton_per_session = is_singleton_application_image(
+                            result[0], os_category
+                        )
+                if result:
+                    process_name, command_line = result
+
                     singleton_key: tuple[str, str, str, str] | None = None
-                    if is_singleton_application_image(process_name, os_category):
+                    if singleton_per_session:
                         normalized_image = process_name.replace("/", "\\").lower()
                         singleton_key = self._singleton_application_key(
                             system,
@@ -24959,7 +25038,7 @@ class ActivityGenerator:
                     )
 
                     # Spawn child/utility processes for apps that have them
-                    if activity_type == "process_user_apps":
+                    if activity_type == "process_user_apps" and deployment_registry is None:
                         from evidenceforge.generation.activity.application_catalog import (
                             get_child_processes,
                             parameterize_scoped_command,
