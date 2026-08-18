@@ -18,14 +18,14 @@ import random
 import secrets
 from collections.abc import Callable
 from contextlib import ExitStack
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from threading import Lock, RLock
+from threading import Condition, Lock, RLock, Thread, current_thread
 from typing import Any, Generic, Literal, Protocol, TypeVar
 
 from evidenceforge.events.base import CanonicalOccurrence
-from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
+from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleEntityRef,
@@ -111,6 +111,11 @@ StrictLifecycleKey = tuple[str, str]
 _DEFAULT_SHARD_COUNT = 64
 _DEFAULT_DUE_PAGE = 4_096
 _MAX_ACTION_COHORT_OPERATIONS = 256
+_DEFAULT_MATERIALIZATION_BATCH_TRANSACTION_CAPACITY = 64
+_DEFAULT_MATERIALIZATION_BATCH_TRANSACTION_BYTE_CAPACITY = 16 * 1024 * 1024
+_MAX_MATERIALIZATION_BATCH_TRANSACTION_BYTES = 4 * 1024 * 1024
+_MAX_MATERIALIZATION_BATCH_PAYLOAD_NODES = 65_536
+_MAX_MATERIALIZATION_BATCH_SCALAR_BYTES = 64 * 1024
 
 _ApplicationAdmissionToken = (
     ApplicationChannelAdmissionToken | HttpChannelAdmissionToken | ExplicitProxyAdmissionToken
@@ -120,6 +125,165 @@ _ApplicationAdmissionResult = (
     | HttpChannelAdmissionResult
     | ExplicitProxyAdmissionCommitResult
 )
+
+
+def _validate_materialization_batch_external_result(
+    value: object,
+) -> tuple[int, int]:
+    """Validate and measure one deeply immutable bounded canonical payload."""
+
+    nodes = 0
+    retained_bytes = 0
+    pending: list[tuple[object, int]] = [(value, 0)]
+    while pending:
+        member, depth = pending.pop()
+        nodes += 1
+        if nodes > _MAX_MATERIALIZATION_BATCH_PAYLOAD_NODES:
+            raise StateError("Materialization-batch payload has too many retained members")
+        if depth > 16:
+            raise StateError("Materialization-batch external result nesting is too deep")
+        if member is None:
+            retained_bytes += 1
+        elif type(member) is bool:
+            retained_bytes += 1
+        elif type(member) is int:
+            retained_bytes += max(1, (member.bit_length() + 8) // 8)
+        elif type(member) is str:
+            scalar_bytes = len(member.encode("utf-8"))
+            if scalar_bytes > _MAX_MATERIALIZATION_BATCH_SCALAR_BYTES:
+                raise StateError("Materialization-batch string member is too large")
+            retained_bytes += scalar_bytes
+        elif type(member) is bytes:
+            if len(member) > _MAX_MATERIALIZATION_BATCH_SCALAR_BYTES:
+                raise StateError("Materialization-batch bytes member is too large")
+            retained_bytes += len(member)
+        elif type(member) is datetime:
+            if member.tzinfo is not UTC:
+                raise StateError(
+                    "Materialization-batch external datetimes must use exact built-in UTC"
+                )
+            retained_bytes += 16
+        elif type(member) is tuple:
+            retained_bytes += 8 * len(member)
+            if retained_bytes > _MAX_MATERIALIZATION_BATCH_TRANSACTION_BYTES:
+                raise StateError("Materialization-batch payload exceeds its retained-byte limit")
+            pending.extend((child, depth + 1) for child in member)
+        else:
+            raise StateError(
+                "Materialization-batch external results require immutable canonical tuples"
+            )
+        if retained_bytes > _MAX_MATERIALIZATION_BATCH_TRANSACTION_BYTES:
+            raise StateError("Materialization-batch payload exceeds its retained-byte limit")
+    return nodes, retained_bytes
+
+
+def _canonical_materialization_batch_payload_bytes(value: object) -> bytes:
+    """Encode one validated inert payload without dispatching caller-defined code."""
+
+    _validate_materialization_batch_external_result(value)
+
+    def encode(member: object) -> bytes:
+        if member is None:
+            return b"n"
+        if type(member) is bool:
+            return b"b1" if member else b"b0"
+        if type(member) is int:
+            scalar = str(member).encode("ascii")
+            return b"i" + str(len(scalar)).encode("ascii") + b":" + scalar
+        if type(member) is str:
+            scalar = member.encode("utf-8")
+            return b"s" + str(len(scalar)).encode("ascii") + b":" + scalar
+        if type(member) is bytes:
+            return b"y" + str(len(member)).encode("ascii") + b":" + member
+        if type(member) is datetime:
+            scalar = member.isoformat(timespec="microseconds").encode("ascii")
+            return b"d" + str(len(scalar)).encode("ascii") + b":" + scalar
+        if type(member) is tuple:
+            encoded_members = tuple(encode(child) for child in member)
+            return (
+                b"t"
+                + str(len(encoded_members)).encode("ascii")
+                + b":"
+                + b"".join(
+                    str(len(child)).encode("ascii") + b":" + child for child in encoded_members
+                )
+            )
+        raise AssertionError("validated materialization payload changed during encoding")
+
+    return encode(value)
+
+
+def _materialization_batch_hmac(authority_secret: bytes, payload: tuple[object, ...]) -> str:
+    """Authenticate one exact inert tuple without relying on object ``repr`` hooks."""
+
+    return hmac.new(
+        authority_secret,
+        _canonical_materialization_batch_payload_bytes(payload),
+        sha256,
+    ).hexdigest()
+
+
+def _thread_identity_payload(identity: ThreadIdentity | None) -> tuple[object, ...] | None:
+    """Project one exact immutable thread identity into inert built-ins."""
+
+    if identity is None:
+        return None
+    if type(identity) is not ThreadIdentity:
+        raise StateError("Materialization-batch thread identity must have its exact type")
+    return (
+        "thread-identity-v1",
+        identity.hostname,
+        identity.process_object_id,
+        identity.pid,
+        identity.tid,
+        identity.object_id,
+        identity.started_at,
+        identity.kind,
+    )
+
+
+def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
+    """Project one exact immutable process identity into inert built-ins."""
+
+    if type(identity) is not ProcessIdentity:
+        raise StateError("Materialization-batch process identity must have its exact type")
+    return (
+        "process-identity-v1",
+        identity.hostname,
+        identity.object_id,
+        identity.pid,
+        identity.parent_pid,
+        identity.image,
+        identity.command_line,
+        identity.principal,
+        identity.logon_id,
+        identity.started_at,
+        identity.lifecycle_group_id,
+        identity.parent_lifecycle_group_id,
+        _thread_identity_payload(identity.primary_thread),
+    )
+
+
+def _session_identity_payload(identity: SessionIdentity | None) -> tuple[object, ...] | None:
+    """Project one exact immutable session identity into inert built-ins."""
+
+    if identity is None:
+        return None
+    if type(identity) is not SessionIdentity:
+        raise StateError("Materialization-batch session identity must have its exact type")
+    return (
+        "session-identity-v1",
+        identity.hostname,
+        identity.object_id,
+        identity.logon_id,
+        identity.session_id,
+        identity.principal,
+        identity.session_kind,
+        identity.started_at,
+        identity.lifecycle_group_id,
+        identity.logon_guid,
+        identity.parent_lifecycle_group_id,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,6 +418,341 @@ class LifecycleMaterializationBatchReceipt:
             sha256,
         ).hexdigest()
         return hmac.compare_digest(self._integrity_token, expected)
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleMaterializationBatchTransaction:
+    """Authority-issued exact locator for one retry-stable batch request."""
+
+    _transaction_id: str
+    _request_digest: str
+    _generation: int
+    _integrity_token: str = field(repr=False)
+
+    @classmethod
+    def _issue(
+        cls,
+        *,
+        authority_secret: bytes,
+        transaction_id: str,
+        request_digest: str,
+        generation: int,
+    ) -> LifecycleMaterializationBatchTransaction:
+        values: tuple[object, ...] = (
+            "materialization-batch-transaction-v1",
+            transaction_id,
+            request_digest,
+            generation,
+        )
+        token = _materialization_batch_hmac(authority_secret, values)
+        return cls(transaction_id, request_digest, generation, token)
+
+    @property
+    def transaction_id(self) -> str:
+        """Return the stable caller-selected transaction identity."""
+
+        return self._transaction_id
+
+    @property
+    def request_digest(self) -> str:
+        """Return the exact retry-stable request digest."""
+
+        return self._request_digest
+
+    def _has_valid_integrity(self, authority_secret: bytes) -> bool:
+        values: tuple[object, ...] = (
+            "materialization-batch-transaction-v1",
+            self._transaction_id,
+            self._request_digest,
+            self._generation,
+        )
+        try:
+            expected = _materialization_batch_hmac(authority_secret, values)
+        except StateError:
+            return False
+        return type(self._integrity_token) is str and hmac.compare_digest(
+            self._integrity_token,
+            expected,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleMaterializationBatchPlanningAttempt:
+    """Exact caller-held identity for one retry-stable planning-claim attempt."""
+
+    _transaction_id: str
+    _request_digest: str
+    _transaction_generation: int
+    _integrity_token: str = field(repr=False)
+
+    @classmethod
+    def _issue(
+        cls,
+        *,
+        authority_secret: bytes,
+        transaction: LifecycleMaterializationBatchTransaction,
+    ) -> LifecycleMaterializationBatchPlanningAttempt:
+        payload: tuple[object, ...] = (
+            "materialization-batch-planning-attempt-v1",
+            transaction.transaction_id,
+            transaction.request_digest,
+            transaction._generation,
+        )
+        return cls(
+            transaction.transaction_id,
+            transaction.request_digest,
+            transaction._generation,
+            _materialization_batch_hmac(authority_secret, payload),
+        )
+
+    def _has_valid_integrity(self, authority_secret: bytes) -> bool:
+        payload: tuple[object, ...] = (
+            "materialization-batch-planning-attempt-v1",
+            self._transaction_id,
+            self._request_digest,
+            self._transaction_generation,
+        )
+        try:
+            expected = _materialization_batch_hmac(authority_secret, payload)
+        except StateError:
+            return False
+        return type(self._integrity_token) is str and hmac.compare_digest(
+            self._integrity_token,
+            expected,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleMaterializationBatchPlanningCapability:
+    """Exact retained proof that one Thread owns retry-stable batch planning."""
+
+    _transaction_id: str
+    _request_digest: str
+    _transaction_generation: int
+    _integrity_token: str = field(repr=False)
+
+    @classmethod
+    def _issue(
+        cls,
+        *,
+        authority_secret: bytes,
+        transaction: LifecycleMaterializationBatchTransaction,
+    ) -> LifecycleMaterializationBatchPlanningCapability:
+        payload: tuple[object, ...] = (
+            "materialization-batch-planning-capability-v1",
+            transaction.transaction_id,
+            transaction.request_digest,
+            transaction._generation,
+        )
+        return cls(
+            transaction.transaction_id,
+            transaction.request_digest,
+            transaction._generation,
+            _materialization_batch_hmac(authority_secret, payload),
+        )
+
+    def _has_valid_integrity(self, authority_secret: bytes) -> bool:
+        payload: tuple[object, ...] = (
+            "materialization-batch-planning-capability-v1",
+            self._transaction_id,
+            self._request_digest,
+            self._transaction_generation,
+        )
+        try:
+            expected = _materialization_batch_hmac(authority_secret, payload)
+        except StateError:
+            return False
+        return type(self._integrity_token) is str and hmac.compare_digest(
+            self._integrity_token,
+            expected,
+        )
+
+
+def _materialization_batch_receipt_payload(
+    receipt: LifecycleMaterializationBatchReceipt,
+) -> tuple[object, ...]:
+    """Project one exact batch receipt without invoking its representation."""
+
+    if type(receipt) is not LifecycleMaterializationBatchReceipt:
+        raise StateError("Materialization-batch receipt must have its exact public type")
+    return (
+        "materialization-batch-receipt-v1",
+        receipt._publication_token,
+        receipt._member_tokens,
+        receipt._prior_version,
+        receipt._committed_version,
+        receipt._integrity_token,
+    )
+
+
+def _materialization_batch_terminal_payload(
+    *,
+    transaction_id: str,
+    request_digest: str,
+    transaction_generation: int,
+    plan_publication_token: str,
+    session: SessionIdentity | None,
+    processes: tuple[ProcessIdentity, ...],
+    boot_times: tuple[tuple[str, datetime], ...],
+    external_result: tuple[object, ...],
+    terminal_at: datetime,
+    receipt: LifecycleMaterializationBatchReceipt,
+) -> tuple[object, ...]:
+    """Project an exact terminal into deeply inert authenticated built-ins."""
+
+    if type(processes) is not tuple:
+        raise StateError("Materialization-batch processes must be an exact tuple")
+    if type(boot_times) is not tuple:
+        raise StateError("Materialization-batch boot times must be an exact tuple")
+    canonical_boot_times: list[tuple[str, datetime]] = []
+    for member in boot_times:
+        if type(member) is not tuple or len(member) != 2:
+            raise StateError("Materialization-batch boot-time members must be exact pairs")
+        hostname, boot_time = member
+        if type(hostname) is not str or type(boot_time) is not datetime:
+            raise StateError("Materialization-batch boot-time members are malformed")
+        canonical_boot_times.append((hostname, boot_time))
+    payload: tuple[object, ...] = (
+        "materialization-batch-terminal-v1",
+        transaction_id,
+        request_digest,
+        transaction_generation,
+        plan_publication_token,
+        _session_identity_payload(session),
+        tuple(_process_identity_payload(identity) for identity in processes),
+        tuple(canonical_boot_times),
+        external_result,
+        terminal_at,
+        _materialization_batch_receipt_payload(receipt),
+    )
+    _validate_materialization_batch_external_result(payload)
+    return payload
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleMaterializationBatchTerminalResult:
+    """Authenticated immutable result retained across a lost public return."""
+
+    _transaction_id: str
+    _request_digest: str
+    _transaction_generation: int
+    _plan_publication_token: str
+    _session: SessionIdentity | None
+    _processes: tuple[ProcessIdentity, ...]
+    _boot_times: tuple[tuple[str, datetime], ...]
+    _external_result: tuple[object, ...]
+    _terminal_at: datetime
+    _receipt: LifecycleMaterializationBatchReceipt
+    _integrity_token: str = field(repr=False)
+
+    @classmethod
+    def _issue(
+        cls,
+        *,
+        authority_secret: bytes,
+        transaction: LifecycleMaterializationBatchTransaction,
+        plan: MaterializationBatchPlan,
+        external_result: tuple[object, ...],
+        receipt: LifecycleMaterializationBatchReceipt,
+    ) -> LifecycleMaterializationBatchTerminalResult:
+        session = plan.session.identity if plan.session is not None else None
+        processes = tuple(member.identity for member in plan.processes)
+        values = _materialization_batch_terminal_payload(
+            transaction_id=transaction.transaction_id,
+            request_digest=transaction.request_digest,
+            transaction_generation=transaction._generation,
+            plan_publication_token=plan.publication_token,
+            session=session,
+            processes=processes,
+            boot_times=plan.boot_times,
+            external_result=external_result,
+            terminal_at=plan.final_state_time,
+            receipt=receipt,
+        )
+        token = _materialization_batch_hmac(authority_secret, values)
+        return cls(
+            transaction.transaction_id,
+            transaction.request_digest,
+            transaction._generation,
+            plan.publication_token,
+            session,
+            processes,
+            plan.boot_times,
+            external_result,
+            plan.final_state_time,
+            receipt,
+            token,
+        )
+
+    @property
+    def transaction_id(self) -> str:
+        """Return the retry-stable transaction identity."""
+
+        return self._transaction_id
+
+    @property
+    def request_digest(self) -> str:
+        """Return the exact request digest bound to this result."""
+
+        return self._request_digest
+
+    @property
+    def session(self) -> SessionIdentity | None:
+        """Return the exact committed session identity, when present."""
+
+        return self._session
+
+    @property
+    def processes(self) -> tuple[ProcessIdentity, ...]:
+        """Return exact committed process identities in batch order."""
+
+        return self._processes
+
+    @property
+    def boot_times(self) -> tuple[tuple[str, datetime], ...]:
+        """Return exact committed host boot times."""
+
+        return self._boot_times
+
+    @property
+    def external_result(self) -> tuple[object, ...]:
+        """Return the authenticated canonical external publication payload."""
+
+        return self._external_result
+
+    @property
+    def terminal_at(self) -> datetime:
+        """Return the canonical retention time for this terminal result."""
+
+        return self._terminal_at
+
+    @property
+    def receipt(self) -> LifecycleMaterializationBatchReceipt:
+        """Return the exact authenticated State/lifecycle commit receipt."""
+
+        return self._receipt
+
+    def _has_valid_integrity(self, authority_secret: bytes) -> bool:
+        try:
+            values = _materialization_batch_terminal_payload(
+                transaction_id=self._transaction_id,
+                request_digest=self._request_digest,
+                transaction_generation=self._transaction_generation,
+                plan_publication_token=self._plan_publication_token,
+                session=self._session,
+                processes=self._processes,
+                boot_times=self._boot_times,
+                external_result=self._external_result,
+                terminal_at=self._terminal_at,
+                receipt=self._receipt,
+            )
+            expected = _materialization_batch_hmac(authority_secret, values)
+        except StateError:
+            return False
+        return type(self._integrity_token) is str and hmac.compare_digest(
+            self._integrity_token,
+            expected,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -986,6 +1485,15 @@ class GeneratorLifecycleAuthorityCensus:
     bootstrapped_sessions: int
     bootstrapped_processes: int
     watermark: datetime | None
+    materialization_batch_transactions: int
+    materialization_batch_transactions_pending: int
+    materialization_batch_transactions_unacknowledged: int
+    materialization_batch_transactions_acknowledged: int
+    materialization_batch_transaction_capacity: int
+    materialization_batch_transaction_high_water: int
+    materialization_batch_transaction_retained_bytes: int
+    materialization_batch_transaction_retained_bytes_high_water: int
+    materialization_batch_transaction_byte_capacity: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -1013,6 +1521,21 @@ class ForegroundShellOwner:
 class _StrictLifecycleMarker:
     key: StrictLifecycleKey
     retain_until: datetime
+
+
+@dataclass(slots=True, weakref_slot=True)
+class _LifecycleMaterializationBatchTransactionRecord:
+    """Bounded authority-owned retry and terminal-result record."""
+
+    transaction: LifecycleMaterializationBatchTransaction
+    terminal_result: LifecycleMaterializationBatchTerminalResult | None = None
+    claimed_thread: Thread | None = None
+    planning_attempt: LifecycleMaterializationBatchPlanningAttempt | None = None
+    planning_capability: LifecycleMaterializationBatchPlanningCapability | None = None
+    planning_capability_consumed: bool = False
+    retained_bytes: int = 0
+    acknowledged: bool = False
+    acknowledged_watermark: datetime | None = None
 
 
 class _AuthorityShard:
@@ -1054,9 +1577,31 @@ class GeneratorLifecycleAuthority:
         lifecycle_shadow: LifecycleShadow,
         *,
         shard_count: int = _DEFAULT_SHARD_COUNT,
+        materialization_batch_transaction_capacity: int = (
+            _DEFAULT_MATERIALIZATION_BATCH_TRANSACTION_CAPACITY
+        ),
+        materialization_batch_transaction_byte_capacity: int = (
+            _DEFAULT_MATERIALIZATION_BATCH_TRANSACTION_BYTE_CAPACITY
+        ),
     ) -> None:
         if shard_count <= 0:
             raise ValueError("Generator lifecycle shard_count must be positive")
+        if (
+            type(materialization_batch_transaction_capacity) is not int
+            or materialization_batch_transaction_capacity <= 0
+        ):
+            raise ValueError(
+                "Generator lifecycle materialization-batch transaction capacity "
+                "must be a positive exact integer"
+            )
+        if (
+            type(materialization_batch_transaction_byte_capacity) is not int
+            or materialization_batch_transaction_byte_capacity <= 0
+        ):
+            raise ValueError(
+                "Generator lifecycle materialization-batch byte capacity must be a positive "
+                "exact integer"
+            )
         self._state_manager = state_manager
         self._shadow = lifecycle_shadow
         self._registry = lifecycle_shadow.registry
@@ -1070,6 +1615,26 @@ class GeneratorLifecycleAuthority:
         self._watermark: datetime | None = None
         self._materialization_precommit_hook: Callable[[], None] | None = None
         self._receipt_secret = secrets.token_bytes(32)
+        self._materialization_batch_transaction_lock = RLock()
+        self._materialization_batch_transaction_condition = Condition(
+            self._materialization_batch_transaction_lock
+        )
+        self._materialization_batch_transactions: dict[
+            str, _LifecycleMaterializationBatchTransactionRecord
+        ] = {}
+        self._materialization_batch_transaction_generation = 0
+        self._materialization_batch_transactions_pending = 0
+        self._materialization_batch_transactions_unacknowledged = 0
+        self._materialization_batch_transactions_acknowledged = 0
+        self._materialization_batch_transaction_capacity = (
+            materialization_batch_transaction_capacity
+        )
+        self._materialization_batch_transaction_high_water = 0
+        self._materialization_batch_transaction_retained_bytes = 0
+        self._materialization_batch_transaction_retained_bytes_high_water = 0
+        self._materialization_batch_transaction_byte_capacity = (
+            materialization_batch_transaction_byte_capacity
+        )
         self._fixture_parent_backfill = False
         self._application_registry: ApplicationChannelRegistry | None = None
         self._http_channel_manager: HttpApplicationChannelManager | None = None
@@ -1082,6 +1647,645 @@ class GeneratorLifecycleAuthority:
         """Return the single engine-owned canonical lifecycle registry."""
 
         return self._registry
+
+    @property
+    def state_manager(self) -> StateManager:
+        """Return the exact State owner committed by this authority."""
+
+        return self._state_manager
+
+    @property
+    def lifecycle_shadow(self) -> LifecycleShadow:
+        """Return the exact State/lifecycle projection adapter."""
+
+        return self._shadow
+
+    def reserve_materialization_batch_transaction(
+        self,
+        *,
+        transaction_id: str,
+        request_digest: str,
+        request_payload: tuple[object, ...] = (),
+        anticipated_terminal_payload: tuple[object, ...] | None = None,
+    ) -> LifecycleMaterializationBatchTransaction:
+        """Reserve or recover one bounded retry-stable batch transaction."""
+
+        if type(transaction_id) is not str or not transaction_id.strip():
+            raise StateError("Materialization-batch transaction ID must be a non-empty string")
+        if len(transaction_id) > 256:
+            raise StateError("Materialization-batch transaction ID is too long")
+        if type(request_digest) is not str or not request_digest.strip():
+            raise StateError("Materialization-batch request digest must be a non-empty string")
+        if len(request_digest) > 256:
+            raise StateError("Materialization-batch request digest is too long")
+        if type(request_payload) is not tuple:
+            raise StateError("Materialization-batch request payload must be an exact tuple")
+        if (
+            anticipated_terminal_payload is not None
+            and type(anticipated_terminal_payload) is not tuple
+        ):
+            raise StateError(
+                "Materialization-batch anticipated terminal payload must be an exact tuple"
+            )
+        _nodes, request_bytes = _validate_materialization_batch_external_result(request_payload)
+        reserved_bytes = 256 + len(transaction_id.encode()) + len(request_digest.encode())
+        reserved_bytes += request_bytes
+        if anticipated_terminal_payload is not None:
+            _validate_materialization_batch_external_result(anticipated_terminal_payload)
+            anticipated_terminal_retained_bytes = 512 + len(
+                _canonical_materialization_batch_payload_bytes(anticipated_terminal_payload)
+            )
+            if anticipated_terminal_retained_bytes > _MAX_MATERIALIZATION_BATCH_TRANSACTION_BYTES:
+                raise StateError("Materialization-batch terminal exceeds its retained-byte limit")
+            reserved_bytes = max(reserved_bytes, anticipated_terminal_retained_bytes)
+        if reserved_bytes > _MAX_MATERIALIZATION_BATCH_TRANSACTION_BYTES:
+            raise StateError("Materialization-batch request exceeds its retained-byte limit")
+        with self._materialization_batch_transaction_lock:
+            existing = self._materialization_batch_transactions.get(transaction_id)
+            if existing is not None:
+                if existing.transaction.request_digest != request_digest:
+                    raise StateError(
+                        "Materialization-batch transaction ID is already bound to another request"
+                    )
+                self._reserve_materialization_batch_transaction_bytes_locked(
+                    existing,
+                    reserved_bytes,
+                )
+                return existing.transaction
+            if (
+                len(self._materialization_batch_transactions)
+                >= self._materialization_batch_transaction_capacity
+            ):
+                raise StateError(
+                    "Materialization-batch transaction capacity is exhausted by retained records"
+                )
+            if (
+                self._materialization_batch_transaction_retained_bytes + reserved_bytes
+                > self._materialization_batch_transaction_byte_capacity
+            ):
+                raise StateError("Materialization-batch transaction byte capacity is exhausted")
+            self._materialization_batch_transaction_generation += 1
+            transaction = LifecycleMaterializationBatchTransaction._issue(
+                authority_secret=self._receipt_secret,
+                transaction_id=transaction_id,
+                request_digest=request_digest,
+                generation=self._materialization_batch_transaction_generation,
+            )
+            self._materialization_batch_transactions[transaction_id] = (
+                _LifecycleMaterializationBatchTransactionRecord(
+                    transaction=transaction,
+                    retained_bytes=reserved_bytes,
+                )
+            )
+            self._materialization_batch_transaction_retained_bytes += reserved_bytes
+            self._materialization_batch_transaction_retained_bytes_high_water = max(
+                self._materialization_batch_transaction_retained_bytes_high_water,
+                self._materialization_batch_transaction_retained_bytes,
+            )
+            self._materialization_batch_transactions_pending += 1
+            self._materialization_batch_transaction_high_water = max(
+                self._materialization_batch_transaction_high_water,
+                len(self._materialization_batch_transactions),
+            )
+            return transaction
+
+    def _reserve_materialization_batch_transaction_bytes_locked(
+        self,
+        record: _LifecycleMaterializationBatchTransactionRecord,
+        retained_bytes: int,
+    ) -> None:
+        """Reserve an exact larger byte charge before any canonical mutation."""
+
+        if retained_bytes <= record.retained_bytes:
+            return
+        additional = retained_bytes - record.retained_bytes
+        if (
+            self._materialization_batch_transaction_retained_bytes + additional
+            > self._materialization_batch_transaction_byte_capacity
+        ):
+            raise StateError("Materialization-batch transaction byte capacity is exhausted")
+        record.retained_bytes = retained_bytes
+        self._materialization_batch_transaction_retained_bytes += additional
+        self._materialization_batch_transaction_retained_bytes_high_water = max(
+            self._materialization_batch_transaction_retained_bytes_high_water,
+            self._materialization_batch_transaction_retained_bytes,
+        )
+
+    @staticmethod
+    def _materialization_batch_terminal_retained_bytes(
+        transaction: LifecycleMaterializationBatchTransaction,
+        plan: MaterializationBatchPlan,
+        external_result: tuple[object, ...],
+    ) -> int:
+        """Measure the exact immutable terminal projection before State publication."""
+
+        if type(plan) is not MaterializationBatchPlan:
+            raise StateError("Materialization-batch plan must have its exact public type")
+        member_count = len(plan.processes) + len(plan.boot_times) + int(plan.session is not None)
+        if member_count > _MAX_MATERIALIZATION_BATCH_PAYLOAD_NODES:
+            raise StateError("Materialization-batch terminal has too many retained members")
+        projection: tuple[object, ...] = (
+            "materialization-batch-terminal-size-v1",
+            transaction.transaction_id,
+            transaction.request_digest,
+            transaction._generation,
+            plan.publication_token,
+            _session_identity_payload(plan.session.identity if plan.session is not None else None),
+            tuple(_process_identity_payload(member.identity) for member in plan.processes),
+            plan.boot_times,
+            external_result,
+            plan.final_state_time,
+        )
+        retained_bytes = 512 + len(_canonical_materialization_batch_payload_bytes(projection))
+        if retained_bytes > _MAX_MATERIALIZATION_BATCH_TRANSACTION_BYTES:
+            raise StateError("Materialization-batch terminal exceeds its retained-byte limit")
+        return retained_bytes
+
+    def _validate_materialization_batch_transaction(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+    ) -> None:
+        """Authenticate transaction structure before acquiring transaction locks."""
+
+        if type(
+            transaction
+        ) is not LifecycleMaterializationBatchTransaction or not transaction._has_valid_integrity(
+            self._receipt_secret
+        ):
+            raise StateError("Materialization-batch transaction failed authority authentication")
+
+    def _materialization_batch_transaction_record_for_locked(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+    ) -> _LifecycleMaterializationBatchTransactionRecord:
+        """Resolve retained identity using only prevalidated inert fields."""
+
+        record = self._materialization_batch_transactions.get(transaction.transaction_id)
+        if record is None or record.transaction is not transaction:
+            raise StateError("Materialization-batch transaction is not retained by this authority")
+        return record
+
+    def _validate_materialization_batch_planning_capability(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        capability: LifecycleMaterializationBatchPlanningCapability,
+    ) -> None:
+        """Authenticate one planning capability outside transaction locks."""
+
+        if (
+            type(capability) is not LifecycleMaterializationBatchPlanningCapability
+            or not capability._has_valid_integrity(self._receipt_secret)
+            or capability._transaction_id != transaction.transaction_id
+            or capability._request_digest != transaction.request_digest
+            or capability._transaction_generation != transaction._generation
+        ):
+            raise StateError("Materialization-batch planning capability failed authentication")
+
+    def _validate_materialization_batch_planning_attempt(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        attempt: LifecycleMaterializationBatchPlanningAttempt,
+    ) -> None:
+        """Authenticate one caller-held planning attempt outside transaction locks."""
+
+        if (
+            type(attempt) is not LifecycleMaterializationBatchPlanningAttempt
+            or not attempt._has_valid_integrity(self._receipt_secret)
+            or attempt._transaction_id != transaction.transaction_id
+            or attempt._request_digest != transaction.request_digest
+            or attempt._transaction_generation != transaction._generation
+        ):
+            raise StateError("Materialization-batch planning attempt failed authentication")
+
+    def authenticates_materialization_batch_terminal_result(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        result: object,
+    ) -> bool:
+        """Verify the exact retained result and reject copied/replayed objects."""
+
+        if not self._materialization_batch_terminal_result_has_valid_integrity(
+            transaction,
+            result,
+        ):
+            return False
+        with self._materialization_batch_transaction_lock:
+            record = self._materialization_batch_transactions.get(transaction.transaction_id)
+            return (
+                record is not None
+                and record.transaction is transaction
+                and record.terminal_result is result
+            )
+
+    def _materialization_batch_terminal_result_has_valid_integrity(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        result: object,
+    ) -> bool:
+        """Verify terminal cryptography and generation without retained identity."""
+
+        return (
+            type(transaction) is LifecycleMaterializationBatchTransaction
+            and transaction._has_valid_integrity(self._receipt_secret)
+            and type(result) is LifecycleMaterializationBatchTerminalResult
+            and result._has_valid_integrity(self._receipt_secret)
+            and result.transaction_id == transaction.transaction_id
+            and result.request_digest == transaction.request_digest
+            and result._transaction_generation == transaction._generation
+            and result.receipt._has_valid_integrity(self._receipt_secret)
+            and result.receipt._publication_token == result._plan_publication_token
+        )
+
+    def validates_archived_materialization_batch_terminal_result(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        result: LifecycleMaterializationBatchTerminalResult,
+    ) -> bool:
+        """Verify an engine-retained terminal after acknowledged watermark pruning."""
+
+        return self._materialization_batch_terminal_result_has_valid_integrity(
+            transaction,
+            result,
+        )
+
+    def _runtime_for_materialization_batch_terminal_result(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        result: LifecycleMaterializationBatchTerminalResult,
+    ) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
+        """Resolve exact live State/registry objects for one authentic terminal result."""
+
+        if not self._materialization_batch_terminal_result_has_valid_integrity(
+            transaction,
+            result,
+        ):
+            raise StateError("Materialization-batch terminal result failed authentication")
+        if self._state_manager.materialization_version < result.receipt.committed_version:
+            raise StateError("Materialization-batch terminal result is ahead of canonical State")
+        for hostname, boot_time in result.boot_times:
+            if self._state_manager.get_boot_time(hostname) != boot_time:
+                raise StateError(
+                    "Materialization-batch terminal boot metadata no longer matches State"
+                )
+        session: ActiveSession | None = None
+        if result.session is not None:
+            identity = result.session
+            session = self._state_manager.get_session(identity.logon_id)
+            if (
+                session is None
+                or self._state_manager.get_session_identity(identity.logon_id) != identity
+            ):
+                raise StateError("Materialization-batch terminal session is absent from State")
+            session_snapshot = self._registry.get_session(identity.object_id)
+            if (
+                session_snapshot is None
+                or session_snapshot.closed_at is not None
+                or session_snapshot.identity.object_id != identity.object_id
+                or session_snapshot.identity.hostname != identity.hostname
+                or session_snapshot.identity.logon_id != identity.logon_id
+            ):
+                raise StateError(
+                    "Materialization-batch terminal session is absent from lifecycle registry"
+                )
+        processes: list[RunningProcess] = []
+        for identity in result.processes:
+            process = self._state_manager.get_process(identity.hostname, identity.pid)
+            if (
+                process is None
+                or self._state_manager.get_process_identity(
+                    identity.hostname,
+                    identity.pid,
+                )
+                != identity
+            ):
+                raise StateError("Materialization-batch terminal process is absent from State")
+            process_snapshot = self._registry.get_process(identity.object_id)
+            if (
+                process_snapshot is None
+                or process_snapshot.closed_at is not None
+                or process_snapshot.identity.object_id != identity.object_id
+                or process_snapshot.identity.hostname != identity.hostname
+                or process_snapshot.identity.pid != identity.pid
+                or process_snapshot.identity.started_at != identity.started_at
+            ):
+                raise StateError(
+                    "Materialization-batch terminal process is absent from lifecycle registry"
+                )
+            processes.append(process)
+        return session, tuple(processes)
+
+    def reconcile_materialization_batch_transaction(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+    ) -> LifecycleMaterializationBatchTerminalResult | None:
+        """Return and verify a committed result, or ``None`` while still pending."""
+
+        self._validate_materialization_batch_transaction(transaction)
+        with self._materialization_batch_transaction_lock:
+            record = self._materialization_batch_transaction_record_for_locked(transaction)
+            result = record.terminal_result
+            if result is None:
+                return None
+        self._runtime_for_materialization_batch_terminal_result(transaction, result)
+        with self._materialization_batch_transaction_lock:
+            record = self._materialization_batch_transaction_record_for_locked(transaction)
+            if record.terminal_result is not result:
+                raise StateError("Materialization-batch terminal changed during reconciliation")
+        return result
+
+    def acknowledge_materialization_batch_transaction(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        result: LifecycleMaterializationBatchTerminalResult,
+    ) -> None:
+        """Acknowledge exact result delivery without weakening watermark retention."""
+
+        if not self.acknowledge_materialization_batch_transaction_if_retained(
+            transaction,
+            result,
+        ):
+            raise StateError("Materialization-batch transaction is not retained by this authority")
+
+    def acknowledge_materialization_batch_transaction_if_retained(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        result: LifecycleMaterializationBatchTerminalResult,
+    ) -> bool:
+        """Atomically acknowledge one retained terminal or return false after exact pruning."""
+
+        if not self._materialization_batch_terminal_result_has_valid_integrity(
+            transaction,
+            result,
+        ):
+            raise StateError("Materialization-batch acknowledgement result is not canonical")
+        with self._materialization_batch_transaction_lock:
+            record = self._materialization_batch_transactions.get(transaction.transaction_id)
+            if record is None:
+                return False
+            if record.transaction is not transaction:
+                raise StateError(
+                    "Materialization-batch transaction is not retained by this authority"
+                )
+            if record.terminal_result is None:
+                raise StateError("Pending materialization-batch transaction cannot be acknowledged")
+            if result is not record.terminal_result:
+                raise StateError("Materialization-batch acknowledgement result is not canonical")
+            if record.acknowledged:
+                return True
+            record.acknowledged = True
+            record.acknowledged_watermark = self._watermark
+            record.planning_attempt = None
+            record.planning_capability = None
+            record.planning_capability_consumed = False
+            self._materialization_batch_transactions_unacknowledged -= 1
+            self._materialization_batch_transactions_acknowledged += 1
+            return True
+
+    def cancel_materialization_batch_transaction(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+    ) -> None:
+        """Release one still-pending reservation; terminal records require acknowledgement."""
+
+        self._validate_materialization_batch_transaction(transaction)
+        with self._materialization_batch_transaction_lock:
+            record = self._materialization_batch_transaction_record_for_locked(transaction)
+            if record.terminal_result is not None:
+                raise StateError("Terminal materialization-batch transaction cannot be cancelled")
+            if record.claimed_thread is not None:
+                raise StateError("Claimed materialization-batch transaction cannot be cancelled")
+            self._materialization_batch_transactions.pop(transaction.transaction_id)
+            self._materialization_batch_transaction_retained_bytes -= record.retained_bytes
+            self._materialization_batch_transactions_pending -= 1
+
+    def _prune_acknowledged_materialization_batch_transactions(self, cutoff: datetime) -> None:
+        """Prune only acknowledged terminals at or behind the shared watermark."""
+
+        with self._materialization_batch_transaction_lock:
+            prunable: list[str] = []
+            for transaction_id, record in self._materialization_batch_transactions.items():
+                if not record.acknowledged or record.terminal_result is None:
+                    continue
+                if record.acknowledged_watermark is None:
+                    record.acknowledged_watermark = cutoff
+                    continue
+                if record.acknowledged_watermark < cutoff:
+                    prunable.append(transaction_id)
+            for transaction_id in prunable:
+                record = self._materialization_batch_transactions.pop(transaction_id)
+                self._materialization_batch_transaction_retained_bytes -= record.retained_bytes
+                self._materialization_batch_transactions_acknowledged -= 1
+
+    def _claim_materialization_batch_transaction(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        planning_capability: LifecycleMaterializationBatchPlanningCapability | None,
+    ) -> tuple[
+        _LifecycleMaterializationBatchTransactionRecord,
+        LifecycleMaterializationBatchTerminalResult | None,
+    ]:
+        """Claim one pending transaction or wait for its authentic terminal result."""
+
+        self._validate_materialization_batch_transaction(transaction)
+        if planning_capability is not None:
+            self._validate_materialization_batch_planning_capability(
+                transaction,
+                planning_capability,
+            )
+        with self._materialization_batch_transaction_condition:
+            record = self._materialization_batch_transaction_record_for_locked(transaction)
+            if planning_capability is not None and (
+                record.planning_capability is not planning_capability
+                or record.claimed_thread is not current_thread()
+            ):
+                raise StateError("Materialization-batch planning capability is not owned here")
+            while record.claimed_thread is not None and record.terminal_result is None:
+                if record.claimed_thread is current_thread():
+                    if (
+                        planning_capability is not None
+                        and record.planning_capability is planning_capability
+                        and not record.planning_capability_consumed
+                    ):
+                        record.planning_capability_consumed = True
+                        return record, None
+                    raise StateError("Materialization-batch transaction is reentrantly claimed")
+                self._materialization_batch_transaction_condition.wait()
+                record = self._materialization_batch_transaction_record_for_locked(transaction)
+            if record.terminal_result is not None:
+                return record, record.terminal_result
+            if planning_capability is not None:
+                raise StateError("Materialization-batch planning capability is no longer active")
+            record.claimed_thread = current_thread()
+            return record, None
+
+    def prepare_materialization_batch_transaction_planning_attempt(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+    ) -> LifecycleMaterializationBatchPlanningAttempt:
+        """Issue one inert attempt identity before entering the retained planning claim."""
+
+        self._validate_materialization_batch_transaction(transaction)
+        with self._materialization_batch_transaction_lock:
+            self._materialization_batch_transaction_record_for_locked(transaction)
+        return LifecycleMaterializationBatchPlanningAttempt._issue(
+            authority_secret=self._receipt_secret,
+            transaction=transaction,
+        )
+
+    def claim_materialization_batch_transaction_for_planning(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        *,
+        attempt: LifecycleMaterializationBatchPlanningAttempt,
+    ) -> (
+        LifecycleMaterializationBatchPlanningCapability
+        | LifecycleMaterializationBatchTerminalResult
+    ):
+        """Serialize exact retry-stable planning before any State capability is minted."""
+
+        self._validate_materialization_batch_transaction(transaction)
+        self._validate_materialization_batch_planning_attempt(transaction, attempt)
+        capability = LifecycleMaterializationBatchPlanningCapability._issue(
+            authority_secret=self._receipt_secret,
+            transaction=transaction,
+        )
+        with self._materialization_batch_transaction_condition:
+            record = self._materialization_batch_transaction_record_for_locked(transaction)
+            while record.claimed_thread is not None and record.terminal_result is None:
+                if record.claimed_thread is current_thread():
+                    raise StateError("Materialization-batch planning is reentrantly claimed")
+                self._materialization_batch_transaction_condition.wait()
+                record = self._materialization_batch_transaction_record_for_locked(transaction)
+            if record.terminal_result is not None:
+                return record.terminal_result
+            record.claimed_thread = current_thread()
+            record.planning_attempt = attempt
+            record.planning_capability = capability
+            record.planning_capability_consumed = False
+            return capability
+
+    def reconcile_materialization_batch_transaction_planning_claim(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        *,
+        attempt: LifecycleMaterializationBatchPlanningAttempt,
+    ) -> LifecycleMaterializationBatchPlanningCapability | None:
+        """Recover only this exact attempt's capability after a lost claim return."""
+
+        self._validate_materialization_batch_transaction(transaction)
+        self._validate_materialization_batch_planning_attempt(transaction, attempt)
+        with self._materialization_batch_transaction_lock:
+            record = self._materialization_batch_transaction_record_for_locked(transaction)
+            if record.terminal_result is not None:
+                return None
+            if record.claimed_thread is None:
+                return None
+            if record.claimed_thread is not current_thread():
+                raise StateError("Materialization-batch planning claim is owned by another Thread")
+            if record.planning_attempt is not attempt:
+                return None
+            capability = record.planning_capability
+            if capability is None or record.planning_capability_consumed:
+                raise StateError("Materialization-batch transaction is past its planning claim")
+            return capability
+
+    def release_materialization_batch_transaction_planning_claim(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        capability: LifecycleMaterializationBatchPlanningCapability,
+    ) -> None:
+        """Release an exact planning claim after a neutral pre-materialization failure."""
+
+        self._validate_materialization_batch_transaction(transaction)
+        self._validate_materialization_batch_planning_capability(transaction, capability)
+        with self._materialization_batch_transaction_condition:
+            record = self._materialization_batch_transaction_record_for_locked(transaction)
+            if record.terminal_result is not None:
+                if record.planning_capability is not capability:
+                    raise StateError("Materialization-batch planning claim is not owned here")
+                record.planning_attempt = None
+                record.planning_capability = None
+                record.planning_capability_consumed = False
+                return
+            if (
+                record.claimed_thread is None
+                and record.planning_capability is capability
+                and record.planning_capability_consumed
+            ):
+                record.planning_attempt = None
+                record.planning_capability = None
+                record.planning_capability_consumed = False
+                return
+            if (
+                record.claimed_thread is not current_thread()
+                or record.planning_capability is not capability
+                or record.planning_capability_consumed
+            ):
+                raise StateError("Materialization-batch planning claim is not owned here")
+            record.claimed_thread = None
+            record.planning_attempt = None
+            record.planning_capability = None
+            record.planning_capability_consumed = False
+            self._materialization_batch_transaction_condition.notify_all()
+
+    def _release_materialization_batch_transaction_claim(
+        self,
+        record: _LifecycleMaterializationBatchTransactionRecord,
+    ) -> None:
+        """Release one nonterminal claim after a fully neutral failure."""
+
+        with self._materialization_batch_transaction_condition:
+            if record.terminal_result is None and record.claimed_thread is current_thread():
+                record.claimed_thread = None
+                self._materialization_batch_transaction_condition.notify_all()
+
+    def _terminalize_materialization_batch_transaction_no_fail(
+        self,
+        record: _LifecycleMaterializationBatchTransactionRecord,
+        result: LifecycleMaterializationBatchTerminalResult,
+    ) -> None:
+        """Publish one preauthenticated terminal under the retained State claim."""
+
+        with self._materialization_batch_transaction_condition:
+            if record.claimed_thread is not current_thread() or record.terminal_result is not None:
+                raise StateError("Materialization-batch transaction lost terminal ownership")
+            self._publish_materialization_batch_terminal_result_locked(record, result)
+
+    def _publish_materialization_batch_terminal_result_locked(
+        self,
+        record: _LifecycleMaterializationBatchTransactionRecord,
+        result: LifecycleMaterializationBatchTerminalResult,
+    ) -> None:
+        """Install one precomputed exact terminal using assignment-only writes."""
+
+        record.terminal_result = result
+        record.claimed_thread = None
+        self._materialization_batch_transactions_pending -= 1
+        self._materialization_batch_transactions_unacknowledged += 1
+        self._materialization_batch_transaction_condition.notify_all()
+
+    def _recover_materialization_batch_terminal_install_no_fail(
+        self,
+        record: _LifecycleMaterializationBatchTransactionRecord,
+        result: LifecycleMaterializationBatchTerminalResult,
+    ) -> None:
+        """Converge a failed public terminal-install boundary on its exact result."""
+
+        with self._materialization_batch_transaction_condition:
+            if record.terminal_result is result:
+                return
+            if record.terminal_result is not None or record.claimed_thread is not current_thread():
+                raise StateError("Materialization-batch terminal install changed during failure")
+            self._publish_materialization_batch_terminal_result_locked(record, result)
+
+    def validate_archived_materialization_batch_terminal_state(
+        self,
+        transaction: LifecycleMaterializationBatchTransaction,
+        result: LifecycleMaterializationBatchTerminalResult,
+    ) -> None:
+        """Validate an engine-pinned terminal against exact State/lifecycle truth."""
+
+        self._runtime_for_materialization_batch_terminal_result(transaction, result)
 
     def bind_application_channel_registry(
         self,
@@ -2936,6 +4140,93 @@ class GeneratorLifecycleAuthority:
         plan: MaterializationBatchPlan,
         *,
         finalize_external_no_fail: Callable[[], None] | None = None,
+        transaction: LifecycleMaterializationBatchTransaction | None = None,
+        external_result: tuple[object, ...] = (),
+        planning_capability: LifecycleMaterializationBatchPlanningCapability | None = None,
+    ) -> tuple[
+        ActiveSession | None,
+        tuple[RunningProcess, ...],
+        LifecycleMaterializationBatchReceipt,
+    ]:
+        """Publish or reconcile one claimed all-or-none lifecycle start batch."""
+
+        if type(external_result) is not tuple:
+            raise StateError("Materialization-batch external result must be an exact tuple")
+        _validate_materialization_batch_external_result(external_result)
+        if transaction is not None and finalize_external_no_fail is not None:
+            raise StateError(
+                "Retry-stable materialization-batch transactions cannot run external callbacks"
+            )
+        if transaction is None and planning_capability is not None:
+            raise StateError(
+                "Materialization-batch planning capability requires a retained transaction"
+            )
+        if transaction is not None:
+            self._validate_materialization_batch_transaction(transaction)
+            if planning_capability is not None:
+                self._validate_materialization_batch_planning_capability(
+                    transaction,
+                    planning_capability,
+                )
+            terminal_bytes = self._materialization_batch_terminal_retained_bytes(
+                transaction,
+                plan,
+                external_result,
+            )
+            with self._materialization_batch_transaction_lock:
+                transaction_record = self._materialization_batch_transaction_record_for_locked(
+                    transaction
+                )
+                self._reserve_materialization_batch_transaction_bytes_locked(
+                    transaction_record,
+                    terminal_bytes,
+                )
+        if transaction is None:
+            if external_result:
+                raise StateError(
+                    "Materialization-batch external result requires a retained transaction"
+                )
+            return self._materialize_batch_claimed(
+                plan,
+                finalize_external_no_fail=finalize_external_no_fail,
+                transaction_record=None,
+                external_result=external_result,
+            )
+
+        record, terminal_result = self._claim_materialization_batch_transaction(
+            transaction,
+            planning_capability,
+        )
+        if terminal_result is not None:
+            if (
+                terminal_result._plan_publication_token != plan.publication_token
+                or terminal_result.external_result != external_result
+            ):
+                raise StateError(
+                    "Materialization-batch transaction replay used another exact plan or result"
+                )
+            session, processes = self._runtime_for_materialization_batch_terminal_result(
+                transaction,
+                terminal_result,
+            )
+            return session, processes, terminal_result.receipt
+        try:
+            return self._materialize_batch_claimed(
+                plan,
+                finalize_external_no_fail=finalize_external_no_fail,
+                transaction_record=record,
+                external_result=external_result,
+            )
+        finally:
+            self._release_materialization_batch_transaction_claim(record)
+
+    def _materialize_batch_claimed(
+        self,
+        plan: MaterializationBatchPlan,
+        *,
+        finalize_external_no_fail: Callable[[], None] | None,
+        transaction_record: _LifecycleMaterializationBatchTransactionRecord | None,
+        external_result: tuple[object, ...],
     ) -> tuple[
         ActiveSession | None,
         tuple[RunningProcess, ...],
@@ -3064,22 +4355,9 @@ class GeneratorLifecycleAuthority:
             )
             staged_processes[(identity.hostname, identity.pid)] = identity
 
-        session_requests = (session_request,) if session_request is not None else ()
-        with self._state_manager.materialization_guard(plan):
-            self._state_manager.validate_materialization_batch(plan)
-            with self._registry.prepare_start_batch(
-                sessions=session_requests,
-                processes=tuple(process_requests),
-            ) as ticket:
-                hook = self._materialization_precommit_hook
-                if hook is not None:
-                    hook()
-                ticket.commit()
-                session, processes = self._state_manager._commit_prevalidated_materialization_batch(
-                    plan
-                )
-                if finalize_external_no_fail is not None:
-                    finalize_external_no_fail()
+        hook = self._materialization_precommit_hook
+        if hook is not None:
+            hook()
         member_tokens = tuple(
             member.publication_token
             for member in (
@@ -3094,6 +4372,65 @@ class GeneratorLifecycleAuthority:
             prior_version=plan.expected_version,
             committed_version=plan.expected_version + 1,
         )
+        terminal_result: LifecycleMaterializationBatchTerminalResult | None = None
+        if transaction_record is not None:
+            if (
+                transaction_record.claimed_thread is not current_thread()
+                or transaction_record.terminal_result is not None
+            ):
+                raise StateError("Materialization-batch transaction lost its exact claim")
+            terminal_result = LifecycleMaterializationBatchTerminalResult._issue(
+                authority_secret=self._receipt_secret,
+                transaction=transaction_record.transaction,
+                plan=plan,
+                external_result=external_result,
+                receipt=receipt,
+            )
+            if not self._materialization_batch_terminal_result_has_valid_integrity(
+                transaction_record.transaction,
+                terminal_result,
+            ):
+                raise StateError("Materialization-batch terminal precomputation failed")
+
+        session_requests = (session_request,) if session_request is not None else ()
+        lost_boundary_error: BaseException | None = None
+        with self._state_manager.prepared_materialization_batch(plan) as prepared:
+            with self._registry.prepare_start_batch(
+                sessions=session_requests,
+                processes=tuple(process_requests),
+            ) as ticket:
+                try:
+                    session, processes = prepared.apply_provisional()
+                except BaseException as error:
+                    if not prepared.provisionally_applied:
+                        raise
+                    lost_boundary_error = error
+                try:
+                    ticket.commit()
+                except BaseException as error:
+                    if not ticket.committed:
+                        raise
+                    if lost_boundary_error is None:
+                        lost_boundary_error = error
+                if transaction_record is not None:
+                    assert terminal_result is not None
+                    try:
+                        self._terminalize_materialization_batch_transaction_no_fail(
+                            transaction_record,
+                            terminal_result,
+                        )
+                    except BaseException as error:
+                        self._recover_materialization_batch_terminal_install_no_fail(
+                            transaction_record,
+                            terminal_result,
+                        )
+                        if lost_boundary_error is None:
+                            lost_boundary_error = error
+                session, processes = prepared.finalize_no_fail()
+                if finalize_external_no_fail is not None:
+                    finalize_external_no_fail()
+        if lost_boundary_error is not None and transaction_record is not None:
+            raise lost_boundary_error
         return session, processes, receipt
 
     def _process_start_request(
@@ -4410,6 +5747,7 @@ class GeneratorLifecycleAuthority:
                     max_slots=page,
                 )
         self._watermark = at
+        self._prune_acknowledged_materialization_batch_transactions(at)
 
     def census(self) -> GeneratorLifecycleAuthorityCensus:
         """Return structural queue metrics without scanning stored entries."""
@@ -4447,6 +5785,18 @@ class GeneratorLifecycleAuthority:
                 )
                 maximum = max(maximum, live)
                 high_water += shard.high_water_entries
+        with self._materialization_batch_transaction_lock:
+            batch_transaction_census = (
+                len(self._materialization_batch_transactions),
+                self._materialization_batch_transactions_pending,
+                self._materialization_batch_transactions_unacknowledged,
+                self._materialization_batch_transactions_acknowledged,
+                self._materialization_batch_transaction_capacity,
+                self._materialization_batch_transaction_high_water,
+                self._materialization_batch_transaction_retained_bytes,
+                self._materialization_batch_transaction_retained_bytes_high_water,
+                self._materialization_batch_transaction_byte_capacity,
+            )
         return GeneratorLifecycleAuthorityCensus(
             process_close_intents=process_closes,
             deferred_session_closes=deferred_closes,
@@ -4460,6 +5810,17 @@ class GeneratorLifecycleAuthority:
             bootstrapped_sessions=self._bootstrapped_sessions,
             bootstrapped_processes=self._bootstrapped_processes,
             watermark=self._watermark,
+            materialization_batch_transactions=batch_transaction_census[0],
+            materialization_batch_transactions_pending=batch_transaction_census[1],
+            materialization_batch_transactions_unacknowledged=batch_transaction_census[2],
+            materialization_batch_transactions_acknowledged=batch_transaction_census[3],
+            materialization_batch_transaction_capacity=batch_transaction_census[4],
+            materialization_batch_transaction_high_water=batch_transaction_census[5],
+            materialization_batch_transaction_retained_bytes=batch_transaction_census[6],
+            materialization_batch_transaction_retained_bytes_high_water=(
+                batch_transaction_census[7]
+            ),
+            materialization_batch_transaction_byte_capacity=batch_transaction_census[8],
         )
 
     def _pop_due_process_closes(

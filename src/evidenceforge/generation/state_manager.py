@@ -39,7 +39,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import datetime, timedelta
 from enum import Enum, StrEnum
-from threading import RLock, get_ident
+from threading import RLock, Thread, current_thread, get_ident
 
 from evidenceforge.events.authentication import windows_logon_can_own_desktop
 from evidenceforge.events.base import CanonicalOccurrence
@@ -649,8 +649,9 @@ class MaterializationBatchPlan:
     """Authenticated allocation-free session/process start transaction.
 
     A batch owns at most one new session and an arbitrary parent-ordered process
-    tree.  Every member is planned against the same StateManager version and the
-    primitive commit advances that version exactly once.
+    tree plus exact host boot-time metadata. Every member is planned against the
+    same StateManager version and the primitive commit advances that version
+    exactly once.
     """
 
     _expected_version: int
@@ -658,6 +659,7 @@ class MaterializationBatchPlan:
     _final_state_time: datetime
     _session: SessionMaterializationPlan | None
     _processes: tuple[ProcessMaterializationPlan, ...]
+    _boot_times: tuple[tuple[str, datetime], ...]
     _session_process_links: _SessionProcessMaterializationLinks
     _integrity_token: str = field(repr=False)
 
@@ -686,6 +688,12 @@ class MaterializationBatchPlan:
         return self._processes
 
     @property
+    def boot_times(self) -> tuple[tuple[str, datetime], ...]:
+        """Return exact host boot-time replacements in canonical host order."""
+
+        return self._boot_times
+
+    @property
     def publication_token(self) -> str:
         """Return the authenticated token bound to the complete batch."""
 
@@ -703,6 +711,7 @@ class MaterializationBatchBuilder:
             self._admission_epoch = manager._prepared_state_admission_epoch
         self._session: SessionMaterializationPlan | None = None
         self._processes: list[ProcessMaterializationPlan] = []
+        self._boot_times: dict[str, datetime] = {}
         self._session_process_plans: dict[str, ProcessMaterializationPlan] = {}
         self._sealed = False
         self._pid_counters: dict[str, int] = {}
@@ -818,6 +827,21 @@ class MaterializationBatchBuilder:
         self._processes.append(plan)
         return plan
 
+    def plan_boot_time(self, system: str, boot_time: datetime) -> datetime:
+        """Stage one exact host boot-time replacement without changing State."""
+
+        self._require_open()
+        if type(system) is not str or not system.strip():
+            raise StateError("Materialization batch boot time requires a non-empty host")
+        if type(boot_time) is not datetime:
+            raise StateError("Materialization batch boot time requires an exact datetime")
+        normalized = ensure_utc(boot_time)
+        prior = self._boot_times.get(system)
+        if prior is not None and prior != normalized:
+            raise StateError(f"Materialization batch repeats boot time for {system}")
+        self._boot_times[system] = normalized
+        return normalized
+
     def bind_session_processes(
         self,
         session: SessionMaterializationPlan,
@@ -853,7 +877,7 @@ class MaterializationBatchBuilder:
         """Freeze and authenticate the complete allocation-free batch."""
 
         self._require_open()
-        if self._session is None and not self._processes:
+        if self._session is None and not self._processes and not self._boot_times:
             raise StateError("Materialization batch cannot be empty")
         self._sealed = True
         return self._manager._seal_materialization_batch(self)
@@ -1532,6 +1556,16 @@ class _ActionCohortRollbackJournal:
 
 
 @dataclass(frozen=True, slots=True)
+class _MaterializationBatchRollbackProjection:
+    """Empty action-only patch surface for a start-batch rollback journal."""
+
+    _live_session_process_roles: tuple[()] = ()
+    _session_metadata: tuple[()] = ()
+    _process_activity: tuple[()] = ()
+    _session_activity: tuple[()] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class _PreparedActionCohortCommitPlan:
     """Every explicit object needed by the action-cohort primitive tail."""
 
@@ -1599,6 +1633,27 @@ class _PreparedConnectionCompositeMaterializationRecord:
     failed: bool = False
     terminal: bool = False
     result: ConnectionCompositeMaterializationResult | None = None
+
+
+@dataclass(slots=True)
+class _PreparedMaterializationBatchRecord:
+    """Manager-owned exact authority for one claimed start batch."""
+
+    preparation: "PreparedMaterializationBatch"
+    plan: MaterializationBatchPlan
+    claim_thread: Thread
+    claim_epoch: int
+    claim_version: int
+    claim_state_time: datetime | None
+    rollback_journal: _ActionCohortRollbackJournal
+    claim_preimage: object
+    certified: bool = False
+    provisional: bool = False
+    committed: bool = False
+    failed: bool = False
+    terminal: bool = False
+    provisional_postimage: object | None = None
+    result: tuple[ActiveSession | None, tuple[RunningProcess, ...]] | None = None
 
 
 class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
@@ -2208,6 +2263,7 @@ def _materialization_batch_integrity_token(
     final_state_time: datetime,
     session: SessionMaterializationPlan | None,
     processes: tuple[ProcessMaterializationPlan, ...],
+    boot_times: tuple[tuple[str, datetime], ...],
     session_process_links: _SessionProcessMaterializationLinks,
 ) -> str:
     """Authenticate the exact ordered membership of one start batch."""
@@ -2220,6 +2276,7 @@ def _materialization_batch_integrity_token(
             final_state_time,
             session.publication_token if session is not None else "",
             tuple(plan.publication_token for plan in processes),
+            boot_times,
             session_process_links,
         )
     ).encode()
@@ -2617,6 +2674,51 @@ class PreparedConnectionCompositeMaterialization:
 
 
 @dataclass(slots=True)
+class PreparedMaterializationBatch:
+    """State-guard-scoped one-shot start-batch commit capability."""
+
+    _manager: "StateManager"
+    _plan: MaterializationBatchPlan
+    _claim_thread: Thread
+    _active: bool = True
+    _committed: bool = False
+    _result: tuple[ActiveSession | None, tuple[RunningProcess, ...]] | None = None
+
+    @property
+    def committed(self) -> bool:
+        """Return whether this exact claimed batch reached canonical State."""
+
+        return self._manager._prepared_materialization_batch_committed(self)
+
+    @property
+    def provisionally_applied(self) -> bool:
+        """Return whether exact reversible State writes are currently installed."""
+
+        return self._manager._prepared_materialization_batch_provisionally_applied(self)
+
+    def apply_provisional(self) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
+        """Apply and certify reversible State writes under the retained claim."""
+
+        return self._manager._apply_claimed_materialization_batch(self)
+
+    def finalize_no_fail(self) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
+        """Make an already-certified provisional State batch terminal."""
+
+        return self._manager._finalize_claimed_materialization_batch_no_fail(self)
+
+    def commit_no_fail(self) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
+        """Compatibility commit as one provisional apply and terminal finalize pair."""
+
+        self.apply_provisional()
+        return self.finalize_no_fail()
+
+    def commit(self) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
+        """Compatibility alias for :meth:`commit_no_fail`."""
+
+        return self.commit_no_fail()
+
+
+@dataclass(slots=True)
 class PreparedActionCohortMaterialization:
     """State-guard-scoped one-shot action-cohort commit capability."""
 
@@ -2797,11 +2899,15 @@ class StateManager:
         self._active_connection_composite_preparations: dict[
             int, _PreparedConnectionCompositeMaterializationRecord
         ] = {}
+        self._active_materialization_batch_preparations: dict[
+            int, _PreparedMaterializationBatchRecord
+        ] = {}
         self._active_action_cohort_preparations: dict[int, _ActionCohortPreparationRecord] = {}
         self._active_action_cohort_claim: _ActionCohortPreparationRecord | None = None
         self._active_prepared_state_claim: (
             _PreparedConnectionMaterializationRecord
             | _PreparedConnectionCompositeMaterializationRecord
+            | _PreparedMaterializationBatchRecord
             | _ActionCohortPreparationRecord
             | None
         ) = None
@@ -3163,6 +3269,26 @@ class StateManager:
             raise StateError("Prepared connection composite belongs to its claiming thread")
         return record
 
+    def _materialization_batch_preparation_record_for(
+        self,
+        preparation: PreparedMaterializationBatch,
+    ) -> _PreparedMaterializationBatchRecord:
+        """Resolve one exact active batch preparation and claiming thread."""
+
+        record = self._active_materialization_batch_preparations.get(id(preparation))
+        if (
+            record is None
+            or record.preparation is not preparation
+            or record.terminal
+            or self._active_prepared_state_claim is not record
+            or preparation._manager is not self
+            or preparation._plan is not record.plan
+        ):
+            raise StateError("Prepared materialization batch is no longer active")
+        if record.claim_thread is not current_thread():
+            raise StateError("Prepared materialization batch belongs to its claiming thread")
+        return record
+
     def _prepared_connection_materialization_committed(
         self,
         preparation: PreparedConnectionMaterialization,
@@ -3184,6 +3310,26 @@ class StateManager:
         if record is not None and record.preparation is preparation and not record.terminal:
             return record.committed
         return preparation._committed
+
+    def _prepared_materialization_batch_committed(
+        self,
+        preparation: PreparedMaterializationBatch,
+    ) -> bool:
+        """Return exact manager-owned batch commit truth while active."""
+
+        record = self._active_materialization_batch_preparations.get(id(preparation))
+        if record is not None and record.preparation is preparation and not record.terminal:
+            return record.committed
+        return preparation._committed
+
+    def _prepared_materialization_batch_provisionally_applied(
+        self,
+        preparation: PreparedMaterializationBatch,
+    ) -> bool:
+        """Return exact reversible-apply truth while the batch claim is active."""
+
+        record = self._materialization_batch_preparation_record_for(preparation)
+        return record.provisional
 
     def _commit_claimed_connection_materialization(
         self,
@@ -3269,6 +3415,123 @@ class StateManager:
             preparation._committed = True
             return result
 
+    def _apply_claimed_materialization_batch(
+        self,
+        preparation: PreparedMaterializationBatch,
+    ) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
+        """Apply and certify one reversible batch under the unified State claim."""
+
+        record = self._materialization_batch_preparation_record_for(preparation)
+        with self._lock:
+            record = self._materialization_batch_preparation_record_for(preparation)
+            if record.committed:
+                raise StateError("Prepared materialization batch is already committed")
+            if record.failed:
+                raise StateError("Prepared materialization batch has already failed")
+            if record.provisional:
+                raise StateError("Prepared materialization batch is already provisionally applied")
+            try:
+                if record.claim_epoch != self._prepared_state_admission_epoch:
+                    raise StateError("Prepared materialization batch claim epoch changed")
+                if (
+                    record.plan.expected_version != record.claim_version
+                    or self._materialization_version != record.claim_version
+                ):
+                    raise StateError("Prepared materialization batch became stale before commit")
+                if self.state.current_time != record.claim_state_time:
+                    raise StateError(
+                        "Prepared materialization batch State time changed before commit"
+                    )
+                self.validate_materialization_batch(record.plan)
+                if (
+                    self._action_cohort_rollback_observation(record.rollback_journal)
+                    != record.claim_preimage
+                ):
+                    raise StateError("Prepared materialization batch touched State changed")
+            except StateError:
+                record.failed = True
+                raise
+            record.provisional = True
+            try:
+                result = self._commit_prevalidated_materialization_batch(record.plan)
+            except BaseException:
+                record.failed = True
+                record.provisional_postimage = self._action_cohort_rollback_observation(
+                    record.rollback_journal
+                )
+                try:
+                    self._restore_materialization_batch_rollback(record)
+                finally:
+                    record.provisional = False
+                    record.provisional_postimage = None
+                raise
+            record.provisional_postimage = self._action_cohort_rollback_observation(
+                record.rollback_journal
+            )
+            try:
+                if self._materialization_version != record.claim_version + 1:
+                    raise StateError("Prepared materialization batch State version drifted")
+                if self.state.current_time != record.plan.final_state_time:
+                    raise StateError("Prepared materialization batch State time drifted")
+                if record.provisional_postimage is None:
+                    raise StateError("Prepared materialization batch has no rollback postimage")
+            except StateError:
+                record.failed = True
+                try:
+                    self._restore_materialization_batch_rollback(record)
+                finally:
+                    record.provisional = False
+                    record.provisional_postimage = None
+                raise
+            record.result = result
+            preparation._result = result
+            record.certified = True
+            return result
+
+    def _restore_materialization_batch_rollback(
+        self,
+        record: _PreparedMaterializationBatchRecord,
+    ) -> None:
+        """Restore exact touched State while one provisional batch owns the lane."""
+
+        preparation = record.preparation
+        if (
+            self._active_prepared_state_claim is not record
+            or self._active_materialization_batch_preparations.get(id(preparation)) is not record
+            or record.claim_thread is not current_thread()
+            or record.claim_epoch != self._prepared_state_admission_epoch
+            or record.terminal
+            or not record.provisional
+            or record.provisional_postimage is None
+        ):
+            raise StateError("Prepared materialization batch no longer owns rollback authority")
+        if (
+            self._action_cohort_rollback_observation(record.rollback_journal)
+            != record.provisional_postimage
+        ):
+            raise StateError(
+                "Prepared materialization batch touched State drifted after provisional apply"
+            )
+        self._restore_action_cohort_rollback_journal(record.rollback_journal)
+
+    def _finalize_claimed_materialization_batch_no_fail(
+        self,
+        preparation: PreparedMaterializationBatch,
+    ) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
+        """Terminalize an already-certified provisional batch using scalar writes only."""
+
+        record = self._materialization_batch_preparation_record_for(preparation)
+        with self._lock:
+            record = self._materialization_batch_preparation_record_for(preparation)
+            if not record.certified or not record.provisional or record.result is None:
+                raise StateError("Prepared materialization batch is not certified for finalize")
+            record.committed = True
+            record.provisional = False
+            record.provisional_postimage = None
+            preparation._committed = True
+            preparation._result = record.result
+            return record.result
+
     def _reject_mutation_during_action_cohort_claim(
         self,
         operation: str,
@@ -3338,6 +3601,7 @@ class StateManager:
                         "_materialization_secret",
                         "_active_connection_preparations",
                         "_active_connection_composite_preparations",
+                        "_active_materialization_batch_preparations",
                         "_active_action_cohort_preparations",
                         "_active_action_cohort_claim",
                         "_active_prepared_state_claim",
@@ -3355,6 +3619,100 @@ class StateManager:
                 set(),
             )
             return hashlib.sha256(repr(frozen).encode()).hexdigest()
+
+    @contextmanager
+    def prepared_materialization_batch(
+        self,
+        plan: MaterializationBatchPlan,
+    ) -> Iterator[PreparedMaterializationBatch]:
+        """Claim the unified public State lane for one exact start batch."""
+
+        claim_admission_epoch = self._prepared_state_admission_epoch
+        if self._active_prepared_state_claim is not None:
+            raise StateError("StateManager already has an active prepared-State claim")
+        with self._lock:
+            if self._active_prepared_state_claim is not None:
+                raise StateError("StateManager already has an active prepared-State claim")
+            if claim_admission_epoch != self._prepared_state_admission_epoch:
+                raise StateError("Materialization-batch claim overlapped another State claim")
+            self.validate_materialization_batch(plan)
+            prepared_sessions = (
+                (self._prepare_action_cohort_session_start(plan.session),)
+                if plan.session is not None
+                else ()
+            )
+            prepared_processes = tuple(
+                self._prepare_action_cohort_process_start(item) for item in plan.processes
+            )
+            rollback_journal = self._prepare_action_cohort_rollback_journal(
+                _MaterializationBatchRollbackProjection(),
+                sessions=prepared_sessions,
+                processes=prepared_processes,
+                process_terminations=(),
+                session_terminalizations=(),
+                boot_times=plan.boot_times,
+            )
+            prepared = PreparedMaterializationBatch(
+                _manager=self,
+                _plan=plan,
+                _claim_thread=current_thread(),
+            )
+            claim_epoch = self._prepared_state_admission_epoch + 1
+            record = _PreparedMaterializationBatchRecord(
+                preparation=prepared,
+                plan=plan,
+                claim_thread=prepared._claim_thread,
+                claim_epoch=claim_epoch,
+                claim_version=self._materialization_version,
+                claim_state_time=self.state.current_time,
+                rollback_journal=rollback_journal,
+                claim_preimage=self._action_cohort_rollback_observation(rollback_journal),
+            )
+            locator = id(prepared)
+            self._active_materialization_batch_preparations[locator] = record
+            self._prepared_state_admission_epoch = claim_epoch
+            self._active_prepared_state_claim = record
+            primary_error: BaseException | None = None
+            try:
+                yield prepared
+            except BaseException as error:
+                primary_error = error
+                raise
+            finally:
+                cleanup_error: BaseException | None = None
+                if (
+                    self._active_materialization_batch_preparations.get(locator) is record
+                    and self._active_prepared_state_claim is record
+                    and record.provisional
+                    and not record.committed
+                ):
+                    try:
+                        self._restore_materialization_batch_rollback(record)
+                    except BaseException as error:
+                        cleanup_error = error
+                    finally:
+                        record.provisional = False
+                        record.provisional_postimage = None
+                if (
+                    self._active_materialization_batch_preparations.get(locator) is not record
+                    or self._active_prepared_state_claim is not record
+                ):
+                    if cleanup_error is None:
+                        cleanup_error = StateError(
+                            "Prepared materialization batch no longer owns its State lane"
+                        )
+                if self._active_materialization_batch_preparations.get(locator) is record:
+                    self._active_materialization_batch_preparations.pop(locator)
+                if self._active_prepared_state_claim is record:
+                    self._active_prepared_state_claim = None
+                    self._prepared_state_admission_epoch += 1
+                record.terminal = True
+                prepared._active = False
+                prepared._committed = record.committed
+                if not record.committed:
+                    prepared._result = None
+                if cleanup_error is not None and primary_error is None:
+                    raise cleanup_error
 
     @contextmanager
     def materialization_guard(self, plan: _MaterializationPlan | int) -> Iterator[None]:
@@ -3533,6 +3891,28 @@ class StateManager:
             self._validate_process_materialization_plan(process)
             if process.expected_version != plan.expected_version:
                 raise StateError("Materialization batch process uses another state version")
+        if type(plan._boot_times) is not tuple:
+            raise StateError("Materialization batch boot times must be an exact tuple")
+        boot_times: dict[str, datetime] = {}
+        for member in plan._boot_times:
+            if (
+                type(member) is not tuple
+                or len(member) != 2
+                or type(member[0]) is not str
+                or not member[0].strip()
+                or type(member[1]) is not datetime
+            ):
+                raise StateError("Materialization batch contains a malformed boot time")
+            hostname, boot_time = member
+            if ensure_utc(boot_time) != boot_time or hostname in boot_times:
+                raise StateError("Materialization batch boot times are not canonical")
+            boot_times[hostname] = boot_time
+        if tuple(sorted(boot_times.items())) != plan._boot_times:
+            raise StateError("Materialization batch boot times are not in canonical order")
+        for process in plan._processes:
+            boot_time = boot_times.get(process.identity.hostname)
+            if boot_time is not None and process.identity.started_at < boot_time:
+                raise StateError("Materialization batch process starts before its host boot time")
         expected = _materialization_batch_integrity_token(
             self._materialization_secret,
             expected_version=plan._expected_version,
@@ -3540,6 +3920,7 @@ class StateManager:
             final_state_time=plan._final_state_time,
             session=session,
             processes=plan._processes,
+            boot_times=plan._boot_times,
             session_process_links=plan._session_process_links,
         )
         if not hmac.compare_digest(plan._integrity_token, expected):
@@ -4349,6 +4730,8 @@ class StateManager:
                 raise StateError("Action cohort builder became stale before sealing")
             if self.state.current_time != builder._expected_state_time:
                 raise StateError("Action cohort State time changed before sealing")
+            if builder._boot_times:
+                raise StateError("Action cohort materialization cannot stage host boot times")
             sessions = tuple(builder._action_sessions)
             processes = tuple(builder._processes)
             if not any(
@@ -4544,7 +4927,9 @@ class StateManager:
             if self.state.current_time != builder._expected_state_time:
                 raise StateError("Materialization batch state-time fence changed before sealing")
             processes = tuple(builder._processes)
+            boot_times = tuple(sorted(builder._boot_times.items()))
             state_times = [process._payload.state_time for process in processes]
+            state_times.extend(boot_time for _hostname, boot_time in boot_times)
             state_times.extend(
                 process._payload.parent_activity_time
                 for process in processes
@@ -4571,6 +4956,7 @@ class StateManager:
                 _final_state_time=final_state_time,
                 _session=builder._session,
                 _processes=processes,
+                _boot_times=boot_times,
                 _session_process_links=links,
                 _integrity_token=_materialization_batch_integrity_token(
                     self._materialization_secret,
@@ -4579,6 +4965,7 @@ class StateManager:
                     final_state_time=final_state_time,
                     session=builder._session,
                     processes=processes,
+                    boot_times=boot_times,
                     session_process_links=links,
                 ),
             )
@@ -7949,12 +8336,13 @@ class StateManager:
 
     def _prepare_action_cohort_rollback_journal(
         self,
-        plan: ActionCohortMaterializationPlan,
+        plan: ActionCohortMaterializationPlan | _MaterializationBatchRollbackProjection,
         *,
         sessions: tuple[_PreparedActionCohortSessionStart, ...],
         processes: tuple[_PreparedActionCohortProcessStart, ...],
         process_terminations: tuple[_PreparedActionCohortProcessTermination, ...],
         session_terminalizations: tuple[_PreparedActionCohortSessionTerminalization, ...],
+        boot_times: tuple[tuple[str, datetime], ...] = (),
     ) -> _ActionCohortRollbackJournal:
         """Capture only cohort-addressable keys, members, and runtime rows."""
 
@@ -8123,6 +8511,8 @@ class StateManager:
             for item in processes
             if item.plan.identity.primary_thread is not None
         }
+        for hostname, _boot_time in boot_times:
+            capture_mapping(self._system_boot_times, hostname)  # type: ignore[arg-type]
         for item in sessions:
             capture_object(item.session)
             capture_indexed(self._active_sessions, item.session.logon_id)  # type: ignore[arg-type]
@@ -9534,6 +9924,8 @@ class StateManager:
     ) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
         """Publish all prevalidated members with primitive writes and one version step."""
 
+        for hostname, boot_time in plan.boot_times:
+            self._system_boot_times[hostname] = boot_time
         session = (
             self._commit_prevalidated_session_materialization(
                 plan.session,

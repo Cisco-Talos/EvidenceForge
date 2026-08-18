@@ -95,6 +95,12 @@ class LifecycleShadow:
         return self._registry
 
     @property
+    def state_manager(self) -> StateManager:
+        """Return the exact State owner projected by this adapter."""
+
+        return self._state_manager
+
+    @property
     def violation_summary(self) -> LifecycleShadowViolationSummary:
         """Return a deterministic bounded summary without retaining entity details."""
 
