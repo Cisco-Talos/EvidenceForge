@@ -2412,3 +2412,38 @@ does not promise process-restart recovery or retroactive per-action atomicity be
 committed canonical state and final Windows/Sysmon file bytes. If either stronger guarantee becomes
 mandatory, stop before presenting the terminal epoch as sufficient and design the larger
 authenticated watermark/deferred-row contract instead.
+
+### Windows Security terminal source publication landed
+
+Commit ``2facf92b9`` (``feat: finalize Windows source publication exactly``) implements the first
+caller-owned terminal ``SourceFinalizationEpoch`` through the real ``GenerationEngine`` EOF
+boundary. Windows candidate admission is bounded before in-memory or threaded retention, sealing
+freezes global order, record IDs, routing, output target, header, footer, and final rendered bytes,
+and one engine-owned publisher commits bounded exact-string chunks through the existing final
+writers before durably checkpointing and releasing each child. Default rooted XML, Splunk, and
+SOF/Snare bytes remain identical to the immutable parent across threaded/non-threaded buffer shapes
+and multiple Python hash seeds.
+
+The exact Windows path uses an owner-private temporary SQLite journal only during the
+``eforge generate`` command. The journal is parameterized, bounded, descriptor-confined, mode
+``0700``/``0600``,
+configured with in-memory SQLite temporary storage, and removed after terminal footer and cleanup.
+Direct/non-engine Windows use retains the legacy portable path. The contract remains same-process
+retry only and adds no service, persistent product database, restart recovery, or LLM call.
+
+Engine retry state now owns initialization, generation, EOF finalization, and emitter-close
+progress explicitly. Concurrent or reentrant ``generate`` calls fail closed; partial initialization
+and failed-generation cleanup can be retried without regenerating the body; progress callbacks
+cannot skip cleanup; IDS totals apply once; and the exact emitter name-to-object cohort is pinned on
+its first close attempt so stopped emitters are never closed twice and failed identities cannot be
+replaced before retry. The final independently reviewed five-path patch has tree ``d607fb110`` and
+binary diff SHA-256 ``21ea45d59da4ba393d6c70fdfc76dec17adb67245a027971c3d6abb106824466``.
+Focused acceptance passes 47/47, the adjacent Windows/engine cohort passes 287/287, three hash-seed
+runs produce the same default XML digest, and repository Ruff/format/diff checks are green.
+After fast-forward integration, the exact core, sorted writer, ASA/eCAR, Bash, Snort/IDS, and Windows
+source-finalization composition passes 417/417 on the integrated tree.
+
+Sysmon remains the next terminal-source adapter only after this integrated Windows boundary passes
+the combined exact-publication composition gate. It must reuse the caller-owned EOF epoch and
+existing final writer path; do not reintroduce per-event exact preparation or intermediate rendered
+payload admission.
