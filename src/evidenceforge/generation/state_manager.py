@@ -175,6 +175,8 @@ _MAX_RETAINED_SESSION_IDENTITIES = 500_000
 _MAX_RETAINED_PROCESS_IDENTITIES = 500_000
 _MAX_RETAINED_THREAD_IDENTITIES = 1_000_000
 _MAX_SMB_MUTATION_OVERLAY = 100_000
+_MAX_ACTIVE_SMB_FILE_MUTATION_JOURNALS = 4_096
+_MAX_SMB_FILE_MUTATION_JOURNAL_ENTRIES = 1_024
 _MAX_ACTION_COHORT_LIVE_SESSION_PROCESS_ROLE_PATCHES = 256
 _SESSION_PROCESS_REFERENCE_FIELDS = (
     "explorer_pid",
@@ -184,6 +186,38 @@ _SESSION_PROCESS_REFERENCE_FIELDS = (
     "process_tree_root",
     "transport_pid",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class SmbFileMutationJournal:
+    """Opaque bounded owner for one transactional SMB file-state mutation set."""
+
+    _journal_id: str
+    _operation_id: str
+    _integrity_token: str = field(repr=False)
+
+    @property
+    def operation_id(self) -> str:
+        """Return the exact semantic SMB operation owned by this journal."""
+
+        return self._operation_id
+
+
+@dataclass(frozen=True, slots=True)
+class _SmbFileStatePreimage:
+    """Exact object and value snapshot for one journal-owned overlay identity."""
+
+    original: SmbFileState | None
+    snapshot: SmbFileState | None
+
+
+@dataclass(slots=True)
+class _SmbFileMutationJournalCapability:
+    """StateManager-retained preimages for one live SMB mutation transaction."""
+
+    journal: SmbFileMutationJournal
+    file_preimages: dict[str, _SmbFileStatePreimage] = field(default_factory=dict)
+    path_preimages: dict[tuple[str, str], str | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3445,6 +3479,13 @@ class StateManager:
         self._ended_threads: ExpiringIndex[tuple[str, str, int], RunningThread] = ExpiringIndex()
         self._smb_file_overlay: dict[str, SmbFileState] = {}
         self._smb_file_by_share_path: dict[tuple[str, str], str] = {}
+        self._smb_file_mutation_journals: dict[
+            str,
+            _SmbFileMutationJournalCapability,
+        ] = {}
+        self._smb_file_mutation_journal_by_operation: dict[str, str] = {}
+        self._smb_file_mutation_owner_by_file_id: dict[str, str] = {}
+        self._smb_file_mutation_owner_by_path: dict[tuple[str, str], str] = {}
 
     @property
     def materialization_version(self) -> int:
@@ -14281,6 +14322,226 @@ class StateManager:
     # Canonical SMB Runtime State
     # ========================================
 
+    def _smb_file_mutation_journal_integrity_token(
+        self,
+        journal_id: str,
+        operation_id: str,
+    ) -> str:
+        """Authenticate one bounded file-mutation journal."""
+
+        canonical = ("smb-file-mutation-journal-v1", journal_id, operation_id)
+        return hmac.new(
+            self._materialization_secret,
+            repr(canonical).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def _smb_file_mutation_journal_id(self, operation_id: str) -> str:
+        """Derive an opaque, non-retained identity without burning allocator state."""
+
+        canonical = ("smb-file-mutation-journal-id-v1", operation_id)
+        return hmac.new(
+            self._materialization_secret,
+            repr(canonical).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def _active_smb_file_mutation_journal(
+        self,
+        journal: SmbFileMutationJournal,
+    ) -> _SmbFileMutationJournalCapability:
+        if type(journal) is not SmbFileMutationJournal:
+            raise StateError("SMB file mutation journal has invalid authority type")
+        expected = self._smb_file_mutation_journal_integrity_token(
+            journal._journal_id,
+            journal._operation_id,
+        )
+        if not hmac.compare_digest(journal._integrity_token, expected):
+            raise StateError("SMB file mutation journal failed integrity validation")
+        capability = self._smb_file_mutation_journals.get(journal._journal_id)
+        if capability is None or capability.journal is not journal:
+            raise StateError("SMB file mutation journal is stale, copied, or foreign")
+        return capability
+
+    def _record_smb_file_mutation_preimages(
+        self,
+        capability: _SmbFileMutationJournalCapability,
+        *,
+        file_ids: tuple[str, ...] = (),
+        path_keys: tuple[tuple[str, str], ...] = (),
+    ) -> None:
+        """Reserve and snapshot each exact file/path identity before mutation."""
+
+        journal_id = capability.journal._journal_id
+        unique_file_ids = tuple(dict.fromkeys(file_ids))
+        unique_path_keys = tuple(dict.fromkeys(path_keys))
+        for file_id in unique_file_ids:
+            owner = self._smb_file_mutation_owner_by_file_id.get(file_id)
+            if owner is not None and owner != journal_id:
+                raise StateError(f"SMB file {file_id} is already owned by another mutation")
+        for path_key in unique_path_keys:
+            owner = self._smb_file_mutation_owner_by_path.get(path_key)
+            if owner is not None and owner != journal_id:
+                raise StateError(
+                    f"SMB path {path_key[0]}:{path_key[1]} is already owned by another mutation"
+                )
+        new_entry_count = sum(
+            file_id not in capability.file_preimages for file_id in unique_file_ids
+        ) + sum(path_key not in capability.path_preimages for path_key in unique_path_keys)
+        retained_entry_count = len(capability.file_preimages) + len(capability.path_preimages)
+        if retained_entry_count + new_entry_count > _MAX_SMB_FILE_MUTATION_JOURNAL_ENTRIES:
+            raise StateError(
+                "SMB file mutation journal exceeds "
+                f"{_MAX_SMB_FILE_MUTATION_JOURNAL_ENTRIES} retained entries"
+            )
+        for file_id in unique_file_ids:
+            if file_id in capability.file_preimages:
+                continue
+            original = self._smb_file_overlay.get(file_id)
+            capability.file_preimages[file_id] = _SmbFileStatePreimage(
+                original=original,
+                snapshot=replace(original) if original is not None else None,
+            )
+            self._smb_file_mutation_owner_by_file_id[file_id] = journal_id
+        for path_key in unique_path_keys:
+            if path_key in capability.path_preimages:
+                continue
+            capability.path_preimages[path_key] = self._smb_file_by_share_path.get(path_key)
+            self._smb_file_mutation_owner_by_path[path_key] = journal_id
+
+    def _require_unowned_smb_file_mutation(
+        self,
+        *,
+        file_ids: tuple[str, ...] = (),
+        path_keys: tuple[tuple[str, str], ...] = (),
+    ) -> None:
+        """Fence nontransactional callers from identities owned by an active journal."""
+
+        if any(file_id in self._smb_file_mutation_owner_by_file_id for file_id in file_ids):
+            raise StateError("SMB file is owned by an active mutation journal")
+        if any(path_key in self._smb_file_mutation_owner_by_path for path_key in path_keys):
+            raise StateError("SMB path is owned by an active mutation journal")
+
+    def _release_smb_file_mutation_ownership(
+        self,
+        capability: _SmbFileMutationJournalCapability,
+    ) -> None:
+        journal_id = capability.journal._journal_id
+        for file_id in capability.file_preimages:
+            if self._smb_file_mutation_owner_by_file_id.get(file_id) == journal_id:
+                self._smb_file_mutation_owner_by_file_id.pop(file_id)
+        for path_key in capability.path_preimages:
+            if self._smb_file_mutation_owner_by_path.get(path_key) == journal_id:
+                self._smb_file_mutation_owner_by_path.pop(path_key)
+
+    def begin_smb_file_mutation_journal(self, operation_id: str) -> SmbFileMutationJournal:
+        """Reserve one bounded rollback journal for an SMB operation."""
+
+        if type(operation_id) is not str or not operation_id.strip() or len(operation_id) > 512:
+            raise StateError("SMB file mutation operation_id must be a nonempty bounded string")
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "begin_smb_file_mutation_journal"
+        )
+        with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "begin_smb_file_mutation_journal",
+                admitted_at=admission_epoch,
+            )
+            existing_id = self._smb_file_mutation_journal_by_operation.get(operation_id)
+            if existing_id is not None:
+                existing = self._smb_file_mutation_journals[existing_id]
+                if existing.file_preimages or existing.path_preimages:
+                    raise StateError("SMB operation already owns an active mutation in progress")
+                return existing.journal
+            if len(self._smb_file_mutation_journals) >= _MAX_ACTIVE_SMB_FILE_MUTATION_JOURNALS:
+                raise StateError(
+                    "active SMB file mutation journals exceed "
+                    f"{_MAX_ACTIVE_SMB_FILE_MUTATION_JOURNALS}"
+                )
+            journal_id = self._smb_file_mutation_journal_id(operation_id)
+            if journal_id in self._smb_file_mutation_journals:
+                raise StateError("SMB file mutation journal identity collision")
+            journal = SmbFileMutationJournal(
+                _journal_id=journal_id,
+                _operation_id=operation_id,
+                _integrity_token=self._smb_file_mutation_journal_integrity_token(
+                    journal_id,
+                    operation_id,
+                ),
+            )
+            self._smb_file_mutation_journals[journal_id] = _SmbFileMutationJournalCapability(
+                journal=journal
+            )
+            self._smb_file_mutation_journal_by_operation[operation_id] = journal_id
+            return journal
+
+    def authenticates_smb_file_mutation_journal(
+        self,
+        journal: SmbFileMutationJournal,
+    ) -> bool:
+        """Return whether this manager retains the exact active journal."""
+
+        with self._lock:
+            try:
+                self._active_smb_file_mutation_journal(journal)
+            except (StateError, TypeError, ValueError):
+                return False
+            return True
+
+    def commit_smb_file_mutation_journal(self, journal: SmbFileMutationJournal) -> None:
+        """Accept journaled file mutations and release their transient preimages."""
+
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "commit_smb_file_mutation_journal"
+        )
+        with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "commit_smb_file_mutation_journal",
+                admitted_at=admission_epoch,
+            )
+            capability = self._active_smb_file_mutation_journal(journal)
+            self._release_smb_file_mutation_ownership(capability)
+            self._smb_file_mutation_journals.pop(journal._journal_id)
+            self._smb_file_mutation_journal_by_operation.pop(journal._operation_id, None)
+
+    def cancel_smb_file_mutation_journal(self, journal: SmbFileMutationJournal) -> None:
+        """Restore every exact file/path preimage retained by a live journal."""
+
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "cancel_smb_file_mutation_journal"
+        )
+        with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "cancel_smb_file_mutation_journal",
+                admitted_at=admission_epoch,
+            )
+            capability = self._active_smb_file_mutation_journal(journal)
+            for file_id, preimage in capability.file_preimages.items():
+                if preimage.snapshot is None:
+                    self._smb_file_overlay.pop(file_id, None)
+                    continue
+                original = preimage.original
+                if original is None:
+                    raise StateError("SMB mutation journal lost its original file object")
+                snapshot = preimage.snapshot
+                original.share = snapshot.share
+                original.path = snapshot.path
+                original.version = snapshot.version
+                original.size_bytes = snapshot.size_bytes
+                original.mime_type = snapshot.mime_type
+                original.tags = snapshot.tags
+                original.deleted = snapshot.deleted
+                original.prior_paths = snapshot.prior_paths
+                self._smb_file_overlay[file_id] = original
+            for path_key, prior_file_id in capability.path_preimages.items():
+                if prior_file_id is None:
+                    self._smb_file_by_share_path.pop(path_key, None)
+                else:
+                    self._smb_file_by_share_path[path_key] = prior_file_id
+            self._release_smb_file_mutation_ownership(capability)
+            self._smb_file_mutation_journals.pop(journal._journal_id)
+            self._smb_file_mutation_journal_by_operation.pop(journal._operation_id, None)
+
     def smb_file_is_available(self, file: object) -> bool:
         """Return whether a compiled catalog entry still exists at its original path."""
 
@@ -14303,7 +14564,12 @@ class StateManager:
                 return max(0, int(file.size_bytes))
             return 0 if state.deleted else state.size_bytes
 
-    def touch_smb_file(self, file: object) -> SmbFileState:
+    def touch_smb_file(
+        self,
+        file: object,
+        *,
+        journal: SmbFileMutationJournal | None = None,
+    ) -> SmbFileState:
         """Return a mutable overlay view for one compiled storage file."""
 
         admission_epoch = self._reject_mutation_during_action_cohort_claim("touch_smb_file")
@@ -14311,6 +14577,22 @@ class StateManager:
             self._reject_mutation_during_action_cohort_claim(
                 "touch_smb_file", admitted_at=admission_epoch
             )
+            capability = (
+                self._active_smb_file_mutation_journal(journal) if journal is not None else None
+            )
+            file_id = file.file_id
+            path_key = (file.share.casefold(), file.path.casefold())
+            if capability is not None:
+                self._record_smb_file_mutation_preimages(
+                    capability,
+                    file_ids=(file_id,),
+                    path_keys=(path_key,),
+                )
+            else:
+                self._require_unowned_smb_file_mutation(
+                    file_ids=(file_id,),
+                    path_keys=(path_key,),
+                )
             existing = self._smb_file_overlay.get(file.file_id)
             if existing is not None:
                 return existing
@@ -14342,6 +14624,7 @@ class StateManager:
         mime_type: str,
         timestamp: datetime,
         tags: tuple[str, ...] = (),
+        journal: SmbFileMutationJournal | None = None,
     ) -> SmbFileState:
         """Create a new file identity in the mutation overlay."""
 
@@ -14349,6 +14632,9 @@ class StateManager:
         with self._lock:
             self._reject_mutation_during_action_cohort_claim(
                 "create_smb_file", admitted_at=admission_epoch
+            )
+            capability = (
+                self._active_smb_file_mutation_journal(journal) if journal is not None else None
             )
             if len(self._smb_file_overlay) >= _MAX_SMB_MUTATION_OVERLAY:
                 raise StateError(
@@ -14360,6 +14646,17 @@ class StateManager:
             if prior is not None and not prior.deleted:
                 raise StateError(f"SMB path already exists: {share}:{path}")
             file_id = f"file-{stable_uuid('smb-created-file', share, path, ensure_utc(timestamp))}"
+            if capability is not None:
+                self._record_smb_file_mutation_preimages(
+                    capability,
+                    file_ids=(file_id,),
+                    path_keys=(key,),
+                )
+            else:
+                self._require_unowned_smb_file_mutation(
+                    file_ids=(file_id,),
+                    path_keys=(key,),
+                )
             state = SmbFileState(
                 file_id=file_id,
                 share=share,
@@ -14373,7 +14670,13 @@ class StateManager:
             self._smb_file_by_share_path[key] = file_id
             return state
 
-    def update_smb_file(self, file_id: str, *, size_bytes: int) -> SmbFileState:
+    def update_smb_file(
+        self,
+        file_id: str,
+        *,
+        size_bytes: int,
+        journal: SmbFileMutationJournal | None = None,
+    ) -> SmbFileState:
         """Advance a file content version and size."""
 
         admission_epoch = self._reject_mutation_during_action_cohort_claim("update_smb_file")
@@ -14381,6 +14684,14 @@ class StateManager:
             self._reject_mutation_during_action_cohort_claim(
                 "update_smb_file", admitted_at=admission_epoch
             )
+            if journal is not None:
+                capability = self._active_smb_file_mutation_journal(journal)
+                self._record_smb_file_mutation_preimages(
+                    capability,
+                    file_ids=(file_id,),
+                )
+            else:
+                self._require_unowned_smb_file_mutation(file_ids=(file_id,))
             state = self._smb_file_overlay[file_id]
             if state.deleted:
                 raise StateError(f"cannot update deleted SMB file {file_id}")
@@ -14388,13 +14699,23 @@ class StateManager:
             state.size_bytes = max(0, size_bytes)
             return state
 
-    def move_smb_file(self, file_id: str, *, share: str, path: str) -> SmbFileState:
+    def move_smb_file(
+        self,
+        file_id: str,
+        *,
+        share: str,
+        path: str,
+        journal: SmbFileMutationJournal | None = None,
+    ) -> SmbFileState:
         """Move a file while preserving its durable identity."""
 
         admission_epoch = self._reject_mutation_during_action_cohort_claim("move_smb_file")
         with self._lock:
             self._reject_mutation_during_action_cohort_claim(
                 "move_smb_file", admitted_at=admission_epoch
+            )
+            capability = (
+                self._active_smb_file_mutation_journal(journal) if journal is not None else None
             )
             state = self._smb_file_overlay[file_id]
             destination_key = (share.casefold(), path.casefold())
@@ -14403,6 +14724,17 @@ class StateManager:
             if destination is not None and not destination.deleted and destination_id != file_id:
                 raise StateError(f"SMB path already exists: {share}:{path}")
             old_key = (state.share.casefold(), state.path.casefold())
+            if capability is not None:
+                self._record_smb_file_mutation_preimages(
+                    capability,
+                    file_ids=(file_id,),
+                    path_keys=(old_key, destination_key),
+                )
+            else:
+                self._require_unowned_smb_file_mutation(
+                    file_ids=(file_id,),
+                    path_keys=(old_key, destination_key),
+                )
             self._smb_file_by_share_path.pop(old_key, None)
             state.prior_paths = (*state.prior_paths, state.path)
             state.share = share
@@ -14410,7 +14742,12 @@ class StateManager:
             self._smb_file_by_share_path[destination_key] = file_id
             return state
 
-    def delete_smb_file(self, file_id: str) -> SmbFileState:
+    def delete_smb_file(
+        self,
+        file_id: str,
+        *,
+        journal: SmbFileMutationJournal | None = None,
+    ) -> SmbFileState:
         """Tombstone a file identity."""
 
         admission_epoch = self._reject_mutation_during_action_cohort_claim("delete_smb_file")
@@ -14418,10 +14755,25 @@ class StateManager:
             self._reject_mutation_during_action_cohort_claim(
                 "delete_smb_file", admitted_at=admission_epoch
             )
+            capability = (
+                self._active_smb_file_mutation_journal(journal) if journal is not None else None
+            )
             state = self._smb_file_overlay[file_id]
+            path_key = (state.share.casefold(), state.path.casefold())
+            if capability is not None:
+                self._record_smb_file_mutation_preimages(
+                    capability,
+                    file_ids=(file_id,),
+                    path_keys=(path_key,),
+                )
+            else:
+                self._require_unowned_smb_file_mutation(
+                    file_ids=(file_id,),
+                    path_keys=(path_key,),
+                )
             state.deleted = True
             self._smb_file_by_share_path.pop(
-                (state.share.casefold(), state.path.casefold()),
+                path_key,
                 None,
             )
             return state
@@ -14439,6 +14791,11 @@ class StateManager:
                 "open_connections": len(self.state.open_connections),
                 "dns_cache_entries": len(self.state.dns_cache),
                 "smb_mutations": len(self._smb_file_overlay),
+                "smb_file_mutation_journals": len(self._smb_file_mutation_journals),
+                "smb_file_mutation_journal_entries": sum(
+                    len(capability.file_preimages) + len(capability.path_preimages)
+                    for capability in self._smb_file_mutation_journals.values()
+                ),
                 "current_time": str(self.state.current_time) if self.state.current_time else None,
             }
 

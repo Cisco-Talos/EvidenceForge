@@ -1257,6 +1257,152 @@ class TestSmbState:
         assert recreated.version == 1
         assert sm.smb_file_is_available(compiled) is False
 
+    def test_file_mutation_journal_cancel_restores_exact_identity_paths_and_digest(self):
+        sm = StateManager()
+        now = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
+        compiled = CompiledStorageFile(
+            file_id="file-seed",
+            share="FS-01.finance",
+            path="Reports\\forecast.xlsx",
+            size_bytes=100,
+            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        original = sm.touch_smb_file(compiled)
+        digest_before = sm.materialization_digest()
+        version_before = sm.materialization_version
+
+        journal = sm.begin_smb_file_mutation_journal("operation-rollback")
+        sm.update_smb_file(original.file_id, size_bytes=125, journal=journal)
+        sm.move_smb_file(
+            original.file_id,
+            share=compiled.share,
+            path="Archive\\forecast.xlsx",
+            journal=journal,
+        )
+        sm.move_smb_file(
+            original.file_id,
+            share=compiled.share,
+            path="Archive\\2026\\forecast.xlsx",
+            journal=journal,
+        )
+        created = sm.create_smb_file(
+            share=compiled.share,
+            path="Scratch\\notes.txt",
+            size_bytes=18,
+            mime_type="text/plain",
+            timestamp=now,
+            journal=journal,
+        )
+        sm.delete_smb_file(created.file_id, journal=journal)
+
+        sm.cancel_smb_file_mutation_journal(journal)
+
+        assert sm._smb_file_overlay[original.file_id] is original
+        assert original.path == compiled.path
+        assert original.version == 1
+        assert original.size_bytes == compiled.size_bytes
+        assert original.deleted is False
+        assert original.prior_paths == ()
+        assert sm._smb_file_by_share_path[
+            (compiled.share.casefold(), compiled.path.casefold())
+        ] == (original.file_id)
+        assert (
+            compiled.share.casefold(),
+            "archive\\forecast.xlsx".casefold(),
+        ) not in sm._smb_file_by_share_path
+        assert created.file_id not in sm._smb_file_overlay
+        assert sm.materialization_version == version_before
+        assert sm.materialization_digest() == digest_before
+
+    def test_file_mutation_journal_recovery_and_exact_capability_validation(self):
+        sm = StateManager()
+        foreign = StateManager()
+        compiled = CompiledStorageFile(
+            file_id="file-seed",
+            share="FS-01.finance",
+            path="Reports\\forecast.xlsx",
+            size_bytes=100,
+            mime_type="application/octet-stream",
+        )
+        state = sm.touch_smb_file(compiled)
+        journal = sm.begin_smb_file_mutation_journal("operation-recover")
+
+        assert sm.begin_smb_file_mutation_journal("operation-recover") is journal
+        assert sm.authenticates_smb_file_mutation_journal(journal)
+        assert not sm.authenticates_smb_file_mutation_journal(replace(journal))
+        assert not foreign.authenticates_smb_file_mutation_journal(journal)
+
+        copied = replace(journal)
+        with pytest.raises(StateError, match="stale, copied, or foreign"):
+            sm.update_smb_file(state.file_id, size_bytes=200, journal=copied)
+        assert state.size_bytes == 100
+
+        tampered = replace(journal)
+        object.__setattr__(tampered, "_operation_id", "operation-tampered")
+        with pytest.raises(StateError, match="failed integrity validation"):
+            sm.update_smb_file(state.file_id, size_bytes=200, journal=tampered)
+        assert state.size_bytes == 100
+
+        sm.update_smb_file(state.file_id, size_bytes=200, journal=journal)
+        with pytest.raises(StateError, match="mutation in progress"):
+            sm.begin_smb_file_mutation_journal("operation-recover")
+        with pytest.raises(StateError, match="owned by an active mutation journal"):
+            sm.update_smb_file(state.file_id, size_bytes=300)
+
+        sm.commit_smb_file_mutation_journal(journal)
+        assert state.size_bytes == 200
+        assert not sm.authenticates_smb_file_mutation_journal(journal)
+        with pytest.raises(StateError, match="stale, copied, or foreign"):
+            sm.cancel_smb_file_mutation_journal(journal)
+
+    def test_file_mutation_journal_bounds_retained_entries(self, monkeypatch):
+        monkeypatch.setattr(state_manager_module, "_MAX_SMB_FILE_MUTATION_JOURNAL_ENTRIES", 2)
+        sm = StateManager()
+        journal = sm.begin_smb_file_mutation_journal("operation-bounded")
+
+        first = sm.create_smb_file(
+            share="FS-01.finance",
+            path="Scratch\\first.txt",
+            size_bytes=1,
+            mime_type="text/plain",
+            timestamp=datetime(2026, 8, 13, 12, 0, tzinfo=UTC),
+            journal=journal,
+        )
+        with pytest.raises(StateError, match="exceeds 2 retained entries"):
+            sm.move_smb_file(
+                first.file_id,
+                share="FS-01.finance",
+                path="Scratch\\second.txt",
+                journal=journal,
+            )
+
+        sm.cancel_smb_file_mutation_journal(journal)
+        assert not sm._smb_file_overlay
+        assert not sm._smb_file_by_share_path
+
+    def test_file_mutation_journal_recovery_remains_available_at_capacity(self, monkeypatch):
+        monkeypatch.setattr(state_manager_module, "_MAX_ACTIVE_SMB_FILE_MUTATION_JOURNALS", 1)
+        sm = StateManager()
+        journal = sm.begin_smb_file_mutation_journal("operation-at-capacity")
+
+        assert sm.begin_smb_file_mutation_journal("operation-at-capacity") is journal
+        with pytest.raises(StateError, match="active SMB file mutation journals exceed 1"):
+            sm.begin_smb_file_mutation_journal("different-operation")
+
+        sm.cancel_smb_file_mutation_journal(journal)
+
+    def test_file_mutation_journal_long_run_releases_all_transient_authority(self):
+        sm = StateManager()
+        digest_before = sm.materialization_digest()
+
+        for index in range(2_000):
+            journal = sm.begin_smb_file_mutation_journal(f"operation-{index}")
+            sm.cancel_smb_file_mutation_journal(journal)
+
+        assert sm.materialization_digest() == digest_before
+        assert sm.get_state_summary()["smb_file_mutation_journals"] == 0
+        assert sm.get_state_summary()["smb_file_mutation_journal_entries"] == 0
+
 
 class TestSessionManagement:
     """Tests for session lifecycle."""
