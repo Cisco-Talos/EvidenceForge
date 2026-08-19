@@ -2376,3 +2376,39 @@ The next dependency-ordered integration is the dispatcher action-cohort producti
 its exact artifact-publication group. It must be reconstructed from the reviewed live preimage onto
 this committed State/SourceTiming/Intent/Audit foundation without sweeping the overlapping lifecycle,
 execution bridge, or SMB overlays.
+
+### Exact sink publication core and Bash/Snort adapters landed
+
+Commit ``f6e9d3f96`` (``feat: add exact sink publication core``) supplies the bounded in-process
+publication authority, immutable prepared rows, stable commit/release cursors, participant fences,
+and retry-aware direct, host, Zeek, and external-sorted writer paths. Commit ``24520c45`` adds the
+Snort adapter, and commit ``670b38432`` adds Bash history plus the combined adapter regression
+matrix. The final four-path adapter tree is ``08fd42c8`` with reviewed patch SHA-256
+``57682777...``; both production postimages remain byte-identical to their independently reviewed
+source commits.
+
+The adapter composition passes 116 Bash, 80 Snort, and 251 combined/IDS tests, plus focused
+hash-seed, race, migration, lint, format, compile, and diff gates. Two wider IDS integration nodes
+fail identically on the exact pre-composition tree and remain inherited. The integration branch
+also reran the combined 251-node gate successfully. Version artifacts remain unchanged.
+
+SQLite remains a temporary emitter-private implementation detail rather than a product database.
+Snort already used a temporary candidate spool; exact Snort and Bash now use bounded, parameterized
+SQLite journals in owner-only private spool directories for same-process lost-return recovery.
+Ordinary Bash generation does not create a spool or open SQLite. These journals are removed after
+terminal export/release, provide no external service, and do not claim interpreter-restart resume.
+
+Windows Security and Sysmon cannot use per-event exact preparation because their immutable bytes do
+not exist until the complete source cohort is sorted, record IDs are assigned, routing is fixed, and
+Sysmon GUID/time synchronization finishes. The selected prerequisite is a caller-owned terminal
+``SourceFinalizationEpoch`` above the unchanged exact core. ``GenerationEngine._finalize`` owns the
+EOF completeness fence and one run authority; each source owns bounded candidate/final journals and
+sealed immutable rows; exact child batches publish bounded chunks sequentially. The first landable
+slice is Windows Security through the real engine boundary, using its existing spool foundation;
+Sysmon follows only after that path is independently proven.
+
+This choice guarantees exact terminal source publication and same-process retry. It deliberately
+does not promise process-restart recovery or retroactive per-action atomicity between already-
+committed canonical state and final Windows/Sysmon file bytes. If either stronger guarantee becomes
+mandatory, stop before presenting the terminal epoch as sufficient and design the larger
+authenticated watermark/deferred-row contract instead.
