@@ -2372,10 +2372,9 @@ the exact parent. The committed-current State/action/lifecycle cohort passed 216
 Ruff/format, compile, and diff checks green. Arbitrary direct mutation of compatibility read objects
 remains outside the approved public-method threat model. Version artifacts remain unchanged.
 
-The next dependency-ordered integration is the dispatcher action-cohort production coordinator plus
-its exact artifact-publication group. It must be reconstructed from the reviewed live preimage onto
-this committed State/SourceTiming/Intent/Audit foundation without sweeping the overlapping lifecycle,
-execution bridge, or SMB overlays.
+The dispatcher action-cohort production coordinator and exact artifact-publication group subsequently
+landed as commits ``dc595983b`` and ``a7a6cb01d``. The retained execution/effect bridge therefore
+depends on those committed owners and must not replay or reconstruct another dispatcher foundation.
 
 ### Exact sink publication core and Bash/Snort adapters landed
 
@@ -2472,3 +2471,46 @@ Windows Security and Sysmon now both satisfy the selected terminal EOF publicati
 same-process retry. The contract still does not claim interpreter-restart recovery or retroactive
 per-action atomicity between committed canonical state and terminal source files; either stronger
 requirement still needs the larger authenticated watermark/deferred-row design.
+
+### Process execution/effect bridge landed
+
+Commit ``f8fc76587`` (``feat: reconcile process execution effects exactly``) lands the queued
+four-path process execution/effect bridge after the already-committed artifact-group and dispatcher
+action-cohort owners. The generator now plans process-owned File and Registry effects before root
+allocation, binds every realized occurrence to one stable ordinal/time identity, advances the exact
+process and live-session activity frontiers to the latest admitted effect, and publishes the root,
+all effect rows, and deduplicated local-artifact tokens through one dispatcher cohort. Required
+artifact failure and cardinality overflow reject before State, lifecycle, timing, audit, artifact,
+or emitter mutation.
+
+The dispatcher relaxes multi-occurrence cardinality only for exact typed File and Registry intents.
+It authenticates every per-ordinal provenance key, actor, lifecycle, member order, completion time,
+and covering State frontier. Network effects remain single-occurrence on this boundary. Scanner
+transport aggregation remains on its legacy publication path: unsupported scanner multi-occurrence
+plans reject before mutation, while ordinary Linux nmap retains its post-parent-resolution foreground
+close sampling and full probe publication.
+
+Independent review found and closed two integration-specific P1s before the bridge was frozen. All
+fallible constructor compatibility checks now precede dispatcher lifecycle, artifact, and effect-audit
+binding, so a rejected owner combination leaves an exact retry neutral. The Linux scanner adapter also
+retains the current-parent foreground finalizer rather than applying the strict pre-allocation close
+requirement intended for File/Registry action cohorts. The final exact four-path patch has tree
+``65032228`` and binary diff SHA-256
+``8725844a40119373449b5ad913a3d7649f2bc30ea1f009913c4664a79f96f065``; the independent reviewer
+returned CLEAR with no P0/P1/P2/P3.
+
+Commit ``10c3301e6`` (``test: align activity execution-effect contracts``) is a separately reviewed
+one-file compatibility migration. Five legacy tests now patch the bridge-owned deterministic
+endpoint-effect RNG, create Linux parents through the lifecycle owner, assert allocation-free
+``INVALID_ACTOR`` rejection after an authoritative session close, and inspect registry materialization
+at its new allocation-free planning seam, including the exact occurrence timestamp argument. This
+keeps the production bridge review at its approved four paths instead of silently expanding it.
+
+Integrated gates pass 49/49 focused bridge tests, 524/524 State/lifecycle/content/action-cohort
+adjacent tests, 5/5 migrated activity contracts, and 314/314 exact-publication plus Windows/Sysmon
+terminal-source tests. The deterministic/RNG/census selection is 9/12; its Windows SMB missing
+``open_smb_session`` failure and two Linux SMB LogonID-reuse failures reproduce unchanged on the
+exact parent. The full activity file is 429 passed with the same 11 inherited failures. Repository
+Ruff, 643-file format, compile, and diff checks are clean. This bridge introduces no SQLite or other
+database path; temporary SQLite remains confined to the previously documented exact sink and
+terminal source-finalization implementations.
