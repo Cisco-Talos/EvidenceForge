@@ -2541,6 +2541,16 @@ commit reconciles the reserved sequence/digest exactly once; release and termina
 authenticated candidate ownership until the final source cohort is validated. The journal remains
 an implementation detail of ``eforge generate`` and is removed at terminal cleanup.
 
+Commit ``b6788b769`` (``fix: authenticate exact Windows abort publication``) closes the final
+failed-generation boundary found by stacked review. A source-bound abort with released exact
+candidates no longer clears their receipts and falls through legacy forced rendering. It
+authenticates the raw marker rows, transactionally seals the partial cohort, and publishes each
+immutable final row through the existing exact host-writer receipt before advancing the durable
+cursor or retiring candidate ownership. Mid-render, writer, checkpoint, release, footer, and spool
+cleanup fail-before or lost-return paths retain one same-process retry owner; public forced flush,
+late admission, reconfiguration, barrier, and quiescence are fenced while that owner exists.
+Ordinary no-receipt abort close keeps the legacy path unchanged.
+
 Unknown service-account SIDs now use a bounded opaque reservation under a dedicated leaf lock,
 never held across dispatcher or sink callbacks. Concurrent allocations skip reserved RIDs,
 same-account tokens share one exact SID, foreign/stale/tampered tokens fail closed, and canonical
@@ -2550,9 +2560,9 @@ Pre-batch projection and SourceTiming failures cancel or prune every caller-owne
 the timing lane is immediately reusable.
 
 Independent review returned CLEAR with no P0/P1/P2 on the final immutable slices. The integrated
-tree passes 65/65 service-logon tests, 20/20 dispatcher recovery tests, 67/67 Windows exact-source
+tree passes 65/65 service-logon tests, 20/20 dispatcher recovery tests, 88/88 Windows exact-source
 tests, 5/5 engine-drain tests, 15/15 SID/process tests, 6/6 adjacent account/storyline tests,
-149/149 wider dispatcher/lifecycle tests, 147/147 engine/Windows/Sysmon tests, and 228/228 exact
+149/149 wider dispatcher/lifecycle tests, 168/168 engine/Windows/Sysmon tests, and 228/228 exact
 publication tests. Two hash seeds times threaded/non-threaded generation pass 4/4; default, Splunk,
 SOF/Snare, buffer, and threaded Windows parity pass 7/7. The full activity and storyline files
 retain their exact-parent failure sets (429/440 and 75/79 respectively), with no new regression.
