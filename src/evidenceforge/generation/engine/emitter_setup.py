@@ -372,13 +372,20 @@ class EmitterSetupMixin:
                     sensor_hostnames=sensor_hostnames,
                 )
             elif format_name in _HOST_FORMATS:
-                emitter = emitter_classes[format_name](format_def, self.output_dir, threaded=True)
+                emitter_kwargs: dict[str, object] = {"threaded": True}
+                if format_name == "windows_event_security":
+                    emitter_kwargs["source_finalization"] = True
+                emitter = emitter_classes[format_name](
+                    format_def,
+                    self.output_dir,
+                    **emitter_kwargs,
+                )
             else:
                 output_path = self.output_dir / f"{format_name}{format_def.output.file_extension}"
                 emitter = emitter_classes[format_name](format_def, output_path, threaded=True)
 
-            emitter.configure_output_target(self.output_target)
             self.emitters[format_name] = emitter
+            emitter.configure_output_target(self.output_target)
             logger.info(f"Initialized {format_name} emitter (threaded)")
 
         # Configure ASA emitters with network topology for interface resolution

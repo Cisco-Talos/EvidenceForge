@@ -33,12 +33,14 @@ import random
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Lock
 
 from evidenceforge.composition.models import CompiledScenario
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.emitters.base import ExactPublicationAuthority
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
 from evidenceforge.generation.engine.storyline import StorylineMixin
@@ -46,6 +48,10 @@ from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
 from evidenceforge.generation.network_identities import ScenarioNetworkResolver
 from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
+from evidenceforge.generation.source_finalization import (
+    SourceFinalizationCoordinator,
+    SourceFinalizationParticipant,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.workload import WorkloadLimits, estimate_workload
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
@@ -170,6 +176,20 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.authored_intent_ledger = AuthoredIntentLedger.from_scenario(scenario)
         self.intent_execution_ledger = IntentExecutionLedger(self.authored_intent_ledger)
         self.network_resolver = ScenarioNetworkResolver.from_scenario(scenario)
+        self._source_finalization_authority: ExactPublicationAuthority | None = None
+        self._source_finalization_coordinator: SourceFinalizationCoordinator | None = None
+        self._ssh_lifecycles_finalized = False
+        self._foreground_lifecycles_finalized = False
+        self._finalization_complete = False
+        self._finalization_aborted = False
+        self._initialization_complete = False
+        self._generation_body_completed = False
+        self._generation_complete = False
+        self._ids_alert_summary_applied = False
+        self._generate_owner = Lock()
+        self._expected_close_emitters: dict[str, object] | None = None
+        self._closed_emitter_names: set[str] = set()
+        self._source_coordinator_closed = False
 
         # Hawkes process state per user for cross-hour continuity
         self._hawkes_states: dict = {}
@@ -192,10 +212,15 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         from evidenceforge.config.provider import effective_config_scope
 
-        with effective_config_scope(self.compiled_scenario.effective_config):
-            with generation_seed_scope(self.generation_seed):
-                reset_thread_rng()
-                self._generate_scoped()
+        if not self._generate_owner.acquire(blocking=False):
+            raise RuntimeError("Generation cannot run concurrently or re-enter on one engine")
+        try:
+            with effective_config_scope(self.compiled_scenario.effective_config):
+                with generation_seed_scope(self.generation_seed):
+                    reset_thread_rng()
+                    self._generate_scoped()
+        finally:
+            self._generate_owner.release()
 
     def _generate_scoped(self) -> None:
         """Main generation flow.
@@ -209,12 +234,31 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         """
         logger.info(f"Starting generation for scenario: {self.scenario.name}")
 
+        if self._finalization_aborted:
+            self._retry_aborted_cleanup()
+            raise RuntimeError("Aborted generation cannot be restarted")
+        if self._generation_body_completed:
+            if not self._finalization_complete:
+                self._finalize_successfully_with_progress(
+                    description="Retrying generation finalization"
+                )
+            self._complete_generation_outputs()
+            return
+        if self._initialization_complete:
+            raise RuntimeError("Generation body cannot be restarted after an incomplete run")
+
         # Phase 1: Initialize
-        self._report_progress(
-            "phase_start", {"phase": "initialize", "description": "Initializing generation engine"}
-        )
-        self._initialize()
-        self._report_progress("phase_end", {"phase": "initialize"})
+        try:
+            self._report_progress(
+                "phase_start",
+                {"phase": "initialize", "description": "Initializing generation engine"},
+            )
+            self._initialize()
+            self._initialization_complete = True
+            self._report_progress("phase_end", {"phase": "initialize"})
+        except BaseException as primary:
+            self._abort_failed_generation(primary)
+            raise
 
         try:
             # Phase 2: Generate baseline activity
@@ -263,14 +307,102 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                         self._execute_single_red_herring_event(idx)
                         self._red_herring_executed.add(idx)
                     self._barrier_flush_all_emitters()
-        finally:
-            # Phase 4: Finalize and close emitters (always, even on error)
-            self._report_progress(
-                "phase_start", {"phase": "finalize", "description": "Finalizing generation"}
-            )
-            self._finalize()
-            self._report_progress("phase_end", {"phase": "finalize"})
+            self._generation_body_completed = True
+        except BaseException as primary:
+            self._abort_failed_generation(primary)
+            raise
+        else:
+            self._finalize_successfully_with_progress(description="Finalizing generation")
 
+        self._complete_generation_outputs()
+
+    def _abort_failed_generation(self, primary: BaseException) -> None:
+        """Close every initialized emitter without allowing progress errors to skip cleanup."""
+
+        self._finalization_aborted = True
+        secondary_errors: list[tuple[str, BaseException]] = []
+        try:
+            self._report_progress(
+                "phase_start",
+                {"phase": "finalize", "description": "Finalizing generation"},
+            )
+        except BaseException as progress_error:
+            secondary_errors.append(("Generation failure progress callback", progress_error))
+        try:
+            self._finalize(generation_succeeded=False)
+        except BaseException as cleanup_error:
+            secondary_errors.append(("Generation failure cleanup", cleanup_error))
+        try:
+            self._report_progress("phase_end", {"phase": "finalize"})
+        except BaseException as progress_error:
+            secondary_errors.append(("Generation failure progress callback", progress_error))
+        for label, error in secondary_errors:
+            try:
+                BaseException.add_note(primary, f"{label} also failed: {error!r}")
+            except BaseException:
+                logger.debug("Unable to annotate the primary generation failure")
+
+    def _retry_aborted_cleanup(self) -> None:
+        """Resume only legacy terminal cleanup after an already-aborted run."""
+
+        if self._finalization_complete:
+            return
+        progress_error: BaseException | None = None
+        try:
+            self._report_progress(
+                "phase_start",
+                {"phase": "finalize", "description": "Retrying aborted generation cleanup"},
+            )
+        except BaseException as error:
+            progress_error = error
+        try:
+            self._finalize(generation_succeeded=False)
+        except BaseException as cleanup_error:
+            if progress_error is not None:
+                cleanup_error.add_note(
+                    f"Aborted cleanup progress callback also failed: {progress_error!r}"
+                )
+            raise
+        try:
+            self._report_progress("phase_end", {"phase": "finalize"})
+        except BaseException:
+            if progress_error is None:
+                raise
+        if progress_error is not None:
+            raise progress_error
+
+    def _finalize_successfully_with_progress(self, *, description: str) -> None:
+        """Run retryable EOF finalization even when its progress callback fails."""
+
+        progress_error: BaseException | None = None
+        try:
+            self._report_progress(
+                "phase_start",
+                {"phase": "finalize", "description": description},
+            )
+        except BaseException as error:
+            progress_error = error
+        try:
+            self._finalize(generation_succeeded=True)
+        except BaseException as finalization_error:
+            if progress_error is not None:
+                finalization_error.add_note(
+                    f"Finalization progress callback also failed: {progress_error!r}"
+                )
+            raise
+        try:
+            self._report_progress("phase_end", {"phase": "finalize"})
+        except BaseException as error:
+            if progress_error is None:
+                progress_error = error
+        if progress_error is not None:
+            raise progress_error
+
+    def _complete_generation_outputs(self) -> None:
+        """Write successful-run metadata once after retryable terminal source close."""
+
+        if self._generation_complete:
+            return
         # Phase 5: Generate ground-truth reports for every successful run. Baseline-only
         # datasets still need an empty GROUND_TRUTH.md so CLI overwrite swaps
         # can keep data and metadata as a matched pair.
@@ -303,6 +435,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         )
         self._report_progress("phase_end", {"phase": "ground_truth"})
 
+        self._generation_complete = True
         logger.info("Generation complete")
 
     def _initialize(self) -> None:
@@ -345,6 +478,20 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         # Initialize emitters (from EmitterSetupMixin)
         self._init_emitters()
+        self._source_finalization_authority = ExactPublicationAuthority(
+            capacity=1,
+            row_capacity=512,
+            byte_capacity=20 * 1024 * 1024,
+        )
+        participants = tuple(
+            emitter
+            for emitter in self.emitters.values()
+            if isinstance(emitter, SourceFinalizationParticipant)
+        )
+        self._source_finalization_coordinator = SourceFinalizationCoordinator(
+            participants,
+            self._source_finalization_authority,
+        )
 
         # Initialize network visibility engine (Phase 2.5)
         from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
@@ -597,27 +744,117 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 return system
         return None
 
-    def _finalize(self) -> None:
+    def _close_emitters(self, *, primary: BaseException | None = None) -> None:
+        """Close every emitter, retaining a supplied lifecycle failure as primary."""
+
+        failures: list[BaseException] = []
+        if self._expected_close_emitters is None:
+            self._expected_close_emitters = dict(self.emitters)
+        expected_emitters = self._expected_close_emitters
+        if set(self.emitters) != set(expected_emitters):
+            failures.append(RuntimeError("Emitter mapping keys changed after close ownership"))
+        else:
+            for format_name, expected in expected_emitters.items():
+                if self.emitters[format_name] is not expected:
+                    failures.append(
+                        RuntimeError(
+                            f"Emitter mapping for {format_name!r} changed identity "
+                            "after close ownership"
+                        )
+                    )
+        if failures:
+            if primary is not None:
+                for failure in failures:
+                    primary.add_note(f"Emitter cleanup also failed: {failure!r}")
+                return
+            first, *additional = failures
+            for failure in additional:
+                first.add_note(f"Additional emitter cleanup failure: {failure!r}")
+            raise first
+
+        for format_name, emitter in expected_emitters.items():
+            logger.info("Stopping %s emitter thread", format_name)
+            if format_name in self._closed_emitter_names:
+                continue
+            try:
+                emitter.close()
+            except BaseException as error:
+                failures.append(error)
+            else:
+                self._closed_emitter_names.add(format_name)
+        if primary is not None:
+            for failure in failures:
+                primary.add_note(f"Emitter cleanup also failed: {failure!r}")
+            return
+        if failures:
+            first, *additional = failures
+            for failure in additional:
+                first.add_note(f"Additional emitter cleanup failure: {failure!r}")
+            raise first
+
+    def _finalize(self, *, generation_succeeded: bool = True) -> None:
         """Finalize generation and close all emitters.
 
         Flushes remaining buffered events and closes emitter files.
         Phase 2.1: Gracefully stops emitter threads before closing.
         """
+        if self._finalization_complete:
+            return
         logger.info("Finalizing generation")
 
-        if self.activity_generator is not None and self.end_time is not None:
-            self.activity_generator.finalize_ssh_session_lifecycles(self.end_time)
-            self.activity_generator.finalize_foreground_process_lifetimes(self.end_time)
+        if not generation_succeeded:
+            self._finalization_aborted = True
+            self._close_emitters()
+            self._finalization_complete = True
+            return
+        if self._finalization_aborted:
+            raise RuntimeError("Aborted generation cannot resume exact source finalization")
 
-        for format_name, emitter in self.emitters.items():
-            logger.info(f"Stopping {format_name} emitter thread")
-            emitter.close()
+        if not self._ssh_lifecycles_finalized:
+            try:
+                if self.activity_generator is not None and self.end_time is not None:
+                    self.activity_generator.finalize_ssh_session_lifecycles(self.end_time)
+            except BaseException as primary:
+                self._finalization_aborted = True
+                try:
+                    self._close_emitters()
+                except BaseException as cleanup_error:
+                    primary.add_note(f"Emitter cleanup also failed: {cleanup_error!r}")
+                else:
+                    self._finalization_complete = True
+                raise
+            self._ssh_lifecycles_finalized = True
+        if not self._foreground_lifecycles_finalized:
+            try:
+                if self.activity_generator is not None and self.end_time is not None:
+                    self.activity_generator.finalize_foreground_process_lifetimes(self.end_time)
+            except BaseException as primary:
+                self._finalization_aborted = True
+                try:
+                    self._close_emitters()
+                except BaseException as cleanup_error:
+                    primary.add_note(f"Emitter cleanup also failed: {cleanup_error!r}")
+                else:
+                    self._finalization_complete = True
+                raise
+            self._foreground_lifecycles_finalized = True
 
-        snort_emitter = self.emitters.get("snort_alert")
-        ids_summary = getattr(snort_emitter, "ids_alert_summary", {})
-        if ids_summary:
-            self._apply_ids_alert_summary(ids_summary)
-        self._ids_evaluation_summary = getattr(snort_emitter, "ids_evaluation_summary", None)
+        coordinator = self._source_finalization_coordinator
+        if coordinator is None:
+            raise RuntimeError("Generation engine lost its source-finalization coordinator")
+        coordinator.finalize()
+        self._close_emitters()
+        if not self._source_coordinator_closed:
+            coordinator.mark_closed()
+            self._source_coordinator_closed = True
+
+        if not self._ids_alert_summary_applied:
+            snort_emitter = self.emitters.get("snort_alert")
+            ids_summary = getattr(snort_emitter, "ids_alert_summary", {})
+            if ids_summary:
+                self._apply_ids_alert_summary(ids_summary)
+            self._ids_evaluation_summary = getattr(snort_emitter, "ids_evaluation_summary", None)
+            self._ids_alert_summary_applied = True
 
         if self.activity_generator is not None:
             self.activity_generator.write_artifacts_manifest()
@@ -631,6 +868,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             workload_estimate=self.workload_estimate,
         )
 
+        self._finalization_complete = True
         logger.info("All emitters closed")
 
     def _apply_ids_alert_summary(
