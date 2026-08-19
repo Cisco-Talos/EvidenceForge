@@ -2514,3 +2514,51 @@ exact parent. The full activity file is 429 passed with the same 11 inherited fa
 Ruff, 643-file format, compile, and diff checks are clean. This bridge introduces no SQLite or other
 database path; temporary SQLite remains confined to the previously documented exact sink and
 terminal source-finalization implementations.
+
+### Type-5 service-logon exact projection landed
+
+Commits ``4b71ab757`` (``feat: add exact Windows candidate admission``), ``5e052c297``
+(``feat: recover exact action projections``), ``bde33c64a``
+(``fix: drain exact projections before emitter close``), and ``ad2611061``
+(``feat: publish service logons exactly``) close the bounded Type-5 service-logon projection
+milestone. Every configured Windows Security and eCAR target is now prepared before canonical
+mutation. The dispatcher retains one authenticated, bounded exact batch and its commit/release
+cursor across same-process lost returns, while the engine drains unresolved dispatcher recovery
+before any emitter close on both successful and failed generation.
+
+Built-in SYSTEM, LOCAL SERVICE, and NETWORK SERVICE logons publish distinct successful
+``authentication_occurrence`` identities with their well-known LUIDs and no fabricated State or
+lifecycle session. Named service accounts publish exactly one State/lifecycle session, one stable
+LUID, the Windows 4624/optional 4672 cohort, and the matching eCAR LOGIN row. Named cohorts also
+record one deterministic zero-effect execution-audit plan. That audit entry intentionally changes
+ground-truth audit metadata; equivalent source-native Windows and eCAR bytes remain identical to
+the legacy renderer across retries, thread modes, and Python hash seeds.
+
+Windows candidate admission reuses the existing bounded, owner-private temporary
+source-finalization SQLite journal. It adds no product database, service, schema version, restart
+recovery, or persistent state. Exact prepare reserves candidate capacity without inserting a row;
+commit reconciles the reserved sequence/digest exactly once; release and terminal sealing retain
+authenticated candidate ownership until the final source cohort is validated. The journal remains
+an implementation detail of ``eforge generate`` and is removed at terminal cleanup.
+
+Unknown service-account SIDs now use a bounded opaque reservation under a dedicated leaf lock,
+never held across dispatcher or sink callbacks. Concurrent allocations skip reserved RIDs,
+same-account tokens share one exact SID, foreign/stale/tampered tokens fail closed, and canonical
+receipt proof installs the reserved mapping exactly once. Account-created 4720 generation owns the
+same explicit-SID reservation before output; the prior direct storyline registry write is removed.
+Pre-batch projection and SourceTiming failures cancel or prune every caller-owned preparation, so
+the timing lane is immediately reusable.
+
+Independent review returned CLEAR with no P0/P1/P2 on the final immutable slices. The integrated
+tree passes 65/65 service-logon tests, 20/20 dispatcher recovery tests, 67/67 Windows exact-source
+tests, 5/5 engine-drain tests, 15/15 SID/process tests, 6/6 adjacent account/storyline tests,
+149/149 wider dispatcher/lifecycle tests, 147/147 engine/Windows/Sysmon tests, and 228/228 exact
+publication tests. Two hash seeds times threaded/non-threaded generation pass 4/4; default, Splunk,
+SOF/Snare, buffer, and threaded Windows parity pass 7/7. The full activity and storyline files
+retain their exact-parent failure sets (429/440 and 75/79 respectively), with no new regression.
+Repository Ruff, format, compile, and diff checks are clean.
+
+The next dependency-ordered V2 milestone is the already-open SMB persistent-channel prerequisite
+and production caller migration. Do not patch the removed legacy StateManager SMB methods back in;
+route SMB authentication/tree/handle ownership through the prepared application-channel manager
+and the now-proven auth/session projection boundary.
