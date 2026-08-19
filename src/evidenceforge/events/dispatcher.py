@@ -63,6 +63,7 @@ from evidenceforge.events.content_identity import (
     canonical_native_path,
 )
 from evidenceforge.events.contracts import (
+    ContextKind,
     EffectOccurrenceDisposition,
     EffectOccurrenceKind,
     EffectOccurrenceOwner,
@@ -100,7 +101,11 @@ if TYPE_CHECKING:
         LocalArtifactPublishToken,
         LocalArtifactVersionRegistry,
     )
-    from evidenceforge.generation.emitters.base import LogEmitter
+    from evidenceforge.generation.emitters.base import (
+        ExactPublicationAuthorityCensus,
+        ExactPublicationBatch,
+        LogEmitter,
+    )
     from evidenceforge.generation.intent_ledger import (
         IntentExecutionBatchReceipt,
         IntentExecutionBatchRequest,
@@ -384,6 +389,7 @@ class PreparedActionCohortBatch:
         "_consumed",
         "_dispatcher_token",
         "_dispatches",
+        "_exact_projection",
         "_integrity_token",
         "_intent_binding_token",
         "_lifecycle_binding_token",
@@ -405,6 +411,7 @@ class PreparedActionCohortBatch:
         audit_binding_token: object,
         artifact_publications: tuple[LocalArtifactPublishToken, ...],
         intent_binding_token: IntentExecutionBatchToken | None,
+        exact_projection: bool,
     ) -> None:
         self._dispatcher_token = dispatcher_token
         self._batch_id = batch_id
@@ -416,6 +423,7 @@ class PreparedActionCohortBatch:
         self._audit_binding_token = audit_binding_token
         self._artifact_publications = artifact_publications
         self._intent_binding_token = intent_binding_token
+        self._exact_projection = exact_projection
         self._integrity_token = ""
         self._consumed = False
 
@@ -504,6 +512,45 @@ class ActionCohortPublicationResult:
         """Return ordered terminal rendering errors without hiding committed receipt truth."""
 
         return tuple(outcome.error for outcome in self.projections)
+
+
+@dataclass(frozen=True, slots=True, eq=False, repr=False)
+class StateNeutralProjectionPublicationReceipt:
+    """Authenticated dispatcher proof for one canonical State-neutral publication."""
+
+    dispatcher_id: str
+    receipt_id: str
+    publication_token: str
+    occurrence_ids: tuple[str, ...]
+    member_integrity_digest: str
+    timing_preparation_id: int
+    timing_overlay_digest: str
+    timing_publication_token: str
+    intent_publication_token: str
+    _integrity: str = ""
+    _published: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class StateNeutralProjectionPublicationResult:
+    """Immutable canonical-owner receipts and recoverable exact projection outcome."""
+
+    receipt: StateNeutralProjectionPublicationReceipt
+    timing: SourceTimingPreparationReceipt
+    intent: IntentExecutionBatchReceipt | None
+    projection: ActionCohortProjectionOutcome
+
+
+@dataclass(frozen=True, slots=True)
+class ExactProjectionRecoveryCensus:
+    """Constant-time bounded census of dispatcher-retained exact publication work."""
+
+    unresolved_recoveries: int
+    active_recoveries: int
+    recovery_capacity: int
+    high_water_recoveries: int
+    state_neutral_receipts: int
+    authority: ExactPublicationAuthorityCensus
 
 
 @dataclass(frozen=True, slots=True)
@@ -698,6 +745,9 @@ class _PreparedActionCohortBatchRecord:
     intent_ledger: IntentExecutionLedger | None
     intent_request: IntentExecutionBatchRequest | None
     intent_token: IntentExecutionBatchToken | None
+    exact_projection: bool
+    exact_publication_batch: ExactPublicationBatch | None
+    exact_prepared_identifiers: tuple[tuple[str, str], ...]
     observation_deltas: tuple[_ActionCohortObservationDelta, ...]
     observation_digest: str
     member_integrity_digest: str
@@ -735,6 +785,7 @@ class _PreparedActionCohortBatchRecord:
     publication_receipt: ActionCohortPublicationReceipt | None = None
     publication_result: ActionCohortPublicationResult | None = None
     projection_outcomes: tuple[ActionCohortProjectionOutcome, ...] = ()
+    exact_recovery: _ExactProjectionRecoveryRecord | None = None
     receipt_eviction_id: int | None = None
     members_cleanup_complete: bool = False
     intent_cleanup_complete: bool = False
@@ -742,6 +793,46 @@ class _PreparedActionCohortBatchRecord:
     lifecycle_cleanup_complete: bool = False
     timing_cleanup_complete: bool = False
     artifact_cleanup_complete: bool = False
+    exact_cleanup_complete: bool = False
+
+
+@dataclass(slots=True)
+class _StateNeutralProjectionPublicationRecord:
+    """Trusted non-State canonical owners retained through exact sink recovery."""
+
+    occurrence_id: str
+    member_integrity_digest: str
+    source_timing_preparation: SourceTimingPreparation
+    authored_intent_id: str | None
+    intent_ledger: IntentExecutionLedger | None
+    intent_request: IntentExecutionBatchRequest | None
+    intent_token: IntentExecutionBatchToken | None
+    observation_deltas: tuple[_ActionCohortObservationDelta, ...]
+    exact_publication_batch: ExactPublicationBatch
+    projection_outcome: ActionCohortProjectionOutcome
+    prepared_observation_updates: tuple[_ActionCohortPreparedObservationCluster, ...] | None = None
+    observation_committed: bool = False
+    expected_timing_receipt: SourceTimingPreparationReceipt | None = None
+    expected_intent_receipt: IntentExecutionBatchReceipt | None = None
+    publication_receipt: StateNeutralProjectionPublicationReceipt | None = None
+    publication_result: StateNeutralProjectionPublicationResult | None = None
+    receipt_eviction_id: int | None = None
+
+
+@dataclass(slots=True)
+class _ExactProjectionRecoveryRecord:
+    """Strong receipt-keyed ownership of one prepared exact batch and its cursor."""
+
+    kind: str
+    receipt: ActionCohortPublicationReceipt | StateNeutralProjectionPublicationReceipt
+    result: ActionCohortPublicationResult | StateNeutralProjectionPublicationResult
+    batch: ExactPublicationBatch
+    outcome: ActionCohortProjectionOutcome
+    occurrence_ids: tuple[str, ...]
+    member_integrity_digest: str
+    identifiers: tuple[tuple[str, str], ...]
+    state: str = "reserved"
+    active_thread_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -766,6 +857,7 @@ class _ActionCohortPreparationCleanupRecord:
     intent_ledger: IntentExecutionLedger | None
     intent_request: IntentExecutionBatchRequest | None
     intent_token: IntentExecutionBatchToken | None
+    exact_publication_batch: ExactPublicationBatch | None
     retained_bytes: int
     member_locks: tuple[object, ...]
     member_installed: list[bool]
@@ -777,6 +869,7 @@ class _ActionCohortPreparationCleanupRecord:
     lifecycle_cleanup_complete: bool = False
     timing_cleanup_complete: bool = False
     artifact_cleanup_complete: bool = False
+    exact_cleanup_complete: bool = False
 
 
 class PreparedNetworkDependentBatch:
@@ -964,6 +1057,22 @@ class EventDispatcher:
         self._action_cohort_claimed_batches = 0
         self._action_cohort_receipts: dict[int, ActionCohortPublicationReceipt] = {}
         self._action_cohort_committed_receipts = 0
+        from evidenceforge.generation.emitters.base import ExactPublicationAuthority
+
+        self._exact_publication_authority = ExactPublicationAuthority(
+            capacity=action_cohort_preparation_capacity,
+            row_capacity=4 * action_cohort_member_capacity,
+            byte_capacity=action_cohort_byte_capacity,
+        )
+        self._exact_projection_recovery_capacity = action_cohort_preparation_capacity
+        self._exact_projection_recoveries: dict[int, _ExactProjectionRecoveryRecord] = {}
+        self._exact_projection_active_recoveries = 0
+        self._exact_projection_recovery_high_water = 0
+        self._state_neutral_projection_receipts: dict[
+            int,
+            StateNeutralProjectionPublicationReceipt,
+        ] = {}
+        self._state_neutral_projection_committed_receipts = 0
         self._network_dependent_batch_lock = Lock()
         self._network_dependent_batches: dict[
             int,
@@ -1907,7 +2016,7 @@ class EventDispatcher:
         )
         allowed_states = {"prepared", "cleanup_pending"}
         if allow_binding:
-            allowed_states.add("binding")
+            allowed_states.update({"binding", "publishing"})
         if any(record.state not in allowed_states for record in records):
             raise EventContractError(
                 "Binding action-cohort projection cannot be cancelled concurrently"
@@ -4116,6 +4225,9 @@ class EventDispatcher:
                 record.effect_binding_digest,
                 record.observation_digest,
                 record.nested_token_digest,
+                record.exact_projection,
+                id(record.exact_publication_batch),
+                record.exact_prepared_identifiers,
                 tuple(
                     (
                         id(token),
@@ -4160,6 +4272,8 @@ class EventDispatcher:
                 ),
                 id(record.publication_result),
                 tuple(id(outcome) for outcome in record.projection_outcomes),
+                id(record.exact_publication_batch),
+                id(record.exact_recovery),
             )
         ).encode("utf-8")
         return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
@@ -4216,6 +4330,66 @@ class EventDispatcher:
             and type(receipt._integrity) is str
             and type(receipt._published) is bool
         )
+
+    def _state_neutral_projection_receipt_integrity(
+        self,
+        receipt: StateNeutralProjectionPublicationReceipt,
+    ) -> str:
+        """Authenticate one honest non-State receipt through a distinct HMAC domain."""
+
+        payload = repr(
+            (
+                "state-neutral-projection-publication-receipt-v1",
+                id(receipt),
+                receipt.dispatcher_id,
+                receipt.receipt_id,
+                receipt.publication_token,
+                receipt.occurrence_ids,
+                receipt.member_integrity_digest,
+                receipt.timing_preparation_id,
+                receipt.timing_overlay_digest,
+                receipt.timing_publication_token,
+                receipt.intent_publication_token,
+            )
+        ).encode("utf-8")
+        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def _state_neutral_projection_receipt_shape_is_valid(
+        receipt: StateNeutralProjectionPublicationReceipt,
+    ) -> bool:
+        """Reject hostile non-State receipt fields before HMAC or registry work."""
+
+        return bool(
+            type(receipt.dispatcher_id) is str
+            and type(receipt.receipt_id) is str
+            and type(receipt.publication_token) is str
+            and type(receipt.occurrence_ids) is tuple
+            and len(receipt.occurrence_ids) == 1
+            and all(type(value) is str and value for value in receipt.occurrence_ids)
+            and type(receipt.member_integrity_digest) is str
+            and type(receipt.timing_preparation_id) is int
+            and receipt.timing_preparation_id > 0
+            and type(receipt.timing_overlay_digest) is str
+            and type(receipt.timing_publication_token) is str
+            and type(receipt.intent_publication_token) is str
+            and type(receipt._integrity) is str
+            and type(receipt._published) is bool
+        )
+
+    @staticmethod
+    def _validate_exact_projection_identifiers(result: object) -> tuple[tuple[str, str], ...]:
+        """Accept only the frozen bounded identifier shape rendered during preflight."""
+
+        if type(result) is not tuple or any(
+            type(item) is not tuple
+            or len(item) != 2
+            or type(item[0]) is not str
+            or type(item[1]) is not str
+            for item in result
+        ):
+            raise EventContractError("Exact projection returned malformed identifiers")
+        return cast(tuple[tuple[str, str], ...], result)
 
     def _action_cohort_expected_publications_authenticate(
         self,
@@ -4321,6 +4495,26 @@ class EventDispatcher:
             receipt = record.publication_receipt
             result = record.publication_result
             outcomes = record.projection_outcomes
+            recovery = record.exact_recovery
+            recovery_valid = (
+                recovery is not None
+                and recovery.kind == "action_cohort"
+                and recovery.receipt is receipt
+                and recovery.result is result
+                and recovery.batch is record.exact_publication_batch
+                and len(outcomes) == 1
+                and recovery.outcome is outcomes[0]
+                and recovery.occurrence_ids == record.member_occurrence_ids
+                and hmac.compare_digest(
+                    recovery.member_integrity_digest,
+                    record.member_integrity_digest,
+                )
+                and recovery.identifiers == record.exact_prepared_identifiers
+                and recovery.state == "reserved"
+                and recovery.active_thread_id is None
+                if record.exact_projection
+                else recovery is None
+            )
             return bool(
                 type(receipt) is ActionCohortPublicationReceipt
                 and not receipt._published
@@ -4340,6 +4534,7 @@ class EventDispatcher:
                 and result.projections is outcomes
                 and type(outcomes) is tuple
                 and len(outcomes) == len(record.dispatches)
+                and recovery_valid
                 and all(
                     type(outcome) is ActionCohortProjectionOutcome
                     and type(outcome._occurrence_id) is str
@@ -4447,6 +4642,20 @@ class EventDispatcher:
         record.publication_receipt = receipt
         record.projection_outcomes = outcomes
         record.publication_result = result
+        if record.exact_projection:
+            exact_batch = record.exact_publication_batch
+            if exact_batch is None or len(outcomes) != 1:
+                raise EventContractError("Exact action-cohort recovery preallocation is malformed")
+            record.exact_recovery = _ExactProjectionRecoveryRecord(
+                kind="action_cohort",
+                receipt=receipt,
+                result=result,
+                batch=exact_batch,
+                outcome=outcomes[0],
+                occurrence_ids=record.member_occurrence_ids,
+                member_integrity_digest=record.member_integrity_digest,
+                identifiers=record.exact_prepared_identifiers,
+            )
         if not self._action_cohort_expected_publications_authenticate(record):
             raise EventContractError(
                 "Action-cohort expected owner publications failed preallocation authentication"
@@ -4490,7 +4699,7 @@ class EventDispatcher:
     @contextmanager
     def _claimed_action_cohort_observations(
         self,
-        record: _PreparedActionCohortBatchRecord,
+        record: _PreparedActionCohortBatchRecord | _StateNeutralProjectionPublicationRecord,
     ) -> Iterator[None]:
         """Precompute affected-only summary replacements while fencing other updates."""
 
@@ -4548,7 +4757,7 @@ class EventDispatcher:
 
     def _commit_action_cohort_observations_no_fail(
         self,
-        record: _PreparedActionCohortBatchRecord,
+        record: _PreparedActionCohortBatchRecord | _StateNeutralProjectionPublicationRecord,
     ) -> None:
         """Install only preallocated affected summaries after canonical owner commit."""
 
@@ -4566,6 +4775,601 @@ class EventDispatcher:
         self._source_evidence_version += 1
         record.observation_committed = True
 
+    def _exact_projection_targets(
+        self,
+        projection: _PreparedProjection,
+    ) -> tuple[tuple[str, LogEmitter], ...]:
+        """Return only targets whose emit callbacks will run during exact rendering."""
+
+        if projection.mode == "suppressed":
+            return ()
+        if projection.mode == "legacy":
+            return tuple(
+                (target.format_name, target.emitter)
+                for target in projection.legacy_targets
+                if target.occurrence is not None
+            )
+        if projection.mode != "compiled":
+            raise EventContractError("Exact projection mode is unsupported")
+        return tuple(
+            (target.format_name, target.emitter)
+            for target in projection.compiled_targets
+            if self._action_cohort_compiled_projection_status(
+                projection.occurrence,
+                target,
+            )
+            in {"visible", "delayed"}
+        )
+
+    @staticmethod
+    def _require_exact_projection_target(
+        format_name: str,
+        emitter: LogEmitter,
+    ) -> None:
+        """Fail closed before rendering unless the concrete sink has exact admission."""
+
+        from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.windows import WindowsEventEmitter
+
+        if format_name == "ecar" and type(emitter) is EcarEmitter:
+            return
+        if (
+            format_name == "windows_event_security"
+            and type(emitter) is WindowsEventEmitter
+            and getattr(emitter, "supports_exact_candidate_publication", None) is True
+        ):
+            return
+        raise EventContractError(
+            f"Exact projection target {format_name!r} is unsupported before rendering"
+        )
+
+    def _exact_projection_participants(
+        self,
+        projection: _PreparedProjection,
+    ) -> tuple[LogEmitter, ...]:
+        """Authenticate and deduplicate exact-capable emitter participants."""
+
+        participants: list[LogEmitter] = []
+        participant_ids: set[int] = set()
+        for format_name, emitter in self._exact_projection_targets(projection):
+            self._require_exact_projection_target(format_name, emitter)
+            if id(emitter) in participant_ids:
+                continue
+            participant_ids.add(id(emitter))
+            participants.append(emitter)
+        return tuple(participants)
+
+    @staticmethod
+    def _require_type_five_projection(projection: _PreparedProjection) -> None:
+        """Require the narrow single-occurrence semantic family authorized for exact mode."""
+
+        event = projection.occurrence
+        auth = event.auth
+        if (
+            event.event_type is not EventKind.LOGON
+            or auth is None
+            or type(auth.logon_type) is not int
+            or auth.logon_type != 5
+            or auth.result != "success"
+        ):
+            raise EventContractError("Exact projection is limited to successful Type-5 logons")
+
+    def _initialize_action_cohort_exact_projection(
+        self,
+        record: _PreparedActionCohortBatchRecord,
+        cleanup_record: _ActionCohortPreparationCleanupRecord,
+    ) -> None:
+        """Validate one State-backed Type-5 member and issue its private exact batch."""
+
+        if (
+            not record.exact_projection
+            or len(record.trusted_projections) != 1
+            or len(record.dispatches) != 1
+        ):
+            raise EventContractError(
+                "Exact action-cohort projection requires exactly one Type-5 member"
+            )
+        projection = record.trusted_projections[0]
+        self._require_type_five_projection(projection)
+        if (
+            record.artifact_publications
+            or record.effect_member_bindings
+            or record.external_effect_links
+            or record.owned_effect_plans
+            or record.published_provenances
+            or record.member_binary_identity_kinds != ("",)
+        ):
+            raise EventContractError(
+                "Exact Type-5 projection cannot carry artifact, effect, or binary owners"
+            )
+        self._exact_projection_participants(projection)
+        cleanup_record.exact_publication_batch = self._exact_publication_authority.issue_batch()
+        record.exact_publication_batch = cleanup_record.exact_publication_batch
+
+    def _prepare_action_cohort_exact_projection(
+        self,
+        record: _PreparedActionCohortBatchRecord,
+    ) -> None:
+        """Freeze exact sink rows outside every dispatcher and member lock."""
+
+        batch = record.exact_publication_batch
+        if batch is None or len(record.trusted_projections) != 1:
+            raise EventContractError("Exact action-cohort batch was not issued")
+        projection = record.trusted_projections[0]
+        participants = self._exact_projection_participants(projection)
+        batch.reserve_participants(cast(tuple[object, ...], participants))
+        prepared_result = batch.prepare(
+            lambda: tuple(sorted(self._publish_action_cohort_projection(projection).items()))
+        )
+        record.exact_prepared_identifiers = self._validate_exact_projection_identifiers(
+            prepared_result
+        )
+
+    @staticmethod
+    def _require_state_neutral_type_five_projection(
+        record: _PreparedActionCohortProjectionRecord,
+    ) -> None:
+        """Require the exact successful built-in Type-5 shape with no State owner."""
+
+        from evidenceforge.events.contexts import AuthContext, HostContext
+        from evidenceforge.events.identity import EntityIdentity, EventIdentityPlan
+        from evidenceforge.events.lifecycle import ActionLifecycleContext
+
+        event = record.occurrence
+        EventDispatcher._require_type_five_projection(record.projection)
+        auth = event.auth
+        host = event.dst_host
+        identity_plan = event.identity_plan
+        lifecycle = event.lifecycle
+        seal_occurrence = event.contract_seal.occurrence
+        expected_accounts = {
+            "SYSTEM": ("S-1-5-18", "0x3e7"),
+            "LOCAL SERVICE": ("S-1-5-19", "0x3e5"),
+            "NETWORK SERVICE": ("S-1-5-20", "0x3e4"),
+        }
+        if (
+            type(auth) is not AuthContext
+            or type(host) is not HostContext
+            or host.os_category != "windows"
+            or type(identity_plan) is not EventIdentityPlan
+            or type(identity_plan.subject) is not EntityIdentity
+            or identity_plan.subject.kind != "authentication_occurrence"
+            or not identity_plan.subject.semantic_key
+            or identity_plan.subject.hostname != host.hostname
+            or identity_plan.actor is not None
+            or identity_plan.target is not None
+            or identity_plan.session is not None
+            or type(lifecycle) is not ActionLifecycleContext
+            or lifecycle.phase != "start"
+            or lifecycle.canonical_start != event.timestamp
+            or lifecycle.parent_group_id is not None
+            or seal_occurrence is None
+            or seal_occurrence.present_contexts
+            != frozenset({ContextKind.AUTH, ContextKind.DST_HOST, ContextKind.LIFECYCLE})
+            or record.binary_identity_kind != ""
+        ):
+            raise EventContractError(
+                "State-neutral exact projection requires one built-in authentication occurrence"
+            )
+        expected = expected_accounts.get(auth.username)
+        if (
+            expected is None
+            or (auth.user_sid, auth.logon_id) != expected
+            or auth.source_ip != "-"
+            or auth.source_port != 0
+            or auth.subject_sid != "S-1-5-18"
+            or auth.subject_username != "SYSTEM"
+            or auth.subject_domain != "NT AUTHORITY"
+            or auth.subject_logon_id != "0x3e7"
+            or auth.logon_process != "Advapi"
+            or auth.auth_package != "Negotiate"
+            or auth.lm_package != "-"
+        ):
+            raise EventContractError(
+                "State-neutral exact projection built-in account/SID/LUID tuple is invalid"
+            )
+
+    def _state_neutral_intent_request(
+        self,
+        record: _PreparedActionCohortProjectionRecord,
+        observation_deltas: tuple[_ActionCohortObservationDelta, ...],
+    ) -> IntentExecutionBatchRequest | None:
+        """Build the same occurrence/observation intent delta as ordinary dispatch."""
+
+        authored_intent_id = record.authored_intent_id
+        if authored_intent_id is None:
+            return None
+        from evidenceforge.generation.intent_ledger import (
+            IntentExecutionBatchRequest,
+            IntentObservationDelta,
+            IntentOccurrenceDelta,
+        )
+
+        occurrence_key = record.occurrence.occurrence_key
+        if type(occurrence_key) is not SemanticOccurrenceKey:
+            raise EventContractError("State-neutral exact projection lost occurrence identity")
+        deltas = [
+            IntentOccurrenceDelta(
+                authored_intent_id,
+                occurrence_key,
+                record.occurrence.timestamp,
+            ),
+            *(
+                IntentObservationDelta(
+                    authored_intent_id,
+                    delta.source,
+                    delta.status,
+                    delta.timestamp,
+                )
+                for delta in observation_deltas
+            ),
+        ]
+        return IntentExecutionBatchRequest(tuple(deltas))
+
+    def _detach_state_neutral_projection_locked(
+        self,
+        carrier: PreparedActionCohortProjection,
+        record: _PreparedActionCohortProjectionRecord,
+    ) -> None:
+        """Consume one authenticated single-member timing group without cancelling timing."""
+
+        group = self._action_cohort_projection_groups.get(id(record.source_timing_preparation))
+        if (
+            self._action_cohort_projections.get(record.preparation_id) is not record
+            or record.carrier_ref() is not carrier
+            or group != {record.preparation_id}
+            or record.state != "publishing"
+        ):
+            raise EventContractError("State-neutral projection ownership changed before claim")
+        self._action_cohort_projections.pop(record.preparation_id)
+        self._action_cohort_projection_locators.pop(record.carrier_id, None)
+        self._action_cohort_projection_groups.pop(id(record.source_timing_preparation), None)
+        self._action_cohort_projection_retained_bytes -= record.retained_bytes
+        record.state = "bound"
+        carrier._consumed = True
+
+    def _install_state_neutral_publication_locked(
+        self,
+        publication: _StateNeutralProjectionPublicationRecord,
+        recovery: _ExactProjectionRecoveryRecord,
+    ) -> None:
+        """Install receipt and recovery before no-fail canonical ledger commits."""
+
+        receipt = cast(
+            StateNeutralProjectionPublicationReceipt,
+            publication.publication_receipt,
+        )
+        if (
+            len(self._exact_projection_recoveries) >= self._exact_projection_recovery_capacity
+            or id(receipt) in self._exact_projection_recoveries
+            or id(receipt) in self._state_neutral_projection_receipts
+        ):
+            raise EventContractError("State-neutral exact recovery capacity is exhausted")
+        eviction_id: int | None = None
+        if (
+            self._state_neutral_projection_committed_receipts
+            >= self._action_cohort_receipt_capacity
+        ):
+            eviction_id = next(
+                (
+                    receipt_id
+                    for receipt_id, retained in self._state_neutral_projection_receipts.items()
+                    if retained._published and receipt_id not in self._exact_projection_recoveries
+                ),
+                None,
+            )
+            if eviction_id is None:
+                raise EventContractError(
+                    "State-neutral receipt capacity has no resolved published eviction"
+                )
+        publication.receipt_eviction_id = eviction_id
+        self._state_neutral_projection_receipts[id(receipt)] = receipt
+        self._exact_projection_recoveries[id(receipt)] = recovery
+        self._exact_projection_recovery_high_water = max(
+            self._exact_projection_recovery_high_water,
+            len(self._exact_projection_recoveries),
+        )
+
+    @staticmethod
+    def _commit_exact_expected_owner(
+        operation: Callable[[], object],
+        *,
+        expected: object,
+        terminal_authenticates: Callable[[], bool],
+        label: str,
+    ) -> None:
+        """Adopt only an exact terminal receipt after a canonical lost return."""
+
+        try:
+            returned = operation()
+        except BaseException:
+            try:
+                adopted = terminal_authenticates()
+            except BaseException:
+                adopted = False
+            if not adopted:
+                raise
+            return
+        try:
+            authentic = terminal_authenticates()
+        except BaseException as exc:
+            raise EventContractError(
+                f"{label} terminal receipt authentication raised after commit"
+            ) from exc
+        if returned is not expected or not authentic:
+            raise EventContractError(
+                f"{label} returned a different or unauthenticated terminal receipt"
+            )
+
+    def publish_state_neutral_exact_projection(
+        self,
+        carrier: PreparedActionCohortProjection,
+    ) -> StateNeutralProjectionPublicationResult:
+        """Commit real non-State owners once, then publish one exact built-in Type-5 row set."""
+
+        from evidenceforge.generation.intent_ledger import IntentExecutionBatchReceipt
+        from evidenceforge.generation.source_timing import SourceTimingPreparationReceipt
+
+        if type(carrier) is not PreparedActionCohortProjection:
+            raise TypeError("State-neutral exact publication requires its exact carrier")
+        timing_preparation: SourceTimingPreparation | None = None
+        exact_batch: ExactPublicationBatch | None = None
+        intent_ledger: IntentExecutionLedger | None = None
+        intent_token: IntentExecutionBatchToken | None = None
+        publication: _StateNeutralProjectionPublicationRecord | None = None
+        recovery: _ExactProjectionRecoveryRecord | None = None
+        detached = False
+        canonical_committed = False
+        try:
+            with self._action_cohort_lock:
+                record = self._active_action_cohort_projection_locked(carrier)
+                timing_preparation = record.source_timing_preparation
+                group = self._action_cohort_projection_groups.get(id(timing_preparation))
+                if record.owner_thread_id != get_ident() or group != {record.preparation_id}:
+                    raise EventContractError(
+                        "State-neutral exact publication requires one same-thread timing member"
+                    )
+                record.state = "publishing"
+            if not self._action_cohort_projection_record_authenticates(record):
+                raise EventContractError("State-neutral projection failed nested authentication")
+            if not self.source_timing_planner.authenticates_preparation(timing_preparation):
+                raise EventContractError("State-neutral source timing is not sealed and authentic")
+            self._require_state_neutral_type_five_projection(record)
+            participants = self._exact_projection_participants(record.projection)
+            exact_batch = self._exact_publication_authority.issue_batch()
+            exact_batch.reserve_participants(cast(tuple[object, ...], participants))
+            prepared_identifiers = self._validate_exact_projection_identifiers(
+                exact_batch.prepare(
+                    lambda: tuple(
+                        sorted(self._publish_action_cohort_projection(record.projection).items())
+                    )
+                )
+            )
+            observation_deltas = self._action_cohort_projection_observation_deltas(
+                record.projection
+            )
+            intent_request = self._state_neutral_intent_request(record, observation_deltas)
+            if intent_request is not None:
+                intent_ledger = self.intent_execution_ledger
+                if intent_ledger is None:
+                    raise EventContractError(
+                        "Attributed state-neutral projection requires the bound intent ledger"
+                    )
+                intent_token = intent_ledger.prepare_batch(intent_request)
+            with self._action_cohort_lock:
+                self._detach_state_neutral_projection_locked(carrier, record)
+                detached = True
+
+            member_integrity_digest = hashlib.sha256(
+                repr(
+                    (
+                        record.occurrence_digest,
+                        record.projection_digest,
+                        record.facts_digest,
+                        record.timing_digest,
+                    )
+                ).encode("utf-8")
+            ).hexdigest()
+            outcome = ActionCohortProjectionOutcome(record.occurrence.occurrence_id)
+            publication = _StateNeutralProjectionPublicationRecord(
+                occurrence_id=record.occurrence.occurrence_id,
+                member_integrity_digest=member_integrity_digest,
+                source_timing_preparation=timing_preparation,
+                authored_intent_id=record.authored_intent_id,
+                intent_ledger=intent_ledger,
+                intent_request=intent_request,
+                intent_token=intent_token,
+                observation_deltas=observation_deltas,
+                exact_publication_batch=exact_batch,
+                projection_outcome=outcome,
+            )
+
+            with ExitStack() as claims:
+                timing_claimed = claims.enter_context(timing_preparation.claimed_commit())
+                intent_claimed: PreparedIntentExecutionBatch | None = None
+                if intent_ledger is not None and intent_token is not None:
+                    intent_claimed = claims.enter_context(intent_ledger.claimed_batch(intent_token))
+                timing_receipt = timing_claimed.expected_receipt
+                if (
+                    type(timing_receipt) is not SourceTimingPreparationReceipt
+                    or not self.source_timing_planner.authenticates_expected_preparation_receipt(
+                        timing_receipt,
+                        preparation=timing_claimed,
+                    )
+                ):
+                    raise EventContractError(
+                        "State-neutral timing expected receipt failed authentication"
+                    )
+                intent_receipt = (
+                    intent_claimed.expected_receipt if intent_claimed is not None else None
+                )
+                if intent_claimed is not None and (
+                    type(intent_receipt) is not IntentExecutionBatchReceipt
+                    or intent_ledger is None
+                    or not intent_ledger.authenticates_expected_batch_receipt(
+                        intent_receipt,
+                        preparation=intent_claimed,
+                    )
+                ):
+                    raise EventContractError(
+                        "State-neutral intent expected receipt failed authentication"
+                    )
+                timing_claimed.certify_composite_commit(timing_receipt)
+                if intent_claimed is not None:
+                    intent_claimed.certify_composite_commit(
+                        cast(IntentExecutionBatchReceipt, intent_receipt)
+                    )
+
+                receipt = StateNeutralProjectionPublicationReceipt(
+                    dispatcher_id=self._action_cohort_dispatcher_id,
+                    receipt_id=secrets.token_hex(16),
+                    publication_token=secrets.token_hex(32),
+                    occurrence_ids=(record.occurrence.occurrence_id,),
+                    member_integrity_digest=member_integrity_digest,
+                    timing_preparation_id=timing_receipt.binding_token.preparation_id,
+                    timing_overlay_digest=timing_receipt.overlay_digest,
+                    timing_publication_token=timing_receipt._integrity,
+                    intent_publication_token=(
+                        intent_receipt.publication_token if intent_receipt is not None else ""
+                    ),
+                )
+                object.__setattr__(
+                    receipt,
+                    "_integrity",
+                    self._state_neutral_projection_receipt_integrity(receipt),
+                )
+                result = StateNeutralProjectionPublicationResult(
+                    receipt=receipt,
+                    timing=timing_receipt,
+                    intent=intent_receipt,
+                    projection=outcome,
+                )
+                recovery = _ExactProjectionRecoveryRecord(
+                    kind="state_neutral",
+                    receipt=receipt,
+                    result=result,
+                    batch=exact_batch,
+                    outcome=outcome,
+                    occurrence_ids=receipt.occurrence_ids,
+                    member_integrity_digest=member_integrity_digest,
+                    identifiers=prepared_identifiers,
+                )
+                publication.expected_timing_receipt = timing_receipt
+                publication.expected_intent_receipt = intent_receipt
+                publication.publication_receipt = receipt
+                publication.publication_result = result
+                if not self._state_neutral_projection_receipt_shape_is_valid(
+                    receipt
+                ) or not hmac.compare_digest(
+                    receipt._integrity,
+                    self._state_neutral_projection_receipt_integrity(receipt),
+                ):
+                    raise EventContractError("State-neutral receipt preallocation is malformed")
+
+                with self._publication_ledger_lock:
+                    with self._claimed_action_cohort_observations(publication):
+                        with self._action_cohort_lock:
+                            self._install_state_neutral_publication_locked(
+                                publication,
+                                recovery,
+                            )
+                        if intent_claimed is not None:
+                            expected_intent_receipt = cast(
+                                IntentExecutionBatchReceipt,
+                                intent_receipt,
+                            )
+                            assert intent_ledger is not None
+                            self._commit_exact_expected_owner(
+                                intent_claimed.commit_no_fail,
+                                expected=expected_intent_receipt,
+                                terminal_authenticates=lambda: bool(
+                                    intent_claimed.committed
+                                    and intent_claimed.receipt is expected_intent_receipt
+                                    and intent_ledger.authenticates_batch_receipt(
+                                        expected_intent_receipt,
+                                        request=intent_request,
+                                    )
+                                ),
+                                label="State-neutral intent owner",
+                            )
+                        self._commit_exact_expected_owner(
+                            timing_claimed.commit_no_fail,
+                            expected=timing_receipt,
+                            terminal_authenticates=lambda: bool(
+                                timing_preparation.committed
+                                and timing_preparation.receipt is timing_receipt
+                                and self.source_timing_planner.authenticates_preparation_receipt(
+                                    timing_receipt
+                                )
+                            ),
+                            label="State-neutral source-timing owner",
+                        )
+                        try:
+                            self._commit_action_cohort_observations_no_fail(publication)
+                        except BaseException:
+                            if not publication.observation_committed:
+                                raise
+                        if not publication.observation_committed:
+                            raise EventContractError(
+                                "State-neutral dispatcher observations did not commit"
+                            )
+                        object.__setattr__(receipt, "_published", True)
+                        canonical_committed = True
+                        with self._action_cohort_lock:
+                            recovery.state = "ready"
+                            if publication.receipt_eviction_id is not None:
+                                evicted = self._state_neutral_projection_receipts.pop(
+                                    publication.receipt_eviction_id,
+                                    None,
+                                )
+                                if evicted is not None and evicted._published:
+                                    self._state_neutral_projection_committed_receipts -= 1
+                            self._state_neutral_projection_committed_receipts += 1
+
+            return cast(
+                StateNeutralProjectionPublicationResult,
+                self._resume_exact_projection_recovery(
+                    receipt,
+                    expected_kind="state_neutral",
+                ),
+            )
+        except BaseException as primary:
+            if not canonical_committed:
+                cleanup_failures: list[BaseException] = []
+                if publication is not None and publication.publication_receipt is not None:
+                    pending_receipt = publication.publication_receipt
+                    with self._action_cohort_lock:
+                        self._state_neutral_projection_receipts.pop(
+                            id(pending_receipt),
+                            None,
+                        )
+                        self._exact_projection_recoveries.pop(id(pending_receipt), None)
+                if intent_ledger is not None and intent_token is not None:
+                    try:
+                        if intent_ledger.authenticates_batch_token(intent_token):
+                            intent_ledger.cancel_batch(intent_token)
+                    except BaseException as failure:
+                        cleanup_failures.append(failure)
+                if exact_batch is not None and exact_batch.state in {"issued", "ready"}:
+                    try:
+                        exact_batch.cancel()
+                    except BaseException as failure:
+                        if exact_batch.state != "canceled":
+                            cleanup_failures.append(failure)
+                if timing_preparation is not None and not timing_preparation.committed:
+                    try:
+                        if detached:
+                            timing_preparation.cancel()
+                        else:
+                            self._cancel_action_cohort_projection_group(
+                                timing_preparation,
+                                allow_binding=True,
+                            )
+                    except BaseException as failure:
+                        cleanup_failures.append(failure)
+                self._add_action_cohort_cleanup_notes(primary, tuple(cleanup_failures))
+            raise
+
     def prepare_action_cohort_batch(
         self,
         root_action_id: str,
@@ -4576,6 +5380,7 @@ class EventDispatcher:
         external_effect_links: tuple[ActionCohortExternalEffectLink, ...],
         *,
         owned_effect_plans: tuple[OwnedEffectOccurrencePlan, ...] = (),
+        exact_projection: bool = False,
     ) -> PreparedActionCohortBatch:
         """Prepare one bounded all-owner action cohort without canonical mutation."""
 
@@ -4593,6 +5398,9 @@ class EventDispatcher:
             IntentOccurrenceDelta,
         )
         from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
+
+        if type(exact_projection) is not bool:
+            raise EventContractError("Action-cohort exact projection opt-in must be an exact bool")
 
         if type(root_action_id) is not str or not root_action_id.strip():
             raise EventContractError("Action-cohort batch requires a non-empty root action ID")
@@ -4914,6 +5722,7 @@ class EventDispatcher:
                 intent_ledger=(intent_ledger if intent_request is not None else None),
                 intent_request=intent_request,
                 intent_token=None,
+                exact_publication_batch=None,
                 retained_bytes=retained_bytes,
                 member_locks=tuple(prepared._lock for prepared in dispatches),
                 member_installed=[False] * len(dispatches),
@@ -4928,6 +5737,8 @@ class EventDispatcher:
         audit_preparation: PreparedExecutionEffectAuditCommit | None = None
         intent_token: IntentExecutionBatchToken | None = None
         assigned_batch_id: int | None = None
+        installed_record: _PreparedActionCohortBatchRecord | None = None
+        carrier: PreparedActionCohortBatch | None = None
         try:
             lifecycle_token = authority.prepare_action_cohort(state_plan)
             cleanup_record.lifecycle_token = lifecycle_token
@@ -5014,6 +5825,7 @@ class EventDispatcher:
                     audit_binding_token=audit_preparation.binding_token,
                     artifact_publications=artifact_publication_tuple,
                     intent_binding_token=intent_token,
+                    exact_projection=exact_projection,
                 )
                 record = _PreparedActionCohortBatchRecord(
                     batch_id=assigned_batch_id,
@@ -5047,6 +5859,9 @@ class EventDispatcher:
                     intent_ledger=(intent_ledger if intent_request is not None else None),
                     intent_request=intent_request,
                     intent_token=intent_token,
+                    exact_projection=exact_projection,
+                    exact_publication_batch=None,
+                    exact_prepared_identifiers=(),
                     observation_deltas=observation_deltas,
                     observation_digest=observation_digest,
                     member_integrity_digest=member_digest,
@@ -5058,6 +5873,8 @@ class EventDispatcher:
                     member_cleanup_status=[False] * len(dispatches),
                     artifact_cleanup_status=[False] * len(artifact_publication_tuple),
                 )
+                if exact_projection:
+                    self._initialize_action_cohort_exact_projection(record, cleanup_record)
                 integrity = self._action_cohort_batch_integrity(carrier, record)
                 carrier._integrity_token = integrity
                 record.integrity_token = integrity
@@ -5073,16 +5890,35 @@ class EventDispatcher:
                         self._action_cohort_batches[assigned_batch_id] = record
                         self._action_cohort_batch_locators[id(carrier)] = assigned_batch_id
                         self._action_cohort_prepare_cleanups.pop(cleanup_id)
+                        installed_record = record
                     except BaseException:
                         self._action_cohort_batches.pop(assigned_batch_id, None)
                         self._action_cohort_batch_locators.pop(id(carrier), None)
                         raise
-                return carrier
+            if installed_record is None or carrier is None:
+                raise EventContractError("Action-cohort batch installation was incomplete")
+            if exact_projection:
+                self._prepare_action_cohort_exact_projection(installed_record)
+                exact_integrity = self._action_cohort_batch_integrity(carrier, installed_record)
+                carrier._integrity_token = exact_integrity
+                installed_record.integrity_token = exact_integrity
+            return carrier
         except BaseException as primary:
             with self._action_cohort_lock:
+                registered_record = (
+                    self._action_cohort_batches.get(installed_record.batch_id)
+                    if installed_record is not None
+                    else None
+                )
                 if self._action_cohort_prepare_cleanups.get(cleanup_id) is cleanup_record:
                     cleanup_record.state = "pending"
-            cleanup_failures = self._finish_action_cohort_preparation_cleanup(cleanup_record)
+            if registered_record is installed_record and installed_record is not None:
+                cleanup_failures = self._finish_action_cohort_batch_cleanup(
+                    installed_record,
+                    terminal_state="cancelled",
+                )
+            else:
+                cleanup_failures = self._finish_action_cohort_preparation_cleanup(cleanup_record)
             self._add_action_cohort_cleanup_notes(primary, cleanup_failures)
             raise
 
@@ -5093,6 +5929,19 @@ class EventDispatcher:
         """Attempt every provisional-member and nested-owner rollback independently."""
 
         failures: list[BaseException] = []
+        exact_batch = record.exact_publication_batch
+        if exact_batch is None:
+            record.exact_cleanup_complete = True
+        elif not record.exact_cleanup_complete:
+            try:
+                exact_batch.cancel()
+            except BaseException as exc:
+                if exact_batch.state == "canceled":
+                    record.exact_cleanup_complete = True
+                else:
+                    failures.append(exc)
+            else:
+                record.exact_cleanup_complete = True
         for ordinal, prepared in enumerate(record.dispatches):
             if record.member_cleanup_complete[ordinal]:
                 continue
@@ -5228,6 +6077,7 @@ class EventDispatcher:
                 record.audit_cleanup_complete,
                 record.lifecycle_cleanup_complete,
                 record.timing_cleanup_complete,
+                record.exact_cleanup_complete,
             )
         )
         with self._action_cohort_lock:
@@ -5293,12 +6143,14 @@ class EventDispatcher:
         root_action_id = batch._root_action_id
         integrity_token = batch._integrity_token
         consumed = batch._consumed
+        exact_projection = batch._exact_projection
         if (
             type(dispatcher_token) is not int
             or type(carrier_batch_id) is not int
             or type(root_action_id) is not str
             or type(integrity_token) is not str
             or type(consumed) is not bool
+            or type(exact_projection) is not bool
         ):
             raise EventContractError("Action-cohort batch carrier shape is malformed")
         expected = self._action_cohort_batch_integrity(batch, record)
@@ -5315,6 +6167,7 @@ class EventDispatcher:
             or batch._audit_binding_token is not record.audit_preparation._token
             or batch._artifact_publications is not record.artifact_publications
             or batch._intent_binding_token is not record.intent_token
+            or exact_projection is not record.exact_projection
             or not hmac.compare_digest(integrity_token, expected)
             or not hmac.compare_digest(record.integrity_token, expected)
         ):
@@ -5329,6 +6182,17 @@ class EventDispatcher:
 
         authority = self._lifecycle_authority
         if authority is None or self._execution_effect_audit is not record.execution_effect_audit:
+            return False
+        if type(record.exact_projection) is not bool:
+            return False
+        if record.exact_projection:
+            if (
+                record.exact_publication_batch is None
+                or record.exact_publication_batch.state != "ready"
+                or len(record.trusted_projections) != 1
+            ):
+                return False
+        elif record.exact_publication_batch is not None:
             return False
         if not self.state_manager.authenticates_action_cohort_plan(record.state_plan):
             return False
@@ -5803,6 +6667,7 @@ class EventDispatcher:
         receipt = record.publication_receipt
         if receipt is not None and not receipt._published:
             self._action_cohort_receipts.pop(id(receipt), None)
+            self._exact_projection_recoveries.pop(id(receipt), None)
         self._action_cohort_retained_members -= len(record.dispatches)
         self._action_cohort_retained_bytes -= record.retained_bytes
         if record.state in {"claimed", "committing"}:
@@ -5827,6 +6692,7 @@ class EventDispatcher:
         receipt = record.publication_receipt
         if receipt is not None and not receipt._published:
             self._action_cohort_receipts.pop(id(receipt), None)
+            self._exact_projection_recoveries.pop(id(receipt), None)
         record.state = "cleanup_pending"
 
     def _finish_action_cohort_batch_cleanup(
@@ -5850,6 +6716,7 @@ class EventDispatcher:
                 record.audit_cleanup_complete,
                 record.lifecycle_cleanup_complete,
                 record.timing_cleanup_complete,
+                record.exact_cleanup_complete,
             )
         ):
             return (EventContractError("Action-cohort cleanup remained incomplete"),)
@@ -5979,6 +6846,22 @@ class EventDispatcher:
                             raise EventContractError(
                                 "Action-cohort receipt identity is already live"
                             )
+                        recovery = record.exact_recovery
+                        if recovery is not None:
+                            if len(self._exact_projection_recoveries) >= (
+                                self._exact_projection_recovery_capacity
+                            ):
+                                raise EventContractError(
+                                    "Exact projection recovery capacity is exhausted"
+                                )
+                            if (
+                                recovery.receipt is not receipt
+                                or recovery.state != "reserved"
+                                or id(receipt) in self._exact_projection_recoveries
+                            ):
+                                raise EventContractError(
+                                    "Exact action-cohort recovery ownership is malformed"
+                                )
                         eviction_id: int | None = None
                         if (
                             self._action_cohort_committed_receipts
@@ -5989,6 +6872,7 @@ class EventDispatcher:
                                     receipt_id
                                     for receipt_id, retained in self._action_cohort_receipts.items()
                                     if retained._published
+                                    and receipt_id not in self._exact_projection_recoveries
                                 ),
                                 None,
                             )
@@ -5998,59 +6882,187 @@ class EventDispatcher:
                                 )
                         record.receipt_eviction_id = eviction_id
                         self._action_cohort_receipts[id(receipt)] = receipt
+                        if recovery is not None:
+                            self._exact_projection_recoveries[id(receipt)] = recovery
+                            self._exact_projection_recovery_high_water = max(
+                                self._exact_projection_recovery_high_water,
+                                len(self._exact_projection_recoveries),
+                            )
                         record.state = "committing"
                     for prepared in record.dispatches:
                         prepared._action_cohort_batch_id = None
                         prepared._consumed = True
 
-                    # Runtime artifacts publish first through their reversible group owner.
-                    # Every later owner has already crossed its composite certification fence,
-                    # so a successful artifact receipt is followed only by fixed primitive
-                    # mutations and the separately reported sink-projection tail.
-                    if record.artifact_claimed is not None:
-                        artifact_receipt = record.artifact_claimed.commit_no_fail()
-                        if artifact_receipt is not record.expected_artifact_receipt:
+                    if record.exact_recovery is not None:
+                        if (
+                            record.artifact_claimed is not None
+                            or record.expected_artifact_receipt is not None
+                        ):
                             raise EventContractError(
-                                "Action-cohort artifact owner returned a different receipt"
+                                "Exact Type-5 projection unexpectedly retained an artifact owner"
                             )
-                        record.artifact_cleanup_status[:] = [True] * len(
-                            record.artifact_cleanup_status
+                        state_claimed = cast(
+                            "PreparedActionCohortMaterialization",
+                            record.state_claimed,
                         )
-                        record.artifact_cleanup_complete = True
+                        lifecycle_claimed = cast(
+                            "PreparedLifecycleActionCohort",
+                            record.lifecycle_claimed,
+                        )
+                        audit_claimed = cast(
+                            "PreparedExecutionEffectAuditCommit",
+                            record.audit_claimed,
+                        )
+                        lifecycle_receipt = cast(
+                            "LifecycleActionCohortReceipt",
+                            record.expected_lifecycle_receipt,
+                        )
+                        audit_receipt = cast(
+                            "ExecutionEffectAuditCommitReceipt",
+                            record.expected_audit_receipt,
+                        )
+                        timing_claimed = cast(
+                            "SourceTimingPreparation",
+                            record.timing_claimed,
+                        )
+                        timing_receipt = cast(
+                            "SourceTimingPreparationReceipt",
+                            record.expected_timing_receipt,
+                        )
+                        state_result = cast(
+                            "ActionCohortMaterializationResult",
+                            record.expected_state_result,
+                        )
+                        authority = cast("GeneratorLifecycleAuthority", self._lifecycle_authority)
 
-                    # State remains provisionally hidden until every later certified
-                    # primitive owner and dispatcher summary has committed. Return objects
-                    # are deliberately ignored: the outer result already binds each exact
-                    # authenticated expected object by identity.
-                    cast(
-                        "PreparedActionCohortMaterialization",
-                        record.state_claimed,
-                    ).apply_provisional()
-                    cast(
-                        "PreparedLifecycleActionCohort",
-                        record.lifecycle_claimed,
-                    ).commit_no_fail()
-                    cast(
-                        "PreparedExecutionEffectAuditCommit",
-                        record.audit_claimed,
-                    ).commit_no_fail()
-                    if record.intent_claimed is not None:
-                        record.intent_claimed.commit_no_fail()
-                    cast(
-                        "SourceTimingPreparation",
-                        record.timing_claimed,
-                    ).commit_no_fail()
+                        # Provisional State remains reversible. An exception here exits every
+                        # claim before another canonical owner commits, so State rolls back.
+                        state_claimed.apply_provisional()
+                        self._commit_exact_expected_owner(
+                            lifecycle_claimed.commit_no_fail,
+                            expected=lifecycle_receipt,
+                            terminal_authenticates=lambda: bool(
+                                lifecycle_claimed.committed
+                                and lifecycle_claimed.receipt is lifecycle_receipt
+                                and authority.registry.authenticates_action_cohort_receipt(
+                                    lifecycle_receipt,
+                                    request=record.lifecycle_request,
+                                    state_publication_token=record.state_plan.publication_token,
+                                )
+                            ),
+                            label="Exact action-cohort lifecycle owner",
+                        )
+                        self._commit_exact_expected_owner(
+                            audit_claimed.commit_no_fail,
+                            expected=audit_receipt,
+                            terminal_authenticates=lambda: bool(
+                                audit_claimed.committed
+                                and audit_claimed.receipt is audit_receipt
+                                and record.execution_effect_audit.authenticates_action_cohort_receipt(
+                                    audit_receipt,
+                                    preparation=audit_claimed,
+                                    root_action_id=record.root_action_id,
+                                    entries=record.audit_entries,
+                                    owned_plans=record.owned_effect_plans,
+                                    published_provenances=record.published_provenances,
+                                )
+                            ),
+                            label="Exact action-cohort audit owner",
+                        )
+                        if record.intent_claimed is not None:
+                            intent_claimed = record.intent_claimed
+                            intent_receipt = cast(
+                                "IntentExecutionBatchReceipt",
+                                record.expected_intent_receipt,
+                            )
+                            intent_ledger = cast("IntentExecutionLedger", record.intent_ledger)
+                            self._commit_exact_expected_owner(
+                                intent_claimed.commit_no_fail,
+                                expected=intent_receipt,
+                                terminal_authenticates=lambda: bool(
+                                    intent_claimed.committed
+                                    and intent_claimed.receipt is intent_receipt
+                                    and intent_ledger.authenticates_batch_receipt(
+                                        intent_receipt,
+                                        request=record.intent_request,
+                                    )
+                                ),
+                                label="Exact action-cohort intent owner",
+                            )
+                        self._commit_exact_expected_owner(
+                            timing_claimed.commit_no_fail,
+                            expected=timing_receipt,
+                            terminal_authenticates=lambda: bool(
+                                timing_claimed.committed
+                                and timing_claimed.receipt is timing_receipt
+                                and self.source_timing_planner.authenticates_preparation_receipt(
+                                    timing_receipt
+                                )
+                            ),
+                            label="Exact action-cohort source-timing owner",
+                        )
+                        try:
+                            self._commit_action_cohort_dispatcher_ledgers_no_fail(record)
+                        except BaseException:
+                            if not record.observation_committed:
+                                raise
+                        if not record.observation_committed:
+                            raise EventContractError(
+                                "Exact action-cohort dispatcher ledgers did not commit"
+                            )
+                        self._commit_exact_expected_owner(
+                            state_claimed.finalize_no_fail,
+                            expected=state_result,
+                            terminal_authenticates=lambda: bool(
+                                state_claimed.committed and state_claimed._result is state_result
+                            ),
+                            label="Exact action-cohort State owner",
+                        )
+                    else:
+                        # Runtime artifacts publish first through their reversible group owner.
+                        # Every later owner has crossed its composite certification fence, so a
+                        # successful artifact receipt is followed only by primitive mutations.
+                        if record.artifact_claimed is not None:
+                            artifact_receipt = record.artifact_claimed.commit_no_fail()
+                            if artifact_receipt is not record.expected_artifact_receipt:
+                                raise EventContractError(
+                                    "Action-cohort artifact owner returned a different receipt"
+                                )
+                            record.artifact_cleanup_status[:] = [True] * len(
+                                record.artifact_cleanup_status
+                            )
+                            record.artifact_cleanup_complete = True
 
-                    self._commit_action_cohort_dispatcher_ledgers_no_fail(record)
-                    cast(
-                        "PreparedActionCohortMaterialization",
-                        record.state_claimed,
-                    ).finalize_no_fail()
+                        cast(
+                            "PreparedActionCohortMaterialization",
+                            record.state_claimed,
+                        ).apply_provisional()
+                        cast(
+                            "PreparedLifecycleActionCohort",
+                            record.lifecycle_claimed,
+                        ).commit_no_fail()
+                        cast(
+                            "PreparedExecutionEffectAuditCommit",
+                            record.audit_claimed,
+                        ).commit_no_fail()
+                        if record.intent_claimed is not None:
+                            record.intent_claimed.commit_no_fail()
+                        cast(
+                            "SourceTimingPreparation",
+                            record.timing_claimed,
+                        ).commit_no_fail()
+                        self._commit_action_cohort_dispatcher_ledgers_no_fail(record)
+                        cast(
+                            "PreparedActionCohortMaterialization",
+                            record.state_claimed,
+                        ).finalize_no_fail()
                     object.__setattr__(receipt, "_published", True)
                     object.__setattr__(capability, "_committed", True)
                     object.__setattr__(capability, "_receipt", receipt)
                     object.__setattr__(capability, "_result", result)
                     with self._action_cohort_lock:
+                        if record.exact_recovery is not None:
+                            record.exact_recovery.state = "ready"
                         self._detach_action_cohort_batch_locked(
                             record,
                             terminal_state="committed",
@@ -6063,6 +7075,12 @@ class EventDispatcher:
                             if evicted is not None and evicted._published:
                                 self._action_cohort_committed_receipts -= 1
                         self._action_cohort_committed_receipts += 1
+
+        if record.exact_recovery is not None:
+            return cast(
+                ActionCohortPublicationResult,
+                self._resume_exact_projection_recovery(receipt, expected_kind="action_cohort"),
+            )
 
         first_failure: BaseException | None = None
         stop_after_base_exception = False
@@ -6143,6 +7161,282 @@ class EventDispatcher:
         except BaseException:
             return False
 
+    def authenticates_state_neutral_projection_publication_receipt(
+        self,
+        receipt: object,
+    ) -> bool:
+        """Totally authenticate one exact retained non-State receipt object."""
+
+        if type(receipt) is not StateNeutralProjectionPublicationReceipt:
+            return False
+        try:
+            with self._action_cohort_lock:
+                canonical = self._state_neutral_projection_receipts.get(id(receipt))
+                if canonical is not receipt:
+                    return False
+            if (
+                not self._state_neutral_projection_receipt_shape_is_valid(receipt)
+                or not receipt._published
+                or receipt.dispatcher_id != self._action_cohort_dispatcher_id
+                or not hmac.compare_digest(
+                    receipt._integrity,
+                    self._state_neutral_projection_receipt_integrity(receipt),
+                )
+            ):
+                return False
+            with self._action_cohort_lock:
+                return (
+                    self._state_neutral_projection_receipts.get(id(receipt)) is receipt
+                    and receipt._published
+                )
+        except BaseException:
+            return False
+
+    def _exact_projection_recovery_receipt_authenticates(
+        self,
+        receipt: object,
+        *,
+        expected_kind: str,
+    ) -> bool:
+        """Authenticate the public receipt domain without holding recovery locks."""
+
+        if expected_kind == "action_cohort":
+            return self.authenticates_action_cohort_publication_receipt(receipt)
+        if expected_kind == "state_neutral":
+            return self.authenticates_state_neutral_projection_publication_receipt(receipt)
+        return False
+
+    @staticmethod
+    def _released_exact_projection_result_authenticates(
+        record: _ExactProjectionRecoveryRecord,
+    ) -> bool:
+        """Authenticate retained terminal result identity after batch release won the race."""
+
+        receipt = record.receipt
+        outcome = record.outcome
+        result = record.result
+        if (
+            not record.batch.released
+            or receipt.occurrence_ids != record.occurrence_ids
+            or not hmac.compare_digest(
+                receipt.member_integrity_digest,
+                record.member_integrity_digest,
+            )
+            or outcome.occurrence_id not in record.occurrence_ids
+            or outcome.status != "succeeded"
+            or outcome.identifiers != record.identifiers
+            or outcome.error is not None
+        ):
+            return False
+        if record.kind == "action_cohort":
+            return bool(
+                type(receipt) is ActionCohortPublicationReceipt
+                and type(result) is ActionCohortPublicationResult
+                and result.receipt is receipt
+                and result.projections == (outcome,)
+            )
+        return bool(
+            record.kind == "state_neutral"
+            and type(receipt) is StateNeutralProjectionPublicationReceipt
+            and type(result) is StateNeutralProjectionPublicationResult
+            and result.receipt is receipt
+            and result.projection is outcome
+        )
+
+    @staticmethod
+    def _annotate_exact_projection_failure(
+        failure: BaseException,
+        record: _ExactProjectionRecoveryRecord,
+    ) -> None:
+        """Attach the exact retry carrier without replacing a sink's primary failure."""
+
+        try:
+            object.__setattr__(failure, "exact_projection_receipt", record.receipt)
+            object.__setattr__(failure, "exact_projection_result", record.result)
+            if record.kind == "action_cohort":
+                object.__setattr__(failure, "action_cohort_receipt", record.receipt)
+                object.__setattr__(failure, "action_cohort_result", record.result)
+            else:
+                object.__setattr__(
+                    failure,
+                    "state_neutral_projection_receipt",
+                    record.receipt,
+                )
+                object.__setattr__(
+                    failure,
+                    "state_neutral_projection_result",
+                    record.result,
+                )
+            failure.add_note(
+                "Canonical owners committed; resume the dispatcher-retained exact projection"
+            )
+        except BaseException:
+            return
+
+    def _resume_exact_projection_recovery(
+        self,
+        receipt: object,
+        *,
+        expected_kind: str,
+    ) -> ActionCohortPublicationResult | StateNeutralProjectionPublicationResult:
+        """Resume one retained exact batch/cursor with every sink callback lock-free."""
+
+        if expected_kind not in {"action_cohort", "state_neutral"}:
+            raise EventContractError("Exact projection recovery kind is unsupported")
+        with self._action_cohort_lock:
+            record = self._exact_projection_recoveries.get(id(receipt))
+            if record is None or record.receipt is not receipt or record.kind != expected_kind:
+                raise EventContractError(
+                    "Exact projection receipt is copied, foreign, stale, or already released"
+                )
+        if not self._exact_projection_recovery_receipt_authenticates(
+            receipt,
+            expected_kind=expected_kind,
+        ):
+            raise EventContractError("Exact projection receipt failed authentication")
+
+        owner_thread = get_ident()
+        with self._action_cohort_lock:
+            active = self._exact_projection_recoveries.get(id(receipt))
+            if active is not record or record.receipt is not receipt:
+                raise EventContractError("Exact projection receipt became stale before resume")
+            if record.state == "active":
+                qualifier = "reentrant" if record.active_thread_id == owner_thread else "concurrent"
+                raise EventContractError(f"Exact projection recovery is already {qualifier}")
+            if record.state != "ready" or record.active_thread_id is not None:
+                raise EventContractError("Exact projection recovery is not resumable")
+            record.state = "active"
+            record.active_thread_id = owner_thread
+            self._exact_projection_active_recoveries += 1
+
+        outcome = record.outcome
+        try:
+            if record.batch.released:
+                if not self._released_exact_projection_result_authenticates(record):
+                    raise EventContractError(
+                        "Released exact projection retained a malformed terminal result"
+                    )
+                with self._action_cohort_lock:
+                    if self._exact_projection_recoveries.get(id(receipt)) is not record:
+                        raise EventContractError(
+                            "Released exact projection recovery ownership changed"
+                        )
+                    self._exact_projection_recoveries.pop(id(receipt))
+                    record.state = "released"
+                return record.result
+            object.__setattr__(outcome, "_status", "started")
+            object.__setattr__(outcome, "_error", None)
+            if record.batch.state not in {"committed", "releasing"}:
+                try:
+                    record.batch.commit()
+                except BaseException as failure:
+                    if record.batch.state != "committed":
+                        object.__setattr__(outcome, "_status", "recoverable")
+                        object.__setattr__(outcome, "_error", failure)
+                        self._annotate_exact_projection_failure(failure, record)
+                        raise
+            object.__setattr__(outcome, "_identifiers", record.identifiers)
+            object.__setattr__(outcome, "_status", "succeeded")
+            object.__setattr__(outcome, "_error", None)
+            try:
+                record.batch.release_no_fail()
+            except BaseException as failure:
+                if not record.batch.released:
+                    object.__setattr__(outcome, "_status", "release_pending")
+                    object.__setattr__(outcome, "_error", failure)
+                    self._annotate_exact_projection_failure(failure, record)
+                    raise
+            with self._action_cohort_lock:
+                if self._exact_projection_recoveries.get(id(receipt)) is not record:
+                    raise EventContractError(
+                        "Exact projection recovery ownership changed after release"
+                    )
+                self._exact_projection_recoveries.pop(id(receipt))
+                record.state = "released"
+            return record.result
+        finally:
+            with self._action_cohort_lock:
+                if record.active_thread_id == owner_thread:
+                    record.active_thread_id = None
+                    self._exact_projection_active_recoveries -= 1
+                    if record.state == "active":
+                        record.state = "ready"
+
+    def resume_action_cohort_projection(
+        self,
+        receipt: ActionCohortPublicationReceipt,
+    ) -> ActionCohortPublicationResult:
+        """Resume the same exact sink batch retained for a State-backed Type-5 cohort."""
+
+        if type(receipt) is not ActionCohortPublicationReceipt:
+            raise TypeError("Action-cohort recovery requires its exact receipt type")
+        return cast(
+            ActionCohortPublicationResult,
+            self._resume_exact_projection_recovery(
+                receipt,
+                expected_kind="action_cohort",
+            ),
+        )
+
+    def resume_state_neutral_exact_projection(
+        self,
+        receipt: StateNeutralProjectionPublicationReceipt,
+    ) -> StateNeutralProjectionPublicationResult:
+        """Resume the same exact sink batch retained for one built-in Type-5 event."""
+
+        if type(receipt) is not StateNeutralProjectionPublicationReceipt:
+            raise TypeError("State-neutral recovery requires its exact receipt type")
+        return cast(
+            StateNeutralProjectionPublicationResult,
+            self._resume_exact_projection_recovery(
+                receipt,
+                expected_kind="state_neutral",
+            ),
+        )
+
+    def drain_exact_projection_recoveries(
+        self,
+    ) -> tuple[ActionCohortPublicationResult | StateNeutralProjectionPublicationResult, ...]:
+        """Boundedly retry every retained batch before emitters enter close."""
+
+        with self._action_cohort_lock:
+            recoveries = tuple(self._exact_projection_recoveries.values())
+        results: list[ActionCohortPublicationResult | StateNeutralProjectionPublicationResult] = []
+        for recovery in recoveries:
+            results.append(
+                self._resume_exact_projection_recovery(
+                    recovery.receipt,
+                    expected_kind=recovery.kind,
+                )
+            )
+        return tuple(results)
+
+    def assert_exact_projection_recoveries_drained(self) -> None:
+        """Fail fast before emitter close if exact sink fences remain unresolved."""
+
+        with self._action_cohort_lock:
+            unresolved = len(self._exact_projection_recoveries)
+            active = self._exact_projection_active_recoveries
+        if unresolved or active:
+            raise EventContractError(
+                "Exact projection recovery must drain before emitter close: "
+                f"unresolved={unresolved}, active={active}"
+            )
+
+    def exact_projection_recovery_census(self) -> ExactProjectionRecoveryCensus:
+        """Return constant-time authority, recovery, and receipt retention counts."""
+
+        authority = self._exact_publication_authority.census()
+        with self._action_cohort_lock:
+            return ExactProjectionRecoveryCensus(
+                unresolved_recoveries=len(self._exact_projection_recoveries),
+                active_recoveries=self._exact_projection_active_recoveries,
+                recovery_capacity=self._exact_projection_recovery_capacity,
+                high_water_recoveries=self._exact_projection_recovery_high_water,
+                state_neutral_receipts=self._state_neutral_projection_committed_receipts,
+                authority=authority,
+            )
+
     def _cancel_action_cohort_record(
         self,
         record: _PreparedActionCohortBatchRecord,
@@ -6150,6 +7444,19 @@ class EventDispatcher:
         """Attempt every trusted cleanup and return failures without short-circuiting."""
 
         failures: list[BaseException] = []
+        exact_batch = record.exact_publication_batch
+        if exact_batch is None:
+            record.exact_cleanup_complete = True
+        elif not record.exact_cleanup_complete:
+            try:
+                exact_batch.cancel()
+            except BaseException as exc:
+                if exact_batch.state == "canceled":
+                    record.exact_cleanup_complete = True
+                else:
+                    failures.append(exc)
+            else:
+                record.exact_cleanup_complete = True
         if not record.members_cleanup_complete:
             failures.extend(self._consume_action_cohort_members(record))
             if all(record.member_cleanup_status):
