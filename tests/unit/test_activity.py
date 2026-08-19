@@ -943,22 +943,27 @@ class TestActivityGenerator:
         activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
         system = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="server")
         user = User(username="root", full_name="Root", email="root@example.com")
-        systemd_pid = state_manager.create_process(
-            system=system.hostname,
+        systemd_pid = activity_gen.generate_process(
+            user=user,
+            system=system,
+            time=timestamp,
+            logon_id="",
+            process_name="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd &",
             parent_pid=0,
-            image="/usr/lib/systemd/systemd",
-            command_line="/usr/lib/systemd/systemd",
-            username="root",
-            integrity_level="System",
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
         )
+        ecar_emitter.reset_mock()
 
         class AlwaysSideEffectRng(random.Random):
             def random(self) -> float:
                 return 0.0
 
         monkeypatch.setattr(
-            "evidenceforge.generation.activity.generator._get_rng",
-            lambda: AlwaysSideEffectRng(1),
+            activity_gen,
+            "_process_endpoint_effect_rng",
+            lambda _request, _actor: AlwaysSideEffectRng(1),
         )
         monkeypatch.setattr(
             "evidenceforge.generation.activity.edr_pools.select_file_side_effect",
@@ -5306,34 +5311,41 @@ class TestActivityGenerator:
         assert termination_event.timestamp < logoff_time
         assert termination_event.auth.logon_id == logon_id
 
-    def test_process_create_after_ended_session_clamps_before_logoff(
+    def test_process_create_after_ended_session_rejects_without_root_mutation(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """Late process creation for a closed session should render before 4634."""
+        """Late process creation for a closed session should fail allocation-free."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
         logoff_time = timestamp + timedelta(minutes=5)
         activity_gen.generate_logoff(test_user, test_system, logoff_time, logon_id)
+        processes_before = tuple(state_manager.list_running_processes())
+        current_time_before = state_manager.get_current_time()
+        lifecycle_before = activity_gen._lifecycle_authority.census()
+        audit_before = activity_gen.execution_effect_audit_snapshot()
+        emitter_calls_before = {
+            name: len(emitter.emit.call_args_list) for name, emitter in mock_emitters.items()
+        }
 
-        activity_gen.generate_process(
-            test_user,
-            test_system,
-            logoff_time + timedelta(minutes=20),
-            logon_id,
-            r"C:\Windows\System32\cmd.exe",
-            "cmd.exe /c whoami",
-        )
+        with pytest.raises(ExecutionEffectPlanError) as exc_info:
+            activity_gen.generate_process(
+                test_user,
+                test_system,
+                logoff_time + timedelta(minutes=20),
+                logon_id,
+                r"C:\Windows\System32\cmd.exe",
+                "cmd.exe /c whoami",
+            )
 
-        process_event = [
-            call.args[0]
-            for call in mock_emitters["windows_event_security"].emit.call_args_list
-            if call.args[0].event_type == "process_create"
-            and call.args[0].process
-            and call.args[0].process.command_line == "cmd.exe /c whoami"
-        ][-1]
-        assert process_event.timestamp < logoff_time
-        assert process_event.auth.logon_id == logon_id
+        assert exc_info.value.code == ExecutionEffectPlanErrorCode.INVALID_ACTOR
+        assert tuple(state_manager.list_running_processes()) == processes_before
+        assert state_manager.get_current_time() == current_time_before
+        assert activity_gen._lifecycle_authority.census() == lifecycle_before
+        assert activity_gen.execution_effect_audit_snapshot() == audit_before
+        assert {
+            name: len(emitter.emit.call_args_list) for name, emitter in mock_emitters.items()
+        } == emitter_calls_before
 
     def test_generate_process_creates_process(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -7972,7 +7984,11 @@ class TestActivityGenerator:
             enabled=True,
         )
 
-        with patch("evidenceforge.generation.activity.generator._get_rng", RegistryOnlyRandom):
+        with patch.object(
+            activity_gen,
+            "_process_endpoint_effect_rng",
+            return_value=RegistryOnlyRandom(),
+        ):
             activity_gen.generate_process(
                 system_user,
                 test_system,
@@ -7994,10 +8010,15 @@ class TestActivityGenerator:
         """Process-owned registry effects must supply time and type before dispatch."""
         import inspect
 
-        source = inspect.getsource(ActivityGenerator._execute_process_create_bundle)
-        assert "_key, _vname, _details, _value_type = materialize_registry_effect(" in source
-        assert "_template_user,\n                    _reg_ts," in source
-        assert "value_type=_value_type" in source
+        source = inspect.getsource(ActivityGenerator._plan_process_execution_side_effects)
+        assert (
+            "key, value_name, details, value_type = materialize_registry_effect(\n"
+            "                    (key, value_name, details),\n"
+            "                    rng,\n"
+            '                    request.user.username if request.user else "SYSTEM",\n'
+            "                    registry_time,\n"
+        ) in source
+        assert "value_type=value_type" in source
 
     def test_process_userassist_effect_preserves_actor_session_and_time(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -8040,7 +8061,11 @@ class TestActivityGenerator:
         ]
 
         with (
-            patch("evidenceforge.generation.activity.generator._get_rng", RegistryOnlyRandom),
+            patch.object(
+                activity_gen,
+                "_process_endpoint_effect_rng",
+                return_value=RegistryOnlyRandom(),
+            ),
             patch(
                 "evidenceforge.generation.activity.edr_pools.get_registry_keys_hkcu",
                 return_value=userassist_template,
