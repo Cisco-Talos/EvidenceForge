@@ -2426,8 +2426,8 @@ and multiple Python hash seeds.
 
 The exact Windows path uses an owner-private temporary SQLite journal only during the
 ``eforge generate`` command. The journal is parameterized, bounded, descriptor-confined, mode
-``0700``/``0600``,
-configured with in-memory SQLite temporary storage, and removed after terminal footer and cleanup.
+``0700``/``0600``, configured with in-memory SQLite temporary storage, and removed after terminal
+footer and cleanup.
 Direct/non-engine Windows use retains the legacy portable path. The contract remains same-process
 retry only and adds no service, persistent product database, restart recovery, or LLM call.
 
@@ -2443,7 +2443,32 @@ runs produce the same default XML digest, and repository Ruff/format/diff checks
 After fast-forward integration, the exact core, sorted writer, ASA/eCAR, Bash, Snort/IDS, and Windows
 source-finalization composition passes 417/417 on the integrated tree.
 
-Sysmon remains the next terminal-source adapter only after this integrated Windows boundary passes
-the combined exact-publication composition gate. It must reuse the caller-owned EOF epoch and
-existing final writer path; do not reintroduce per-event exact preparation or intermediate rendered
-payload admission.
+### Sysmon terminal source publication landed
+
+Commit ``b68e53a7a`` (``feat: finalize Sysmon source publication exactly``) adds the second
+engine-owned terminal source without changing the shared epoch, exact core, engine finalization,
+Windows adapter, or host writer. Sysmon exact mode is enabled only by ``GenerationEngine``;
+direct/non-engine construction remains on the legacy path. Candidate admission detaches typed JSON
+and charges rows and UTF-8 bytes before FIFO or Python retention. The private owner-only temporary
+SQLite journal is bounded, parameterized, descriptor-confined, and removed after terminal cleanup.
+
+Terminal seal preserves the legacy cohort algorithm exactly: compatibility causal shifts update
+the pre-sort keys; one stable ``(sort_key, insertion_sequence)`` order is frozen; per-host time and
+EventRecordID state advances once without a second sort; UTC, follow-on, and ProcessGuid references
+are synchronized over that same order; and only then are final routed strings sealed. Intermediate
+and final payload growth share the source cap, retry-local clock/ID/GUID state is adopted only after
+the seal commit is durable, and the existing final writers publish bounded chunks before the source
+checkpoint advances and the exact receipt releases.
+
+Independent review found no P0/P1/P2. The exact three-path commit has tree ``38000b04b`` and binary
+diff SHA-256 ``f1182a9d31025f60efb523bb91a058f6e9253e96df742c55f62fea536523aebd``.
+Focused Sysmon acceptance passes 39/39 under three hash seeds; adjacent Sysmon/engine/output-target
+coverage passes 209/209; and the Windows/exact-publication composition passes 275/275 before
+integration. The integrated exact core, sorted writer, ASA/eCAR, Bash, Snort/IDS, Windows, and
+Sysmon publication cohort passes 456/456, followed by the integrated adjacent Sysmon matrix at
+209/209. Default XML, Splunk, and SOF/Snare remain byte-identical to the immutable parent.
+
+Windows Security and Sysmon now both satisfy the selected terminal EOF publication milestone with
+same-process retry. The contract still does not claim interpreter-restart recovery or retroactive
+per-action atomicity between committed canonical state and terminal source files; either stronger
+requirement still needs the larger authenticated watermark/deferred-row design.
