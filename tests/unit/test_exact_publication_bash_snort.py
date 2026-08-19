@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import os
 import sqlite3
 import stat
+import subprocess
+import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,11 +21,13 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 
+import evidenceforge.generation.emitters.bash_history as bash_history_module
 from evidenceforge.events.ids_evaluation import new_ids_digest, update_ids_digest
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters import snort as snort_module
 from evidenceforge.generation.emitters.base import (
     ExactPublicationAuthority,
+    ExactPublicationBatch,
     ExactPublicationError,
     ExactPublicationKey,
 )
@@ -30,6 +35,24 @@ from evidenceforge.generation.emitters.bash_history import BashHistoryEmitter
 from evidenceforge.generation.emitters.snort import SnortEmitter
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+class _CommitLostReturnConnection:
+    """Delegate SQLite operations but fail after one selected real commit."""
+
+    def __init__(self, connection: sqlite3.Connection, *, fail_on_commit: int = 1) -> None:
+        self._connection = connection
+        self.commit_calls = 0
+        self._fail_on_commit = fail_on_commit
+
+    def commit(self) -> None:
+        self.commit_calls += 1
+        self._connection.commit()
+        if self.commit_calls == self._fail_on_commit:
+            raise RuntimeError("SQLite commit returned late")
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._connection, name)
 
 
 def _bash_event(command: str, *, second: int = 0) -> dict[str, object]:
@@ -73,6 +96,14 @@ def _publish_exact(emitter: object, event: dict[str, object]) -> None:
     batch = ExactPublicationAuthority(capacity=1).issue_batch()
     batch.publish(lambda: emitter.emit_event(event))
     batch.release_no_fail()
+
+
+def _upgrade_pending_bash_ordinary_route(emitter: BashHistoryEmitter) -> None:
+    """Enter exact journal mode without admitting the staged placeholder row."""
+
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.prepare(lambda: emitter.emit_event(_bash_event("cancelled exact upgrade")))
+    batch.cancel()
 
 
 def test_bash_ordinary_flush_boundaries_keep_legacy_clear_and_order_bytes(
@@ -146,6 +177,309 @@ def test_bash_exact_admission_freezes_final_row_and_reconciles_lost_return(
     assert "mutated" not in rendered
 
 
+def test_bash_sqlite_admission_commit_lost_return_reconstructs_exact_census(
+    tmp_path: Path,
+) -> None:
+    """A durable SQLite commit is adopted on retry without accounting underflow."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    emitter.emit_event(_bash_event("ordinary journal opener"))
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.prepare(lambda: emitter.emit_event(_bash_event("reconciled exact", second=1)))
+    writer = next(iter(emitter._writers.values()))
+    connection = writer._connection
+    assert connection is not None
+    proxy = _CommitLostReturnConnection(connection)
+    writer._connection = proxy  # type: ignore[assignment]
+
+    prepared = emitter.journal_census()
+    with pytest.raises(RuntimeError, match="commit returned late"):
+        batch.commit()
+
+    failed = emitter.journal_census()
+    assert failed.pending_operations == prepared.pending_operations == 1
+    assert failed.reserved_rows == prepared.reserved_rows
+    assert failed.reserved_bytes == prepared.reserved_bytes
+    assert failed.admission_receipts == failed.export_receipts == 0
+    assert writer._pending_rows == 1
+
+    batch.commit()
+    admitted = emitter.journal_census()
+    assert proxy.commit_calls == 1
+    assert admitted.pending_operations == 2
+    assert admitted.reserved_rows == admitted.reserved_bytes == 0
+    assert admitted.admission_receipts == 1
+    assert writer._pending_rows == 2
+    assert writer._receipt_rows == writer._admission_receipts == 1
+
+    emitter.flush()
+    exported = emitter.journal_census()
+    assert exported.pending_operations == 0
+    assert exported.admission_receipts == exported.export_receipts == 1
+    batch.release_no_fail()
+    emitter.close()
+
+    rendered = _bash_path(tmp_path).read_text(encoding="utf-8")
+    assert rendered.count("ordinary journal opener") == 1
+    assert rendered.count("reconciled exact") == 1
+    terminal = emitter.journal_census()
+    assert terminal.retained_rows == terminal.retained_bytes == 0
+    assert emitter.event_count == 2
+
+
+def test_bash_duplicate_writer_retry_is_exactly_once_and_census_neutral(tmp_path: Path) -> None:
+    """A duplicate adapter retry cannot charge or retain the same exact row twice."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    emitter.emit_event(_bash_event("ordinary control"))
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.prepare(lambda: emitter.emit_event(_bash_event("duplicate control", second=1)))
+    batch.commit()
+
+    writer = next(iter(emitter._writers.values()))
+    prepared_rows = batch._prepared_rows
+    assert prepared_rows is not None and len(prepared_rows) == 1
+    row = prepared_rows[0]
+    assert type(row.frozen_content) is str
+    envelope = json.loads(row.frozen_content)
+    before = emitter.journal_census()
+    writer_state = (
+        writer._pending_rows,
+        writer._pending_bytes,
+        writer._receipt_rows,
+        writer._admission_receipts,
+        writer._retained_event_count,
+    )
+
+    writer.commit_exact(
+        batch._row_key(0),
+        row.content_digest,
+        envelope["rendered"],
+        row.retained_bytes,
+    )
+
+    assert emitter.journal_census() == before
+    assert (
+        writer._pending_rows,
+        writer._pending_bytes,
+        writer._receipt_rows,
+        writer._admission_receipts,
+        writer._retained_event_count,
+    ) == writer_state
+
+    emitter.flush()
+    batch.release_no_fail()
+    emitter.close()
+    rendered = _bash_path(tmp_path).read_text(encoding="utf-8")
+    assert rendered.count("ordinary control") == 1
+    assert rendered.count("duplicate control") == 1
+
+
+@pytest.mark.parametrize("exported", [False, True], ids=["unexported-update", "exported-delete"])
+def test_bash_release_commit_lost_return_reconciles_once_and_reuses_route(
+    tmp_path: Path,
+    exported: bool,
+) -> None:
+    """Durable release state owns retry accounting for both UPDATE and DELETE."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.publish(lambda: emitter.emit_event(_bash_event("release first")))
+    writer = next(iter(emitter._writers.values()))
+    if exported:
+        emitter.flush()
+    connection = writer._connection
+    assert connection is not None
+    proxy = _CommitLostReturnConnection(connection)
+    writer._connection = proxy  # type: ignore[assignment]
+    before = emitter.journal_census()
+
+    with pytest.raises(RuntimeError, match="commit returned late"):
+        batch.release_no_fail()
+
+    assert emitter.journal_census() == before
+    assert writer._exact_release_receipts
+    assert writer._exact_receipts
+    with pytest.raises(ExactPublicationError, match="releases to reconcile"):
+        emitter.flush()
+    batch.release_no_fail()
+    batch.release_no_fail()
+    assert proxy.commit_calls == 1
+    assert writer._exact_release_receipts == {}
+    assert writer._exact_receipts == {}
+
+    if not exported:
+        emitter.flush()
+    assert emitter._writers == {}
+    released = emitter.journal_census()
+    assert released.retained_rows == released.retained_bytes == 0
+
+    emitter.emit_event(_bash_event("release later ordinary", second=1))
+    _publish_exact(emitter, _bash_event("release later exact", second=2))
+    emitter.close()
+
+    rendered = _bash_path(tmp_path).read_text(encoding="utf-8")
+    assert rendered.count("release first") == 1
+    assert rendered.count("release later ordinary") == 1
+    assert rendered.count("release later exact") == 1
+    assert emitter.event_count == 3
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_ordinary_insert_commit_lost_return_is_adopted_exactly_once(
+    tmp_path: Path,
+) -> None:
+    """An anonymous durable row is identified by sequence and charged only once."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    emitter.emit_event(_bash_event("ordinary opener"))
+    _upgrade_pending_bash_ordinary_route(emitter)
+    writer = next(iter(emitter._writers.values()))
+    connection = writer._connection
+    assert connection is not None
+    proxy = _CommitLostReturnConnection(connection)
+    writer._connection = proxy  # type: ignore[assignment]
+
+    emitter.emit_event(_bash_event("ordinary reconciled", second=1))
+    assert proxy.commit_calls == 1
+    assert writer._pending_rows == 2
+    emitter.flush()
+    emitter.flush()
+    assert emitter._writers == {}
+    assert emitter.journal_census().retained_rows == 0
+
+    emitter.emit_event(_bash_event("ordinary later epoch", second=2))
+    emitter.close()
+
+    rendered = _bash_path(tmp_path).read_text(encoding="utf-8")
+    assert rendered.count("ordinary opener") == 1
+    assert rendered.count("ordinary reconciled") == 1
+    assert rendered.count("ordinary later epoch") == 1
+    assert emitter.event_count == 3
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_export_plan_commit_lost_return_retains_and_adopts_sealed_owner(
+    tmp_path: Path,
+) -> None:
+    """A durable plan keeps its temp and budget until retry adopts it once."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    emitter.emit_event(_bash_event("plan first"))
+    _upgrade_pending_bash_ordinary_route(emitter)
+    writer = next(iter(emitter._writers.values()))
+    connection = writer._connection
+    assert connection is not None
+    proxy = _CommitLostReturnConnection(connection)
+    writer._connection = proxy  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="commit returned late"):
+        emitter.flush()
+
+    pending_plan = writer._unreconciled_export_plan
+    assert pending_plan is not None
+    assert writer._plan_rows == writer._plan_bytes == 0
+    assert (writer.output_path.parent / pending_plan.temporary_name).exists()
+    retained = emitter._budget.snapshot()
+    assert retained.plan_rows == 1
+    assert retained.plan_bytes == pending_plan.working_bytes
+
+    emitter.flush()
+    emitter.flush()
+    assert proxy.commit_calls == 2
+    assert writer._unreconciled_export_plan is None
+    assert emitter._writers == {}
+    assert emitter.journal_census().retained_rows == 0
+
+    emitter.emit_event(_bash_event("plan later epoch", second=1))
+    emitter.close()
+
+    rendered = _bash_path(tmp_path).read_text(encoding="utf-8")
+    assert rendered.count("plan first") == 1
+    assert rendered.count("plan later epoch") == 1
+    assert emitter.event_count == 2
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_export_completion_commit_lost_return_reconciles_deleted_epoch_once(
+    tmp_path: Path,
+) -> None:
+    """Durable plan deletion retains a local completion owner until retry."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    emitter.emit_event(_bash_event("completion first"))
+    _upgrade_pending_bash_ordinary_route(emitter)
+    writer = next(iter(emitter._writers.values()))
+    connection = writer._connection
+    assert connection is not None
+    proxy = _CommitLostReturnConnection(connection, fail_on_commit=2)
+    writer._connection = proxy  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="commit returned late"):
+        emitter.flush()
+
+    assert proxy.commit_calls == 2
+    assert writer._export_completion is not None
+    assert writer._plan_rows == 1
+    assert writer._pending_rows == 1
+    assert proxy.execute("SELECT singleton FROM export_plan WHERE singleton = 1").fetchone() is None
+    assert _bash_path(tmp_path).read_text(encoding="utf-8").count("completion first") == 1
+
+    emitter.flush()
+    emitter.flush()
+    assert proxy.commit_calls == 2
+    assert writer._export_completion is None
+    assert emitter._writers == {}
+    assert emitter.journal_census().retained_rows == 0
+
+    emitter.emit_event(_bash_event("completion later epoch", second=1))
+    emitter.close()
+
+    rendered = _bash_path(tmp_path).read_text(encoding="utf-8")
+    assert rendered.count("completion first") == 1
+    assert rendered.count("completion later epoch") == 1
+    assert emitter.event_count == 2
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_export_completion_lost_return_allows_immediate_exact_release(
+    tmp_path: Path,
+) -> None:
+    """Release first reconciles a committed export owner before deleting its receipt."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.publish(lambda: emitter.emit_event(_bash_event("completion active first")))
+    writer = next(iter(emitter._writers.values()))
+    connection = writer._connection
+    assert connection is not None
+    proxy = _CommitLostReturnConnection(connection, fail_on_commit=2)
+    writer._connection = proxy  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="commit returned late"):
+        emitter.flush()
+
+    assert writer._export_completion is not None
+    assert writer._export_completion.active_exact == 1
+    assert emitter.journal_census().export_receipts == 0
+    batch.release_no_fail()
+    batch.release_no_fail()
+
+    assert proxy.commit_calls == 3
+    assert writer._export_completion is None
+    assert emitter._writers == {}
+    assert emitter.journal_census().retained_rows == 0
+    assert _bash_path(tmp_path).read_text(encoding="utf-8").count("completion active first") == 1
+
+    emitter.emit_event(_bash_event("later route epoch", second=1))
+    emitter.close()
+    rendered = _bash_path(tmp_path).read_text(encoding="utf-8")
+    assert rendered.count("completion active first") == 1
+    assert rendered.count("later route epoch") == 1
+    assert emitter.event_count == 2
+    _assert_bash_terminal_state(emitter)
+
+
 def test_bash_exact_clear_is_an_ordered_operation_not_a_global_resort(tmp_path: Path) -> None:
     """Exact clear order is frozen while later ordinary flushes remain independent."""
 
@@ -190,6 +524,59 @@ def test_bash_threaded_exact_drain_keeps_the_current_logical_flush_epoch(
     assert _bash_path(tmp_path).read_text(encoding="utf-8") == (
         f"#{int((T0 + timedelta(seconds=20)).timestamp())}\nlater\n"
     )
+
+
+def test_bash_direct_reserve_drains_prior_fifo_without_physical_flush(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct participant reservation fences only after prior ordinary dispatch."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path, threaded=True)
+    ordinary_entered = Event()
+    release_ordinary = Event()
+    original_dispatch = emitter._dispatch
+    block_once = True
+
+    def block_prior_ordinary(event_data: dict[str, object]) -> None:
+        nonlocal block_once
+        if block_once and "prior ordinary" in str(event_data.get("rendered")):
+            block_once = False
+            ordinary_entered.set()
+            assert release_ordinary.wait(timeout=2)
+        original_dispatch(event_data)
+
+    monkeypatch.setattr(emitter, "_dispatch", block_prior_ordinary)
+    emitter.emit_event(_bash_event("prior ordinary"))
+    assert ordinary_entered.wait(timeout=2)
+
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    reserved = Event()
+    failures: list[BaseException] = []
+    reserver = Thread(
+        target=lambda: (
+            _capture_failure(failures, lambda: batch.reserve_participants((emitter,))),
+            reserved.set(),
+        )
+    )
+    reserver.start()
+    assert not reserved.wait(timeout=0.1)
+    assert not _bash_path(tmp_path).exists()
+
+    release_ordinary.set()
+    assert reserved.wait(timeout=2)
+    reserver.join(timeout=2)
+    assert failures == []
+    assert not _bash_path(tmp_path).exists()
+
+    batch.prepare(lambda: emitter.emit_event(_bash_event("reserved exact", second=1)))
+    batch.commit()
+    batch.release_no_fail()
+    emitter.close()
+
+    commands = _bash_path(tmp_path).read_text(encoding="utf-8").splitlines()[1::2]
+    assert commands == ["prior ordinary", "reserved exact"]
+    _assert_bash_terminal_state(emitter)
 
 
 def test_bash_threaded_public_barrier_retains_legacy_physical_flush(tmp_path: Path) -> None:
@@ -313,6 +700,148 @@ def test_bash_failed_close_plan_keeps_rows_from_the_next_admission_epoch(
     assert rendered.count("second epoch") == 1
 
 
+@pytest.mark.parametrize("operation", ["replace", "unlink", "fsync"])
+def test_bash_threaded_failed_close_keeps_worker_live_for_later_ordinary_and_exact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    """A lost close return cannot reopen admission with a stopped worker."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path, threaded=True)
+    emitter.emit_event(_bash_event("initial ordinary"))
+    emitter._drain_threaded_before_exact()
+    _upgrade_pending_bash_ordinary_route(emitter)
+    writer = next(iter(emitter._writers.values()))
+    fail_once = True
+
+    if operation == "replace":
+        original_replace = writer._replace_output
+
+        def replace_then_raise(payload: object) -> None:
+            nonlocal fail_once
+            original_replace(payload)
+            if fail_once:
+                fail_once = False
+                raise RuntimeError("threaded replace returned late")
+
+        monkeypatch.setattr(writer, "_replace_output", replace_then_raise)
+    elif operation == "unlink":
+        original_unlink = writer._unlink_cleanup_journal
+
+        def unlink_then_raise(directory_descriptor: int, journal_name: str) -> None:
+            nonlocal fail_once
+            original_unlink(directory_descriptor, journal_name)
+            if fail_once:
+                fail_once = False
+                raise RuntimeError("threaded unlink returned late")
+
+        monkeypatch.setattr(writer, "_unlink_cleanup_journal", unlink_then_raise)
+    else:
+        original_fsync = writer._fsync_cleanup_directory
+
+        def fsync_then_raise(directory_descriptor: int) -> None:
+            nonlocal fail_once
+            original_fsync(directory_descriptor)
+            if fail_once:
+                fail_once = False
+                raise RuntimeError("threaded fsync returned late")
+
+        monkeypatch.setattr(writer, "_fsync_cleanup_directory", fsync_then_raise)
+
+    with pytest.raises(RuntimeError, match="returned late"):
+        emitter.close()
+    assert emitter._close_state == "open"
+    assert emitter._thread is not None and emitter._thread.is_alive()
+
+    emitter.emit_event(_bash_event("later ordinary", second=1))
+    _publish_exact(emitter, _bash_event("later exact", second=2))
+    emitter.close()
+
+    rendered = _bash_path(tmp_path).read_text(encoding="utf-8")
+    assert rendered.count("initial ordinary") == 1
+    assert rendered.count("later ordinary") == 1
+    assert rendered.count("later exact") == 1
+    _assert_bash_terminal_state(emitter)
+
+
+@pytest.mark.parametrize("operation", ["rmdir", "parent-fsync"])
+def test_bash_threaded_private_cleanup_failed_close_allows_later_epochs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    """A private-root lost return is reconciled before threaded admission reopens."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root, threaded=True)
+    emitter.emit_event(_bash_event("private-close initial ordinary"))
+    emitter._drain_threaded_before_exact()
+    _upgrade_pending_bash_ordinary_route(emitter)
+    writer = next(iter(emitter._writers.values()))
+    journal_directory = writer._journal_directory
+    assert journal_directory is not None
+    original_close = journal_directory.close
+    close_calls = 0
+    operation_calls = 0
+    fail_once = True
+
+    def counted_close() -> None:
+        nonlocal close_calls
+        close_calls += 1
+        original_close()
+
+    monkeypatch.setattr(journal_directory, "close", counted_close)
+    if operation == "rmdir":
+        original_remove = journal_directory._remove_directory
+
+        def remove_then_raise(
+            parent_descriptor: int,
+            directory_name: str,
+            path: Path,
+        ) -> None:
+            nonlocal fail_once, operation_calls
+            operation_calls += 1
+            original_remove(parent_descriptor, directory_name, path)
+            if fail_once:
+                fail_once = False
+                raise RuntimeError("threaded private rmdir returned late")
+
+        monkeypatch.setattr(journal_directory, "_remove_directory", remove_then_raise)
+    else:
+        original_fsync = journal_directory._fsync_parent
+
+        def fsync_then_raise(parent_descriptor: int) -> None:
+            nonlocal fail_once, operation_calls
+            operation_calls += 1
+            original_fsync(parent_descriptor)
+            if fail_once:
+                fail_once = False
+                raise RuntimeError("threaded private parent fsync returned late")
+
+        monkeypatch.setattr(journal_directory, "_fsync_parent", fsync_then_raise)
+
+    with pytest.raises(RuntimeError, match="returned late"):
+        emitter.close()
+    assert close_calls >= 2
+    assert operation_calls == (1 if operation == "rmdir" else 2)
+    assert emitter._close_state == "open"
+    assert emitter._thread is not None and emitter._thread.is_alive()
+
+    emitter.emit_event(_bash_event("private-close later ordinary", second=1))
+    _publish_exact(emitter, _bash_event("private-close later exact", second=2))
+    emitter.close()
+
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    assert rendered.count("private-close initial ordinary") == 1
+    assert rendered.count("private-close later ordinary") == 1
+    assert rendered.count("private-close later exact") == 1
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
 def test_bash_capacity_charges_reservation_admission_export_and_terminal_gc(
     tmp_path: Path,
 ) -> None:
@@ -328,7 +857,7 @@ def test_bash_capacity_charges_reservation_admission_export_and_terminal_gc(
     batch.prepare(lambda: emitter.emit_event(_bash_event("charged")))
     prepared = emitter.journal_census()
     assert prepared.reserved_rows >= 2
-    assert prepared.retained_rows == 0
+    assert prepared.retained_rows == 1
 
     batch.commit()
     admitted = emitter.journal_census()
@@ -358,7 +887,8 @@ def test_bash_private_journal_and_close_fence_cover_whole_ordinary_admission(
     writer = next(iter(emitter._writers.values()))
     journal_path = writer._journal_path
     assert journal_path is not None
-    assert journal_path.parent == _bash_path(tmp_path).parent
+    assert not journal_path.is_relative_to(tmp_path)
+    assert stat.S_IMODE(journal_path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(journal_path.stat().st_mode) == 0o600
 
     entered = Event()
@@ -391,6 +921,2949 @@ def test_bash_private_journal_and_close_fence_cover_whole_ordinary_admission(
     ordinary.join(timeout=2)
     closer.join(timeout=2)
     assert failures == []
+    assert not journal_path.parent.exists()
+
+
+def test_bash_threaded_two_row_batch_does_not_deadlock_interleaved_ordinary(
+    tmp_path: Path,
+) -> None:
+    """Ordinary admission cannot occupy the FIFO between rows of one exact batch."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path, threaded=True)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    first_staged = Event()
+    allow_second = Event()
+    prepared = Event()
+    ordinary_done = Event()
+    failures: list[BaseException] = []
+
+    def render() -> None:
+        emitter.emit_event(_bash_event("exact first", second=10))
+        first_staged.set()
+        assert allow_second.wait(timeout=2)
+        emitter.emit_event(_bash_event("exact second", second=30))
+
+    producer = Thread(
+        target=lambda: (
+            _capture_failure(failures, lambda: batch.prepare(render)),
+            prepared.set(),
+        ),
+        daemon=True,
+    )
+    producer.start()
+    assert first_staged.wait(timeout=2)
+    ordinary = Thread(
+        target=lambda: (
+            _capture_failure(
+                failures,
+                lambda: emitter.emit_event(_bash_event("ordinary middle", second=20)),
+            ),
+            ordinary_done.set(),
+        ),
+        daemon=True,
+    )
+    ordinary.start()
+    assert not ordinary_done.wait(timeout=0.1)
+    allow_second.set()
+    assert prepared.wait(timeout=2)
+    assert not ordinary_done.wait(timeout=0.1)
+    batch.commit()
+    batch.release_no_fail()
+    assert ordinary_done.wait(timeout=2)
+    producer.join(timeout=2)
+    ordinary.join(timeout=2)
+    emitter.close()
+
+    assert failures == []
+    assert _bash_path(tmp_path).read_text(encoding="utf-8").splitlines()[1::2] == [
+        "exact first",
+        "ordinary middle",
+        "exact second",
+    ]
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_threaded_barrier_between_exact_rows_waits_outside_admission_lock(
+    tmp_path: Path,
+) -> None:
+    """A public barrier waits without preventing the registered batch continuing."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path, threaded=True)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    first_staged = Event()
+    allow_second = Event()
+    prepared = Event()
+    barrier_done = Event()
+    failures: list[BaseException] = []
+
+    def render() -> None:
+        emitter.emit_event(_bash_event("exact first", second=10))
+        first_staged.set()
+        assert allow_second.wait(timeout=2)
+        emitter.emit_event(_bash_event("exact second", second=20))
+
+    producer = Thread(
+        target=lambda: (
+            _capture_failure(failures, lambda: batch.prepare(render)),
+            prepared.set(),
+        ),
+        daemon=True,
+    )
+    producer.start()
+    assert first_staged.wait(timeout=2)
+    barrier = Thread(
+        target=lambda: (
+            _capture_failure(failures, emitter.barrier_flush),
+            barrier_done.set(),
+        ),
+        daemon=True,
+    )
+    barrier.start()
+    assert not barrier_done.wait(timeout=0.1)
+    allow_second.set()
+    assert prepared.wait(timeout=2)
+    batch.commit()
+    batch.release_no_fail()
+    assert barrier_done.wait(timeout=2)
+    producer.join(timeout=2)
+    barrier.join(timeout=2)
+    emitter.close()
+
+    assert failures == []
+    assert _bash_path(tmp_path).read_text(encoding="utf-8").count("exact") == 2
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_threaded_close_between_exact_rows_allows_registered_continuation(
+    tmp_path: Path,
+) -> None:
+    """Close claims new admission while the already-fenced batch finishes rendering."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path, threaded=True)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    first_staged = Event()
+    allow_second = Event()
+    prepared = Event()
+    closed = Event()
+    failures: list[BaseException] = []
+
+    def render() -> None:
+        emitter.emit_event(_bash_event("exact first", second=10))
+        first_staged.set()
+        assert allow_second.wait(timeout=2)
+        emitter.emit_event(_bash_event("exact second", second=20))
+
+    producer = Thread(
+        target=lambda: (
+            _capture_failure(failures, lambda: batch.prepare(render)),
+            prepared.set(),
+        ),
+        daemon=True,
+    )
+    producer.start()
+    assert first_staged.wait(timeout=2)
+    closer = Thread(
+        target=lambda: (_capture_failure(failures, emitter.close), closed.set()),
+        daemon=True,
+    )
+    closer.start()
+    assert _wait_for_state(emitter, "closing")
+    allow_second.set()
+    assert prepared.wait(timeout=2)
+    assert not closed.wait(timeout=0.1)
+    batch.commit()
+    batch.release_no_fail()
+    producer.join(timeout=2)
+    closer.join(timeout=2)
+
+    assert failures == []
+    assert closed.is_set()
+    assert _bash_path(tmp_path).read_text(encoding="utf-8").count("exact") == 2
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_threaded_foreign_batch_waits_without_blocking_current_render(
+    tmp_path: Path,
+) -> None:
+    """A foreign exact producer never holds admission while waiting for the owner."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path, threaded=True)
+    first_batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    second_batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    first_staged = Event()
+    finish_first = Event()
+    first_prepared = Event()
+    second_started = Event()
+    second_prepared = Event()
+    failures: list[BaseException] = []
+
+    def first_render() -> None:
+        emitter.emit_event(_bash_event("first batch", second=10))
+        first_staged.set()
+        assert finish_first.wait(timeout=2)
+        emitter.emit_event(_bash_event("first continuation", second=20))
+
+    first = Thread(
+        target=lambda: (
+            _capture_failure(failures, lambda: first_batch.prepare(first_render)),
+            first_prepared.set(),
+        ),
+        daemon=True,
+    )
+    first.start()
+    assert first_staged.wait(timeout=2)
+
+    def prepare_second() -> None:
+        second_started.set()
+        _capture_failure(
+            failures,
+            lambda: second_batch.prepare(
+                lambda: emitter.emit_event(_bash_event("second batch", second=30))
+            ),
+        )
+        second_prepared.set()
+
+    second = Thread(target=prepare_second, daemon=True)
+    second.start()
+    assert second_started.wait(timeout=2)
+    assert not second_prepared.wait(timeout=0.1)
+    finish_first.set()
+    assert first_prepared.wait(timeout=2)
+    first_batch.commit()
+    first_batch.release_no_fail()
+    assert second_prepared.wait(timeout=2)
+    second_batch.commit()
+    second_batch.release_no_fail()
+    first.join(timeout=2)
+    second.join(timeout=2)
+    emitter.close()
+
+    assert failures == []
+    rendered = _bash_path(tmp_path).read_text(encoding="utf-8")
+    assert rendered.count("first batch") == 1
+    assert rendered.count("first continuation") == 1
+    assert rendered.count("second batch") == 1
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_threaded_worker_death_before_registration_cleans_control(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worker death during the drain fails promptly without retaining authority."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path, threaded=True)
+
+    def kill_worker(_queue_item: object) -> bool:
+        raise SystemExit("worker died before registration")
+
+    monkeypatch.setattr(emitter, "_handle_exact_drain_request", kill_worker)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with pytest.raises(RuntimeError, match="emitter thread failed"):
+        batch.prepare(lambda: emitter.emit_event(_bash_event("never admitted")))
+    batch.cancel()
+    assert emitter._active_exact_publication_keys == set()
+    assert emitter._event_queue is not None and emitter._event_queue.unfinished_tasks == 0
+    assert emitter.journal_census().retained_rows == 0
+    assert emitter._stop_event is not None
+    emitter._thread_error = None
+    emitter._stop_event.set()
+    emitter.close()
+    assert not _bash_path(tmp_path).exists()
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_threaded_worker_death_after_enqueue_releases_participant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A death after exact enqueue cannot strand the participant or publish later."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path, threaded=True)
+    original = bash_history_module.exact_publication_queue_payload
+
+    def kill_on_exact(queue_item: object) -> tuple[object, object | None]:
+        if type(queue_item).__name__ == "_ExactQueuedPublication":
+            raise SystemExit("worker died after enqueue")
+        return original(queue_item)
+
+    monkeypatch.setattr(bash_history_module, "exact_publication_queue_payload", kill_on_exact)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with pytest.raises(RuntimeError, match="emitter thread failed"):
+        batch.prepare(lambda: emitter.emit_event(_bash_event("never staged")))
+    batch.cancel()
+    assert emitter._active_exact_publication_keys == set()
+    assert emitter._event_queue is not None and emitter._event_queue.unfinished_tasks == 0
+    assert emitter.journal_census().retained_rows == 0
+    assert emitter._stop_event is not None
+    emitter._thread_error = None
+    emitter._stop_event.set()
+    emitter.close()
+    assert not _bash_path(tmp_path).exists()
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_close_after_registration_cannot_overtake_exact_enqueue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registration and queue handoff form one close-serialized admission."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path, threaded=True)
+    entered = Event()
+    release = Event()
+    prepared = Event()
+    closed = Event()
+    failures: list[BaseException] = []
+    original = emitter._handoff_exact_event
+
+    def blocked_handoff(event_data: dict[str, object], attempt: object) -> object:
+        entered.set()
+        assert release.wait(timeout=2)
+        return original(event_data, attempt)
+
+    monkeypatch.setattr(emitter, "_handoff_exact_event", blocked_handoff)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    producer = Thread(
+        target=lambda: (
+            _capture_failure(
+                failures,
+                lambda: batch.prepare(lambda: emitter.emit_event(_bash_event("exact"))),
+            ),
+            prepared.set(),
+        ),
+        daemon=True,
+    )
+    producer.start()
+    assert entered.wait(timeout=2)
+    assert emitter._active_exact_publication_keys
+    closer = Thread(
+        target=lambda: (_capture_failure(failures, emitter.close), closed.set()),
+        daemon=True,
+    )
+    closer.start()
+    assert not closed.wait(timeout=0.1)
+    assert emitter._close_state == "open"
+    release.set()
+    assert prepared.wait(timeout=2)
+    assert not closed.wait(timeout=0.1)
+    batch.commit()
+    batch.release_no_fail()
+    producer.join(timeout=2)
+    closer.join(timeout=2)
+
+    assert failures == []
+    assert closed.is_set()
+    assert _bash_path(tmp_path).read_text(encoding="utf-8").count("exact") == 1
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_caller_callbacks_and_reentry_run_outside_admission_lock(
+    tmp_path: Path,
+) -> None:
+    """Caller deepcopy/string hooks may re-enter public APIs without owning admission."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    observed_lock_states: list[bool] = []
+    observed_hooks: list[str] = []
+    failures: list[BaseException] = []
+    completed = Event()
+
+    class DetachedCommand:
+        def __str__(self) -> str:
+            observed_hooks.append("string")
+            observed_lock_states.append(emitter._admission_lock._is_owned())
+            emitter.flush()
+            return "callback-safe"
+
+        def __del__(self) -> None:
+            observed_hooks.append("finalizer")
+            observed_lock_states.append(emitter._admission_lock._is_owned())
+            emitter.flush()
+
+    class ReentrantCommand:
+        def __deepcopy__(self, _memo: object) -> DetachedCommand:
+            observed_hooks.append("deepcopy")
+            observed_lock_states.append(emitter._admission_lock._is_owned())
+            emitter.flush()
+            return DetachedCommand()
+
+    event = _bash_event("placeholder")
+    event["command"] = ReentrantCommand()
+    producer = Thread(
+        target=lambda: (
+            _capture_failure(failures, lambda: emitter.emit_event(event)),
+            completed.set(),
+        ),
+        daemon=True,
+    )
+    producer.start()
+    assert completed.wait(timeout=2)
+    producer.join(timeout=2)
+    assert failures == []
+    assert set(observed_hooks) == {"deepcopy", "string", "finalizer"}
+    assert observed_lock_states and not any(observed_lock_states)
+    emitter.close()
+    assert "callback-safe" in _bash_path(tmp_path).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("operation", ["flush", "close"])
+def test_bash_exact_reentrant_callback_fails_promptly_without_deadlock(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    """A callback in a continuation cannot wait on the participant it currently owns."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    completed = Event()
+    failures: list[BaseException] = []
+
+    class ReentrantContinuation:
+        def __deepcopy__(self, _memo: object) -> ReentrantContinuation:
+            return self
+
+        def __str__(self) -> str:
+            getattr(emitter, operation)()
+            return "never staged"
+
+    def render() -> None:
+        emitter.emit_event(_bash_event("first staged"))
+        second = _bash_event("placeholder", second=1)
+        second["command"] = ReentrantContinuation()
+        emitter.emit_event(second)
+
+    producer = Thread(
+        target=lambda: (_capture_failure(failures, lambda: batch.prepare(render)), completed.set()),
+        daemon=True,
+    )
+    producer.start()
+    assert completed.wait(timeout=2)
+    producer.join(timeout=2)
+    assert len(failures) == 1
+    assert isinstance(failures[0], ExactPublicationError)
+    assert "cannot re-enter" in str(failures[0])
+    assert emitter._active_exact_publication_keys == set()
+    assert emitter.journal_census().retained_rows == emitter.journal_census().reserved_rows == 0
+    batch.cancel()
+    emitter.close()
+
+
+def test_bash_global_route_cap_rejects_before_second_route_allocation(tmp_path: Path) -> None:
+    """The exact route cap does not constrain legacy ordinary-only writers."""
+
+    emitter = BashHistoryEmitter(
+        load_format("bash_history"),
+        tmp_path,
+        journal_route_capacity=1,
+        journal_row_capacity=32,
+        journal_byte_capacity=64 * 1024,
+    )
+    emitter.emit_event(_bash_event("first route"))
+    second = _bash_event("second route")
+    second["username"] = "bob"
+    second["host_fqdn"] = "linux-02.example.test"
+    emitter.emit_event(second)
+
+    census = emitter.journal_census()
+    assert census.routes == census.writers == 0
+    assert census.retained_rows == census.retained_bytes == 0
+    assert census.high_water_rows <= census.row_capacity
+    assert census.high_water_bytes <= census.byte_capacity
+    assert not (tmp_path / "linux-02.example.test").exists()
+    emitter.close()
+    assert _bash_path(tmp_path).read_text(encoding="utf-8").count("first route") == 1
+    second_output = tmp_path / "linux-02.example.test" / "bash_history" / "bob.bash_history"
+    assert second_output.read_text(encoding="utf-8").count("second route") == 1
+
+    exact_root = tmp_path / "exact"
+    exact = BashHistoryEmitter(
+        load_format("bash_history"),
+        exact_root,
+        journal_route_capacity=1,
+        journal_row_capacity=16,
+        journal_byte_capacity=64 * 1024,
+    )
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+
+    def render_two_routes() -> None:
+        exact.emit_event(_bash_event("first exact route"))
+        exact.emit_event(second)
+
+    with pytest.raises(ExactPublicationError, match="route capacity"):
+        batch.prepare(render_two_routes)
+    batch.cancel()
+    assert exact.journal_census().routes == exact.journal_census().reserved_rows == 0
+    assert not exact_root.exists()
+    exact.close()
+
+
+@pytest.mark.parametrize(
+    "capacity_name",
+    ["journal_route_capacity", "journal_row_capacity", "journal_byte_capacity"],
+)
+@pytest.mark.parametrize("invalid", [0, -1, True])
+def test_bash_global_caps_require_positive_exact_ints(
+    tmp_path: Path,
+    capacity_name: str,
+    invalid: object,
+) -> None:
+    """Booleans, zero, and negative values cannot disable any global ceiling."""
+
+    with pytest.raises(ValueError, match="positive exact int"):
+        BashHistoryEmitter(
+            load_format("bash_history"),
+            tmp_path,
+            **{capacity_name: invalid},
+        )
+
+
+def test_bash_exact_global_row_and_byte_caps_have_hard_boundaries(tmp_path: Path) -> None:
+    """Exact route plus row reservations fit at equality and fail one unit below."""
+
+    probe = BashHistoryEmitter(
+        load_format("bash_history"),
+        tmp_path / "probe",
+        journal_route_capacity=1,
+        journal_row_capacity=4,
+        journal_byte_capacity=64 * 1024,
+    )
+    probe_batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    probe_batch.prepare(lambda: probe.emit_event(_bash_event("boundary")))
+    required_bytes = probe.journal_census().high_water_bytes
+    assert probe.journal_census().high_water_rows == 4
+    probe_batch.cancel()
+    assert probe.journal_census().retained_rows == probe.journal_census().reserved_rows == 0
+    probe.close()
+
+    exact = BashHistoryEmitter(
+        load_format("bash_history"),
+        tmp_path / "exact",
+        journal_route_capacity=1,
+        journal_row_capacity=4,
+        journal_byte_capacity=required_bytes,
+    )
+    exact_batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    exact_batch.prepare(lambda: exact.emit_event(_bash_event("boundary")))
+    exact_census = exact.journal_census()
+    assert exact_census.high_water_rows == exact_census.row_capacity == 4
+    assert exact_census.high_water_bytes == exact_census.byte_capacity == required_bytes
+    exact_batch.cancel()
+    exact.close()
+
+    rejected = BashHistoryEmitter(
+        load_format("bash_history"),
+        tmp_path / "rejected",
+        journal_route_capacity=1,
+        journal_row_capacity=4,
+        journal_byte_capacity=required_bytes - 1,
+    )
+    rejected_batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with pytest.raises(ExactPublicationError, match="byte capacity"):
+        rejected_batch.prepare(lambda: rejected.emit_event(_bash_event("boundary")))
+    rejected_batch.cancel()
+    rejected_census = rejected.journal_census()
+    assert rejected_census.retained_rows == rejected_census.reserved_rows == 0
+    assert rejected_census.high_water_bytes <= rejected_census.byte_capacity
+    assert not (tmp_path / "rejected" / "linux-01.example.test").exists()
+    rejected.close()
+
+
+def test_bash_ordinary_rows_bypass_exact_journal_caps_and_private_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy ordinary rows neither consume exact capacity nor allocate a spool."""
+
+    spool_root = tmp_path / "private-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(
+        load_format("bash_history"),
+        tmp_path / "root",
+        journal_route_capacity=1,
+        journal_row_capacity=1,
+        journal_byte_capacity=1,
+    )
+    emitter.emit_event(_bash_event("ordinary ignores exact cap"))
+    census = emitter.journal_census()
+    assert census.writers == census.routes == 0
+    assert census.retained_rows == census.retained_bytes == 0
+    assert census.high_water_rows <= census.row_capacity
+    assert not spool_root.exists()
+    emitter.flush()
+    assert (
+        _bash_path(tmp_path / "root")
+        .read_text(encoding="utf-8")
+        .count("ordinary ignores exact cap")
+        == 1
+    )
+    emitter.close()
+    assert not spool_root.exists()
+
+
+@pytest.mark.parametrize("capacity_kind", ["row", "byte"])
+@pytest.mark.parametrize("delta", [-1, 0, 1], ids=["one-under", "exact", "plus-one"])
+def test_bash_exact_upgrade_preflights_complete_ordinary_buffer_atomically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capacity_kind: str,
+    delta: int,
+) -> None:
+    """A complete migration fits at its direct boundary or rejects without a trace."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "private-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    ordinary_events = (
+        _bash_event("migration ordinary first"),
+        _bash_event("migration ordinary second", second=1),
+    )
+    exact_event = _bash_event("migration exact", second=3)
+    sizing = BashHistoryEmitter(load_format("bash_history"), tmp_path / "sizing")
+    for event in ordinary_events:
+        sizing.emit_event(event)
+    sizing_writer = next(iter(sizing._writers.values()))
+    migration_rows, migration_bytes = sizing_writer.ordinary_migration_requirements()
+    prepared = sizing._prepare_event(exact_event)
+    exact_bytes = len(prepared["envelope"].encode("utf-8"))
+    required_rows = migration_rows + bash_history_module._EXACT_RESERVATION_ROWS + 1
+    required_bytes = (
+        migration_bytes + exact_bytes + required_rows * bash_history_module._EXACT_METADATA_BYTES
+    )
+    sizing.close()
+
+    row_capacity = required_rows + (delta if capacity_kind == "row" else 8)
+    byte_capacity = required_bytes + (delta if capacity_kind == "byte" else 64 * 1024)
+    emitter = BashHistoryEmitter(
+        load_format("bash_history"),
+        root,
+        journal_route_capacity=1,
+        journal_row_capacity=row_capacity,
+        journal_byte_capacity=byte_capacity,
+    )
+    for event in ordinary_events:
+        emitter.emit_event(event)
+    writer = next(iter(emitter._writers.values()))
+    buffered = tuple(writer._ordinary_buffer)
+    before = emitter.journal_census()
+    token_calls = 0
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+
+    def deterministic_token_hex(_byte_count: int) -> str:
+        nonlocal token_calls
+        token_calls += 1
+        return f"{token_calls:032x}"
+
+    monkeypatch.setattr(bash_history_module.secrets, "token_hex", deterministic_token_hex)
+    if delta < 0:
+        with pytest.raises(ExactPublicationError, match=f"{capacity_kind} capacity"):
+            batch.prepare(lambda: emitter.emit_event(exact_event))
+        assert batch.state == "issued"
+        assert emitter.journal_census() == before
+        assert emitter.event_count == len(ordinary_events)
+        assert tuple(writer._ordinary_buffer) == buffered
+        assert not writer._journal_mode
+        assert not writer.exact_route_active
+        assert writer._journal_directory is None
+        assert writer._connection is None
+        assert token_calls == 0
+        assert not spool_root.exists()
+        assert not _bash_path(root).exists()
+
+        emitter.emit_event(_bash_event("migration ordinary after rejection", second=2))
+        emitter.flush()
+        emitter._budget.row_capacity = 128
+        emitter._budget.byte_capacity = 128 * 1024
+        batch.publish(lambda: emitter.emit_event(exact_event))
+    else:
+        batch.prepare(lambda: emitter.emit_event(exact_event))
+        admitted_boundary = emitter.journal_census()
+        if capacity_kind == "row":
+            assert admitted_boundary.high_water_rows == required_rows
+            assert admitted_boundary.row_capacity == required_rows + delta
+        else:
+            assert admitted_boundary.high_water_bytes == required_bytes
+            assert admitted_boundary.byte_capacity == required_bytes + delta
+        assert token_calls == 1
+        emitter._budget.row_capacity = 128
+        emitter._budget.byte_capacity = 128 * 1024
+        batch.commit()
+
+    batch.release_no_fail()
+    emitter.close()
+
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    commands = ["migration ordinary first", "migration ordinary second"]
+    if delta < 0:
+        commands.append("migration ordinary after rejection")
+    commands.append("migration exact")
+    positions = [rendered.index(f"\n{command}\n") for command in commands]
+    assert positions == sorted(positions)
+    for command in commands:
+        assert rendered.count(f"\n{command}\n") == 1
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_mid_migration_failure_rolls_back_whole_buffer_and_private_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second-row failure leaves no durable prefix and retries the FIFO exactly once."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "private-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    emitter.emit_event(_bash_event("migration rollback first"))
+    emitter.emit_event(_bash_event("migration rollback second", second=1))
+    writer = next(iter(emitter._writers.values()))
+    buffered = tuple(writer._ordinary_buffer)
+    before = emitter.journal_census()
+    original_insert = writer._insert_ordinary_migration_row_unlocked
+    insert_calls = 0
+
+    def fail_second_insert(
+        connection: sqlite3.Connection,
+        *,
+        epoch: int,
+        rendered: str,
+        encoded_bytes: int,
+    ) -> int:
+        nonlocal insert_calls
+        insert_calls += 1
+        if insert_calls == 2:
+            raise RuntimeError("ordinary migration failed mid-transaction")
+        return original_insert(
+            connection,
+            epoch=epoch,
+            rendered=rendered,
+            encoded_bytes=encoded_bytes,
+        )
+
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with monkeypatch.context() as patch:
+        patch.setattr(writer, "_insert_ordinary_migration_row_unlocked", fail_second_insert)
+        with pytest.raises(RuntimeError, match="mid-transaction"):
+            batch.prepare(
+                lambda: emitter.emit_event(_bash_event("migration rollback exact", second=2))
+            )
+
+    assert insert_calls == 2
+    assert batch.state == "issued"
+    assert tuple(writer._ordinary_buffer) == buffered
+    assert not writer._journal_mode
+    assert not writer.exact_route_active
+    assert writer._ordinary_migration is None
+    assert writer._ordinary_migration_reservation is None
+    assert writer._journal_directory is None
+    assert writer._connection is None
+    rolled_back = emitter.journal_census()
+    assert rolled_back.retained_rows == before.retained_rows == 0
+    assert rolled_back.retained_bytes == before.retained_bytes == 0
+    assert not spool_root.exists() or list(spool_root.iterdir()) == []
+    assert not _bash_path(root).exists()
+
+    batch.publish(lambda: emitter.emit_event(_bash_event("migration rollback exact", second=2)))
+    batch.release_no_fail()
+    emitter.close()
+
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    commands = [
+        "migration rollback first",
+        "migration rollback second",
+        "migration rollback exact",
+    ]
+    positions = [rendered.index(f"\n{command}\n") for command in commands]
+    assert positions == sorted(positions)
+    for command in commands:
+        assert rendered.count(f"\n{command}\n") == 1
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+def _retain_unresolved_bash_migration_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    threaded: bool = False,
+) -> tuple[
+    BashHistoryEmitter,
+    bash_history_module._SingleHistoryWriter,
+    ExactPublicationBatch,
+    _CommitLostReturnConnection,
+    list[bool],
+    list[int],
+    tuple[str, ...],
+]:
+    """Leave one durable migration commit behind an unavailable reconciliation seam."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "private-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root, threaded=threaded)
+    emitter.emit_event(_bash_event("migration owner first"))
+    emitter.emit_event(_bash_event("migration owner second", second=1))
+    if threaded:
+        emitter._drain_threaded_before_exact()
+    writer = next(iter(emitter._writers.values()))
+    buffered = tuple(writer._ordinary_buffer)
+    original_connect = bash_history_module._connect_existing_journal
+    original_load = writer._load_ordinary_migration_unlocked
+    proxies: list[_CommitLostReturnConnection] = []
+    allow_reconciliation = [False]
+    reconciliation_calls = [0]
+
+    def lost_return_connect(
+        journal_path: Path,
+    ) -> sqlite3.Connection | _CommitLostReturnConnection:
+        connection = original_connect(journal_path)
+        if proxies:
+            return connection
+        proxy = _CommitLostReturnConnection(connection, fail_on_commit=2)
+        proxies.append(proxy)
+        return proxy
+
+    def unavailable_reconciliation(
+        owner: bash_history_module._OrdinaryMigration,
+    ) -> tuple[tuple[int, str, int], ...]:
+        reconciliation_calls[0] += 1
+        if not allow_reconciliation[0]:
+            raise RuntimeError("ordinary migration reconciliation unavailable")
+        return original_load(owner)
+
+    monkeypatch.setattr(bash_history_module, "_connect_existing_journal", lost_return_connect)
+    monkeypatch.setattr(
+        writer,
+        "_load_ordinary_migration_unlocked",
+        unavailable_reconciliation,
+    )
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with pytest.raises(RuntimeError, match="reconciliation unavailable"):
+        batch.prepare(lambda: emitter.emit_event(_bash_event("migration owner exact", second=3)))
+
+    assert len(proxies) == 1
+    assert proxies[0].commit_calls == 2
+    assert reconciliation_calls == [1]
+    assert batch.state == "issued"
+    assert tuple(writer._ordinary_buffer) == buffered
+    assert not writer._journal_mode
+    assert writer._ordinary_migration is not None
+    assert writer._ordinary_migration_reservation is not None
+    assert not _bash_path(root).exists()
+    return (
+        emitter,
+        writer,
+        batch,
+        proxies[0],
+        allow_reconciliation,
+        reconciliation_calls,
+        buffered,
+    )
+
+
+def _retain_unresolved_rolled_back_bash_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    BashHistoryEmitter,
+    bash_history_module._SingleHistoryWriter,
+    ExactPublicationBatch,
+    list[bool],
+    list[int],
+    list[int],
+    tuple[str, ...],
+    Path,
+    Path,
+]:
+    """Retain an owner after rollback succeeds and its first durable read is unavailable."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "private-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    emitter.emit_event(_bash_event("rolled back migration first"))
+    emitter.emit_event(_bash_event("rolled back migration second", second=1))
+    writer = next(iter(emitter._writers.values()))
+    buffered = tuple(writer._ordinary_buffer)
+    original_commit = writer._commit_ordinary_migration_unlocked
+    original_load = writer._load_ordinary_migration_unlocked
+    allow_reconciliation = [False]
+    commit_calls = [0]
+    reconciliation_calls = [0]
+
+    def fail_first_commit(connection: sqlite3.Connection) -> None:
+        commit_calls[0] += 1
+        if commit_calls[0] == 1:
+            raise RuntimeError("ordinary migration commit failed")
+        original_commit(connection)
+
+    def unavailable_reconciliation(
+        owner: bash_history_module._OrdinaryMigration,
+    ) -> tuple[tuple[int, str, int], ...]:
+        reconciliation_calls[0] += 1
+        if not allow_reconciliation[0]:
+            raise RuntimeError("ordinary migration reconciliation unavailable")
+        return original_load(owner)
+
+    monkeypatch.setattr(writer, "_commit_ordinary_migration_unlocked", fail_first_commit)
+    monkeypatch.setattr(
+        writer,
+        "_load_ordinary_migration_unlocked",
+        unavailable_reconciliation,
+    )
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with pytest.raises(RuntimeError, match="reconciliation unavailable"):
+        batch.prepare(
+            lambda: emitter.emit_event(_bash_event("rolled back migration exact", second=3))
+        )
+
+    journal_directory = writer._journal_directory
+    journal_path = writer._journal_path
+    assert journal_directory is not None and journal_directory.path is not None
+    assert journal_path is not None
+    assert commit_calls == [1]
+    assert reconciliation_calls == [1]
+    assert tuple(writer._ordinary_buffer) == buffered
+    assert not writer._journal_mode
+    assert writer._ordinary_migration is not None
+    assert writer._ordinary_migration_reservation is not None
+    assert not writer._ordinary_migration_rollback_proved
+    assert writer.exact_route_active
+    return (
+        emitter,
+        writer,
+        batch,
+        allow_reconciliation,
+        commit_calls,
+        reconciliation_calls,
+        buffered,
+        journal_directory.path,
+        journal_path,
+    )
+
+
+def test_bash_migration_commit_lost_return_retains_owner_and_retry_adopts_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A durable whole-buffer commit survives unavailable first reconciliation."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "private-spool"
+    (
+        emitter,
+        writer,
+        batch,
+        proxy,
+        allow_reconciliation,
+        reconciliation_calls,
+        buffered,
+    ) = _retain_unresolved_bash_migration_owner(
+        tmp_path,
+        monkeypatch,
+    )
+
+    assert writer.exact_route_active
+    retained_owner = emitter.journal_census()
+    assert retained_owner.pending_operations == 0
+    assert retained_owner.reserved_rows == len(buffered)
+    assert writer._connection is proxy
+
+    allow_reconciliation[0] = True
+    batch.publish(lambda: emitter.emit_event(_bash_event("migration owner exact", second=3)))
+    assert reconciliation_calls == [2]
+    assert proxy.commit_calls == 3
+    assert writer._ordinary_buffer == []
+    assert writer._ordinary_migration is None
+    assert writer._ordinary_migration_reservation is None
+    assert writer._journal_mode
+    assert writer._pending_rows == len(buffered) + 1
+    batch.release_no_fail()
+    emitter.close()
+
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    commands = [
+        "migration owner first",
+        "migration owner second",
+        "migration owner exact",
+    ]
+    positions = [rendered.index(f"\n{command}\n") for command in commands]
+    assert positions == sorted(positions)
+    for command in commands:
+        assert rendered.count(f"\n{command}\n") == 1
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+@pytest.mark.parametrize("threaded", [False, True], ids=["direct", "threaded"])
+def test_bash_unresolved_migration_fences_later_ordinary_suffix_until_adoption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    threaded: bool,
+) -> None:
+    """A later ordinary row is not admitted until the durable prefix is adopted."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "private-spool"
+    (
+        emitter,
+        writer,
+        batch,
+        proxy,
+        allow_reconciliation,
+        reconciliation_calls,
+        buffered,
+    ) = _retain_unresolved_bash_migration_owner(
+        tmp_path,
+        monkeypatch,
+        threaded=threaded,
+    )
+    before = emitter.journal_census()
+    before_event_count = emitter.event_count
+    before_queue_tasks = emitter._event_queue.unfinished_tasks if threaded else 0
+
+    with pytest.raises(RuntimeError, match="reconciliation unavailable"):
+        emitter.emit_event(_bash_event("migration owner suffix", second=2))
+
+    assert reconciliation_calls == [2]
+    assert proxy.commit_calls == 2
+    assert emitter.journal_census() == before
+    assert emitter.event_count == before_event_count == len(buffered)
+    assert tuple(writer._ordinary_buffer) == buffered
+    assert not writer._journal_mode
+    assert writer._ordinary_migration is not None
+    assert writer._ordinary_migration_reservation is not None
+    assert not _bash_path(root).exists()
+    if threaded:
+        assert emitter._event_queue.unfinished_tasks == before_queue_tasks == 0
+        assert emitter._thread_error is None
+        assert emitter._thread is not None and emitter._thread.is_alive()
+
+    allow_reconciliation[0] = True
+    emitter.emit_event(_bash_event("migration owner suffix", second=2))
+    if threaded:
+        emitter._drain_threaded_before_exact()
+    assert writer._ordinary_buffer == []
+    assert writer._ordinary_migration is None
+    assert writer._ordinary_migration_reservation is None
+    assert writer._journal_mode
+    batch.publish(lambda: emitter.emit_event(_bash_event("migration owner exact", second=3)))
+    batch.release_no_fail()
+    emitter.close()
+
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    commands = [
+        "migration owner first",
+        "migration owner second",
+        "migration owner suffix",
+        "migration owner exact",
+    ]
+    positions = [rendered.index(f"\n{command}\n") for command in commands]
+    assert positions == sorted(positions)
+    for command in commands:
+        assert rendered.count(f"\n{command}\n") == 1
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+@pytest.mark.parametrize(
+    ("operation_name", "threaded"),
+    [("flush", False), ("barrier_flush", False), ("barrier_flush", True)],
+    ids=["flush", "barrier", "threaded-barrier"],
+)
+def test_bash_unresolved_migration_fences_flush_and_barrier_until_adoption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation_name: str,
+    threaded: bool,
+) -> None:
+    """Flush boundaries remain output-neutral while migration state is unknowable."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "private-spool"
+    (
+        emitter,
+        writer,
+        batch,
+        proxy,
+        allow_reconciliation,
+        reconciliation_calls,
+        buffered,
+    ) = _retain_unresolved_bash_migration_owner(
+        tmp_path,
+        monkeypatch,
+        threaded=threaded,
+    )
+    operation = getattr(emitter, operation_name)
+    before = emitter.journal_census()
+
+    with pytest.raises(RuntimeError, match="reconciliation unavailable"):
+        operation()
+
+    assert reconciliation_calls == [2]
+    assert proxy.commit_calls == 2
+    assert emitter.journal_census() == before
+    assert tuple(writer._ordinary_buffer) == buffered
+    assert not writer._journal_mode
+    assert writer._ordinary_migration is not None
+    assert writer._ordinary_migration_reservation is not None
+    assert not _bash_path(root).exists()
+    if threaded:
+        assert emitter._thread_error is None
+        assert emitter._thread is not None and emitter._thread.is_alive()
+
+    allow_reconciliation[0] = True
+    operation()
+    batch.publish(lambda: emitter.emit_event(_bash_event("migration owner exact", second=3)))
+    batch.release_no_fail()
+    emitter.close()
+
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    for command in ["migration owner first", "migration owner second", "migration owner exact"]:
+        assert rendered.count(f"\n{command}\n") == 1
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+@pytest.mark.parametrize("threaded", [False, True], ids=["direct", "threaded"])
+def test_bash_unresolved_migration_keeps_close_retryable_until_adoption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    threaded: bool,
+) -> None:
+    """Close cannot publish closed or clean a migration whose commit is unknowable."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "private-spool"
+    (
+        emitter,
+        writer,
+        batch,
+        proxy,
+        allow_reconciliation,
+        reconciliation_calls,
+        buffered,
+    ) = _retain_unresolved_bash_migration_owner(
+        tmp_path,
+        monkeypatch,
+        threaded=threaded,
+    )
+    before = emitter.journal_census()
+
+    with pytest.raises(RuntimeError, match="reconciliation unavailable"):
+        emitter.close()
+
+    assert reconciliation_calls == [2]
+    assert proxy.commit_calls == 2
+    assert emitter._close_state == "open"
+    assert emitter.journal_census() == before
+    assert tuple(writer._ordinary_buffer) == buffered
+    assert not writer._journal_mode
+    assert writer._ordinary_migration is not None
+    assert writer._ordinary_migration_reservation is not None
+    assert not _bash_path(root).exists()
+    if threaded:
+        assert emitter._thread_error is None
+        assert emitter._thread is not None and emitter._thread.is_alive()
+
+    batch.cancel()
+    allow_reconciliation[0] = True
+    emitter.close()
+
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    assert rendered.count("\nmigration owner first\n") == 1
+    assert rendered.count("\nmigration owner second\n") == 1
+    assert "migration owner exact" not in rendered
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+@pytest.mark.parametrize("reconciliation_path", ["ordinary", "flush", "close", "exact"])
+def test_bash_proved_absent_migration_rolls_back_atomically_for_later_operations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reconciliation_path: str,
+) -> None:
+    """An empty durable read restores legacy state before the caller may continue."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "private-spool"
+    (
+        emitter,
+        writer,
+        batch,
+        allow_reconciliation,
+        commit_calls,
+        reconciliation_calls,
+        buffered,
+        old_private_path,
+        _old_journal_path,
+    ) = _retain_unresolved_rolled_back_bash_migration(tmp_path, monkeypatch)
+    allow_reconciliation[0] = True
+    expected_commands = ["rolled back migration first", "rolled back migration second"]
+
+    if reconciliation_path == "ordinary":
+        emitter.emit_event(_bash_event("rolled back migration suffix", second=2))
+        expected_commands.append("rolled back migration suffix")
+        assert not writer._journal_mode
+        assert not writer.exact_route_active
+        assert writer._ordinary_migration is None
+        assert writer._ordinary_migration_reservation is None
+        assert writer._journal_directory is None
+    elif reconciliation_path == "flush":
+        emitter.flush()
+        emitter.emit_event(_bash_event("rolled back migration suffix", second=2))
+        expected_commands.append("rolled back migration suffix")
+        assert not writer.exact_route_active
+        assert writer._ordinary_migration is None
+        assert writer._ordinary_migration_reservation is None
+    elif reconciliation_path == "close":
+        batch.cancel()
+        emitter.close()
+        assert not old_private_path.exists()
+        assert list(spool_root.iterdir()) == []
+        _assert_bash_terminal_state(emitter)
+
+        emitter = BashHistoryEmitter(load_format("bash_history"), root)
+        later_batch = ExactPublicationAuthority(capacity=1).issue_batch()
+        later_batch.publish(
+            lambda: emitter.emit_event(_bash_event("rolled back migration later exact", second=4))
+        )
+        later_batch.release_no_fail()
+        emitter.close()
+        expected_commands.append("rolled back migration later exact")
+        rendered = _bash_path(root).read_text(encoding="utf-8")
+        positions = [rendered.index(f"\n{command}\n") for command in expected_commands]
+        assert positions == sorted(positions)
+        for command in expected_commands:
+            assert rendered.count(f"\n{command}\n") == 1
+        assert list(spool_root.iterdir()) == []
+        _assert_bash_terminal_state(emitter)
+        return
+    else:
+        batch.publish(
+            lambda: emitter.emit_event(_bash_event("rolled back migration exact", second=3))
+        )
+
+    assert reconciliation_calls == [2]
+    assert commit_calls[0] >= 1
+    assert not old_private_path.exists()
+    if reconciliation_path != "exact":
+        batch.publish(
+            lambda: emitter.emit_event(_bash_event("rolled back migration exact", second=3))
+        )
+    expected_commands.append("rolled back migration exact")
+    batch.release_no_fail()
+    emitter.close()
+
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    positions = [rendered.index(f"\n{command}\n") for command in expected_commands]
+    assert positions == sorted(positions)
+    for command in expected_commands:
+        assert rendered.count(f"\n{command}\n") == 1
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_proved_absent_migration_cleanup_lost_return_retains_retry_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lost unlink return keeps the absent owner until cleanup is reconciled."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "private-spool"
+    (
+        emitter,
+        writer,
+        batch,
+        allow_reconciliation,
+        _commit_calls,
+        reconciliation_calls,
+        buffered,
+        old_private_path,
+        old_journal_path,
+    ) = _retain_unresolved_rolled_back_bash_migration(tmp_path, monkeypatch)
+    original_unlink = writer._unlink_cleanup_journal
+    unlink_calls = 0
+
+    def unlink_then_raise(directory_descriptor: int, journal_name: str) -> None:
+        nonlocal unlink_calls
+        unlink_calls += 1
+        original_unlink(directory_descriptor, journal_name)
+        if unlink_calls == 1:
+            raise RuntimeError("absent migration cleanup returned late")
+
+    monkeypatch.setattr(writer, "_unlink_cleanup_journal", unlink_then_raise)
+    allow_reconciliation[0] = True
+    before = emitter.journal_census()
+    with pytest.raises(RuntimeError, match="cleanup returned late"):
+        emitter.emit_event(_bash_event("rolled back migration suffix", second=2))
+
+    assert unlink_calls == 1
+    assert reconciliation_calls == [2]
+    assert emitter.journal_census() == before
+    assert tuple(writer._ordinary_buffer) == buffered
+    assert writer._ordinary_migration is not None
+    assert writer._ordinary_migration_reservation is not None
+    assert writer._ordinary_migration_rollback_proved
+    assert writer.exact_route_active
+    assert not old_journal_path.exists()
+    assert old_private_path.exists()
+    assert not _bash_path(root).exists()
+
+    emitter.emit_event(_bash_event("rolled back migration suffix", second=2))
+    assert unlink_calls == 1
+    assert reconciliation_calls == [2]
+    assert not old_private_path.exists()
+    assert not writer.exact_route_active
+    assert writer._ordinary_migration is None
+    assert writer._ordinary_migration_reservation is None
+    batch.publish(lambda: emitter.emit_event(_bash_event("rolled back migration exact", second=3)))
+    batch.release_no_fail()
+    emitter.close()
+
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    commands = [
+        "rolled back migration first",
+        "rolled back migration second",
+        "rolled back migration suffix",
+        "rolled back migration exact",
+    ]
+    positions = [rendered.index(f"\n{command}\n") for command in commands]
+    assert positions == sorted(positions)
+    for command in commands:
+        assert rendered.count(f"\n{command}\n") == 1
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+@pytest.mark.parametrize("conflict_kind", ["row", "receipt"])
+def test_bash_proved_absent_migration_rejects_conflicting_durable_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    conflict_kind: str,
+) -> None:
+    """Any nonempty suffix or receipt keeps an unresolved migration fail closed."""
+
+    root = tmp_path / "root"
+    (
+        emitter,
+        writer,
+        batch,
+        allow_reconciliation,
+        _commit_calls,
+        reconciliation_calls,
+        buffered,
+        _old_private_path,
+        _old_journal_path,
+    ) = _retain_unresolved_rolled_back_bash_migration(tmp_path, monkeypatch)
+    connection = writer._connection
+    assert connection is not None
+    if conflict_kind == "row":
+        rendered_conflict = f"#{int(T0.timestamp())}\nforeign migration row"
+        connection.execute(
+            """INSERT INTO entries
+            (publication_key, publication_digest, epoch, rendered, payload_bytes)
+            VALUES (NULL, NULL, ?, ?, ?)""",
+            (int(T0.timestamp()), rendered_conflict, len(rendered_conflict.encode("utf-8"))),
+        )
+    else:
+        connection.execute(
+            """INSERT INTO publication_receipts
+            (publication_key, publication_digest, admission_active, exported)
+            VALUES (?, ?, 1, 0)""",
+            ("foreign:receipt:0", "foreign-digest"),
+        )
+    connection.commit()
+    allow_reconciliation[0] = True
+    before = emitter.journal_census()
+
+    with pytest.raises(ExactPublicationError, match="conflicting|durable transaction"):
+        emitter.emit_event(_bash_event("rejected migration suffix", second=2))
+
+    assert reconciliation_calls == [2]
+    assert emitter.journal_census() == before
+    assert tuple(writer._ordinary_buffer) == buffered
+    assert writer._ordinary_migration is not None
+    assert writer._ordinary_migration_reservation is not None
+    assert writer.exact_route_active
+    assert not _bash_path(root).exists()
+
+    connection.execute("DELETE FROM entries")
+    connection.execute("DELETE FROM publication_receipts")
+    connection.commit()
+    batch.cancel()
+    emitter.close()
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    assert rendered.count("\nrolled back migration first\n") == 1
+    assert rendered.count("\nrolled back migration second\n") == 1
+    assert "rejected migration suffix" not in rendered
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_export_charges_full_baseline_and_expected_before_temp_allocation(
+    tmp_path: Path,
+) -> None:
+    """A working-set cap failure leaves baseline, plan, and temporary namespace untouched."""
+
+    output = _bash_path(tmp_path)
+    output.parent.mkdir(parents=True)
+    baseline = b"baseline-history\n" * 128
+    output.write_bytes(baseline)
+    emitter = BashHistoryEmitter(
+        load_format("bash_history"),
+        tmp_path,
+        journal_route_capacity=1,
+        journal_row_capacity=32,
+        journal_byte_capacity=4096,
+    )
+    emitter.emit_event(_bash_event("pending append"))
+    _upgrade_pending_bash_ordinary_route(emitter)
+    with pytest.raises(ExactPublicationError, match="byte capacity"):
+        emitter.flush()
+
+    census = emitter.journal_census()
+    writer = next(iter(emitter._writers.values()))
+    assert output.read_bytes() == baseline
+    assert census.pending_operations == 1
+    assert census.high_water_bytes <= census.byte_capacity
+    assert writer._plan_rows == writer._plan_bytes == 0
+    assert list(output.parent.glob(".*.export-*.tmp")) == []
+
+    emitter._budget.byte_capacity = 64 * 1024
+    emitter.close()
+
+
+@pytest.mark.parametrize("mutation", ["append", "replace"])
+def test_bash_sealed_baseline_copy_is_bounded_under_concurrent_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    """A changed baseline cannot make export copy beyond its precharged snapshot."""
+
+    output = _bash_path(tmp_path)
+    output.parent.mkdir(parents=True)
+    baseline = b"sealed-baseline\n" * 32
+    output.write_bytes(baseline)
+    emitter = BashHistoryEmitter(
+        load_format("bash_history"),
+        tmp_path,
+        journal_route_capacity=1,
+        journal_row_capacity=32,
+        journal_byte_capacity=4096,
+    )
+    emitter.emit_event(_bash_event("pending after mutation"))
+    _upgrade_pending_bash_ordinary_route(emitter)
+    original_copy = bash_history_module._copy_descriptor
+    observed_temporary_sizes: list[int] = []
+    attacked = False
+    attack_bytes = b"attacker-growth\n" * 1024
+
+    def mutate_then_copy(
+        source: int,
+        destination: int,
+        digest: object,
+        *,
+        expected_size: int,
+        expected_digest: str,
+    ) -> int:
+        nonlocal attacked
+        if not attacked:
+            attacked = True
+            if mutation == "append":
+                with output.open("ab") as stream:
+                    stream.write(attack_bytes)
+            else:
+                replacement = output.with_name("replacement-history")
+                replacement.write_bytes(attack_bytes)
+                os.replace(replacement, output)
+        try:
+            return original_copy(
+                source,
+                destination,
+                digest,
+                expected_size=expected_size,
+                expected_digest=expected_digest,
+            )
+        finally:
+            observed_temporary_sizes.append(os.fstat(destination).st_size)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bash_history_module, "_copy_descriptor", mutate_then_copy)
+        with pytest.raises(ExactPublicationError, match="output"):
+            emitter.flush()
+
+    attacked_output = baseline + attack_bytes if mutation == "append" else attack_bytes
+    assert output.read_bytes() == attacked_output
+    assert observed_temporary_sizes and max(observed_temporary_sizes) <= len(baseline)
+    assert list(output.parent.glob(".*.export-*.tmp")) == []
+    writer = next(iter(emitter._writers.values()))
+    assert writer._plan_rows == writer._plan_bytes == 0
+    assert writer._pending_rows == 1
+    census = emitter.journal_census()
+    assert census.high_water_bytes <= census.byte_capacity
+
+    emitter._budget.byte_capacity = 128 * 1024
+    emitter.close()
+
+
+@pytest.mark.parametrize(
+    "route_case",
+    ["username-210", "username-boundary", "host-boundary"],
+)
+def test_bash_long_public_route_uses_bounded_private_names_and_publishes_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    route_case: str,
+) -> None:
+    """Valid public boundary names use fixed-size private route identifiers."""
+
+    name_max = int(os.pathconf(tmp_path, "PC_NAME_MAX"))
+    username = "alice"
+    host = "linux-01.example.test"
+    if route_case == "username-210":
+        username = "u" * 210
+    elif route_case == "username-boundary":
+        username = "u" * (name_max - len(os.fsencode(".bash_history")))
+    else:
+        host = "h" * name_max
+    event = _bash_event("long public route")
+    event["username"] = username
+    event["host_fqdn"] = host
+    output = tmp_path / host / "bash_history" / f"{username}.bash_history"
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.prepare(lambda: emitter.emit_event(event))
+    assert not output.parent.exists()
+    if route_case == "username-boundary":
+        assert len(os.fsencode(output.name)) == name_max
+    elif route_case == "host-boundary":
+        assert len(os.fsencode(host)) == name_max
+
+    batch.commit()
+    writer = next(iter(emitter._writers.values()))
+    journal_name = writer._journal_name
+    journal_path = writer._journal_path
+    assert journal_name is not None and journal_path is not None
+    assert stat.S_IMODE(journal_path.stat().st_mode) == 0o600
+    plans: list[object] = []
+    original_replace = writer._replace_output
+
+    def capture_plan(plan: object) -> None:
+        plans.append(plan)
+        original_replace(plan)
+
+    monkeypatch.setattr(writer, "_replace_output", capture_plan)
+    emitter.flush()
+    assert len(plans) == 1
+    plan = plans[0]
+    assert type(plan) is bash_history_module._ExportPlan
+    temporary_name = plan.temporary_name
+    route_stem = bash_history_module._private_route_stem(tmp_path, output)
+    assert journal_name.startswith(f".{route_stem}.journal-")
+    assert journal_name.endswith(".sqlite3")
+    assert temporary_name.startswith(f".{route_stem}.export-")
+    assert temporary_name.endswith(".tmp")
+
+    output_path_max = int(os.pathconf(output.parent, "PC_PATH_MAX"))
+    journal_name_max = int(os.pathconf(journal_path.parent, "PC_NAME_MAX"))
+    journal_path_max = int(os.pathconf(journal_path.parent, "PC_PATH_MAX"))
+    journal_names = (
+        journal_name,
+        *(f"{journal_name}{suffix}" for suffix in ("-journal", "-wal", "-shm")),
+    )
+    for private_name in journal_names:
+        assert Path(private_name).name == private_name
+        assert len(os.fsencode(private_name)) <= journal_name_max
+        private_path = journal_path.parent / private_name
+        assert not private_path.is_relative_to(tmp_path)
+        assert len(os.fsencode(private_path)) + 1 <= journal_path_max
+    assert Path(temporary_name).name == temporary_name
+    assert len(os.fsencode(temporary_name)) <= name_max
+    assert len(os.fsencode(output.parent / temporary_name)) + 1 <= output_path_max
+    assert len(os.fsencode(output)) + 1 <= output_path_max
+
+    batch.release_no_fail()
+    emitter.close()
+    rendered = output.read_text(encoding="utf-8")
+    assert rendered.count("long public route") == 1
+    assert emitter.event_count == 1
+    _assert_bash_terminal_state(emitter)
+
+
+@pytest.mark.parametrize("failure", ["username", "host", "path"])
+def test_bash_impossible_public_path_aborts_exact_prepare_neutrally(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    """An impossible public route fails before participant, reservation, or mutation."""
+
+    name_max = int(os.pathconf(tmp_path, "PC_NAME_MAX"))
+    event = _bash_event("must fail before admission")
+    if failure == "username":
+        suffix_bytes = len(os.fsencode(".bash_history"))
+        event["username"] = "u" * (name_max - suffix_bytes + 1)
+    elif failure == "host":
+        event["host_fqdn"] = "h" * (name_max + 1)
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    authority = ExactPublicationAuthority(capacity=1)
+    batch = authority.issue_batch()
+    if failure == "path":
+        output = _bash_path(tmp_path)
+        original_limits = bash_history_module._directory_path_limits
+
+        def impossible_path_limit(descriptor: int) -> tuple[int | None, int | None]:
+            current_name_max, _current_path_max = original_limits(descriptor)
+            return current_name_max, len(os.fsencode(output))
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                bash_history_module,
+                "_directory_path_limits",
+                impossible_path_limit,
+            )
+            with pytest.raises(ExactPublicationError, match="PATH_MAX"):
+                batch.prepare(lambda: emitter.emit_event(event))
+    else:
+        with pytest.raises(ExactPublicationError, match="NAME_MAX"):
+            batch.prepare(lambda: emitter.emit_event(event))
+
+    assert batch.state == "issued"
+    assert batch._participants == {}
+    assert batch._prepared_rows is None
+    authority_census = authority.census()
+    assert authority_census.prepared_batches == 0
+    assert authority_census.retained_rows == authority_census.retained_bytes == 0
+    assert emitter._active_exact_publication_keys == set()
+    assert emitter._exact_capacity_reservations == {}
+    assert emitter._provisional_routes == set()
+    assert emitter._writers == {}
+    census = emitter.journal_census()
+    assert census.routes == census.writers == 0
+    assert census.reserved_rows == census.reserved_bytes == 0
+    assert census.pending_operations == census.retained_rows == census.retained_bytes == 0
+    assert list(tmp_path.iterdir()) == []
+
+    valid = _bash_event("valid after rejected route")
+    batch.publish(lambda: emitter.emit_event(valid))
+    batch.release_no_fail()
+    emitter.close()
+    assert _bash_path(tmp_path).read_text(encoding="utf-8").count("valid after rejected route") == 1
+    assert authority.census().active_batches == 0
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_private_names_distinguish_long_routes_under_fixed_nonce(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Full route digests keep long neighboring routes distinct under nonce reuse."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    fixed_nonce = "e" * 32
+    first_user = "u" * 209 + "a"
+    second_user = "u" * 209 + "b"
+    first = _bash_event("first distinct route")
+    first["username"] = first_user
+    second = _bash_event("second distinct route", second=1)
+    second["username"] = second_user
+    monkeypatch.setattr(
+        bash_history_module.secrets,
+        "token_hex",
+        lambda size: fixed_nonce if size == 16 else pytest.fail("unexpected nonce size"),
+    )
+
+    def render() -> None:
+        emitter.emit_event(first)
+        emitter.emit_event(second)
+
+    batch.prepare(render)
+    batch.commit()
+    assert len(emitter._writers) == 2
+    journals = {writer._journal_name for writer in emitter._writers.values()}
+    assert None not in journals and len(journals) == 2
+    export_names: dict[tuple[str, str], str] = {}
+    for writer_key, writer in emitter._writers.items():
+        original_replace = writer._replace_output
+
+        def capture_plan(
+            plan: object,
+            *,
+            key: tuple[str, str] = writer_key,
+            replace: Callable[[object], None] = original_replace,
+        ) -> None:
+            assert type(plan) is bash_history_module._ExportPlan
+            export_names[key] = plan.temporary_name
+            replace(plan)
+
+        monkeypatch.setattr(writer, "_replace_output", capture_plan)
+
+    emitter.flush()
+    assert len(set(export_names.values())) == 2
+    for writer_key, writer in emitter._writers.items():
+        stem = bash_history_module._private_route_stem(tmp_path, writer.output_path)
+        assert writer._journal_name == f".{stem}.journal-{fixed_nonce}.sqlite3"
+        assert export_names[writer_key] == f".{stem}.export-{fixed_nonce}.tmp"
+
+    batch.release_no_fail()
+    emitter.close()
+    first_output = (
+        tmp_path / "linux-01.example.test" / "bash_history" / f"{first_user}.bash_history"
+    )
+    second_output = (
+        tmp_path / "linux-01.example.test" / "bash_history" / f"{second_user}.bash_history"
+    )
+    assert first_output.read_text(encoding="utf-8").count("first distinct route") == 1
+    assert second_output.read_text(encoding="utf-8").count("second distinct route") == 1
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_private_name_collisions_retry_without_following_links(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Private O_EXCL collisions skip attacker links without touching their target."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    output = _bash_path(tmp_path)
+    output.parent.mkdir(parents=True)
+    sentinel = tmp_path / "external-sentinel"
+    sentinel.write_bytes(b"do-not-touch")
+    stem = bash_history_module._private_route_stem(tmp_path, output)
+    journal_collision_nonce = "a" * 32
+    journal_retry_nonce = "b" * 32
+    export_collision_nonce = "c" * 32
+    export_retry_nonce = "d" * 32
+    export_collision = output.parent / f".{stem}.export-{export_collision_nonce}.tmp"
+    export_collision.symlink_to(sentinel)
+    journal_collisions: list[str] = []
+    original_create_private_file = bash_history_module._create_private_file
+
+    def create_with_journal_collision(
+        directory_descriptor: int,
+        prefix: str,
+        suffix: str,
+    ) -> tuple[int, str]:
+        if suffix == ".sqlite3" and not journal_collisions:
+            collision_name = f"{prefix}{journal_collision_nonce}{suffix}"
+            os.symlink(sentinel, collision_name, dir_fd=directory_descriptor)
+            journal_collisions.append(collision_name)
+        return original_create_private_file(directory_descriptor, prefix, suffix)
+
+    monkeypatch.setattr(
+        bash_history_module,
+        "_create_private_file",
+        create_with_journal_collision,
+    )
+    nonces = iter(
+        [
+            journal_collision_nonce,
+            journal_retry_nonce,
+            export_collision_nonce,
+            export_retry_nonce,
+        ]
+    )
+
+    def next_nonce(size: int) -> str:
+        assert size == 16
+        return next(nonces)
+
+    monkeypatch.setattr(bash_history_module.secrets, "token_hex", next_nonce)
+    batch.prepare(lambda: emitter.emit_event(_bash_event("collision safe")))
+    batch.commit()
+    writer = next(iter(emitter._writers.values()))
+    assert writer._journal_name == f".{stem}.journal-{journal_retry_nonce}.sqlite3"
+    journal_root = writer._journal_directory.path
+    assert journal_root is not None
+    journal_collision = journal_root / journal_collisions[0]
+    plans: list[object] = []
+    original_replace = writer._replace_output
+
+    def capture_plan(plan: object) -> None:
+        plans.append(plan)
+        original_replace(plan)
+
+    monkeypatch.setattr(writer, "_replace_output", capture_plan)
+    emitter.flush()
+    assert len(plans) == 1
+    plan = plans[0]
+    assert type(plan) is bash_history_module._ExportPlan
+    assert plan.temporary_name == f".{stem}.export-{export_retry_nonce}.tmp"
+    assert journal_collision.is_symlink()
+    assert export_collision.is_symlink()
+    assert sentinel.read_bytes() == b"do-not-touch"
+
+    batch.release_no_fail()
+    emitter.close()
+    assert output.read_text(encoding="utf-8").count("collision safe") == 1
+    assert sentinel.read_bytes() == b"do-not-touch"
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_private_route_names_are_python_hash_seed_independent() -> None:
+    """Private route identifiers depend only on framed route bytes and SHA-256."""
+
+    repository = Path(__file__).resolve().parents[2]
+    probe = """
+import json
+from pathlib import Path
+from evidenceforge.generation.emitters.bash_history import _private_file_prototypes
+base = Path('/deterministic/bash-root')
+output = base / 'linux-01.example.test' / 'bash_history' / ('u' * 210 + '.bash_history')
+print(json.dumps(_private_file_prototypes(base, output)))
+"""
+    results: list[str] = []
+    for seed in ("1", "8675309"):
+        environment = os.environ.copy()
+        environment["PYTHONHASHSEED"] = seed
+        environment["PYTHONPATH"] = os.fspath(repository / "src")
+        results.append(
+            subprocess.check_output(
+                [sys.executable, "-c", probe],
+                env=environment,
+                text=True,
+            ).strip()
+        )
+    assert results[0] == results[1]
+    private_names = json.loads(results[0])
+    assert len(private_names) == 5
+    assert private_names[0].startswith(".")
+    assert len(private_names[0].split(".")[1]) == 64
+
+
+def test_bash_public_census_is_scalar_and_terminal_route_is_reclaimed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Aggregate census never scans writers, and release reclaims empty SQLite state."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.publish(lambda: emitter.emit_event(_bash_event("terminal reclaim")))
+    emitter.flush()
+    writer = next(iter(emitter._writers.values()))
+    journal_path = writer._journal_path
+    assert journal_path is not None and journal_path.exists()
+    monkeypatch.setattr(
+        writer,
+        "census",
+        lambda: (_ for _ in ()).throw(AssertionError("writer scan")),
+    )
+    assert emitter.journal_census().writers == 1
+
+    batch.release_no_fail()
+    assert emitter._writers == {}
+    assert not journal_path.exists()
+    terminal = emitter.journal_census()
+    assert terminal.writers == terminal.routes == 0
+    assert terminal.retained_rows == terminal.retained_bytes == 0
+    assert emitter.event_count == 1
+    emitter.close()
+
+
+def test_bash_symlinked_route_ancestry_and_output_fail_before_mutation(
+    tmp_path: Path,
+) -> None:
+    """Neither an ancestor link nor a final-output link can redirect publication."""
+
+    root = tmp_path / "root"
+    root.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    (root / "linked.example.test").symlink_to(external, target_is_directory=True)
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    ancestry = _bash_event("ancestry")
+    ancestry["host_fqdn"] = "linked.example.test"
+    ancestry_batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with pytest.raises(ExactPublicationError, match="ancestry"):
+        ancestry_batch.prepare(lambda: emitter.emit_event(ancestry))
+    ancestry_batch.cancel()
+    assert list(external.iterdir()) == []
+    assert emitter.journal_census().retained_rows == 0
+    emitter.close()
+
+    output_root = tmp_path / "output-root"
+    output = _bash_path(output_root)
+    output.parent.mkdir(parents=True)
+    target = tmp_path / "target.txt"
+    target.write_text("do-not-touch", encoding="utf-8")
+    output.symlink_to(target)
+    output_emitter = BashHistoryEmitter(load_format("bash_history"), output_root)
+    output_batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with pytest.raises(ExactPublicationError, match="output"):
+        output_batch.prepare(lambda: output_emitter.emit_event(_bash_event("redirect")))
+    output_batch.cancel()
+    assert target.read_text(encoding="utf-8") == "do-not-touch"
+    assert output_emitter.journal_census().retained_rows == 0
+    output_emitter.close()
+
+
+def test_bash_symlinked_journal_fails_closed_without_touching_target(tmp_path: Path) -> None:
+    """A swapped journal pathname is rejected before SQLite or output mutation."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path / "root")
+    emitter.emit_event(_bash_event("pending"))
+    _upgrade_pending_bash_ordinary_route(emitter)
+    writer = next(iter(emitter._writers.values()))
+    journal_path = writer._journal_path
+    connection = writer._connection
+    assert journal_path is not None and connection is not None
+    target = tmp_path / "journal-target.txt"
+    target.write_text("do-not-touch", encoding="utf-8")
+    journal_path.unlink()
+    journal_path.symlink_to(target)
+    try:
+        with pytest.raises(ExactPublicationError, match="journal"):
+            emitter.flush()
+        assert target.read_text(encoding="utf-8") == "do-not-touch"
+        assert not _bash_path(tmp_path / "root").exists()
+    finally:
+        connection.close()
+        journal_path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("target_exists", [False, True], ids=["missing", "sentinel"])
+def test_bash_journal_swap_before_sqlite_connect_cannot_mutate_external_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_exists: bool,
+) -> None:
+    """SQLite opens an existing journal only and validates it before issuing SQL."""
+
+    root = tmp_path / "root"
+    external = tmp_path / "external-journal.sqlite3"
+    sentinel = b"external-sentinel-bytes"
+    if target_exists:
+        external.write_bytes(sentinel)
+    original_connect = bash_history_module._connect_existing_journal
+    swapped_paths: list[Path] = []
+
+    def swap_then_connect(journal_path: Path) -> object:
+        swapped_paths.append(journal_path)
+        journal_path.unlink()
+        journal_path.symlink_to(external)
+        return original_connect(journal_path)
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with monkeypatch.context() as patch:
+        patch.setattr(bash_history_module, "_connect_existing_journal", swap_then_connect)
+        with pytest.raises(ExactPublicationError, match="journal"):
+            batch.prepare(lambda: emitter.emit_event(_bash_event("must not escape")))
+    batch.cancel()
+
+    assert bool(external.exists()) is target_exists
+    if target_exists:
+        assert external.read_bytes() == sentinel
+    assert not _bash_path(root).exists()
+    assert emitter.journal_census().retained_rows == 0
+    assert swapped_paths
+    swapped_paths[0].unlink(missing_ok=True)
+    emitter.close()
+
+
+def test_bash_sqlite_companion_link_is_rejected_before_first_sql(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SQLite cannot follow a preinstalled rollback sidecar outside its private root."""
+
+    root = tmp_path / "root"
+    external = tmp_path / "external-sidecar"
+    sentinel = b"external-sidecar-sentinel"
+    external.write_bytes(sentinel)
+    original_connect = bash_history_module._connect_existing_journal
+    companion_paths: list[Path] = []
+
+    def connect_then_install_sidecar(journal_path: Path) -> sqlite3.Connection:
+        connection = original_connect(journal_path)
+        companion = Path(f"{journal_path}-journal")
+        companion.symlink_to(external)
+        companion_paths.append(companion)
+        return connection
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            bash_history_module,
+            "_connect_existing_journal",
+            connect_then_install_sidecar,
+        )
+        with pytest.raises(ExactPublicationError, match="journal companion"):
+            batch.prepare(lambda: emitter.emit_event(_bash_event("sidecar must not escape")))
+    batch.cancel()
+
+    assert external.read_bytes() == sentinel
+    assert not _bash_path(root).exists()
+    assert companion_paths and not companion_paths[0].exists()
+    assert emitter.journal_census().retained_rows == 0
+    emitter.close()
+
+
+def test_bash_live_rollback_sidecar_stays_private_and_mode_0600(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live SQLite rollback journal never escapes the protected route directory."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    original_connect = bash_history_module._connect_existing_journal
+    observed: list[tuple[Path, int]] = []
+
+    class ObservingConnection:
+        def __init__(self, connection: sqlite3.Connection, journal_path: Path) -> None:
+            self._connection = connection
+            self._journal_path = journal_path
+
+        def execute(
+            self,
+            sql: str,
+            parameters: tuple[object, ...] = (),
+        ) -> sqlite3.Cursor:
+            cursor = self._connection.execute(sql, parameters)
+            if "INSERT INTO entries" in sql:
+                companion = Path(f"{self._journal_path}-journal")
+                metadata = companion.stat(follow_symlinks=False)
+                observed.append((companion, stat.S_IMODE(metadata.st_mode)))
+            return cursor
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._connection, name)
+
+    def observing_connect(journal_path: Path) -> ObservingConnection:
+        return ObservingConnection(original_connect(journal_path), journal_path)
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    emitter.emit_event(_bash_event("observe rollback sidecar"))
+    with monkeypatch.context() as patch:
+        patch.setattr(bash_history_module, "_connect_existing_journal", observing_connect)
+        _upgrade_pending_bash_ordinary_route(emitter)
+
+    assert observed
+    companion, mode = observed[-1]
+    assert companion.parent.is_relative_to(spool_root)
+    assert not companion.is_relative_to(root)
+    assert mode == 0o600
+    writer = next(iter(emitter._writers.values()))
+    connection = writer._connection
+    assert connection is not None
+    assert connection.execute("PRAGMA temp_store").fetchone() == (2,)
+    plans = (
+        connection.execute(
+            """EXPLAIN QUERY PLAN SELECT rendered FROM entries
+            INDEXED BY entries_epoch_sequence
+            WHERE sequence <= ? ORDER BY epoch, sequence""",
+            (10,),
+        ),
+        connection.execute(
+            """EXPLAIN QUERY PLAN SELECT rendered FROM entries
+            INDEXED BY entries_epoch_sequence
+            WHERE sequence <= ? AND (epoch, sequence) > (?, ?)
+            ORDER BY epoch, sequence""",
+            (10, 0, 0),
+        ),
+    )
+    for plan in plans:
+        details = [str(row[3]).upper() for row in plan]
+        assert not any("USE TEMP B-TREE" in detail for detail in details)
+    emitter.close()
+
+    assert _bash_path(root).read_text(encoding="utf-8").count("observe rollback sidecar") == 1
+    assert not companion.exists()
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+@pytest.mark.parametrize("external_exists", [False, True], ids=["missing", "existing"])
+def test_bash_output_parent_swap_cannot_redirect_private_sqlite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    external_exists: bool,
+) -> None:
+    """A pinned old output dirfd cannot disagree with SQLite's journal pathname."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    output = _bash_path(root)
+    output.parent.mkdir(parents=True)
+    held_parent = output.parent.with_name("bash_history-held")
+    external_parent = tmp_path / "external-parent"
+    external_parent.mkdir()
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    original_connect = bash_history_module._connect_existing_journal
+    connect_entered = Event()
+    allow_connect = Event()
+    prepare_finished = Event()
+    private_paths: list[Path] = []
+    failures: list[BaseException] = []
+
+    def paused_connect(journal_path: Path) -> sqlite3.Connection:
+        private_paths.append(journal_path)
+        connect_entered.set()
+        assert allow_connect.wait(timeout=2)
+        return original_connect(journal_path)
+
+    def prepare() -> None:
+        try:
+            batch.prepare(lambda: emitter.emit_event(_bash_event("parent swap first")))
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            prepare_finished.set()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bash_history_module, "_connect_existing_journal", paused_connect)
+        prepare_thread = Thread(target=prepare)
+        prepare_thread.start()
+        assert connect_entered.wait(timeout=2)
+        assert len(private_paths) == 1
+        private_path = private_paths[0]
+        assert private_path.is_relative_to(spool_root)
+        assert not private_path.is_relative_to(root)
+        assert stat.S_IMODE(private_path.parent.stat().st_mode) == 0o700
+
+        output.parent.rename(held_parent)
+        output.parent.symlink_to(external_parent, target_is_directory=True)
+        external_database = external_parent / private_path.name
+        external_bytes: bytes | None = None
+        if external_exists:
+            with sqlite3.connect(external_database) as connection:
+                connection.execute("CREATE TABLE sentinel (value TEXT NOT NULL)")
+                connection.execute("INSERT INTO sentinel VALUES ('unchanged')")
+            external_bytes = external_database.read_bytes()
+        allow_connect.set()
+        assert prepare_finished.wait(timeout=2)
+        prepare_thread.join(timeout=2)
+
+    assert failures == []
+    batch.commit()
+    assert external_database.exists() is external_exists
+    if external_exists:
+        assert external_bytes is not None
+        assert external_database.read_bytes() == external_bytes
+        with sqlite3.connect(
+            f"{external_database.as_uri()}?mode=ro",
+            uri=True,
+        ) as connection:
+            tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+                )
+            }
+            assert tables == {"sentinel"}
+            assert connection.execute("SELECT value FROM sentinel").fetchone() == ("unchanged",)
+        assert list(external_parent.iterdir()) == [external_database]
+    else:
+        assert list(external_parent.iterdir()) == []
+
+    retained = emitter.journal_census()
+    with pytest.raises(ExactPublicationError, match="ancestry"):
+        emitter.flush()
+    assert emitter.journal_census() == retained
+    assert external_database.exists() is external_exists
+    if external_exists:
+        assert external_database.read_bytes() == external_bytes
+    assert not (external_parent / output.name).exists()
+
+    output.parent.unlink()
+    held_parent.rename(output.parent)
+    emitter.flush()
+    batch.release_no_fail()
+    _publish_exact(emitter, _bash_event("parent swap later epoch", second=1))
+    emitter.close()
+
+    rendered = output.read_text(encoding="utf-8")
+    assert rendered.count("parent swap first") == 1
+    assert rendered.count("parent swap later epoch") == 1
+    assert external_database.exists() is external_exists
+    if external_exists:
+        assert external_database.read_bytes() == external_bytes
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_private_spool_overlap_fails_closed_and_retries_disjoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SQLite never falls back beneath the attacker-controlled public output root."""
+
+    root = tmp_path / "root"
+    overlapping_spool = root / "private-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(overlapping_spool))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with pytest.raises(ExactPublicationError, match="outside its public output root"):
+        batch.prepare(lambda: emitter.emit_event(_bash_event("overlap rejected")))
+    assert not root.exists()
+    assert not overlapping_spool.exists()
+    assert emitter._writers == {}
+
+    trusted_spool = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(trusted_spool))
+    batch.publish(lambda: emitter.emit_event(_bash_event("overlap rejected")))
+    emitter.flush()
+    batch.release_no_fail()
+    emitter.close()
+
+    assert _bash_path(root).read_text(encoding="utf-8").count("overlap rejected") == 1
+    assert list(trusted_spool.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+@pytest.mark.parametrize("layout", ["equal", "symlink-under-output"])
+def test_bash_private_spool_resolved_overlap_is_rejected_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    layout: str,
+) -> None:
+    """Configured private storage cannot equal or resolve beneath the public root."""
+
+    root = tmp_path / "root"
+    if layout == "equal":
+        configured_spool = root
+        forbidden_target = root
+    else:
+        root.mkdir()
+        forbidden_target = root / "private-spool"
+        configured_spool = tmp_path / "configured-spool-link"
+        configured_spool.symlink_to(forbidden_target, target_is_directory=True)
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(configured_spool))
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with pytest.raises(ExactPublicationError, match="outside its public output root"):
+        batch.prepare(lambda: emitter.emit_event(_bash_event("resolved overlap rejected")))
+
+    assert not forbidden_target.exists() or forbidden_target == root
+    assert not (root / "private-spool").exists()
+    assert emitter._writers == {}
+    assert emitter.journal_census().pending_operations == 0
+
+    trusted_spool = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(trusted_spool))
+    batch.publish(lambda: emitter.emit_event(_bash_event("resolved overlap rejected")))
+    batch.release_no_fail()
+    emitter.close()
+
+    assert _bash_path(root).read_text(encoding="utf-8").count("resolved overlap rejected") == 1
+    assert list(trusted_spool.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_private_spool_rejects_nonsticky_writable_ancestry_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A group/other-writable nonsticky ancestor is never trusted for SQLite."""
+
+    unsafe_parent = tmp_path / "unsafe-parent"
+    unsafe_parent.mkdir(mode=0o700)
+    unsafe_parent.chmod(0o777)
+    configured_spool = unsafe_parent / "spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(configured_spool))
+    root = tmp_path / "root"
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with pytest.raises(ExactPublicationError, match="externally writable"):
+        batch.prepare(lambda: emitter.emit_event(_bash_event("unsafe ancestry retry")))
+    assert not configured_spool.exists()
+    assert emitter._writers == {}
+
+    unsafe_parent.chmod(0o700)
+    batch.publish(lambda: emitter.emit_event(_bash_event("unsafe ancestry retry")))
+    batch.release_no_fail()
+    emitter.close()
+
+    assert _bash_path(root).read_text(encoding="utf-8").count("unsafe ancestry retry") == 1
+    assert list(configured_spool.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_private_spool_accepts_sticky_shared_ancestry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A root/euid-owned sticky shared ancestor retains normal POSIX temp semantics."""
+
+    sticky_parent = tmp_path / "sticky-parent"
+    sticky_parent.mkdir(mode=0o700)
+    sticky_parent.chmod(0o1777)
+    monkeypatch.delenv("EFORGE_SPOOL_DIR", raising=False)
+    monkeypatch.setattr(
+        bash_history_module.tempfile,
+        "gettempdir",
+        lambda: os.fspath(sticky_parent),
+    )
+    root = tmp_path / "root"
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+
+    _publish_exact(emitter, _bash_event("sticky ancestry accepted"))
+    writer = next(iter(emitter._writers.values()))
+    private_path = writer._journal_directory.path
+    journal_path = writer._journal_path
+    assert private_path is not None and private_path.parent == sticky_parent
+    assert journal_path is not None
+    assert stat.S_IMODE(private_path.stat().st_mode) == 0o700
+    assert stat.S_IMODE(journal_path.stat().st_mode) == 0o600
+    emitter.close()
+
+    assert _bash_path(root).read_text(encoding="utf-8").count("sticky ancestry accepted") == 1
+    assert list(sticky_parent.iterdir()) == []
+    sticky_parent.chmod(0o700)
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_exact_upgrade_rechecks_private_leaf_owner_mode_before_sql(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lazily allocated exact journal must reject a changed private leaf mode."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    emitter.emit_event(_bash_event("ordinary before strict upgrade"))
+    original_finish = bash_history_module._PrivateJournalDirectory._finish_initialization
+    tampered_paths: list[Path] = []
+
+    def finish_then_tamper(
+        journal_directory: bash_history_module._PrivateJournalDirectory,
+    ) -> None:
+        original_finish(journal_directory)
+        private_path = journal_directory.path
+        assert private_path is not None
+        if not tampered_paths:
+            private_path.chmod(0o755)
+            tampered_paths.append(private_path)
+
+    monkeypatch.setattr(
+        bash_history_module._PrivateJournalDirectory,
+        "_finish_initialization",
+        finish_then_tamper,
+    )
+
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    with pytest.raises(ExactPublicationError, match="mode 0700"):
+        batch.prepare(lambda: emitter.emit_event(_bash_event("exact strict retry", second=1)))
+    writer = next(iter(emitter._writers.values()))
+    assert writer._journal_directory is not None
+    private_path = writer._journal_directory.path
+    assert private_path is not None and tampered_paths == [private_path]
+    failed = emitter.journal_census()
+    assert failed.pending_operations == 0
+    assert failed.admission_receipts == 0
+
+    private_path.chmod(0o700)
+    batch.publish(lambda: emitter.emit_event(_bash_event("exact strict retry", second=1)))
+    batch.release_no_fail()
+    emitter.close()
+
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    assert rendered.count("ordinary before strict upgrade") == 1
+    assert rendered.count("exact strict retry") == 1
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_strict_private_spool_rechecks_writable_ancestry_each_exact_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trusted spool that becomes nonsticky writable blocks later exact SQL."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    _publish_exact(emitter, _bash_event("strict first epoch"))
+    spool_root.chmod(0o777)
+
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    before = emitter.journal_census()
+    with pytest.raises(ExactPublicationError, match="externally writable"):
+        batch.prepare(lambda: emitter.emit_event(_bash_event("strict later epoch", second=1)))
+    failed = emitter.journal_census()
+    assert failed.pending_operations == before.pending_operations == 1
+    assert failed.admission_receipts == 0
+
+    spool_root.chmod(0o755)
+    batch.publish(lambda: emitter.emit_event(_bash_event("strict later epoch", second=1)))
+    batch.release_no_fail()
+    emitter.close()
+
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    assert rendered.count("strict first epoch") == 1
+    assert rendered.count("strict later epoch") == 1
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["dirfd", "stat-nofollow", "nofollow", "euid", "listdir-fd", "directory-fsync"],
+)
+def test_bash_exact_journal_capability_gate_is_fail_closed_but_ordinary_compatible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing: str,
+) -> None:
+    """Exact admission requires POSIX safety while ordinary rows retain compatibility."""
+
+    root = tmp_path / "root"
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    authority = ExactPublicationAuthority(capacity=1)
+    batch = authority.issue_batch()
+
+    with monkeypatch.context() as patch:
+        if missing == "dirfd":
+            patch.setattr(
+                bash_history_module.os,
+                "supports_dir_fd",
+                frozenset(
+                    operation for operation in os.supports_dir_fd if operation is not os.open
+                ),
+            )
+        elif missing == "stat-nofollow":
+            patch.setattr(
+                bash_history_module.os,
+                "supports_follow_symlinks",
+                frozenset(
+                    operation
+                    for operation in os.supports_follow_symlinks
+                    if operation is not os.stat
+                ),
+            )
+        elif missing == "nofollow":
+            patch.setattr(bash_history_module, "_NOFOLLOW", 0)
+        elif missing == "euid":
+            patch.setattr(bash_history_module, "_effective_user_id", lambda: None)
+        elif missing == "listdir-fd":
+
+            def unsupported_descriptor_listing(_descriptor: int) -> None:
+                raise TypeError("listdir(fd) is unsupported")
+
+            patch.setattr(
+                bash_history_module,
+                "_verify_descriptor_listing",
+                unsupported_descriptor_listing,
+            )
+        else:
+
+            def unsupported_directory_fsync(_descriptor: int) -> None:
+                raise OSError("directory fsync is unsupported")
+
+            patch.setattr(
+                bash_history_module,
+                "_verify_directory_fsync",
+                unsupported_directory_fsync,
+            )
+
+        with pytest.raises(ExactPublicationError, match="requires"):
+            batch.prepare(lambda: emitter.emit_event(_bash_event("unsafe exact")))
+        emitter.emit_event(_bash_event("ordinary remains compatible"))
+
+    assert batch.state == "issued"
+    assert batch._participants == {}
+    assert emitter._active_exact_publication_keys == set()
+    assert emitter._exact_capacity_reservations == {}
+    batch.publish(lambda: emitter.emit_event(_bash_event("safe exact retry", second=1)))
+    batch.release_no_fail()
+    emitter.close()
+
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    assert rendered.count("ordinary remains compatible") == 1
+    assert rendered.count("safe exact retry") == 1
+    assert authority.census().active_batches == 0
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_runtime_dirfd_failure_leaves_ordinary_path_fully_legacy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Actual unsupported descriptor operations affect exact publication only."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "private-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    authority = ExactPublicationAuthority(capacity=1)
+    batch = authority.issue_batch()
+    original_open = os.open
+    original_stat = os.stat
+    original_listdir = os.listdir
+
+    def guarded_open(
+        path: object,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if dir_fd is not None:
+            raise NotImplementedError("openat is unavailable")
+        return original_open(path, flags, mode)  # type: ignore[arg-type]
+
+    def guarded_stat(
+        path: object,
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        if dir_fd is not None or not follow_symlinks:
+            raise NotImplementedError("statat is unavailable")
+        return original_stat(path)  # type: ignore[arg-type]
+
+    def guarded_listdir(path: object = ".") -> list[str]:
+        if type(path) is int:
+            raise NotImplementedError("listdir(fd) is unavailable")
+        return original_listdir(path)  # type: ignore[arg-type]
+
+    def guarded_fsync(_descriptor: int) -> None:
+        raise NotImplementedError("directory fsync is unavailable")
+
+    def forbidden_private_directory(*_args: object, **_kwargs: object) -> object:
+        pytest.fail("ordinary or capability-negative admission allocated a private directory")
+
+    def forbidden_sqlite_connect(_journal_path: Path) -> sqlite3.Connection:
+        pytest.fail("ordinary or capability-negative admission opened SQLite")
+
+    supported_dir_fd = frozenset(
+        guarded_open
+        if operation is original_open
+        else guarded_stat
+        if operation is original_stat
+        else operation
+        for operation in os.supports_dir_fd
+    )
+    supported_follow_symlinks = frozenset(
+        guarded_stat if operation is original_stat else operation
+        for operation in os.supports_follow_symlinks
+    )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bash_history_module.os, "open", guarded_open)
+        patch.setattr(bash_history_module.os, "stat", guarded_stat)
+        patch.setattr(bash_history_module.os, "listdir", guarded_listdir)
+        patch.setattr(bash_history_module.os, "fsync", guarded_fsync)
+        patch.setattr(
+            bash_history_module,
+            "_PrivateJournalDirectory",
+            forbidden_private_directory,
+        )
+        patch.setattr(
+            bash_history_module,
+            "_connect_existing_journal",
+            forbidden_sqlite_connect,
+        )
+        patch.setattr(bash_history_module.os, "supports_dir_fd", supported_dir_fd)
+        patch.setattr(
+            bash_history_module.os,
+            "supports_follow_symlinks",
+            supported_follow_symlinks,
+        )
+
+        emitter.emit_event(_bash_event("ordinary before unsupported exact"))
+        ordinary_writer = next(iter(emitter._writers.values()))
+        assert ordinary_writer._journal_directory is None
+        assert ordinary_writer._connection is None
+        assert not ordinary_writer._journal_mode
+        emitter.flush()
+        first_bytes = _bash_path(root).read_bytes()
+        assert first_bytes.count(b"ordinary before unsupported exact") == 1
+        assert not spool_root.exists()
+        assert emitter._writers == {}
+        assert emitter.journal_census().writers == emitter.journal_census().routes == 0
+
+        with pytest.raises(ExactPublicationError, match="requires"):
+            batch.prepare(lambda: emitter.emit_event(_bash_event("unsupported exact", second=1)))
+        assert batch.state == "issued"
+        assert batch._participants == {}
+        assert emitter._active_exact_publication_keys == set()
+        assert emitter._exact_capacity_reservations == {}
+        assert emitter._provisional_routes == set()
+        assert emitter._writers == {}
+        assert not spool_root.exists()
+
+        emitter.emit_event(_bash_event("ordinary after unsupported exact", second=2))
+        emitter.close()
+
+    batch.cancel()
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    assert rendered.count("ordinary before unsupported exact") == 1
+    assert rendered.count("ordinary after unsupported exact") == 1
+    assert "\nunsupported exact\n" not in rendered
+    assert not spool_root.exists()
+    assert emitter.event_count == 2
+    assert authority.census().active_batches == 0
+    _assert_bash_terminal_state(emitter)
+
+
+@pytest.mark.parametrize("exact", [False, True])
+def test_bash_absent_clear_only_never_creates_output(tmp_path: Path, exact: bool) -> None:
+    """Legacy clear-only behavior preserves an absent history file as absent."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    if exact:
+        _publish_exact(emitter, _bash_event("history -c"))
+    else:
+        emitter.emit_event(_bash_event("history -c"))
+    emitter.flush()
+    assert not _bash_path(tmp_path).exists()
+    assert emitter._writers == {}
+    emitter.close()
+    assert not _bash_path(tmp_path).exists()
+
+
+@pytest.mark.parametrize("operation", ["unlink", "fsync"])
+def test_bash_cleanup_lost_return_is_retryable_and_not_prematurely_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    """Unlink plus directory-fsync must complete before terminal writer publication."""
+
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.publish(lambda: emitter.emit_event(_bash_event("cleanup retry")))
+    emitter.flush()
+    writer = next(iter(emitter._writers.values()))
+    journal_path = writer._journal_path
+    assert journal_path is not None and journal_path.exists()
+    fail_once = True
+
+    if operation == "fsync":
+        original_fsync = writer._fsync_cleanup_directory
+
+        def fsync_then_raise(directory_descriptor: int) -> None:
+            nonlocal fail_once
+            original_fsync(directory_descriptor)
+            if fail_once:
+                fail_once = False
+                raise RuntimeError("cleanup fsync returned late")
+
+        monkeypatch.setattr(writer, "_fsync_cleanup_directory", fsync_then_raise)
+    else:
+        original_unlink = writer._unlink_cleanup_journal
+
+        def unlink_then_raise(directory_descriptor: int, journal_name: str) -> None:
+            nonlocal fail_once
+            original_unlink(directory_descriptor, journal_name)
+            if fail_once:
+                fail_once = False
+                raise RuntimeError("cleanup unlink returned late")
+
+        monkeypatch.setattr(writer, "_unlink_cleanup_journal", unlink_then_raise)
+    with pytest.raises(RuntimeError, match="returned late"):
+        batch.release_no_fail()
+    assert not writer._closed
+    assert not writer._terminal
+    assert not journal_path.exists()
+
+    batch.release_no_fail()
+    assert writer._closed and writer._terminal
+    assert emitter._writers == {}
+    assert emitter.journal_census().retained_rows == 0
+    emitter.close()
+
+
+@pytest.mark.parametrize("operation", ["rmdir", "parent-fsync"])
+def test_bash_private_spool_cleanup_lost_return_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    """Private-root removal and its parent fsync remain owned until retry."""
+
+    spool_root = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path / "root")
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.publish(lambda: emitter.emit_event(_bash_event("private cleanup retry")))
+    emitter.flush()
+    writer = next(iter(emitter._writers.values()))
+    journal_directory = writer._journal_directory
+    private_path = journal_directory.path
+    assert private_path is not None and private_path.exists()
+    fail_once = True
+
+    if operation == "rmdir":
+        original_remove = journal_directory._remove_directory
+
+        def remove_then_raise(
+            parent_descriptor: int,
+            directory_name: str,
+            path: Path,
+        ) -> None:
+            nonlocal fail_once
+            original_remove(parent_descriptor, directory_name, path)
+            if fail_once:
+                fail_once = False
+                raise RuntimeError("private rmdir returned late")
+
+        monkeypatch.setattr(journal_directory, "_remove_directory", remove_then_raise)
+    else:
+        original_fsync = journal_directory._fsync_parent
+
+        def fsync_then_raise(parent_descriptor: int) -> None:
+            nonlocal fail_once
+            original_fsync(parent_descriptor)
+            if fail_once:
+                fail_once = False
+                raise RuntimeError("private parent fsync returned late")
+
+        monkeypatch.setattr(journal_directory, "_fsync_parent", fsync_then_raise)
+
+    with pytest.raises(RuntimeError, match="returned late"):
+        batch.release_no_fail()
+    assert not private_path.exists()
+    assert not writer._terminal
+    assert writer in emitter._writers.values()
+
+    batch.release_no_fail()
+    assert writer._terminal
+    assert emitter._writers == {}
+    assert list(spool_root.iterdir()) == []
+    emitter.close()
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_private_spool_initialization_lost_return_keeps_retry_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A post-mkdtemp failure remains owned by the writer until exact retry."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    emitter.emit_event(_bash_event("private init ordinary owner"))
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    original_fsync = bash_history_module._PrivateJournalDirectory._fsync_parent
+    fsync_calls = 0
+    fail_once = True
+
+    def fsync_then_raise(
+        journal_directory: object,
+        parent_descriptor: int,
+    ) -> None:
+        nonlocal fail_once, fsync_calls
+        fsync_calls += 1
+        original_fsync(journal_directory, parent_descriptor)
+        if fail_once:
+            fail_once = False
+            raise RuntimeError("private initialization fsync returned late")
+
+    monkeypatch.setattr(
+        bash_history_module._PrivateJournalDirectory,
+        "_fsync_parent",
+        fsync_then_raise,
+    )
+
+    with pytest.raises(RuntimeError, match="returned late"):
+        batch.prepare(lambda: emitter.emit_event(_bash_event("private init retry", second=1)))
+    writer = next(iter(emitter._writers.values()))
+    private_path = writer._journal_directory.path
+    assert private_path is not None and private_path.exists()
+    assert writer._journal_path is None
+    assert not writer._terminal
+    failed = emitter.journal_census()
+    assert failed.pending_operations == failed.admission_receipts == 0
+    assert failed.writers == failed.routes == 1
+    assert fsync_calls == 1
+
+    batch.publish(lambda: emitter.emit_event(_bash_event("private init retry", second=1)))
+    emitter.flush()
+    batch.release_no_fail()
+    emitter.close()
+
+    assert fsync_calls >= 2
+    rendered = _bash_path(root).read_text(encoding="utf-8")
+    assert rendered.count("private init ordinary owner") == 1
+    assert rendered.count("private init retry") == 1
+    assert not private_path.exists()
+    assert list(spool_root.iterdir()) == []
+    _assert_bash_terminal_state(emitter)
+
+
+@pytest.mark.parametrize("suffix", ["-journal", "-wal", "-shm"])
+def test_bash_residual_sqlite_components_reconcile_unlink_lost_return(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    suffix: str,
+) -> None:
+    """Every owned SQLite companion stays private and cleanup survives a lost return."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.publish(lambda: emitter.emit_event(_bash_event("residual sidecar cleanup")))
+    emitter.flush()
+    writer = next(iter(emitter._writers.values()))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(emitter, "_try_reclaim_writer", lambda *_args: None)
+        batch.release_no_fail()
+
+    connection = writer._connection
+    journal_path = writer._journal_path
+    journal_name = writer._journal_name
+    assert connection is not None and journal_path is not None and journal_name is not None
+    connection.close()
+    writer._connection = None
+    companions = [Path(f"{journal_path}{candidate}") for candidate in ("-journal", "-wal", "-shm")]
+    for companion in companions:
+        companion.write_bytes(f"owned {companion.suffix}".encode())
+
+    journal_directory = writer._journal_directory
+    private_path = journal_directory.path
+    assert private_path is not None
+    original_close = journal_directory.close
+    original_unlink = journal_directory._unlink_retained_component
+    original_parent_fsync = journal_directory._fsync_parent
+    close_calls = 0
+    target_unlink_calls = 0
+    parent_fsync_calls = 0
+    fail_once = True
+
+    def counted_close() -> None:
+        nonlocal close_calls
+        close_calls += 1
+        original_close()
+
+    def unlink_then_raise(directory_descriptor: int, name: str) -> None:
+        nonlocal fail_once, target_unlink_calls
+        original_unlink(directory_descriptor, name)
+        if name == f"{journal_name}{suffix}":
+            target_unlink_calls += 1
+            if fail_once:
+                fail_once = False
+                raise RuntimeError("residual sidecar unlink returned late")
+
+    def counted_parent_fsync(parent_descriptor: int) -> None:
+        nonlocal parent_fsync_calls
+        parent_fsync_calls += 1
+        original_parent_fsync(parent_descriptor)
+
+    monkeypatch.setattr(journal_directory, "close", counted_close)
+    monkeypatch.setattr(journal_directory, "_unlink_retained_component", unlink_then_raise)
+    monkeypatch.setattr(journal_directory, "_fsync_parent", counted_parent_fsync)
+
+    with pytest.raises(RuntimeError, match="returned late"):
+        emitter._try_reclaim_writer(("alice", "linux-01.example.test"), writer)
+    assert private_path.exists()
+    assert target_unlink_calls == 1
+    assert not Path(f"{journal_path}{suffix}").exists()
+    assert not writer._terminal
+
+    emitter._try_reclaim_writer(("alice", "linux-01.example.test"), writer)
+    assert close_calls >= 2
+    assert target_unlink_calls == 1
+    assert parent_fsync_calls >= 1
+    assert writer._terminal
+    assert emitter._writers == {}
+    assert not private_path.exists()
+    assert list(spool_root.iterdir()) == []
+    emitter.close()
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_private_cleanup_retains_unowned_file_until_explicit_removal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Terminal cleanup never guesses that an unrelated private-root file is owned."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.publish(lambda: emitter.emit_event(_bash_event("unowned cleanup guard")))
+    emitter.flush()
+    writer = next(iter(emitter._writers.values()))
+    with monkeypatch.context() as patch:
+        patch.setattr(emitter, "_try_reclaim_writer", lambda *_args: None)
+        batch.release_no_fail()
+
+    private_path = writer._journal_directory.path
+    assert private_path is not None
+    intruder = private_path / "not-owned-by-this-route"
+    sentinel = b"unowned-private-root-sentinel"
+    intruder.write_bytes(sentinel)
+
+    with pytest.raises(ExactPublicationError, match="unowned file"):
+        emitter._try_reclaim_writer(("alice", "linux-01.example.test"), writer)
+    assert intruder.read_bytes() == sentinel
+    assert private_path.exists()
+    assert not writer._terminal
+
+    intruder.unlink()
+    emitter._try_reclaim_writer(("alice", "linux-01.example.test"), writer)
+    assert writer._terminal
+    assert emitter._writers == {}
+    assert list(spool_root.iterdir()) == []
+    emitter.close()
+    _assert_bash_terminal_state(emitter)
+
+
+def test_bash_private_cleanup_unlinks_owned_symlink_without_touching_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An owned-looking residual link is removed without following its target."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.publish(lambda: emitter.emit_event(_bash_event("owned link cleanup")))
+    emitter.flush()
+    writer = next(iter(emitter._writers.values()))
+    with monkeypatch.context() as patch:
+        patch.setattr(emitter, "_try_reclaim_writer", lambda *_args: None)
+        batch.release_no_fail()
+
+    journal_directory = writer._journal_directory
+    private_path = journal_directory.path
+    assert private_path is not None
+    target = tmp_path / "external-sidecar-target"
+    sentinel = b"external-sidecar-target-sentinel"
+    target.write_bytes(sentinel)
+    link_name = f"{journal_directory._journal_prefix}{'a' * 32}.sqlite3-wal"
+    retained_link = private_path / link_name
+    retained_link.symlink_to(target)
+
+    emitter._try_reclaim_writer(("alice", "linux-01.example.test"), writer)
+
+    assert target.read_bytes() == sentinel
+    assert not retained_link.exists()
+    assert writer._terminal
+    assert emitter._writers == {}
+    assert list(spool_root.iterdir()) == []
+    emitter.close()
+    _assert_bash_terminal_state(emitter)
 
 
 def test_snort_exact_candidate_freezes_final_native_line_before_close(
@@ -3141,6 +6614,60 @@ def test_snort_dirfd_export_does_not_mutate_swapped_output_parent(
     emitter.close()
     assert output.read_text(encoding="utf-8").count("dirfd anchored") == 1
     assert emitter.journal_census().retained_rows == 0
+
+
+def test_bash_close_before_release_retains_private_receipt_until_callback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Physical close retains the Bash route until the core releases its receipt."""
+
+    root = tmp_path / "root"
+    spool_root = tmp_path / "trusted-spool"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", os.fspath(spool_root))
+    emitter = BashHistoryEmitter(load_format("bash_history"), root)
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.publish(lambda: emitter.emit_event(_bash_event("unreleased bash exact")))
+    writer = next(iter(emitter._writers.values()))
+    journal_path = writer._journal_path
+    private_path = writer._journal_directory.path
+    assert journal_path is not None and private_path is not None
+
+    emitter.close()
+
+    retained = emitter.journal_census()
+    assert emitter._close_state == "closed"
+    assert retained.pending_operations == 0
+    assert retained.admission_receipts == 1
+    assert retained.export_receipts == 1
+    assert writer._close_requested and not writer._terminal
+    assert writer in emitter._writers.values()
+    assert journal_path.exists() and private_path.exists()
+    assert _bash_path(root).read_text(encoding="utf-8").count("unreleased bash exact") == 1
+
+    batch.release_no_fail()
+
+    assert writer._terminal
+    assert emitter._writers == {}
+    assert not journal_path.exists()
+    assert not private_path.exists()
+    assert list(spool_root.iterdir()) == []
+    emitter.close()
+    _assert_bash_terminal_state(emitter)
+
+
+def _assert_bash_terminal_state(emitter: BashHistoryEmitter) -> None:
+    assert emitter._close_state == "closed"
+    assert emitter._active_exact_publication_keys == set()
+    assert emitter._queue_admissions == 0
+    census = emitter.journal_census()
+    assert census.pending_operations == 0
+    assert census.reserved_rows == 0
+    assert census.retained_rows == census.retained_bytes == 0
+    if emitter._event_queue is not None:
+        assert emitter._event_queue.unfinished_tasks == 0
+    if emitter._thread is not None:
+        assert not emitter._thread.is_alive()
 
 
 def _capture_failure(

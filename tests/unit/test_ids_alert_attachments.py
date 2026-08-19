@@ -1075,7 +1075,9 @@ def test_snort_sensor_filter_counters_are_independent(tmp_path) -> None:
         assert summary["policy_filtered"] == 1
 
 
-def test_snort_spool_is_removed_when_final_rendering_fails(tmp_path, monkeypatch) -> None:
+def test_snort_spool_is_retained_until_failed_final_rendering_retries(
+    tmp_path, monkeypatch
+) -> None:
     emitter = SnortEmitter(
         format_def=load_format("snort_alert"),
         output_path=tmp_path / "snort.log",
@@ -1096,13 +1098,20 @@ def test_snort_spool_is_removed_when_final_rendering_fails(tmp_path, monkeypatch
     spool_path = emitter._spool_path
     assert spool_path is not None and spool_path.exists()
 
+    original_renderer = emitter._render_alert
+
     def fail_render(_event_data):
         raise RuntimeError("render failed")
 
     monkeypatch.setattr(emitter, "_render_alert", fail_render)
     with pytest.raises(RuntimeError, match="render failed"):
         emitter.close()
+    assert spool_path.exists()
+
+    monkeypatch.setattr(emitter, "_render_alert", original_renderer)
+    emitter.close()
     assert not spool_path.exists()
+    assert "test" in (tmp_path / "snort.log").read_text()
 
 
 def test_no_ids_sensor_creates_no_candidate_totals_or_output(tmp_path) -> None:
