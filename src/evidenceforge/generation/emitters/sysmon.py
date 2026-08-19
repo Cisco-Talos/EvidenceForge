@@ -28,11 +28,22 @@ and writes to per-host FQDN directories as windows_event_sysmon.xml.
 """
 
 import hashlib
+import json
+import logging
+import os
 import random
+import secrets
+import sqlite3
+import stat
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from queue import Empty
-from threading import Lock, local
+from queue import Empty, Full
+from threading import Lock, get_ident, local
 from typing import Any
 
 from evidenceforge.config.sysmon_filters import load_sysmon_filters
@@ -40,7 +51,7 @@ from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.formats.format_def import FormatDefinition
-from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.generation.emitters.base import ExactPublicationError, LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.generation.emitters.syslog_family import (
     make_syslog_family_route_key,
@@ -49,6 +60,7 @@ from evidenceforge.generation.emitters.syslog_family import (
 )
 from evidenceforge.generation.emitters.windows import (
     _normalize_windows_time_created,
+    _require_windows_source_finalization_capabilities,
     _subject_domain,
 )
 from evidenceforge.generation.emitters.windows_event import (
@@ -63,6 +75,12 @@ from evidenceforge.generation.emitters.windows_record_ids import (
 from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SYSMON_SNARE_FILENAME,
     render_windows_sysmon_snare_syslog,
+)
+from evidenceforge.generation.source_finalization import (
+    ExactChunkPublisher,
+    ExactSourceRow,
+    SourceFinalizationEpoch,
+    SourceFinalizationError,
 )
 from evidenceforge.generation.source_timing import (
     compatibility_endpoint_event_times,
@@ -130,6 +148,136 @@ _PROCESS_GUID_FIELDS: tuple[str, ...] = (
     "TargetProcessGUID",
 )
 _FROZEN_TIMING_MARKER = object()
+logger = logging.getLogger(__name__)
+
+_DEFAULT_FINALIZATION_ROW_CAPACITY = 2_000_000
+_DEFAULT_FINALIZATION_BYTE_CAPACITY = 2 * 1024 * 1024 * 1024
+_DEFAULT_FINALIZATION_ROUTE_CAPACITY = 100_000
+_FINALIZATION_CHUNK_ROWS = 512
+_FINALIZATION_CHUNK_BYTES = 16 * 1024 * 1024
+_FINALIZATION_CHUNK_ROUTES = 128
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_SQLITE_COMPANION_SUFFIXES = ("-journal", "-wal", "-shm")
+
+_SPOOL_FIELDS_KEY = "fields"
+_SPOOL_VALUE_TYPE_KEY = "type"
+_SPOOL_VALUE_KEY = "value"
+_SPOOL_DATETIME_TYPE = "datetime"
+_SPOOL_TIMING_MARKER_TYPE = "timing_marker"
+_SPOOL_JSON_TYPE = "json"
+
+
+def _sysmon_spool_encode(event: dict[str, Any]) -> str:
+    """Encode one detached Sysmon candidate without native deserialization."""
+
+    fields: dict[str, dict[str, Any]] = {}
+    for key, value in event.items():
+        if isinstance(value, datetime):
+            fields[key] = {
+                _SPOOL_VALUE_TYPE_KEY: _SPOOL_DATETIME_TYPE,
+                _SPOOL_VALUE_KEY: value.isoformat(),
+            }
+        elif value is _FROZEN_TIMING_MARKER:
+            fields[key] = {
+                _SPOOL_VALUE_TYPE_KEY: _SPOOL_TIMING_MARKER_TYPE,
+                _SPOOL_VALUE_KEY: None,
+            }
+        else:
+            fields[key] = {
+                _SPOOL_VALUE_TYPE_KEY: _SPOOL_JSON_TYPE,
+                _SPOOL_VALUE_KEY: value,
+            }
+    return json.dumps({_SPOOL_FIELDS_KEY: fields})
+
+
+def _sysmon_spool_decode(payload: str) -> dict[str, Any]:
+    """Decode one inert JSON Sysmon candidate from the private journal."""
+
+    decoded = json.loads(payload)
+    if not isinstance(decoded, dict):
+        raise ValueError("Sysmon spool payload must decode to an object")
+    fields = decoded.get(_SPOOL_FIELDS_KEY)
+    if not isinstance(fields, dict):
+        raise ValueError("Sysmon spool payload is missing its fields object")
+
+    event: dict[str, Any] = {}
+    for key, wrapped in fields.items():
+        if not isinstance(key, str) or not isinstance(wrapped, dict):
+            raise ValueError("Sysmon spool field entries must be keyed objects")
+        value_type = wrapped.get(_SPOOL_VALUE_TYPE_KEY)
+        value = wrapped.get(_SPOOL_VALUE_KEY)
+        if value_type == _SPOOL_DATETIME_TYPE:
+            if not isinstance(value, str):
+                raise ValueError("Sysmon spool datetime value must be a string")
+            event[key] = ensure_utc(datetime.fromisoformat(value))
+        elif value_type == _SPOOL_TIMING_MARKER_TYPE:
+            if value is not None:
+                raise ValueError("Sysmon spool timing marker must not retain a value")
+            event[key] = _FROZEN_TIMING_MARKER
+        elif value_type == _SPOOL_JSON_TYPE:
+            event[key] = value
+        else:
+            raise ValueError(f"unknown Sysmon spool field type: {value_type!r}")
+    return event
+
+
+@dataclass(frozen=True, slots=True)
+class SysmonSourceFinalizationCensus:
+    """Constant-time candidate, final-row, route, and checkpoint counts."""
+
+    state: str
+    candidate_rows: int
+    candidate_bytes: int
+    final_rows: int
+    final_bytes: int
+    routes: int
+    published_rows: int
+    row_capacity: int
+    byte_capacity: int
+    route_capacity: int
+    high_water_rows: int
+    high_water_bytes: int
+    high_water_routes: int
+
+
+class _SysmonSourceFinalizationEpoch(SourceFinalizationEpoch):
+    """Emitter-owned opaque reference to one sealed Sysmon cohort."""
+
+    __slots__ = ("_footer", "_header", "_ordinal", "_output_target", "_owner")
+
+    def __init__(
+        self,
+        owner: object,
+        ordinal: int,
+        output_target: OutputTarget,
+        header: str,
+        footer: str,
+    ) -> None:
+        self._owner = owner
+        self._ordinal = ordinal
+        self._output_target = output_target
+        self._header = header
+        self._footer = footer
+
+
+@dataclass(frozen=True, slots=True)
+class _SysmonFinalChunk:
+    """One bounded page loaded from immutable final-row storage."""
+
+    chunk_id: int
+    end_sequence: int
+    rows: tuple[ExactSourceRow, ...]
+
+
+@dataclass(slots=True)
+class _SysmonRenderState:
+    """Retry-local mutable source state used during one terminal seal."""
+
+    record_id_sequences: dict[str, WindowsRecordIdSequence]
+    last_time_created_by_computer: dict[str, datetime]
+    time_collision_count_by_computer: dict[str, int]
+    final_process_guids: dict[tuple[str, int, str], str]
 
 
 def _format_sysmon_utc_time(timestamp: datetime) -> str:
@@ -1942,10 +2090,30 @@ class SysmonEventEmitter(LogEmitter):
         output_path: Path,
         buffer_size: int = 10000,
         threaded: bool = False,
-    ):
+        *,
+        source_finalization: bool = False,
+        finalization_row_capacity: int = _DEFAULT_FINALIZATION_ROW_CAPACITY,
+        finalization_byte_capacity: int = _DEFAULT_FINALIZATION_BYTE_CAPACITY,
+        finalization_route_capacity: int = _DEFAULT_FINALIZATION_ROUTE_CAPACITY,
+    ) -> None:
+        if type(source_finalization) is not bool:
+            raise ValueError("Sysmon source_finalization must be one exact bool")
+        if source_finalization:
+            _require_windows_source_finalization_capabilities()
+        for value, label in (
+            (finalization_row_capacity, "row"),
+            (finalization_byte_capacity, "byte"),
+            (finalization_route_capacity, "route"),
+        ):
+            if type(value) is not int or value <= 0:
+                raise ValueError(
+                    f"Sysmon finalization {label} capacity must be a positive exact int"
+                )
         self._direct_file_mode = output_path.suffix != ""
         self._base_dir = output_path.parent if self._direct_file_mode else output_path
         self._direct_file_path = output_path if self._direct_file_mode else None
+        if source_finalization:
+            self._preflight_private_spool_root()
         self._host_writers: dict[str, _SingleHostWriter] = {}
         self._snare_writers: dict[str, _SingleHostWriter] = {}
         self._host_writers_lock = Lock()
@@ -1958,14 +2126,795 @@ class SysmonEventEmitter(LogEmitter):
         self._time_collision_count_by_computer: dict[str, int] = {}
         self._final_process_guids: dict[tuple[str, int, str], str] = {}
         self._terminal_session_ids_by_logon: dict[tuple[str, str], int] = {}
+        self._spool_dir: Path | None = None
+        self._owns_spool_dir = False
+        self._spool_path: Path | None = None
+        self._spool_filename: str | None = None
+        self._spool_conn: sqlite3.Connection | None = None
+        self._spool_sequence = 0
+        self._spooled_count = 0
+        self._spool_directory_descriptor: int | None = None
+        self._spool_directory_identity: tuple[int, int] | None = None
+        self._spool_root_descriptor: int | None = None
+        self._spool_root_identity: tuple[int, int] | None = None
+        self._spool_directory_name: str | None = None
+        self._spool_initialization_pending = False
+        self._spool_file_initialization_pending = False
+        self._spool_file_identity: tuple[int, int] | None = None
+        self._candidate_admitted_rows = 0
+        self._candidate_admitted_bytes = 0
+        self._candidate_high_water_rows = 0
+        self._candidate_high_water_bytes = 0
+        self._source_high_water_rows = 0
+        self._source_high_water_bytes = 0
+        self._source_high_water_routes = 0
+        self._candidate_admission_lock = Lock()
+        self._finalization_row_capacity = finalization_row_capacity
+        self._finalization_byte_capacity = finalization_byte_capacity
+        self._finalization_route_capacity = finalization_route_capacity
+        self._source_finalization_state = "open"
+        self._source_finalization_owner: int | None = None
+        self._source_finalization_operation_lock = Lock()
+        self._source_finalization_epoch: _SysmonSourceFinalizationEpoch | None = None
+        self._source_finalization_ordinal = 0
+        self._source_finalization_routes: dict[int, _SingleHostWriter] = {}
+        self._source_finalization_route_ids: dict[tuple[str, str], int] = {}
+        self._source_finalization_bound = source_finalization
+        self._source_finalization_output_target: OutputTarget | None = None
+        self._source_finalization_header: str | None = None
+        self._source_finalization_footer: str | None = None
+
+    def _preflight_private_spool_root(self) -> None:
+        """Validate exact-spool trust and output disjointness before generation."""
+
+        configured = os.environ.get("EFORGE_SPOOL_DIR")
+        root = Path(
+            os.path.realpath(
+                os.fspath(Path(configured).expanduser() if configured else tempfile.gettempdir())
+            )
+        )
+        output_root = Path(os.path.realpath(os.fspath(self._base_dir)))
+        if root == output_root or root.is_relative_to(output_root):
+            raise ExactPublicationError("Sysmon private spool root must be outside public output")
+        ancestor = root
+        while not ancestor.exists():
+            if ancestor == ancestor.parent:
+                raise ExactPublicationError("Sysmon private spool has no existing trusted ancestor")
+            ancestor = ancestor.parent
+        self._validate_private_spool_ancestry(ancestor)
+
+    @staticmethod
+    def _open_directory_nofollow(path: Path, *, create: bool = False) -> int:
+        """Open every absolute directory component without following symlinks."""
+
+        absolute = Path(os.path.abspath(os.fspath(path)))
+        descriptor = os.open(absolute.anchor, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+        try:
+            for component in absolute.parts[1:]:
+                try:
+                    next_descriptor = os.open(
+                        component,
+                        os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
+                        dir_fd=descriptor,
+                    )
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    try:
+                        os.mkdir(component, mode=0o755, dir_fd=descriptor)
+                    except FileExistsError:
+                        pass
+                    else:
+                        os.fsync(descriptor)
+                    next_descriptor = os.open(
+                        component,
+                        os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
+                        dir_fd=descriptor,
+                    )
+                os.close(descriptor)
+                descriptor = next_descriptor
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    @classmethod
+    def _validate_private_spool_ancestry(cls, path: Path) -> None:
+        """Require root-or-process-owned ancestry with sticky shared roots."""
+
+        effective_user = int(os.geteuid())
+        current = path
+        while True:
+            descriptor = cls._open_directory_nofollow(current)
+            try:
+                metadata = os.fstat(descriptor)
+            finally:
+                os.close(descriptor)
+            if int(metadata.st_uid) not in {0, effective_user}:
+                raise ExactPublicationError(
+                    "Sysmon private spool ancestry is not process controlled"
+                )
+            permissions = stat.S_IMODE(metadata.st_mode)
+            if permissions & 0o022 and not metadata.st_mode & stat.S_ISVTX:
+                raise ExactPublicationError(
+                    "Sysmon private spool ancestry is externally writable without sticky mode"
+                )
+            if current == current.parent:
+                return
+            current = current.parent
+
+    def _validate_spool_directory_unlocked(self) -> None:
+        """Revalidate the owner-only private directory and pinned identity."""
+
+        spool_dir = self._spool_dir
+        descriptor = self._spool_directory_descriptor
+        identity = self._spool_directory_identity
+        root_descriptor = self._spool_root_descriptor
+        root_identity = self._spool_root_identity
+        directory_name = self._spool_directory_name
+        if (
+            spool_dir is None
+            or descriptor is None
+            or identity is None
+            or root_descriptor is None
+            or root_identity is None
+            or directory_name is None
+        ):
+            raise ExactPublicationError("Sysmon private spool lost its identity")
+        retained = os.fstat(descriptor)
+        retained_root = os.fstat(root_descriptor)
+        reopened = os.stat(directory_name, dir_fd=root_descriptor, follow_symlinks=False)
+        effective_user = int(os.geteuid())
+        if (
+            not stat.S_ISDIR(retained_root.st_mode)
+            or (int(retained_root.st_dev), int(retained_root.st_ino)) != root_identity
+        ):
+            raise ExactPublicationError("Sysmon private spool root identity changed")
+        for metadata in (retained, reopened):
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or (int(metadata.st_dev), int(metadata.st_ino)) != identity
+                or int(metadata.st_uid) != effective_user
+                or stat.S_IMODE(metadata.st_mode) != 0o700
+            ):
+                raise ExactPublicationError("Sysmon private spool identity or mode changed")
+
+    def _validate_spool_file_unlocked(self) -> None:
+        """Revalidate the SQLite main file without following its directory entry."""
+
+        self._validate_spool_directory_unlocked()
+        descriptor = self._spool_directory_descriptor
+        filename = self._spool_filename
+        identity = self._spool_file_identity
+        if descriptor is None or filename is None or identity is None:
+            raise ExactPublicationError("Sysmon private journal lost its identity")
+        metadata = os.stat(filename, dir_fd=descriptor, follow_symlinks=False)
+        effective_user = int(os.geteuid())
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or (int(metadata.st_dev), int(metadata.st_ino)) != identity
+            or int(metadata.st_uid) != effective_user
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise ExactPublicationError("Sysmon private journal identity or mode changed")
+
+    def _get_spool_dir_unlocked(self) -> Path:
+        """Return the owner-only local runtime directory for exact journal state."""
+
+        if self._spool_dir is not None:
+            if self._spool_initialization_pending:
+                self._finish_private_spool_initialization_unlocked()
+            self._validate_spool_directory_unlocked()
+            return self._spool_dir
+
+        configured = os.environ.get("EFORGE_SPOOL_DIR")
+        protected_root = Path(
+            os.path.realpath(
+                os.fspath(Path(configured).expanduser() if configured else tempfile.gettempdir())
+            )
+        )
+        output_root = Path(os.path.realpath(os.fspath(self._base_dir)))
+        if protected_root == output_root or protected_root.is_relative_to(output_root):
+            raise ExactPublicationError("Sysmon private spool must be outside public output")
+        if configured:
+            ancestor = protected_root
+            while not ancestor.exists():
+                if ancestor == ancestor.parent:
+                    raise ExactPublicationError(
+                        "Sysmon private spool has no existing trusted ancestor"
+                    )
+                ancestor = ancestor.parent
+            self._validate_private_spool_ancestry(ancestor)
+        root_descriptor = self._open_directory_nofollow(
+            protected_root,
+            create=configured is not None,
+        )
+        root_metadata = os.fstat(root_descriptor)
+        try:
+            self._validate_private_spool_ancestry(protected_root)
+        except BaseException:
+            os.close(root_descriptor)
+            raise
+        self._spool_root_descriptor = root_descriptor
+        self._spool_root_identity = (int(root_metadata.st_dev), int(root_metadata.st_ino))
+        for _attempt in range(128):
+            directory_name = f"evidenceforge-sysmon-spool-{secrets.token_hex(16)}"
+            self._spool_directory_name = directory_name
+            self._spool_dir = protected_root / directory_name
+            self._owns_spool_dir = True
+            self._spool_initialization_pending = True
+            try:
+                os.mkdir(directory_name, mode=0o700, dir_fd=root_descriptor)
+            except FileExistsError:
+                self._spool_directory_name = None
+                self._spool_dir = None
+                self._owns_spool_dir = False
+                self._spool_initialization_pending = False
+                continue
+            except BaseException:
+                self._adopt_private_spool_create_lost_return_unlocked()
+                raise
+            break
+        else:
+            os.close(root_descriptor)
+            self._spool_root_descriptor = None
+            self._spool_root_identity = None
+            raise ExactPublicationError("Unable to allocate a unique Sysmon private spool")
+        self._finish_private_spool_initialization_unlocked()
+        self._validate_spool_directory_unlocked()
+        return self._spool_dir
+
+    def _adopt_private_spool_create_lost_return_unlocked(self) -> None:
+        """Retain an owner-only leaf created before mkdir's return was lost."""
+
+        root_descriptor = self._spool_root_descriptor
+        directory_name = self._spool_directory_name
+        if root_descriptor is None or directory_name is None:
+            raise ExactPublicationError("Sysmon private spool lost its create owner")
+        try:
+            metadata = os.stat(directory_name, dir_fd=root_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        effective_user = int(os.geteuid())
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or int(metadata.st_uid) != effective_user
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise ExactPublicationError("Sysmon private spool leaf is not owner-only")
+        self._spool_directory_identity = (int(metadata.st_dev), int(metadata.st_ino))
+
+    def _finish_private_spool_initialization_unlocked(self) -> None:
+        """Retryably pin and durably publish one private spool leaf."""
+
+        root_descriptor = self._spool_root_descriptor
+        directory_name = self._spool_directory_name
+        if root_descriptor is None or directory_name is None:
+            raise ExactPublicationError("Sysmon private spool lost its initialization owner")
+        try:
+            metadata = os.stat(directory_name, dir_fd=root_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            try:
+                os.mkdir(directory_name, mode=0o700, dir_fd=root_descriptor)
+            except BaseException:
+                self._adopt_private_spool_create_lost_return_unlocked()
+                raise
+            metadata = os.stat(directory_name, dir_fd=root_descriptor, follow_symlinks=False)
+        effective_user = int(os.geteuid())
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or int(metadata.st_uid) != effective_user
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise ExactPublicationError("Sysmon private spool leaf is not owner-only")
+        identity = (int(metadata.st_dev), int(metadata.st_ino))
+        if self._spool_directory_identity not in {None, identity}:
+            raise ExactPublicationError("Sysmon private spool leaf identity changed")
+        if self._spool_directory_descriptor is None:
+            self._spool_directory_descriptor = os.open(
+                directory_name,
+                os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
+                dir_fd=root_descriptor,
+            )
+        retained = os.fstat(self._spool_directory_descriptor)
+        if (int(retained.st_dev), int(retained.st_ino)) != identity:
+            raise ExactPublicationError("Sysmon private spool descriptor changed identity")
+        self._spool_directory_identity = identity
+        os.fsync(self._spool_directory_descriptor)
+        os.fsync(root_descriptor)
+        self._spool_initialization_pending = False
+
+    def _get_spool_conn_unlocked(self) -> sqlite3.Connection:
+        """Open the exact Sysmon journal while holding `_file_lock`."""
+
+        if self._spool_conn is not None:
+            if self._spool_file_initialization_pending:
+                self._finish_private_journal_initialization_unlocked()
+            return self._spool_conn
+        spool_dir = self._get_spool_dir_unlocked()
+        directory_descriptor = self._spool_directory_descriptor
+        if directory_descriptor is None:
+            raise ExactPublicationError("Sysmon private spool lost its directory descriptor")
+        if self._spool_filename is None:
+            for _attempt in range(128):
+                filename = f".sysmon_event_spool_{secrets.token_hex(16)}.sqlite3"
+                self._spool_filename = filename
+                self._spool_path = spool_dir / filename
+                self._spool_file_initialization_pending = True
+                try:
+                    descriptor = os.open(
+                        filename,
+                        os.O_RDWR | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
+                        0o600,
+                        dir_fd=directory_descriptor,
+                    )
+                except FileExistsError:
+                    self._spool_filename = None
+                    self._spool_path = None
+                    self._spool_file_initialization_pending = False
+                    continue
+                except BaseException:
+                    self._adopt_private_journal_create_lost_return_unlocked()
+                    raise
+                else:
+                    try:
+                        self._adopt_private_journal_descriptor_unlocked(descriptor)
+                    finally:
+                        os.close(descriptor)
+                    break
+            else:
+                raise ExactPublicationError("Unable to allocate a unique Sysmon journal")
+        self._finish_private_journal_initialization_unlocked()
+        if self._spool_conn is None:
+            raise ExactPublicationError("Sysmon private journal did not open")
+        return self._spool_conn
+
+    def _adopt_private_journal_descriptor_unlocked(self, descriptor: int) -> None:
+        """Retain the identity returned by one exclusive journal create."""
+
+        metadata = os.fstat(descriptor)
+        effective_user = int(os.geteuid())
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or int(metadata.st_uid) != effective_user
+        ):
+            raise ExactPublicationError("Sysmon private journal is not an owner file")
+        os.fchmod(descriptor, 0o600)
+        self._spool_file_identity = (int(metadata.st_dev), int(metadata.st_ino))
+
+    def _adopt_private_journal_create_lost_return_unlocked(self) -> None:
+        """Retain a journal created before its exclusive-open return was lost."""
+
+        directory_descriptor = self._spool_directory_descriptor
+        filename = self._spool_filename
+        if directory_descriptor is None or filename is None:
+            raise ExactPublicationError("Sysmon private journal lost its create owner")
+        try:
+            descriptor = os.open(filename, os.O_RDWR | _NOFOLLOW, dir_fd=directory_descriptor)
+        except FileNotFoundError:
+            return
+        try:
+            self._adopt_private_journal_descriptor_unlocked(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _finish_private_journal_initialization_unlocked(self) -> None:
+        """Retryably initialize and durably publish the retained journal."""
+
+        directory_descriptor = self._spool_directory_descriptor
+        filename = self._spool_filename
+        path = self._spool_path
+        if directory_descriptor is None or filename is None or path is None:
+            raise ExactPublicationError("Sysmon private journal lost its initialization owner")
+        if self._spool_file_identity is None:
+            try:
+                descriptor = os.open(
+                    filename,
+                    os.O_RDWR | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
+                    0o600,
+                    dir_fd=directory_descriptor,
+                )
+            except FileExistsError as error:
+                raise ExactPublicationError(
+                    "Sysmon private journal create ownership is ambiguous"
+                ) from error
+            except BaseException:
+                self._adopt_private_journal_create_lost_return_unlocked()
+                raise
+            else:
+                try:
+                    self._adopt_private_journal_descriptor_unlocked(descriptor)
+                finally:
+                    os.close(descriptor)
+        self._validate_spool_file_unlocked()
+        if self._spool_conn is None:
+            self._spool_conn = sqlite3.connect(
+                f"{path.as_uri()}?mode=rw",
+                uri=True,
+                check_same_thread=False,
+            )
+        self._initialize_spool_schema_unlocked(self._spool_conn)
+        self._validate_spool_file_unlocked()
+        os.fsync(directory_descriptor)
+        self._spool_file_initialization_pending = False
+
+    def _initialize_spool_schema_unlocked(self, connection: sqlite3.Connection) -> None:
+        """Create one bounded journal with memory-only SQLite temporary state."""
+
+        connection.execute("PRAGMA temp_store=MEMORY")
+        if connection.execute("PRAGMA temp_store").fetchone() != (2,):
+            raise ExactPublicationError("Sysmon journal could not confine SQLite temp storage")
+        connection.execute("PRAGMA journal_mode=DELETE")
+        connection.execute("PRAGMA synchronous=FULL")
+        if connection.execute("PRAGMA user_version").fetchone() == (1,):
+            self._validate_initial_spool_schema_unlocked(connection)
+            return
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute(
+                """CREATE TABLE events (
+                    sequence INTEGER PRIMARY KEY,
+                    sort_key TEXT NOT NULL,
+                    phase TEXT NOT NULL CHECK (phase IN ('candidate', 'final')),
+                    payload TEXT NOT NULL,
+                    payload_bytes INTEGER NOT NULL CHECK (payload_bytes >= 0),
+                    ordinal INTEGER,
+                    route_kind TEXT,
+                    route_key TEXT,
+                    payload_digest TEXT
+                )"""
+            )
+            connection.execute(
+                "CREATE INDEX events_candidate_order ON events (phase, sort_key, sequence)"
+            )
+            connection.execute("CREATE UNIQUE INDEX events_final_order ON events (phase, ordinal)")
+            connection.execute(
+                """CREATE TABLE finalization_state (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    phase TEXT NOT NULL,
+                    candidate_rows INTEGER NOT NULL,
+                    candidate_bytes INTEGER NOT NULL,
+                    final_rows INTEGER NOT NULL,
+                    final_bytes INTEGER NOT NULL,
+                    routes INTEGER NOT NULL,
+                    published_rows INTEGER NOT NULL,
+                    epoch INTEGER NOT NULL,
+                    high_water_rows INTEGER NOT NULL,
+                    high_water_bytes INTEGER NOT NULL,
+                    high_water_routes INTEGER NOT NULL
+                )"""
+            )
+            connection.execute(
+                """INSERT INTO finalization_state
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (1, "candidate", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            )
+            connection.execute("PRAGMA user_version=1")
+            connection.commit()
+        except BaseException:
+            if not connection.in_transaction:
+                try:
+                    self._validate_initial_spool_schema_unlocked(connection)
+                except ExactPublicationError:
+                    pass
+                else:
+                    return
+            connection.rollback()
+            raise
+        self._validate_initial_spool_schema_unlocked(connection)
+
+    @staticmethod
+    def _validate_initial_spool_schema_unlocked(connection: sqlite3.Connection) -> None:
+        """Adopt only the exact empty schema after an initialization lost return."""
+
+        objects = set(
+            connection.execute(
+                """SELECT type, name FROM sqlite_master
+                   WHERE name IN (?, ?, ?, ?)""",
+                (
+                    "events",
+                    "events_candidate_order",
+                    "events_final_order",
+                    "finalization_state",
+                ),
+            ).fetchall()
+        )
+        expected = {
+            ("table", "events"),
+            ("index", "events_candidate_order"),
+            ("index", "events_final_order"),
+            ("table", "finalization_state"),
+        }
+        state = connection.execute(
+            "SELECT * FROM finalization_state WHERE singleton = ?",
+            (1,),
+        ).fetchone()
+        if (
+            connection.execute("PRAGMA user_version").fetchone() != (1,)
+            or objects != expected
+            or state != (1, "candidate", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            or connection.execute("SELECT COUNT(*) FROM events").fetchone() != (0,)
+        ):
+            raise ExactPublicationError("Sysmon private journal schema is not immutable")
+
+    def _event_sort_key(self, event: dict[str, Any]) -> str:
+        """Return the stable sortable timestamp key for one deferred row."""
+
+        timestamp = event.get("TimeCreated", "")
+        if isinstance(timestamp, datetime):
+            return ensure_utc(timestamp).isoformat()
+        return str(timestamp)
+
+    def _spool_event_dicts_unlocked(self) -> None:
+        """Move exact candidate dictionaries to disk and bound emitter memory."""
+
+        if not self._event_dicts:
+            return
+        connection = self._get_spool_conn_unlocked()
+        self._validate_spool_file_unlocked()
+        rows: list[tuple[int, str, str, str, int]] = []
+        added_bytes = 0
+        start_sequence = self._spool_sequence
+        for offset, event in enumerate(self._event_dicts):
+            payload = _sysmon_spool_encode(event)
+            payload_bytes = len(payload.encode("utf-8"))
+            if payload_bytes > _FINALIZATION_CHUNK_BYTES:
+                raise SourceFinalizationError(
+                    "Sysmon candidate row exceeds the finalization chunk byte capacity"
+                )
+            rows.append(
+                (
+                    start_sequence + offset,
+                    self._event_sort_key(event),
+                    "candidate",
+                    payload,
+                    payload_bytes,
+                )
+            )
+            added_bytes += payload_bytes
+        state = connection.execute(
+            """SELECT phase, candidate_rows, candidate_bytes
+               FROM finalization_state WHERE singleton = ?""",
+            (1,),
+        ).fetchone()
+        if state is None or state[0] != "candidate":
+            raise SourceFinalizationError("Sysmon journal rejected a late candidate cohort")
+        candidate_rows = int(state[1]) + len(rows)
+        candidate_bytes = int(state[2]) + added_bytes
+        if candidate_rows > self._finalization_row_capacity:
+            raise SourceFinalizationError("Sysmon finalization row capacity is exhausted")
+        if candidate_bytes > self._finalization_byte_capacity:
+            raise SourceFinalizationError("Sysmon finalization byte capacity is exhausted")
+        with self._candidate_admission_lock:
+            admitted_rows = self._candidate_admitted_rows
+            admitted_bytes = self._candidate_admitted_bytes
+            high_water_rows = self._candidate_high_water_rows
+            high_water_bytes = self._candidate_high_water_bytes
+        if candidate_rows > admitted_rows or candidate_bytes > admitted_bytes:
+            raise SourceFinalizationError("Sysmon journal exceeded admitted candidate capacity")
+        try:
+            connection.executemany(
+                """INSERT INTO events
+                   (sequence, sort_key, phase, payload, payload_bytes)
+                   VALUES (?, ?, ?, ?, ?)""",
+                rows,
+            )
+            connection.execute(
+                """UPDATE finalization_state
+                   SET candidate_rows = ?, candidate_bytes = ?,
+                       high_water_rows = MAX(high_water_rows, ?),
+                       high_water_bytes = MAX(high_water_bytes, ?)
+                   WHERE singleton = ?""",
+                (candidate_rows, candidate_bytes, high_water_rows, high_water_bytes, 1),
+            )
+            self._commit_journal_unlocked()
+        except BaseException:
+            retained_rows = connection.execute(
+                """SELECT sequence, sort_key, phase, payload, payload_bytes
+                   FROM events WHERE sequence >= ? AND sequence < ? ORDER BY sequence""",
+                (start_sequence, start_sequence + len(rows)),
+            ).fetchall()
+            retained_state = connection.execute(
+                """SELECT phase, candidate_rows, candidate_bytes
+                   FROM finalization_state WHERE singleton = ?""",
+                (1,),
+            ).fetchone()
+            committed = (
+                not connection.in_transaction
+                and retained_rows == rows
+                and retained_state == ("candidate", candidate_rows, candidate_bytes)
+            )
+            if not committed:
+                connection.rollback()
+                raise
+        self._spool_sequence = start_sequence + len(rows)
+        self._spooled_count += len(rows)
+        self._event_dicts.clear()
+
+    def _load_candidate_rows_unlocked(
+        self,
+        *,
+        frozen_order: bool = False,
+    ) -> list[tuple[int, dict[str, Any]]]:
+        """Load the bounded cohort in insertion or frozen chronological order."""
+
+        if self._spool_conn is None:
+            return []
+        if frozen_order:
+            cursor = self._spool_conn.execute(
+                """SELECT sequence, payload FROM events
+                   WHERE phase = ? ORDER BY sort_key, sequence""",
+                ("candidate",),
+            )
+        else:
+            cursor = self._spool_conn.execute(
+                """SELECT sequence, payload FROM events
+                   WHERE phase = ? ORDER BY sequence""",
+                ("candidate",),
+            )
+        return [(int(sequence), _sysmon_spool_decode(payload)) for sequence, payload in cursor]
+
+    def _persist_candidate_phase_unlocked(
+        self,
+        candidate_rows: list[tuple[int, dict[str, Any]]],
+        *,
+        update_sort_key: bool,
+        phase_name: str,
+    ) -> int:
+        """Persist and re-charge one in-transaction candidate transformation."""
+
+        connection = self._spool_conn
+        if connection is None or not connection.in_transaction:
+            raise SourceFinalizationError(
+                "Sysmon candidate transformation lost its sealing transaction"
+            )
+        payload_updates: list[tuple[Any, ...]] = []
+        candidate_bytes = 0
+        for sequence, event in candidate_rows:
+            payload = _sysmon_spool_encode(event)
+            payload_bytes = len(payload.encode("utf-8"))
+            if payload_bytes > _FINALIZATION_CHUNK_BYTES:
+                raise SourceFinalizationError(
+                    f"Sysmon {phase_name} candidate exceeds the chunk byte capacity"
+                )
+            candidate_bytes += payload_bytes
+            if candidate_bytes > self._finalization_byte_capacity:
+                raise SourceFinalizationError(
+                    f"Sysmon {phase_name} candidate byte capacity is exhausted"
+                )
+            if update_sort_key:
+                payload_updates.append(
+                    (
+                        self._event_sort_key(event),
+                        payload_bytes,
+                        payload,
+                        sequence,
+                        "candidate",
+                    )
+                )
+            else:
+                payload_updates.append((payload_bytes, payload, sequence, "candidate"))
+
+        if update_sort_key:
+            updated = connection.executemany(
+                """UPDATE events SET sort_key = ?, payload_bytes = ?, payload = ?
+                   WHERE sequence = ? AND phase = ?""",
+                payload_updates,
+            )
+        else:
+            updated = connection.executemany(
+                """UPDATE events SET payload_bytes = ?, payload = ?
+                   WHERE sequence = ? AND phase = ?""",
+                payload_updates,
+            )
+        if updated.rowcount != len(payload_updates):
+            raise SourceFinalizationError(
+                f"Sysmon candidate changed during {phase_name} persistence"
+            )
+        updated_state = connection.execute(
+            """UPDATE finalization_state
+               SET candidate_bytes = ?, high_water_bytes = MAX(high_water_bytes, ?)
+               WHERE singleton = ? AND phase = ? AND candidate_rows = ?""",
+            (candidate_bytes, candidate_bytes, 1, "candidate", len(candidate_rows)),
+        )
+        if updated_state.rowcount != 1:
+            raise SourceFinalizationError(
+                f"Sysmon source state changed during {phase_name} persistence"
+            )
+        return candidate_bytes
+
+    def _cleanup_spool_unlocked(self) -> None:
+        """Remove the owner-private journal after terminal close or abort."""
+
+        if self._spool_conn is not None:
+            self._spool_conn.close()
+            self._spool_conn = None
+        descriptor = self._spool_directory_descriptor
+        filename = self._spool_filename
+        if descriptor is not None:
+            self._validate_spool_directory_unlocked()
+        if descriptor is not None and filename is not None:
+            for candidate in (
+                filename,
+                *(filename + suffix for suffix in _SQLITE_COMPANION_SUFFIXES),
+            ):
+                try:
+                    metadata = os.stat(candidate, dir_fd=descriptor, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                    raise ExactPublicationError(
+                        "Sysmon private journal cleanup found a non-regular entry"
+                    )
+                if (
+                    candidate == filename
+                    and (int(metadata.st_dev), int(metadata.st_ino)) != self._spool_file_identity
+                ):
+                    raise ExactPublicationError(
+                        "Sysmon private journal changed before terminal cleanup"
+                    )
+                os.unlink(candidate, dir_fd=descriptor)
+            os.fsync(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
+            self._spool_directory_descriptor = None
+        root_descriptor = self._spool_root_descriptor
+        directory_name = self._spool_directory_name
+        if self._owns_spool_dir and root_descriptor is not None and directory_name is not None:
+            try:
+                metadata = os.stat(
+                    directory_name,
+                    dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                metadata = None
+            if metadata is not None:
+                if (
+                    not stat.S_ISDIR(metadata.st_mode)
+                    or (int(metadata.st_dev), int(metadata.st_ino))
+                    != self._spool_directory_identity
+                ):
+                    raise ExactPublicationError(
+                        "Sysmon private spool changed before directory cleanup"
+                    )
+                os.rmdir(directory_name, dir_fd=root_descriptor)
+            os.fsync(root_descriptor)
+            os.close(root_descriptor)
+            self._spool_root_descriptor = None
+        self._spool_path = None
+        self._spool_filename = None
+        self._spool_file_identity = None
+        self._spool_file_initialization_pending = False
+        self._spool_directory_identity = None
+        self._spool_root_identity = None
+        self._spool_directory_name = None
+        self._spool_dir = None
+        self._owns_spool_dir = False
+        self._spooled_count = 0
+        self._candidate_admitted_rows = 0
+        self._candidate_admitted_bytes = 0
+
+    def configure_output_target(self, target: str | OutputTarget | None) -> None:
+        """Reject target mutation after the terminal cohort starts quiescing."""
+
+        state, _ = self._source_lifecycle_snapshot()
+        if self._source_finalization_bound and state != "open":
+            raise SourceFinalizationError(
+                "Sysmon output target cannot change after source quiescence"
+            )
+        super().configure_output_target(target)
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host = sanitize_path_component(host_fqdn)
-        writer = self._host_writers.get(safe_host)
+        writer_key = "" if self._direct_file_mode else safe_host
+        writer = self._host_writers.get(writer_key)
         if writer is not None:
             return writer
         with self._host_writers_lock:
-            writer = self._host_writers.get(safe_host)
+            writer = self._host_writers.get(writer_key)
             if writer is not None:
                 return writer
             if safe_host and not self._direct_file_mode:
@@ -1975,10 +2924,19 @@ class SysmonEventEmitter(LogEmitter):
             else:
                 path = self._base_dir / "windows_event_sysmon.xml"
             writer = _SingleHostWriter(path, self.buffer_size)
-            header = self.format_def.output.header_template
-            if header and self.output_target != OutputTarget.SPLUNK:
+            source_state, _ = self._source_lifecycle_snapshot()
+            terminal = self._source_finalization_bound and source_state != "open"
+            header = (
+                self._source_finalization_header
+                if terminal
+                else self.format_def.output.header_template
+            )
+            output_target = (
+                self._source_finalization_output_target if terminal else self.output_target
+            )
+            if header and output_target != OutputTarget.SPLUNK:
                 writer.write_header(header)
-            self._host_writers[safe_host] = writer
+            self._host_writers[writer_key] = writer
             return writer
 
     def _get_snare_writer(self, host_fqdn: str, timestamp: datetime) -> _SingleHostWriter:
@@ -1988,11 +2946,17 @@ class SysmonEventEmitter(LogEmitter):
             direct_file_mode=self._direct_file_mode,
         )
         safe_route_key = sanitize_syslog_family_route_key(route_key)
-        writer = self._snare_writers.get(safe_route_key)
+        return self._get_snare_writer_for_route_key(safe_route_key)
+
+    def _get_snare_writer_for_route_key(self, safe_route_key: str) -> _SingleHostWriter:
+        """Resolve one already-sanitized immutable Snare route."""
+
+        writer_key = "" if self._direct_file_mode else safe_route_key
+        writer = self._snare_writers.get(writer_key)
         if writer is not None:
             return writer
         with self._host_writers_lock:
-            writer = self._snare_writers.get(safe_route_key)
+            writer = self._snare_writers.get(writer_key)
             if writer is not None:
                 return writer
             if self._direct_file_path is not None:
@@ -2006,7 +2970,7 @@ class SysmonEventEmitter(LogEmitter):
                     flat_filename=WINDOWS_SYSMON_SNARE_FILENAME,
                 )
             writer = _SingleHostWriter(path, self.buffer_size)
-            self._snare_writers[safe_route_key] = writer
+            self._snare_writers[writer_key] = writer
             return writer
 
     def _buffer_event(self, rendered: str) -> None:
@@ -2055,13 +3019,94 @@ class SysmonEventEmitter(LogEmitter):
         host_type = getattr(self._emission_context, "host_type", "")
         if host_type:
             event_data["_host_type"] = host_type
-        if self.threaded:
-            self._emit_threaded(event_data)
-        else:
-            with self._file_lock:
-                self._event_dicts.append(event_data)
-                if len(self._event_dicts) >= self.buffer_size:
-                    self._flush_unlocked()
+        self._begin_queue_admission()
+        handed_off = False
+        reserved_bytes = 0
+        try:
+            with self._candidate_admission_lock:
+                event_data, reserved_bytes = self._reserve_candidate_admission_unlocked(event_data)
+            if self.threaded:
+                if self._event_queue is None:
+                    raise RuntimeError("Threaded Sysmon emitter lost its FIFO")
+                warned = False
+                while True:
+                    self._raise_if_thread_failed()
+                    try:
+                        self._event_queue.put(event_data, timeout=0.1)
+                    except Full:
+                        if not warned:
+                            logger.warning(
+                                "Event queue full for %s emitter, applying backpressure",
+                                self.format_def.name,
+                            )
+                            warned = True
+                        continue
+                    handed_off = True
+                    break
+            else:
+                with self._file_lock:
+                    self._event_dicts.append(event_data)
+                    handed_off = True
+                    if len(self._event_dicts) >= self.buffer_size:
+                        try:
+                            if self._source_finalization_bound:
+                                self._spool_event_dicts_unlocked()
+                            else:
+                                self._flush_unlocked()
+                        except BaseException:
+                            if self._source_finalization_bound:
+                                retained = self._event_dicts.pop()
+                                handed_off = False
+                                if retained is not event_data:
+                                    raise SourceFinalizationError(
+                                        "Sysmon candidate rollback lost its current row"
+                                    ) from None
+                            raise
+        except BaseException:
+            if self._source_finalization_bound and not handed_off:
+                with self._candidate_admission_lock:
+                    self._release_candidate_admission_unlocked(reserved_bytes)
+            raise
+        finally:
+            self._finish_queue_admission()
+
+    def _reserve_candidate_admission_unlocked(
+        self,
+        event_data: dict[str, Any],
+    ) -> tuple[dict[str, Any], int]:
+        """Charge and detach one exact candidate before memory or FIFO retention."""
+
+        if not self._source_finalization_bound:
+            return event_data, 0
+        payload = _sysmon_spool_encode(event_data)
+        payload_bytes = len(payload.encode("utf-8"))
+        if payload_bytes > _FINALIZATION_CHUNK_BYTES:
+            raise SourceFinalizationError(
+                "Sysmon candidate row exceeds the finalization chunk byte capacity"
+            )
+        candidate_rows = self._candidate_admitted_rows + 1
+        candidate_bytes = self._candidate_admitted_bytes + payload_bytes
+        if candidate_rows > self._finalization_row_capacity:
+            raise SourceFinalizationError("Sysmon finalization row capacity is exhausted")
+        if candidate_bytes > self._finalization_byte_capacity:
+            raise SourceFinalizationError("Sysmon finalization byte capacity is exhausted")
+        self._candidate_admitted_rows = candidate_rows
+        self._candidate_admitted_bytes = candidate_bytes
+        self._candidate_high_water_rows = max(self._candidate_high_water_rows, candidate_rows)
+        self._candidate_high_water_bytes = max(self._candidate_high_water_bytes, candidate_bytes)
+        self._source_high_water_rows = max(self._source_high_water_rows, candidate_rows)
+        self._source_high_water_bytes = max(self._source_high_water_bytes, candidate_bytes)
+        return _sysmon_spool_decode(payload), payload_bytes
+
+    def _release_candidate_admission_unlocked(self, payload_bytes: int) -> None:
+        """Undo a candidate reservation that never reached memory or the FIFO."""
+
+        if payload_bytes == 0:
+            return
+        if self._candidate_admitted_rows <= 0 or self._candidate_admitted_bytes < payload_bytes:
+            raise SourceFinalizationError("Sysmon candidate admission accounting underflowed")
+        self._candidate_admitted_rows -= 1
+        self._candidate_admitted_bytes -= payload_bytes
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         from xml.sax.saxutils import escape as xml_escape
@@ -2077,6 +3122,9 @@ class SysmonEventEmitter(LogEmitter):
         return self._template.render(**event_data)
 
     def _run(self) -> None:
+        """Buffer raw Sysmon dicts and fail closed on any worker error."""
+
+        logger.debug("Emitter thread started for %s", self.format_def.name)
         while not self._stop_event.is_set():
             try:
                 event_data = self._event_queue.get(timeout=0.1)
@@ -2085,23 +3133,65 @@ class SysmonEventEmitter(LogEmitter):
                         continue
                     with self._file_lock:
                         self._event_dicts.append(event_data)
-                        if not self.threaded and len(self._event_dicts) >= self.buffer_size:
-                            self._flush_unlocked()
+                        if (
+                            self._source_finalization_bound
+                            and len(self._event_dicts) >= self.buffer_size
+                        ):
+                            self._spool_event_dicts_unlocked()
                 finally:
                     self._event_queue.task_done()
             except Empty:
                 continue
-        self.flush()
+            except Exception as error:  # noqa: BLE001
+                self._thread_error = error
+                logger.exception(
+                    "Unhandled exception in %s emitter thread; stopping thread",
+                    self.format_def.name,
+                )
+                self._stop_event.set()
+        logger.debug("Emitter thread stopped for %s", self.format_def.name)
+
+    def _flush_at_barrier(self) -> None:
+        """Spill exact candidates or preserve the ordinary legacy barrier."""
+
+        with self._file_lock:
+            if self._source_finalization_bound:
+                self._spool_event_dicts_unlocked()
+            elif not self.threaded:
+                self._flush_unlocked()
 
     def _flush_unlocked(self) -> None:
+        """Prepare, render, and write one ordinary legacy Sysmon cohort."""
+
         if not self._event_dicts:
             return
+
+        self._prepare_event_cohort_unlocked()
+        for event in self._event_dicts:
+            final = self._finalize_event_for_output(event)
+            if final is not None:
+                final[2].write(final[3])
+        self._event_dicts.clear()
+
+    def _prepare_event_cohort_unlocked(self) -> None:
+        """Apply the existing global order, IDs, clocks, and GUID synchronization once."""
+
+        all_finalized = self._apply_compatibility_causal_shifts_unlocked()
+        self._freeze_event_order_and_assign_ids_unlocked(all_finalized)
+        self._synchronize_event_cohort_unlocked(all_finalized)
+
+    def _apply_compatibility_causal_shifts_unlocked(self) -> bool:
+        """Apply legacy causal shifts before the terminal chronological order freezes."""
 
         all_finalized = all(self._timing_is_finalized(event) for event in self._event_dicts)
         if not all_finalized:
             self._shift_process_creates_after_visible_parent()
             self._shift_followons_after_process_create()
             self._shift_terminations_after_followons()
+        return all_finalized
+
+    def _freeze_event_order_and_assign_ids_unlocked(self, all_finalized: bool) -> None:
+        """Freeze `(TimeCreated, insertion ordinal)` and assign source record IDs."""
 
         def _sort_key(event: dict) -> Any:
             ts = event.get("TimeCreated", "")
@@ -2110,6 +3200,11 @@ class SysmonEventEmitter(LogEmitter):
             return ts
 
         self._event_dicts.sort(key=_sort_key)
+
+        self._assign_normalized_times_and_record_ids_unlocked(all_finalized)
+
+    def _assign_normalized_times_and_record_ids_unlocked(self, all_finalized: bool) -> None:
+        """Normalize clocks and assign IDs without changing the already-frozen order."""
 
         for sequence, event in enumerate(self._event_dicts):
             if self._timing_is_finalized(event):
@@ -2142,27 +3237,53 @@ class SysmonEventEmitter(LogEmitter):
                 event.get("TimeCreated"),
                 coerce_windows_event_id(event.get("EventID")),
             )
+
+    def _synchronize_event_cohort_unlocked(self, all_finalized: bool) -> None:
+        """Synchronize UTC payloads and compatibility GUID references over frozen order."""
+
         self._sync_utc_time_fields()
         if not all_finalized:
             self._shift_followon_utc_times_after_process_create()
             self._sync_process_guids_to_event1_times()
 
-        for event in self._event_dicts:
-            host_fqdn = str(event.get("Computer") or "")
-            if not host_fqdn and not self._direct_file_path:
-                continue
-            snare_timestamp = event.get("TimeCreated")
-            event.pop("_TimingFinalized", None)
-            if self.output_target == OutputTarget.SOF_ELK and isinstance(snare_timestamp, datetime):
-                snare_rendered = render_windows_sysmon_snare_syslog(event)
-                self._get_snare_writer(host_fqdn, snare_timestamp).write(snare_rendered)
-            elif self.output_target in {OutputTarget.DEFAULT, OutputTarget.SPLUNK}:
-                rendered = self._render_event(event)
-                if self.output_target == OutputTarget.SPLUNK:
-                    rendered = compact_windows_event_xml(rendered)
-                self._get_host_writer(host_fqdn).write(rendered)
+    def _finalize_event_for_output(
+        self,
+        event: dict[str, Any],
+    ) -> tuple[str, str, _SingleHostWriter, str] | None:
+        """Resolve the frozen physical route and final source-native string."""
 
-        self._event_dicts.clear()
+        source_state, _ = self._source_lifecycle_snapshot()
+        terminal = self._source_finalization_bound and source_state != "open"
+        output_target = self._source_finalization_output_target if terminal else self.output_target
+        if output_target is None:
+            raise SourceFinalizationError("Sysmon final output target was not frozen")
+        host_fqdn = str(event.get("Computer") or "")
+        if not host_fqdn and not self._direct_file_path:
+            return None
+        snare_timestamp = event.get("TimeCreated")
+        event.pop("_TimingFinalized", None)
+        if output_target == OutputTarget.SOF_ELK and isinstance(snare_timestamp, datetime):
+            route_key = sanitize_syslog_family_route_key(
+                make_syslog_family_route_key(
+                    host_fqdn or "default",
+                    snare_timestamp,
+                    direct_file_mode=self._direct_file_mode,
+                )
+            )
+            writer = self._get_snare_writer_for_route_key(route_key)
+            return (
+                "snare",
+                "" if self._direct_file_mode else route_key,
+                writer,
+                render_windows_sysmon_snare_syslog(event),
+            )
+        if output_target in {OutputTarget.DEFAULT, OutputTarget.SPLUNK}:
+            route_key = "" if self._direct_file_mode else sanitize_path_component(host_fqdn)
+            rendered = self._render_event(event)
+            if output_target == OutputTarget.SPLUNK:
+                rendered = compact_windows_event_xml(rendered)
+            return ("xml", route_key, self._get_host_writer(host_fqdn), rendered)
+        return None
 
     def _shift_process_creates_after_visible_parent(self) -> None:
         """Prevent visible Sysmon Event 1 children from preceding their parent Event 1."""
@@ -2373,13 +3494,759 @@ class SysmonEventEmitter(LogEmitter):
             if isinstance(ts, datetime) and latest is not None and ts <= latest:
                 event["TimeCreated"] = latest + timedelta(milliseconds=1)
 
-    def flush(self, force: bool = False) -> None:
-        if not self.threaded:
-            force = True
-        if not force:
-            return
+    def _snapshot_render_state(self) -> _SysmonRenderState:
+        """Copy mutable source-native state so failed sealing cannot advance it."""
+
+        return _SysmonRenderState(
+            record_id_sequences=deepcopy(self._record_id_sequences),
+            last_time_created_by_computer=dict(self._last_time_created_by_computer),
+            time_collision_count_by_computer=dict(self._time_collision_count_by_computer),
+            final_process_guids=dict(self._final_process_guids),
+        )
+
+    def _adopt_render_state(self, state: _SysmonRenderState) -> None:
+        """Install one retry-local source-native state snapshot."""
+
+        self._record_id_sequences = state.record_id_sequences
+        self._last_time_created_by_computer = state.last_time_created_by_computer
+        self._time_collision_count_by_computer = state.time_collision_count_by_computer
+        self._final_process_guids = state.final_process_guids
+
+    def _source_lifecycle_snapshot(self) -> tuple[str, int | None]:
+        """Read source state and transient operation owner under the close fence."""
+
+        with self._close_condition:
+            return self._source_finalization_state, self._source_finalization_owner
+
+    @contextmanager
+    def _source_finalization_operation(self) -> Iterator[None]:
+        """Fence one terminal mutation while allowing sequential thread transfer."""
+
+        if not self._source_finalization_operation_lock.acquire(blocking=False):
+            raise SourceFinalizationError(
+                "Sysmon source finalization already has an active owner operation"
+            )
+        owner = get_ident()
+        try:
+            with self._close_condition:
+                if self._source_finalization_owner is not None:
+                    raise SourceFinalizationError(
+                        "Sysmon source finalization retained a stale operation owner"
+                    )
+                self._source_finalization_owner = owner
+            yield
+        finally:
+            with self._close_condition:
+                if self._source_finalization_owner == owner:
+                    self._source_finalization_owner = None
+                    self._close_condition.notify_all()
+            self._source_finalization_operation_lock.release()
+
+    def _set_source_lifecycle_state(self, state: str) -> None:
+        """Advance source state under the shared close admission lock."""
+
+        with self._close_condition:
+            owner = self._source_finalization_owner
+            if owner is not None and owner != get_ident():
+                raise SourceFinalizationError(
+                    "Sysmon source-finalization state has a different owner"
+                )
+            self._source_finalization_state = state
+            self._close_condition.notify_all()
+
+    def _require_source_owner(self, allowed_states: set[str]) -> str:
+        """Require the transient operation owner for a terminal mutation."""
+
+        state, owner = self._source_lifecycle_snapshot()
+        if state not in allowed_states:
+            raise SourceFinalizationError(
+                f"Sysmon source-finalization state {state!r} is not mutable here"
+            )
+        if owner != get_ident():
+            raise SourceFinalizationError(
+                "Sysmon source-finalization mutation has a different owner"
+            )
+        return state
+
+    def barrier_flush(self) -> None:
+        """Reject external barriers after terminal quiescence begins."""
+
+        current = get_ident()
+        with self._close_condition:
+            state = self._source_finalization_state
+            owner = self._source_finalization_owner
+            if state != "open" and current != owner:
+                raise SourceFinalizationError(
+                    "Sysmon source-finalization rejected a barrier after quiescence"
+                )
+            if state == "open":
+                legacy_close_owner = (
+                    self._close_state == "closing" and self._close_thread == current
+                )
+                if not legacy_close_owner:
+                    self._require_accepting_events_locked()
+            elif state != "quiescing":
+                raise SourceFinalizationError(
+                    "Sysmon source-finalization rejected a terminal barrier"
+                )
+            self._queue_admissions += 1
+        try:
+            if self.threaded:
+                super().barrier_flush()
+            else:
+                self._wait_for_exact_publication_turn(None)
+                self.flush()
+        finally:
+            self._finish_queue_admission()
+
+    def quiesce_source_finalization(self) -> None:
+        """Reject late candidates, drain FIFO work, and spill without output."""
+
+        with self._source_finalization_operation():
+            self._quiesce_source_finalization()
+
+    def _quiesce_source_finalization(self) -> None:
+        """Run source quiescence under the current operation capability."""
+
+        if not self._source_finalization_bound:
+            raise SourceFinalizationError(
+                "Direct Sysmon emitters retain legacy close and cannot bind an exact epoch"
+            )
+        owner = get_ident()
+        with self._close_condition:
+            state = self._source_finalization_state
+            if state in {"quiesced", "sealed", "published", "closed"}:
+                return
+            if state == "open":
+                if self._close_state != "open":
+                    raise SourceFinalizationError(
+                        "Sysmon emitter close raced source-finalization quiescence"
+                    )
+                self._source_finalization_state = "quiescing"
+                self._source_finalization_owner = owner
+                self._source_finalization_output_target = self.output_target
+                self._source_finalization_header = self.format_def.output.header_template or ""
+                self._source_finalization_footer = self.format_def.output.footer_template or ""
+                self._close_state = "closing"
+                self._close_thread = owner
+            elif state != "quiescing" or self._source_finalization_owner != owner:
+                raise SourceFinalizationError(
+                    "Sysmon source-finalization quiescence has a different owner"
+                )
+            while self._active_exact_publication_keys or self._queue_admissions:
+                self._close_condition.wait()
+
+        if self.threaded:
+            self._raise_if_thread_failed()
+            self.stop_thread()
+            self._raise_if_thread_failed()
         with self._file_lock:
-            self._flush_unlocked()
+            self._spool_event_dicts_unlocked()
+            state = self._journal_state_unlocked()
+            with self._candidate_admission_lock:
+                admitted_rows = self._candidate_admitted_rows
+                admitted_bytes = self._candidate_admitted_bytes
+            if (
+                str(state[0]) != "candidate"
+                or int(state[1]) != admitted_rows
+                or int(state[2]) != admitted_bytes
+            ):
+                raise SourceFinalizationError(
+                    "Sysmon candidate journal does not match admitted source capacity"
+                )
+        self._set_source_lifecycle_state("quiesced")
+
+    def _journal_state_unlocked(self) -> tuple[Any, ...]:
+        """Return the singleton source-journal state while holding `_file_lock`."""
+
+        connection = self._get_spool_conn_unlocked()
+        self._validate_spool_file_unlocked()
+        row = connection.execute(
+            """SELECT phase, candidate_rows, candidate_bytes, final_rows, final_bytes,
+                      routes, published_rows, epoch, high_water_rows, high_water_bytes,
+                      high_water_routes
+               FROM finalization_state WHERE singleton = ?""",
+            (1,),
+        ).fetchone()
+        if row is None:
+            raise SourceFinalizationError("Sysmon source journal lost its singleton state")
+        return tuple(row)
+
+    def _commit_journal_unlocked(self) -> None:
+        """Commit the journal through one injectable lost-return boundary."""
+
+        if self._spool_conn is None:
+            raise SourceFinalizationError("Sysmon source journal is not open")
+        self._spool_conn.commit()
+
+    def _rollback_journal_unlocked(self) -> None:
+        """Roll back one uncommitted private-journal transaction."""
+
+        if self._spool_conn is not None:
+            self._spool_conn.rollback()
+
+    def _route_id_unlocked(
+        self,
+        route_kind: str,
+        route_key: str,
+        writer: _SingleHostWriter,
+    ) -> int:
+        """Retain one resolved physical writer under the finite route cap."""
+
+        token = (route_kind, route_key)
+        route_id = self._source_finalization_route_ids.get(token)
+        if route_id is not None:
+            if self._source_finalization_routes.get(route_id) is not writer:
+                raise SourceFinalizationError(
+                    "Sysmon source route changed its physical writer during sealing"
+                )
+            return route_id
+        if len(self._source_finalization_route_ids) >= self._finalization_route_capacity:
+            raise SourceFinalizationError("Sysmon finalization route capacity is exhausted")
+        route_id = len(self._source_finalization_route_ids)
+        self._source_finalization_route_ids[token] = route_id
+        self._source_finalization_routes[route_id] = writer
+        return route_id
+
+    def _epoch_from_sealed_state_unlocked(
+        self,
+        epoch_ordinal: int,
+    ) -> _SysmonSourceFinalizationEpoch:
+        """Return the strongly retained opaque epoch for one durable seal."""
+
+        epoch = self._source_finalization_epoch
+        output_target = self._source_finalization_output_target
+        header = self._source_finalization_header
+        footer = self._source_finalization_footer
+        if output_target is None or header is None or footer is None:
+            raise SourceFinalizationError("Sysmon epoch lost its frozen output contract")
+        if epoch is not None:
+            if (
+                epoch._owner is not self
+                or epoch._ordinal != epoch_ordinal
+                or epoch._output_target != output_target
+                or epoch._header != header
+                or epoch._footer != footer
+            ):
+                raise SourceFinalizationError("Sysmon source epoch identity changed")
+            return epoch
+        epoch = _SysmonSourceFinalizationEpoch(
+            self,
+            epoch_ordinal,
+            output_target,
+            header,
+            footer,
+        )
+        self._source_finalization_epoch = epoch
+        self._source_finalization_ordinal = epoch_ordinal
+        return epoch
+
+    def _validate_sealed_journal_unlocked(
+        self,
+        epoch_ordinal: int,
+        *,
+        expected_rows: int | None = None,
+        expected_bytes: int | None = None,
+        expected_routes: int | None = None,
+    ) -> tuple[Any, ...]:
+        """Stream-validate final rows before adopting a seal lost return."""
+
+        state = self._journal_state_unlocked()
+        if str(state[0]) not in {"sealed", "published"} or int(state[7]) != epoch_ordinal:
+            raise SourceFinalizationError("Sysmon journal did not retain its sealed epoch")
+        final_rows = int(state[3])
+        final_bytes = int(state[4])
+        routes = int(state[5])
+        if expected_rows is not None and final_rows != expected_rows:
+            raise SourceFinalizationError("Sysmon sealed row count changed after commit")
+        if expected_bytes is not None and final_bytes != expected_bytes:
+            raise SourceFinalizationError("Sysmon sealed byte count changed after commit")
+        if expected_routes is not None and routes != expected_routes:
+            raise SourceFinalizationError("Sysmon sealed route count changed after commit")
+        if self._spool_conn is None:
+            raise SourceFinalizationError("Sysmon source journal is not open")
+        if self._spool_conn.execute(
+            "SELECT COUNT(*) FROM events WHERE phase = ?", ("candidate",)
+        ).fetchone() != (0,):
+            raise SourceFinalizationError("Sysmon sealed journal retained candidate rows")
+        route_tokens: set[tuple[str, str]] = set()
+        retained_rows = 0
+        retained_bytes = 0
+        cursor = self._spool_conn.execute(
+            """SELECT ordinal, route_kind, route_key, payload, payload_bytes, payload_digest
+               FROM events WHERE phase = ? ORDER BY ordinal""",
+            ("final",),
+        )
+        for ordinal, route_kind, route_key, rendered, payload_bytes, payload_digest in cursor:
+            if int(ordinal) != retained_rows:
+                raise SourceFinalizationError("Sysmon sealed journal lost contiguous ordinals")
+            if not all(isinstance(value, str) for value in (route_kind, route_key, rendered)):
+                raise SourceFinalizationError("Sysmon sealed journal retained invalid row types")
+            encoded = rendered.encode("utf-8")
+            if len(encoded) != int(payload_bytes) or hashlib.sha256(encoded).hexdigest() != str(
+                payload_digest
+            ):
+                raise SourceFinalizationError("Sysmon sealed journal row changed after commit")
+            route_tokens.add((route_kind, route_key))
+            retained_rows += 1
+            retained_bytes += len(encoded)
+        if (retained_rows, retained_bytes, len(route_tokens)) != (
+            final_rows,
+            final_bytes,
+            routes,
+        ):
+            raise SourceFinalizationError("Sysmon sealed journal scalar state changed")
+        if route_tokens != set(self._source_finalization_route_ids):
+            raise SourceFinalizationError("Sysmon sealed journal lost retained route owners")
+        return state
+
+    def seal_source_finalization(self) -> SourceFinalizationEpoch:
+        """Seal the complete cohort into immutable routed strings exactly once."""
+
+        with self._source_finalization_operation():
+            return self._seal_source_finalization()
+
+    def _seal_source_finalization(self) -> SourceFinalizationEpoch:
+        """Run source sealing under the current operation capability."""
+
+        source_state = self._require_source_owner({"quiesced", "sealed", "published"})
+        with self._file_lock:
+            state = self._journal_state_unlocked()
+            if str(state[0]) in {"sealed", "published"}:
+                self._validate_sealed_journal_unlocked(int(state[7]))
+                epoch = self._epoch_from_sealed_state_unlocked(int(state[7]))
+                if source_state != "published":
+                    self._set_source_lifecycle_state(str(state[0]))
+                return epoch
+            if str(state[0]) != "candidate":
+                raise SourceFinalizationError("Sysmon source journal has an invalid seal phase")
+            connection = self._spool_conn
+            if connection is None:
+                raise SourceFinalizationError("Sysmon source journal is not open")
+
+            candidate_rows = self._load_candidate_rows_unlocked()
+            events = [event for _sequence, event in candidate_rows]
+            original_events = self._event_dicts
+            original_state = _SysmonRenderState(
+                record_id_sequences=self._record_id_sequences,
+                last_time_created_by_computer=self._last_time_created_by_computer,
+                time_collision_count_by_computer=self._time_collision_count_by_computer,
+                final_process_guids=self._final_process_guids,
+            )
+            working_state = self._snapshot_render_state()
+            initial_host_writer_keys = set(self._host_writers)
+            initial_snare_writer_keys = set(self._snare_writers)
+            self._source_finalization_routes.clear()
+            self._source_finalization_route_ids.clear()
+            epoch_ordinal = int(state[7]) + 1
+            final_rows = 0
+            final_bytes = 0
+            seal_high_water_bytes = int(state[9])
+            sealed = False
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._event_dicts = events
+                self._adopt_render_state(working_state)
+                all_finalized = self._apply_compatibility_causal_shifts_unlocked()
+                shifted_bytes = self._persist_candidate_phase_unlocked(
+                    candidate_rows,
+                    update_sort_key=True,
+                    phase_name="causal-shift",
+                )
+                seal_high_water_bytes = max(seal_high_water_bytes, shifted_bytes)
+
+                candidate_rows = []
+                self._event_dicts = []
+                events = []
+                frozen_rows = self._load_candidate_rows_unlocked(frozen_order=True)
+                self._event_dicts = [event for _sequence, event in frozen_rows]
+                sequence_by_identity = {id(event): sequence for sequence, event in frozen_rows}
+                self._assign_normalized_times_and_record_ids_unlocked(all_finalized)
+                normalized_bytes = self._persist_candidate_phase_unlocked(
+                    frozen_rows,
+                    update_sort_key=False,
+                    phase_name="normalization",
+                )
+                seal_high_water_bytes = max(seal_high_water_bytes, normalized_bytes)
+                self._synchronize_event_cohort_unlocked(all_finalized)
+                synchronized_bytes = self._persist_candidate_phase_unlocked(
+                    frozen_rows,
+                    update_sort_key=False,
+                    phase_name="synchronization",
+                )
+                seal_high_water_bytes = max(seal_high_water_bytes, synchronized_bytes)
+                for event in self._event_dicts:
+                    sequence = sequence_by_identity.get(id(event))
+                    if sequence is None:
+                        raise SourceFinalizationError(
+                            "Sysmon terminal sort lost a candidate identity"
+                        )
+                    final = self._finalize_event_for_output(event)
+                    if final is None:
+                        connection.execute(
+                            "DELETE FROM events WHERE sequence = ? AND phase = ?",
+                            (sequence, "candidate"),
+                        )
+                        continue
+                    route_kind, route_key, writer, rendered = final
+                    self._route_id_unlocked(route_kind, route_key, writer)
+                    encoded = rendered.encode("utf-8")
+                    rendered_bytes = len(encoded)
+                    if rendered_bytes > _FINALIZATION_CHUNK_BYTES:
+                        raise SourceFinalizationError(
+                            "Sysmon final row exceeds exact publication byte capacity"
+                        )
+                    final_rows += 1
+                    final_bytes += rendered_bytes
+                    if final_rows > self._finalization_row_capacity:
+                        raise SourceFinalizationError(
+                            "Sysmon finalization row capacity is exhausted"
+                        )
+                    if final_bytes > self._finalization_byte_capacity:
+                        raise SourceFinalizationError(
+                            "Sysmon finalization byte capacity is exhausted"
+                        )
+                    updated = connection.execute(
+                        """UPDATE events
+                           SET phase = ?, payload = ?, payload_bytes = ?, ordinal = ?,
+                               route_kind = ?, route_key = ?, payload_digest = ?
+                           WHERE sequence = ? AND phase = ?""",
+                        (
+                            "final",
+                            rendered,
+                            rendered_bytes,
+                            final_rows - 1,
+                            route_kind,
+                            route_key,
+                            hashlib.sha256(encoded).hexdigest(),
+                            sequence,
+                            "candidate",
+                        ),
+                    )
+                    if updated.rowcount != 1:
+                        raise SourceFinalizationError(
+                            "Sysmon candidate changed during terminal sealing"
+                        )
+                working_state = self._snapshot_render_state()
+                routes = len(self._source_finalization_route_ids)
+                updated_state = connection.execute(
+                    """UPDATE finalization_state
+                       SET phase = ?, candidate_rows = ?, candidate_bytes = ?,
+                           final_rows = ?, final_bytes = ?, routes = ?, published_rows = ?,
+                           epoch = ?, high_water_rows = MAX(high_water_rows, ?),
+                           high_water_bytes = MAX(high_water_bytes, ?),
+                           high_water_routes = MAX(high_water_routes, ?)
+                       WHERE singleton = ? AND phase = ?""",
+                    (
+                        "sealed",
+                        0,
+                        0,
+                        final_rows,
+                        final_bytes,
+                        routes,
+                        0,
+                        epoch_ordinal,
+                        final_rows,
+                        final_bytes,
+                        routes,
+                        1,
+                        "candidate",
+                    ),
+                )
+                if updated_state.rowcount != 1:
+                    raise SourceFinalizationError("Sysmon source state changed during sealing")
+                self._commit_journal_unlocked()
+                sealed = True
+            except BaseException:
+                if not connection.in_transaction:
+                    try:
+                        self._validate_sealed_journal_unlocked(
+                            epoch_ordinal,
+                            expected_rows=final_rows,
+                            expected_bytes=final_bytes,
+                            expected_routes=len(self._source_finalization_route_ids),
+                        )
+                    except SourceFinalizationError:
+                        sealed = False
+                    else:
+                        sealed = True
+                if not sealed:
+                    self._rollback_journal_unlocked()
+                    self._source_finalization_routes.clear()
+                    self._source_finalization_route_ids.clear()
+                    for writer_key in set(self._host_writers) - initial_host_writer_keys:
+                        self._host_writers.pop(writer_key, None)
+                    for writer_key in set(self._snare_writers) - initial_snare_writer_keys:
+                        self._snare_writers.pop(writer_key, None)
+                    raise
+            finally:
+                self._event_dicts = original_events
+                self._adopt_render_state(original_state)
+
+            if not sealed:
+                raise SourceFinalizationError("Sysmon terminal source seal was not durable")
+            self._spooled_count = 0
+            self._candidate_admitted_rows = 0
+            self._candidate_admitted_bytes = 0
+            self._source_high_water_rows = max(self._source_high_water_rows, final_rows)
+            self._source_high_water_bytes = max(
+                self._source_high_water_bytes,
+                seal_high_water_bytes,
+                final_bytes,
+            )
+            self._source_high_water_routes = max(
+                self._source_high_water_routes,
+                len(self._source_finalization_route_ids),
+            )
+            self._adopt_render_state(working_state)
+            epoch = self._epoch_from_sealed_state_unlocked(epoch_ordinal)
+            self._set_source_lifecycle_state("sealed")
+            return epoch
+
+    def _resolve_sealed_writer_unlocked(
+        self,
+        route_kind: str,
+        route_key: str,
+    ) -> _SingleHostWriter:
+        """Resolve the writer retained when this route was sealed."""
+
+        route_id = self._source_finalization_route_ids.get((route_kind, route_key))
+        writer = self._source_finalization_routes.get(route_id) if route_id is not None else None
+        if writer is None:
+            raise SourceFinalizationError(
+                "Sysmon sealed route lost its same-process physical writer"
+            )
+        return writer
+
+    def _read_final_chunk_unlocked(
+        self,
+        cursor: int,
+        final_rows: int,
+    ) -> _SysmonFinalChunk | None:
+        """Load one bounded immutable final-string chunk."""
+
+        if cursor >= final_rows:
+            return None
+        connection = self._spool_conn
+        if connection is None:
+            raise SourceFinalizationError("Sysmon source journal is not open")
+        rows: list[ExactSourceRow] = []
+        retained_bytes = 0
+        route_ids: set[int] = set()
+        while len(rows) < _FINALIZATION_CHUNK_ROWS and cursor + len(rows) < final_rows:
+            ordinal = cursor + len(rows)
+            row = connection.execute(
+                """SELECT route_kind, route_key, payload, payload_bytes, payload_digest
+                   FROM events WHERE phase = ? AND ordinal = ?""",
+                ("final", ordinal),
+            ).fetchone()
+            if row is None:
+                raise SourceFinalizationError("Sysmon immutable final row is missing")
+            route_kind, route_key, rendered, payload_bytes, payload_digest = row
+            if not all(isinstance(value, str) for value in (route_kind, route_key, rendered)):
+                raise SourceFinalizationError("Sysmon immutable final row has invalid types")
+            encoded = rendered.encode("utf-8")
+            if len(encoded) != int(payload_bytes) or hashlib.sha256(encoded).hexdigest() != str(
+                payload_digest
+            ):
+                raise SourceFinalizationError("Sysmon immutable final row failed validation")
+            writer = self._resolve_sealed_writer_unlocked(route_kind, route_key)
+            next_bytes = retained_bytes + len(encoded)
+            next_route_ids = route_ids | {id(writer)}
+            if rows and (
+                next_bytes > _FINALIZATION_CHUNK_BYTES
+                or len(next_route_ids) > _FINALIZATION_CHUNK_ROUTES
+            ):
+                break
+            if next_bytes > _FINALIZATION_CHUNK_BYTES:
+                raise SourceFinalizationError(
+                    "Sysmon immutable row exceeds exact chunk byte capacity"
+                )
+            retained_bytes = next_bytes
+            route_ids = next_route_ids
+            rows.append(ExactSourceRow(writer=writer, content=rendered))
+        if not rows:
+            raise SourceFinalizationError("Sysmon source chunk could not make bounded progress")
+        return _SysmonFinalChunk(
+            chunk_id=cursor,
+            end_sequence=cursor + len(rows),
+            rows=tuple(rows),
+        )
+
+    def _source_checkpoint_at_least_unlocked(self, cursor: int) -> bool:
+        state = self._journal_state_unlocked()
+        return int(state[6]) >= cursor
+
+    def _checkpoint_source_chunk(self, start: int, end: int) -> None:
+        """Durably advance the source cursor after sink commit and before release."""
+
+        self._require_source_owner({"sealed"})
+        with self._file_lock:
+            state = self._journal_state_unlocked()
+            if int(state[6]) >= end:
+                return
+            if str(state[0]) != "sealed" or int(state[6]) != start:
+                raise SourceFinalizationError(
+                    "Sysmon source checkpoint does not match the retained child"
+                )
+            if self._spool_conn is None:
+                raise SourceFinalizationError("Sysmon source journal is not open")
+            self._spool_conn.execute(
+                """UPDATE finalization_state SET published_rows = ?
+                   WHERE singleton = ? AND phase = ? AND published_rows = ?""",
+                (end, 1, "sealed", start),
+            )
+            try:
+                self._commit_journal_unlocked()
+            except BaseException:
+                if self._spool_conn.in_transaction or not self._source_checkpoint_at_least_unlocked(
+                    end
+                ):
+                    self._rollback_journal_unlocked()
+                    raise
+            if not self._source_checkpoint_at_least_unlocked(end):
+                raise SourceFinalizationError("Sysmon source checkpoint was not durable")
+
+    def _source_checkpoint_at_least(self, cursor: int) -> bool:
+        self._require_source_owner({"sealed"})
+        with self._file_lock:
+            return self._source_checkpoint_at_least_unlocked(cursor)
+
+    def publish_source_finalization(
+        self,
+        epoch: SourceFinalizationEpoch,
+        publisher: ExactChunkPublisher,
+    ) -> None:
+        """Publish sealed strings through bounded exact final-writer children."""
+
+        with self._source_finalization_operation():
+            self._publish_source_finalization(epoch, publisher)
+
+    def _publish_source_finalization(
+        self,
+        epoch: SourceFinalizationEpoch,
+        publisher: ExactChunkPublisher,
+    ) -> None:
+        source_state = self._require_source_owner({"sealed", "published"})
+        if epoch is not self._source_finalization_epoch or not isinstance(
+            epoch, _SysmonSourceFinalizationEpoch
+        ):
+            raise SourceFinalizationError("Sysmon publication received a foreign epoch")
+        if epoch._owner is not self:
+            raise SourceFinalizationError("Sysmon publication lost its epoch owner")
+        if source_state == "published":
+            return
+
+        publisher.resume(epoch)
+        while True:
+            with self._file_lock:
+                state = self._journal_state_unlocked()
+                phase = str(state[0])
+                final_rows = int(state[3])
+                cursor = int(state[6])
+                if phase == "published":
+                    self._set_source_lifecycle_state("published")
+                    return
+                if phase != "sealed":
+                    raise SourceFinalizationError("Sysmon journal left its exact publication phase")
+                chunk = self._read_final_chunk_unlocked(cursor, final_rows)
+            if chunk is None:
+                with self._file_lock:
+                    if self._spool_conn is None:
+                        raise SourceFinalizationError("Sysmon source journal is not open")
+                    self._spool_conn.execute(
+                        """UPDATE finalization_state SET phase = ?
+                           WHERE singleton = ? AND phase = ? AND published_rows = final_rows""",
+                        ("published", 1, "sealed"),
+                    )
+                    try:
+                        self._commit_journal_unlocked()
+                    except BaseException:
+                        if (
+                            self._spool_conn.in_transaction
+                            or str(self._journal_state_unlocked()[0]) != "published"
+                        ):
+                            self._rollback_journal_unlocked()
+                            raise
+                    if str(self._journal_state_unlocked()[0]) != "published":
+                        raise SourceFinalizationError(
+                            "Sysmon terminal publication state was not durable"
+                        )
+                self._set_source_lifecycle_state("published")
+                return
+
+            publisher.publish_chunk(
+                epoch,
+                chunk.chunk_id,
+                chunk.rows,
+                is_checkpointed=lambda end=chunk.end_sequence: self._source_checkpoint_at_least(
+                    end
+                ),
+                checkpoint=lambda start=chunk.chunk_id, end=chunk.end_sequence: (
+                    self._checkpoint_source_chunk(start, end)
+                ),
+            )
+
+    def source_finalization_census(self) -> SysmonSourceFinalizationCensus:
+        """Return bounded journal counts for diagnostics and tests."""
+
+        source_state, _ = self._source_lifecycle_snapshot()
+        with self._candidate_admission_lock:
+            admitted_rows = self._candidate_admitted_rows
+            admitted_bytes = self._candidate_admitted_bytes
+            source_high_water = (
+                self._source_high_water_rows,
+                self._source_high_water_bytes,
+                self._source_high_water_routes,
+            )
+        with self._file_lock:
+            if source_state == "closed":
+                values = (0, 0, 0, 0, 0, 0)
+                high_water = source_high_water
+            elif source_state in {"open", "quiescing", "quiesced"}:
+                values = (admitted_rows, admitted_bytes, 0, 0, 0, 0)
+                high_water = source_high_water
+            elif self._spool_conn is None:
+                values = (0, 0, 0, 0, 0, 0)
+                high_water = source_high_water
+            else:
+                state = self._journal_state_unlocked()
+                values = tuple(int(value) for value in state[1:7])
+                high_water = tuple(int(value) for value in state[8:11])
+            return SysmonSourceFinalizationCensus(
+                state=source_state,
+                candidate_rows=values[0],
+                candidate_bytes=values[1],
+                final_rows=values[2],
+                final_bytes=values[3],
+                routes=values[4],
+                published_rows=values[5],
+                row_capacity=self._finalization_row_capacity,
+                byte_capacity=self._finalization_byte_capacity,
+                route_capacity=self._finalization_route_capacity,
+                high_water_rows=high_water[0],
+                high_water_bytes=high_water[1],
+                high_water_routes=high_water[2],
+            )
+
+    def flush(self, force: bool = False) -> None:
+        """Spill exact candidates or preserve ordinary legacy rendering."""
+
+        source_state, _ = self._source_lifecycle_snapshot()
+        if self._source_finalization_bound and source_state != "open":
+            raise SourceFinalizationError(
+                "Sysmon source-finalization rejected legacy flush after quiescence"
+            )
+        if self._source_finalization_bound:
+            with self._file_lock:
+                self._spool_event_dicts_unlocked()
+        else:
+            if not self.threaded:
+                force = True
+            if not force:
+                return
+            with self._file_lock:
+                self._flush_unlocked()
         with self._host_writers_lock:
             for writer in self._host_writers.values():
                 writer.flush()
@@ -2387,19 +4254,74 @@ class SysmonEventEmitter(LogEmitter):
                 writer.flush()
 
     def close(self) -> None:
-        if self.threaded:
-            self.barrier_flush()
-            self.stop_thread()
-        else:
-            self.flush(force=True)
-        self.flush(force=True)
-        footer = self.format_def.output.footer_template or ""
-        for writer in self._host_writers.values():
-            writer.flush()
-            if footer and writer.event_count > 0 and self.output_target != OutputTarget.SPLUNK:
-                writer.write_footer(footer)
-        for writer in self._snare_writers.values():
-            writer.flush()
+        """Close after exact publication, or retain the direct legacy behavior."""
+
+        if self._source_finalization_bound:
+            with self._source_finalization_operation():
+                self._close_sysmon_emitter()
+            return
+        self._close_sysmon_emitter()
+
+    def _close_sysmon_emitter(self) -> None:
+        """Run exact or legacy close while the required source owner is held."""
+
+        source_state, source_owner = self._source_lifecycle_snapshot()
+        if self._source_finalization_bound and source_state != "open":
+            if source_state in {"aborted", "closed"}:
+                return
+            if source_state != "published":
+                raise SourceFinalizationError(
+                    "Sysmon source close cannot render an unpublished sealed cohort"
+                )
+            if source_owner != get_ident():
+                raise SourceFinalizationError("Sysmon source close has a different owner")
+            footer = self._source_finalization_footer
+            output_target = self._source_finalization_output_target
+            if footer is None or output_target is None:
+                raise SourceFinalizationError("Sysmon source close lost its frozen contract")
+            for writer in self._host_writers.values():
+                if footer and writer.event_count > 0 and output_target != OutputTarget.SPLUNK:
+                    writer.write_footer(footer)
+                else:
+                    writer.flush()
+            for writer in self._snare_writers.values():
+                writer.flush()
+            with self._file_lock:
+                self._cleanup_spool_unlocked()
+            self._source_finalization_routes.clear()
+            self._source_finalization_route_ids.clear()
+            self._set_source_lifecycle_state("closed")
+            self._finish_close()
+            return
+
+        if not self._begin_close():
+            return
+        try:
+            if self.threaded:
+                self.stop_thread()
+            if self._source_finalization_bound:
+                with self._file_lock:
+                    self._spool_event_dicts_unlocked()
+                    self._cleanup_spool_unlocked()
+            else:
+                self.flush(force=True)
+                footer = self.format_def.output.footer_template or ""
+                for writer in self._host_writers.values():
+                    writer.flush()
+                    if (
+                        footer
+                        and writer.event_count > 0
+                        and self.output_target != OutputTarget.SPLUNK
+                    ):
+                        writer.write_footer(footer)
+                for writer in self._snare_writers.values():
+                    writer.flush()
+        except BaseException:
+            self._fail_close()
+            raise
+        if self._source_finalization_bound:
+            self._set_source_lifecycle_state("aborted")
+        self._finish_close()
 
     @property
     def event_count(self) -> int:

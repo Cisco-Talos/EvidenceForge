@@ -373,7 +373,7 @@ class EmitterSetupMixin:
                 )
             elif format_name in _HOST_FORMATS:
                 emitter_kwargs: dict[str, object] = {"threaded": True}
-                if format_name == "windows_event_security":
+                if format_name in {"windows_event_security", "windows_event_sysmon"}:
                     emitter_kwargs["source_finalization"] = True
                 emitter = emitter_classes[format_name](
                     format_def,
