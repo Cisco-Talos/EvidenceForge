@@ -54,6 +54,7 @@ from evidenceforge.generation.actions.command_effects import (
     ExecutionEffectPlan,
     FileEffectAction,
     FileEffectIntent,
+    NetworkEffectIntent,
     SessionEffectAction,
     SessionEffectIntent,
 )
@@ -868,6 +869,38 @@ def test_action_cohort_linked_effects_require_exact_supported_owner_kind(
                 ),
                 owned_effect_plans=(),
             )
+
+
+def test_multi_occurrence_action_cohort_guard_remains_closed_to_network_effects() -> None:
+    """Only typed process-local endpoint rows may use the per-ordinal relaxation."""
+
+    dispatcher = EventDispatcher(StateManager(), {})
+    anchor = ActionAnchor("process_execution", _ROOT_ACTION_ID, source="unit_test")
+    node = ExecutionEffectNode.create(
+        anchor,
+        NetworkEffectIntent("db.internal", 5432, occurrence_cardinality=2),
+        role=OccurrenceRole.DEPENDENT,
+    )
+    plan = ExecutionEffectPlan(anchor, (node,))
+    outcome = EffectExecutionOutcome(
+        node.node_id,
+        EffectOutcomeStatus.REALIZED,
+        completed_at=_START,
+        child_action_id="network-owner",
+        canonical_occurrence_count=2,
+    )
+    entry = ExecutionEffectAuditCohortEntry(plan, plan.reconcile((outcome,)))
+
+    with pytest.raises(EventContractError, match="typed per-ordinal State/lifecycle authority"):
+        dispatcher._validate_action_cohort_effect_member_bindings(
+            root_action_id=_ROOT_ACTION_ID,
+            state_plan=SimpleNamespace(),
+            dispatches=(),
+            audit_entries=(entry,),
+            bindings=(),
+            external_links=(),
+            owned_effect_plans=(),
+        )
 
 
 def test_later_owner_claim_failure_preserves_primary_and_closes_prior_owner(

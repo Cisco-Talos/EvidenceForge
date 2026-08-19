@@ -3645,10 +3645,15 @@ class EventDispatcher:
         from evidenceforge.generation.actions.command_effects import (
             ChildProcessEffectIntent,
             EffectOutcomeStatus,
+            FileEffectIntent,
+            RegistryEffectIntent,
             SessionEffectIntent,
         )
 
         dispatch_ids = {id(dispatch): dispatch for dispatch in dispatches}
+        dispatch_positions = {
+            id(dispatch): position for position, dispatch in enumerate(dispatches)
+        }
         expected: dict[tuple[int, str, int], tuple[object, object, object]] = {}
         expected_links: dict[tuple[int, str], tuple[object, object]] = {}
         for entry_ordinal, entry in enumerate(audit_entries):
@@ -3668,7 +3673,10 @@ class EventDispatcher:
                     raise EventContractError(
                         "Action-cohort realized effect cardinality changed after reconciliation"
                     )
-                if cardinality != 1:
+                if cardinality != 1 and type(node.intent) not in {
+                    FileEffectIntent,
+                    RegistryEffectIntent,
+                }:
                     raise EventContractError(
                         "Multi-occurrence action cohorts require a typed per-ordinal "
                         "State/lifecycle authority"
@@ -3729,6 +3737,14 @@ class EventDispatcher:
                     or provenance.plan_action_id != entry.plan.action_id
                     or provenance.node_id != node.node_id
                     or provenance.occurrence_ordinal != binding.occurrence_ordinal
+                    or occurrence_key.instance_key
+                    != stable_uuid(
+                        "endpoint-effect-occurrence",
+                        entry.plan.action_id,
+                        node.node_id,
+                        binding.occurrence_ordinal,
+                        event.timestamp.isoformat(),
+                    )
                 ):
                     raise EventContractError(
                         "Action-cohort endpoint effect provenance disagrees with its binding"
@@ -3740,6 +3756,8 @@ class EventDispatcher:
             raise EventContractError(
                 "Action-cohort effect bindings do not cover every realized ordinal exactly"
             )
+        from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
+
         realized_groups = {
             (entry_ordinal, node_id) for entry_ordinal, node_id, _occurrence_ordinal in expected
         }
@@ -3759,15 +3777,43 @@ class EventDispatcher:
             if len(members) == 1:
                 valid_completion = outcome.completed_at == timestamps[0]
             else:
-                valid_completion = len(set(timestamps)) == len(
-                    timestamps
-                ) and outcome.completed_at == max(timestamps)
+                member_positions = tuple(dispatch_positions[id(member)] for member in members)
+                actors = tuple(
+                    member._occurrence.identity_plan.actor
+                    if member._occurrence.identity_plan is not None
+                    else None
+                    for member in members
+                )
+                lifecycles = tuple(member._occurrence.lifecycle for member in members)
+                actor = actors[0]
+                has_covering_activity_patch = bool(
+                    type(actor) is ProcessIdentity
+                    and any(
+                        self._action_cohort_target_identity(patch.target) == actor
+                        and patch.activity_time >= timestamps[-1]
+                        for patch in state_plan.process_activity_patches
+                    )
+                )
+                valid_completion = bool(
+                    type(actor) is ProcessIdentity
+                    and all(candidate == actor for candidate in actors)
+                    and all(
+                        lifecycle is not None
+                        and lifecycle.group_id == actor.lifecycle_group_id
+                        and lifecycle.canonical_start == actor.started_at
+                        for lifecycle in lifecycles
+                    )
+                    and member_positions == tuple(sorted(member_positions))
+                    and timestamps == tuple(sorted(timestamps))
+                    and outcome.completed_at == timestamps[-1]
+                    and has_covering_activity_patch
+                )
             if not valid_completion:
                 raise EventContractError(
-                    "Action-cohort realized effect completion time disagrees with its members"
+                    "Action-cohort realized effect completion or per-ordinal authority "
+                    "disagrees with its members"
                 )
 
-        from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
         from evidenceforge.generation.state_manager import (
             ProcessMaterializationPlan,
             SessionMaterializationPlan,

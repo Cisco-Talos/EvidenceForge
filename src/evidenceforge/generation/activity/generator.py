@@ -41,12 +41,12 @@ import shlex
 import uuid
 import zipfile
 from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, cast
 from urllib.parse import urlsplit
 
 from evidenceforge.events.artifacts_manifest import (
@@ -60,6 +60,12 @@ from evidenceforge.events.authentication import (
     windows_logon_has_local_source,
 )
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.content_identity import (
+    Architecture,
+    Platform,
+    UnresolvedBinaryIdentity,
+    canonical_native_path,
+)
 from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
@@ -83,18 +89,29 @@ from evidenceforge.events.contexts import (
     SslContext,
     X509Context,
 )
-from evidenceforge.events.contracts import OccurrenceRole
+from evidenceforge.events.contracts import (
+    EffectOccurrenceKind,
+    OccurrenceRole,
+    OwnedEffectOccurrencePlan,
+    SemanticOccurrenceKey,
+)
 from evidenceforge.events.cryptography import (
     OcspTransactionPlan,
     TlsCertificatePresentationPlan,
 )
 from evidenceforge.events.dispatcher import (
+    ActionCohortEffectMemberBinding,
     EventDispatcher,
     PreparedDispatch,
     PreparedDispatchStateIntent,
     expand_formats,
 )
-from evidenceforge.events.identity import EventIdentityPlan, SessionIdentity
+from evidenceforge.events.identity import (
+    EntityIdentity,
+    EventIdentityPlan,
+    ProcessIdentity,
+    SessionIdentity,
+)
 from evidenceforge.events.lifecycle import ActionLifecycleContext, SessionEndPlan
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -116,6 +133,10 @@ from evidenceforge.generation.actions import (
     DhcpLeaseRequest,
     DnsLookupActionBundle,
     DnsLookupRequest,
+    EffectExecutionOutcome,
+    EffectKind,
+    EffectOutcomeStatus,
+    EffectRequirement,
     EmailAccessActionBundle,
     EmailAccessRequest,
     EmailDeliveryActionBundle,
@@ -123,6 +144,11 @@ from evidenceforge.generation.actions import (
     EmailDeliveryResult,
     ExecutionEffectAuditCounter,
     ExecutionEffectAuditSnapshot,
+    ExecutionEffectNode,
+    ExecutionEffectPlan,
+    ExecutionEffectPlanError,
+    ExecutionEffectPlanErrorCode,
+    ExecutionEffectReconciliation,
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
     FailedLogonActionBundle,
@@ -161,6 +187,7 @@ from evidenceforge.generation.actions import (
     NetworkConnectionIdentityCapture,
     NetworkConnectionRequest,
     NmapCommandProbeActionBundle,
+    NmapCommandProbePlan,
     NmapCommandProbePlanner,
     NmapCommandProbeRequest,
     NmapCommandProbeTarget,
@@ -176,12 +203,15 @@ from evidenceforge.generation.actions import (
     ProcessAccessActionBundle,
     ProcessAccessRequest,
     ProcessExecutionActionBundle,
+    ProcessExecutionPreparedEffects,
     ProcessExecutionRequest,
+    ProcessRuntimeImageLoadPlan,
     ProcessTerminationActionBundle,
     ProcessTerminationRequest,
     RdpSessionActionBundle,
     RdpSessionRequest,
     RdpSourceProcessFactory,
+    ScannerEffectIntent,
     ScheduledTaskActionBundle,
     ScheduledTaskRequest,
     ServiceLogonActionBundle,
@@ -191,6 +221,7 @@ from evidenceforge.generation.actions import (
     SmbActivityResult,
     SshSessionActionBundle,
     SshSessionRequest,
+    UnplannedEffectFailure,
     WindowsRemoteAuthenticationActionBundle,
     WindowsRemoteAuthenticationPlanner,
     WindowsRemoteAuthenticationRequest,
@@ -206,6 +237,12 @@ from evidenceforge.generation.actions import (
     plan_linux_pipeline_stage_times,
 )
 from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.actions.endpoint_effects import (
+    PreparedEndpointEffect,
+    PreparedProcessEffectActor,
+    PreparedProcessEndpointEffectPlan,
+)
+from evidenceforge.generation.actions.scanner_probe import NmapCommandProbePlanningProfile
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
@@ -260,7 +297,10 @@ from evidenceforge.generation.application_channels import ApplicationChannelRegi
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
-from evidenceforge.generation.deployment_registry import DeploymentContentRegistry
+from evidenceforge.generation.deployment_registry import (
+    DeploymentContentRegistry,
+    LocalArtifactPublishToken,
+)
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.http_channels import HttpApplicationChannelManager
 from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
@@ -275,6 +315,11 @@ from evidenceforge.generation.network_runtime import (
 )
 from evidenceforge.generation.process_runtime_cache import BoundedRuntimeCache, deadline_seconds
 from evidenceforge.generation.proxy_channels import ExplicitProxyChannelManager
+from evidenceforge.generation.runtime_content import (
+    RuntimeArtifactOwnerKind,
+    RuntimeContentIdentityManager,
+    RuntimeContentOwnerError,
+)
 from evidenceforge.generation.source_timing import (
     SourceTimingPlanner,
     SourceTimingPlanningRuntime,
@@ -494,6 +539,24 @@ _SYSTEM_ACCOUNT_LOGON_IDS = {
     "LOCAL SERVICE": "0x3e5",
     "NETWORK SERVICE": "0x3e4",
 }
+
+
+def _runtime_artifact_owner_kind(
+    platform: Platform,
+    principal: str,
+    logon_id: str,
+) -> RuntimeArtifactOwnerKind:
+    """Classify one process owner consistently for runtime artifact publication."""
+
+    if (
+        principal in _SYSTEM_ACCOUNTS
+        or logon_id in _SYSTEM_ACCOUNT_LOGON_IDS.values()
+        or (platform == "linux" and principal == "root")
+    ):
+        return "system"
+    return "user"
+
+
 _BASH_BLOCKING_PREFIXES = (
     "nano ",
     "vim ",
@@ -624,6 +687,7 @@ _LINUX_SHELL_MAX_INFERRED_PROCESSES = 4
 _LINUX_SHELL_MAX_INFER_STAGES = 32
 _LINUX_SHELL_MAX_STAGE_CHARS = 4096
 _LINUX_SHELL_MAX_SCAN_CHARS = 32768
+_PROCESS_ENDPOINT_ACTION_COHORT_MEMBER_LIMIT = 256
 _NMAP_PORT_SERVICES = {
     21: "ftp",
     22: "ssh",
@@ -4744,6 +4808,7 @@ class ActivityGenerator:
         application_channel_registry: ApplicationChannelRegistry | None = None,
         generation_window_start: datetime | None = None,
         generation_window_end: datetime | None = None,
+        runtime_content_manager: RuntimeContentIdentityManager | None = None,
     ):
         """Initialize activity generator.
 
@@ -4772,9 +4837,32 @@ class ActivityGenerator:
                 bounded application registries.
             generation_window_end: Exclusive canonical generation boundary for
                 bounded application registries.
+            runtime_content_manager: Optional engine-owned local artifact/content
+                identity manager. Production shares the dispatcher's exact registry.
         """
         self.state_manager = state_manager
         self._execution_effect_audit = ExecutionEffectAuditCounter()
+        dispatcher_artifacts = (
+            getattr(dispatcher, "local_artifact_registry", None) if dispatcher is not None else None
+        )
+        if runtime_content_manager is None and dispatcher_artifacts is not None:
+            runtime_content_manager = RuntimeContentIdentityManager(dispatcher_artifacts)
+        elif (
+            runtime_content_manager is not None
+            and dispatcher_artifacts is not None
+            and runtime_content_manager.registry is not dispatcher_artifacts
+        ):
+            raise ValueError(
+                "activity generator and dispatcher must share one local artifact registry"
+            )
+        runtime_artifact_registry = (
+            runtime_content_manager.registry if runtime_content_manager is not None else None
+        )
+        dispatcher_artifact_registry_to_bind = (
+            runtime_artifact_registry
+            if dispatcher is not None and dispatcher_artifacts is None
+            else None
+        )
         dispatcher_runtime = getattr(dispatcher, "timing_runtime", None)
         if timing_runtime is None:
             timing_runtime = (
@@ -4809,6 +4897,28 @@ class ActivityGenerator:
             raise ValueError("dispatcher and activity generator must share one LifecycleShadow")
         if lifecycle_shadow is None:
             lifecycle_shadow = LifecycleShadow(state_manager, LifecycleRegistry())
+        lifecycle_compatibility_fixture_mode = lifecycle_authority is None
+        if lifecycle_authority is None:
+            lifecycle_authority = GeneratorLifecycleAuthority(
+                state_manager,
+                lifecycle_shadow,
+            )
+        elif lifecycle_authority.registry is not lifecycle_shadow.registry:
+            raise ValueError("activity generator and lifecycle authority must share one registry")
+        proxy_window_start = ensure_utc(generation_window_start or datetime.min.replace(tzinfo=UTC))
+        proxy_window_end = ensure_utc(generation_window_end or datetime.max.replace(tzinfo=UTC))
+        if application_channel_registry is None:
+            application_channel_registry = ApplicationChannelRegistry(
+                window_start=proxy_window_start,
+                window_end=proxy_window_end,
+            )
+        elif (
+            application_channel_registry.window_start != proxy_window_start
+            or application_channel_registry.window_end != proxy_window_end
+        ):
+            raise ValueError(
+                "ActivityGenerator window must exactly match the shared application registry"
+            )
         if dispatcher is None and emitters:
             # Auto-create dispatcher for backward compat with tests
             dispatcher = EventDispatcher(
@@ -4816,13 +4926,19 @@ class ActivityGenerator:
                 emitters=emitters,
                 timing_runtime=timing_runtime,
                 source_timing_planner=source_timing_planner,
+                local_artifact_registry=runtime_artifact_registry,
                 lifecycle_shadow=lifecycle_shadow,
             )
         elif dispatcher is not None:
             bind_lifecycle_shadow = getattr(dispatcher, "bind_lifecycle_shadow", None)
             if callable(bind_lifecycle_shadow):
                 bind_lifecycle_shadow(lifecycle_shadow)
+            if dispatcher_artifact_registry_to_bind is not None:
+                dispatcher.bind_local_artifact_registry(
+                    dispatcher_artifact_registry_to_bind,
+                )
         self.dispatcher = dispatcher
+        self._runtime_content_manager = runtime_content_manager
         if dispatcher is not None:
             bind_execution_effect_audit = getattr(
                 dispatcher,
@@ -4842,14 +4958,6 @@ class ActivityGenerator:
             clock_profile_name=source_timing_profile,
             timing_runtime=timing_runtime,
         )
-        lifecycle_compatibility_fixture_mode = lifecycle_authority is None
-        if lifecycle_authority is None:
-            lifecycle_authority = GeneratorLifecycleAuthority(
-                state_manager,
-                lifecycle_shadow,
-            )
-        elif lifecycle_authority.registry is not lifecycle_shadow.registry:
-            raise ValueError("activity generator and lifecycle authority must share one registry")
         self._lifecycle_authority = lifecycle_authority
         if lifecycle_compatibility_fixture_mode:
             self._lifecycle_authority.enable_fixture_parent_backfill()
@@ -4884,20 +4992,6 @@ class ActivityGenerator:
         self._proxy_auth_policy = ProxyAuthPolicyConfig()
         self._proxy_service_accounts: list[str] = []
         self._proxy_auth_session_deadlines: dict[tuple[str, str], datetime] = {}
-        proxy_window_start = ensure_utc(generation_window_start or datetime.min.replace(tzinfo=UTC))
-        proxy_window_end = ensure_utc(generation_window_end or datetime.max.replace(tzinfo=UTC))
-        if application_channel_registry is None:
-            application_channel_registry = ApplicationChannelRegistry(
-                window_start=proxy_window_start,
-                window_end=proxy_window_end,
-            )
-        elif (
-            application_channel_registry.window_start != proxy_window_start
-            or application_channel_registry.window_end != proxy_window_end
-        ):
-            raise ValueError(
-                "ActivityGenerator window must exactly match the shared application registry"
-            )
         self._application_channel_registry = application_channel_registry
         self._proxy_channel_manager = ExplicitProxyChannelManager(
             window_start=proxy_window_start,
@@ -13750,20 +13844,1186 @@ class ActivityGenerator:
         )
         return ProcessExecutionActionBundle(self, request).execute()
 
+    def _finalize_due_process_lifetimes(
+        self,
+        cutoff: datetime,
+        *,
+        exhaust: bool,
+    ) -> None:
+        """Render bounded due-close pages outside lifecycle-authority locks.
+
+        Hot allocation boundaries drain one fixed page and apply backpressure if
+        more work is already due.  Engine watermarks and finalization explicitly
+        repeat pages before sealing the canonical frontier.
+        """
+
+        known_users = getattr(self, "_users_by_username", {})
+        normalized_cutoff = ensure_utc(cutoff)
+        while True:
+            due = self._lifecycle_authority.pop_due_process_closes(normalized_cutoff)
+            if not due:
+                return
+            for intent in due:
+                system = intent.system
+                running = self.state_manager.get_process(system.hostname, intent.pid)
+                if running is None:
+                    continue
+                if running.start_time != intent.started_at:
+                    continue
+                if self._process_termination_recorded(
+                    system.hostname,
+                    intent.pid,
+                    running.start_time,
+                ):
+                    continue
+                process_user = known_users.get(intent.username) or User(
+                    username=intent.username,
+                    full_name=intent.username,
+                    email=f"{intent.username}@example.local",
+                )
+                self.generate_process_termination(
+                    user=process_user,
+                    system=system,
+                    time=intent.close_at,
+                    pid=intent.pid,
+                    process_name=running.image or intent.process_name,
+                    logon_id=running.logon_id or intent.logon_id,
+                )
+            if not exhaust:
+                if self._lifecycle_authority.has_due_process_closes(normalized_cutoff):
+                    raise StateError(
+                        "Process allocation cannot proceed while more than one bounded "
+                        "lifecycle close page is already due; advance the engine watermark"
+                    )
+                return
+
+    def _sample_process_spacing_gap(
+        self,
+        *,
+        relationship_key: str,
+        stable_id: str,
+        system: System,
+        logon_id: str,
+        minimum_seconds: float,
+        mode_seconds: float,
+        maximum_seconds: float,
+    ) -> timedelta:
+        """Sample one order-independent process spacing gap through the shared runtime."""
+
+        return self.timing_runtime.sampler.sample_timedelta(
+            TriangularDistribution(
+                minimum=minimum_seconds * 1_000_000,
+                mode=mode_seconds * 1_000_000,
+                maximum=maximum_seconds * 1_000_000,
+            ),
+            relationship_key=relationship_key,
+            scope=TimingScope(
+                stable_id=stable_id,
+                host=system.hostname,
+                source="endpoint_process",
+                lifecycle_id=logon_id,
+            ),
+            sample_key="gap",
+        )
+
+    def record_owned_effect_occurrence_plan(self, plan: OwnedEffectOccurrencePlan) -> None:
+        """Register one exact non-process family-owned endpoint-effect root."""
+
+        self._execution_effect_audit.record_owned_effect_plan(plan)
+
+    def _plan_nmap_command_probes(
+        self,
+        request: NmapCommandProbeRequest,
+        planning_profile: NmapCommandProbePlanningProfile,
+    ) -> NmapCommandProbePlan | None:
+        """Compile recognized nmap commands without allocating process state."""
+
+        command_lower = request.command_line.lower()
+        image_lower = request.process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if image_lower not in {"nmap", "nmap.exe"} and " nmap " not in f" {command_lower} ":
+            return None
+        return NmapCommandProbePlanner(planning_profile).plan(
+            request,
+            getattr(self, "_ip_to_system", {}),
+        )
+
+    @staticmethod
+    def _nmap_command_probe_count(plan: NmapCommandProbePlan) -> int:
+        """Return exact canonical connection cardinality for one bounded plan."""
+
+        return len(plan.targets) if plan.discovery else len(plan.targets) * len(plan.ports)
+
+    def _plan_process_execution_effects(
+        self,
+        request: ProcessExecutionRequest,
+        anchor: ActionAnchor,
+    ) -> ExecutionEffectPlan:
+        """Plan bounded command effects before allocating the root process."""
+
+        planning_request = NmapCommandProbeRequest(
+            user=request.user,
+            system=request.system,
+            time=request.time,
+            pid=-1,
+            process_name=request.process_name,
+            command_line=request.command_line,
+        )
+        scanner_plan = self._plan_nmap_command_probes(
+            planning_request,
+            nmap_command_probe_config(),
+        )
+        if scanner_plan is None:
+            return ExecutionEffectPlan(anchor=anchor)
+        probe_count = self._nmap_command_probe_count(scanner_plan)
+        scanner_node = ExecutionEffectNode.create(
+            anchor,
+            ScannerEffectIntent(
+                tool="nmap",
+                target=request.command_line,
+                probe_count=probe_count,
+            ),
+        )
+        return ExecutionEffectPlan(anchor=anchor, nodes=(scanner_node,))
+
+    def _process_endpoint_uses_action_cohort(
+        self,
+        *,
+        actor: PreparedProcessEffectActor,
+        admitted_effects: tuple[PreparedEndpointEffect, ...],
+        effect_plan: ExecutionEffectPlan | None,
+    ) -> bool:
+        """Select the exact endpoint publication boundary without mutating an owner."""
+
+        from evidenceforge.generation.actions.command_effects import (
+            FileEffectIntent,
+            RegistryEffectIntent,
+        )
+
+        has_scanner_effect_intent = effect_plan is not None and any(
+            isinstance(node.intent, ScannerEffectIntent) for node in effect_plan.nodes
+        )
+        has_non_single_endpoint_effect = any(
+            isinstance(effect.spec.intent, (FileEffectIntent, RegistryEffectIntent))
+            and effect.spec.intent.occurrence_cardinality != 1
+            for effect in admitted_effects
+        )
+        state_session = self.state_manager.get_session(actor.logon_id) if actor.logon_id else None
+        state_session_identity = (
+            self.state_manager.get_session_identity(actor.logon_id)
+            if state_session is not None
+            else None
+        )
+        lifecycle_session_snapshot = (
+            self._lifecycle_authority.registry.get_session(state_session_identity.object_id)
+            if state_session_identity is not None
+            else None
+        )
+        session_requires_legacy_endpoint_path = state_session is not None and (
+            state_session_identity is None
+            or lifecycle_session_snapshot is None
+            or lifecycle_session_snapshot.identity
+            != LifecycleShadow.project_session_start(state_session_identity)
+        )
+        if has_scanner_effect_intent and has_non_single_endpoint_effect:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "scanner process endpoint effects require exactly one occurrence on the "
+                "legacy publication path",
+            )
+        if session_requires_legacy_endpoint_path and has_non_single_endpoint_effect:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "process endpoint effects require exactly one occurrence when the owning "
+                "State session lacks exact lifecycle-registry identity",
+            )
+        return not has_scanner_effect_intent and not session_requires_legacy_endpoint_path
+
+    def _plan_process_execution_side_effects(
+        self,
+        request: ProcessExecutionRequest,
+        anchor: ActionAnchor,
+    ) -> ProcessExecutionPreparedEffects | None:
+        """Freeze endpoint/module intent before any PID, lifecycle, or event mutation."""
+
+        from evidenceforge.generation.actions.command_effects import (
+            EffectRequirement,
+            FileEffectAction,
+            FileEffectIntent,
+            RegistryEffectAction,
+            RegistryEffectIntent,
+        )
+        from evidenceforge.generation.actions.endpoint_effects import (
+            EndpointEffectSpec,
+            EndpointStateDisposition,
+            PreparedEndpointEffect,
+            PreparedFileEffectPayload,
+            PreparedProcessEndpointEffectPlan,
+            PreparedRegistryEffectPayload,
+        )
+
+        if (
+            matching_service_worker(
+                os_category=_get_os_category(request.system.os),
+                image=request.process_name,
+                command_line=request.command_line,
+                username=request.user.username,
+            )
+            is not None
+        ):
+            return None
+
+        actor = self._prepare_process_effect_actor(request)
+        rng = self._process_endpoint_effect_rng(request, actor)
+        endpoint_window_candidates = [actor.started_at + timedelta(days=1)]
+        scenario_end = getattr(self, "_scenario_end_time", None)
+        if isinstance(scenario_end, datetime):
+            endpoint_window_candidates.append(ensure_utc(scenario_end))
+        dispatcher_end = getattr(self.dispatcher, "output_end_time", None)
+        if isinstance(dispatcher_end, datetime):
+            endpoint_window_candidates.append(ensure_utc(dispatcher_end))
+        endpoint_window_end = min(endpoint_window_candidates)
+        source_ready_floor = actor.started_at + timedelta(seconds=4)
+        planned: list[PreparedEndpointEffect] = list(request.requested_endpoint_effects)
+
+        process_name = actor.image
+        command_line = actor.command_line
+        process_username = actor.username
+        os_category = _get_os_category(request.system.os)
+        exe_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        bundle_owned_service_payload = exe_lower in {
+            "psexesvc.exe",
+            "healthmonitorsvc.exe",
+        }
+        if request.ensure_file_event and not bundle_owned_service_payload:
+            lower_path = process_name.lower()
+            windows_path = lower_path.replace("/", "\\")
+            is_system_binary = (
+                windows_path.startswith("c:\\windows\\system32\\")
+                or windows_path.startswith("c:\\windows\\syswow64\\")
+                or windows_path.startswith("c:\\program files\\")
+                or windows_path.startswith("c:\\program files (x86)\\")
+                or lower_path.startswith(
+                    (
+                        "/bin/",
+                        "/sbin/",
+                        "/usr/bin/",
+                        "/usr/sbin/",
+                        "/usr/local/bin/",
+                        "/usr/local/sbin/",
+                    )
+                )
+            )
+            if not is_system_binary:
+                occurrence_time = max(
+                    actor.started_at + timedelta(milliseconds=120),
+                    source_ready_floor,
+                )
+                planned.append(
+                    PreparedEndpointEffect(
+                        spec=EndpointEffectSpec(
+                            intent=FileEffectIntent(
+                                action=FileEffectAction.CREATE,
+                                path=process_name,
+                            ),
+                            occurrence_times=(occurrence_time,),
+                            instance_key="guaranteed-process-image-create",
+                            state_disposition=EndpointStateDisposition.DURABLE_FINAL,
+                            retention_deadline=max(
+                                endpoint_window_end,
+                                occurrence_time + timedelta(microseconds=1),
+                            ),
+                        ),
+                        event_type="file_create",
+                        payload=PreparedFileEffectPayload(
+                            path=process_name,
+                            action=FileEffectAction.CREATE,
+                        ),
+                    )
+                )
+
+        semantic_file_effect = None
+        if not request.suppress_command_file_effect:
+            from evidenceforge.generation.activity.edr_pools import select_command_file_side_effect
+
+            semantic_file_effect = select_command_file_side_effect(process_name, command_line)
+            if semantic_file_effect is not None:
+                action, path = semantic_file_effect
+                file_action = FileEffectAction(action)
+                occurrence_time = max(
+                    actor.started_at + timedelta(milliseconds=180),
+                    source_ready_floor + timedelta(milliseconds=1),
+                )
+                mutates = file_action in {FileEffectAction.CREATE, FileEffectAction.MODIFY}
+                planned.append(
+                    PreparedEndpointEffect(
+                        spec=EndpointEffectSpec(
+                            intent=FileEffectIntent(action=file_action, path=path),
+                            occurrence_times=(occurrence_time,),
+                            instance_key="semantic-command-file",
+                            state_disposition=(
+                                EndpointStateDisposition.DURABLE_FINAL
+                                if mutates
+                                else EndpointStateDisposition.NONE
+                            ),
+                            retention_deadline=(
+                                max(
+                                    endpoint_window_end,
+                                    occurrence_time + timedelta(microseconds=1),
+                                )
+                                if mutates
+                                else None
+                            ),
+                        ),
+                        event_type=_FILE_ACTION_EVENT_TYPES[action],
+                        payload=PreparedFileEffectPayload(path=path, action=file_action),
+                    )
+                )
+        if (
+            not request.suppress_command_file_effect
+            and semantic_file_effect is None
+            and rng.random() < 0.40
+        ):
+            from evidenceforge.generation.activity.edr_pools import select_file_side_effect
+
+            side_effect = select_file_side_effect(
+                process_name=process_name,
+                command_line=command_line,
+                os_category=os_category,
+                rng=rng,
+                user=process_username,
+            )
+            if side_effect is not None:
+                action, path = side_effect
+                file_action = FileEffectAction(action)
+                occurrence_time = max(
+                    actor.started_at + timedelta(milliseconds=rng.randint(110, 650)),
+                    source_ready_floor + timedelta(milliseconds=2),
+                )
+                mutates = file_action in {FileEffectAction.CREATE, FileEffectAction.MODIFY}
+                planned.append(
+                    PreparedEndpointEffect(
+                        spec=EndpointEffectSpec(
+                            intent=FileEffectIntent(action=file_action, path=path),
+                            occurrence_times=(occurrence_time,),
+                            instance_key="ambient-process-file",
+                            requirement=EffectRequirement.OPTIONAL,
+                            state_disposition=(
+                                EndpointStateDisposition.DURABLE_FINAL
+                                if mutates
+                                else EndpointStateDisposition.NONE
+                            ),
+                            retention_deadline=(
+                                max(
+                                    endpoint_window_end,
+                                    occurrence_time + timedelta(microseconds=1),
+                                )
+                                if mutates
+                                else None
+                            ),
+                        ),
+                        event_type=_FILE_ACTION_EVENT_TYPES[action],
+                        payload=PreparedFileEffectPayload(path=path, action=file_action),
+                    )
+                )
+
+        runtime_image_load: ProcessRuntimeImageLoadPlan | None = None
+        if os_category == "windows" and rng.random() < 0.30:
+            from evidenceforge.generation.activity.dll_load_profiles import (
+                get_runtime_dlls_for_process,
+            )
+
+            dll_profiles = get_runtime_dlls_for_process(exe_lower)
+            dll_profile = rng.choice(dll_profiles) if dll_profiles else {}
+            dll_path = str(dll_profile.get("path", ""))
+            module_time = max(
+                actor.started_at + timedelta(milliseconds=rng.randint(120, 1500)),
+                source_ready_floor + timedelta(milliseconds=2),
+            )
+            if dll_path and module_time < endpoint_window_end:
+                runtime_image_load = ProcessRuntimeImageLoadPlan(
+                    timestamp=module_time,
+                    path=dll_path,
+                    signed=bool(dll_profile.get("signed", True)),
+                    signature=str(dll_profile.get("signature", "Microsoft Windows")),
+                    signature_status=str(dll_profile.get("signature_status", "Valid")),
+                )
+
+        registry_writers = {
+            "svchost.exe",
+            "services.exe",
+            "explorer.exe",
+            "powershell.exe",
+            "rundll32.exe",
+            "msiexec.exe",
+            "reg.exe",
+            "regedit.exe",
+            "taskhostw.exe",
+            "usoclient.exe",
+            "dllhost.exe",
+            "tiworker.exe",
+            "trustedinstaller.exe",
+            "mpcmdrun.exe",
+            "msmpeng.exe",
+            "winword.exe",
+            "excel.exe",
+            "powerpnt.exe",
+            "outlook.exe",
+        }
+        storyline_registry_writers = {"reg.exe", "regedit.exe", "msiexec.exe"}
+        if (
+            os_category == "windows"
+            and exe_lower in registry_writers
+            and (not request.from_storyline or exe_lower in storyline_registry_writers)
+            and rng.random() < 0.50
+        ):
+            from evidenceforge.generation.activity.edr_pools import (
+                get_registry_keys_hkcu,
+                get_registry_keys_hklm,
+                materialize_registry_effect,
+                registry_entries_for_process,
+            )
+
+            hklm_writers = {
+                "svchost.exe",
+                "services.exe",
+                "reg.exe",
+                "regedit.exe",
+                "msiexec.exe",
+            }
+            count = rng.choices([1, 2, 3], weights=[50, 35, 15], k=1)[0]
+            pool_hkcu = registry_entries_for_process(get_registry_keys_hkcu(), process_name)
+            pool_hklm = registry_entries_for_process(get_registry_keys_hklm(), process_name)
+            for registry_index in range(count):
+                if process_username in _SYSTEM_ACCOUNTS:
+                    eligible_registry = pool_hklm
+                elif exe_lower in hklm_writers:
+                    eligible_registry = pool_hklm + pool_hkcu
+                else:
+                    eligible_registry = pool_hkcu
+                if not eligible_registry:
+                    continue
+                key, value_name, details = rng.choice(eligible_registry)
+                registry_time = max(
+                    actor.started_at + timedelta(milliseconds=rng.randint(120, 950)),
+                    source_ready_floor + timedelta(milliseconds=3 + registry_index),
+                )
+                key, value_name, details, value_type = materialize_registry_effect(
+                    (key, value_name, details),
+                    rng,
+                    request.user.username if request.user else "SYSTEM",
+                    registry_time,
+                    host_key=request.system.hostname,
+                    host_ip=request.system.ip,
+                    host_os=request.system.os,
+                    deployment_registry=getattr(self.dispatcher, "deployment_registry", None),
+                )
+                planned.append(
+                    PreparedEndpointEffect(
+                        spec=EndpointEffectSpec(
+                            intent=RegistryEffectIntent(
+                                action=RegistryEffectAction.MODIFY,
+                                key=key,
+                                value_name=value_name,
+                            ),
+                            occurrence_times=(registry_time,),
+                            instance_key=f"ambient-registry-{registry_index}",
+                            requirement=EffectRequirement.OPTIONAL,
+                            state_disposition=EndpointStateDisposition.DURABLE_FINAL,
+                            retention_deadline=max(
+                                endpoint_window_end,
+                                registry_time + timedelta(microseconds=1),
+                            ),
+                        ),
+                        event_type="registry_modify",
+                        payload=PreparedRegistryEffectPayload(
+                            key=key,
+                            value_name=value_name,
+                            value=details,
+                            value_type=value_type,
+                            action=RegistryEffectAction.MODIFY,
+                        ),
+                    )
+                )
+
+        allocation_free_endpoint = (
+            PreparedProcessEndpointEffectPlan(
+                root_anchor=anchor,
+                actor=actor,
+                window_end=endpoint_window_end,
+                retention_horizon_end=endpoint_window_end,
+                effects=tuple(planned),
+            )
+            if planned
+            else None
+        )
+        if allocation_free_endpoint is not None:
+            root_effect_plan = request.effect_plan or self._plan_process_execution_effects(
+                request,
+                anchor,
+            )
+            self._process_endpoint_uses_action_cohort(
+                actor=actor,
+                admitted_effects=allocation_free_endpoint.admitted_effects,
+                effect_plan=root_effect_plan,
+            )
+
+        runtime_content_manager = self._runtime_content_manager
+        deployment_registry = getattr(self.dispatcher, "deployment_registry", None)
+        host_deployment = (
+            deployment_registry.host_deployment(request.system.hostname)
+            if isinstance(deployment_registry, DeploymentContentRegistry)
+            else None
+        )
+        effective_architecture: Architecture | None = request.system.architecture or (
+            host_deployment.architecture if host_deployment is not None else None
+        )
+        newly_reserved: list[LocalArtifactPublishToken] = []
+        if runtime_content_manager is not None:
+            platform = cast(Platform, os_category)
+            prepared_file_effects: list[PreparedEndpointEffect] = []
+            try:
+                for effect in planned:
+                    payload = effect.payload
+                    if (
+                        not isinstance(payload, PreparedFileEffectPayload)
+                        or payload.artifact_publication is not None
+                    ):
+                        prepared_file_effects.append(effect)
+                        continue
+                    same_as_actor_image = canonical_native_path(
+                        payload.path,
+                        platform,
+                    ) == canonical_native_path(actor.image, platform)
+                    executable = same_as_actor_image and effective_architecture is not None
+                    publication = runtime_content_manager.prepare_effect_publication(
+                        root_action_id=anchor.action_id,
+                        stable_source_id=(
+                            f"{anchor.action_id}:{effect.spec.instance_key}:"
+                            f"{effect.spec.intent.semantic_key}"
+                        ),
+                        hostname=request.system.hostname,
+                        principal=actor.username,
+                        platform=platform,
+                        architecture=effective_architecture,
+                        native_path=payload.path,
+                        action=payload.action.value,
+                        observed_at=effect.spec.occurrence_times[0],
+                        owner_kind=_runtime_artifact_owner_kind(
+                            platform,
+                            actor.username,
+                            actor.logon_id,
+                        ),
+                        deployment_registry=deployment_registry,
+                        actor_image=actor.image,
+                        executable=executable,
+                    )
+                    if publication is not None:
+                        newly_reserved.append(publication)
+                    prepared_file_effects.append(
+                        replace(
+                            effect,
+                            payload=replace(payload, artifact_publication=publication),
+                        )
+                    )
+            except RuntimeContentOwnerError as exc:
+                for publication in newly_reserved:
+                    runtime_content_manager.registry.cancel_prepared(publication)
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                    "prepared process runtime-content owner is inadmissible: "
+                    f"host={request.system.hostname!r} principal={actor.username!r} "
+                    f"image={actor.image!r}: {exc}",
+                ) from exc
+            except (ExecutionEffectPlanError, StateError, ValueError):
+                for publication in newly_reserved:
+                    runtime_content_manager.registry.cancel_prepared(publication)
+                raise
+            planned = prepared_file_effects
+
+        try:
+            endpoint = (
+                replace(
+                    allocation_free_endpoint,
+                    effects=tuple(planned),
+                )
+                if allocation_free_endpoint is not None
+                else None
+            )
+            provisional_termination = self._plan_process_provisional_termination(
+                request,
+                actor,
+            )
+            endpoint_close_floor: datetime | None = None
+            if (
+                provisional_termination is not None
+                and endpoint is not None
+                and endpoint.latest_admitted_occurrence is not None
+            ):
+                endpoint_close_floor = endpoint.latest_admitted_occurrence + timedelta(
+                    milliseconds=25
+                )
+                provisional_termination = max(provisional_termination, endpoint_close_floor)
+            if actor.session_deadline is not None and provisional_termination is not None:
+                close_ceiling = actor.session_deadline - timedelta(milliseconds=25)
+                if endpoint_close_floor is not None and endpoint_close_floor > close_ceiling:
+                    raise ExecutionEffectPlanError(
+                        ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                        "prepared endpoint effects leave no interval for the process lifecycle close",
+                    )
+                if provisional_termination > close_ceiling:
+                    provisional_termination = close_ceiling
+                if provisional_termination <= actor.started_at:
+                    raise ExecutionEffectPlanError(
+                        ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                        "prepared process actor leaves no interval for its lifecycle close",
+                    )
+
+            root_binary_publication: LocalArtifactPublishToken | None = None
+            if runtime_content_manager is not None:
+                platform = cast(Platform, os_category)
+                endpoint_has_binary = bool(
+                    endpoint is not None
+                    and any(
+                        isinstance(effect.payload, PreparedFileEffectPayload)
+                        and effect.payload.artifact_publication is not None
+                        and effect.payload.artifact_publication.record.binary is not None
+                        and canonical_native_path(
+                            effect.payload.artifact_publication.record.artifact.native_path,
+                            platform,
+                        )
+                        == canonical_native_path(actor.image, platform)
+                        for effect in endpoint.admitted_effects
+                    )
+                )
+                resolved_binary = self.dispatcher.resolve_process_binary_identity(
+                    request.system.hostname,
+                    actor.username,
+                    actor.image,
+                    platform,
+                )
+                if not endpoint_has_binary and isinstance(
+                    resolved_binary,
+                    UnresolvedBinaryIdentity,
+                ):
+                    if effective_architecture is None:
+                        raise ExecutionEffectPlanError(
+                            ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                            "unresolved process executable requires exact host architecture",
+                        )
+                    root_binary_publication = runtime_content_manager.prepare_effect_publication(
+                        root_action_id=anchor.action_id,
+                        stable_source_id=f"{anchor.action_id}:root-process-image",
+                        hostname=request.system.hostname,
+                        principal=actor.username,
+                        platform=platform,
+                        architecture=effective_architecture,
+                        native_path=actor.image,
+                        action="create",
+                        observed_at=actor.started_at,
+                        owner_kind=_runtime_artifact_owner_kind(
+                            platform,
+                            actor.username,
+                            actor.logon_id,
+                        ),
+                        deployment_registry=deployment_registry,
+                        actor_image=actor.image,
+                        executable=True,
+                    )
+                    if root_binary_publication is None:
+                        raise ExecutionEffectPlanError(
+                            ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                            "unresolved process executable did not prepare a binary publication",
+                        )
+                    newly_reserved.append(root_binary_publication)
+
+            return ProcessExecutionPreparedEffects(
+                root_anchor=anchor,
+                actor=actor,
+                endpoint=endpoint,
+                runtime_image_load=runtime_image_load,
+                provisional_termination=provisional_termination,
+                root_binary_publication=root_binary_publication,
+            )
+        except RuntimeContentOwnerError as exc:
+            if runtime_content_manager is not None:
+                for publication in newly_reserved:
+                    runtime_content_manager.registry.cancel_prepared(publication)
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                "prepared process runtime-content owner is inadmissible: "
+                f"host={request.system.hostname!r} principal={actor.username!r} "
+                f"image={actor.image!r}: {exc}",
+            ) from exc
+        except (ExecutionEffectPlanError, StateError, ValueError):
+            if runtime_content_manager is not None:
+                for publication in newly_reserved:
+                    runtime_content_manager.registry.cancel_prepared(publication)
+            raise
+
+    @staticmethod
+    def _process_endpoint_effect_rng(
+        request: ProcessExecutionRequest,
+        actor: PreparedProcessEffectActor,
+    ) -> random.Random:
+        """Return the worker/order-stable RNG for one process endpoint preflight."""
+
+        return random.Random(
+            _stable_seed(f"process_endpoint_preflight:{request.stable_id}:{actor.stable_id}")
+        )
+
+    def _plan_process_provisional_termination(
+        self,
+        request: ProcessExecutionRequest,
+        actor: "PreparedProcessEffectActor",
+    ) -> datetime | None:
+        """Freeze a Linux foreground close time before allocating its PID or state."""
+
+        if _get_os_category(
+            request.system.os
+        ) != "linux" or not _linux_shell_process_reserves_foreground(
+            actor.image, actor.command_line
+        ):
+            return None
+        actor_exe = actor.image.rsplit("/", 1)[-1].lower()
+        if actor_exe in {"bash", "sh", "zsh"} and actor.command_line.strip() == f"-{actor_exe}":
+            return None
+        parent_owns_foreground = (
+            self._foreground_shell_key(
+                system=request.system,
+                username=actor.username,
+                logon_id=actor.logon_id,
+                parent_pid=request.parent_pid,
+            )
+            is not None
+        )
+        if not parent_owns_foreground:
+            session = self.state_manager.get_session(actor.logon_id)
+            parent_owns_foreground = bool(
+                actor.logon_id
+                and session is not None
+                and session.system.casefold() == request.system.hostname.casefold()
+            )
+        if not parent_owns_foreground:
+            return None
+        lifetime = _linux_foreground_lifetime(actor.image, actor.command_line)
+        if lifetime is None:
+            return None
+        minimum_seconds, maximum_seconds = lifetime
+        median_seconds = minimum_seconds + (maximum_seconds - minimum_seconds) * 0.34
+        return self.timing_runtime.sampler.after(
+            actor.started_at,
+            TruncatedLognormalDistribution(
+                median=median_seconds * 1_000_000,
+                sigma=0.78,
+                minimum=minimum_seconds * 1_000_000,
+                maximum=maximum_seconds * 1_000_000,
+            ),
+            relationship_key="activity.process.linux_foreground_lifetime",
+            scope=TimingScope(
+                stable_id=request.stable_id,
+                host=request.system.hostname,
+                source="endpoint_process",
+                lifecycle_id=actor.lifecycle_id,
+            ),
+            sample_key="provisional_close",
+        )
+
+    def _prepare_process_effect_actor(
+        self,
+        request: ProcessExecutionRequest,
+    ) -> "PreparedProcessEffectActor":
+        """Resolve the root actor and start fence without mutating runtime state."""
+
+        system = request.system
+        process_name = request.process_name
+        command_line = request.command_line
+        if _get_os_category(system.os) == "windows":
+            process_name, command_line = _windows_script_host_process(
+                process_name,
+                command_line,
+            )
+        exe_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if _get_os_category(system.os) == "windows" and exe_lower == "psexesvc.exe":
+            process_name = r"C:\Windows\PSEXESVC.exe"
+            if "accepteula" in command_line.lower():
+                command_line = r"C:\Windows\PSEXESVC.exe"
+        process_name = normalize_defender_platform_path(process_name, system.hostname)
+
+        started_at = ensure_utc(request.time)
+        process_username, process_logon_id = self._resolve_process_identity(
+            system=system,
+            username=request.user.username,
+            logon_id=request.logon_id,
+            process_name=process_name,
+            time=started_at,
+        )
+        service_account = _windows_service_process_account(process_name, command_line)
+        if _get_os_category(system.os) == "windows" and service_account is not None:
+            process_username = service_account
+            process_logon_id = _SYSTEM_ACCOUNT_LOGON_IDS[service_account]
+        if (
+            _get_os_category(system.os) == "linux"
+            and process_logon_id
+            and (session_end := self.state_manager.get_session_end_time(process_logon_id))
+            is not None
+            and started_at >= ensure_utc(session_end)
+            and self._linux_process_is_system_background_helper(process_name, command_line)
+        ):
+            process_username = self._linux_background_helper_username(process_name, command_line)
+            process_logon_id = "0x3e7"
+
+        session = self.state_manager.get_session(process_logon_id)
+        session_end_plan = self.state_manager.get_session_end_plan(process_logon_id)
+        session_deadline = self.state_manager.get_session_end_time(process_logon_id)
+        if (
+            session is not None
+            and session.session_kind.casefold() == "ssh"
+            and session.network_close_time is not None
+        ):
+            network_close_deadline = ensure_utc(session.network_close_time)
+            session_deadline = (
+                network_close_deadline
+                if session_deadline is None
+                else min(ensure_utc(session_deadline), network_close_deadline)
+            )
+        if session_end_plan is not None and session_end_plan.is_hard_deadline:
+            planned_deadline = ensure_utc(session_end_plan.canonical_end)
+            session_deadline = (
+                planned_deadline
+                if session_deadline is None
+                else min(ensure_utc(session_deadline), planned_deadline)
+            )
+        if (
+            session_end_plan is not None
+            and session_end_plan.is_hard_deadline
+            and started_at >= ensure_utc(session_end_plan.canonical_end)
+        ):
+            deadline = ensure_utc(session_end_plan.canonical_end)
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                "prepared process actor begins at or after its authoritative session end: "
+                f"host={system.hostname} logon_id={process_logon_id} image={process_name!r} "
+                f"started_at={started_at.isoformat()} deadline={deadline.isoformat()}",
+            )
+        if session_deadline is not None and started_at >= ensure_utc(session_deadline):
+            deadline = ensure_utc(session_deadline)
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                "prepared process actor begins at or after its session deadline: "
+                f"host={system.hostname} logon_id={process_logon_id} image={process_name!r} "
+                f"started_at={started_at.isoformat()} deadline={deadline.isoformat()}",
+            )
+        if session is not None and started_at <= ensure_utc(session.start_time):
+            offset_ms = 100 + (
+                _stable_seed(
+                    f"process_after_logon:{system.hostname}:{process_logon_id}:{process_name}"
+                )
+                % 1400
+            )
+            started_at = ensure_utc(session.start_time) + timedelta(milliseconds=offset_ms)
+        parent = self.state_manager.get_process(system.hostname, request.parent_pid)
+        if parent is not None and started_at <= ensure_utc(parent.start_time):
+            offset_ms = 50 + (
+                _stable_seed(
+                    f"process_after_parent:{system.hostname}:{request.parent_pid}:{process_name}:"
+                    f"{command_line}"
+                )
+                % 450
+            )
+            started_at = ensure_utc(parent.start_time) + timedelta(milliseconds=offset_ms)
+
+        if not request.from_storyline and request.source_visible_by is None:
+            started_at = self._preview_one_shot_cli_launch(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=started_at,
+            )
+            if request.allow_browser_launch_spacing:
+                started_at = self._preview_browser_launch(
+                    system=system,
+                    username=process_username,
+                    logon_id=process_logon_id,
+                    process_name=process_name,
+                    command_line=command_line,
+                    time=started_at,
+                )
+        if (
+            _get_os_category(system.os) == "linux"
+            and request.source_visible_by is None
+            and _linux_shell_process_reserves_foreground(process_name, command_line)
+            and _linux_foreground_lifetime(process_name, command_line) is not None
+        ):
+            started_at = self._reserve_foreground_shell_time(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                parent_pid=request.parent_pid,
+                requested_time=started_at,
+                seed_text=command_line,
+                concurrency_group_id=request.concurrency_group_id,
+            )
+        if not request.from_storyline and request.source_visible_by is None:
+            started_at = self._space_interactive_shell_child_launch(
+                system=system,
+                process_name=process_name,
+                parent_pid=request.parent_pid,
+                time=started_at,
+            )
+        effective_deadline = ensure_utc(session_deadline) if session_deadline is not None else None
+        if effective_deadline is not None and started_at >= effective_deadline:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                "prepared process actor leaves no session interval after launch spacing: "
+                f"host={system.hostname} logon_id={process_logon_id} image={process_name!r} "
+                f"started_at={started_at.isoformat()} deadline={effective_deadline.isoformat()}",
+            )
+        return PreparedProcessEffectActor(
+            hostname=system.hostname,
+            image=process_name,
+            command_line=command_line,
+            username=process_username,
+            logon_id=process_logon_id,
+            lifecycle_id=request.lifecycle_group_id or request.stable_id,
+            started_at=started_at,
+            session_deadline=effective_deadline,
+        )
+
+    def _preview_one_shot_cli_launch(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+    ) -> datetime:
+        """Return one-shot spacing without updating compatibility caches."""
+
+        if _get_os_category(system.os) != "windows":
+            return time
+        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name not in _WINDOWS_ONE_SHOT_CLI_EXES:
+            return time
+        normalized_command = " ".join(command_line.lower().split())
+        exe_key = (system.hostname, username, logon_id, exe_name)
+        command_key = (*exe_key, normalized_command)
+        adjusted = time
+        command_last = self._last_one_shot_cli_launch_by_command.get(command_key)
+        if command_last is not None:
+            gap = self._sample_process_spacing_gap(
+                relationship_key="activity.process.one_shot_same_command_gap",
+                stable_id=(
+                    f"{system.hostname}:{username}:{logon_id}:{exe_name}:"
+                    f"{normalized_command}:{command_last.isoformat()}"
+                ),
+                system=system,
+                logon_id=logon_id,
+                minimum_seconds=18.0,
+                mode_seconds=32.0,
+                maximum_seconds=75.0,
+            )
+            adjusted = max(adjusted, command_last + gap)
+        exe_last = self._last_one_shot_cli_launch_by_exe.get(exe_key)
+        if exe_last is not None:
+            gap = self._sample_process_spacing_gap(
+                relationship_key="activity.process.one_shot_same_exe_gap",
+                stable_id=(
+                    f"{system.hostname}:{username}:{logon_id}:{exe_name}:{exe_last.isoformat()}"
+                ),
+                system=system,
+                logon_id=logon_id,
+                minimum_seconds=2.5,
+                mode_seconds=4.2,
+                maximum_seconds=9.0,
+            )
+            adjusted = max(adjusted, exe_last + gap)
+        return adjusted
+
+    def _preview_browser_launch(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+    ) -> datetime:
+        """Return top-level browser spacing without updating compatibility caches."""
+
+        if _get_os_category(system.os) != "windows" or not self._is_top_level_browser_launch(
+            process_name,
+            command_line,
+        ):
+            return time
+        previous = self._last_browser_launch_by_session.get((system.hostname, username, logon_id))
+        if previous is None:
+            return time
+        gap = self._sample_process_spacing_gap(
+            relationship_key="activity.process.browser_launch_gap",
+            stable_id=f"{system.hostname}:{username}:{logon_id}:{previous.isoformat()}",
+            system=system,
+            logon_id=logon_id,
+            minimum_seconds=4.0,
+            mode_seconds=7.5,
+            maximum_seconds=18.0,
+        )
+        return max(time, previous + gap)
+
+    def _resolve_existing_prepared_process_parent(
+        self,
+        *,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+        parent_pid: int,
+        process_username: str,
+    ) -> int:
+        """Resolve an existing parent for a required bundle without materializing helpers."""
+
+        os_category = _get_os_category(system.os)
+        if parent_pid not in {0, 4}:
+            if (
+                os_category == "windows"
+                and self._is_valid_process_parent_at(
+                    system=system,
+                    parent_pid=parent_pid,
+                    time=time,
+                )
+                and self._parent_process_matches_logon(
+                    hostname=system.hostname,
+                    parent_pid=parent_pid,
+                    logon_id=logon_id,
+                    os_category=os_category,
+                )
+            ):
+                return parent_pid
+            if os_category == "linux" and self._linux_parent_usable_for_child_at(
+                system=system,
+                parent_pid=parent_pid,
+                time=time,
+                logon_id=logon_id,
+            ):
+                return parent_pid
+
+        system_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        if os_category == "windows":
+            user_context = (
+                process_username not in _SYSTEM_ACCOUNTS and not process_username.endswith("$")
+            )
+            if user_context:
+                explorer_pid = self._get_session_explorer_pid(
+                    system,
+                    user,
+                    time=time,
+                    logon_id=logon_id,
+                )
+                if explorer_pid is not None:
+                    return explorer_pid
+            for role in ("explorer", "winlogon", "services", "svchost_dcom", "wininit"):
+                candidate = system_pids.get(role)
+                if (
+                    candidate is not None
+                    and self._is_valid_process_parent_at(
+                        system=system,
+                        parent_pid=candidate,
+                        time=time,
+                    )
+                    and self._parent_process_matches_logon(
+                        hostname=system.hostname,
+                        parent_pid=candidate,
+                        logon_id=logon_id,
+                        os_category=os_category,
+                    )
+                ):
+                    return candidate
+            return 4
+
+        session_shell = self._active_session_shell_pid(system, user, time, logon_id)
+        if session_shell is not None:
+            return session_shell
+        for role in ("bash", "sshd", "systemd", "init"):
+            candidate = system_pids.get(role)
+            if candidate is not None and self._linux_parent_usable_for_child_at(
+                system=system,
+                parent_pid=candidate,
+                time=time,
+                logon_id=logon_id,
+            ):
+                return candidate
+        return 0
+
     def _execute_process_create_bundle(self, request: ProcessExecutionRequest) -> int:
         """Expand a process-execution bundle through the compatibility adapter."""
         from evidenceforge.events.contexts import ProcessContext
 
+        prepared_effects = request.prepared_effects
+        prepared_endpoint = prepared_effects.endpoint if prepared_effects is not None else None
+        prepared_actor = prepared_effects.actor if prepared_effects is not None else None
+        # Scanner transports still publish through the established post-process network path.
+        # Keep their process/dependent rows on that same legacy boundary until one bounded
+        # scanner transport collector can admit the complete probe group atomically.
+        if prepared_endpoint is not None and prepared_actor is None:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "prepared process endpoint effects lost their allocation-free actor",
+            )
+        uses_action_cohort = bool(
+            prepared_endpoint is not None
+            and prepared_actor is not None
+            and self._process_endpoint_uses_action_cohort(
+                actor=prepared_actor,
+                admitted_effects=prepared_endpoint.admitted_effects,
+                effect_plan=request.effect_plan,
+            )
+        )
+        if uses_action_cohort:
+            admitted_occurrence_count = sum(
+                len(effect.spec.occurrence_times) for effect in prepared_endpoint.admitted_effects
+            )
+            if 1 + admitted_occurrence_count > _PROCESS_ENDPOINT_ACTION_COHORT_MEMBER_LIMIT:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "process endpoint action cohort exceeds its root/occurrence member limit",
+                )
+        prepared_requires_new_root = bool(
+            prepared_effects is not None
+            and (
+                prepared_effects.process_binary_publication is not None
+                or (
+                    prepared_effects.endpoint is not None
+                    and any(
+                        spec.requirement != EffectRequirement.OPTIONAL
+                        for spec in prepared_effects.endpoint.specs
+                    )
+                )
+            )
+        )
+        if prepared_actor is not None:
+            expected_actor = self._prepare_process_effect_actor(
+                replace(request, prepared_effects=None)
+            )
+            if expected_actor != prepared_actor:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                    "prepared process actor drifted before root allocation",
+                )
+
         user = request.user
         system = request.system
-        time = request.time
-        logon_id = request.logon_id
-        process_name = request.process_name
-        command_line = request.command_line
+        time = prepared_actor.started_at if prepared_actor is not None else request.time
+        logon_id = prepared_actor.logon_id if prepared_actor is not None else request.logon_id
+        process_name = prepared_actor.image if prepared_actor is not None else request.process_name
+        command_line = (
+            prepared_actor.command_line if prepared_actor is not None else request.command_line
+        )
         parent_pid = request.parent_pid
-        ensure_file_event = request.ensure_file_event
         from_storyline = request.from_storyline
-        suppress_command_file_effect = request.suppress_command_file_effect
         allow_existing_browser_reuse = request.allow_existing_browser_reuse
         allow_browser_launch_spacing = request.allow_browser_launch_spacing
         concurrency_group_id = request.concurrency_group_id
@@ -13785,11 +15045,10 @@ class ActivityGenerator:
                 worker_name=worker_name,
             )
 
-        self.state_manager.set_current_time(time)
         session_end_plan = self.state_manager.get_session_end_plan(logon_id)
         if (
             session_end_plan is not None
-            and session_end_plan.is_authoritative
+            and session_end_plan.is_hard_deadline
             and ensure_utc(time) >= ensure_utc(session_end_plan.canonical_end)
         ):
             raise StateError(
@@ -13852,25 +15111,43 @@ class ActivityGenerator:
                     rng = _get_rng()
                     _integrity = "Low" if rng.random() < 0.65 else "Medium"
 
-        process_username, process_logon_id = self._resolve_process_identity(
-            system=system,
-            username=user.username,
-            logon_id=logon_id,
-            process_name=process_name,
-            time=time,
-        )
+        if prepared_actor is not None:
+            process_username = prepared_actor.username
+            process_logon_id = prepared_actor.logon_id
+        else:
+            process_username, process_logon_id = self._resolve_process_identity(
+                system=system,
+                username=user.username,
+                logon_id=logon_id,
+                process_name=process_name,
+                time=time,
+            )
         service_process_account = _windows_service_process_account(process_name, command_line)
-        if _get_os_category(system.os) == "windows" and service_process_account is not None:
+        if (
+            prepared_actor is None
+            and _get_os_category(system.os) == "windows"
+            and service_process_account is not None
+        ):
             process_username = service_process_account
             process_logon_id = _SYSTEM_ACCOUNT_LOGON_IDS[service_process_account]
             _integrity = "System"
+        if (
+            prepared_actor is not None
+            and _get_os_category(system.os) == "linux"
+            and process_logon_id == "0x3e7"
+            and request.logon_id != "0x3e7"
+            and self._linux_process_is_system_background_helper(process_name, command_line)
+        ):
+            _integrity = "System"
+            parent_pid = self._linux_system_parent_fallback(system, time)
         linux_session_end_time = (
             self.state_manager.get_session_end_time(process_logon_id)
             if _get_os_category(system.os) == "linux" and process_logon_id
             else None
         )
         if (
-            linux_session_end_time is not None
+            prepared_actor is None
+            and linux_session_end_time is not None
             and ensure_utc(time) >= ensure_utc(linux_session_end_time)
             and self._linux_process_is_system_background_helper(process_name, command_line)
         ):
@@ -13881,43 +15158,66 @@ class ActivityGenerator:
             process_logon_id = "0x3e7"
             _integrity = "System"
             parent_pid = self._linux_system_parent_fallback(system, time)
+        if prepared_actor is not None and (
+            process_name != prepared_actor.image
+            or command_line != prepared_actor.command_line
+            or process_username != prepared_actor.username
+            or process_logon_id != prepared_actor.logon_id
+        ):
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                "resolved process identity drifted from its allocation-free prepared actor",
+            )
         session_end_time = self.state_manager.get_session_end_time(process_logon_id)
         if (
-            session_end_time is not None
+            prepared_actor is None
+            and session_end_time is not None
             and time >= session_end_time
             and process_logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
         ):
-            time = session_end_time - sample_timing_delta(
+            time = session_end_time - self._sample_profile_activity_gap(
                 "windows.process_create_before_logoff",
-                seed_parts=(system.hostname, process_logon_id, process_name, command_line),
+                stable_id=request.stable_id,
+                host=system.hostname,
+                source="endpoint_process",
+                lifecycle_id=process_logon_id,
+                sample_key="before_logoff_gap",
             )
-            self.state_manager.set_current_time(time)
         session = self.state_manager.get_session(process_logon_id)
         process_logon_type = session.logon_type if session is not None else 2
-        if session is not None and time <= session.start_time:
-            offset_ms = 100 + (
-                _stable_seed(
-                    f"process_after_logon:{system.hostname}:{process_logon_id}:{process_name}"
-                )
-                % 1400
+        if prepared_actor is None and session is not None and time <= session.start_time:
+            logon_gap = self._sample_activity_gap(
+                relationship_key="activity.process.start_after_logon",
+                stable_id=request.stable_id,
+                minimum_ms=100,
+                maximum_ms=1499,
+                host=system.hostname,
+                source="endpoint_process",
+                lifecycle_id=process_logon_id,
+                sample_key="after_logon_gap",
             )
-            time = session.start_time + timedelta(milliseconds=offset_ms)
-            self.state_manager.set_current_time(time)
+            time = session.start_time + logon_gap
         explicit_parent = self.state_manager.get_process(system.hostname, parent_pid)
-        if explicit_parent is not None and time <= explicit_parent.start_time:
-            offset_ms = 50 + (
-                _stable_seed(
-                    f"process_after_parent:{system.hostname}:{parent_pid}:{process_name}:"
-                    f"{command_line}"
-                )
-                % 450
+        if (
+            prepared_actor is None
+            and explicit_parent is not None
+            and time <= explicit_parent.start_time
+        ):
+            parent_gap = self._sample_activity_gap(
+                relationship_key="activity.process.start_after_parent",
+                stable_id=request.stable_id,
+                minimum_ms=50,
+                maximum_ms=499,
+                host=system.hostname,
+                source="endpoint_process",
+                lifecycle_id=process_logon_id,
+                sample_key="after_parent_gap",
             )
-            time = explicit_parent.start_time + timedelta(milliseconds=offset_ms)
-            self.state_manager.set_current_time(time)
+            time = explicit_parent.start_time + parent_gap
         # A caller-supplied source deadline means this process owns an already
         # anchored causal occurrence (for example an SSH socket). Optional
         # human-spacing must not move the canonical start beyond that anchor.
-        if not from_storyline and source_visible_by is None:
+        if prepared_actor is None and not from_storyline and source_visible_by is None:
             spaced_time = self._space_one_shot_cli_launch(
                 system=system,
                 username=process_username,
@@ -13928,7 +15228,6 @@ class ActivityGenerator:
             )
             if spaced_time != time:
                 time = spaced_time
-                self.state_manager.set_current_time(time)
             if allow_browser_launch_spacing:
                 spaced_time = self._space_browser_launch(
                     system=system,
@@ -13940,7 +15239,6 @@ class ActivityGenerator:
                 )
                 if spaced_time != time:
                     time = spaced_time
-                    self.state_manager.set_current_time(time)
         if (
             process_username != user.username
             and process_username not in _SYSTEM_ACCOUNTS
@@ -13963,7 +15261,8 @@ class ActivityGenerator:
             _mandatory_label = "S-1-16-8192"
 
         if (
-            not from_storyline
+            not prepared_requires_new_root
+            and not from_storyline
             and _get_os_category(system.os) == "windows"
             and _exe_lower == "explorer.exe"
             and process_logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
@@ -13975,6 +15274,7 @@ class ActivityGenerator:
                 process_logon_id,
             )
             if explorer_pid is not None:
+                self._record_reused_process_optional_effects(prepared_effects)
                 self.state_manager.update_process_activity_time(
                     system.hostname,
                     explorer_pid,
@@ -13982,19 +15282,23 @@ class ActivityGenerator:
                 )
                 return explorer_pid
 
-        singleton_pid = self._existing_windows_singleton_pid(system, process_name, time)
+        singleton_pid = (
+            self._existing_windows_singleton_pid(system, process_name, time)
+            if not prepared_requires_new_root
+            else None
+        )
         if singleton_pid is not None:
-            running_proc = self.state_manager.get_process(system.hostname, singleton_pid)
-            if running_proc is not None:
-                if (
-                    running_proc.last_activity_time is None
-                    or time > running_proc.last_activity_time
-                ):
-                    running_proc.last_activity_time = time
+            self._record_reused_process_optional_effects(prepared_effects)
+            self.state_manager.update_process_activity_time(
+                system.hostname,
+                singleton_pid,
+                time,
+            )
             return singleton_pid
 
         if (
-            _get_os_category(system.os) == "windows"
+            not prepared_requires_new_root
+            and _get_os_category(system.os) == "windows"
             and explicit_parent is not None
             and ntpath.basename(explicit_parent.image).lower() == "services.exe"
         ):
@@ -14006,6 +15310,7 @@ class ActivityGenerator:
                 command_line=command_line,
             )
             if singleton_service_pid is not None:
+                self._record_reused_process_optional_effects(prepared_effects)
                 running_proc = self.state_manager.get_process(
                     system.hostname, singleton_service_pid
                 )
@@ -14017,7 +15322,7 @@ class ActivityGenerator:
                     )
                 return singleton_service_pid
 
-        if not from_storyline:
+        if not prepared_requires_new_root and not from_storyline:
             persistent_app_pid = self._existing_persistent_user_app_pid(
                 system=system,
                 username=process_username,
@@ -14027,9 +15332,10 @@ class ActivityGenerator:
                 time=time,
             )
             if persistent_app_pid is not None:
+                self._record_reused_process_optional_effects(prepared_effects)
                 return persistent_app_pid
 
-        if not from_storyline and allow_existing_browser_reuse:
+        if not prepared_requires_new_root and not from_storyline and allow_existing_browser_reuse:
             browser_pid = self._existing_user_browser_pid(
                 system=system,
                 username=process_username,
@@ -14039,39 +15345,55 @@ class ActivityGenerator:
                 time=time,
             )
             if browser_pid is not None:
+                self._record_reused_process_optional_effects(prepared_effects)
                 return browser_pid
 
-        parent_pid = self._sanitize_user_parent_pid(
-            system=system,
-            user=user,
-            time=time,
-            logon_id=process_logon_id,
-            process_name=process_name,
-            command_line=command_line,
-            parent_pid=parent_pid,
-            process_username=process_username,
-        )
-        parent_pid = self._materialize_visible_linux_shell_parent_for_child(
-            system=system,
-            time=time,
-            logon_id=process_logon_id,
-            parent_pid=parent_pid,
-            process_username=process_username,
-        )
-        parent_pid = self._repair_process_parent_pid(
-            system=system,
-            time=time,
-            logon_id=process_logon_id,
-            process_name=process_name,
-            command_line=command_line,
-            parent_pid=parent_pid,
-            process_username=process_username,
-        )
+        if prepared_requires_new_root:
+            parent_pid = self._resolve_existing_prepared_process_parent(
+                system=system,
+                user=user,
+                time=time,
+                logon_id=process_logon_id,
+                parent_pid=parent_pid,
+                process_username=process_username,
+            )
+        else:
+            parent_pid = self._sanitize_user_parent_pid(
+                system=system,
+                user=user,
+                time=time,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                parent_pid=parent_pid,
+                process_username=process_username,
+            )
+            parent_pid = self._materialize_visible_linux_shell_parent_for_child(
+                system=system,
+                time=time,
+                logon_id=process_logon_id,
+                parent_pid=parent_pid,
+                process_username=process_username,
+            )
+            parent_pid = self._repair_process_parent_pid(
+                system=system,
+                time=time,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                parent_pid=parent_pid,
+                process_username=process_username,
+            )
         repaired_parent = self.state_manager.get_process(system.hostname, parent_pid)
-        if repaired_parent is not None and time <= repaired_parent.start_time:
+        if (
+            prepared_actor is None
+            and repaired_parent is not None
+            and time <= repaired_parent.start_time
+        ):
             time = repaired_parent.start_time + timedelta(milliseconds=50)
         if (
-            _get_os_category(system.os) == "linux"
+            prepared_actor is None
+            and _get_os_category(system.os) == "linux"
             and source_visible_by is None
             and _linux_shell_process_reserves_foreground(process_name, command_line)
             and _linux_foreground_lifetime(process_name, command_line) is not None
@@ -14087,7 +15409,7 @@ class ActivityGenerator:
             )
             if (
                 session_end_plan is not None
-                and session_end_plan.is_authoritative
+                and session_end_plan.is_hard_deadline
                 and time >= ensure_utc(session_end_plan.canonical_end)
             ):
                 raise StateError(
@@ -14097,54 +15419,97 @@ class ActivityGenerator:
                 )
         if not from_storyline:
             if source_visible_by is None:
-                spaced_time = self._space_interactive_shell_child_launch(
-                    system=system,
-                    process_name=process_name,
-                    parent_pid=parent_pid,
-                    time=time,
-                )
-                if spaced_time != time:
-                    time = spaced_time
-            self._remember_one_shot_cli_launch(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                time=time,
-            )
-        self.state_manager.set_current_time(time)
-        self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
+                if prepared_actor is None:
+                    spaced_time = self._space_interactive_shell_child_launch(
+                        system=system,
+                        process_name=process_name,
+                        parent_pid=parent_pid,
+                        time=time,
+                    )
+                    if spaced_time != time:
+                        time = spaced_time
 
-        # Phase 1: Allocate IDs from StateManager
+        # Drain independently committed due closes before freezing the root State and
+        # source-timing fences. Running this after a timing overlay is sealed or claimed
+        # would either stale that overlay or re-enter its locked canonical indexes.
+        self._finalize_due_process_lifetimes(time, exhaust=False)
+
+        # Phase 1: Freeze the exact PID/thread identity without consuming any allocator.
         process_name = normalize_defender_platform_path(process_name, system.hostname)
-        pid = self.state_manager.create_process(
-            system=system.hostname,
-            parent_pid=parent_pid,
-            image=process_name,
-            command_line=command_line,
-            username=process_username,
-            integrity_level=_integrity,
-            logon_id=process_logon_id,
-            lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
-            concurrency_group_id=concurrency_group_id,
+        process_session_id = self._session_id_for_logon(process_logon_id)
+        process_session_identity = self.state_manager.get_session_identity(process_logon_id)
+        action_cohort_builder = (
+            self.state_manager.begin_action_cohort_materialization() if uses_action_cohort else None
+        )
+        if action_cohort_builder is not None:
+            process_plan = action_cohort_builder.plan_process(
+                system=system.hostname,
+                parent_pid=parent_pid,
+                image=process_name,
+                command_line=command_line,
+                username=process_username,
+                integrity_level=_integrity,
+                logon_id=process_logon_id,
+                lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
+                concurrency_group_id=concurrency_group_id,
+                os_category=_get_os_category(system.os),
+                start_time=ensure_utc(time),
+                parent_activity_time=(ensure_utc(time) if parent_pid not in {0, 4} else None),
+                auth_session_id=process_session_id,
+                auth_logon_type=process_logon_type,
+            )
+            endpoint_activity_frontier = max(
+                ensure_utc(time),
+                prepared_endpoint.latest_admitted_occurrence or ensure_utc(time),
+            )
+            action_cohort_builder.patch_process_activity(
+                process_plan,
+                endpoint_activity_frontier,
+            )
+            live_session = self.state_manager.get_session(process_logon_id)
+            if live_session is not None and process_session_identity is not None:
+                action_cohort_builder.patch_session_activity(
+                    process_session_identity,
+                    endpoint_activity_frontier,
+                )
+            action_cohort_state_plan = action_cohort_builder.seal()
+        else:
+            process_plan = self.state_manager.plan_process_materialization(
+                system=system.hostname,
+                parent_pid=parent_pid,
+                image=process_name,
+                command_line=command_line,
+                username=process_username,
+                integrity_level=_integrity,
+                logon_id=process_logon_id,
+                lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
+                concurrency_group_id=concurrency_group_id,
+                os_category=_get_os_category(system.os),
+                start_time=ensure_utc(time),
+                parent_activity_time=ensure_utc(time),
+            )
+            action_cohort_state_plan = None
+        process_identity = process_plan.identity
+        pid = process_identity.pid
+        parent_identity = self.state_manager.get_process_identity(
+            system.hostname,
+            process_identity.parent_pid,
         )
 
-        # Phase 2: Build OccurrenceBuilder
-        running_proc = self.state_manager.get_process(system.hostname, pid)
-        if running_proc and running_proc.logon_id:
-            session = self.state_manager.get_session(running_proc.logon_id)
-            if session is not None:
-                session.last_activity_time = time
+        # Phase 2: Build and validate the complete root/dependent publication batch.
+        provisional_process_termination = (
+            prepared_effects.provisional_termination if prepared_effects is not None else None
+        )
         if (
-            running_proc is not None
+            not uses_action_cohort
+            and provisional_process_termination is None
             and _get_os_category(system.os) == "linux"
             and _linux_shell_process_reserves_foreground(process_name, command_line)
             and self._foreground_shell_key(
                 system=system,
-                username=running_proc.username,
-                logon_id=running_proc.logon_id,
-                parent_pid=running_proc.parent_pid,
+                username=process_identity.principal,
+                logon_id=process_identity.logon_id,
+                parent_pid=process_identity.parent_pid,
             )
             is not None
         ):
@@ -14153,33 +15518,332 @@ class ActivityGenerator:
                 provisional_rng = random.Random(
                     _stable_seed(
                         "canonical-linux-foreground-lifetime:"
-                        f"{system.hostname}:{pid}:{running_proc.start_time.isoformat()}:"
+                        f"{system.hostname}:{pid}:{process_identity.started_at.isoformat()}:"
                         f"{command_line}"
                     )
                 )
-                provisional_termination = ensure_utc(running_proc.start_time) + timedelta(
-                    seconds=provisional_rng.uniform(*provisional_lifetime)
+                provisional_process_termination = ensure_utc(
+                    process_identity.started_at
+                ) + timedelta(seconds=provisional_rng.uniform(*provisional_lifetime))
+                session_deadline = self.state_manager.get_session_end_time(
+                    process_identity.logon_id
                 )
-                session_deadline = self.state_manager.get_session_end_time(running_proc.logon_id)
                 if session_deadline is not None:
-                    provisional_termination = min(
-                        provisional_termination,
+                    provisional_process_termination = min(
+                        provisional_process_termination,
                         ensure_utc(session_deadline) - timedelta(milliseconds=25),
                     )
-                self._remember_foreground_process_finalizer(
-                    system=system,
-                    user=user,
-                    pid=pid,
-                    process_name=process_name,
-                    logon_id=running_proc.logon_id,
-                    termination_time=max(
-                        provisional_termination,
-                        ensure_utc(running_proc.start_time) + timedelta(milliseconds=25),
-                    ),
+                provisional_process_termination = max(
+                    provisional_process_termination,
+                    ensure_utc(process_identity.started_at) + timedelta(milliseconds=25),
                 )
         if (
-            running_proc is not None
+            uses_action_cohort
+            and provisional_process_termination is None
             and _get_os_category(system.os) == "linux"
+            and _linux_shell_process_reserves_foreground(process_name, command_line)
+            and self._foreground_shell_key(
+                system=system,
+                username=process_identity.principal,
+                logon_id=process_identity.logon_id,
+                parent_pid=process_identity.parent_pid,
+            )
+            is not None
+        ):
+            provisional_lifetime = _linux_foreground_lifetime(process_name, command_line)
+            if provisional_lifetime is not None:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "Linux foreground process reached allocation without a frozen close time",
+                )
+        process_binary_publication = (
+            prepared_effects.process_binary_publication if prepared_effects is not None else None
+        )
+        event = OccurrenceBuilder(
+            timestamp=time,
+            event_type="process_create",
+            src_host=self._build_host_context(system),
+            auth=AuthContext(
+                username=process_username,
+                user_sid=self._get_sid(process_username),
+                logon_id=process_logon_id,
+                session_id=process_session_id,
+                logon_type=process_logon_type,
+                elevated=_integrity in {"High", "System"},
+            ),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=parent_pid,
+                image=process_name,
+                command_line=command_line,
+                username=process_username,
+                integrity_level=_integrity,
+                logon_id=process_logon_id,
+                parent_image=self._lookup_process_name(
+                    system.hostname, parent_pid, _get_os_category(system.os)
+                ),
+                parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
+                parent_start_time=self._lookup_parent_start_time(system.hostname, parent_pid),
+                token_elevation=_token_elevation,
+                mandatory_label=_mandatory_label,
+                start_time=process_identity.started_at,
+                current_directory=self._derive_current_directory(
+                    system=system,
+                    username=process_username,
+                    process_name=process_name,
+                    command_line=command_line,
+                    parent_pid=parent_pid,
+                    logon_type=process_logon_type,
+                ),
+                concurrency_group_id=concurrency_group_id,
+                binary_identity=(
+                    process_binary_publication.record.binary
+                    if process_binary_publication is not None
+                    else None
+                ),
+            ),
+            storyline_origin=from_storyline,
+            identity_plan=EventIdentityPlan(
+                subject=process_identity,
+                actor=parent_identity,
+                session=(
+                    process_session_identity if action_cohort_state_plan is not None else None
+                ),
+            ),
+            lifecycle=ActionLifecycleContext(
+                group_id=process_identity.lifecycle_group_id,
+                canonical_start=process_identity.started_at,
+                phase="start",
+                parent_group_id=process_identity.parent_lifecycle_group_id or None,
+            ),
+        )
+
+        endpoint_source_deadline = (
+            prepared_endpoint.earliest_admitted_occurrence - timedelta(microseconds=1)
+            if prepared_endpoint is not None
+            and prepared_endpoint.earliest_admitted_occurrence is not None
+            else None
+        )
+        effective_source_visible_by = (
+            min(
+                value
+                for value in (source_visible_by, endpoint_source_deadline)
+                if value is not None
+            )
+            if source_visible_by is not None or endpoint_source_deadline is not None
+            else None
+        )
+        if (
+            provisional_process_termination is not None
+            and prepared_endpoint is not None
+            and prepared_endpoint.latest_admitted_occurrence is not None
+        ):
+            provisional_process_termination = max(
+                provisional_process_termination,
+                prepared_endpoint.latest_admitted_occurrence + timedelta(milliseconds=25),
+            )
+
+        def dependent_artifact_publications(
+            publication: LocalArtifactPublishToken | None,
+        ) -> tuple[LocalArtifactPublishToken, ...]:
+            """Bind the root binary plus a distinct dependent file publication."""
+
+            publications: list[LocalArtifactPublishToken] = []
+            if process_binary_publication is not None:
+                publications.append(process_binary_publication)
+            if publication is not None and publication is not process_binary_publication:
+                publications.append(publication)
+            return tuple(publications)
+
+        with self.dispatcher.source_timing_planner.prepared_planning() as timing_preparation:
+            self._plan_process_source_create_times(
+                event,
+                not_after=effective_source_visible_by,
+            )
+
+            endpoint_reconciliation = None
+            endpoint_builders: tuple[
+                tuple[OccurrenceBuilder, LocalArtifactPublishToken | None], ...
+            ] = ()
+            if prepared_endpoint is not None:
+                endpoint_reconciliation, endpoint_builders = (
+                    self._prepare_process_owned_endpoint_effects_for_publication(
+                        system=system,
+                        process_identity=process_identity,
+                        process_closes_at=provisional_process_termination,
+                        prepared=prepared_endpoint,
+                        storyline_origin=from_storyline,
+                        action_cohort_owned=action_cohort_state_plan is not None,
+                    )
+                )
+
+            root_dispatch = self.dispatcher.prepare_builder(
+                event,
+                state_intent=(
+                    PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
+                    if action_cohort_state_plan is not None
+                    else PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START
+                ),
+                lifecycle_ticket=(
+                    action_cohort_state_plan
+                    if action_cohort_state_plan is not None
+                    else process_plan
+                ),
+                artifact_publications=(
+                    (process_binary_publication,) if process_binary_publication is not None else ()
+                ),
+                source_timing_preparation=timing_preparation,
+            )
+            dependent_dispatches = tuple(
+                self.dispatcher.prepare_builder(
+                    builder,
+                    state_intent=(
+                        PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
+                        if action_cohort_state_plan is not None
+                        else PreparedDispatchStateIntent.EXTERNAL_DEPENDENT
+                    ),
+                    lifecycle_ticket=(
+                        action_cohort_state_plan
+                        if action_cohort_state_plan is not None
+                        else process_plan
+                    ),
+                    artifact_publications=dependent_artifact_publications(publication),
+                    source_timing_preparation=timing_preparation,
+                )
+                for builder, publication in endpoint_builders
+            )
+        self.dispatcher.validate_prepared(root_dispatch)
+        for dependent_dispatch in dependent_dispatches:
+            self.dispatcher.validate_prepared(dependent_dispatch)
+
+        artifact_publications = (
+            prepared_effects.artifact_publications if prepared_effects is not None else ()
+        )
+        if artifact_publications and self._runtime_content_manager is None:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "prepared process artifacts require the engine-owned runtime content manager",
+            )
+        reservation_ids = tuple(
+            getattr(publication, "_reservation_id", 0) for publication in artifact_publications
+        )
+        if len(reservation_ids) != len(set(reservation_ids)):
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "prepared process artifacts contain a duplicate publication token",
+            )
+
+        if action_cohort_state_plan is not None:
+            from evidenceforge.generation.actions.command_effects import (
+                ExecutionEffectAuditCohortEntry,
+            )
+
+            if endpoint_reconciliation is None or prepared_endpoint is None:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "process endpoint action cohort lost its exact reconciliation",
+                )
+            endpoint_effect_plan = prepared_endpoint.execution_plan
+            if endpoint_effect_plan is None:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "process endpoint action cohort lost its execution-effect plan",
+                )
+            effect_member_bindings = tuple(
+                ActionCohortEffectMemberBinding(
+                    entry_ordinal=0,
+                    node_id=builder.effect_provenance.node_id,
+                    occurrence_ordinal=builder.effect_provenance.occurrence_ordinal,
+                    member=dependent_dispatch,
+                )
+                for (builder, _publication), dependent_dispatch in zip(
+                    endpoint_builders,
+                    dependent_dispatches,
+                    strict=True,
+                )
+                if builder.effect_provenance is not None
+            )
+            action_cohort_batch = self.dispatcher.prepare_action_cohort_batch(
+                prepared_endpoint.root_anchor.action_id,
+                action_cohort_state_plan,
+                (root_dispatch, *dependent_dispatches),
+                (
+                    ExecutionEffectAuditCohortEntry(
+                        endpoint_effect_plan,
+                        endpoint_reconciliation,
+                    ),
+                ),
+                effect_member_bindings,
+                (),
+            )
+            self.dispatcher.publish_prepared_action_cohort_batch(action_cohort_batch)
+            running_proc = self.state_manager.get_process(system.hostname, pid)
+            if running_proc is None:  # pragma: no cover - authenticated State result invariant
+                raise StateError("Committed process action cohort did not publish its root")
+        else:
+            with timing_preparation.claimed_commit():
+                with ExitStack() as artifact_stack:
+                    artifact_commits = tuple(
+                        artifact_stack.enter_context(
+                            self._runtime_content_manager.registry.prepared_publication(publication)
+                        )
+                        for publication in artifact_publications
+                    )
+
+                    def finalize_prepared_capabilities() -> None:
+                        for artifact_commit in artifact_commits:
+                            artifact_commit.commit()
+                        timing_preparation.commit_no_fail()
+
+                    running_proc, materialization_receipt = (
+                        self._lifecycle_authority.materialize_process(
+                            process_plan,
+                            finalize_external_no_fail=finalize_prepared_capabilities,
+                        )
+                    )
+
+            self.dispatcher.publish_prepared(
+                root_dispatch,
+                materialization_receipt=materialization_receipt,
+            )
+            for dependent_dispatch in dependent_dispatches:
+                self.dispatcher.publish_prepared(
+                    dependent_dispatch,
+                    materialization_receipt=materialization_receipt,
+                )
+            if endpoint_reconciliation is not None:
+                self._execution_effect_audit.record(endpoint_reconciliation)
+
+        if not from_storyline:
+            self._remember_one_shot_cli_launch(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+            )
+        if running_proc.logon_id and action_cohort_state_plan is None:
+            session = self.state_manager.get_session(running_proc.logon_id)
+            if session is not None:
+                session.last_activity_time = time
+        self._record_process_source_create_time(
+            system.hostname,
+            pid,
+            event,
+            not_after=effective_source_visible_by,
+        )
+        if provisional_process_termination is not None:
+            self._remember_foreground_process_finalizer(
+                system=system,
+                user=user,
+                pid=pid,
+                process_name=process_name,
+                logon_id=running_proc.logon_id,
+                termination_time=provisional_process_termination,
+            )
+        if (
+            _get_os_category(system.os) == "linux"
             and _linux_shell_process_reserves_foreground(process_name, command_line)
             and _linux_foreground_lifetime(process_name, command_line) is None
             and self._foreground_shell_key(
@@ -14210,65 +15874,6 @@ class ActivityGenerator:
                     seed_text=running_proc.command_line,
                     concurrency_group_id=running_proc.concurrency_group_id,
                 )
-        self.state_manager.get_process_object_id(system.hostname, pid)
-        self.state_manager.get_process_object_id(system.hostname, parent_pid)
-        process_session_id = self._session_id_for_logon(process_logon_id)
-        event = OccurrenceBuilder(
-            timestamp=time,
-            event_type="process_create",
-            src_host=self._build_host_context(system),
-            auth=AuthContext(
-                username=process_username,
-                user_sid=self._get_sid(process_username),
-                logon_id=process_logon_id,
-                session_id=process_session_id,
-                logon_type=process_logon_type,
-                elevated=_integrity in {"High", "System"},
-            ),
-            process=ProcessContext(
-                pid=pid,
-                parent_pid=parent_pid,
-                image=process_name,
-                command_line=command_line,
-                username=process_username,
-                integrity_level=_integrity,
-                logon_id=process_logon_id,
-                parent_image=self._lookup_process_name(
-                    system.hostname, parent_pid, _get_os_category(system.os)
-                ),
-                parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
-                parent_start_time=self._lookup_parent_start_time(system.hostname, parent_pid),
-                token_elevation=_token_elevation,
-                mandatory_label=_mandatory_label,
-                start_time=running_proc.start_time if running_proc is not None else None,
-                current_directory=self._derive_current_directory(
-                    system=system,
-                    username=process_username,
-                    process_name=process_name,
-                    command_line=command_line,
-                    parent_pid=parent_pid,
-                    logon_type=process_logon_type,
-                ),
-                concurrency_group_id=concurrency_group_id,
-            ),
-            storyline_origin=from_storyline,
-        )
-
-        self._record_process_source_create_time(
-            system.hostname,
-            pid,
-            event,
-            not_after=source_visible_by,
-        )
-
-        # Phase 3: Dispatch to matching emitters
-        self.dispatcher.dispatch_builder(event)
-        self._record_process_source_create_time(
-            system.hostname,
-            pid,
-            event,
-            not_after=source_visible_by,
-        )
         if _get_os_category(system.os) == "windows":
             self._emit_windows_process_startup_modules(
                 user=user,
@@ -14285,264 +15890,400 @@ class ActivityGenerator:
             pid=pid,
             process_name=process_name,
             command_line=command_line,
+            effect_plan=request.effect_plan,
         )
 
-        # Guaranteed FILE/CREATE for the process image when requested (storyline processes).
-        # Skip for pre-existing binaries in System32/SysWOW64/Program Files — Event 11
-        # should only fire for genuinely new files written to disk (malware drops, downloads).
-        bundle_owned_service_payload = _exe_lower in {
-            "psexesvc.exe",
-            "healthmonitorsvc.exe",
-        }
-        if ensure_file_event and not bundle_owned_service_payload:
-            _lower = process_name.lower()
-            _win_path = _lower.replace("/", "\\")
-            _is_windows_system_binary = (
-                _win_path.startswith("c:\\windows\\system32\\")
-                or _win_path.startswith("c:\\windows\\syswow64\\")
-                or _win_path.startswith("c:\\program files\\")
-                or _win_path.startswith("c:\\program files (x86)\\")
-            )
-            _linux_system_binary_prefixes = (
-                "/bin/",
-                "/sbin/",
-                "/usr/bin/",
-                "/usr/sbin/",
-                "/usr/local/bin/",
-                "/usr/local/sbin/",
-            )
-            _is_linux_system_binary = _lower.startswith(_linux_system_binary_prefixes)
-            _is_system_binary = _is_windows_system_binary or _is_linux_system_binary
-            if not _is_system_binary:
-                file_create_time = time + timedelta(milliseconds=120)
-                file_process_pid = pid
-                file_process_parent_pid = parent_pid
-                file_process_image = process_name
-                file_process_command_line = command_line
-                file_process_username = process_username
-                file_process_logon_id = process_logon_id
-                file_process_start_time = (
-                    running_proc.start_time if running_proc is not None else None
-                )
-                self.dispatcher.dispatch_builder(
-                    OccurrenceBuilder(
-                        timestamp=file_create_time,
-                        event_type="file_create",
-                        src_host=self._build_host_context(system),
-                        auth=AuthContext(username=file_process_username),
-                        process=ProcessContext(
-                            pid=file_process_pid,
-                            parent_pid=file_process_parent_pid,
-                            image=file_process_image,
-                            command_line=file_process_command_line,
-                            username=file_process_username,
-                            logon_id=file_process_logon_id,
-                            start_time=file_process_start_time,
-                        ),
-                        file=FileContext(path=process_name, action="create", pid=file_process_pid),
-                        storyline_origin=from_storyline,
-                    )
-                )
-
-        # Phase 8.2: Probabilistic EDR object diversity via canonical OccurrenceBuilder
-        rng = _get_rng()
-        os_category = _get_os_category(system.os)
-        host_ctx = self._build_host_context(system)
-        auth_ctx = AuthContext(
-            username=process_username,
-            user_sid=self._get_sid(process_username),
-            logon_id=process_logon_id,
+        runtime_image_load = (
+            prepared_effects.runtime_image_load if prepared_effects is not None else None
         )
-        semantic_file_effect = None
-        if not suppress_command_file_effect:
-            from evidenceforge.generation.activity.edr_pools import select_command_file_side_effect
-
-            semantic_file_effect = select_command_file_side_effect(process_name, command_line)
-            if semantic_file_effect is not None:
-                action, path = semantic_file_effect
-                event_type = _FILE_ACTION_EVENT_TYPES[action]
-                self.dispatcher.dispatch_builder(
-                    OccurrenceBuilder(
-                        timestamp=time + timedelta(milliseconds=180),
-                        event_type=event_type,
-                        src_host=host_ctx,
-                        auth=auth_ctx,
-                        process=ProcessContext(
-                            pid=pid,
-                            parent_pid=parent_pid,
-                            image=process_name,
-                            command_line=command_line,
-                            username=process_username,
-                            logon_id=process_logon_id,
-                            start_time=running_proc.start_time
-                            if running_proc is not None
-                            else None,
-                        ),
-                        file=FileContext(path=path, action=action, pid=pid),
-                        storyline_origin=from_storyline,
-                    ),
-                )
-        if (
-            not suppress_command_file_effect
-            and semantic_file_effect is None
-            and rng.random() < 0.40
-        ):
-            from evidenceforge.generation.activity.edr_pools import select_file_side_effect
-
-            side_effect = select_file_side_effect(
-                process_name=process_name,
-                command_line=command_line,
-                os_category=os_category,
-                rng=rng,
-                user=process_username,
+        if runtime_image_load is not None:
+            self.generate_image_load(
+                user=user,
+                system=system,
+                time=runtime_image_load.timestamp,
+                pid=pid,
+                image=process_name,
+                dll_path=runtime_image_load.path,
+                signed=runtime_image_load.signed,
+                signature=runtime_image_load.signature,
+                signature_status=runtime_image_load.signature_status,
+                load_phase="runtime",
+                from_storyline=from_storyline,
             )
-            if side_effect is not None:
-                action, path = side_effect
-                event_type = _FILE_ACTION_EVENT_TYPES[action]
-                self.dispatcher.dispatch_builder(
-                    OccurrenceBuilder(
-                        timestamp=time + timedelta(milliseconds=rng.randint(110, 650)),
-                        event_type=event_type,
-                        src_host=host_ctx,
-                        auth=auth_ctx,
-                        process=ProcessContext(
-                            pid=pid,
-                            parent_pid=parent_pid,
-                            image=process_name,
-                            command_line=command_line,
-                            username=process_username,
-                            logon_id=process_logon_id,
-                            start_time=running_proc.start_time
-                            if running_proc is not None
-                            else None,
-                        ),
-                        file=FileContext(path=path, action=action, pid=pid),
-                        storyline_origin=from_storyline,
-                    ),
-                )
-        if os_category == "windows" and rng.random() < 0.30:
-            from evidenceforge.generation.activity.dll_load_profiles import (
-                get_runtime_dlls_for_process,
-            )
-
-            dll_profiles = get_runtime_dlls_for_process(_exe_lower)
-            dll_profile = rng.choice(dll_profiles) if dll_profiles else {}
-            dll_path = dll_profile.get("path", "")
-            module_delay_ms = rng.randint(120, 1500)
-            if dll_path:
-                self.generate_image_load(
-                    user=user,
-                    system=system,
-                    time=time + timedelta(milliseconds=module_delay_ms),
-                    pid=pid,
-                    image=process_name,
-                    dll_path=dll_path,
-                    signed=bool(dll_profile.get("signed", True)),
-                    signature=str(dll_profile.get("signature", "Microsoft Windows")),
-                    signature_status=str(dll_profile.get("signature_status", "Valid")),
-                    load_phase="runtime",
-                    from_storyline=from_storyline,
-                )
-        # Only emit registry events for processes that realistically modify registry
-        # (services, shells, installers) — NOT command-line recon tools like net.exe/dsquery.exe
-        _REGISTRY_WRITERS = {
-            "svchost.exe",
-            "services.exe",
-            "explorer.exe",
-            "powershell.exe",
-            "rundll32.exe",
-            "msiexec.exe",
-            "reg.exe",
-            "regedit.exe",
-            "taskhostw.exe",
-            "usoclient.exe",
-            "dllhost.exe",
-            "tiworker.exe",
-            "trustedinstaller.exe",
-            "mpcmdrun.exe",
-            "msmpeng.exe",
-            "winword.exe",
-            "excel.exe",
-            "powerpnt.exe",
-            "outlook.exe",
-        }
-        _exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        _STORYLINE_REGISTRY_WRITERS = {"reg.exe", "regedit.exe", "msiexec.exe"}
-        if (
-            os_category == "windows"
-            and _exe in _REGISTRY_WRITERS
-            and (not from_storyline or _exe in _STORYLINE_REGISTRY_WRITERS)
-            and rng.random() < 0.50
-        ):
-            # Service-level processes can write HKLM; user processes only HKCU
-            _HKLM_WRITERS = {"svchost.exe", "services.exe", "reg.exe", "regedit.exe", "msiexec.exe"}
-            # Emit 1-3 registry events per process (registry activity is high-volume)
-            _reg_count = rng.choices([1, 2, 3], weights=[50, 35, 15], k=1)[0]
-            from evidenceforge.generation.activity.edr_pools import (
-                get_registry_keys_hkcu,
-                get_registry_keys_hklm,
-                materialize_registry_effect,
-                registry_entries_for_process,
-            )
-
-            _pool_hkcu = registry_entries_for_process(get_registry_keys_hkcu(), process_name)
-            _pool_hklm = registry_entries_for_process(get_registry_keys_hklm(), process_name)
-            for _ in range(_reg_count):
-                if process_username in _SYSTEM_ACCOUNTS:
-                    _eligible_registry = _pool_hklm
-                elif _exe in _HKLM_WRITERS:
-                    _eligible_registry = _pool_hklm + _pool_hkcu
-                else:
-                    _eligible_registry = _pool_hkcu
-                if not _eligible_registry:
-                    continue
-                _key, _vname, _details = rng.choice(_eligible_registry)
-                _template_user = user.username if user else "SYSTEM"
-                _reg_ts = time + timedelta(milliseconds=rng.randint(120, 950))
-                _key, _vname, _details, _value_type = materialize_registry_effect(
-                    (_key, _vname, _details),
-                    rng,
-                    _template_user,
-                    _reg_ts,
-                    host_key=system.hostname,
-                    host_ip=system.ip,
-                    host_os=system.os,
-                )
-                # TargetObject = key\value_name (full path as Sysmon shows it)
-                _target = f"{_key}\\{_vname}"
-                # Sysmon value writes are Event 13. Key create/delete events need key-only
-                # contexts, not the value-name pools used for ambient registry noise.
-                reg_action = "modify"
-                self.dispatcher.dispatch_builder(
-                    OccurrenceBuilder(
-                        timestamp=_reg_ts,
-                        event_type="registry_modify",
-                        src_host=host_ctx,
-                        auth=auth_ctx,
-                        process=ProcessContext(
-                            pid=pid,
-                            parent_pid=parent_pid,
-                            image=process_name,
-                            command_line=command_line,
-                            username=process_username,
-                            logon_id=process_logon_id,
-                            start_time=running_proc.start_time
-                            if running_proc is not None
-                            else None,
-                        ),
-                        registry=RegistryContext(
-                            key=_target,
-                            value=_details,
-                            value_type=_value_type,
-                            action=reg_action,
-                            pid=pid,
-                        ),
-                        storyline_origin=from_storyline,
-                    )
-                )
-
         logger.debug(f"Generated process: {process_name} (PID: {pid}) on {system.hostname}")
         return pid
+
+    def _cancel_uncommitted_process_artifact_publications(
+        self,
+        prepared_effects: ProcessExecutionPreparedEffects | None,
+    ) -> None:
+        """Release every prepared artifact reservation not consumed by a successful bundle."""
+
+        manager = self._runtime_content_manager
+        if manager is None or prepared_effects is None:
+            return
+        for publication in prepared_effects.artifact_publications:
+            manager.registry.cancel_prepared(publication)
+
+    def _record_reused_process_optional_effects(
+        self,
+        prepared_effects: ProcessExecutionPreparedEffects | None,
+    ) -> None:
+        """Reconcile planned optionals explicitly when an existing root is reused."""
+
+        endpoint = prepared_effects.endpoint if prepared_effects is not None else None
+        if endpoint is None:
+            return
+        plan = endpoint.execution_plan
+        if plan is None or any(
+            node.requirement != EffectRequirement.OPTIONAL for node in plan.nodes
+        ):
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "a reused process root may suppress only explicitly optional endpoint effects",
+            )
+        reconciliation = plan.reconcile(
+            tuple(
+                EffectExecutionOutcome(
+                    node_id=node.node_id,
+                    status=EffectOutcomeStatus.SUPPRESSED,
+                    completed_at=endpoint.actor.started_at,
+                    reason="optional endpoint effect omitted because an exact live root was reused",
+                    canonical_occurrence_count=0,
+                )
+                for node in plan.ordered_nodes
+            )
+        )
+        reconciliation.require_complete()
+        self._execution_effect_audit.record(reconciliation)
+
+    def _prepare_process_owned_endpoint_effects_for_publication(
+        self,
+        *,
+        system: System,
+        prepared: PreparedProcessEndpointEffectPlan,
+        storyline_origin: bool,
+        action_cohort_owned: bool = False,
+        process_identity: ProcessIdentity | None = None,
+        process_closes_at: datetime | None = None,
+        pid: int | None = None,
+        parent_pid: int | None = None,
+    ) -> tuple[
+        ExecutionEffectReconciliation,
+        tuple[tuple[OccurrenceBuilder, LocalArtifactPublishToken | None], ...],
+    ]:
+        """Bind and stage an endpoint DAG against an allocation-free process identity."""
+
+        from types import SimpleNamespace
+
+        from evidenceforge.events.contracts import (
+            EffectOccurrenceProvenance,
+        )
+        from evidenceforge.generation.actions.command_effects import (
+            EffectExecutionOutcome,
+            EffectOutcomeStatus,
+            FileEffectIntent,
+            RegistryEffectIntent,
+        )
+        from evidenceforge.generation.actions.endpoint_effects import (
+            EndpointEffectExecutionPlan,
+            EndpointEffectPreparedCommit,
+            ExactProcessEffectActor,
+            PreparedFileEffectPayload,
+            PreparedRegistryEffectPayload,
+            ProcessOwnedEndpointEffectActionBundle,
+            ProcessOwnedEndpointEffectRequest,
+            bind_prepared_process_endpoint_effect_plan,
+        )
+
+        if process_identity is None:
+            if pid is None:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                    "endpoint effects require an exact process identity or PID",
+                )
+            process_identity = self.state_manager.get_process_identity(system.hostname, pid)
+            running_process = self.state_manager.get_process(system.hostname, pid)
+            if process_identity is None or running_process is None:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                    f"endpoint effects require live exact process {system.hostname}:{pid}",
+                )
+            process_closes_at = running_process.end_time
+        if parent_pid is not None and parent_pid != process_identity.parent_pid:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                "endpoint effect parent PID drifted from its exact process identity",
+            )
+
+        actor = ExactProcessEffectActor(
+            hostname=process_identity.hostname,
+            pid=process_identity.pid,
+            process_object_id=process_identity.object_id,
+            lifecycle_id=process_identity.lifecycle_group_id,
+            image=process_identity.image,
+            command_line=process_identity.command_line,
+            username=process_identity.principal,
+            logon_id=process_identity.logon_id,
+            started_at=process_identity.started_at,
+            closes_at=process_closes_at,
+        )
+        request = bind_prepared_process_endpoint_effect_plan(prepared, actor)
+        host_context = self._build_host_context(system)
+        auth_context = AuthContext(
+            username=actor.username,
+            user_sid=self._get_sid(actor.username),
+            logon_id=actor.logon_id,
+        )
+        process_context = ProcessContext(
+            pid=process_identity.pid,
+            parent_pid=process_identity.parent_pid,
+            image=actor.image,
+            command_line=actor.command_line,
+            username=actor.username,
+            logon_id=actor.logon_id,
+            start_time=actor.started_at,
+        )
+        effect_graph = prepared.execution_plan
+        if effect_graph is None:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "prepared endpoint publication requires its frozen execution-effect graph",
+            )
+        nodes_by_instance_key = {node.instance_key: node for node in effect_graph.ordered_nodes}
+        builders_by_key: dict[
+            str,
+            tuple[tuple[OccurrenceBuilder, LocalArtifactPublishToken | None], ...],
+        ] = {}
+        for effect in prepared.admitted_effects:
+            spec = effect.spec
+            payload = effect.payload
+            intent = spec.intent
+            if isinstance(intent, FileEffectIntent):
+                if not isinstance(payload, PreparedFileEffectPayload):
+                    raise ExecutionEffectPlanError(
+                        ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                        "prepared file effect lost its source-native payload",
+                    )
+                semantic_key = f"{system.hostname}:{payload.path.casefold()}"
+                subject = EntityIdentity(
+                    object_id=stable_uuid("file-identity", semantic_key),
+                    kind="file",
+                    hostname=system.hostname,
+                    semantic_key=semantic_key,
+                )
+                builder_template = OccurrenceBuilder(
+                    timestamp=actor.started_at,
+                    event_type=effect.event_type,
+                    src_host=host_context,
+                    auth=auth_context,
+                    process=process_context,
+                    file=FileContext(
+                        path=payload.path,
+                        action=payload.action.value,
+                        pid=process_identity.pid,
+                        artifact_identity=(
+                            payload.artifact_publication.record.artifact
+                            if payload.artifact_publication is not None
+                            else None
+                        ),
+                        content_identity=(
+                            payload.artifact_publication.record.content
+                            if payload.artifact_publication is not None
+                            else None
+                        ),
+                    ),
+                    storyline_origin=storyline_origin,
+                )
+            elif isinstance(intent, RegistryEffectIntent):
+                if not isinstance(payload, PreparedRegistryEffectPayload):
+                    raise ExecutionEffectPlanError(
+                        ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                        "prepared registry effect lost its source-native payload",
+                    )
+                target = f"{payload.key}\\{payload.value_name}"
+                semantic_key = f"{system.hostname}:{target.casefold()}:{payload.value}"
+                subject = EntityIdentity(
+                    object_id=stable_uuid("registry-identity", semantic_key),
+                    kind="registry",
+                    hostname=system.hostname,
+                    semantic_key=semantic_key,
+                )
+                builder_template = OccurrenceBuilder(
+                    timestamp=actor.started_at,
+                    event_type=effect.event_type,
+                    src_host=host_context,
+                    auth=auth_context,
+                    process=process_context,
+                    registry=RegistryContext(
+                        key=target,
+                        value=payload.value,
+                        value_type=payload.value_type,
+                        action=payload.action.value,
+                        pid=process_identity.pid,
+                    ),
+                    storyline_origin=storyline_origin,
+                )
+            else:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_INTENT,
+                    "prepared process endpoint adapters accept only file and registry effects",
+                )
+            node = nodes_by_instance_key.get(spec.instance_key)
+            if node is None:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.MISSING_DEPENDENCY,
+                    "prepared process endpoint payload has no matching effect node",
+                )
+            artifact_publication = (
+                payload.artifact_publication
+                if isinstance(payload, PreparedFileEffectPayload)
+                else None
+            )
+            publication_occurrences = (
+                tuple(enumerate(spec.occurrence_times))
+                if action_cohort_owned
+                else ((0, spec.occurrence_times[0]),)
+            )
+            builders_by_key[spec.instance_key] = tuple(
+                (
+                    replace(
+                        builder_template,
+                        timestamp=occurrence_time,
+                        occurrence_key=(
+                            SemanticOccurrenceKey(
+                                action_id=stable_uuid(
+                                    "canonical-action",
+                                    process_identity.lifecycle_group_id,
+                                ),
+                                role=node.role,
+                                instance_key=stable_uuid(
+                                    "endpoint-effect-occurrence",
+                                    effect_graph.action_id,
+                                    node.node_id,
+                                    occurrence_ordinal,
+                                    occurrence_time.isoformat(),
+                                ),
+                            )
+                            if action_cohort_owned
+                            else None
+                        ),
+                        identity_plan=EventIdentityPlan(
+                            subject=subject,
+                            actor=process_identity,
+                        ),
+                        lifecycle=(
+                            ActionLifecycleContext(
+                                group_id=process_identity.lifecycle_group_id,
+                                canonical_start=process_identity.started_at,
+                                phase="dependent",
+                                parent_group_id=(
+                                    process_identity.parent_lifecycle_group_id or None
+                                ),
+                            )
+                            if action_cohort_owned
+                            else None
+                        ),
+                        effect_provenance=EffectOccurrenceProvenance.planned(
+                            kind=(
+                                EffectOccurrenceKind.FILE
+                                if isinstance(intent, FileEffectIntent)
+                                else EffectOccurrenceKind.REGISTRY
+                            ),
+                            root_action_id=prepared.root_anchor.action_id,
+                            plan_action_id=effect_graph.action_id,
+                            node_id=node.node_id,
+                            occurrence_ordinal=occurrence_ordinal,
+                        ),
+                    ),
+                    artifact_publication,
+                )
+                for occurrence_ordinal, occurrence_time in publication_occurrences
+            )
+
+        staged_builders: tuple[tuple[OccurrenceBuilder, LocalArtifactPublishToken | None], ...] = ()
+
+        def preflight(
+            candidate_request: ProcessOwnedEndpointEffectRequest,
+            _anchor: ActionAnchor,
+        ) -> EndpointEffectExecutionPlan:
+            expected = candidate_request.execution_plan
+            if expected is None or candidate_request.actor != actor:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                    "process endpoint actor drifted from its allocation-free identity",
+                )
+            for occurrence in expected.occurrences():
+                if occurrence.timestamp < process_identity.started_at or (
+                    process_closes_at is not None and occurrence.timestamp >= process_closes_at
+                ):
+                    raise ExecutionEffectPlanError(
+                        ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                        "process endpoint occurrence falls outside its prepared actor lifetime",
+                    )
+            return expected
+
+        def prepare(
+            candidate_request: ProcessOwnedEndpointEffectRequest,
+        ) -> EndpointEffectPreparedCommit:
+            nonlocal staged_builders
+            plan = candidate_request.execution_plan
+            if plan is None:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "process endpoint staging requires its exact frozen plan",
+                )
+            suppressed = frozenset(plan.suppressed_instance_keys)
+            admitted_keys = tuple(
+                spec.instance_key for spec in plan.specs if spec.instance_key not in suppressed
+            )
+            if set(admitted_keys) != builders_by_key.keys():
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "process endpoint builders drifted from admitted planned instances",
+                )
+            staged_builders = tuple(
+                builder for key in admitted_keys for builder in builders_by_key[key]
+            )
+            specs_by_key = {spec.instance_key: spec for spec in plan.specs}
+            outcomes = []
+            for node in plan.effects.ordered_nodes:
+                spec = specs_by_key[node.instance_key]
+                if node.instance_key in suppressed:
+                    outcomes.append(
+                        EffectExecutionOutcome(
+                            node_id=node.node_id,
+                            status=EffectOutcomeStatus.SUPPRESSED,
+                            completed_at=actor.started_at,
+                            reason="optional endpoint effect omitted outside its prepared interval",
+                            canonical_occurrence_count=0,
+                        )
+                    )
+                    continue
+                outcomes.append(
+                    EffectExecutionOutcome(
+                        node_id=node.node_id,
+                        status=EffectOutcomeStatus.REALIZED,
+                        completed_at=spec.occurrence_times[-1],
+                        child_action_id=(actor.lifecycle_id if action_cohort_owned else ""),
+                        canonical_occurrence_count=node.intent.occurrence_cardinality,
+                    )
+                )
+            return EndpointEffectPreparedCommit.create(plan, tuple(outcomes))
+
+        def commit(
+            _candidate_request: ProcessOwnedEndpointEffectRequest,
+            _prepared_commit: EndpointEffectPreparedCommit,
+        ) -> None:
+            return None
+
+        adapter = SimpleNamespace(
+            _preflight_process_owned_endpoint_effects=preflight,
+            _prepare_process_owned_endpoint_effects=prepare,
+            _commit_process_owned_endpoint_effects=commit,
+        )
+        reconciliation = ProcessOwnedEndpointEffectActionBundle(adapter, request).execute()
+        return reconciliation, staged_builders
 
     def _record_process_source_create_time(
         self,
@@ -14883,21 +16624,58 @@ class ActivityGenerator:
         pid: int,
         process_name: str,
         command_line: str,
+        effect_plan: ExecutionEffectPlan | None = None,
     ) -> None:
         """Emit direct network effects for well-known network-scanning commands."""
-        NmapCommandProbeActionBundle(
+        probe_request = NmapCommandProbeRequest(
+            user=user,
+            system=system,
+            time=time,
+            pid=pid,
+            process_name=process_name,
+            command_line=command_line,
+        )
+        bundle = NmapCommandProbeActionBundle(
             executor=self,
-            request=NmapCommandProbeRequest(
-                user=user,
-                system=system,
-                time=time,
-                pid=pid,
-                process_name=process_name,
-                command_line=command_line,
-            ),
-        ).execute()
+            request=probe_request,
+        )
+        if effect_plan is None:
+            bundle.execute()
+            return
 
-    def _execute_nmap_command_probe_bundle(self, request: NmapCommandProbeRequest) -> None:
+        probe_count = self._execute_nmap_command_probe_bundle(probe_request)
+        scanner_nodes = tuple(
+            node for node in effect_plan.nodes if isinstance(node.intent, ScannerEffectIntent)
+        )
+        if scanner_nodes:
+            outcomes = (
+                EffectExecutionOutcome(
+                    node_id=scanner_nodes[0].node_id,
+                    status=EffectOutcomeStatus.REALIZED,
+                    canonical_occurrence_count=probe_count,
+                ),
+            )
+            unplanned_failures = ()
+        elif probe_count:
+            outcomes = ()
+            unplanned_failures = (
+                UnplannedEffectFailure(
+                    effect_kind=EffectKind.SCANNER,
+                    canonical_occurrence_count=probe_count,
+                    reason="nmap emitted canonical probes for an explicit no-effect plan",
+                ),
+            )
+        else:
+            outcomes = ()
+            unplanned_failures = ()
+        reconciliation = effect_plan.reconcile(
+            outcomes,
+            unplanned_failures=unplanned_failures,
+        )
+        self._execution_effect_audit.record(reconciliation)
+        reconciliation.require_complete()
+
+    def _execute_nmap_command_probe_bundle(self, request: NmapCommandProbeRequest) -> int:
         """Expand nmap-like process commands into scanner probe connections."""
 
         system = request.system
@@ -14908,14 +16686,14 @@ class ActivityGenerator:
         command_lower = command_line.lower()
         image_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         if image_lower not in {"nmap", "nmap.exe"} and " nmap " not in f" {command_lower} ":
-            return
+            return 0
         planning_profile = nmap_command_probe_config()
         plan = NmapCommandProbePlanner(planning_profile).plan(
             request,
             getattr(self, "_ip_to_system", {}),
         )
         if plan is None:
-            return
+            return 0
 
         # The process and its connections are separate canonical occurrences, while eCAR
         # independently delays their source observations. Anchor the entire scanner family after
@@ -14939,7 +16717,7 @@ class ActivityGenerator:
                     planning_profile.discovery_window_seconds_max,
                 ),
             )
-            return
+            return len(plan.targets)
 
         probe_pairs = [(target, port) for target in plan.targets for port in plan.ports]
         rng.shuffle(probe_pairs)
@@ -14981,6 +16759,7 @@ class ActivityGenerator:
                 process_image=process_name,
                 suppress_application_side_effects=True,
             )
+        return len(probe_pairs)
 
     def _nmap_probe_anchor_after_visible_process_create(
         self,
