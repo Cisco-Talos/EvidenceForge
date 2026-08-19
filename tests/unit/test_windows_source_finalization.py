@@ -20,7 +20,11 @@ from evidenceforge.generation.emitters.base import (
     ExactPublicationError,
 )
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
-from evidenceforge.generation.emitters.windows import WindowsEventEmitter, _spool_encode
+from evidenceforge.generation.emitters.windows import (
+    WindowsEventEmitter,
+    _spool_decode,
+    _spool_encode,
+)
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.source_finalization import (
     ExactChunkPublisher,
@@ -69,6 +73,25 @@ def _authority() -> ExactPublicationAuthority:
     )
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        ("A" * 32, 1, 0),
+        ("a" * 31, 1, 0),
+        ("a" * 32, True, 0),
+        ("a" * 32, 2**63, 0),
+        ("a" * 32, 1, 2**63),
+    ],
+)
+def test_windows_exact_candidate_key_rejects_unbounded_or_noncanonical_values(
+    key: object,
+) -> None:
+    """Journal receipt keys are exact, canonical, and SQLite-safe."""
+
+    with pytest.raises(ExactPublicationError, match="key is malformed"):
+        WindowsEventEmitter._validate_exact_candidate_key(key)  # type: ignore[arg-type]
+
+
 def _scenario() -> Scenario:
     return Scenario(
         version="1.0",
@@ -107,6 +130,491 @@ def _scenario() -> Scenario:
         ),
         personas=[],
     )
+
+
+@pytest.mark.parametrize("threaded", [False, True])
+def test_windows_exact_candidate_prepare_reserves_without_admitting_and_cancel_is_neutral(
+    tmp_path: Path,
+    threaded: bool,
+) -> None:
+    """Exact Type-5 candidates stay private until commit and cancel releases capacity."""
+
+    emitter = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "output",
+        threaded=threaded,
+        source_finalization=True,
+    )
+    batch = _authority().issue_batch()
+    first = _event(datetime(2024, 1, 15, 10, 30, tzinfo=UTC), "svc-once")
+    second = {
+        **first,
+        "EventID": 4672,
+        "PrivilegeList": "SeSecurityPrivilege",
+    }
+
+    try:
+        batch.prepare(lambda: (emitter.emit_event(first), emitter.emit_event(second)))
+
+        assert emitter._event_dicts == []
+        assert emitter._event_queue is None or emitter._event_queue.empty()
+        census = emitter.source_finalization_census()
+        assert census.candidate_rows == 2
+        assert census.candidate_bytes > 0
+        exact_census = emitter.exact_candidate_census()
+        assert (
+            exact_census.current_rows,
+            exact_census.current_participants,
+            exact_census.released_rows,
+        ) == (2, 1, 0)
+        assert exact_census.current_bytes > 0
+
+        batch.cancel()
+
+        census = emitter.source_finalization_census()
+        assert census.candidate_rows == 0
+        assert census.candidate_bytes == 0
+        assert emitter._event_dicts == []
+        assert emitter._event_queue is None or emitter._event_queue.empty()
+        assert emitter._spool_sequence == 0
+        exact_census = emitter.exact_candidate_census()
+        assert (
+            exact_census.current_rows,
+            exact_census.current_bytes,
+            exact_census.current_participants,
+        ) == (0, 0, 0)
+        assert (
+            exact_census.high_water_rows,
+            exact_census.high_water_participants,
+        ) == (2, 1)
+
+        replacement = _authority().issue_batch()
+        replacement.prepare(lambda: emitter.emit_event(first))
+        replacement.commit()
+        with emitter._file_lock:
+            assert emitter._spool_conn is not None
+            exact_sequences = emitter._spool_conn.execute(
+                "SELECT sequence FROM events WHERE route_kind = ?",
+                ("exact-candidate-v1",),
+            ).fetchall()
+        assert exact_sequences == [(0,)]
+        replacement.release_no_fail()
+        coordinator = SourceFinalizationCoordinator((emitter,), _authority())
+        coordinator.finalize()
+        emitter.close()
+        coordinator.mark_closed()
+    finally:
+        if not batch.released and batch.state != "canceled":
+            batch.cancel()
+        emitter.close()
+
+
+@pytest.mark.parametrize("threaded", [False, True])
+@pytest.mark.parametrize("lost_return", [False, True])
+def test_windows_exact_candidate_commit_resumes_4672_without_duplicate_4624(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    threaded: bool,
+    lost_return: bool,
+) -> None:
+    """A second-row failure resumes the same journal candidates and batch cursor."""
+
+    emitter = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "output",
+        threaded=threaded,
+        source_finalization=True,
+    )
+    batch = _authority().issue_batch()
+    first = _event(datetime(2024, 1, 15, 10, 30, tzinfo=UTC), "svc-once")
+    second = {**first, "EventID": 4672, "PrivilegeList": "SeSecurityPrivilege"}
+    original_commit = emitter._commit_exact_candidate_row
+    faulted = False
+
+    def fail_second_once(key: tuple[str, int, int], digest: str, frozen: object) -> None:
+        nonlocal faulted
+        if key[2] == 1 and not faulted:
+            faulted = True
+            if lost_return:
+                original_commit(key, digest, frozen)
+            raise RuntimeError("4672 exact candidate return lost")
+        original_commit(key, digest, frozen)
+
+    monkeypatch.setattr(emitter, "_commit_exact_candidate_row", fail_second_once)
+    batch.prepare(lambda: (emitter.emit_event(first), emitter.emit_event(second)))
+
+    with pytest.raises(RuntimeError, match="4672 exact candidate return lost"):
+        batch.commit()
+    assert batch.state == "ready"
+    assert emitter.exact_candidate_census().current_rows == 2
+
+    batch.commit()
+    batch.release_no_fail()
+    exact_census = emitter.exact_candidate_census()
+    assert (
+        exact_census.released_rows,
+        exact_census.released_bytes,
+        exact_census.completed_participants,
+    ) == (
+        exact_census.current_rows,
+        exact_census.current_bytes,
+        exact_census.current_participants,
+    )
+
+    coordinator = SourceFinalizationCoordinator((emitter,), _authority())
+    coordinator.finalize()
+    emitter.close()
+    coordinator.mark_closed()
+    output = (
+        tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
+    ).read_text(encoding="utf-8")
+    assert output.count("<EventID>4624</EventID>") == 1
+    assert output.count("<EventID>4672</EventID>") == 1
+    terminal_census = emitter.exact_candidate_census()
+    assert (
+        terminal_census.current_rows,
+        terminal_census.current_bytes,
+        terminal_census.current_participants,
+        terminal_census.released_rows,
+        terminal_census.released_bytes,
+        terminal_census.completed_participants,
+    ) == (0, 0, 0, 0, 0, 0)
+
+
+def test_windows_exact_candidate_release_fences_quiesce_until_receipt_retires(
+    tmp_path: Path,
+) -> None:
+    """Terminal source finalization cannot overtake an unresolved candidate receipt."""
+
+    emitter = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "output",
+        source_finalization=True,
+    )
+    batch = _authority().issue_batch()
+    batch.prepare(
+        lambda: emitter.emit_event(_event(datetime(2024, 1, 15, 10, 30, tzinfo=UTC), "svc-once"))
+    )
+    batch.commit()
+    started = Event()
+    completed = Event()
+
+    def quiesce() -> None:
+        started.set()
+        emitter.quiesce_source_finalization()
+        completed.set()
+
+    thread = Thread(target=quiesce)
+    thread.start()
+    assert started.wait(timeout=1.0)
+    assert not completed.wait(timeout=0.1)
+
+    batch.release_no_fail()
+    assert completed.wait(timeout=2.0)
+    thread.join(timeout=1.0)
+    epoch = emitter.seal_source_finalization()
+    emitter.publish_source_finalization(epoch, ExactChunkPublisher(_authority()))
+    emitter.close()
+
+
+def test_windows_exact_candidate_release_call_original_then_raise_is_resumable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lost release return reuses the retained released reservation."""
+
+    emitter = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "output",
+        source_finalization=True,
+    )
+    batch = _authority().issue_batch()
+    original_release = emitter._release_exact_candidate_row
+    lost_return = True
+
+    def release_then_raise(key: tuple[str, int, int]) -> None:
+        nonlocal lost_return
+        original_release(key)
+        if lost_return:
+            lost_return = False
+            raise RuntimeError("candidate release return lost")
+
+    monkeypatch.setattr(emitter, "_release_exact_candidate_row", release_then_raise)
+    batch.prepare(
+        lambda: emitter.emit_event(_event(datetime(2024, 1, 15, 10, 30, tzinfo=UTC), "svc-once"))
+    )
+    batch.commit()
+
+    with pytest.raises(RuntimeError, match="candidate release return lost"):
+        batch.release_no_fail()
+    assert batch.state == "releasing"
+
+    batch.release_no_fail()
+    coordinator = SourceFinalizationCoordinator((emitter,), _authority())
+    coordinator.finalize()
+    emitter.close()
+    coordinator.mark_closed()
+    terminal_census = emitter.exact_candidate_census()
+    assert (
+        terminal_census.current_rows,
+        terminal_census.current_bytes,
+        terminal_census.current_participants,
+    ) == (0, 0, 0)
+
+
+def test_windows_exact_candidate_journal_commit_lost_return_reconciles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Candidate insertion recognizes a committed private-journal transaction."""
+
+    emitter = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "output",
+        source_finalization=True,
+    )
+    batch = _authority().issue_batch()
+    batch.prepare(
+        lambda: emitter.emit_event(_event(datetime(2024, 1, 15, 10, 30, tzinfo=UTC), "svc-once"))
+    )
+    original_commit = emitter._commit_journal_unlocked
+    lost_return = True
+
+    def commit_then_raise() -> None:
+        nonlocal lost_return
+        original_commit()
+        if lost_return:
+            lost_return = False
+            raise RuntimeError("candidate journal commit return lost")
+
+    monkeypatch.setattr(emitter, "_commit_journal_unlocked", commit_then_raise)
+    batch.commit()
+    batch.release_no_fail()
+    assert not lost_return
+
+    coordinator = SourceFinalizationCoordinator((emitter,), _authority())
+    coordinator.finalize()
+    emitter.close()
+    coordinator.mark_closed()
+
+
+def test_windows_exact_candidate_release_rejects_tampered_journal_payload(
+    tmp_path: Path,
+) -> None:
+    """A receipt cannot release a row whose exact journal payload was changed."""
+
+    emitter = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "output",
+        source_finalization=True,
+    )
+    batch = _authority().issue_batch()
+    batch.prepare(
+        lambda: emitter.emit_event(_event(datetime(2024, 1, 15, 10, 30, tzinfo=UTC), "svc-once"))
+    )
+    batch.commit()
+
+    with emitter._file_lock:
+        assert emitter._spool_conn is not None
+        retained = emitter._spool_conn.execute(
+            "SELECT sequence, payload FROM events WHERE route_kind = ?",
+            ("exact-candidate-v1",),
+        ).fetchone()
+        assert retained is not None
+        sequence, payload = retained
+        emitter._spool_conn.execute(
+            "UPDATE events SET payload = ? WHERE sequence = ?",
+            (payload + " ", sequence),
+        )
+        emitter._commit_journal_unlocked()
+
+    with pytest.raises(ExactPublicationError, match="conflicting journal state"):
+        batch.release_no_fail()
+
+    with emitter._file_lock:
+        assert emitter._spool_conn is not None
+        emitter._spool_conn.execute(
+            "UPDATE events SET payload = ? WHERE sequence = ?",
+            (payload, sequence),
+        )
+        emitter._commit_journal_unlocked()
+    batch.release_no_fail()
+    coordinator = SourceFinalizationCoordinator((emitter,), _authority())
+    coordinator.finalize()
+    emitter.close()
+    coordinator.mark_closed()
+
+
+def _run_windows_post_release_seal_tamper(
+    tmp_path: Path,
+    *,
+    tamper_payload: bool,
+) -> None:
+    output_root = tmp_path / "output"
+    emitter = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        output_root,
+        source_finalization=True,
+    )
+    emitter.emit_event(_event(datetime(2024, 1, 15, 10, 29, tzinfo=UTC), "ordinary-row"))
+    batch = _authority().issue_batch()
+    batch.prepare(
+        lambda: emitter.emit_event(_event(datetime(2024, 1, 15, 10, 30, tzinfo=UTC), "svc-once"))
+    )
+    batch.commit()
+    batch.release_no_fail()
+    released_census = emitter.exact_candidate_census()
+    assert (
+        released_census.current_rows,
+        released_census.released_rows,
+        released_census.current_participants,
+        released_census.completed_participants,
+    ) == (1, 1, 1, 1)
+    emitter.quiesce_source_finalization()
+
+    with emitter._file_lock:
+        assert emitter._spool_conn is not None
+        retained = emitter._spool_conn.execute(
+            "SELECT sequence, payload, sort_key FROM events WHERE route_kind = ?",
+            ("exact-candidate-v1",),
+        ).fetchone()
+        assert retained is not None
+        sequence, payload, sort_key = retained
+        if tamper_payload:
+            tampered_payload = payload.replace("svc-once", "svc-twce", 1)
+            assert tampered_payload != payload
+            assert len(tampered_payload.encode("utf-8")) == len(payload.encode("utf-8"))
+            assert _spool_decode(tampered_payload)["TargetUserName"] == "svc-twce"
+            emitter._spool_conn.execute(
+                "UPDATE events SET payload = ? WHERE sequence = ?",
+                (tampered_payload, sequence),
+            )
+        else:
+            emitter._spool_conn.execute(
+                "UPDATE events SET sort_key = ? WHERE sequence = ?",
+                (sort_key + "0", sequence),
+            )
+        emitter._commit_journal_unlocked()
+
+    with pytest.raises(ExactPublicationError, match="changed payload or sort key"):
+        emitter.seal_source_finalization()
+    rejected_census = emitter.exact_candidate_census()
+    assert (
+        rejected_census.current_rows,
+        rejected_census.released_rows,
+        rejected_census.current_participants,
+        rejected_census.completed_participants,
+    ) == (1, 1, 1, 1)
+
+    with emitter._file_lock:
+        assert emitter._spool_conn is not None
+        emitter._spool_conn.execute(
+            "UPDATE events SET payload = ?, sort_key = ? WHERE sequence = ?",
+            (payload, sort_key, sequence),
+        )
+        emitter._commit_journal_unlocked()
+    epoch = emitter.seal_source_finalization()
+    sealed_census = emitter.exact_candidate_census()
+    assert (
+        sealed_census.current_rows,
+        sealed_census.released_rows,
+        sealed_census.current_participants,
+        sealed_census.completed_participants,
+    ) == (1, 1, 1, 1)
+    emitter.publish_source_finalization(epoch, ExactChunkPublisher(_authority()))
+    emitter.close()
+
+    output = (output_root / "WIN-TEST-01.corp.local" / "windows_event_security.xml").read_text(
+        encoding="utf-8"
+    )
+    assert output.count("ordinary-row") == 1
+    assert output.count("svc-once") == 1
+    exact_census = emitter.exact_candidate_census()
+    assert (
+        exact_census.current_rows,
+        exact_census.current_bytes,
+        exact_census.current_participants,
+        exact_census.released_rows,
+        exact_census.released_bytes,
+        exact_census.completed_participants,
+    ) == (0, 0, 0, 0, 0, 0)
+
+
+def test_windows_seal_rejects_post_release_same_length_valid_json_payload_tamper(
+    tmp_path: Path,
+) -> None:
+    """Seal reauthenticates released exact payloads while ignoring ordinary rows."""
+
+    _run_windows_post_release_seal_tamper(tmp_path, tamper_payload=True)
+
+
+def test_windows_seal_rejects_post_release_sort_key_only_tamper(tmp_path: Path) -> None:
+    """Seal recomputes exact candidate sort keys before terminal fixups overwrite them."""
+
+    _run_windows_post_release_seal_tamper(tmp_path, tamper_payload=False)
+
+
+@pytest.mark.parametrize("threaded", [False, True])
+def test_windows_prior_ordinary_equal_time_candidate_precedes_exact_candidate(
+    tmp_path: Path,
+    threaded: bool,
+) -> None:
+    """Exact registration drains prior FIFO work before reserving journal sequences."""
+
+    emitter = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "output",
+        buffer_size=1,
+        threaded=threaded,
+        source_finalization=True,
+    )
+    timestamp = datetime(2024, 1, 15, 10, 30, tzinfo=UTC)
+    emitter.emit_event(_event(timestamp, "ordinary-first"))
+    batch = _authority().issue_batch()
+    batch.prepare(lambda: emitter.emit_event(_event(timestamp, "exact-second")))
+    batch.commit()
+    batch.release_no_fail()
+
+    coordinator = SourceFinalizationCoordinator((emitter,), _authority())
+    coordinator.finalize()
+    emitter.close()
+    coordinator.mark_closed()
+    output = (
+        tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
+    ).read_text(encoding="utf-8")
+    assert output.index("ordinary-first") < output.index("exact-second")
+
+
+def test_windows_exact_candidate_capacity_failure_cleans_journal_and_reservations(
+    tmp_path: Path,
+) -> None:
+    """A later exact candidate capacity failure removes every precanonical reservation."""
+
+    emitter = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "output",
+        source_finalization=True,
+        finalization_row_capacity=1,
+    )
+    batch = _authority().issue_batch()
+    first = _event(datetime(2024, 1, 15, 10, 30, tzinfo=UTC), "svc-once")
+    second = {**first, "EventID": 4672, "PrivilegeList": "SeSecurityPrivilege"}
+
+    with pytest.raises(SourceFinalizationError, match="row capacity"):
+        batch.prepare(lambda: (emitter.emit_event(first), emitter.emit_event(second)))
+
+    census = emitter.source_finalization_census()
+    assert (census.candidate_rows, census.candidate_bytes) == (0, 0)
+    exact_census = emitter.exact_candidate_census()
+    assert (
+        exact_census.current_rows,
+        exact_census.current_bytes,
+        exact_census.current_participants,
+    ) == (0, 0, 0)
+    with emitter._file_lock:
+        assert emitter._spool_conn is None
+    batch.cancel()
+    emitter.close()
 
 
 def test_exact_chunk_retries_checkpoint_and_release_without_duplicate_rows(
@@ -341,8 +849,15 @@ def test_windows_exact_and_direct_legacy_bytes_match_immutable_parent_hashes(
         source_finalization=True,
     )
     exact.configure_output_target(target)
-    exact.emit_event(_event(timestamp, "later"))
-    exact.emit_event(_event(timestamp - timedelta(seconds=10), "earlier"))
+    candidate_batch = _authority().issue_batch()
+    candidate_batch.prepare(
+        lambda: (
+            exact.emit_event(_event(timestamp, "later")),
+            exact.emit_event(_event(timestamp - timedelta(seconds=10), "earlier")),
+        )
+    )
+    candidate_batch.commit()
+    candidate_batch.release_no_fail()
     coordinator = SourceFinalizationCoordinator((exact,), _authority())
     coordinator.finalize()
     exact.close()
@@ -374,9 +889,13 @@ def test_windows_default_exact_bytes_are_thread_and_buffer_invariant(
     )
     timestamp = datetime(2024, 1, 15, 10, 30, 20, tzinfo=UTC)
     emitter.emit_event(_event(timestamp, "later"))
-    emitter.barrier_flush()
+    candidate_batch = _authority().issue_batch()
+    candidate_batch.prepare(
+        lambda: emitter.emit_event(_event(timestamp - timedelta(seconds=10), "earlier"))
+    )
+    candidate_batch.commit()
+    candidate_batch.release_no_fail()
     assert not output_root.exists()
-    emitter.emit_event(_event(timestamp - timedelta(seconds=10), "earlier"))
     coordinator = SourceFinalizationCoordinator((emitter,), _authority())
     coordinator.finalize()
     emitter.close()

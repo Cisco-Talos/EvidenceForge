@@ -41,6 +41,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty, Full
@@ -52,7 +53,14 @@ from evidenceforge.events.contexts import AuthContext, HostContext
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.activity.timing_profiles import windows_collision_spacing_config
 from evidenceforge.generation.activity.windows_auth_realism import min_unlock_gap_seconds
-from evidenceforge.generation.emitters.base import ExactPublicationError, LogEmitter
+from evidenceforge.generation.emitters.base import (
+    ExactPublicationError,
+    ExactPublicationKey,
+    ExactPublicationParticipantKey,
+    LogEmitter,
+    exact_publication_attempt_active,
+    stage_exact_publication_row,
+)
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.generation.emitters.syslog_family import (
     make_syslog_family_route_key,
@@ -88,6 +96,8 @@ from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 from evidenceforge.utils.windows_ids import normalize_windows_id_value
+
+_EXACT_CANDIDATE_MARKER = "exact-candidate-v1"
 
 win_logger = logging.getLogger(__name__)
 _FROZEN_TIMING_MARKER = "windows-security-frozen-timing-v1"
@@ -633,6 +643,48 @@ class WindowsSourceFinalizationCensus:
     high_water_rows: int
     high_water_bytes: int
     high_water_routes: int
+
+
+@dataclass(frozen=True, slots=True)
+class WindowsExactCandidateCensus:
+    """Constant-time exact candidate receipt and reservation ownership counts."""
+
+    current_rows: int
+    current_bytes: int
+    current_participants: int
+    released_rows: int
+    released_bytes: int
+    completed_participants: int
+    high_water_rows: int
+    high_water_bytes: int
+    high_water_participants: int
+
+
+@dataclass(slots=True)
+class _WindowsExactCandidateReservation:
+    """Owner-private same-process reservation for one exact raw candidate."""
+
+    digest: str
+    retained_bytes: int
+    charged_bytes: int
+    sequence: int
+    capacity_charged: bool = False
+    admitted: bool = False
+    released: bool = False
+
+
+@dataclass(slots=True)
+class _WindowsExactCandidateParticipant:
+    """Bounded scalar ownership for one exact candidate participant."""
+
+    next_sequence: int
+    reservation_keys: list[ExactPublicationKey] = dataclass_field(default_factory=list)
+    reserved_rows: int = 0
+    reserved_bytes: int = 0
+    admitted_rows: int = 0
+    released_rows: int = 0
+    released_bytes: int = 0
+    completed: bool = False
 
 
 class _WindowsSourceFinalizationEpoch(SourceFinalizationEpoch):
@@ -2028,6 +2080,23 @@ class WindowsEventEmitter(LogEmitter):
         self._source_high_water_rows = 0
         self._source_high_water_bytes = 0
         self._source_high_water_routes = 0
+        self._exact_candidate_reservations: dict[
+            ExactPublicationKey,
+            _WindowsExactCandidateReservation,
+        ] = {}
+        self._exact_candidate_participants: dict[
+            ExactPublicationParticipantKey,
+            _WindowsExactCandidateParticipant,
+        ] = {}
+        self._exact_candidate_current_rows = 0
+        self._exact_candidate_current_bytes = 0
+        self._exact_candidate_current_participants = 0
+        self._exact_candidate_released_rows = 0
+        self._exact_candidate_released_bytes = 0
+        self._exact_candidate_completed_participants = 0
+        self._exact_candidate_high_water_rows = 0
+        self._exact_candidate_high_water_bytes = 0
+        self._exact_candidate_high_water_participants = 0
         self._candidate_admission_lock = Lock()
         self._finalization_row_capacity = finalization_row_capacity
         self._finalization_byte_capacity = finalization_byte_capacity
@@ -2149,6 +2218,91 @@ class WindowsEventEmitter(LogEmitter):
             return
         self._get_host_writer("").write(rendered)
 
+    def _begin_windows_candidate_admission(self) -> None:
+        """Serialize ordinary candidate handoff against exact participant ownership."""
+
+        with self._close_condition:
+            while self._active_exact_publication_keys:
+                self._close_condition.wait()
+            self._require_accepting_events_locked()
+            self._queue_admissions += 1
+
+    @property
+    def supports_exact_candidate_publication(self) -> bool:
+        """Return whether this emitter owns the journal required for exact candidates."""
+
+        return self._source_finalization_bound
+
+    def _register_exact_publication_batch(
+        self,
+        key: ExactPublicationParticipantKey,
+    ) -> None:
+        """Fence new candidates, then drain every prior threaded FIFO admission."""
+
+        self._validate_exact_candidate_participant_key(key)
+        worker_thread = self._thread.ident if self._thread is not None else None
+        if worker_thread == get_ident():
+            raise ExactPublicationError(
+                "Windows exact publication cannot register from its emitter worker"
+            )
+        if not self._source_finalization_bound:
+            raise ExactPublicationError(
+                "Windows exact candidate publication requires source finalization"
+            )
+        with self._exact_publication_condition:
+            retained_participant = self._exact_candidate_participants.get(key)
+            if retained_participant is not None:
+                if key not in self._active_exact_publication_keys:
+                    raise ExactPublicationError(
+                        "Windows exact participant receipt is already terminal"
+                    )
+                return
+            foreign = self._active_exact_publication_keys - {key}
+            if foreign:
+                raise ExactPublicationError(
+                    "Windows emitter already has an unresolved exact publication"
+                )
+            if self._close_state != "open" and key not in self._active_exact_publication_keys:
+                raise ExactPublicationError(
+                    "Windows emitter is closing or closed during exact publication"
+                )
+            while self._queue_admissions:
+                self._exact_publication_condition.wait()
+            self._active_exact_publication_keys.add(key)
+
+        queue = self._event_queue
+        try:
+            if queue is not None:
+                queue.join()
+                self._raise_if_thread_failed()
+            with self._file_lock:
+                self._spool_event_dicts_unlocked()
+            with self._exact_publication_condition:
+                if key not in self._active_exact_publication_keys:
+                    raise ExactPublicationError(
+                        "Windows exact participant lost its admission fence"
+                    )
+                if key in self._exact_candidate_participants:
+                    raise ExactPublicationError(
+                        "Windows exact participant was registered concurrently"
+                    )
+                self._exact_candidate_participants[key] = _WindowsExactCandidateParticipant(
+                    next_sequence=self._spool_sequence
+                )
+                self._exact_candidate_current_participants += 1
+                self._exact_candidate_high_water_participants = max(
+                    self._exact_candidate_high_water_participants,
+                    self._exact_candidate_current_participants,
+                )
+        except BaseException:
+            with self._exact_publication_condition:
+                participant = self._exact_candidate_participants.pop(key, None)
+                if participant is not None:
+                    self._exact_candidate_current_participants -= 1
+                self._active_exact_publication_keys.discard(key)
+                self._exact_publication_condition.notify_all()
+            raise
+
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Buffer a Windows Event dict for deferred rendering."""
         event_data = self._normalize_execution_ids(event_data)
@@ -2167,7 +2321,20 @@ class WindowsEventEmitter(LogEmitter):
         host_type = getattr(self._emission_context, "host_type", "")
         if host_type:
             event_data["_host_type"] = host_type
-        self._begin_queue_admission()
+        if exact_publication_attempt_active():
+            payload = _spool_encode(event_data)
+            staged = stage_exact_publication_row(
+                self,
+                payload,
+                publish=self._commit_exact_candidate_row,
+                release=self._release_exact_candidate_row,
+            )
+            if not staged:
+                raise ExactPublicationError(
+                    "Windows exact candidate lost its active publication attempt"
+                )
+            return
+        self._begin_windows_candidate_admission()
         handed_off = False
         reserved_bytes = 0
         try:
@@ -2223,6 +2390,20 @@ class WindowsEventEmitter(LogEmitter):
             return event_data, 0
         payload = _spool_encode(event_data)
         payload_bytes = len(payload.encode("utf-8"))
+        self._reserve_candidate_payload_unlocked(payload_bytes)
+        return _spool_decode(payload), payload_bytes
+
+    def _reserve_candidate_payload_unlocked(self, payload_bytes: int) -> None:
+        """Charge one already-frozen candidate payload against terminal capacity."""
+
+        if type(payload_bytes) is not int or payload_bytes < 0:
+            raise SourceFinalizationError("Windows candidate byte reservation is malformed")
+        if not self._source_finalization_bound:
+            if payload_bytes != 0:
+                raise SourceFinalizationError(
+                    "Legacy Windows candidate cannot retain finalization capacity"
+                )
+            return
         if payload_bytes > _FINALIZATION_CHUNK_BYTES:
             raise SourceFinalizationError(
                 "Windows candidate row exceeds the finalization chunk byte capacity"
@@ -2239,16 +2420,451 @@ class WindowsEventEmitter(LogEmitter):
         self._candidate_high_water_bytes = max(self._candidate_high_water_bytes, candidate_bytes)
         self._source_high_water_rows = max(self._source_high_water_rows, candidate_rows)
         self._source_high_water_bytes = max(self._source_high_water_bytes, candidate_bytes)
-        return _spool_decode(payload), payload_bytes
+
+    @staticmethod
+    def _validate_exact_candidate_participant_key(
+        key: ExactPublicationParticipantKey,
+    ) -> None:
+        """Reject hostile or malformed exact participant keys before owner lookup."""
+
+        if (
+            type(key) is not tuple
+            or len(key) != 2
+            or type(key[0]) is not str
+            or len(key[0]) != 32
+            or any(character not in "0123456789abcdef" for character in key[0])
+            or type(key[1]) is not int
+            or key[1] <= 0
+            or key[1] > (2**63 - 1)
+        ):
+            raise ExactPublicationError("Windows exact participant key is malformed")
+
+    @classmethod
+    def _validate_exact_candidate_key(cls, key: ExactPublicationKey) -> None:
+        """Reject hostile or malformed exact candidate keys before owner lookup."""
+
+        if type(key) is not tuple or len(key) != 3:
+            raise ExactPublicationError("Windows exact candidate key is malformed")
+        cls._validate_exact_candidate_participant_key(key[:2])
+        if type(key[2]) is not int or key[2] < 0 or key[2] > (2**63 - 1):
+            raise ExactPublicationError("Windows exact candidate key is malformed")
+
+    def _reserve_exact_publication_row(
+        self,
+        key: ExactPublicationKey,
+        digest: str,
+        retained_bytes: int,
+    ) -> None:
+        """Reserve one exact raw candidate before canonical State may mutate."""
+
+        self._validate_exact_candidate_key(key)
+        if (
+            type(digest) is not str
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            or type(retained_bytes) is not int
+            or retained_bytes <= 0
+        ):
+            raise ExactPublicationError("Windows exact candidate reservation is malformed")
+        participant_key = key[:2]
+        with self._exact_publication_condition:
+            if participant_key not in self._active_exact_publication_keys:
+                raise ExactPublicationError(
+                    "Windows exact candidate reservation lost its participant fence"
+                )
+            retained = self._exact_candidate_reservations.get(key)
+            if retained is not None:
+                if retained.digest != digest or retained.retained_bytes != retained_bytes:
+                    raise ExactPublicationError(
+                        "Windows exact candidate reservation changed on retry"
+                    )
+                return
+            if not self._source_finalization_bound:
+                raise ExactPublicationError(
+                    "Windows exact candidate reservation requires source finalization"
+                )
+            participant = self._exact_candidate_participants.get(participant_key)
+            if participant is None or participant.completed:
+                raise ExactPublicationError(
+                    "Windows exact candidate reservation lost its participant owner"
+                )
+            sequence = participant.next_sequence
+            if sequence < self._spool_sequence or sequence > (2**63 - 1):
+                raise ExactPublicationError(
+                    "Windows exact candidate sequence exceeds its journal ownership"
+                )
+            charged_bytes = retained_bytes
+            with self._candidate_admission_lock:
+                self._reserve_candidate_payload_unlocked(charged_bytes)
+            prior_participant = (
+                participant.next_sequence,
+                participant.reserved_rows,
+                participant.reserved_bytes,
+            )
+            prior_global = (
+                self._exact_candidate_current_rows,
+                self._exact_candidate_current_bytes,
+                self._exact_candidate_high_water_rows,
+                self._exact_candidate_high_water_bytes,
+            )
+            try:
+                self._exact_candidate_reservations[key] = _WindowsExactCandidateReservation(
+                    digest=digest,
+                    retained_bytes=retained_bytes,
+                    charged_bytes=charged_bytes,
+                    sequence=sequence,
+                    capacity_charged=True,
+                )
+                participant.reservation_keys.append(key)
+                participant.next_sequence = sequence + 1
+                participant.reserved_rows += 1
+                participant.reserved_bytes += retained_bytes
+                self._exact_candidate_current_rows += 1
+                self._exact_candidate_current_bytes += retained_bytes
+                self._exact_candidate_high_water_rows = max(
+                    self._exact_candidate_high_water_rows,
+                    self._exact_candidate_current_rows,
+                )
+                self._exact_candidate_high_water_bytes = max(
+                    self._exact_candidate_high_water_bytes,
+                    self._exact_candidate_current_bytes,
+                )
+            except BaseException:
+                self._exact_candidate_reservations.pop(key, None)
+                if participant.reservation_keys and participant.reservation_keys[-1] == key:
+                    participant.reservation_keys.pop()
+                (
+                    participant.next_sequence,
+                    participant.reserved_rows,
+                    participant.reserved_bytes,
+                ) = prior_participant
+                (
+                    self._exact_candidate_current_rows,
+                    self._exact_candidate_current_bytes,
+                    self._exact_candidate_high_water_rows,
+                    self._exact_candidate_high_water_bytes,
+                ) = prior_global
+                with self._candidate_admission_lock:
+                    self._release_candidate_admission_unlocked(charged_bytes)
+                raise
+
+    def _commit_exact_candidate_row(
+        self,
+        key: ExactPublicationKey,
+        digest: str,
+        frozen: object,
+    ) -> None:
+        """Insert or reconcile one durable candidate before its batch cursor advances."""
+
+        self._validate_exact_candidate_key(key)
+        if type(frozen) is not str:
+            raise ExactPublicationError("Windows exact candidate must retain one inert string")
+        if type(digest) is not str or len(digest) != 64:
+            raise ExactPublicationError("Windows exact candidate digest is malformed")
+        encoded = frozen.encode("utf-8")
+        retained_bytes = len(encoded)
+        if hashlib.sha256(encoded).hexdigest() != digest:
+            raise ExactPublicationError("Windows exact candidate content digest changed")
+        event_data = _spool_decode(frozen)
+        sort_key = self._event_sort_key(event_data)
+        participant_key = key[:2]
+        route_key = f"{key[0]}:{key[1]}:{key[2]}"
+        if len(route_key) > 96:
+            raise ExactPublicationError("Windows exact candidate route key is oversized")
+        with self._exact_publication_condition:
+            if participant_key not in self._active_exact_publication_keys:
+                raise ExactPublicationError("Windows exact candidate lost its emitter fence")
+            participant = self._exact_candidate_participants.get(participant_key)
+            reservation = self._exact_candidate_reservations.get(key)
+            if (
+                participant is None
+                or participant.completed
+                or reservation is None
+                or reservation.digest != digest
+                or reservation.retained_bytes != retained_bytes
+                or not reservation.capacity_charged
+                or reservation.released
+            ):
+                raise ExactPublicationError(
+                    "Windows exact candidate has no authentic prepared reservation"
+                )
+            with self._candidate_admission_lock:
+                high_water_rows = self._candidate_high_water_rows
+                high_water_bytes = self._candidate_high_water_bytes
+            with self._file_lock:
+                connection = self._spool_conn
+                if connection is None:
+                    connection = self._get_spool_conn_unlocked()
+                self._validate_spool_file_unlocked()
+                expected_row = (
+                    reservation.sequence,
+                    sort_key,
+                    "candidate",
+                    frozen,
+                    reservation.retained_bytes,
+                    None,
+                    _EXACT_CANDIDATE_MARKER,
+                    route_key,
+                    digest,
+                )
+                retained = connection.execute(
+                    """SELECT sequence, sort_key, phase, payload, payload_bytes, ordinal,
+                              route_kind, route_key, payload_digest
+                       FROM events WHERE sequence = ?""",
+                    (reservation.sequence,),
+                ).fetchone()
+                if retained == expected_row:
+                    if not reservation.admitted:
+                        participant.admitted_rows += 1
+                        reservation.admitted = True
+                    return
+                if retained is not None:
+                    raise ExactPublicationError("Windows exact candidate sequence is already owned")
+                if reservation.sequence != self._spool_sequence:
+                    raise ExactPublicationError(
+                        "Windows exact candidate sequence is not the current journal tail"
+                    )
+                state = connection.execute(
+                    "SELECT phase, candidate_rows, candidate_bytes "
+                    "FROM finalization_state WHERE singleton = ?",
+                    (1,),
+                ).fetchone()
+                if state is None or state[0] != "candidate":
+                    raise SourceFinalizationError(
+                        "Windows journal rejected an exact candidate commit"
+                    )
+                candidate_rows = int(state[1]) + 1
+                candidate_bytes = int(state[2]) + reservation.retained_bytes
+                try:
+                    connection.execute(
+                        """INSERT INTO events
+                        (sequence, sort_key, phase, payload, payload_bytes, ordinal,
+                         route_kind, route_key, payload_digest)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        expected_row,
+                    )
+                    connection.execute(
+                        """UPDATE finalization_state
+                        SET candidate_rows = ?, candidate_bytes = ?,
+                            high_water_rows = MAX(high_water_rows, ?),
+                            high_water_bytes = MAX(high_water_bytes, ?)
+                        WHERE singleton = ?""",
+                        (
+                            candidate_rows,
+                            candidate_bytes,
+                            high_water_rows,
+                            high_water_bytes,
+                            1,
+                        ),
+                    )
+                    self._commit_journal_unlocked()
+                except BaseException:
+                    reconciled_row = connection.execute(
+                        """SELECT sequence, sort_key, phase, payload, payload_bytes, ordinal,
+                                  route_kind, route_key, payload_digest
+                           FROM events WHERE sequence = ?""",
+                        (reservation.sequence,),
+                    ).fetchone()
+                    reconciled_state = connection.execute(
+                        "SELECT phase, candidate_rows, candidate_bytes "
+                        "FROM finalization_state WHERE singleton = ?",
+                        (1,),
+                    ).fetchone()
+                    committed = bool(
+                        not connection.in_transaction
+                        and reconciled_row == expected_row
+                        and reconciled_state == ("candidate", candidate_rows, candidate_bytes)
+                    )
+                    if not committed:
+                        connection.rollback()
+                        raise
+                self._spool_sequence = reservation.sequence + 1
+                self._spooled_count += 1
+                if not reservation.admitted:
+                    participant.admitted_rows += 1
+                    reservation.admitted = True
+
+    def _release_exact_candidate_row(self, key: ExactPublicationKey) -> None:
+        """Mark one durable candidate released without discarding its retry receipt."""
+
+        self._validate_exact_candidate_key(key)
+        participant_key = key[:2]
+        with self._exact_publication_condition:
+            participant = self._exact_candidate_participants.get(participant_key)
+            reservation = self._exact_candidate_reservations.get(key)
+            if participant is None or reservation is None:
+                raise ExactPublicationError(
+                    "Windows exact candidate release lost its retained reservation"
+                )
+            if reservation.released:
+                return
+            if not reservation.admitted:
+                raise ExactPublicationError(
+                    "Windows exact candidate release lost its committed reservation"
+                )
+            with self._file_lock:
+                connection = self._spool_conn
+                if connection is None:
+                    raise ExactPublicationError(
+                        "Windows exact candidate release lost its private journal"
+                    )
+                route_key = f"{key[0]}:{key[1]}:{key[2]}"
+                retained = connection.execute(
+                    """SELECT phase, payload, payload_bytes, route_kind, route_key,
+                              payload_digest
+                       FROM events WHERE sequence = ?""",
+                    (reservation.sequence,),
+                ).fetchone()
+                state = connection.execute(
+                    "SELECT phase, candidate_rows, candidate_bytes "
+                    "FROM finalization_state WHERE singleton = ?",
+                    (1,),
+                ).fetchone()
+                with self._candidate_admission_lock:
+                    expected_state = (
+                        "candidate",
+                        self._candidate_admitted_rows,
+                        self._candidate_admitted_bytes,
+                    )
+                if retained is None or len(retained) != 6 or type(retained[1]) is not str:
+                    raise ExactPublicationError(
+                        "Windows exact candidate release found malformed journal state"
+                    )
+                payload = retained[1]
+                encoded = payload.encode("utf-8")
+                expected_metadata = (
+                    "candidate",
+                    reservation.retained_bytes,
+                    _EXACT_CANDIDATE_MARKER,
+                    route_key,
+                    reservation.digest,
+                )
+                retained_metadata = (
+                    retained[0],
+                    retained[2],
+                    retained[3],
+                    retained[4],
+                    retained[5],
+                )
+                if (
+                    retained_metadata != expected_metadata
+                    or len(encoded) != reservation.retained_bytes
+                    or hashlib.sha256(encoded).hexdigest() != reservation.digest
+                    or state != expected_state
+                ):
+                    raise ExactPublicationError(
+                        "Windows exact candidate release found conflicting journal state"
+                    )
+            released_rows = participant.released_rows + 1
+            released_bytes = participant.released_bytes + reservation.retained_bytes
+            if (
+                released_rows > participant.reserved_rows
+                or released_bytes > participant.reserved_bytes
+            ):
+                raise ExactPublicationError("Windows exact candidate release accounting overflowed")
+            reservation.released = True
+            participant.released_rows = released_rows
+            participant.released_bytes = released_bytes
+            self._exact_candidate_released_rows += 1
+            self._exact_candidate_released_bytes += reservation.retained_bytes
+            if (
+                participant.completed
+                and participant.released_rows == participant.reserved_rows
+                and participant.released_bytes == participant.reserved_bytes
+            ):
+                self._active_exact_publication_keys.discard(participant_key)
+                self._exact_publication_condition.notify_all()
+
+    def _complete_exact_publication_batch(
+        self,
+        key: ExactPublicationParticipantKey,
+    ) -> None:
+        """Keep terminal source operations fenced until exact receipts release."""
+
+        with self._exact_publication_condition:
+            participant = self._exact_candidate_participants.get(key)
+            if participant is None:
+                raise ExactPublicationError("Windows exact completion lost its participant owner")
+            if participant.completed:
+                return
+            participant.completed = True
+            self._exact_candidate_completed_participants += 1
+            if participant.reserved_rows == 0:
+                self._exact_candidate_participants.pop(key)
+                self._exact_candidate_current_participants -= 1
+                self._exact_candidate_completed_participants -= 1
+                self._active_exact_publication_keys.discard(key)
+                self._exact_publication_condition.notify_all()
+                return
+            if (
+                participant.released_rows == participant.reserved_rows
+                and participant.released_bytes == participant.reserved_bytes
+            ):
+                self._active_exact_publication_keys.discard(key)
+                self._exact_publication_condition.notify_all()
+
+    def _abort_exact_publication_batch(
+        self,
+        key: ExactPublicationParticipantKey,
+    ) -> None:
+        """Release every uncommitted exact reservation after precanonical cancel."""
+
+        with self._exact_publication_condition:
+            participant = self._exact_candidate_participants.get(key)
+            if participant is None:
+                self._active_exact_publication_keys.discard(key)
+                self._exact_publication_condition.notify_all()
+                return
+            if participant.admitted_rows:
+                raise ExactPublicationError(
+                    "Windows cannot abort an admitted exact candidate batch"
+                )
+            for candidate_key in participant.reservation_keys:
+                reservation = self._exact_candidate_reservations.get(candidate_key)
+                if (
+                    reservation is None
+                    or reservation.admitted
+                    or reservation.released
+                    or not reservation.capacity_charged
+                ):
+                    raise ExactPublicationError(
+                        "Windows exact candidate abort found conflicting ownership"
+                    )
+            with self._candidate_admission_lock:
+                self._release_candidate_admissions_unlocked(
+                    participant.reserved_rows,
+                    participant.reserved_bytes,
+                )
+            for candidate_key in participant.reservation_keys:
+                self._exact_candidate_reservations.pop(candidate_key)
+            self._exact_candidate_current_rows -= participant.reserved_rows
+            self._exact_candidate_current_bytes -= participant.reserved_bytes
+            self._exact_candidate_current_participants -= 1
+            self._exact_candidate_participants.pop(key)
+            self._active_exact_publication_keys.discard(key)
+            self._exact_publication_condition.notify_all()
 
     def _release_candidate_admission_unlocked(self, payload_bytes: int) -> None:
         """Undo a reserved candidate that never reached memory or the FIFO."""
 
         if payload_bytes == 0:
             return
-        if self._candidate_admitted_rows <= 0 or self._candidate_admitted_bytes < payload_bytes:
+        self._release_candidate_admissions_unlocked(1, payload_bytes)
+
+    def _release_candidate_admissions_unlocked(self, rows: int, payload_bytes: int) -> None:
+        """Undo a bounded group of candidates that never reached durable admission."""
+
+        if type(rows) is not int or rows < 0 or type(payload_bytes) is not int or payload_bytes < 0:
+            raise SourceFinalizationError("Windows candidate release accounting is malformed")
+        if rows == 0 and payload_bytes == 0:
+            return
+        if (
+            rows <= 0
+            or self._candidate_admitted_rows < rows
+            or self._candidate_admitted_bytes < payload_bytes
+        ):
             raise SourceFinalizationError("Windows candidate admission accounting underflowed")
-        self._candidate_admitted_rows -= 1
+        self._candidate_admitted_rows -= rows
         self._candidate_admitted_bytes -= payload_bytes
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
@@ -4306,6 +4922,113 @@ class WindowsEventEmitter(LogEmitter):
         if self._spool_conn is not None:
             self._spool_conn.rollback()
 
+    def _validate_exact_candidate_receipts_before_seal_unlocked(self) -> None:
+        """Authenticate every retained exact candidate before final metadata replaces it."""
+
+        connection = self._spool_conn
+        if connection is None:
+            raise SourceFinalizationError("Windows source journal is not open")
+        if self._active_exact_publication_keys:
+            raise ExactPublicationError("Windows exact candidate seal found an active publication")
+        if (
+            self._exact_candidate_current_rows != self._exact_candidate_released_rows
+            or self._exact_candidate_current_bytes != self._exact_candidate_released_bytes
+            or self._exact_candidate_current_participants
+            != self._exact_candidate_completed_participants
+            or len(self._exact_candidate_reservations) != self._exact_candidate_current_rows
+            or len(self._exact_candidate_participants) != self._exact_candidate_current_participants
+        ):
+            raise ExactPublicationError(
+                "Windows exact candidate seal found incomplete receipt ownership"
+            )
+
+        matched_rows = 0
+        cursor = connection.execute(
+            """SELECT sequence, sort_key, phase, payload, payload_bytes, ordinal,
+                      route_kind, route_key, payload_digest
+               FROM events WHERE route_kind = ? ORDER BY sequence""",
+            (_EXACT_CANDIDATE_MARKER,),
+        )
+        for row in cursor:
+            if (
+                len(row) != 9
+                or type(row[0]) is not int
+                or type(row[1]) is not str
+                or row[2] != "candidate"
+                or type(row[3]) is not str
+                or type(row[4]) is not int
+                or row[4] <= 0
+                or row[5] is not None
+                or row[6] != _EXACT_CANDIDATE_MARKER
+                or type(row[7]) is not str
+                or len(row[7]) > 96
+                or type(row[8]) is not str
+            ):
+                raise ExactPublicationError(
+                    "Windows exact candidate seal found malformed journal metadata"
+                )
+            (
+                sequence,
+                sort_key,
+                _phase,
+                payload,
+                payload_bytes,
+                _ordinal,
+                _marker,
+                route_key,
+                digest,
+            ) = row
+            route_parts = route_key.split(":")
+            if len(route_parts) != 3:
+                raise ExactPublicationError(
+                    "Windows exact candidate seal found a noncanonical journal key"
+                )
+            try:
+                key = (route_parts[0], int(route_parts[1]), int(route_parts[2]))
+            except ValueError:
+                raise ExactPublicationError(
+                    "Windows exact candidate seal found a noncanonical journal key"
+                ) from None
+            self._validate_exact_candidate_key(key)
+            if route_key != f"{key[0]}:{key[1]}:{key[2]}":
+                raise ExactPublicationError(
+                    "Windows exact candidate seal found a noncanonical journal key"
+                )
+            reservation = self._exact_candidate_reservations.get(key)
+            if (
+                reservation is None
+                or not reservation.capacity_charged
+                or not reservation.admitted
+                or not reservation.released
+                or reservation.sequence != sequence
+                or reservation.retained_bytes != payload_bytes
+                or reservation.digest != digest
+            ):
+                raise ExactPublicationError(
+                    "Windows exact candidate seal found foreign or conflicting ownership"
+                )
+            encoded = payload.encode("utf-8")
+            try:
+                expected_sort_key = self._event_sort_key(_spool_decode(payload))
+            except (RecursionError, TypeError, ValueError):
+                raise ExactPublicationError(
+                    "Windows exact candidate seal found a malformed payload"
+                ) from None
+            if (
+                len(encoded) != reservation.retained_bytes
+                or hashlib.sha256(encoded).hexdigest() != reservation.digest
+                or sort_key != expected_sort_key
+            ):
+                raise ExactPublicationError(
+                    "Windows exact candidate seal found a changed payload or sort key"
+                )
+            matched_rows += 1
+
+        if matched_rows != self._exact_candidate_current_rows:
+            raise ExactPublicationError(
+                "Windows exact candidate seal found a missing or extra journal receipt"
+            )
+
     def _apply_spooled_terminal_fixups_unlocked(self) -> None:
         """Run the complete existing Windows cohort fixup and suppression pass."""
 
@@ -4503,6 +5226,7 @@ class WindowsEventEmitter(LogEmitter):
             connection.execute("BEGIN IMMEDIATE")
             self._sealing_transaction = True
             try:
+                self._validate_exact_candidate_receipts_before_seal_unlocked()
                 self._apply_spooled_terminal_fixups_unlocked()
                 while True:
                     candidate = self._next_candidate_unlocked(
@@ -4822,6 +5546,22 @@ class WindowsEventEmitter(LogEmitter):
                 ),
             )
 
+    def exact_candidate_census(self) -> WindowsExactCandidateCensus:
+        """Return constant-time same-process exact candidate ownership counts."""
+
+        with self._exact_publication_condition:
+            return WindowsExactCandidateCensus(
+                current_rows=self._exact_candidate_current_rows,
+                current_bytes=self._exact_candidate_current_bytes,
+                current_participants=self._exact_candidate_current_participants,
+                released_rows=self._exact_candidate_released_rows,
+                released_bytes=self._exact_candidate_released_bytes,
+                completed_participants=self._exact_candidate_completed_participants,
+                high_water_rows=self._exact_candidate_high_water_rows,
+                high_water_bytes=self._exact_candidate_high_water_bytes,
+                high_water_participants=self._exact_candidate_high_water_participants,
+            )
+
     def source_finalization_census(self) -> WindowsSourceFinalizationCensus:
         """Return bounded source journal counts for tests and terminal diagnostics."""
 
@@ -4898,6 +5638,45 @@ class WindowsEventEmitter(LogEmitter):
             return
         self._close_windows_emitter()
 
+    def _finish_exact_candidate_terminal_cleanup(self) -> None:
+        """Drop bounded released receipts only after terminal source ownership ends."""
+
+        with self._exact_publication_condition:
+            if self._active_exact_publication_keys:
+                raise ExactPublicationError(
+                    "Windows terminal cleanup found an active exact candidate batch"
+                )
+            if (
+                self._exact_candidate_current_participants
+                != self._exact_candidate_completed_participants
+            ):
+                raise ExactPublicationError(
+                    "Windows terminal cleanup found an incomplete exact participant"
+                )
+            if (
+                self._exact_candidate_current_rows != self._exact_candidate_released_rows
+                or self._exact_candidate_current_bytes != self._exact_candidate_released_bytes
+            ):
+                raise ExactPublicationError(
+                    "Windows terminal cleanup found an unreleased exact candidate"
+                )
+            if (
+                len(self._exact_candidate_reservations) != self._exact_candidate_current_rows
+                or len(self._exact_candidate_participants)
+                != self._exact_candidate_current_participants
+            ):
+                raise ExactPublicationError(
+                    "Windows terminal cleanup found inconsistent exact candidate ownership"
+                )
+            self._exact_candidate_reservations.clear()
+            self._exact_candidate_participants.clear()
+            self._exact_candidate_current_rows = 0
+            self._exact_candidate_current_bytes = 0
+            self._exact_candidate_current_participants = 0
+            self._exact_candidate_released_rows = 0
+            self._exact_candidate_released_bytes = 0
+            self._exact_candidate_completed_participants = 0
+
     def _close_windows_emitter(self) -> None:
         """Run exact or legacy close while any required source capability is held."""
 
@@ -4919,6 +5698,7 @@ class WindowsEventEmitter(LogEmitter):
                 raise SourceFinalizationError(
                     "Windows source close lost its frozen output contract"
                 )
+            self._finish_exact_candidate_terminal_cleanup()
             for writer in self._host_writers.values():
                 if footer and writer.event_count > 0 and output_target != OutputTarget.SPLUNK:
                     writer.write_footer(footer)
@@ -4937,6 +5717,7 @@ class WindowsEventEmitter(LogEmitter):
         if not self._begin_close():
             return
         try:
+            self._finish_exact_candidate_terminal_cleanup()
             if self.threaded:
                 self.stop_thread()
             self.flush(force=True)
