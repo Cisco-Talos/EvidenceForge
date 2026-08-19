@@ -190,6 +190,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._expected_close_emitters: dict[str, object] | None = None
         self._closed_emitter_names: set[str] = set()
         self._source_coordinator_closed = False
+        self._exact_projection_recovery_dispatcher: object | None = None
 
         # Hawkes process state per user for cross-hour continuity
         self._hawkes_states: dict = {}
@@ -744,6 +745,44 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 return system
         return None
 
+    def _drain_exact_projection_recoveries_before_close(self) -> None:
+        """Finish dispatcher-owned exact projection recovery before sink shutdown.
+
+        The dispatcher is installed partway through initialization, and legacy
+        dispatchers cannot own exact projection recovery.  Treat a dispatcher
+        with neither capability as a no-op, but reject a partial or malformed
+        capability so emitter close cannot strand admitted source rows.
+        """
+
+        dispatcher = getattr(self, "dispatcher", None)
+        recovery_dispatcher = self._exact_projection_recovery_dispatcher
+        if recovery_dispatcher is not None and dispatcher is not recovery_dispatcher:
+            raise RuntimeError(
+                "Generation dispatcher changed identity after exact projection recovery ownership"
+            )
+        if dispatcher is None:
+            return
+        drain = getattr(dispatcher, "drain_exact_projection_recoveries", None)
+        assert_drained = getattr(
+            dispatcher,
+            "assert_exact_projection_recoveries_drained",
+            None,
+        )
+        if drain is None and assert_drained is None:
+            return
+        if not callable(drain) or not callable(assert_drained):
+            raise RuntimeError(
+                "Generation dispatcher has an incomplete exact projection recovery capability"
+            )
+        if recovery_dispatcher is None:
+            if self.dispatcher is not dispatcher:
+                raise RuntimeError(
+                    "Generation dispatcher changed identity during exact projection recovery setup"
+                )
+            self._exact_projection_recovery_dispatcher = dispatcher
+        drain()
+        assert_drained()
+
     def _close_emitters(self, *, primary: BaseException | None = None) -> None:
         """Close every emitter, retaining a supplied lifecycle failure as primary."""
 
@@ -804,6 +843,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         if not generation_succeeded:
             self._finalization_aborted = True
+            self._drain_exact_projection_recoveries_before_close()
             self._close_emitters()
             self._finalization_complete = True
             return
@@ -817,6 +857,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             except BaseException as primary:
                 self._finalization_aborted = True
                 try:
+                    self._drain_exact_projection_recoveries_before_close()
                     self._close_emitters()
                 except BaseException as cleanup_error:
                     primary.add_note(f"Emitter cleanup also failed: {cleanup_error!r}")
@@ -831,6 +872,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             except BaseException as primary:
                 self._finalization_aborted = True
                 try:
+                    self._drain_exact_projection_recoveries_before_close()
                     self._close_emitters()
                 except BaseException as cleanup_error:
                     primary.add_note(f"Emitter cleanup also failed: {cleanup_error!r}")
@@ -842,6 +884,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         coordinator = self._source_finalization_coordinator
         if coordinator is None:
             raise RuntimeError("Generation engine lost its source-finalization coordinator")
+        self._drain_exact_projection_recoveries_before_close()
         coordinator.finalize()
         self._close_emitters()
         if not self._source_coordinator_closed:
