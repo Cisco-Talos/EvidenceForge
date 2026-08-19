@@ -18,6 +18,7 @@ from evidenceforge.generation.emitters.base import (
     ExactPublicationAuthority,
     ExactPublicationBatch,
     ExactPublicationError,
+    ExactPublicationKey,
 )
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.generation.emitters.windows import (
@@ -554,6 +555,539 @@ def test_windows_seal_rejects_post_release_sort_key_only_tamper(tmp_path: Path) 
     _run_windows_post_release_seal_tamper(tmp_path, tamper_payload=False)
 
 
+def _released_windows_abort_close_emitter(
+    tmp_path: Path,
+    target: OutputTarget | None = None,
+    *,
+    threaded: bool = False,
+) -> WindowsEventEmitter:
+    emitter = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "output",
+        threaded=threaded,
+        source_finalization=True,
+    )
+    if target is not None:
+        emitter.configure_output_target(target)
+    emitter.emit_event(_event(datetime(2024, 1, 15, 10, 29, tzinfo=UTC), "ordinary-row"))
+    batch = _authority().issue_batch()
+    batch.prepare(
+        lambda: emitter.emit_event(_event(datetime(2024, 1, 15, 10, 30, tzinfo=UTC), "svc-once"))
+    )
+    batch.commit()
+    batch.release_no_fail()
+    return emitter
+
+
+def _windows_exact_candidate_journal_row(
+    emitter: WindowsEventEmitter,
+) -> tuple[int, str, str]:
+    with emitter._file_lock:
+        assert emitter._spool_conn is not None
+        retained = emitter._spool_conn.execute(
+            "SELECT sequence, payload, sort_key FROM events WHERE route_kind = ?",
+            ("exact-candidate-v1",),
+        ).fetchone()
+    assert retained is not None
+    return retained
+
+
+def test_windows_abort_close_rejects_post_release_same_length_payload_tamper(
+    tmp_path: Path,
+) -> None:
+    """Abort close authenticates released exact payloads before legacy rendering."""
+
+    emitter = _released_windows_abort_close_emitter(tmp_path)
+    sequence, payload, sort_key = _windows_exact_candidate_journal_row(emitter)
+    tampered_payload = payload.replace("svc-once", "svc-twce", 1)
+    assert tampered_payload != payload
+    assert len(tampered_payload.encode("utf-8")) == len(payload.encode("utf-8"))
+    assert _spool_decode(tampered_payload)["TargetUserName"] == "svc-twce"
+    with emitter._file_lock:
+        assert emitter._spool_conn is not None
+        emitter._spool_conn.execute(
+            "UPDATE events SET payload = ? WHERE sequence = ?",
+            (tampered_payload, sequence),
+        )
+        emitter._commit_journal_unlocked()
+
+    with pytest.raises(
+        SourceFinalizationError,
+        match="released exact candidates require authenticated abort close",
+    ):
+        emitter.flush(force=True)
+    assert not (tmp_path / "output").exists()
+
+    with pytest.raises(ExactPublicationError, match="changed payload or sort key"):
+        emitter.close()
+
+    assert not (tmp_path / "output").exists()
+    assert emitter.source_finalization_census().state == "open"
+    rejected = emitter.exact_candidate_census()
+    assert (
+        rejected.current_rows,
+        rejected.released_rows,
+        rejected.current_participants,
+        rejected.completed_participants,
+    ) == (1, 1, 1, 1)
+
+    with emitter._file_lock:
+        assert emitter._spool_conn is not None
+        emitter._spool_conn.execute(
+            "UPDATE events SET payload = ?, sort_key = ? WHERE sequence = ?",
+            (payload, sort_key, sequence),
+        )
+        emitter._commit_journal_unlocked()
+    emitter.close()
+    output = (
+        tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
+    ).read_text(encoding="utf-8")
+    assert output.count("ordinary-row") == 1
+    assert output.count("svc-once") == 1
+    assert "svc-twce" not in output
+    assert emitter.exact_candidate_census().current_rows == 0
+
+
+def test_windows_abort_close_rejects_post_release_sort_key_only_tamper(
+    tmp_path: Path,
+) -> None:
+    """Abort close recomputes released exact candidate sort keys before rendering."""
+
+    emitter = _released_windows_abort_close_emitter(tmp_path)
+    sequence, payload, sort_key = _windows_exact_candidate_journal_row(emitter)
+    with emitter._file_lock:
+        assert emitter._spool_conn is not None
+        emitter._spool_conn.execute(
+            "UPDATE events SET sort_key = ? WHERE sequence = ?",
+            (sort_key + "0", sequence),
+        )
+        emitter._commit_journal_unlocked()
+
+    with pytest.raises(ExactPublicationError, match="changed payload or sort key"):
+        emitter.close()
+
+    assert not (tmp_path / "output").exists()
+    rejected = emitter.exact_candidate_census()
+    assert (rejected.current_rows, rejected.released_rows) == (1, 1)
+    with emitter._file_lock:
+        assert emitter._spool_conn is not None
+        emitter._spool_conn.execute(
+            "UPDATE events SET payload = ?, sort_key = ? WHERE sequence = ?",
+            (payload, sort_key, sequence),
+        )
+        emitter._commit_journal_unlocked()
+    emitter.close()
+    output = (
+        tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
+    ).read_text(encoding="utf-8")
+    assert output.count("ordinary-row") == 1
+    assert output.count("svc-once") == 1
+    assert emitter.exact_candidate_census().current_rows == 0
+
+
+@pytest.mark.parametrize("threaded", [False, True])
+def test_windows_valid_abort_close_preserves_legacy_bytes_and_zeroes_exact_census(
+    tmp_path: Path,
+    threaded: bool,
+) -> None:
+    """A valid exact candidate abort close retains legacy source bytes exactly once."""
+
+    timestamp = datetime(2024, 1, 15, 10, 30, tzinfo=UTC)
+    reference_root = tmp_path / "reference"
+    reference = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        reference_root,
+    )
+    reference.emit_event(_event(timestamp - timedelta(minutes=1), "ordinary-row"))
+    reference.emit_event(_event(timestamp, "svc-once"))
+    reference.close()
+
+    emitter = _released_windows_abort_close_emitter(tmp_path, threaded=threaded)
+    emitter.close()
+
+    filename = Path("WIN-TEST-01.corp.local/windows_event_security.xml")
+    assert (tmp_path / "output" / filename).read_bytes() == (reference_root / filename).read_bytes()
+    exact_census = emitter.exact_candidate_census()
+    assert (
+        exact_census.current_rows,
+        exact_census.current_bytes,
+        exact_census.current_participants,
+        exact_census.released_rows,
+        exact_census.released_bytes,
+        exact_census.completed_participants,
+    ) == (0, 0, 0, 0, 0, 0)
+    assert emitter.source_finalization_census().state == "aborted"
+
+
+def test_windows_abort_close_authentication_lost_return_retries_exactly_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lost authentication return preserves receipts for one exact retry."""
+
+    emitter = _released_windows_abort_close_emitter(tmp_path)
+    original_validate = emitter._validate_exact_candidate_receipts_before_seal_unlocked
+    lost_return = True
+
+    def validate_then_raise() -> None:
+        nonlocal lost_return
+        original_validate()
+        if lost_return:
+            lost_return = False
+            raise RuntimeError("abort authentication return lost")
+
+    monkeypatch.setattr(
+        emitter,
+        "_validate_exact_candidate_receipts_before_seal_unlocked",
+        validate_then_raise,
+    )
+    with pytest.raises(RuntimeError, match="abort authentication return lost"):
+        emitter.close()
+
+    assert not (tmp_path / "output").exists()
+    retained = emitter.exact_candidate_census()
+    assert (retained.current_rows, retained.released_rows) == (1, 1)
+
+    emitter.close()
+    output = (
+        tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
+    ).read_text(encoding="utf-8")
+    assert output.count("ordinary-row") == 1
+    assert output.count("svc-once") == 1
+    assert emitter.exact_candidate_census().current_rows == 0
+
+
+@pytest.mark.parametrize("lost_return", [False, True])
+def test_windows_abort_close_render_failure_retains_exact_retry_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_return: bool,
+) -> None:
+    """Abort rendering cannot retire exact receipts before retryable completion."""
+
+    emitter = _released_windows_abort_close_emitter(tmp_path)
+    original_seal = emitter._seal_source_finalization
+    faulted = False
+
+    def fail_render_once() -> SourceFinalizationEpoch:
+        nonlocal faulted
+        if not faulted:
+            faulted = True
+            if lost_return:
+                original_seal()
+            raise RuntimeError("abort render return lost")
+        return original_seal()
+
+    monkeypatch.setattr(emitter, "_seal_source_finalization", fail_render_once)
+    with pytest.raises(RuntimeError, match="abort render return lost"):
+        emitter.close()
+
+    retained = emitter.exact_candidate_census()
+    assert (
+        retained.current_rows,
+        retained.released_rows,
+        retained.current_participants,
+        retained.completed_participants,
+    ) == (1, 1, 1, 1)
+    assert emitter.source_finalization_census().state == "open"
+
+    emitter.close()
+    output = (
+        tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
+    ).read_text(encoding="utf-8")
+    assert output.count("ordinary-row") == 1
+    assert output.count("svc-once") == 1
+    assert emitter.exact_candidate_census().current_rows == 0
+
+
+def test_windows_abort_close_partial_internal_render_rolls_back_before_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mid-cohort renderer failure cannot strand partially written exact rows."""
+
+    emitter = _released_windows_abort_close_emitter(tmp_path)
+    emitter.emit_event(_event(datetime(2024, 1, 15, 10, 31, tzinfo=UTC), "ordinary-last"))
+    original_finalize = emitter._finalize_event_for_output
+    faulted = False
+
+    def finalize_then_raise(*args: object, **kwargs: object) -> object:
+        nonlocal faulted
+        result = original_finalize(*args, **kwargs)
+        if not faulted and args[1] == 1:
+            faulted = True
+            raise RuntimeError("abort renderer failed mid-cohort")
+        return result
+
+    monkeypatch.setattr(emitter, "_finalize_event_for_output", finalize_then_raise)
+    with pytest.raises(RuntimeError, match="abort renderer failed mid-cohort"):
+        emitter.close()
+
+    assert not (tmp_path / "output").exists()
+    assert emitter._exact_candidate_abort_close_rendering
+    assert not emitter._exact_candidate_abort_close_rows_rendered
+    with emitter._file_lock:
+        assert emitter._journal_state_unlocked()[0] == "candidate"
+
+    emitter.close()
+    output = (
+        tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
+    ).read_text(encoding="utf-8")
+    assert output.count("ordinary-row") == 1
+    assert output.count("svc-once") == 1
+    assert output.count("ordinary-last") == 1
+    assert emitter.exact_candidate_census().current_rows == 0
+
+
+@pytest.mark.parametrize("fault_point", ["commit", "checkpoint", "release"])
+@pytest.mark.parametrize("lost_return", [False, True])
+def test_windows_abort_close_exact_row_failure_resumes_one_final_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault_point: str,
+    lost_return: bool,
+) -> None:
+    """Abort row commit, cursor, and release failures retain one bounded retry owner."""
+
+    emitter = _released_windows_abort_close_emitter(tmp_path)
+    faulted = False
+
+    if fault_point == "commit":
+        original_commit = _SingleHostWriter._commit_exact_row
+
+        def commit_then_raise(
+            writer: _SingleHostWriter,
+            key: ExactPublicationKey,
+            digest: str,
+            frozen: object,
+        ) -> None:
+            nonlocal faulted
+            if not faulted:
+                faulted = True
+                if lost_return:
+                    original_commit(writer, key, digest, frozen)
+                raise RuntimeError("abort exact row commit failed")
+            original_commit(writer, key, digest, frozen)
+
+        monkeypatch.setattr(_SingleHostWriter, "_commit_exact_row", commit_then_raise)
+    elif fault_point == "checkpoint":
+        original_checkpoint = emitter._checkpoint_source_chunk
+
+        def checkpoint_then_raise(start: int, end: int) -> None:
+            nonlocal faulted
+            if not faulted:
+                faulted = True
+                if lost_return:
+                    original_checkpoint(start, end)
+                raise RuntimeError("abort exact row checkpoint failed")
+            original_checkpoint(start, end)
+
+        monkeypatch.setattr(emitter, "_checkpoint_source_chunk", checkpoint_then_raise)
+    else:
+        original_release = _SingleHostWriter._release_exact_row
+
+        def release_then_raise(
+            writer: _SingleHostWriter,
+            key: ExactPublicationKey,
+        ) -> None:
+            nonlocal faulted
+            if not faulted:
+                faulted = True
+                if lost_return:
+                    original_release(writer, key)
+                raise RuntimeError("abort exact row release failed")
+            original_release(writer, key)
+
+        monkeypatch.setattr(_SingleHostWriter, "_release_exact_row", release_then_raise)
+
+    with pytest.raises(RuntimeError, match=f"abort exact row {fault_point} failed"):
+        emitter.close()
+
+    retained = emitter.exact_candidate_census()
+    assert (retained.current_rows, retained.released_rows) == (1, 1)
+    assert emitter._exact_candidate_abort_pending_row is not None
+    assert emitter.source_finalization_census().state == "open"
+
+    emitter.close()
+    output = (
+        tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
+    ).read_text(encoding="utf-8")
+    assert output.count("ordinary-row") == 1
+    assert output.count("svc-once") == 1
+    assert output.count("</Events>") == 1
+    assert emitter._exact_candidate_abort_pending_row is None
+    assert emitter.exact_candidate_census().current_rows == 0
+
+
+@pytest.mark.parametrize("lost_return", [False, True])
+def test_windows_abort_close_writer_flush_failure_retains_exact_retry_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_return: bool,
+) -> None:
+    """A terminal writer flush failure preserves authenticated abort ownership."""
+
+    emitter = _released_windows_abort_close_emitter(tmp_path, OutputTarget.SPLUNK)
+    original_flush = _SingleHostWriter.flush
+    faulted = False
+
+    def fail_writer_flush_once(writer: _SingleHostWriter) -> None:
+        nonlocal faulted
+        if not faulted:
+            faulted = True
+            if lost_return:
+                original_flush(writer)
+            raise RuntimeError("abort writer flush return lost")
+        original_flush(writer)
+
+    monkeypatch.setattr(_SingleHostWriter, "flush", fail_writer_flush_once)
+    with pytest.raises(RuntimeError, match="abort writer flush return lost"):
+        emitter.close()
+
+    retained = emitter.exact_candidate_census()
+    assert (retained.current_rows, retained.released_rows) == (1, 1)
+    assert emitter.source_finalization_census().state == "open"
+
+    emitter.close()
+    output = (
+        tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
+    ).read_text(encoding="utf-8")
+    assert output.count("ordinary-row") == 1
+    assert output.count("svc-once") == 1
+    assert emitter.exact_candidate_census().current_rows == 0
+
+
+@pytest.mark.parametrize("lost_return", [False, True])
+def test_windows_abort_close_footer_failure_retains_exact_retry_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_return: bool,
+) -> None:
+    """Abort footer retries cannot discard or duplicate rendered exact rows."""
+
+    emitter = _released_windows_abort_close_emitter(tmp_path)
+    original_footer = _SingleHostWriter.write_footer
+    faulted = False
+
+    def fail_footer_once(writer: _SingleHostWriter, footer: str) -> None:
+        nonlocal faulted
+        if faulted:
+            original_footer(writer, footer)
+            return
+        faulted = True
+        if lost_return:
+            original_footer(writer, footer)
+        raise RuntimeError("abort footer return lost")
+
+    monkeypatch.setattr(_SingleHostWriter, "write_footer", fail_footer_once)
+    with pytest.raises(RuntimeError, match="abort footer return lost"):
+        emitter.close()
+
+    retained = emitter.exact_candidate_census()
+    assert (retained.current_rows, retained.released_rows) == (1, 1)
+    assert emitter.source_finalization_census().state == "open"
+
+    emitter.close()
+    output = (
+        tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
+    ).read_text(encoding="utf-8")
+    assert output.count("ordinary-row") == 1
+    assert output.count("svc-once") == 1
+    assert output.count("</Events>") == 1
+    assert emitter.exact_candidate_census().current_rows == 0
+
+
+@pytest.mark.parametrize("lost_return", [False, True])
+def test_windows_abort_close_journal_cleanup_failure_retains_exact_retry_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lost_return: bool,
+) -> None:
+    """Journal cleanup failure keeps the rendered exact rows owned for retry."""
+
+    emitter = _released_windows_abort_close_emitter(tmp_path)
+    original_cleanup = emitter._cleanup_spool_unlocked
+    faulted = False
+
+    def cleanup_then_raise() -> None:
+        nonlocal faulted
+        if faulted:
+            original_cleanup()
+            return
+        faulted = True
+        if lost_return:
+            original_cleanup()
+        raise RuntimeError("abort journal cleanup return lost")
+
+    monkeypatch.setattr(emitter, "_cleanup_spool_unlocked", cleanup_then_raise)
+    with pytest.raises(RuntimeError, match="abort journal cleanup return lost"):
+        emitter.close()
+
+    retained = emitter.exact_candidate_census()
+    assert (retained.current_rows, retained.released_rows) == (1, 1)
+    assert (emitter._spool_conn is None) is lost_return
+    assert emitter.source_finalization_census().state == "open"
+
+    emitter.close()
+    output = (
+        tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
+    ).read_text(encoding="utf-8")
+    assert output.count("ordinary-row") == 1
+    assert output.count("svc-once") == 1
+    assert emitter.exact_candidate_census().current_rows == 0
+
+
+def test_windows_abort_close_render_owner_fences_new_work_until_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retained abort render owner rejects late candidates and target mutation."""
+
+    emitter = _released_windows_abort_close_emitter(tmp_path)
+    original_seal = emitter._seal_source_finalization
+    lost_return = True
+
+    def render_then_raise() -> SourceFinalizationEpoch:
+        nonlocal lost_return
+        result = original_seal()
+        if lost_return:
+            lost_return = False
+            raise RuntimeError("abort render return lost")
+        return result
+
+    monkeypatch.setattr(emitter, "_seal_source_finalization", render_then_raise)
+    with pytest.raises(RuntimeError, match="abort render return lost"):
+        emitter.close()
+
+    with pytest.raises(ExactPublicationError, match="retry owner rejects new candidate"):
+        emitter.emit_event(_event(datetime(2024, 1, 15, 10, 31, tzinfo=UTC), "late-ordinary"))
+    late_batch = _authority().issue_batch()
+    with pytest.raises(ExactPublicationError, match="retry owner rejects exact candidate"):
+        late_batch.prepare(
+            lambda: emitter.emit_event(
+                _event(datetime(2024, 1, 15, 10, 32, tzinfo=UTC), "late-exact")
+            )
+        )
+    with pytest.raises(SourceFinalizationError, match="terminal source ownership"):
+        emitter.configure_output_target(OutputTarget.SPLUNK)
+    with pytest.raises(SourceFinalizationError, match="retry owner rejects an external flush"):
+        emitter.flush(force=True)
+    with pytest.raises(SourceFinalizationError, match="retry owner rejects an external barrier"):
+        emitter.barrier_flush()
+    with pytest.raises(SourceFinalizationError, match="retry owner rejects source quiescence"):
+        emitter.quiesce_source_finalization()
+
+    emitter.close()
+    output = (
+        tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
+    ).read_text(encoding="utf-8")
+    assert output.count("ordinary-row") == 1
+    assert output.count("svc-once") == 1
+    assert "late-ordinary" not in output
+    assert "late-exact" not in output
+    assert emitter.exact_candidate_census().current_rows == 0
+
+
 @pytest.mark.parametrize("threaded", [False, True])
 def test_windows_prior_ordinary_equal_time_candidate_precedes_exact_candidate(
     tmp_path: Path,
@@ -820,7 +1354,7 @@ def test_windows_terminal_seal_sorts_late_earlier_row_and_uses_exact_writer(
         ),
     ],
 )
-def test_windows_exact_and_direct_legacy_bytes_match_immutable_parent_hashes(
+def test_windows_exact_abort_and_direct_legacy_bytes_match_immutable_parent_hashes(
     tmp_path: Path,
     target: OutputTarget,
     filename: str,
@@ -864,10 +1398,33 @@ def test_windows_exact_and_direct_legacy_bytes_match_immutable_parent_hashes(
     coordinator.mark_closed()
     exact_output = next(exact_root.rglob(filename))
 
+    abort_root = tmp_path / "abort"
+    abort = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        abort_root,
+        buffer_size=1,
+        source_finalization=True,
+    )
+    abort.configure_output_target(target)
+    abort_batch = _authority().issue_batch()
+    abort_batch.prepare(
+        lambda: (
+            abort.emit_event(_event(timestamp, "later")),
+            abort.emit_event(_event(timestamp - timedelta(seconds=10), "earlier")),
+        )
+    )
+    abort_batch.commit()
+    abort_batch.release_no_fail()
+    abort.close()
+    abort_output = next(abort_root.rglob(filename))
+
     direct_bytes = direct_output.read_bytes()
     exact_bytes = exact_output.read_bytes()
+    abort_bytes = abort_output.read_bytes()
     assert exact_bytes == direct_bytes
+    assert abort_bytes == direct_bytes
     assert hashlib.sha256(exact_bytes).hexdigest() == expected_digest
+    assert hashlib.sha256(abort_bytes).hexdigest() == expected_digest
 
 
 @pytest.mark.parametrize(

@@ -687,6 +687,16 @@ class _WindowsExactCandidateParticipant:
     completed: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class _WindowsAbortExactPendingRow:
+    """One bounded final-writer row retained across abort-publication retry."""
+
+    ordinal: int
+    key: ExactPublicationKey
+    writer: _SingleHostWriter
+    digest: str
+
+
 class _WindowsSourceFinalizationEpoch(SourceFinalizationEpoch):
     """Emitter-owned opaque reference to one sealed Windows Security cohort."""
 
@@ -2097,6 +2107,12 @@ class WindowsEventEmitter(LogEmitter):
         self._exact_candidate_high_water_rows = 0
         self._exact_candidate_high_water_bytes = 0
         self._exact_candidate_high_water_participants = 0
+        self._exact_candidate_abort_close_rendering = False
+        self._exact_candidate_abort_close_rows_rendered = False
+        self._exact_candidate_abort_close_render_complete = False
+        self._exact_candidate_abort_participant_key: ExactPublicationParticipantKey | None = None
+        self._exact_candidate_abort_registered_writers: dict[int, _SingleHostWriter] = {}
+        self._exact_candidate_abort_pending_row: _WindowsAbortExactPendingRow | None = None
         self._candidate_admission_lock = Lock()
         self._finalization_row_capacity = finalization_row_capacity
         self._finalization_byte_capacity = finalization_byte_capacity
@@ -2138,12 +2154,16 @@ class WindowsEventEmitter(LogEmitter):
     def configure_output_target(self, target: str | OutputTarget | None) -> None:
         """Reject target mutation after the terminal source cohort starts quiescing."""
 
-        state, _ = self._source_lifecycle_snapshot()
-        if self._source_finalization_bound and state != "open":
-            raise SourceFinalizationError(
-                "Windows output target cannot change after source quiescence"
-            )
-        super().configure_output_target(target)
+        with self._close_condition:
+            if self._source_finalization_bound and (
+                self._source_finalization_state != "open"
+                or self._close_state != "open"
+                or self._exact_candidate_abort_close_rendering
+            ):
+                raise SourceFinalizationError(
+                    "Windows output target cannot change during terminal source ownership"
+                )
+            super().configure_output_target(target)
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host_fqdn = sanitize_path_component(host_fqdn)
@@ -2225,6 +2245,10 @@ class WindowsEventEmitter(LogEmitter):
             while self._active_exact_publication_keys:
                 self._close_condition.wait()
             self._require_accepting_events_locked()
+            if self._exact_candidate_abort_close_rendering:
+                raise ExactPublicationError(
+                    "Windows abort close retry owner rejects new candidate admission"
+                )
             self._queue_admissions += 1
 
     @property
@@ -2250,6 +2274,10 @@ class WindowsEventEmitter(LogEmitter):
                 "Windows exact candidate publication requires source finalization"
             )
         with self._exact_publication_condition:
+            if self._exact_candidate_abort_close_rendering:
+                raise ExactPublicationError(
+                    "Windows abort close retry owner rejects exact candidate admission"
+                )
             retained_participant = self._exact_candidate_participants.get(key)
             if retained_participant is not None:
                 if key not in self._active_exact_publication_keys:
@@ -4082,6 +4110,13 @@ class WindowsEventEmitter(LogEmitter):
     def _cleanup_spool_unlocked(self) -> None:
         """Remove the exact private journal after terminal source close."""
 
+        if (
+            self._exact_candidate_abort_close_rendering
+            and not self._exact_candidate_abort_close_rows_rendered
+        ):
+            raise ExactPublicationError(
+                "Windows abort close cannot clear its journal before exact rows render"
+            )
         if self._spool_conn is not None:
             self._spool_conn.close()
             self._spool_conn = None
@@ -4171,6 +4206,8 @@ class WindowsEventEmitter(LogEmitter):
         self._spooled_count = 0
         self._candidate_admitted_rows = 0
         self._candidate_admitted_bytes = 0
+        if self._exact_candidate_abort_close_rendering:
+            self._exact_candidate_abort_close_render_complete = True
 
     def _snapshot_render_state(self) -> _WindowsRenderState:
         """Copy source-native mutable state so a failed seal cannot advance it."""
@@ -4289,6 +4326,10 @@ class WindowsEventEmitter(LogEmitter):
 
     def _flush_unlocked(self) -> None:
         """Sort events, assign RecordIDs, render, and write to per-host files."""
+        if self._exact_candidate_abort_close_rendering:
+            raise ExactPublicationError(
+                "Windows exact abort publication cannot use legacy streaming render"
+            )
         if not self._event_dicts and self._spooled_count == 0:
             return
 
@@ -4822,6 +4863,10 @@ class WindowsEventEmitter(LogEmitter):
                 )
                 if not legacy_close_owner:
                     self._require_accepting_events_locked()
+                    if self._exact_candidate_abort_close_rendering:
+                        raise SourceFinalizationError(
+                            "Windows abort close retry owner rejects an external barrier"
+                        )
             elif state != "quiescing":
                 raise SourceFinalizationError(
                     "Windows source-finalization rejected a terminal barrier"
@@ -4852,6 +4897,10 @@ class WindowsEventEmitter(LogEmitter):
         owner = get_ident()
         with self._close_condition:
             state = self._source_finalization_state
+            if self._exact_candidate_abort_close_rendering:
+                raise SourceFinalizationError(
+                    "Windows abort close retry owner rejects source quiescence"
+                )
             if state in {"quiesced", "sealed", "published", "closed"}:
                 return
             if state == "open":
@@ -5373,6 +5422,41 @@ class WindowsEventEmitter(LogEmitter):
             )
         return writer
 
+    def _read_final_row_unlocked(self, ordinal: int) -> ExactSourceRow:
+        """Load and authenticate one immutable final row by exact ordinal."""
+
+        if type(ordinal) is not int or ordinal < 0:
+            raise SourceFinalizationError(
+                "Windows immutable final row ordinal must be a nonnegative exact int"
+            )
+        connection = self._spool_conn
+        if connection is None:
+            raise SourceFinalizationError("Windows source journal is not open")
+        row = connection.execute(
+            """SELECT route_kind, route_key, payload, payload_bytes, payload_digest
+               FROM events WHERE phase = ? AND ordinal = ?""",
+            ("final", ordinal),
+        ).fetchone()
+        if row is None:
+            raise SourceFinalizationError("Windows immutable final row is missing")
+        route_kind, route_key, rendered, payload_bytes, payload_digest = row
+        if (
+            type(route_kind) is not str
+            or type(route_key) is not str
+            or type(rendered) is not str
+            or type(payload_bytes) is not int
+            or payload_bytes < 0
+            or type(payload_digest) is not str
+        ):
+            raise SourceFinalizationError("Windows immutable final row has invalid types")
+        encoded = rendered.encode("utf-8")
+        if len(encoded) != payload_bytes or hashlib.sha256(encoded).hexdigest() != payload_digest:
+            raise SourceFinalizationError("Windows immutable final row failed validation")
+        return ExactSourceRow(
+            writer=self._resolve_sealed_writer_unlocked(route_kind, route_key),
+            content=rendered,
+        )
+
     def _read_final_chunk_unlocked(self, cursor: int, final_rows: int) -> _WindowsFinalChunk | None:
         """Load one bounded immutable chunk from the private journal."""
 
@@ -5386,23 +5470,10 @@ class WindowsEventEmitter(LogEmitter):
         route_ids: set[int] = set()
         while len(rows) < _FINALIZATION_CHUNK_ROWS and cursor + len(rows) < final_rows:
             ordinal = cursor + len(rows)
-            row = connection.execute(
-                """SELECT route_kind, route_key, payload, payload_bytes, payload_digest
-                   FROM events WHERE phase = ? AND ordinal = ?""",
-                ("final", ordinal),
-            ).fetchone()
-            if row is None:
-                raise SourceFinalizationError("Windows immutable final row is missing")
-            route_kind, route_key, rendered, payload_bytes, payload_digest = row
-            if not all(isinstance(value, str) for value in (route_kind, route_key, rendered)):
-                raise SourceFinalizationError("Windows immutable final row has invalid types")
-            encoded = rendered.encode("utf-8")
-            if len(encoded) != int(payload_bytes) or hashlib.sha256(encoded).hexdigest() != str(
-                payload_digest
-            ):
-                raise SourceFinalizationError("Windows immutable final row failed validation")
-            writer = self._resolve_sealed_writer_unlocked(route_kind, route_key)
-            next_bytes = retained_bytes + len(encoded)
+            row = self._read_final_row_unlocked(ordinal)
+            encoded_size = len(row.content.encode("utf-8"))
+            writer = row.writer
+            next_bytes = retained_bytes + encoded_size
             next_route_ids = route_ids | {id(writer)}
             if rows and (
                 next_bytes > _FINALIZATION_CHUNK_BYTES
@@ -5415,7 +5486,7 @@ class WindowsEventEmitter(LogEmitter):
                 )
             retained_bytes = next_bytes
             route_ids = next_route_ids
-            rows.append(ExactSourceRow(writer=writer, content=rendered))
+            rows.append(row)
         if not rows:
             raise SourceFinalizationError("Windows source chunk could not make bounded progress")
         return _WindowsFinalChunk(
@@ -5613,7 +5684,28 @@ class WindowsEventEmitter(LogEmitter):
 
     def flush(self, *, force: bool = False) -> None:
         """Flush host writers and spill deferred Windows events to bounded disk storage."""
-        source_state, _ = self._source_lifecycle_snapshot()
+        current = get_ident()
+        with self._close_condition:
+            source_state = self._source_finalization_state
+            retained_exact_candidates = bool(
+                self._active_exact_publication_keys
+                or self._exact_candidate_current_rows
+                or self._exact_candidate_current_bytes
+                or self._exact_candidate_current_participants
+                or self._exact_candidate_released_rows
+                or self._exact_candidate_released_bytes
+                or self._exact_candidate_completed_participants
+                or self._exact_candidate_reservations
+                or self._exact_candidate_participants
+            )
+            if self._exact_candidate_abort_close_rendering and self._close_thread != current:
+                raise SourceFinalizationError(
+                    "Windows abort close retry owner rejects an external flush"
+                )
+            if self._source_finalization_bound and force and retained_exact_candidates:
+                raise SourceFinalizationError(
+                    "Windows released exact candidates require authenticated abort close"
+                )
         if self._source_finalization_bound and source_state != "open":
             raise SourceFinalizationError(
                 "Windows source-finalization rejected legacy flush after quiescence"
@@ -5668,6 +5760,13 @@ class WindowsEventEmitter(LogEmitter):
                 raise ExactPublicationError(
                     "Windows terminal cleanup found inconsistent exact candidate ownership"
                 )
+            if (
+                self._exact_candidate_abort_pending_row is not None
+                or self._exact_candidate_abort_registered_writers
+            ):
+                raise ExactPublicationError(
+                    "Windows terminal cleanup found incomplete exact abort publication"
+                )
             self._exact_candidate_reservations.clear()
             self._exact_candidate_participants.clear()
             self._exact_candidate_current_rows = 0
@@ -5676,6 +5775,229 @@ class WindowsEventEmitter(LogEmitter):
             self._exact_candidate_released_rows = 0
             self._exact_candidate_released_bytes = 0
             self._exact_candidate_completed_participants = 0
+            self._exact_candidate_abort_participant_key = None
+
+    def _validate_exact_candidate_receipts_before_abort_close(self) -> bool:
+        """Authenticate released exact candidates before abort may clear or render them."""
+
+        with self._exact_publication_condition:
+            retained = bool(
+                self._exact_candidate_current_rows
+                or self._exact_candidate_current_bytes
+                or self._exact_candidate_current_participants
+                or self._exact_candidate_released_rows
+                or self._exact_candidate_released_bytes
+                or self._exact_candidate_completed_participants
+                or self._exact_candidate_reservations
+                or self._exact_candidate_participants
+            )
+            if not retained:
+                return False
+            with self._file_lock:
+                self._validate_exact_candidate_receipts_before_seal_unlocked()
+            return True
+
+    def _exact_candidate_abort_participant(self) -> ExactPublicationParticipantKey:
+        """Retain one authenticated candidate participant for exact abort publication."""
+
+        with self._exact_publication_condition:
+            retained = self._exact_candidate_abort_participant_key
+            if retained is not None:
+                if retained not in self._exact_candidate_participants:
+                    raise ExactPublicationError(
+                        "Windows exact abort publication lost its candidate participant"
+                    )
+                return retained
+            if not self._exact_candidate_participants:
+                raise ExactPublicationError(
+                    "Windows exact abort publication requires a retained participant"
+                )
+            retained = min(self._exact_candidate_participants)
+            self._validate_exact_candidate_participant_key(retained)
+            self._exact_candidate_abort_participant_key = retained
+            return retained
+
+    def _register_exact_candidate_abort_writer(
+        self,
+        writer: _SingleHostWriter,
+        participant_key: ExactPublicationParticipantKey,
+    ) -> None:
+        """Fence one final writer under the retained abort participant."""
+
+        writer_id = id(writer)
+        retained = self._exact_candidate_abort_registered_writers.get(writer_id)
+        if retained is not None:
+            if retained is not writer:
+                raise ExactPublicationError(
+                    "Windows exact abort publication changed a retained final writer"
+                )
+            return
+        writer._register_exact_publication_batch(participant_key)
+        self._exact_candidate_abort_registered_writers[writer_id] = writer
+
+    def _mark_exact_candidate_abort_published_unlocked(self) -> None:
+        """Durably mark a fully checkpointed abort cohort published."""
+
+        connection = self._spool_conn
+        if connection is None:
+            raise SourceFinalizationError("Windows source journal is not open")
+        connection.execute(
+            """UPDATE finalization_state SET phase = ?
+               WHERE singleton = ? AND phase = ? AND published_rows = final_rows""",
+            ("published", 1, "sealed"),
+        )
+        try:
+            self._commit_journal_unlocked()
+        except BaseException:
+            if connection.in_transaction or str(self._journal_state_unlocked()[0]) != "published":
+                self._rollback_journal_unlocked()
+                raise
+        if str(self._journal_state_unlocked()[0]) != "published":
+            raise SourceFinalizationError("Windows exact abort publication state was not durable")
+
+    def _resume_exact_candidate_abort_rows(self) -> None:
+        """Publish sealed abort rows one at a time through exact final-writer receipts."""
+
+        participant_key = self._exact_candidate_abort_participant()
+        while True:
+            pending = self._exact_candidate_abort_pending_row
+            release_pending = False
+            publication_complete = False
+            rendered = ""
+            with self._file_lock:
+                state = self._journal_state_unlocked()
+                phase = str(state[0])
+                final_rows = int(state[3])
+                cursor = int(state[6])
+                if cursor < 0 or cursor > final_rows:
+                    raise SourceFinalizationError(
+                        "Windows exact abort publication cursor is out of range"
+                    )
+                if pending is not None and cursor == pending.ordinal + 1:
+                    release_pending = True
+                elif pending is not None and cursor != pending.ordinal:
+                    raise ExactPublicationError(
+                        "Windows exact abort publication lost its pending row cursor"
+                    )
+                elif phase == "published":
+                    if cursor != final_rows:
+                        raise SourceFinalizationError(
+                            "Windows published abort cohort retained an incomplete cursor"
+                        )
+                    publication_complete = True
+                elif phase != "sealed":
+                    raise SourceFinalizationError(
+                        "Windows exact abort publication requires a sealed journal"
+                    )
+                elif cursor == final_rows:
+                    self._mark_exact_candidate_abort_published_unlocked()
+                    publication_complete = True
+                else:
+                    row = self._read_final_row_unlocked(cursor)
+                    rendered = row.content
+                    digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+                    key = (participant_key[0], participant_key[1], cursor)
+                    if pending is None:
+                        pending = _WindowsAbortExactPendingRow(
+                            ordinal=cursor,
+                            key=key,
+                            writer=row.writer,
+                            digest=digest,
+                        )
+                        self._exact_candidate_abort_pending_row = pending
+                    elif (
+                        pending.key != key
+                        or pending.writer is not row.writer
+                        or pending.digest != digest
+                    ):
+                        raise ExactPublicationError(
+                            "Windows exact abort publication changed its pending final row"
+                        )
+
+            if release_pending:
+                if pending is None:
+                    raise ExactPublicationError(
+                        "Windows exact abort publication lost its release owner"
+                    )
+                pending.writer._release_exact_row(pending.key)
+                self._exact_candidate_abort_pending_row = None
+                continue
+            if publication_complete:
+                break
+            if pending is None:
+                raise ExactPublicationError("Windows exact abort publication lost its pending row")
+            self._register_exact_candidate_abort_writer(pending.writer, participant_key)
+            pending.writer._commit_exact_row(pending.key, pending.digest, rendered)
+            self._checkpoint_source_chunk(pending.ordinal, pending.ordinal + 1)
+
+        for writer in tuple(self._exact_candidate_abort_registered_writers.values()):
+            writer._complete_exact_publication_batch(participant_key)
+        self._exact_candidate_abort_registered_writers.clear()
+
+    def _resume_exact_candidate_abort_render(self) -> None:
+        """Seal, exactly publish, and clean one authenticated abort cohort."""
+
+        with self._close_condition:
+            output_target = self._source_finalization_output_target
+            header = self._source_finalization_header
+            footer = self._source_finalization_footer
+            if output_target is None and header is None and footer is None:
+                self._source_finalization_output_target = self.output_target
+                self._source_finalization_header = self.format_def.output.header_template or ""
+                self._source_finalization_footer = self.format_def.output.footer_template or ""
+            elif (
+                output_target != self.output_target
+                or header != (self.format_def.output.header_template or "")
+                or footer != (self.format_def.output.footer_template or "")
+            ):
+                raise ExactPublicationError(
+                    "Windows exact abort publication changed its frozen output contract"
+                )
+        self._set_source_lifecycle_state("quiesced")
+        try:
+            with self._file_lock:
+                self._spool_event_dicts_unlocked()
+            self._seal_source_finalization()
+            self._resume_exact_candidate_abort_rows()
+        finally:
+            self._set_source_lifecycle_state("open")
+        self._exact_candidate_abort_close_rows_rendered = True
+        with self._file_lock:
+            self._cleanup_spool_unlocked()
+
+    def _prepare_exact_candidate_abort_close_render(self) -> bool:
+        """Resume authenticated abort rendering and report whether rows already rendered."""
+
+        if self._exact_candidate_abort_close_render_complete:
+            if (
+                not self._exact_candidate_abort_close_rendering
+                or not self._exact_candidate_abort_close_rows_rendered
+            ):
+                raise ExactPublicationError(
+                    "Windows abort close lost its exact render-completion owner"
+                )
+            return True
+        if self._exact_candidate_abort_close_rows_rendered:
+            if not self._exact_candidate_abort_close_rendering:
+                raise ExactPublicationError(
+                    "Windows abort close retained rows without an exact render owner"
+                )
+            with self._file_lock:
+                self._cleanup_spool_unlocked()
+            if not self._exact_candidate_abort_close_render_complete:
+                raise ExactPublicationError(
+                    "Windows abort close did not retain journal-cleanup completion"
+                )
+            return True
+        if self._exact_candidate_abort_close_rendering:
+            self._resume_exact_candidate_abort_render()
+            return True
+        retained = self._validate_exact_candidate_receipts_before_abort_close()
+        if not retained:
+            return False
+        self._exact_candidate_abort_close_rendering = True
+        self._resume_exact_candidate_abort_render()
+        return True
 
     def _close_windows_emitter(self) -> None:
         """Run exact or legacy close while any required source capability is held."""
@@ -5717,21 +6039,38 @@ class WindowsEventEmitter(LogEmitter):
         if not self._begin_close():
             return
         try:
-            self._finish_exact_candidate_terminal_cleanup()
             if self.threaded:
                 self.stop_thread()
-            self.flush(force=True)
+            skip_render = False
+            if self._source_finalization_bound:
+                skip_render = self._prepare_exact_candidate_abort_close_render()
+            if not skip_render:
+                self.flush(force=True)
+            if (
+                self._exact_candidate_abort_close_rendering
+                and not self._exact_candidate_abort_close_render_complete
+            ):
+                raise ExactPublicationError(
+                    "Windows abort close did not complete its authenticated exact render"
+                )
             footer = self.format_def.output.footer_template or ""
             for writer in self._host_writers.values():
-                writer.flush()
                 if footer and writer.event_count > 0 and self.output_target != OutputTarget.SPLUNK:
                     writer.write_footer(footer)
+                else:
+                    writer.flush()
             for writer in self._snare_writers.values():
                 writer.flush()
+            self._source_finalization_routes.clear()
+            self._source_finalization_route_ids.clear()
+            self._finish_exact_candidate_terminal_cleanup()
         except BaseException:
             self._fail_close()
             raise
         if self._source_finalization_bound:
+            self._exact_candidate_abort_close_rendering = False
+            self._exact_candidate_abort_close_rows_rendered = False
+            self._exact_candidate_abort_close_render_complete = False
             self._set_source_lifecycle_state("aborted")
         self._finish_close()
 
