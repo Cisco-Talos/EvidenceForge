@@ -30,6 +30,7 @@ from typing import Literal, TypeAlias
 
 EntityIdentityKind: TypeAlias = Literal[
     "authentication_attempt",
+    "authentication_occurrence",
     "file",
     "module",
     "network_flow",

@@ -25,6 +25,7 @@
 import ipaddress
 import random
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -40,6 +41,7 @@ from evidenceforge.events.contexts import (
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.observation import ObservationPolicy
+from evidenceforge.formats.loader import load_format
 from evidenceforge.generation.actions import (
     AccountChangedActionBundle,
     AccountChangedRequest,
@@ -140,6 +142,7 @@ from evidenceforge.generation.activity.tls_realism import (
     certificate_analyzer_delay_ms,
     certificate_file_size,
 )
+from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 from evidenceforge.generation.identity import IdentityDirectory, WindowsAccount
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.source_timing import (
@@ -8297,27 +8300,50 @@ class TestActivityGenerator:
         assert event.process.integrity_level == "Medium"
 
     def test_log_cleared_uses_service_subject_identity(
-        self, activity_gen, test_system, state_manager, mock_emitters
+        self,
+        test_system,
+        state_manager,
+        monkeypatch,
+        tmp_path: Path,
     ):
         """1102 should use the clearing service token's source-native subject fields."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
-        service_logon_id = activity_gen.generate_service_logon(
-            system=test_system,
-            time=timestamp - timedelta(seconds=1),
-            service_account="SYSTEM",
+        emitter = WindowsEventEmitter(
+            load_format("windows_event_security"),
+            tmp_path / "output",
+            threaded=False,
+            source_finalization=True,
         )
-        mock_emitters["windows_event_security"].reset_mock()
+        emitters = {"windows_event_security": emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        emitted = []
+        original_emit = emitter.emit
+
+        def capture_emit(event):
+            emitted.append(event)
+            original_emit(event)
+
+        monkeypatch.setattr(emitter, "emit", capture_emit)
         system_user = User(
             username="SYSTEM",
             full_name="Local System",
             email="system@example.com",
             enabled=True,
         )
+        try:
+            service_logon_id = activity_gen.generate_service_logon(
+                system=test_system,
+                time=timestamp - timedelta(seconds=1),
+                service_account="SYSTEM",
+            )
+            emitted.clear()
+            activity_gen.generate_log_cleared(system_user, test_system, timestamp)
+        finally:
+            emitter.close()
 
-        activity_gen.generate_log_cleared(system_user, test_system, timestamp)
-
-        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        event = emitted[0]
         assert event.event_type == "log_cleared"
         assert event.auth.subject_sid == "S-1-5-18"
         assert event.auth.subject_username == "SYSTEM"
@@ -8335,10 +8361,10 @@ class TestActivityGenerator:
     )
     def test_builtin_service_logon_uses_well_known_authentication_id(
         self,
-        activity_gen,
         test_system,
         state_manager,
-        mock_emitters,
+        monkeypatch,
+        tmp_path: Path,
         service_account,
         expected_logon_id,
     ):
@@ -8346,25 +8372,49 @@ class TestActivityGenerator:
 
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
-
-        first = activity_gen.generate_service_logon(test_system, timestamp, service_account)
-        second = activity_gen.generate_service_logon(
-            test_system,
-            timestamp + timedelta(minutes=5),
-            service_account,
+        emitter = WindowsEventEmitter(
+            load_format("windows_event_security"),
+            tmp_path / "output",
+            threaded=False,
+            source_finalization=True,
         )
+        emitters = {"windows_event_security": emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        prepare_projection = dispatcher.prepare_action_cohort_projection
+        events = []
 
-        events = [
-            call.args[0]
-            for call in mock_emitters["windows_event_security"].emit.call_args_list
-            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 5
-        ]
+        def capture_projection(event, **kwargs):
+            events.append(event)
+            return prepare_projection(event, **kwargs)
+
+        monkeypatch.setattr(dispatcher, "prepare_action_cohort_projection", capture_projection)
+        try:
+            first = activity_gen.generate_service_logon(test_system, timestamp, service_account)
+            second = activity_gen.generate_service_logon(
+                test_system,
+                timestamp + timedelta(minutes=5),
+                service_account,
+            )
+        finally:
+            emitter.close()
+        exact_census = emitter.exact_candidate_census()
+        recovery_census = dispatcher.exact_projection_recovery_census()
+
         assert first == second == expected_logon_id
         assert {event.auth.logon_id for event in events} == {expected_logon_id}
-        assert len({event.identity_plan.session.object_id for event in events}) == 2
+        assert len({event.identity_plan.subject.object_id for event in events}) == 2
+        assert all(
+            event.identity_plan.subject.kind == "authentication_occurrence" for event in events
+        )
+        assert all(event.identity_plan.session is None for event in events)
         assert len({event.lifecycle.group_id for event in events}) == 2
-        assert all(event.identity_plan.session.logon_id == expected_logon_id for event in events)
         assert state_manager.get_session(expected_logon_id) is None
+        assert exact_census.current_rows == 0
+        assert exact_census.current_bytes == 0
+        assert exact_census.current_participants == 0
+        assert recovery_census.unresolved_recoveries == 0
+        assert recovery_census.authority.active_batches == 0
 
     def test_log_cleared_can_inherit_causative_process_logon_id(
         self, activity_gen, test_system, mock_emitters

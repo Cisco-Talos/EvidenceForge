@@ -40,7 +40,7 @@ import re
 import shlex
 import uuid
 import zipfile
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -49,6 +49,7 @@ from threading import Lock
 from typing import Any, Literal, Optional, cast
 from urllib.parse import urlsplit
 
+import evidenceforge.events.dispatcher as dispatcher_types
 from evidenceforge.events.artifacts_manifest import (
     ARTIFACTS_MANIFEST_SCHEMA_VERSION,
 )
@@ -101,7 +102,10 @@ from evidenceforge.events.cryptography import (
 )
 from evidenceforge.events.dispatcher import (
     ActionCohortEffectMemberBinding,
+    ActionCohortProjectionOutcome,
+    ActionCohortPublicationResult,
     EventDispatcher,
+    PreparedActionCohortProjection,
     PreparedDispatch,
     PreparedDispatchStateIntent,
     expand_formats,
@@ -110,7 +114,6 @@ from evidenceforge.events.identity import (
     EntityIdentity,
     EventIdentityPlan,
     ProcessIdentity,
-    SessionIdentity,
 )
 from evidenceforge.events.lifecycle import ActionLifecycleContext, SessionEndPlan
 from evidenceforge.events.network import (
@@ -4680,6 +4683,67 @@ class _FailedLogonAttemptPreparedCommit:
         self._active = False
 
 
+_SID_RESERVATION_CAPACITY = 1_024
+
+
+class _SidReservation:
+    """Opaque single-use capability for one noncanonical SID reservation."""
+
+    __slots__ = (
+        "_domain_prefix",
+        "_kind",
+        "_owner",
+        "_reservation_id",
+        "_rid",
+        "_sid",
+        "_username",
+    )
+
+    def __init__(
+        self,
+        owner: "ActivityGenerator",
+        reservation_id: int,
+        *,
+        kind: Literal["generated", "explicit"],
+        username: str,
+        sid: str,
+        domain_prefix: str | None,
+        rid: int | None,
+    ) -> None:
+        self._owner = owner
+        self._reservation_id = reservation_id
+        self._kind = kind
+        self._username = username
+        self._sid = sid
+        self._domain_prefix = domain_prefix
+        self._rid = rid
+
+
+@dataclass(slots=True)
+class _SidReservationGroup:
+    """Ref-safe per-account SID held outside the canonical registry."""
+
+    username: str
+    sid: str
+    domain_prefix: str | None
+    rid: int | None
+    binding_existed: bool
+    token_ids: dict[int, _SidReservation]
+    generated_origin: bool = False
+    generated_tokens: int = 0
+    committed: bool = False
+
+
+@dataclass(slots=True)
+class _SidReservationRecord:
+    """Exact owner mapping for one active opaque SID capability."""
+
+    reservation: _SidReservation
+    reservation_id: int
+    kind: Literal["generated", "explicit"]
+    group: _SidReservationGroup
+
+
 class ActivityGenerator:
     """Generates specific activity events using StateManager and emitters.
 
@@ -4974,6 +5038,11 @@ class ActivityGenerator:
             if callable(bind_lifecycle_strict_predicate):
                 bind_lifecycle_strict_predicate(self._lifecycle_authority.event_is_strict)
         self.sid_registry = sid_registry or {}
+        self._sid_registry_lock = Lock()
+        self._sid_reservation_groups: dict[str, _SidReservationGroup] = {}
+        self._sid_reservations: dict[int, _SidReservationRecord] = {}
+        self._next_sid_reservation_id = 1
+        self._sid_reservation_high_water = 0
         self.identity_directory = identity_directory
 
         # IP→System lookup for HostContext resolution on connection events
@@ -28412,6 +28481,31 @@ class ActivityGenerator:
             return ad_domain
         return "corp.local"
 
+    @staticmethod
+    def _reconcile_generator_cleanup(
+        primary: BaseException,
+        label: str,
+        cleanup: Callable[[], object],
+    ) -> bool:
+        """Run one idempotent cleanup twice at most without masking its primary."""
+
+        failures: list[BaseException] = []
+        for _attempt in range(2):
+            try:
+                cleanup()
+                return True
+            except BaseException as failure:
+                failures.append(failure)
+        for failure in failures:
+            try:
+                primary.add_note(
+                    f"Generator {label} cleanup also failed with "
+                    f"{type(failure).__module__}.{type(failure).__qualname__}"
+                )
+            except BaseException:
+                continue
+        return False
+
     def generate_service_logon(
         self,
         system: System,
@@ -28434,15 +28528,58 @@ class ActivityGenerator:
 
     def _execute_service_logon_bundle(self, request: ServiceLogonRequest) -> str:
         """Generate a service logon (type 5) for system accounts."""
+        service_account = request.service_account
+        normalized_account = service_account.upper()
+        builtin_account = (
+            normalized_account if normalized_account in _SYSTEM_ACCOUNT_LOGON_IDS else None
+        )
+        event_account = builtin_account or service_account
+        sid = _SYSTEM_ACCOUNT_SIDS.get(event_account)
+        stable_id = request.stable_id
+        sid_reservation: _SidReservation | None = None
+        if sid is None:
+            sid_reservation, sid = self._reserve_sid(service_account)
+        try:
+            return self._execute_service_logon_projection(
+                request,
+                stable_id=stable_id,
+                sid=sid,
+                sid_reservation=sid_reservation,
+            )
+        except BaseException as primary:
+            if sid_reservation is not None:
+                self._reconcile_generator_cleanup(
+                    primary,
+                    "SID reservation",
+                    lambda: self._cancel_sid_reservation(sid_reservation),
+                )
+            raise
+
+    def _execute_service_logon_projection(
+        self,
+        request: ServiceLogonRequest,
+        *,
+        stable_id: str,
+        sid: str,
+        sid_reservation: _SidReservation | None,
+    ) -> str:
+        """Prepare and publish one fully frozen Type-5 projection."""
+
         system = request.system
         time = request.time
         service_account = request.service_account
-
-        sid = _SYSTEM_ACCOUNT_SIDS.get(service_account, self._get_sid(service_account))
         normalized_account = service_account.upper()
+        builtin_account = (
+            normalized_account if normalized_account in _SYSTEM_ACCOUNT_LOGON_IDS else None
+        )
+        event_account = builtin_account or service_account
         logon_id = _SYSTEM_ACCOUNT_LOGON_IDS.get(normalized_account, "")
+        session_plan = None
+        state_plan = None
+        audit_entry = None
         if not logon_id:
-            logon_id = self.state_manager.create_session(
+            state_builder = self.state_manager.begin_action_cohort_materialization()
+            session_plan = state_builder.plan_session(
                 username=service_account,
                 system=system.hostname,
                 logon_type=5,
@@ -28450,7 +28587,25 @@ class ActivityGenerator:
                 start_time=time,
                 session_kind="service",
                 logon_guid_required=False,
-                lifecycle_group_id=request.stable_id,
+                lifecycle_group_id=stable_id,
+            )
+            state_plan = state_builder.seal()
+            logon_id = session_plan.identity.logon_id
+            from evidenceforge.generation.actions.command_effects import (
+                ExecutionEffectAuditCohortEntry,
+            )
+
+            audit_plan = ExecutionEffectPlan(
+                ActionAnchor(
+                    family="service_logon",
+                    stable_id=stable_id,
+                    source=request.source,
+                ),
+                (),
+            )
+            audit_entry = ExecutionEffectAuditCohortEntry(
+                audit_plan,
+                audit_plan.reconcile(()),
             )
         host = self._build_host_context(system)
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
@@ -28463,23 +28618,19 @@ class ActivityGenerator:
             "windows-built-in-service-authentication-occurrence",
             system.hostname,
             logon_id,
-            request.stable_id,
+            stable_id,
         )
-        builtin_session_identity = (
-            SessionIdentity(
+        builtin_authentication_identity = (
+            EntityIdentity(
                 hostname=system.hostname,
                 object_id=stable_uuid(
                     "windows-built-in-service-authentication-object",
                     system.hostname,
                     logon_id,
-                    request.stable_id,
+                    stable_id,
                 ),
-                logon_id=logon_id,
-                session_id=0,
-                principal=service_account,
-                session_kind="service",
-                started_at=time,
-                lifecycle_group_id=builtin_lifecycle_group_id,
+                kind="authentication_occurrence",
+                semantic_key=stable_id,
             )
             if normalized_account in _SYSTEM_ACCOUNT_LOGON_IDS
             else None
@@ -28490,12 +28641,13 @@ class ActivityGenerator:
             event_type="logon",
             dst_host=host,
             auth=AuthContext(
-                username=service_account,
+                username=event_account,
                 user_sid=sid,
                 logon_id=logon_id,
                 logon_type=5,
                 auth_package="Negotiate",
                 source_ip="-",
+                source_port=0,
                 elevated=True,
                 logon_process="Advapi",
                 lm_package="-",
@@ -28509,23 +28661,314 @@ class ActivityGenerator:
             lifecycle=ActionLifecycleContext(
                 group_id=(
                     builtin_lifecycle_group_id
-                    if builtin_session_identity is not None
-                    else request.stable_id
+                    if builtin_authentication_identity is not None
+                    else stable_id
                 ),
                 canonical_start=time,
                 phase="start",
             ),
             identity_plan=(
                 EventIdentityPlan(
-                    subject=builtin_session_identity,
-                    session=builtin_session_identity,
+                    subject=builtin_authentication_identity,
                 )
-                if builtin_session_identity is not None
-                else None
+                if builtin_authentication_identity is not None
+                else EventIdentityPlan(
+                    subject=session_plan.identity,
+                    session=session_plan.identity,
+                )
             ),
         )
-        self.dispatcher.dispatch_builder(event)
+
+        carrier: PreparedActionCohortProjection | None = None
+        prepared: PreparedDispatch | None = None
+        timing_preparation: SourceTimingPreparation | None = None
+        try:
+            with self.dispatcher.source_timing_planner.prepared_planning() as timing_preparation:
+                carrier = self.dispatcher.prepare_action_cohort_projection(
+                    event,
+                    source_timing_preparation=timing_preparation,
+                )
+            occurrence_id = self.dispatcher.action_cohort_projection_occurrence(
+                carrier
+            ).occurrence_id
+            if state_plan is not None:
+                prepared = self.dispatcher.bind_action_cohort_projection(
+                    carrier,
+                    state_plan=state_plan,
+                )
+        except BaseException as primary:
+            if carrier is not None:
+                self._reconcile_generator_cleanup(
+                    primary,
+                    "projection carrier",
+                    lambda: self.dispatcher.cancel_prepared_action_cohort_projection(carrier),
+                )
+            self._reconcile_generator_cleanup(
+                primary,
+                "orphan projection",
+                self.dispatcher.prune_prepared_action_cohort_projections,
+            )
+            if timing_preparation is not None:
+                self._reconcile_generator_cleanup(
+                    primary,
+                    "source timing",
+                    timing_preparation.cancel,
+                )
+            raise
+
+        if state_plan is None:
+            try:
+                result = self.dispatcher.publish_state_neutral_exact_projection(carrier)
+            except BaseException as error:
+                receipt = None
+                attached_result = None
+                try:
+                    attributes = object.__getattribute__(error, "__dict__")
+                    receipt = (
+                        attributes.get("state_neutral_projection_receipt")
+                        if type(attributes) is dict
+                        else None
+                    )
+                    attached_result = (
+                        attributes.get("state_neutral_projection_result")
+                        if type(attributes) is dict
+                        else None
+                    )
+                    result_type = getattr(
+                        dispatcher_types,
+                        "StateNeutralProjectionPublicationResult",
+                        None,
+                    )
+                    authentic = (
+                        receipt is not None
+                        and result_type is not None
+                        and type(attached_result) is result_type
+                        and attached_result.receipt is receipt
+                        and self.dispatcher.authenticates_state_neutral_projection_publication_receipt(
+                            receipt
+                        )
+                        is True
+                        and receipt.occurrence_ids == (occurrence_id,)
+                    )
+                except BaseException:
+                    authentic = False
+                if not authentic:
+                    self._reconcile_generator_cleanup(
+                        error,
+                        "state-neutral carrier",
+                        lambda: self.dispatcher.cancel_prepared_action_cohort_projection(carrier),
+                    )
+                    self._reconcile_generator_cleanup(
+                        error,
+                        "state-neutral orphan projection",
+                        self.dispatcher.prune_prepared_action_cohort_projections,
+                    )
+                    if timing_preparation is not None:
+                        self._reconcile_generator_cleanup(
+                            error,
+                            "state-neutral source timing",
+                            timing_preparation.cancel,
+                        )
+                    raise
+                result = self.dispatcher.resume_state_neutral_exact_projection(receipt)
+                if result is not attached_result:
+                    raise StateError(
+                        "Built-in service-logon recovery returned a different publication result"
+                    ) from error
+                self._validate_state_neutral_service_logon_result(
+                    result,
+                    occurrence_id=occurrence_id,
+                    expected_receipt=receipt,
+                )
+            else:
+                self._validate_state_neutral_service_logon_result(
+                    result,
+                    occurrence_id=occurrence_id,
+                )
+            return logon_id
+
+        if session_plan is None:  # pragma: no cover - construction invariant
+            raise StateError("Named service-logon State plan lost its session member")
+        if audit_entry is None:  # pragma: no cover - construction invariant
+            raise StateError("Named service-logon State plan lost its audit member")
+        if prepared is None:  # pragma: no cover - construction invariant
+            raise StateError("Named service-logon projection lost its prepared dispatch")
+        try:
+            batch = self.dispatcher.prepare_action_cohort_batch(
+                stable_id,
+                state_plan,
+                (prepared,),
+                (audit_entry,),
+                (),
+                (),
+                owned_effect_plans=(),
+                exact_projection=True,
+            )
+        except BaseException as primary:
+            self._reconcile_generator_cleanup(
+                primary,
+                "orphan action-cohort batch",
+                self.dispatcher.prune_prepared_action_cohort_batches,
+            )
+            if timing_preparation is not None:
+                self._reconcile_generator_cleanup(
+                    primary,
+                    "pre-batch source timing",
+                    timing_preparation.cancel,
+                )
+            self._reconcile_generator_cleanup(
+                primary,
+                "post-batch orphan projection",
+                self.dispatcher.prune_prepared_action_cohort_projections,
+            )
+            raise
+        try:
+            result = self.dispatcher.publish_prepared_action_cohort_batch(batch)
+        except BaseException as error:
+            receipt = None
+            attached_result = None
+            try:
+                attributes = object.__getattribute__(error, "__dict__")
+                receipt = (
+                    attributes.get("action_cohort_receipt") if type(attributes) is dict else None
+                )
+                attached_result = (
+                    attributes.get("action_cohort_result") if type(attributes) is dict else None
+                )
+                authentic = (
+                    receipt is not None
+                    and type(attached_result) is ActionCohortPublicationResult
+                    and attached_result.receipt is receipt
+                    and self.dispatcher.authenticates_action_cohort_publication_receipt(receipt)
+                    is True
+                    and receipt.occurrence_ids == (occurrence_id,)
+                    and receipt.root_action_id == stable_id
+                    and receipt.state_semantic_id == state_plan.semantic_id
+                )
+            except BaseException:
+                authentic = False
+            if not authentic:
+                self._reconcile_generator_cleanup(
+                    error,
+                    "action-cohort batch",
+                    lambda: self.dispatcher.cancel_prepared_action_cohort_batch(batch),
+                )
+                self._reconcile_generator_cleanup(
+                    error,
+                    "orphan action-cohort batch",
+                    self.dispatcher.prune_prepared_action_cohort_batches,
+                )
+                raise
+            try:
+                result = self.dispatcher.resume_action_cohort_projection(receipt)
+            except BaseException as resume_error:
+                if sid_reservation is None:  # pragma: no cover - named invariant
+                    raise StateError(
+                        "Named service-logon recovery lost its SID reservation"
+                    ) from resume_error
+                # The authenticated receipt remains dispatcher-owned and drainable. Install the
+                # exact reserved binding before allowing that pending canonical work to escape.
+                self._commit_sid_reservation(sid_reservation)
+                raise
+            if result is not attached_result:
+                raise StateError(
+                    "Named service-logon recovery returned a different publication result"
+                ) from error
+            self._validate_named_service_logon_result(
+                result,
+                occurrence_id=occurrence_id,
+                expected_receipt=receipt,
+                expected_root_action_id=stable_id,
+                expected_state_semantic_id=state_plan.semantic_id,
+            )
+        else:
+            self._validate_named_service_logon_result(
+                result,
+                occurrence_id=occurrence_id,
+                expected_root_action_id=stable_id,
+                expected_state_semantic_id=state_plan.semantic_id,
+            )
+        if self.state_manager.get_session_identity(logon_id) != session_plan.identity:
+            raise StateError("Named service-logon cohort returned an invalid session identity")
+        if sid_reservation is None:  # pragma: no cover - named invariant
+            raise StateError("Named service-logon projection lost its SID reservation")
+        if self._commit_sid_reservation(sid_reservation) != sid:
+            raise StateError("Named service-logon committed a different reserved SID")
         return logon_id
+
+    def _validate_state_neutral_service_logon_result(
+        self,
+        result: object,
+        *,
+        occurrence_id: str,
+        expected_receipt: object | None = None,
+    ) -> None:
+        """Validate one terminal state-neutral exact projection result."""
+
+        result_type = getattr(
+            dispatcher_types,
+            "StateNeutralProjectionPublicationResult",
+            None,
+        )
+        if result_type is None or type(result) is not result_type:
+            raise StateError("Built-in service-logon projection returned the wrong result type")
+        receipt = result.receipt
+        projection = result.projection
+        try:
+            authentic = (
+                expected_receipt is None or receipt is expected_receipt
+            ) and self.dispatcher.authenticates_state_neutral_projection_publication_receipt(
+                receipt
+            ) is True
+            receipt_matches = authentic and receipt.occurrence_ids == (occurrence_id,)
+        except BaseException:
+            receipt_matches = False
+        if (
+            not receipt_matches
+            or type(projection) is not ActionCohortProjectionOutcome
+            or projection.occurrence_id != occurrence_id
+            or projection.status != "succeeded"
+            or projection.error is not None
+        ):
+            raise StateError("Built-in service-logon projection returned invalid terminal proof")
+
+    def _validate_named_service_logon_result(
+        self,
+        result: object,
+        *,
+        occurrence_id: str,
+        expected_receipt: object | None = None,
+        expected_root_action_id: str,
+        expected_state_semantic_id: str,
+    ) -> None:
+        """Validate one terminal named Type-5 exact cohort result."""
+
+        if type(result) is not ActionCohortPublicationResult:
+            raise StateError("Named service-logon projection returned the wrong result type")
+        receipt = result.receipt
+        projections = result.projections
+        try:
+            authentic = (
+                expected_receipt is None or receipt is expected_receipt
+            ) and self.dispatcher.authenticates_action_cohort_publication_receipt(receipt) is True
+            receipt_matches = (
+                authentic
+                and receipt.occurrence_ids == (occurrence_id,)
+                and receipt.root_action_id == expected_root_action_id
+                and receipt.state_semantic_id == expected_state_semantic_id
+            )
+        except BaseException:
+            receipt_matches = False
+        if (
+            not receipt_matches
+            or type(projections) is not tuple
+            or len(projections) != 1
+            or type(projections[0]) is not ActionCohortProjectionOutcome
+            or projections[0].occurrence_id != occurrence_id
+            or projections[0].status != "succeeded"
+            or projections[0].error is not None
+        ):
+            raise StateError("Named service-logon projection returned invalid terminal proof")
 
     def generate_kerberos_preauth_failed(
         self,
@@ -29311,7 +29754,19 @@ class ActivityGenerator:
             target_username=target_username,
             target_sid=target_sid,
         )
-        AccountCreatedActionBundle(self, request).execute()
+        reservation = self._reserve_explicit_sid(target_username, target_sid)
+        try:
+            AccountCreatedActionBundle(self, request).execute()
+            committed_sid = self._commit_sid_reservation(reservation)
+        except BaseException as primary:
+            self._reconcile_generator_cleanup(
+                primary,
+                "account-created SID reservation",
+                lambda: self._cancel_sid_reservation(reservation),
+            )
+            raise
+        if committed_sid != target_sid:  # pragma: no cover - authenticated invariant
+            raise StateError("Account-created publication committed a different reserved SID")
 
     def _execute_account_created_bundle(self, request: AccountCreatedRequest) -> None:
         """Generate user account created event (4720) on DC."""
@@ -33889,47 +34344,358 @@ class ActivityGenerator:
             return _get_os_category(self._ip_to_system[ip].os)
         return "windows"
 
-    def _get_sid(self, username: str) -> str:
-        """Look up Windows SID for a username.
+    def _sid_allocator_snapshot_unlocked(self) -> tuple[str | None, int]:
+        """Return the current SID prefix/RID frontier while the leaf lock is held."""
 
-        For unknown principals (stale accounts, attacker-created accounts),
-        generates a deterministic synthetic SID using the domain prefix from
-        the existing registry and a stable RID derived from the username.
+        if hasattr(self, "_domain_sid_prefix"):
+            return self._domain_sid_prefix, self._max_rid
+        domain_sid_prefix: str | None = None
+        max_rid = 1100
+        for sid in self.sid_registry.values():
+            if sid.startswith("S-1-5-21-") and sid.count("-") == 7:
+                domain_sid_prefix = "-".join(sid.split("-")[:7])
+                try:
+                    max_rid = max(max_rid, int(sid.rsplit("-", 1)[1]))
+                except ValueError:
+                    continue
+        return domain_sid_prefix, max_rid
 
-        Args:
-            username: Username to look up
+    @staticmethod
+    def _sid_rid_for_prefix(sid: str, domain_sid_prefix: str | None) -> int | None:
+        """Return a domain RID only when a SID belongs to the requested prefix."""
 
-        Returns:
-            SID string — from registry, well-known, or deterministic synthetic
-        """
+        if domain_sid_prefix is None or not sid.startswith(f"{domain_sid_prefix}-"):
+            return None
+        try:
+            return int(sid.rsplit("-", 1)[1])
+        except ValueError:
+            return None
+
+    def _reserved_sid_max_rid_unlocked(
+        self,
+        domain_sid_prefix: str | None,
+        max_rid: int,
+    ) -> int:
+        """Include every active reserved RID in an allocator frontier."""
+
+        for group in self._sid_reservation_groups.values():
+            if (
+                group.generated_origin
+                and group.generated_tokens > 0
+                and group.domain_prefix == domain_sid_prefix
+                and group.rid is not None
+            ):
+                max_rid = max(max_rid, group.rid)
+        return max_rid
+
+    def _next_generated_sid_unlocked(
+        self,
+        username: str,
+        domain_sid_prefix: str,
+        max_rid: int,
+    ) -> tuple[str, int]:
+        """Return the old-formula SID, advancing only across exact active collisions."""
+
+        rid = max_rid + 1 + (_stable_seed(f"unknown_sid_{username}") % 50)
+        while any(
+            group.username != username and group.sid == f"{domain_sid_prefix}-{rid}"
+            for group in self._sid_reservation_groups.values()
+        ):
+            rid += 1
+        return f"{domain_sid_prefix}-{rid}", rid
+
+    def _preview_sid_unlocked(self, username: str) -> str:
+        """Return a reservation-aware SID preview while the leaf lock is held."""
+
+        reserved = self._sid_reservation_groups.get(username)
+        if reserved is not None:
+            return reserved.sid
         if username in self.sid_registry:
             return self.sid_registry[username]
         if username in self._WELL_KNOWN_SIDS:
             return self._WELL_KNOWN_SIDS[username]
-        # Generate deterministic synthetic SID for unknown principals.
-        # Allocate from max existing RID + offset (not hardcoded 7000 range)
-        # to avoid unrealistic gaps in the RID sequence.
-        if not hasattr(self, "_domain_sid_prefix"):
-            self._domain_sid_prefix: str | None = None
-            self._max_rid: int = 1100
-            for sid in self.sid_registry.values():
-                if sid.startswith("S-1-5-21-") and sid.count("-") == 7:
-                    self._domain_sid_prefix = "-".join(sid.split("-")[:7])
-                    try:
-                        rid_val = int(sid.rsplit("-", 1)[1])
-                        if rid_val > self._max_rid:
-                            self._max_rid = rid_val
-                    except ValueError:
-                        pass
-        if self._domain_sid_prefix:
-            from evidenceforge.utils.rng import _stable_seed
+        domain_sid_prefix, max_rid = self._sid_allocator_snapshot_unlocked()
+        max_rid = self._reserved_sid_max_rid_unlocked(domain_sid_prefix, max_rid)
+        if domain_sid_prefix:
+            return self._next_generated_sid_unlocked(
+                username,
+                domain_sid_prefix,
+                max_rid,
+            )[0]
+        return "S-1-0-0"
 
-            rid = self._max_rid + 1 + (_stable_seed(f"unknown_sid_{username}") % 50)
+    def _get_sid_unlocked(self, username: str) -> str:
+        """Resolve or allocate one SID while the dedicated leaf lock is held."""
+
+        reserved = self._sid_reservation_groups.get(username)
+        if reserved is not None:
+            self._install_reserved_sid_unlocked(reserved)
+            return reserved.sid
+        if username in self.sid_registry:
+            return self.sid_registry[username]
+        if username in self._WELL_KNOWN_SIDS:
+            return self._WELL_KNOWN_SIDS[username]
+        had_allocator = hasattr(self, "_domain_sid_prefix")
+        domain_sid_prefix, max_rid = self._sid_allocator_snapshot_unlocked()
+        if not had_allocator:
+            self._domain_sid_prefix = domain_sid_prefix
+            self._max_rid = max_rid
+        max_rid = self._reserved_sid_max_rid_unlocked(domain_sid_prefix, max_rid)
+        if domain_sid_prefix:
+            synthetic, rid = self._next_generated_sid_unlocked(
+                username,
+                domain_sid_prefix,
+                max_rid,
+            )
             self._max_rid = max(self._max_rid, rid)
-            synthetic = f"{self._domain_sid_prefix}-{rid}"
-            self.sid_registry[username] = synthetic  # Cache for consistency
+            self.sid_registry[username] = synthetic
             return synthetic
         return "S-1-0-0"
+
+    def _get_sid(self, username: str) -> str:
+        """Look up or deterministically allocate one reservation-aware Windows SID."""
+
+        with self._sid_registry_lock:
+            return self._get_sid_unlocked(username)
+
+    def _preview_sid(self, username: str) -> str:
+        """Return the reservation-aware SID preview without canonical mutation."""
+
+        with self._sid_registry_lock:
+            return self._preview_sid_unlocked(username)
+
+    def _reserve_sid(self, username: str) -> tuple[_SidReservation, str]:
+        """Reserve one exact SID without changing the canonical registry or RID frontier."""
+
+        if type(username) is not str or not username or len(username) > 512:
+            raise StateError("SID reservation requires a bounded exact account name")
+        with self._sid_registry_lock:
+            if len(self._sid_reservations) >= _SID_RESERVATION_CAPACITY:
+                raise StateError("SID reservation capacity is exhausted")
+            group = self._sid_reservation_groups.get(username)
+            if group is None:
+                sid = self._preview_sid_unlocked(username)
+                domain_prefix, _max_rid = self._sid_allocator_snapshot_unlocked()
+                group = _SidReservationGroup(
+                    username=username,
+                    sid=sid,
+                    domain_prefix=domain_prefix,
+                    rid=self._sid_rid_for_prefix(sid, domain_prefix),
+                    binding_existed=(
+                        username in self.sid_registry or username in self._WELL_KNOWN_SIDS
+                    ),
+                    token_ids={},
+                    generated_origin=(
+                        username not in self.sid_registry and username not in self._WELL_KNOWN_SIDS
+                    ),
+                    generated_tokens=0,
+                )
+            reservation = self._issue_sid_reservation_unlocked(group, kind="generated")
+            return reservation, group.sid
+
+    def _issue_sid_reservation_unlocked(
+        self,
+        group: _SidReservationGroup,
+        *,
+        kind: Literal["generated", "explicit"],
+    ) -> _SidReservation:
+        """Issue one charged token with complete rollback on allocation failure."""
+
+        reservation_id = self._next_sid_reservation_id
+        self._next_sid_reservation_id += 1
+        reservation = _SidReservation(
+            self,
+            reservation_id,
+            kind=kind,
+            username=group.username,
+            sid=group.sid,
+            domain_prefix=group.domain_prefix,
+            rid=group.rid,
+        )
+        record = _SidReservationRecord(
+            reservation=reservation,
+            reservation_id=reservation_id,
+            kind=kind,
+            group=group,
+        )
+        reservation_key = id(reservation)
+        inserted_group = False
+        generated_incremented = False
+        try:
+            active_group = self._sid_reservation_groups.get(group.username)
+            if active_group is None:
+                self._sid_reservation_groups[group.username] = group
+                inserted_group = True
+            elif active_group is not group:
+                raise StateError("SID reservation group changed during token issue")
+            group.token_ids[reservation_key] = reservation
+            self._sid_reservations[reservation_key] = record
+            if kind == "generated":
+                group.generated_tokens += 1
+                generated_incremented = True
+            self._sid_reservation_high_water = max(
+                self._sid_reservation_high_water,
+                len(self._sid_reservations),
+            )
+        except BaseException:
+            self._sid_reservations.pop(reservation_key, None)
+            group.token_ids.pop(reservation_key, None)
+            if generated_incremented:
+                group.generated_tokens -= 1
+            if inserted_group and not group.token_ids:
+                self._sid_reservation_groups.pop(group.username, None)
+            raise
+        return reservation
+
+    def _active_sid_reservation_unlocked(
+        self,
+        reservation: _SidReservation,
+    ) -> _SidReservationRecord:
+        """Authenticate one exact active reservation under the leaf lock."""
+
+        if (
+            type(reservation) is not _SidReservation
+            or reservation._owner is not self
+            or type(reservation._reservation_id) is not int
+            or reservation._reservation_id <= 0
+            or type(reservation._kind) is not str
+            or reservation._kind not in {"generated", "explicit"}
+            or type(reservation._username) is not str
+            or type(reservation._sid) is not str
+            or (
+                reservation._domain_prefix is not None
+                and type(reservation._domain_prefix) is not str
+            )
+            or (reservation._rid is not None and type(reservation._rid) is not int)
+        ):
+            raise StateError("SID reservation is foreign or malformed")
+        record = self._sid_reservations.get(id(reservation))
+        if (
+            record is None
+            or record.reservation is not reservation
+            or record.reservation_id != reservation._reservation_id
+            or record.kind != reservation._kind
+            or record.group.token_ids.get(id(reservation)) is not reservation
+            or self._sid_reservation_groups.get(record.group.username) is not record.group
+            or reservation._username != record.group.username
+            or reservation._sid != record.group.sid
+            or reservation._domain_prefix != record.group.domain_prefix
+            or reservation._rid != record.group.rid
+        ):
+            raise StateError("SID reservation is stale or already terminal")
+        return record
+
+    def _release_sid_reservation_unlocked(self, record: _SidReservationRecord) -> None:
+        """Release one authenticated token and its empty per-account group."""
+
+        if record.kind == "generated" and record.group.generated_tokens <= 0:
+            raise StateError("SID reservation generated-token census is malformed")
+        reservation_id = id(record.reservation)
+        self._sid_reservations.pop(reservation_id, None)
+        record.group.token_ids.pop(reservation_id, None)
+        if record.kind == "generated":
+            record.group.generated_tokens -= 1
+        if not record.group.token_ids:
+            self._sid_reservation_groups.pop(record.group.username, None)
+
+    def _install_reserved_sid_unlocked(self, group: _SidReservationGroup) -> None:
+        """Install one exact active group without consulting external owners."""
+
+        existing = self.sid_registry.get(group.username)
+        well_known = self._WELL_KNOWN_SIDS.get(group.username)
+        if existing is not None and existing != group.sid:
+            raise StateError("SID reservation conflicts with the canonical account binding")
+        if well_known is not None and well_known != group.sid:
+            raise StateError("SID reservation contradicts a well-known account binding")
+        if existing is not None or well_known is None:
+            self.sid_registry[group.username] = group.sid
+        if not group.binding_existed:
+            if not hasattr(self, "_domain_sid_prefix"):
+                domain_prefix, max_rid = self._sid_allocator_snapshot_unlocked()
+                self._domain_sid_prefix = domain_prefix
+                self._max_rid = max_rid
+            if group.domain_prefix == self._domain_sid_prefix and group.rid is not None:
+                self._max_rid = max(self._max_rid, group.rid)
+        group.committed = True
+
+    def _commit_sid_reservation(self, reservation: _SidReservation) -> str:
+        """Install exactly one receipt-proven SID and terminalize its token."""
+
+        with self._sid_registry_lock:
+            record = self._active_sid_reservation_unlocked(reservation)
+            group = record.group
+            if not group.committed:
+                self._install_reserved_sid_unlocked(group)
+            elif self.sid_registry.get(group.username, group.sid) != group.sid:
+                raise StateError("Committed SID reservation changed before terminal release")
+            self._release_sid_reservation_unlocked(record)
+            return group.sid
+
+    def _cancel_sid_reservation(self, reservation: _SidReservation) -> bool:
+        """Idempotently discard one noncanonical SID token without allocator mutation."""
+
+        with self._sid_registry_lock:
+            try:
+                record = self._active_sid_reservation_unlocked(reservation)
+            except StateError:
+                return False
+            self._release_sid_reservation_unlocked(record)
+            return True
+
+    def _sid_reservation_census(self) -> tuple[int, int, int, int]:
+        """Return O(1) active group/token/high-water/capacity diagnostics."""
+
+        with self._sid_registry_lock:
+            return (
+                len(self._sid_reservation_groups),
+                len(self._sid_reservations),
+                self._sid_reservation_high_water,
+                _SID_RESERVATION_CAPACITY,
+            )
+
+    def _reserve_explicit_sid(self, username: str, sid: str) -> _SidReservation:
+        """Reserve one explicit storyline SID before its canonical account event."""
+
+        if (
+            type(username) is not str
+            or not username
+            or len(username) > 512
+            or type(sid) is not str
+            or not sid
+            or len(sid) > 256
+        ):
+            raise StateError("Storyline SID reservation requires bounded exact strings")
+        with self._sid_registry_lock:
+            if len(self._sid_reservations) >= _SID_RESERVATION_CAPACITY:
+                raise StateError("SID reservation capacity is exhausted")
+            existing_group = self._sid_reservation_groups.get(username)
+            if existing_group is not None and existing_group.sid != sid:
+                raise StateError("Storyline SID reservation conflicts with an active account")
+            if any(
+                group.username != username and group.sid == sid
+                for group in self._sid_reservation_groups.values()
+            ):
+                raise StateError("Storyline SID reservation conflicts with a reserved RID")
+            existing_sid = self.sid_registry.get(username)
+            well_known = self._WELL_KNOWN_SIDS.get(username)
+            if (existing_sid is not None and existing_sid != sid) or (
+                well_known is not None and well_known != sid
+            ):
+                raise StateError("Storyline SID contradicts the canonical account binding")
+            group = existing_group
+            if group is None:
+                domain_prefix, _max_rid = self._sid_allocator_snapshot_unlocked()
+                group = _SidReservationGroup(
+                    username=username,
+                    sid=sid,
+                    domain_prefix=domain_prefix,
+                    rid=self._sid_rid_for_prefix(sid, domain_prefix),
+                    binding_existed=(existing_sid is not None or well_known is not None),
+                    token_ids={},
+                    generated_origin=False,
+                    generated_tokens=0,
+                )
+            return self._issue_sid_reservation_unlocked(group, kind="explicit")
 
     # Phase 5.2: EDR object type diversity data pools
     # EDR file/registry/DLL pools moved to edr_pools.yaml (data-driven config).

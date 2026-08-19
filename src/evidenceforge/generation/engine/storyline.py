@@ -4997,7 +4997,6 @@ class StorylineMixin:
             # Store SID for later reuse by group_member_added, account_deleted,
             # and any _get_sid() lookups (Windows event rendering).
             self._created_account_sids[spec.target_username] = target_sid
-            self.activity_generator.sid_registry[spec.target_username] = target_sid
             self._created_account_effect_times[
                 self._account_create_lookup_key(dc, spec.target_username)
             ] = effect_time
