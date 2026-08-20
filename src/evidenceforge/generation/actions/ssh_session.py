@@ -1406,7 +1406,7 @@ class _PreparedSshCloseContinuation:
             raise StateError("Exact SSH close requires its original SSH application owner")
 
     def require_projection_owner_shape(self) -> None:
-        """Reject any non-built-in or multiply targeted terminal projection owner."""
+        """Reject any non-built-in or replaced terminal projection owner."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.zeek import ZeekEmitter
@@ -1415,7 +1415,6 @@ class _PreparedSshCloseContinuation:
         if (
             type(self.dispatcher_owner) is not EventDispatcher
             or type(emitters) is not dict
-            or set(emitters) != {"ecar", "zeek_conn"}
             or emitters.get("ecar") is not self.ecar_owner
             or emitters.get("zeek_conn") is not self.zeek_owner
             or type(self.ecar_owner) is not EcarEmitter

@@ -26,6 +26,7 @@ from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
+from evidenceforge.generation.emitters.web import WebEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.lifecycle_registry import (
@@ -2052,7 +2053,7 @@ def test_exact_close_rejects_projection_owner_change_before_terminal_state(
         fixture.generator._ssh_channel_manager.census(),
         fixture.generator.dispatcher.action_cohort_publication_census(),
     )
-    fixture.generator.dispatcher.emitters["syslog"] = Mock()
+    fixture.generator.dispatcher.emitters["ecar"] = Mock()
 
     with pytest.raises(StateError, match="original eCAR/Zeek projection owners"):
         fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
@@ -2067,10 +2068,52 @@ def test_exact_close_rejects_projection_owner_change_before_terminal_state(
     assert fixture.state.get_session(logon_id) is not None
     assert fixture.state.get_process(fixture.target.hostname, receiver_pid) is not None
     assert len(fixture.generator._pending_ssh_session_closures) == 1
-    fixture.generator.dispatcher.emitters.pop("syslog")
+    fixture.generator.dispatcher.emitters["ecar"] = fixture.ecar
     fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
     assert fixture.generator._pending_ssh_session_closures == []
     fixture.close_and_read()
+
+
+def test_exact_close_accepts_stable_full_emitter_topology(tmp_path: Path) -> None:
+    """A production-like non-target emitter does not replace the SSH projection owners."""
+
+    reset_thread_rng(42)
+    web = WebEmitter(
+        load_format("web_access"),
+        tmp_path / "web",
+        threaded=False,
+    )
+    fixture = _fixture(
+        tmp_path / "ssh",
+        extra_emitters={"web_access": web},
+    )
+    request = replace(
+        fixture.request(),
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+    try:
+        _uid, logon_id = SshSessionActionBundle(request, fixture.generator).execute_with_identity()
+        assert fixture.state.get_session(logon_id) is not None
+
+        fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
+
+        assert fixture.state.get_session(logon_id) is None
+        assert fixture.generator.ssh_close_journal_census().total_pending == 0
+        _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+        ecar_rows, zeek_rows = fixture.close_and_read()
+        target_rows = [
+            row
+            for row in ecar_rows
+            if row.get("hostname") == fixture.target.hostname
+            and row.get("object") == "USER_SESSION"
+        ]
+        assert [row["action"] for row in target_rows] == ["LOGIN", "LOGOUT"]
+        assert len(zeek_rows) == 1
+    finally:
+        fixture.ecar.close()
+        fixture.zeek.close()
+        web.close()
 
 
 def test_exact_close_terminal_capacity_preserves_canonical_owners_and_retry_converges(
