@@ -46,6 +46,9 @@ from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
+from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
+from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.network_identities import ScenarioNetworkResolver
 from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
 from evidenceforge.generation.source_finalization import (
@@ -541,6 +544,17 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 "inter_gap_bias": rng.gauss(0, 0.10),  # +/-10% gap timing
             }
 
+        # Establish the canonical State frontier before constructing any runtime owner that
+        # can publish lifecycle identity. Production owns exactly one registry/shadow/authority
+        # graph; boot processes enter State and lifecycle through its fleet transaction below.
+        self.state_manager.set_current_time(self.warmup_start_time)
+        self.lifecycle_registry = LifecycleRegistry()
+        self.lifecycle_shadow = LifecycleShadow(self.state_manager, self.lifecycle_registry)
+        self.lifecycle_authority = GeneratorLifecycleAuthority(
+            self.state_manager,
+            self.lifecycle_shadow,
+        )
+
         # Initialize event dispatcher and activity generator
         from evidenceforge.events.observation import ObservationPolicy
 
@@ -552,6 +566,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             output_end_time=self.end_time,
             observation_policy=ObservationPolicy(self.scenario.observation_profile),
             intent_execution_ledger=self.intent_execution_ledger,
+            lifecycle_shadow=self.lifecycle_shadow,
             collection_deployment=self.source_deployment_compilation.deployment,
         )
         self.activity_generator = ActivityGenerator(
@@ -562,6 +577,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             identity_directory=identity_directory,
             source_timing_profile=self.scenario.observation_profile,
             dispatcher=self.dispatcher,
+            lifecycle_shadow=self.lifecycle_shadow,
+            lifecycle_authority=self.lifecycle_authority,
         )
         self.activity_generator._network_resolver = self.network_resolver
         self.activity_generator._scenario_environment = self.scenario.environment
@@ -579,9 +596,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.activity_generator._scenario_start_time = self.start_time
         self.activity_generator._scenario_end_time = self.end_time
         logger.info("Initialized activity generator")
-
-        # Set initial state manager time (warm-up start if applicable)
-        self.state_manager.set_current_time(self.warmup_start_time)
 
         # Resolve scenario timezone for work-hours modulation
         self._scenario_tz = None

@@ -28,11 +28,13 @@ import threading
 import weakref
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, tzinfo
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
 from evidenceforge.generation.lifecycle_authority import (
@@ -52,8 +54,9 @@ from evidenceforge.generation.state_manager import (
     PreparedMaterializationBatch,
     StateManager,
 )
-from evidenceforge.models import System, User
+from evidenceforge.models import Scenario, System, User
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.utils.files import load_yaml
 
 
 @pytest.fixture
@@ -85,6 +88,138 @@ def linux_system():
 
 class TestSystemProcessProtection:
     """Verify seeded system processes are never terminated."""
+
+    def test_real_initialize_owns_boot_lifecycle_identity_before_seeding(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Production initialization should seed one shared State/lifecycle boot forest."""
+
+        scenario_path = (
+            Path(__file__).parent.parent / "fixtures" / "scenarios" / "smb-linux-matrix.yaml"
+        )
+        engine = GenerationEngine(Scenario(**load_yaml(scenario_path)), tmp_path)
+
+        def initialize_without_emitters() -> None:
+            engine.emitters = {}
+
+        with (
+            patch.object(engine, "_init_emitters", side_effect=initialize_without_emitters),
+            patch.object(
+                GeneratorLifecycleAuthority,
+                "enable_fixture_parent_backfill",
+                autospec=True,
+                side_effect=AssertionError("production initialization enabled fixture backfill"),
+            ) as enable_backfill,
+            patch.object(
+                GeneratorLifecycleAuthority,
+                "bootstrap_active_state",
+                autospec=True,
+                side_effect=AssertionError("production initialization bootstrapped legacy State"),
+            ) as bootstrap_active_state,
+        ):
+            engine._initialize()
+
+            enable_backfill.assert_not_called()
+            bootstrap_active_state.assert_not_called()
+
+            assert engine.lifecycle_registry is engine.lifecycle_shadow.registry
+            assert engine.lifecycle_shadow.state_manager is engine.state_manager
+            assert engine.lifecycle_authority.registry is engine.lifecycle_registry
+            assert engine.lifecycle_authority.lifecycle_shadow is engine.lifecycle_shadow
+            assert engine.activity_generator is not None
+            assert engine.activity_generator._lifecycle_authority is engine.lifecycle_authority
+            assert engine.dispatcher.lifecycle_shadow is engine.lifecycle_shadow
+            assert engine.dispatcher.authenticates_lifecycle_authority_owner(
+                engine.lifecycle_authority
+            )
+            assert engine.lifecycle_authority._bootstrap_complete is False
+
+            running = engine.state_manager.list_running_processes()
+            assert running
+            assert engine.lifecycle_registry.stats().live_processes == len(running)
+            for process in running:
+                snapshot = engine.lifecycle_registry.get_process(process.ecar_object_id)
+                assert snapshot is not None
+                assert snapshot.identity.object_id == process.ecar_object_id
+                assert snapshot.identity.pid == process.pid
+                assert snapshot.identity.started_at == process.start_time
+
+            server = next(
+                system
+                for system in engine.scenario.environment.systems
+                if system.hostname == "SAMBA-01"
+            )
+            linux_client = next(
+                system
+                for system in engine.scenario.environment.systems
+                if system.hostname == "LNX-CLIENT-01"
+            )
+            windows_client = next(
+                system
+                for system in engine.scenario.environment.systems
+                if system.hostname == "WIN-CLIENT-01"
+            )
+            sshd_pid = engine._system_pids[server.hostname]["sshd"]
+            smbd_pid = engine._system_pids[server.hostname]["smbd"]
+            existing_processes = {
+                (process.system, process.pid)
+                for process in engine.state_manager.list_running_processes()
+            }
+            responder_time = engine.start_time + timedelta(minutes=1)
+            engine.activity_generator.generate_connection(
+                src_ip=linux_client.ip,
+                dst_ip=server.ip,
+                time=responder_time,
+                dst_port=22,
+                proto="tcp",
+                service="ssh",
+                duration=8.0,
+                orig_bytes=1_200,
+                resp_bytes=2_400,
+                src_port=51_022,
+                conn_state="SF",
+                source_system=linux_client,
+            )
+            engine.activity_generator.generate_connection(
+                src_ip=windows_client.ip,
+                dst_ip=server.ip,
+                time=responder_time + timedelta(seconds=1),
+                dst_port=445,
+                proto="tcp",
+                service="smb",
+                duration=5.0,
+                orig_bytes=900,
+                resp_bytes=1_900,
+                src_port=51_445,
+                conn_state="SF",
+                source_system=windows_client,
+            )
+
+            responder_children = {
+                process.parent_pid: process
+                for process in engine.state_manager.list_running_processes()
+                if (process.system, process.pid) not in existing_processes
+                and process.system == server.hostname
+                and process.parent_pid in {sshd_pid, smbd_pid}
+            }
+
+        assert responder_children.keys() == {sshd_pid, smbd_pid}
+        expected_images = {sshd_pid: "/usr/sbin/sshd", smbd_pid: "/usr/sbin/smbd"}
+        for parent_pid, child in responder_children.items():
+            parent = engine.state_manager.get_process(server.hostname, parent_pid)
+            assert parent is not None
+            assert child.parent_pid == parent.pid
+            assert child.image == expected_images[parent_pid]
+            snapshot = engine.lifecycle_registry.get_process(child.ecar_object_id)
+            assert snapshot is not None
+            assert snapshot.identity.parent_object_id == parent.ecar_object_id
+            assert snapshot.closed_at is None
+
+        census = engine.lifecycle_authority.census()
+        assert census.bootstrapped_processes == 0
+        assert census.bootstrapped_sessions == 0
+        assert engine.lifecycle_shadow.violation_summary["total"] == 0
 
     def _seed_and_get_pids(self, state_manager, mock_emitters, system):
         """Helper: seed system process tree and return (engine, pids dict)."""
