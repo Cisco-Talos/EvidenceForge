@@ -23722,9 +23722,27 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
                 prepared_processes = tuple(
                     trusted_prepare_process(item) for item in private_plan.processes
                 )
+                trial_prepared_session = (
+                    trusted_prepare_session(private_plan.session)
+                    if private_plan.session is not None
+                    else None
+                )
+                trial_prepared_sessions = (
+                    (trial_prepared_session,) if trial_prepared_session is not None else ()
+                )
+                trial_prepared_processes = tuple(
+                    trusted_prepare_process(item) for item in private_plan.processes
+                )
                 journal_arguments = dict(
                     sessions=prepared_sessions,
                     processes=prepared_processes,
+                    process_terminations=(),
+                    session_terminalizations=(),
+                    boot_times=private_plan.boot_times,
+                )
+                trial_journal_arguments = dict(
+                    sessions=trial_prepared_sessions,
+                    processes=trial_prepared_processes,
                     process_terminations=(),
                     session_terminalizations=(),
                     boot_times=private_plan.boot_times,
@@ -23737,10 +23755,10 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
                 trial_rollback_journal = trusted_prepare_journal(
                     manager,
                     projection_type(),
-                    **journal_arguments,
+                    **trial_journal_arguments,
                 )
-                private_rollback_journal = clone_rollback_journal(trial_rollback_journal)
-                cleanup_rollback_journal = clone_rollback_journal(trial_rollback_journal)
+                private_rollback_journal = clone_rollback_journal(observation_journal)
+                cleanup_rollback_journal = clone_rollback_journal(observation_journal)
                 private_rollback_preimage = rollback_observation(
                     manager,
                     private_rollback_journal,
@@ -23759,8 +23777,8 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
                     expected_result = trusted_commit_batch(
                         manager,
                         private_plan,
-                        prepared_session,
-                        prepared_processes,
+                        trial_prepared_session,
+                        trial_prepared_processes,
                     )
                     expected_result_digest = result_digest(expected_result)
                     expected_state_digest = state_digest(manager)

@@ -6,15 +6,127 @@
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from threading import Thread
 
 import pytest
 
 import evidenceforge.generation.state_manager as state_manager_module
+from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.state_manager import MaterializationBatchPlan, StateManager
+from evidenceforge.models import Scenario
 from evidenceforge.models.exceptions import StateError
 
 _START = datetime(2026, 8, 20, 14, 0, tzinfo=UTC)
+
+
+def _minimal_boot_scenario(operating_system: str) -> Scenario:
+    """Build the smallest real engine scenario that enters fleet boot materialization."""
+
+    return Scenario.model_validate(
+        {
+            "version": "1.0",
+            "name": "generic-batch-real-initialize",
+            "description": "One-host production initialization regression",
+            "environment": {
+                "description": "One boot host",
+                "users": [
+                    {
+                        "username": "analyst",
+                        "full_name": "Analyst",
+                        "email": "analyst@example.test",
+                        "primary_system": "BOOT-HOST",
+                        "enabled": True,
+                    }
+                ],
+                "systems": [
+                    {
+                        "hostname": "BOOT-HOST",
+                        "ip": "192.0.2.10",
+                        "os": operating_system,
+                        "type": "server",
+                    }
+                ],
+            },
+            "time_window": {"start": "2024-01-15T10:00:00Z", "duration": "1h"},
+            "baseline_activity": {
+                "description": "Minimal baseline",
+                "intensity": "low",
+                "variation": "low",
+            },
+            "output": {"logs": [], "destination": "./output", "compression": False},
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("operating_system", "root_alias", "root_pid"),
+    (
+        ("Windows 11", "system", 4),
+        ("Ubuntu 22.04", "systemd", 1),
+    ),
+)
+def test_real_initialize_boot_batch_matches_detached_trial(
+    tmp_path: Path,
+    operating_system: str,
+    root_alias: str,
+    root_pid: int,
+) -> None:
+    """Production Windows and Linux boot batches must match their trial postimages."""
+
+    engine = GenerationEngine(_minimal_boot_scenario(operating_system), tmp_path)
+
+    engine._initialize()
+
+    assert engine._system_pids["BOOT-HOST"][root_alias] == root_pid
+    assert engine.state_manager.get_process("BOOT-HOST", root_pid) is not None
+    transaction_census = engine.lifecycle_authority.census()
+    assert transaction_census.materialization_batch_transactions_pending == 0
+    assert transaction_census.materialization_batch_transactions_unacknowledged == 0
+    assert transaction_census.materialization_batch_transactions_acknowledged == 1
+    assert engine.state_manager._active_materialization_batch_preparations == {}
+    assert engine.state_manager._active_materialization_batch_private_rollback is None
+    assert engine.state_manager._active_prepared_state_claim is None
+    if root_alias == "systemd":
+        allocations = engine.state_manager._linux_pid_allocations["BOOT-HOST"]
+        allocation_records = tuple(
+            (event_time, logical_position)
+            for block in allocations._blocks
+            for event_time, _sequence, logical_position in block
+        )
+        assert len(allocation_records) == len(set(allocation_records))
+
+
+def test_failed_real_initialize_clears_generic_batch_provisional_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lost primitive return during real boot leaves no State batch authority active."""
+
+    engine = GenerationEngine(_minimal_boot_scenario("Ubuntu 22.04"), tmp_path)
+    manager = engine.state_manager
+    original_commit = manager._commit_prevalidated_materialization_batch
+
+    def commit_then_raise(*args: object, **kwargs: object) -> object:
+        original_commit(*args, **kwargs)  # type: ignore[arg-type]
+        raise StateError("injected real initialize batch failure")
+
+    monkeypatch.setattr(
+        manager,
+        "_commit_prevalidated_materialization_batch",
+        commit_then_raise,
+    )
+
+    with pytest.raises(StateError, match="injected real initialize batch failure"):
+        engine._initialize()
+
+    assert manager.materialization_version == 0
+    assert manager.list_running_processes() == []
+    assert manager.get_boot_time("BOOT-HOST") is None
+    assert manager._active_materialization_batch_preparations == {}
+    assert manager._active_materialization_batch_private_rollback is None
+    assert manager._active_prepared_state_claim is None
+    assert engine.lifecycle_registry.stats().live_processes == 0
 
 
 def _generic_batch(
