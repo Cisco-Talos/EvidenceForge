@@ -308,7 +308,10 @@ from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.http_channels import HttpApplicationChannelManager
 from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
 from evidenceforge.generation.indexes import ExpiringIndex
-from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
+from evidenceforge.generation.lifecycle_authority import (
+    GeneratorLifecycleAuthority,
+    LifecycleMaterializationReceipt,
+)
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.network_runtime import (
@@ -331,6 +334,7 @@ from evidenceforge.generation.source_timing import (
 from evidenceforge.generation.state_manager import (
     MaterializationBatchPlan,
     ProcessMaterializationPlan,
+    SessionMaterializationPlan,
     StateManager,
 )
 from evidenceforge.generation.timing import (
@@ -690,6 +694,8 @@ _LINUX_SHELL_MAX_INFERRED_PROCESSES = 4
 _LINUX_SHELL_MAX_INFER_STAGES = 32
 _LINUX_SHELL_MAX_STAGE_CHARS = 4096
 _LINUX_SHELL_MAX_SCAN_CHARS = 32768
+_LINUX_SUDO_TTY_MAP_CENSUS_LIMIT = 4096
+_LINUX_SUDO_TTY_RECONCILE_ATTEMPTS = 8
 _PROCESS_ENDPOINT_ACTION_COHORT_MEMBER_LIMIT = 256
 _NMAP_PORT_SERVICES = {
     21: "ftp",
@@ -5023,6 +5029,7 @@ class ActivityGenerator:
             timing_runtime=timing_runtime,
         )
         self._lifecycle_authority = lifecycle_authority
+        self._lifecycle_compatibility_fixture_mode = lifecycle_compatibility_fixture_mode
         if lifecycle_compatibility_fixture_mode:
             self._lifecycle_authority.enable_fixture_parent_backfill()
             self._lifecycle_authority.bootstrap_active_state()
@@ -5158,8 +5165,16 @@ class ActivityGenerator:
         self._linux_shell_last_session_close: dict[tuple[str, str], datetime] = {}
         self._linux_local_logon_syslog_sessions: set[str] = set()
         self._linux_local_logind_session_ids: dict[str, int] = {}
+        self._linux_sudo_tty_lock = Lock()
         self._linux_sudo_tty_assignments: dict[tuple[str, str, str], str] = {}
         self._linux_sudo_tty_owners: dict[tuple[str, str], tuple[str, str, str]] = {}
+        self._linux_sudo_tty_capacity_claims: dict[
+            tuple[str, str, str],
+            tuple[object, str, bool, bool, bool],
+        ] = {}
+        self._linux_sudo_tty_sessions: dict[tuple[str, str, str], str] = {}
+        self._linux_sudo_tty_available: dict[tuple[str, str, str], datetime] = {}
+        self._linux_sudo_tty_publication_hook: Callable[[str], None] | None = None
         self._ssh_session_ready_times: dict[str, datetime] = {}
         self._pending_ssh_session_closures: list[
             tuple[datetime, Any, Any, OccurrenceBuilder, Any]
@@ -30902,6 +30917,661 @@ class ActivityGenerator:
             ),
         ).execute()
 
+    def _reconcile_linux_sudo_tty_assignment(
+        self,
+        *,
+        requested_tty_key: tuple[str, str, str],
+        requested_tty: str,
+        assigned_tty: str | None,
+        publish: bool,
+        capacity_claim: object | None = None,
+        release_capacity_claim: bool = False,
+    ) -> str:
+        """Select, reserve, repair, or publish one exact forward/inverse TTY pair."""
+
+        if type(publish) is not bool or type(release_capacity_claim) is not bool:
+            raise StateError("Linux sudo TTY publication flags require exact bools")
+        if (
+            type(requested_tty_key) is not tuple
+            or len(requested_tty_key) != 3
+            or any(type(component) is not str for component in requested_tty_key)
+            or type(requested_tty) is not str
+            or (assigned_tty is not None and type(assigned_tty) is not str)
+            or (capacity_claim is not None and type(capacity_claim) is not object)
+        ):
+            raise StateError("Linux sudo TTY ownership keys require exact strings")
+        if release_capacity_claim:
+            if capacity_claim is None or publish or assigned_tty is not None:
+                raise StateError("Linux sudo TTY capacity release requires only its exact claim")
+        elif publish != (assigned_tty is not None):
+            raise StateError("Linux sudo TTY publication requires one selected assignment")
+        hostname = requested_tty_key[0]
+        if requested_tty_key[2] != requested_tty:
+            raise StateError("Linux sudo TTY request key disagrees with its terminal")
+        missing = object()
+
+        def conflict(detail: str) -> StateError:
+            return StateError(f"Linux sudo TTY ownership conflict: {detail}")
+
+        def validated_snapshots(
+            assignments: object,
+            owners: object,
+            capacity_claims: object,
+        ) -> tuple[
+            dict[tuple[str, str, str], str],
+            dict[tuple[str, str], tuple[str, str, str]],
+            dict[tuple[str, str, str], tuple[object, str, bool, bool, bool]],
+        ]:
+            if (
+                type(assignments) is not dict
+                or type(owners) is not dict
+                or type(capacity_claims) is not dict
+            ):
+                raise StateError(
+                    "Linux sudo TTY ownership maps and claims must be exact dictionaries"
+                )
+            if (
+                dict.__len__(assignments) > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+                or dict.__len__(owners) > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+                or dict.__len__(capacity_claims) > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+            ):
+                raise StateError(
+                    "Linux sudo TTY ownership maps or claims exceed their bounded census"
+                )
+            forward = dict.copy(assignments)
+            inverse = dict.copy(owners)
+            claims = dict.copy(capacity_claims)
+            for key, value in dict.items(forward):
+                if (
+                    type(key) is not tuple
+                    or len(key) != 3
+                    or any(type(component) is not str for component in key)
+                    or type(value) is not str
+                ):
+                    raise conflict("malformed forward assignment")
+            for key, value in dict.items(inverse):
+                if (
+                    type(key) is not tuple
+                    or len(key) != 2
+                    or any(type(component) is not str for component in key)
+                    or type(value) is not tuple
+                    or len(value) != 3
+                    or any(type(component) is not str for component in value)
+                ):
+                    raise conflict("malformed inverse owner")
+            if any(owner_key[0] != inverse_key[0] for inverse_key, owner_key in inverse.items()):
+                raise conflict("malformed inverse owner hostname")
+            claimed_ttys: set[tuple[str, str]] = set()
+            for key, value in dict.items(claims):
+                if (
+                    type(key) is not tuple
+                    or len(key) != 3
+                    or any(type(component) is not str for component in key)
+                    or type(value) is not tuple
+                    or len(value) != 5
+                ):
+                    raise conflict("malformed capacity claim")
+                token, candidate, needs_forward, needs_inverse, active = value
+                if (
+                    type(token) is not object
+                    or type(candidate) is not str
+                    or type(needs_forward) is not bool
+                    or type(needs_inverse) is not bool
+                    or type(active) is not bool
+                    or not (needs_forward or needs_inverse)
+                ):
+                    raise conflict("malformed capacity claim")
+                claimed_tty = (key[0], candidate)
+                if claimed_tty in claimed_ttys:
+                    raise conflict(f"TTY {candidate!r} has multiple capacity claims")
+                claimed_ttys.add(claimed_tty)
+            return forward, inverse, claims
+
+        def validate_target_claim(
+            forward: dict[tuple[str, str, str], str],
+            inverse: dict[tuple[str, str], tuple[str, str, str]],
+            claim: tuple[object, str, bool, bool, bool],
+        ) -> None:
+            _token, candidate, needs_forward, needs_inverse, _active = claim
+            existing_forward = forward.get(requested_tty_key, missing)
+            existing_inverse = inverse.get((hostname, candidate), missing)
+            if existing_forward is not missing and existing_forward != candidate:
+                raise conflict("capacity claim disagrees with its forward assignment")
+            if existing_inverse is not missing and existing_inverse != requested_tty_key:
+                raise conflict("capacity claim disagrees with its inverse owner")
+            if needs_forward != (existing_forward is missing):
+                raise conflict("capacity claim has a stale forward reservation")
+            if needs_inverse != (existing_inverse is missing):
+                raise conflict("capacity claim has a stale inverse reservation")
+
+        def classify(
+            forward: dict[tuple[str, str, str], str],
+            inverse: dict[tuple[str, str], tuple[str, str, str]],
+            claims: dict[
+                tuple[str, str, str],
+                tuple[object, str, bool, bool, bool],
+            ],
+        ) -> tuple[str, Literal["forward", "inverse"] | None, int, int]:
+            existing_forward = forward.get(requested_tty_key, missing)
+            requested_claim = claims.get(requested_tty_key, missing)
+            if requested_claim is not missing:
+                assert isinstance(requested_claim, tuple)
+                validate_target_claim(forward, inverse, requested_claim)
+                claimed_candidate = requested_claim[1]
+                if assigned_tty is not None and assigned_tty != claimed_candidate:
+                    raise conflict(
+                        f"requested assignment changed from {assigned_tty!r} "
+                        f"to {claimed_candidate!r}"
+                    )
+            owned_inverse_keys = tuple(
+                inverse_key
+                for inverse_key, owner_key in inverse.items()
+                if owner_key == requested_tty_key
+            )
+
+            def reject_duplicate_forward(candidate: str) -> None:
+                duplicate_keys = tuple(
+                    key
+                    for key, value in forward.items()
+                    if key[0] == hostname and value == candidate and key != requested_tty_key
+                )
+                if duplicate_keys:
+                    raise conflict(f"TTY {candidate!r} has multiple forward owners")
+                duplicate_claims = tuple(
+                    key
+                    for key, claim in claims.items()
+                    if key[0] == hostname and claim[1] == candidate and key != requested_tty_key
+                )
+                if duplicate_claims:
+                    raise conflict(f"TTY {candidate!r} belongs to another capacity claim")
+
+            if existing_forward is not missing:
+                assert isinstance(existing_forward, str)
+                candidate = existing_forward
+                if requested_claim is not missing and requested_claim[1] != candidate:
+                    raise conflict("capacity claim changed its forward assignment")
+                if assigned_tty is not None and assigned_tty != candidate:
+                    raise conflict(
+                        f"requested assignment changed from {assigned_tty!r} to {candidate!r}"
+                    )
+                reject_duplicate_forward(candidate)
+                inverse_key = (hostname, candidate)
+                current_owner = inverse.get(inverse_key, missing)
+                if owned_inverse_keys and owned_inverse_keys != (inverse_key,):
+                    raise conflict("forward owner has another inverse assignment")
+                if current_owner is missing:
+                    return candidate, "inverse", 0, 1
+                if current_owner != requested_tty_key:
+                    raise conflict(f"TTY {candidate!r} belongs to another request")
+                return candidate, None, 0, 0
+
+            if owned_inverse_keys:
+                if len(owned_inverse_keys) != 1:
+                    raise conflict("request has multiple inverse assignments")
+                inverse_key = owned_inverse_keys[0]
+                if inverse_key[0] != hostname:
+                    raise conflict("inverse assignment has another hostname")
+                candidate = inverse_key[1]
+                if requested_claim is not missing and requested_claim[1] != candidate:
+                    raise conflict("capacity claim changed its inverse assignment")
+                if assigned_tty is not None and assigned_tty != candidate:
+                    raise conflict(
+                        f"requested assignment changed from {assigned_tty!r} to {candidate!r}"
+                    )
+                reject_duplicate_forward(candidate)
+                return candidate, "forward", 1, 0
+
+            if requested_claim is not missing:
+                candidate = requested_claim[1]
+                reject_duplicate_forward(candidate)
+                if assigned_tty is None:
+                    return candidate, None, 1, 1
+                return candidate, "forward", 1, 1
+
+            if assigned_tty is None:
+                occupied_ttys: set[str] = set()
+                for key, value in forward.items():
+                    if key[0] == hostname:
+                        occupied_ttys.add(value)
+                for key in inverse:
+                    if key[0] == hostname:
+                        occupied_ttys.add(key[1])
+                for key, claim in claims.items():
+                    if key[0] == hostname:
+                        occupied_ttys.add(claim[1])
+                if requested_tty not in occupied_ttys:
+                    return requested_tty, None, 1, 1
+                prefix, separator, suffix = requested_tty.rpartition("/")
+                try:
+                    next_index = int(suffix) + 1 if separator else 0
+                except ValueError:
+                    prefix, separator, next_index = "pts", "/", 0
+                for offset in range(len(occupied_ttys) + 2):
+                    candidate = f"{prefix}{separator}{next_index + offset}"
+                    if candidate not in occupied_ttys:
+                        return candidate, None, 1, 1
+                raise StateError("Linux sudo TTY assignment search exhausted its bounded range")
+
+            candidate = assigned_tty
+            reject_duplicate_forward(candidate)
+            inverse_key = (hostname, candidate)
+            current_owner = inverse.get(inverse_key, missing)
+            if current_owner is not missing:
+                raise conflict(f"TTY {candidate!r} belongs to another request")
+            return candidate, "forward", 1, 1
+
+        def capacity_is_exhausted(
+            forward: dict[tuple[str, str, str], str],
+            inverse: dict[tuple[str, str], tuple[str, str, str]],
+            claims: dict[
+                tuple[str, str, str],
+                tuple[object, str, bool, bool, bool],
+            ],
+            *,
+            forward_delta: int,
+            inverse_delta: int,
+            target_claim: tuple[object, str, bool, bool, bool] | None,
+        ) -> bool:
+            reserved_forward = sum(int(claim[2]) for claim in claims.values())
+            reserved_inverse = sum(int(claim[3]) for claim in claims.values())
+            additional_forward = forward_delta
+            additional_inverse = inverse_delta
+            if target_claim is not None:
+                if forward_delta != int(target_claim[2]) or inverse_delta != int(target_claim[3]):
+                    raise conflict("capacity claim no longer matches its exact map delta")
+                additional_forward = 0
+                additional_inverse = 0
+            return (
+                len(forward) + reserved_forward + additional_forward
+                > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+                or len(inverse) + reserved_inverse + additional_inverse
+                > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+            )
+
+        def install_capacity_claim(
+            claims: dict[
+                tuple[str, str, str],
+                tuple[object, str, bool, bool, bool],
+            ],
+            claim: tuple[object, str, bool, bool, bool],
+        ) -> None:
+            dict.__setitem__(claims, requested_tty_key, claim)
+            if dict.get(claims, requested_tty_key, missing) != claim:
+                raise conflict("capacity claim write lost its postcondition")
+
+        def remove_capacity_claim(
+            claims: dict[
+                tuple[str, str, str],
+                tuple[object, str, bool, bool, bool],
+            ],
+        ) -> tuple[object, str, bool, bool, bool]:
+            retained = dict.pop(claims, requested_tty_key)
+            if dict.get(claims, requested_tty_key, missing) is not missing:
+                raise conflict("capacity claim removal lost its postcondition")
+            return retained
+
+        for _attempt in range(_LINUX_SUDO_TTY_RECONCILE_ATTEMPTS):
+            assignments = self._linux_sudo_tty_assignments
+            owners = self._linux_sudo_tty_owners
+            claims = self._linux_sudo_tty_capacity_claims
+            forward, inverse, claim_snapshot = validated_snapshots(assignments, owners, claims)
+
+            if release_capacity_claim:
+                existing_claim = claim_snapshot.get(requested_tty_key)
+                if existing_claim is None or existing_claim[0] is not capacity_claim:
+                    return existing_claim[1] if existing_claim is not None else requested_tty
+                candidate = existing_claim[1]
+                existing_forward = forward.get(requested_tty_key, missing)
+                existing_inverse = inverse.get((hostname, candidate), missing)
+                claim_conflict = (
+                    existing_forward is not missing and existing_forward != candidate
+                ) or (existing_inverse is not missing and existing_inverse != requested_tty_key)
+                needs_forward = existing_forward is missing
+                needs_inverse = existing_inverse is missing
+                remove_claim = claim_conflict or needs_forward == needs_inverse
+                replacement_claim = (
+                    capacity_claim,
+                    candidate,
+                    needs_forward,
+                    needs_inverse,
+                    False,
+                )
+                stale = False
+                retained_claim: object | None = None
+                with self._linux_sudo_tty_lock:
+                    current_assignments = self._linux_sudo_tty_assignments
+                    current_owners = self._linux_sudo_tty_owners
+                    current_claims = self._linux_sudo_tty_capacity_claims
+                    current_forward, current_inverse, current_claim_snapshot = validated_snapshots(
+                        current_assignments,
+                        current_owners,
+                        current_claims,
+                    )
+                    if (
+                        current_assignments is not assignments
+                        or current_owners is not owners
+                        or current_claims is not claims
+                        or dict.__eq__(current_forward, forward) is not True
+                        or dict.__eq__(current_inverse, inverse) is not True
+                        or dict.__eq__(current_claim_snapshot, claim_snapshot) is not True
+                    ):
+                        stale = True
+                    elif remove_claim:
+                        retained_claim = remove_capacity_claim(current_claims)
+                    else:
+                        retained_claim = existing_claim
+                        install_capacity_claim(
+                            current_claims,
+                            replacement_claim,
+                        )
+                if stale:
+                    continue
+                del retained_claim
+                return candidate
+
+            candidate, action, forward_delta, inverse_delta = classify(
+                forward,
+                inverse,
+                claim_snapshot,
+            )
+            existing_claim = claim_snapshot.get(requested_tty_key)
+            adopt_claim = False
+            target_claim: tuple[object, str, bool, bool, bool] | None = None
+            if existing_claim is not None:
+                if capacity_claim is None:
+                    raise conflict("request is already protected by a capacity claim")
+                if existing_claim[0] is capacity_claim:
+                    target_claim = existing_claim
+                    adopt_claim = not existing_claim[4]
+                elif existing_claim[4]:
+                    raise conflict("request is already protected by an active capacity claim")
+                else:
+                    target_claim = existing_claim
+                    adopt_claim = True
+
+            stale = False
+            capacity_exhausted = False
+            claim_adopted = False
+            claim_reserved = False
+            retained_claim: object | None = None
+            with self._linux_sudo_tty_lock:
+                current_assignments = self._linux_sudo_tty_assignments
+                current_owners = self._linux_sudo_tty_owners
+                current_claims = self._linux_sudo_tty_capacity_claims
+                current_forward, current_inverse, current_claim_snapshot = validated_snapshots(
+                    current_assignments,
+                    current_owners,
+                    current_claims,
+                )
+                if (
+                    current_assignments is not assignments
+                    or current_owners is not owners
+                    or current_claims is not claims
+                    or dict.__eq__(current_forward, forward) is not True
+                    or dict.__eq__(current_inverse, inverse) is not True
+                    or dict.__eq__(current_claim_snapshot, claim_snapshot) is not True
+                ):
+                    stale = True
+                elif adopt_claim:
+                    assert capacity_claim is not None
+                    assert target_claim is not None
+                    retained_claim = target_claim
+                    install_capacity_claim(
+                        current_claims,
+                        (
+                            capacity_claim,
+                            target_claim[1],
+                            target_claim[2],
+                            target_claim[3],
+                            True,
+                        ),
+                    )
+                    claim_adopted = True
+                elif capacity_is_exhausted(
+                    current_forward,
+                    current_inverse,
+                    current_claim_snapshot,
+                    forward_delta=forward_delta,
+                    inverse_delta=inverse_delta,
+                    target_claim=target_claim,
+                ):
+                    capacity_exhausted = True
+                elif (
+                    capacity_claim is not None
+                    and not publish
+                    and action is None
+                    and (forward_delta or inverse_delta)
+                ):
+                    if len(current_claim_snapshot) + 1 > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT:
+                        capacity_exhausted = True
+                    else:
+                        install_capacity_claim(
+                            current_claims,
+                            (
+                                capacity_claim,
+                                candidate,
+                                bool(forward_delta),
+                                bool(inverse_delta),
+                                True,
+                            ),
+                        )
+                        claim_reserved = True
+            if stale:
+                continue
+            del retained_claim
+            if claim_adopted:
+                continue
+            if capacity_exhausted:
+                raise StateError("Linux sudo TTY ownership capacity exhausted for exact pair")
+            if claim_reserved:
+                return candidate
+            if action is None:
+                return candidate
+            if capacity_claim is not None and publish and target_claim is None:
+                raise conflict("publication lost its exact capacity claim")
+
+            hook = self._linux_sudo_tty_publication_hook
+            if hook is not None:
+                hook(f"{action}-precommit")
+
+            stale = False
+            capacity_exhausted = False
+            retained_claim = None
+            with self._linux_sudo_tty_lock:
+                current_assignments = self._linux_sudo_tty_assignments
+                current_owners = self._linux_sudo_tty_owners
+                current_claims = self._linux_sudo_tty_capacity_claims
+                current_forward, current_inverse, current_claim_snapshot = validated_snapshots(
+                    current_assignments,
+                    current_owners,
+                    current_claims,
+                )
+                if (
+                    current_assignments is not assignments
+                    or current_owners is not owners
+                    or current_claims is not claims
+                    or dict.__eq__(current_forward, forward) is not True
+                    or dict.__eq__(current_inverse, inverse) is not True
+                    or dict.__eq__(current_claim_snapshot, claim_snapshot) is not True
+                ):
+                    stale = True
+                elif capacity_is_exhausted(
+                    current_forward,
+                    current_inverse,
+                    current_claim_snapshot,
+                    forward_delta=forward_delta,
+                    inverse_delta=inverse_delta,
+                    target_claim=target_claim,
+                ):
+                    capacity_exhausted = True
+                elif action == "forward":
+                    if dict.get(current_forward, requested_tty_key, missing) is not missing:
+                        stale = True
+                    else:
+                        dict.__setitem__(assignments, requested_tty_key, candidate)
+                        if dict.get(assignments, requested_tty_key, missing) != candidate:
+                            raise conflict(
+                                f"forward write for {candidate!r} lost its postcondition"
+                            )
+                        if target_claim is not None:
+                            retained_claim = target_claim
+                            replacement_claim = (
+                                target_claim[0],
+                                candidate,
+                                False,
+                                target_claim[3],
+                                True,
+                            )
+                            if replacement_claim[2] or replacement_claim[3]:
+                                install_capacity_claim(
+                                    current_claims,
+                                    replacement_claim,
+                                )
+                            else:
+                                retained_claim = remove_capacity_claim(current_claims)
+                else:
+                    inverse_key = (hostname, candidate)
+                    if dict.get(current_inverse, inverse_key, missing) is not missing:
+                        stale = True
+                    else:
+                        dict.__setitem__(owners, inverse_key, requested_tty_key)
+                        if dict.get(owners, inverse_key, missing) != requested_tty_key:
+                            raise conflict(
+                                f"inverse write for {candidate!r} lost its postcondition"
+                            )
+                        if target_claim is not None:
+                            retained_claim = target_claim
+                            replacement_claim = (
+                                target_claim[0],
+                                candidate,
+                                target_claim[2],
+                                False,
+                                True,
+                            )
+                            if replacement_claim[2] or replacement_claim[3]:
+                                install_capacity_claim(
+                                    current_claims,
+                                    replacement_claim,
+                                )
+                            else:
+                                retained_claim = remove_capacity_claim(current_claims)
+            if stale:
+                continue
+            del retained_claim
+            if capacity_exhausted:
+                raise StateError("Linux sudo TTY ownership capacity exhausted for exact pair")
+
+            hook = self._linux_sudo_tty_publication_hook
+            if hook is not None:
+                hook(f"{action}-postcommit")
+
+        raise StateError("Linux sudo TTY ownership reconciliation exhausted its retry bound")
+
+    def _require_linux_sudo_session_lifecycle_owner(self, session: ActiveSession) -> None:
+        """Reject a production sudo parent that lacks exact lifecycle ownership."""
+
+        if self._lifecycle_compatibility_fixture_mode:
+            return
+        state_identity = self.state_manager.get_session_identity(session.logon_id)
+        lifecycle_snapshot = self._lifecycle_authority.registry.get_session(session.ecar_object_id)
+        if (
+            state_identity is None
+            or lifecycle_snapshot is None
+            or lifecycle_snapshot.closed_at is not None
+            or lifecycle_snapshot.identity != LifecycleShadow.project_session_start(state_identity)
+        ):
+            raise StateError(
+                f"Linux sudo session lacks exact lifecycle ownership: {session.ecar_object_id}"
+            )
+
+    def _recover_linux_sudo_session_materialization(
+        self,
+        plan: SessionMaterializationPlan,
+    ) -> ActiveSession | None:
+        """Adopt only the exact State/lifecycle owner after a lost return."""
+
+        state_identity = self.state_manager.get_session_identity(plan.identity.logon_id)
+        if state_identity != plan.identity:
+            return None
+        session = self.state_manager.get_session(plan.identity.logon_id)
+        if session is None or session.ecar_object_id != plan.identity.object_id:
+            return None
+        lifecycle_snapshot = self._lifecycle_authority.registry.get_session(plan.identity.object_id)
+        if (
+            lifecycle_snapshot is None
+            or lifecycle_snapshot.closed_at is not None
+            or lifecycle_snapshot.identity != LifecycleShadow.project_session_start(plan.identity)
+        ):
+            return None
+        return session
+
+    def _materialize_linux_sudo_carried_in_session(
+        self,
+        *,
+        user: User,
+        system: System,
+        session_time: datetime,
+        lifecycle_group_id: str,
+    ) -> ActiveSession:
+        """Atomically own one silent pre-window sudo session and logind identity."""
+
+        session_plan = self.state_manager.plan_session_materialization(
+            username=user.username,
+            system=system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=session_time,
+            session_kind="interactive",
+            lifecycle_group_id=lifecycle_group_id,
+            session_id=0,
+        )
+        logind_rng = random.Random(
+            _stable_seed(
+                "linux_local_logon_syslog:"
+                f"{system.hostname}:{user.username}:{session_plan.identity.logon_id}"
+            )
+        )
+        logind_time = ensure_utc(session_time) - timedelta(milliseconds=logind_rng.randint(20, 80))
+        session_plan = self.state_manager.plan_linux_logind_session_materialization(
+            session_plan,
+            rng=logind_rng,
+            event_time=logind_time,
+        )
+        try:
+            materialization_result = self._lifecycle_authority.materialize_session(session_plan)
+        except Exception:
+            # The authority can have committed both owners before an injected
+            # acknowledgement failure. Recover only their exact planned identity;
+            # every fail-before or partial publication remains fail-closed.
+            recovered_session = self._recover_linux_sudo_session_materialization(session_plan)
+            if recovered_session is None:
+                raise
+            return recovered_session
+
+        if type(materialization_result) is not tuple or len(materialization_result) != 2:
+            raise StateError(
+                "Linux sudo lifecycle authority returned a malformed materialization result"
+            )
+        returned_session, receipt = materialization_result
+        recovered_session = self._recover_linux_sudo_session_materialization(session_plan)
+        returned_result_is_exact = (
+            type(returned_session) is ActiveSession
+            and recovered_session is returned_session
+            and type(receipt) is LifecycleMaterializationReceipt
+            and receipt.kind == "session"
+            and self._lifecycle_authority.authenticates_materialization_receipt(
+                session_plan,
+                receipt,
+            )
+        )
+        if returned_result_is_exact:
+            return returned_session
+        if recovered_session is not None:
+            raise StateError(
+                "Linux sudo lifecycle authority returned an unauthenticated exact planned result"
+            )
+        raise StateError("Linux sudo lifecycle authority returned no exact planned session owner")
+
     def generate_linux_sudo_processes(
         self,
         *,
@@ -30920,106 +31590,115 @@ class ActivityGenerator:
 
         user = self._user_model_for_username(sudo_user)
         requested_tty_key = (system.hostname, sudo_user, tty)
-        assigned_tty = self._linux_sudo_tty_assignments.get(requested_tty_key)
-        if assigned_tty is None:
-            assigned_tty = tty
-            owner_key = self._linux_sudo_tty_owners.get((system.hostname, assigned_tty))
-            if owner_key is not None and owner_key != requested_tty_key:
-                prefix, separator, suffix = tty.rpartition("/")
-                try:
-                    next_index = int(suffix) + 1 if separator else 0
-                except ValueError:
-                    prefix, separator, next_index = "pts", "/", 0
-                while (system.hostname, f"{prefix}{separator}{next_index}") in (
-                    self._linux_sudo_tty_owners
-                ):
-                    next_index += 1
-                assigned_tty = f"{prefix}{separator}{next_index}"
-            self._linux_sudo_tty_assignments[requested_tty_key] = assigned_tty
-            self._linux_sudo_tty_owners[(system.hostname, assigned_tty)] = requested_tty_key
-        tty_key = (system.hostname, sudo_user, assigned_tty)
-        tty_sessions = getattr(self, "_linux_sudo_tty_sessions", None)
-        if tty_sessions is None:
-            tty_sessions = {}
-            self._linux_sudo_tty_sessions = tty_sessions
-        tty_available = getattr(self, "_linux_sudo_tty_available", None)
-        if tty_available is None:
-            tty_available = {}
-            self._linux_sudo_tty_available = tty_available
-        available = tty_available.get(tty_key)
-        effective_sudo_time = sudo_time
-        if available is not None and effective_sudo_time <= available:
-            effective_sudo_time = available + timedelta(milliseconds=20)
-        timing_shift = effective_sudo_time - sudo_time
-        child_time += timing_shift
-        reserve_until += timing_shift
-        tty_available[tty_key] = reserve_until
+        capacity_claim = object()
+        tty_pair_published = False
+        try:
+            assigned_tty = self._reconcile_linux_sudo_tty_assignment(
+                requested_tty_key=requested_tty_key,
+                requested_tty=tty,
+                assigned_tty=None,
+                publish=False,
+                capacity_claim=capacity_claim,
+            )
+            tty_key = (system.hostname, sudo_user, assigned_tty)
+            tty_sessions = self._linux_sudo_tty_sessions
+            tty_available = self._linux_sudo_tty_available
+            available = tty_available.get(tty_key)
+            effective_sudo_time = sudo_time
+            if available is not None and effective_sudo_time <= available:
+                effective_sudo_time = available + timedelta(milliseconds=20)
+            timing_shift = effective_sudo_time - sudo_time
+            child_time += timing_shift
+            reserve_until += timing_shift
 
-        session = None
-        existing_logon_id = tty_sessions.get(tty_key)
-        if existing_logon_id:
-            candidate = self.state_manager.get_session_at(existing_logon_id, effective_sudo_time)
-            if candidate is not None and _session_active_for_activity(
-                candidate,
-                reserve_until,
-                margin_seconds=1.0,
-            ):
-                session = candidate
-        if session is None:
-            compatible_sessions = [
-                candidate
-                for candidate in self.state_manager.get_sessions_for_user_at(
-                    user.username,
+            session = None
+            existing_logon_id = tty_sessions.get(tty_key)
+            if existing_logon_id:
+                candidate = self.state_manager.get_session_at(
+                    existing_logon_id,
                     effective_sudo_time,
                 )
-                if candidate.system == system.hostname
-                and candidate.session_kind in {"interactive", "ssh"}
-                and _session_active_for_activity(
+                if candidate is not None and _session_active_for_activity(
                     candidate,
                     reserve_until,
                     margin_seconds=1.0,
-                )
-            ]
-            if compatible_sessions:
-                session = max(compatible_sessions, key=lambda candidate: candidate.start_time)
-                tty_sessions[tty_key] = session.logon_id
-        if session is None:
-            session_seed = _stable_seed(
-                "sudo-session-bootstrap:"
-                f"{system.hostname}:{sudo_user}:{assigned_tty}:{sudo_time.date()}"
-            )
-            session_time = effective_sudo_time - timedelta(
-                seconds=75 + (session_seed % 526),
-            )
-            scenario_start = getattr(self, "_scenario_start_time", None)
-            scenario_start = ensure_utc(scenario_start) if scenario_start is not None else None
-            if scenario_start is not None and session_time < scenario_start:
-                logon_id = self.state_manager.create_session(
-                    username=user.username,
-                    system=system.hostname,
-                    logon_type=2,
-                    source_ip="-",
-                    start_time=session_time,
-                    session_kind="interactive",
-                    lifecycle_group_id=lifecycle_group_id,
-                    session_id=0,
-                )
-                self._ensure_linux_local_session_id(user, system, session_time, logon_id)
-            else:
-                logon_id = self.generate_logon(
-                    user=user,
-                    system=system,
-                    time=session_time,
-                    logon_type=2,
-                    source_ip=None,
-                    emit_network_evidence=False,
-                    reuse_required_at=child_time,
-                    lifecycle_group_id=lifecycle_group_id,
-                )
-            session = self.state_manager.get_session(logon_id)
+                ):
+                    session = candidate
             if session is None:
-                return 0, None, timing_shift, assigned_tty
-            tty_sessions[tty_key] = logon_id
+                compatible_sessions = [
+                    candidate
+                    for candidate in self.state_manager.get_sessions_for_user_at(
+                        user.username,
+                        effective_sudo_time,
+                    )
+                    if candidate.system == system.hostname
+                    and candidate.session_kind in {"interactive", "ssh"}
+                    and _session_active_for_activity(
+                        candidate,
+                        reserve_until,
+                        margin_seconds=1.0,
+                    )
+                ]
+                if compatible_sessions:
+                    session = max(compatible_sessions, key=lambda candidate: candidate.start_time)
+            if session is None:
+                session_seed = _stable_seed(
+                    "sudo-session-bootstrap:"
+                    f"{system.hostname}:{sudo_user}:{assigned_tty}:{sudo_time.date()}"
+                )
+                session_time = effective_sudo_time - timedelta(
+                    seconds=75 + (session_seed % 526),
+                )
+                scenario_start = getattr(self, "_scenario_start_time", None)
+                scenario_start = ensure_utc(scenario_start) if scenario_start is not None else None
+                if scenario_start is not None and session_time < scenario_start:
+                    session = self._materialize_linux_sudo_carried_in_session(
+                        user=user,
+                        system=system,
+                        session_time=session_time,
+                        lifecycle_group_id=lifecycle_group_id,
+                    )
+                else:
+                    logon_id = self.generate_logon(
+                        user=user,
+                        system=system,
+                        time=session_time,
+                        logon_type=2,
+                        source_ip=None,
+                        emit_network_evidence=False,
+                        reuse_required_at=child_time,
+                        lifecycle_group_id=lifecycle_group_id,
+                    )
+                    session = self.state_manager.get_session(logon_id)
+                if session is None:
+                    return 0, None, timing_shift, assigned_tty
+            self._require_linux_sudo_session_lifecycle_owner(session)
+            assigned_tty = self._reconcile_linux_sudo_tty_assignment(
+                requested_tty_key=requested_tty_key,
+                requested_tty=tty,
+                assigned_tty=assigned_tty,
+                publish=True,
+                capacity_claim=capacity_claim,
+            )
+            tty_pair_published = True
+        finally:
+            try:
+                self._reconcile_linux_sudo_tty_assignment(
+                    requested_tty_key=requested_tty_key,
+                    requested_tty=tty,
+                    assigned_tty=None,
+                    publish=False,
+                    capacity_claim=capacity_claim,
+                    release_capacity_claim=True,
+                )
+            except StateError:
+                # Hostile caller replacement already makes the TTY owner fail closed.
+                # Preserve an originating prepublication failure; an otherwise
+                # completed call must surface the cleanup integrity failure.
+                if tty_pair_published:
+                    raise
+        tty_sessions[tty_key] = session.logon_id
+        tty_available[tty_key] = reserve_until
         shell_pid = self.ensure_linux_session_shell(
             user=user,
             target_system=system,
