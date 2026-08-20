@@ -252,6 +252,7 @@ class ApplicationChannelCensus:
     prepared_admission_capabilities: int
     prepared_close_tokens: int
     prepared_close_capabilities: int
+    prepared_close_projections: int
     prepared_commit_journals: int
     prepared_close_commit_journals: int
     releasing_admissions: int

@@ -56,6 +56,8 @@ _EXPIRY_COMPACTION_WORK_PER_WATERMARK = 4_096
 _EXPIRY_PAGE_SIZE = 4_096
 _DECODED_CACHE_PER_SHARD = 256
 _MAX_RECOVERABLE_ADMISSION_RESULTS = 4_096
+_MAX_PREPARED_CLOSE_PROJECTION_TEXT_BYTES = 4_096
+_MAX_PREPARED_CLOSE_PROJECTION_PAYLOAD_BYTES = 96 * 1_024
 _EMPTY_PRIMARY_MAP_BYTES = sys.getsizeof({})
 _EMPTY_PACKED_ROUTE_MAP_BYTES = 2 * sys.getsizeof(array("Q", [0]) * 8)
 _ESTIMATED_ROUTE_HASH_ENTRY_BYTES = 40
@@ -1606,28 +1608,548 @@ class ApplicationChannelPreparedCloseToken:
         return self._integrity_token
 
 
+def _prepared_close_proof_text(value: object, field_name: str) -> bytes:
+    """Frame one exact bounded built-in string without invoking caller callbacks."""
+
+    if type(value) is not str:
+        raise ValueError(f"{field_name} must be an exact string")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError(f"{field_name} must be valid UTF-8") from error
+    if len(encoded) > _MAX_PREPARED_CLOSE_PROJECTION_TEXT_BYTES:
+        raise ValueError(f"{field_name} exceeds the prepared-close proof text bound")
+    return struct.pack(">I", len(encoded)) + encoded
+
+
+def _prepared_close_proof_uint(value: object, bits: int, field_name: str) -> bytes:
+    """Encode one exact unsigned scalar with a fixed public width."""
+
+    if type(value) is not int or value < 0 or value >= 1 << bits:
+        raise ValueError(f"{field_name} must be an unsigned {bits}-bit integer")
+    if bits == 32:
+        return struct.pack(">I", value)
+    if bits == 64:
+        return struct.pack(">Q", value)
+    raise AssertionError("prepared-close proof integer width is internal")
+
+
+def _prepared_close_proof_datetime(value: object, field_name: str) -> bytes:
+    """Encode one exact UTC datetime as a signed fixed-width microsecond value."""
+
+    if type(value) is not datetime or value.tzinfo is not UTC:
+        raise ValueError(f"{field_name} must be an exact UTC datetime")
+    microseconds = _datetime_us(value)
+    if microseconds < -(1 << 63) or microseconds >= 1 << 63:
+        raise ValueError(f"{field_name} exceeds the prepared-close datetime bound")
+    return struct.pack(">q", microseconds)
+
+
+def _prepared_close_proof_timedelta(value: object, field_name: str) -> bytes:
+    """Encode one exact timedelta as signed fixed-width microseconds."""
+
+    if type(value) is not timedelta:
+        raise ValueError(f"{field_name} must be an exact timedelta")
+    microseconds = ((value.days * 86_400 + value.seconds) * 1_000_000) + value.microseconds
+    if microseconds < -(1 << 63) or microseconds >= 1 << 63:
+        raise ValueError(f"{field_name} exceeds the prepared-close duration bound")
+    return struct.pack(">q", microseconds)
+
+
+def _prepared_close_proof_digest(value: object, field_name: str) -> str:
+    """Validate one exact lowercase SHA-256/HMAC hexadecimal token."""
+
+    if type(value) is not str or len(value) != 64:
+        raise ValueError(f"{field_name} must be an exact 64-character digest")
+    if any(character not in "0123456789abcdef" for character in value):
+        raise ValueError(f"{field_name} must be lowercase hexadecimal")
+    return value
+
+
+def _application_channel_identity_proof_payload(identity: object) -> bytes:
+    """Return a callback-free bounded encoding of one exact channel identity tree."""
+
+    if type(identity) is not ApplicationChannelIdentity:
+        raise ValueError("prepared-close snapshot identity has an invalid exact type")
+    binding = identity.binding
+    budget = identity.budget
+    if type(binding) is not ApplicationTransportBinding:
+        raise ValueError("prepared-close transport binding has an invalid exact type")
+    if type(budget) is not ApplicationChannelBudget:
+        raise ValueError("prepared-close budget has an invalid exact type")
+    payload = bytearray(b"application-channel-identity-proof-v1\0")
+    payload.extend(_prepared_close_proof_text(identity.channel_id, "identity.channel_id"))
+    payload.extend(_prepared_close_proof_text(identity.protocol, "identity.protocol"))
+    payload.extend(_prepared_close_proof_text(identity.owner_id, "identity.owner_id"))
+    payload.extend(_prepared_close_proof_text(identity.affinity_digest, "identity.affinity_digest"))
+    payload.extend(
+        _prepared_close_proof_text(binding.transport_id, "identity.binding.transport_id")
+    )
+    payload.extend(_prepared_close_proof_datetime(binding.opened_at, "identity.binding.opened_at"))
+    payload.extend(_prepared_close_proof_datetime(binding.closes_at, "identity.binding.closes_at"))
+    payload.extend(_prepared_close_proof_datetime(identity.opened_at, "identity.opened_at"))
+    payload.extend(_prepared_close_proof_timedelta(identity.idle_timeout, "identity.idle_timeout"))
+    payload.extend(_prepared_close_proof_datetime(identity.hard_deadline, "identity.hard_deadline"))
+    payload.extend(
+        _prepared_close_proof_uint(
+            budget.initiator_bytes,
+            64,
+            "identity.budget.initiator_bytes",
+        )
+    )
+    payload.extend(
+        _prepared_close_proof_uint(
+            budget.responder_bytes,
+            64,
+            "identity.budget.responder_bytes",
+        )
+    )
+    payload.extend(_prepared_close_proof_uint(budget.operations, 32, "identity.budget.operations"))
+    if len(payload) > _MAX_PREPARED_CLOSE_PROJECTION_PAYLOAD_BYTES:
+        raise ValueError("prepared-close identity proof exceeds its payload bound")
+    return bytes(payload)
+
+
+def _application_channel_snapshot_proof_payload(snapshot: object) -> bytes:
+    """Return a callback-free bounded encoding of one exact immutable snapshot tree."""
+
+    if type(snapshot) is not ApplicationChannelSnapshot:
+        raise ValueError("prepared-close snapshot has an invalid exact type")
+    payload = bytearray(b"application-channel-snapshot-proof-v1\0")
+    identity_payload = _application_channel_identity_proof_payload(snapshot.identity)
+    payload.extend(struct.pack(">I", len(identity_payload)))
+    payload.extend(identity_payload)
+    payload.extend(
+        _prepared_close_proof_datetime(snapshot.last_activity_at, "snapshot.last_activity_at")
+    )
+    payload.extend(_prepared_close_proof_datetime(snapshot.idle_deadline, "snapshot.idle_deadline"))
+    payload.extend(
+        _prepared_close_proof_uint(
+            snapshot.reserved_initiator_bytes,
+            64,
+            "snapshot.reserved_initiator_bytes",
+        )
+    )
+    payload.extend(
+        _prepared_close_proof_uint(
+            snapshot.reserved_responder_bytes,
+            64,
+            "snapshot.reserved_responder_bytes",
+        )
+    )
+    payload.extend(
+        _prepared_close_proof_uint(
+            snapshot.reserved_operations,
+            32,
+            "snapshot.reserved_operations",
+        )
+    )
+    payload.extend(
+        _prepared_close_proof_uint(
+            snapshot.completed_operations,
+            32,
+            "snapshot.completed_operations",
+        )
+    )
+    payload.extend(
+        _prepared_close_proof_uint(
+            snapshot.active_operations,
+            32,
+            "snapshot.active_operations",
+        )
+    )
+    if snapshot.closed_at is None:
+        payload.extend(b"\0")
+    else:
+        payload.extend(b"\1")
+        payload.extend(_prepared_close_proof_datetime(snapshot.closed_at, "snapshot.closed_at"))
+    payload.extend(_prepared_close_proof_text(snapshot.close_reason, "snapshot.close_reason"))
+    if len(payload) > _MAX_PREPARED_CLOSE_PROJECTION_PAYLOAD_BYTES:
+        raise ValueError("prepared-close snapshot proof exceeds its payload bound")
+    return bytes(payload)
+
+
+def _application_channel_prepared_close_token_payload(token: object) -> bytes:
+    """Return an exact framed close-token preimage without dynamic representations."""
+
+    if type(token) is not ApplicationChannelPreparedCloseToken:
+        raise ValueError("prepared-close token has an invalid exact type")
+    payload = bytearray(b"application-channel-prepared-close-v2\0")
+    payload.extend(_prepared_close_proof_text(token.channel_id, "token.channel_id"))
+    payload.extend(_prepared_close_proof_datetime(token.closed_at, "token.closed_at"))
+    payload.extend(_prepared_close_proof_text(token.reason, "token.reason"))
+    payload.extend(_prepared_close_proof_uint(token._registry_token, 64, "token.registry"))
+    payload.extend(_prepared_close_proof_uint(token._reservation_id, 64, "token.reservation"))
+    payload.extend(_prepared_close_proof_uint(token._owner_shard_id, 32, "token.owner_shard"))
+    payload.extend(_prepared_close_proof_uint(token._channel_handle, 32, "token.handle"))
+    payload.extend(_prepared_close_proof_uint(token._channel_generation, 32, "token.generation"))
+    for snapshot in (token._expected_snapshot, token._prepared_snapshot):
+        snapshot_payload = _application_channel_snapshot_proof_payload(snapshot)
+        payload.extend(struct.pack(">I", len(snapshot_payload)))
+        payload.extend(snapshot_payload)
+    if len(payload) > _MAX_PREPARED_CLOSE_PROJECTION_PAYLOAD_BYTES:
+        raise ValueError("prepared-close token proof exceeds its payload bound")
+    return bytes(payload)
+
+
+def _application_channel_prepared_close_token_is_authentic(
+    authority_secret: bytes,
+    token: object,
+) -> bool:
+    """Fail closed on malformed public tokens without invoking caller callbacks."""
+
+    if type(token) is not ApplicationChannelPreparedCloseToken:
+        return False
+    try:
+        canonical = _application_channel_prepared_close_token_payload(token)
+        retained = _prepared_close_proof_digest(token._integrity_token, "token.integrity")
+    except (OverflowError, ValueError):
+        return False
+    expected = hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(retained, expected)
+
+
 def _application_channel_prepared_close_integrity_token(
     authority_secret: bytes,
     token: ApplicationChannelPreparedCloseToken,
 ) -> str:
     """Authenticate every public and routing field of one close reservation."""
 
-    canonical = repr(
-        (
-            "application-channel-prepared-close-v1",
-            token.channel_id,
-            token.closed_at,
-            token.reason,
-            token._registry_token,
-            token._reservation_id,
-            token._owner_shard_id,
-            token._channel_handle,
-            token._channel_generation,
-            token._expected_snapshot,
-            token._prepared_snapshot,
-        )
-    ).encode()
+    canonical = _application_channel_prepared_close_token_payload(token)
     return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicationChannelPreparedCloseProjection:
+    """Detached authenticated precommit and projected terminal close truth."""
+
+    publication_token: str
+    channel_id: str
+    owner_id: str
+    protocol: str
+    affinity_digest: str
+    transport_id: str
+    owner_partition_id: int
+    channel_handle: int
+    channel_generation: int
+    expected_current: ApplicationChannelSnapshot
+    projected_terminal: ApplicationChannelSnapshot
+    cumulative_initiator_bytes: int
+    cumulative_responder_bytes: int
+    cumulative_operations: int
+    completed_operations: int
+    active_operations: int
+    closed_at: datetime
+    close_reason: str
+    _registry_token: int = field(repr=False, default=0)
+    _reservation_id: int = field(repr=False, default=0)
+    _prepared_token_id: int = field(repr=False, default=0)
+    _integrity_token: str = field(repr=False, default="")
+
+    @property
+    def proof_token(self) -> str:
+        """Return the opaque keyed proof over this exact retained projection."""
+
+        return self._integrity_token
+
+
+@dataclass(frozen=True, slots=True)
+class _ApplicationChannelPreparedCloseProjectionAuthority:
+    """Private intact preimage and exact public proof retained in one charged slot."""
+
+    token_id: int
+    reservation_id: int
+    integrity_token: str
+    public_projection: ApplicationChannelPreparedCloseProjection
+    trusted_projection: ApplicationChannelPreparedCloseProjection
+
+
+def _application_channel_prepared_close_projection_payload(projection: object) -> bytes:
+    """Return the fixed-shape authenticated preimage of one public projection."""
+
+    if type(projection) is not ApplicationChannelPreparedCloseProjection:
+        raise ValueError("prepared-close projection has an invalid exact type")
+    payload = bytearray(b"application-channel-prepared-close-projection-v1\0")
+    payload.extend(
+        _prepared_close_proof_text(projection.publication_token, "projection.publication_token")
+    )
+    payload.extend(_prepared_close_proof_text(projection.channel_id, "projection.channel_id"))
+    payload.extend(_prepared_close_proof_text(projection.owner_id, "projection.owner_id"))
+    payload.extend(_prepared_close_proof_text(projection.protocol, "projection.protocol"))
+    payload.extend(
+        _prepared_close_proof_text(
+            projection.affinity_digest,
+            "projection.affinity_digest",
+        )
+    )
+    payload.extend(_prepared_close_proof_text(projection.transport_id, "projection.transport_id"))
+    payload.extend(
+        _prepared_close_proof_uint(
+            projection.owner_partition_id,
+            32,
+            "projection.owner_partition_id",
+        )
+    )
+    payload.extend(
+        _prepared_close_proof_uint(projection.channel_handle, 32, "projection.channel_handle")
+    )
+    payload.extend(
+        _prepared_close_proof_uint(
+            projection.channel_generation,
+            32,
+            "projection.channel_generation",
+        )
+    )
+    for snapshot in (projection.expected_current, projection.projected_terminal):
+        snapshot_payload = _application_channel_snapshot_proof_payload(snapshot)
+        payload.extend(struct.pack(">I", len(snapshot_payload)))
+        payload.extend(snapshot_payload)
+    payload.extend(
+        _prepared_close_proof_uint(
+            projection.cumulative_initiator_bytes,
+            64,
+            "projection.cumulative_initiator_bytes",
+        )
+    )
+    payload.extend(
+        _prepared_close_proof_uint(
+            projection.cumulative_responder_bytes,
+            64,
+            "projection.cumulative_responder_bytes",
+        )
+    )
+    payload.extend(
+        _prepared_close_proof_uint(
+            projection.cumulative_operations,
+            32,
+            "projection.cumulative_operations",
+        )
+    )
+    payload.extend(
+        _prepared_close_proof_uint(
+            projection.completed_operations,
+            32,
+            "projection.completed_operations",
+        )
+    )
+    payload.extend(
+        _prepared_close_proof_uint(
+            projection.active_operations,
+            32,
+            "projection.active_operations",
+        )
+    )
+    payload.extend(_prepared_close_proof_datetime(projection.closed_at, "projection.closed_at"))
+    payload.extend(_prepared_close_proof_text(projection.close_reason, "projection.close_reason"))
+    payload.extend(
+        _prepared_close_proof_uint(projection._registry_token, 64, "projection.registry")
+    )
+    payload.extend(
+        _prepared_close_proof_uint(projection._reservation_id, 64, "projection.reservation")
+    )
+    payload.extend(
+        _prepared_close_proof_uint(
+            projection._prepared_token_id,
+            64,
+            "projection.prepared_token_id",
+        )
+    )
+    if len(payload) > _MAX_PREPARED_CLOSE_PROJECTION_PAYLOAD_BYTES:
+        raise ValueError("prepared-close projection proof exceeds its payload bound")
+    return bytes(payload)
+
+
+def _application_channel_prepared_close_projection_integrity_token(
+    authority_secret: bytes,
+    projection: ApplicationChannelPreparedCloseProjection,
+) -> str:
+    """Authenticate the exact detached proof and its capability locator."""
+
+    canonical = _application_channel_prepared_close_projection_payload(projection)
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+def _application_channel_prepared_close_projection_is_authentic(
+    authority_secret: bytes,
+    projection: object,
+) -> bool:
+    """Fail closed on malformed public projections before dynamic operations."""
+
+    if type(projection) is not ApplicationChannelPreparedCloseProjection:
+        return False
+    try:
+        canonical = _application_channel_prepared_close_projection_payload(projection)
+        retained = _prepared_close_proof_digest(
+            projection._integrity_token,
+            "projection.integrity",
+        )
+    except (OverflowError, ValueError):
+        return False
+    expected = hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(retained, expected)
+
+
+def _prepared_close_projection_matches_token(
+    token: ApplicationChannelPreparedCloseToken,
+    projection: ApplicationChannelPreparedCloseProjection,
+) -> bool:
+    """Validate every duplicated public scalar against both exact snapshots and token."""
+
+    try:
+        token_expected = _application_channel_snapshot_proof_payload(token._expected_snapshot)
+        token_terminal = _application_channel_snapshot_proof_payload(token._prepared_snapshot)
+        proof_expected = _application_channel_snapshot_proof_payload(projection.expected_current)
+        proof_terminal = _application_channel_snapshot_proof_payload(projection.projected_terminal)
+        expected_identity = _application_channel_identity_proof_payload(
+            projection.expected_current.identity
+        )
+        terminal_identity = _application_channel_identity_proof_payload(
+            projection.projected_terminal.identity
+        )
+    except (OverflowError, ValueError):
+        return False
+    expected = projection.expected_current
+    terminal = projection.projected_terminal
+    expected_identity_value = expected.identity
+    expected_binding = expected_identity_value.binding
+    return (
+        token_expected == proof_expected
+        and token_terminal == proof_terminal
+        and expected_identity == terminal_identity
+        and projection.publication_token == token.publication_token
+        and projection._registry_token == token._registry_token
+        and projection._reservation_id == token._reservation_id
+        and projection._prepared_token_id == id(token)
+        and projection.owner_partition_id == token._owner_shard_id
+        and projection.channel_handle == token._channel_handle
+        and projection.channel_generation == token._channel_generation
+        and projection.channel_id == token.channel_id
+        and projection.channel_id == expected.channel_id
+        and projection.channel_id == terminal.channel_id
+        and projection.owner_id == expected_identity_value.owner_id
+        and projection.owner_id == terminal.identity.owner_id
+        and projection.protocol == expected_identity_value.protocol
+        and projection.protocol == terminal.identity.protocol
+        and projection.affinity_digest == expected_identity_value.affinity_digest
+        and projection.affinity_digest == terminal.identity.affinity_digest
+        and projection.transport_id == expected_binding.transport_id
+        and projection.transport_id == terminal.identity.binding.transport_id
+        and projection.cumulative_initiator_bytes == expected.reserved_initiator_bytes
+        and projection.cumulative_initiator_bytes == terminal.reserved_initiator_bytes
+        and projection.cumulative_responder_bytes == expected.reserved_responder_bytes
+        and projection.cumulative_responder_bytes == terminal.reserved_responder_bytes
+        and projection.cumulative_operations == expected.reserved_operations
+        and projection.cumulative_operations == terminal.reserved_operations
+        and projection.completed_operations == expected.completed_operations
+        and projection.completed_operations == terminal.completed_operations
+        and projection.active_operations == expected.active_operations
+        and projection.active_operations == terminal.active_operations
+        and projection.active_operations == 0
+        and expected.last_activity_at == terminal.last_activity_at
+        and expected.idle_deadline == terminal.idle_deadline
+        and expected.closed_at is None
+        and expected.close_reason == ""
+        and projection.closed_at == token.closed_at
+        and projection.closed_at == terminal.closed_at
+        and projection.close_reason == token.reason
+        and projection.close_reason == terminal.close_reason
+    )
+
+
+def _detached_prepared_close_text(value: str) -> str:
+    """Create an independent immutable text value from one validated proof scalar."""
+
+    return value.encode("utf-8").decode("utf-8")
+
+
+def _detached_prepared_close_datetime(value: datetime) -> datetime:
+    """Create an independent exact UTC datetime value."""
+
+    return _datetime_from_us(_datetime_us(value))
+
+
+def _detached_application_channel_snapshot(
+    snapshot: ApplicationChannelSnapshot,
+) -> ApplicationChannelSnapshot:
+    """Reconstruct a deeply detached snapshot after exact bounded-shape validation."""
+
+    _application_channel_snapshot_proof_payload(snapshot)
+    identity = snapshot.identity
+    binding = identity.binding
+    budget = identity.budget
+    detached_binding = ApplicationTransportBinding(
+        transport_id=_detached_prepared_close_text(binding.transport_id),
+        opened_at=_detached_prepared_close_datetime(binding.opened_at),
+        closes_at=_detached_prepared_close_datetime(binding.closes_at),
+    )
+    detached_budget = ApplicationChannelBudget(
+        initiator_bytes=budget.initiator_bytes,
+        responder_bytes=budget.responder_bytes,
+        operations=budget.operations,
+    )
+    detached_identity = ApplicationChannelIdentity(
+        channel_id=_detached_prepared_close_text(identity.channel_id),
+        protocol=_detached_prepared_close_text(identity.protocol),
+        owner_id=_detached_prepared_close_text(identity.owner_id),
+        affinity_digest=_detached_prepared_close_text(identity.affinity_digest),
+        binding=detached_binding,
+        opened_at=_detached_prepared_close_datetime(identity.opened_at),
+        idle_timeout=timedelta(
+            days=identity.idle_timeout.days,
+            seconds=identity.idle_timeout.seconds,
+            microseconds=identity.idle_timeout.microseconds,
+        ),
+        hard_deadline=_detached_prepared_close_datetime(identity.hard_deadline),
+        budget=detached_budget,
+    )
+    return ApplicationChannelSnapshot(
+        identity=detached_identity,
+        last_activity_at=_detached_prepared_close_datetime(snapshot.last_activity_at),
+        idle_deadline=_detached_prepared_close_datetime(snapshot.idle_deadline),
+        reserved_initiator_bytes=snapshot.reserved_initiator_bytes,
+        reserved_responder_bytes=snapshot.reserved_responder_bytes,
+        reserved_operations=snapshot.reserved_operations,
+        completed_operations=snapshot.completed_operations,
+        active_operations=snapshot.active_operations,
+        closed_at=(
+            _detached_prepared_close_datetime(snapshot.closed_at)
+            if snapshot.closed_at is not None
+            else None
+        ),
+        close_reason=_detached_prepared_close_text(snapshot.close_reason),
+    )
+
+
+def _detached_prepared_close_projection(
+    projection: ApplicationChannelPreparedCloseProjection,
+) -> ApplicationChannelPreparedCloseProjection:
+    """Reconstruct the private proof preimage without retaining public mutable aliases."""
+
+    _application_channel_prepared_close_projection_payload(projection)
+    return ApplicationChannelPreparedCloseProjection(
+        publication_token=_detached_prepared_close_text(projection.publication_token),
+        channel_id=_detached_prepared_close_text(projection.channel_id),
+        owner_id=_detached_prepared_close_text(projection.owner_id),
+        protocol=_detached_prepared_close_text(projection.protocol),
+        affinity_digest=_detached_prepared_close_text(projection.affinity_digest),
+        transport_id=_detached_prepared_close_text(projection.transport_id),
+        owner_partition_id=projection.owner_partition_id,
+        channel_handle=projection.channel_handle,
+        channel_generation=projection.channel_generation,
+        expected_current=_detached_application_channel_snapshot(projection.expected_current),
+        projected_terminal=_detached_application_channel_snapshot(projection.projected_terminal),
+        cumulative_initiator_bytes=projection.cumulative_initiator_bytes,
+        cumulative_responder_bytes=projection.cumulative_responder_bytes,
+        cumulative_operations=projection.cumulative_operations,
+        completed_operations=projection.completed_operations,
+        active_operations=projection.active_operations,
+        closed_at=_detached_prepared_close_datetime(projection.closed_at),
+        close_reason=_detached_prepared_close_text(projection.close_reason),
+        _registry_token=projection._registry_token,
+        _reservation_id=projection._reservation_id,
+        _prepared_token_id=projection._prepared_token_id,
+        _integrity_token=_detached_prepared_close_text(projection._integrity_token),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1638,6 +2160,7 @@ class _ApplicationChannelPreparedCloseCapability:
     reservation_id: int
     integrity_token: str
     trusted_token: ApplicationChannelPreparedCloseToken
+    projection_authority: _ApplicationChannelPreparedCloseProjectionAuthority
 
 
 @dataclass(slots=True)
@@ -1706,6 +2229,7 @@ class _RecoverableApplicationCloseResult:
 
     token: ApplicationChannelPreparedCloseToken
     result: ApplicationChannelCloseAdmissionResult
+    projection_authority: _ApplicationChannelPreparedCloseProjectionAuthority
 
 
 @dataclass(frozen=True, slots=True)
@@ -2181,6 +2705,34 @@ def _decoded_snapshot_estimated_bytes(snapshot: ApplicationChannelSnapshot) -> i
     )
     unique = {id(value): value for value in values}
     return sum(sys.getsizeof(value) for value in unique.values())
+
+
+def _prepared_close_projection_authority_estimated_bytes(
+    authority: _ApplicationChannelPreparedCloseProjectionAuthority,
+) -> int:
+    """Return a conservative estimate for one charged public/private proof pair."""
+
+    trusted = authority.trusted_projection
+    proof_values: tuple[object, ...] = (
+        trusted,
+        trusted.publication_token,
+        trusted.channel_id,
+        trusted.owner_id,
+        trusted.protocol,
+        trusted.affinity_digest,
+        trusted.transport_id,
+        trusted.closed_at,
+        trusted.close_reason,
+        trusted._integrity_token,
+    )
+    unique = {id(value): value for value in proof_values}
+    return (
+        sys.getsizeof(authority)
+        + sys.getsizeof(authority.integrity_token)
+        + 2 * sum(sys.getsizeof(value) for value in unique.values())
+        + 2 * _decoded_snapshot_estimated_bytes(trusted.expected_current)
+        + 2 * _decoded_snapshot_estimated_bytes(trusted.projected_terminal)
+    )
 
 
 def _operation_estimated_bytes(operation: ApplicationOperationReservation) -> int:
@@ -3467,21 +4019,28 @@ class ApplicationChannelRegistry:
 
         if type(token) is not ApplicationChannelPreparedCloseToken:
             raise StateError("application channel prepared close token is copied or stale")
+        try:
+            canonical = _application_channel_prepared_close_token_payload(token)
+            integrity_token = _prepared_close_proof_digest(
+                token._integrity_token,
+                "token.integrity",
+            )
+        except (OverflowError, ValueError) as error:
+            raise StateError(
+                "application channel prepared close token integrity validation failed"
+            ) from error
         if token._registry_token != id(self):
             raise StateError("application channel prepared close token is foreign")
+        expected = hmac.new(self._admission_secret, canonical, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(integrity_token, expected):
+            raise StateError("application channel prepared close token integrity validation failed")
         capability = self._prepared_close_capabilities.get(id(token))
         if capability is None or capability.token_id != id(token):
             raise StateError("application channel prepared close token is copied or stale")
         active = self._prepared_close_tokens.get(capability.reservation_id)
         if active is not token:
             raise StateError("application channel prepared close token is copied or stale")
-        expected = _application_channel_prepared_close_integrity_token(
-            self._admission_secret,
-            token,
-        )
-        if not hmac.compare_digest(
-            token._integrity_token, capability.integrity_token
-        ) or not hmac.compare_digest(expected, capability.integrity_token):
+        if not hmac.compare_digest(integrity_token, capability.integrity_token):
             raise StateError("application channel prepared close token integrity validation failed")
         return capability
 
@@ -3621,17 +4180,181 @@ class ApplicationChannelRegistry:
                     token,
                 ),
             )
+            expected_projection = _detached_application_channel_snapshot(snapshot)
+            terminal_projection = _detached_application_channel_snapshot(prepared_snapshot)
+            identity = expected_projection.identity
+            projection = ApplicationChannelPreparedCloseProjection(
+                publication_token=token.publication_token,
+                channel_id=identity.channel_id,
+                owner_id=identity.owner_id,
+                protocol=identity.protocol,
+                affinity_digest=identity.affinity_digest,
+                transport_id=identity.binding.transport_id,
+                owner_partition_id=shard_id,
+                channel_handle=channel_handle,
+                channel_generation=generation,
+                expected_current=expected_projection,
+                projected_terminal=terminal_projection,
+                cumulative_initiator_bytes=expected_projection.reserved_initiator_bytes,
+                cumulative_responder_bytes=expected_projection.reserved_responder_bytes,
+                cumulative_operations=expected_projection.reserved_operations,
+                completed_operations=expected_projection.completed_operations,
+                active_operations=expected_projection.active_operations,
+                closed_at=canonical_close,
+                close_reason=canonical_reason,
+                _registry_token=id(self),
+                _reservation_id=reservation_id,
+                _prepared_token_id=id(token),
+            )
+            projection = replace(
+                projection,
+                _integrity_token=(
+                    _application_channel_prepared_close_projection_integrity_token(
+                        self._admission_secret,
+                        projection,
+                    )
+                ),
+            )
+            if not _prepared_close_projection_matches_token(token, projection):
+                raise StateError("Application prepared close projection is internally inconsistent")
+            projection_authority = _ApplicationChannelPreparedCloseProjectionAuthority(
+                token_id=id(token),
+                reservation_id=reservation_id,
+                integrity_token=projection.proof_token,
+                public_projection=projection,
+                trusted_projection=_detached_prepared_close_projection(projection),
+            )
             capability = _ApplicationChannelPreparedCloseCapability(
                 token_id=id(token),
                 reservation_id=reservation_id,
                 integrity_token=token._integrity_token,
                 trusted_token=deepcopy(token),
+                projection_authority=projection_authority,
             )
             self._prepared_close_tokens[reservation_id] = token
             self._prepared_close_capabilities[id(token)] = capability
             self._prepared_channel_ids[canonical_channel] = reservation_id
             self._recoverable_admission_slots.add(reservation_id)
             return token
+
+    def _prepared_close_projection_authority_locked(
+        self,
+        token: ApplicationChannelPreparedCloseToken,
+    ) -> _ApplicationChannelPreparedCloseProjectionAuthority | None:
+        """Locate proof authority from active or committed charged retention."""
+
+        if not _application_channel_prepared_close_token_is_authentic(
+            self._admission_secret,
+            token,
+        ):
+            return None
+        reservation_id = token._reservation_id
+        if type(reservation_id) is not int:
+            return None
+        retained = self._recoverable_close_results.get(reservation_id)
+        if retained is None:
+            retained = self._acknowledging_close_results.get(reservation_id)
+        if retained is not None and retained.token is token:
+            authority = retained.projection_authority
+            if authority.token_id == id(token) and authority.reservation_id == reservation_id:
+                return authority
+        capability = self._prepared_close_capabilities.get(id(token))
+        if capability is not None:
+            try:
+                active = self._active_prepared_close_locked(token)
+            except StateError:
+                return None
+            return active.projection_authority
+        return None
+
+    def _authenticates_prepared_close_projection_locked(
+        self,
+        token: ApplicationChannelPreparedCloseToken,
+        projection: ApplicationChannelPreparedCloseProjection,
+    ) -> bool:
+        """Validate exact retained proof membership without consulting live channel rows."""
+
+        authority = self._prepared_close_projection_authority_locked(token)
+        if authority is None or authority.public_projection is not projection:
+            return False
+        if not _application_channel_prepared_close_projection_is_authentic(
+            self._admission_secret,
+            projection,
+        ) or not _application_channel_prepared_close_projection_is_authentic(
+            self._admission_secret,
+            authority.trusted_projection,
+        ):
+            return False
+        if (
+            authority.token_id != id(token)
+            or authority.reservation_id != token._reservation_id
+            or projection._prepared_token_id != authority.token_id
+            or projection._reservation_id != authority.reservation_id
+        ):
+            return False
+        try:
+            public_integrity = _prepared_close_proof_digest(
+                projection._integrity_token,
+                "projection.integrity",
+            )
+            trusted_integrity = _prepared_close_proof_digest(
+                authority.trusted_projection._integrity_token,
+                "trusted projection.integrity",
+            )
+            authority_integrity = _prepared_close_proof_digest(
+                authority.integrity_token,
+                "projection authority.integrity",
+            )
+        except ValueError:
+            return False
+        return (
+            hmac.compare_digest(public_integrity, authority_integrity)
+            and hmac.compare_digest(trusted_integrity, authority_integrity)
+            and _prepared_close_projection_matches_token(token, projection)
+            and _prepared_close_projection_matches_token(
+                token,
+                authority.trusted_projection,
+            )
+        )
+
+    def prepared_close_projection(
+        self,
+        token: ApplicationChannelPreparedCloseToken,
+    ) -> ApplicationChannelPreparedCloseProjection:
+        """Return the exact detached proof retained for one close capability."""
+
+        if not _application_channel_prepared_close_token_is_authentic(
+            self._admission_secret,
+            token,
+        ):
+            raise StateError("application channel prepared close token is copied or stale")
+        with self._prepared_lock:
+            authority = self._prepared_close_projection_authority_locked(token)
+            if authority is None:
+                raise StateError("application channel prepared close token is copied or stale")
+            projection = authority.public_projection
+            if not self._authenticates_prepared_close_projection_locked(token, projection):
+                raise StateError(
+                    "application channel prepared close projection integrity validation failed"
+                )
+            return projection
+
+    def authenticates_prepared_close_projection(
+        self,
+        token: ApplicationChannelPreparedCloseToken,
+        projection: ApplicationChannelPreparedCloseProjection,
+    ) -> bool:
+        """Return whether an exact owner/token/projection capability remains retained."""
+
+        if type(projection) is not ApplicationChannelPreparedCloseProjection:
+            return False
+        if not _application_channel_prepared_close_token_is_authentic(
+            self._admission_secret,
+            token,
+        ):
+            return False
+        with self._prepared_lock:
+            return self._authenticates_prepared_close_projection_locked(token, projection)
 
     def cancel_prepared_close(self, token: ApplicationChannelPreparedCloseToken) -> bool:
         """Cancel one unclaimed close-only reservation without mutation."""
@@ -3848,7 +4571,11 @@ class ApplicationChannelRegistry:
         try:
             self._prepared_retention_fault("close-receipt")
             self._recoverable_close_results[capability.reservation_id] = (
-                _RecoverableApplicationCloseResult(token, result)
+                _RecoverableApplicationCloseResult(
+                    token,
+                    result,
+                    capability.projection_authority,
+                )
             )
         except BaseException:
             if capability.reservation_id not in self._recoverable_close_results:
@@ -3878,7 +4605,10 @@ class ApplicationChannelRegistry:
     ) -> ApplicationChannelCloseCommitRecovery:
         """Return exact committed, certified-prestate, or indeterminate close truth."""
 
-        if type(token) is not ApplicationChannelPreparedCloseToken:
+        if not _application_channel_prepared_close_token_is_authentic(
+            self._admission_secret,
+            token,
+        ):
             return ApplicationChannelCloseCommitRecovery("indeterminate")
         with self._gate.mutation(), self._prepared_lock:
             retained = self._recoverable_close_results.get(token._reservation_id)
@@ -3946,13 +4676,10 @@ class ApplicationChannelRegistry:
     ) -> ApplicationChannelCloseAdmissionResult | None:
         """Return one exact retained close result after a lost outer return."""
 
-        if type(token) is not ApplicationChannelPreparedCloseToken:
-            return None
-        expected = _application_channel_prepared_close_integrity_token(
+        if not _application_channel_prepared_close_token_is_authentic(
             self._admission_secret,
             token,
-        )
-        if not hmac.compare_digest(token._integrity_token, expected):
+        ):
             return None
         with self._prepared_lock:
             retained = self._recoverable_close_results.get(token._reservation_id)
@@ -3968,13 +4695,10 @@ class ApplicationChannelRegistry:
     ) -> ApplicationChannelCloseCommitRecovery:
         """Reconcile one exact retained indeterminate close after context exit."""
 
-        if type(token) is not ApplicationChannelPreparedCloseToken:
-            return ApplicationChannelCloseCommitRecovery("indeterminate")
-        expected = _application_channel_prepared_close_integrity_token(
+        if not _application_channel_prepared_close_token_is_authentic(
             self._admission_secret,
             token,
-        )
-        if not hmac.compare_digest(token._integrity_token, expected):
+        ):
             return ApplicationChannelCloseCommitRecovery("indeterminate")
         recovery = self._reconcile_claimed_close(token)
         if recovery.status == "not_committed":
@@ -3992,7 +4716,10 @@ class ApplicationChannelRegistry:
     ) -> bool:
         """Consume one exact close recovery result after outer commit."""
 
-        if type(token) is not ApplicationChannelPreparedCloseToken:
+        if not _application_channel_prepared_close_token_is_authentic(
+            self._admission_secret,
+            token,
+        ):
             return False
         with self._gate.mutation(), self._prepared_lock:
             acknowledging = self._acknowledging_close_results.get(token._reservation_id)
@@ -6477,6 +7204,17 @@ class ApplicationChannelRegistry:
             prepared_admission_capabilities = len(self._prepared_capabilities)
             prepared_close_tokens = len(self._prepared_close_tokens)
             prepared_close_capabilities = len(self._prepared_close_capabilities)
+            prepared_close_projection_authorities = {
+                capability.reservation_id: capability.projection_authority
+                for capability in self._prepared_close_capabilities.values()
+            }
+            for retained in (
+                *self._recoverable_close_results.values(),
+                *self._acknowledging_close_results.values(),
+            ):
+                authority = retained.projection_authority
+                prepared_close_projection_authorities[authority.reservation_id] = authority
+            prepared_close_projections = len(prepared_close_projection_authorities)
             prepared_commit_journals = len(self._prepared_commit_journals)
             prepared_close_commit_journals = len(self._prepared_close_commit_journals)
             releasing_admissions = len(self._releasing_reservations)
@@ -6551,6 +7289,18 @@ class ApplicationChannelRegistry:
                 + sum(
                     sys.getsizeof(token_id) + sys.getsizeof(capability)
                     for token_id, capability in self._prepared_capabilities.items()
+                )
+                + sum(
+                    sys.getsizeof(reservation_id) + sys.getsizeof(token)
+                    for reservation_id, token in self._prepared_close_tokens.items()
+                )
+                + sum(
+                    sys.getsizeof(token_id) + sys.getsizeof(capability)
+                    for token_id, capability in self._prepared_close_capabilities.items()
+                )
+                + sum(
+                    _prepared_close_projection_authority_estimated_bytes(authority)
+                    for authority in prepared_close_projection_authorities.values()
                 )
                 + sum(
                     sys.getsizeof(reservation_id)
@@ -6751,6 +7501,7 @@ class ApplicationChannelRegistry:
                 prepared_admission_capabilities=prepared_admission_capabilities,
                 prepared_close_tokens=prepared_close_tokens,
                 prepared_close_capabilities=prepared_close_capabilities,
+                prepared_close_projections=prepared_close_projections,
                 prepared_commit_journals=prepared_commit_journals,
                 prepared_close_commit_journals=prepared_close_commit_journals,
                 releasing_admissions=releasing_admissions,
