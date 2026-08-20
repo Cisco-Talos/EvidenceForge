@@ -1384,7 +1384,11 @@ class TestWebAccessCorrelation:
             "pick_proxy_uri",
             lambda *args, **kwargs: ("/favicon.ico", "image/x-icon", "GET", "", "none"),
         )
-        monkeypatch.setattr(generator_module, "_get_http_status", lambda dst_ip, uri: (200, "OK"))
+        monkeypatch.setattr(
+            generator_module,
+            "_get_http_status",
+            lambda dst_ip, uri, *, publish_cache=True: (200, "OK"),
+        )
 
         activity_gen.generate_connection(
             src_ip="10.0.10.50",
@@ -1432,7 +1436,11 @@ class TestWebAccessCorrelation:
             "pick_proxy_uri",
             lambda *args, **kwargs: ("/", "text/html", "GET", "", "none"),
         )
-        monkeypatch.setattr(generator_module, "_get_http_status", lambda dst_ip, uri: (200, "OK"))
+        monkeypatch.setattr(
+            generator_module,
+            "_get_http_status",
+            lambda dst_ip, uri, *, publish_cache=True: (200, "OK"),
+        )
 
         activity_gen.generate_connection(
             src_ip=dc.ip,
@@ -2162,6 +2170,25 @@ class TestDhcpLease:
 
 class TestAnonymousLogon:
     """Anonymous logons use a complete short-lived session lifecycle."""
+
+    @pytest.fixture(autouse=True)
+    def _preview_unconsumed_logon_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Keep the direct generator fixture on the allocation-free planning seam."""
+
+        def preview_logon_id(
+            manager: StateManager,
+            system: str,
+            event_time: datetime | None = None,
+        ) -> str:
+            resolved_time = event_time if event_time is not None else manager.state.current_time
+            assert resolved_time is not None
+            before = manager.materialization_digest()
+            logon_id = manager.preview_logon_id(system, resolved_time)
+            assert logon_id == "0x176341f"
+            assert manager.materialization_digest() == before
+            return logon_id
+
+        monkeypatch.setattr(StateManager, "allocate_logon_id", preview_logon_id)
 
     def test_generate_anonymous_logon_dispatches(
         self, activity_gen, state_manager, mock_emitters, timestamp
