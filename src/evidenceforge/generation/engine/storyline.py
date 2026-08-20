@@ -5322,6 +5322,7 @@ class StorylineMixin:
             )
             if existing_lease:
                 legacy_timer_state = "renewal_rng" not in existing_lease
+                renewal_sequence = int(existing_lease.get("renewal_sequence", 0))
                 renewal_rng = existing_lease.get("renewal_rng")
                 if renewal_rng is None:
                     renewal_rng = random.Random(
@@ -5333,6 +5334,7 @@ class StorylineMixin:
                     timer_granularity = renewal_rng.choice([0.25, 1.0, 1.0, 5.0])
             else:
                 legacy_timer_state = False
+                renewal_sequence = 0
                 renewal_rng = random.Random(
                     _stable_seed(f"dhcp_renewal_timer:{system.hostname}:{mac}")
                 )
@@ -5342,9 +5344,13 @@ class StorylineMixin:
             else:
                 renewal_interval = dhcp_renewal_interval_seconds(
                     lease_time,
-                    renewal_rng,
+                    timing_runtime=self.timing_runtime,
+                    stable_id=f"{system.hostname}|{mac}",
+                    host=system.hostname,
+                    renewal_sequence=renewal_sequence,
                     timer_granularity=timer_granularity,
                 )
+                renewal_sequence += 1
             msg_types = ["REQUEST", "ACK"] if existing_lease else None
             authored_ids_alerts = _build_ids_alert_contexts(
                 getattr(spec, "ids_alerts", []),
@@ -5375,6 +5381,7 @@ class StorylineMixin:
                     "next_renewal": time.timestamp() + renewal_interval,
                     "renewal_interval": renewal_interval,
                     "renewal_rng": renewal_rng,
+                    "renewal_sequence": renewal_sequence,
                     "timer_granularity": timer_granularity,
                     "server_addr": dhcp_server,
                     "system": system,

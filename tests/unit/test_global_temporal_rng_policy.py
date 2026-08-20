@@ -31,12 +31,10 @@ _RAW_TEMPORAL_METHODS = frozenset(
 )
 
 # Exact integration-head ceiling for direct continuous RNG. Thirty-seven calls
-# are known byte/count/identity texture; the remaining 332 are deferred temporal
+# are known byte/count/identity texture; the remaining 328 are deferred temporal
 # debt. Keeping the conservative superset here prevents either class from
 # growing while allowing any owner to remove a selector or lower its count.
 _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
-1|actions/dhcp_lease.py|dhcp_renewal_interval_seconds|triangular
-3|actions/dhcp_lease.py|dhcp_renewal_interval_seconds|uniform
 4|actions/file_transfer.py|_http_response_file_duration|uniform
 1|actions/file_transfer.py|_http_transfer_throughput_floor|uniform
 1|actions/linux_shell_command.py|plan_linux_pipeline_stage_times|triangular
@@ -286,13 +284,13 @@ def test_generation_has_no_remaining_legacy_timing_helper_calls() -> None:
 
 
 def test_direct_continuous_rng_inventory_can_only_shrink() -> None:
-    """The exact 369-call compatibility census cannot gain selectors or calls."""
+    """The exact 365-call compatibility census cannot gain selectors or calls."""
 
     caps = _direct_continuous_rng_caps()
     observed = _generation_call_inventory(_DIRECT_CONTINUOUS_METHODS)
 
-    assert len(caps) == 169
-    assert sum(caps.values()) == 369
+    assert len(caps) == 167
+    assert sum(caps.values()) == 365
     assert not observed - caps
     assert len(observed) <= len(caps)
     assert sum(observed.values()) <= sum(caps.values())

@@ -8864,6 +8864,27 @@ class BaselineMixin:
                     dhcp_state["next_renewal"] = storyline_dhcp_time.timestamp()
                     continue
                 lease_time = dhcp_state["lease_time"]
+                renewal_sequence = int(dhcp_state.get("renewal_sequence", 0))
+
+                def next_renewal_interval(
+                    lease: float = float(lease_time),
+                    runtime: Any = self.timing_runtime,
+                    stable_id: str = f"{system.hostname}|{dhcp_state['mac']}",
+                    host: str = system.hostname,
+                    granularity: float = float(dhcp_state["timer_granularity"]),
+                ) -> float:
+                    nonlocal renewal_sequence
+                    interval = dhcp_renewal_interval_seconds(
+                        lease,
+                        timing_runtime=runtime,
+                        stable_id=stable_id,
+                        host=host,
+                        renewal_sequence=renewal_sequence,
+                        timer_granularity=granularity,
+                    )
+                    renewal_sequence += 1
+                    return interval
+
                 (
                     renewal_epochs,
                     updated_last_renewal,
@@ -8873,13 +8894,7 @@ class BaselineMixin:
                     renewal_interval=dhcp_state["renewal_interval"],
                     current_hour=current_hour,
                     next_renewal=dhcp_state.get("next_renewal"),
-                    renewal_interval_factory=lambda lease=lease_time, state=dhcp_state: (
-                        dhcp_renewal_interval_seconds(
-                            lease,
-                            state["renewal_rng"],
-                            timer_granularity=state["timer_granularity"],
-                        )
-                    ),
+                    renewal_interval_factory=next_renewal_interval,
                 )
                 if renewal_epochs:
                     from evidenceforge.utils.ids import generate_zeek_uid
@@ -8909,6 +8924,7 @@ class BaselineMixin:
                 dhcp_state["last_renewal"] = updated_last_renewal
                 if renewal_epochs:
                     dhcp_state["renewal_interval"] = renewal_epochs[-1][1]
+                dhcp_state["renewal_sequence"] = renewal_sequence
                 if pending_next_renewal is None:
                     dhcp_state.pop("next_renewal", None)
                 else:

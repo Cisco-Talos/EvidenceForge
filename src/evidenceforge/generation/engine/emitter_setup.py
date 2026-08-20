@@ -549,9 +549,13 @@ class EmitterSetupMixin:
             ].ip
             renewal_rng = random.Random(_stable_seed(f"dhcp_renewal_timer:{system.hostname}:{mac}"))
             timer_granularity = renewal_rng.choice([0.25, 1.0, 1.0, 5.0])
+            renewal_sequence = 0
             renewal_interval = dhcp_renewal_interval_seconds(
                 lease_time,
-                renewal_rng,
+                timing_runtime=self.timing_runtime,
+                stable_id=f"{system.hostname}|{mac}",
+                host=system.hostname,
+                renewal_sequence=renewal_sequence,
                 timer_granularity=timer_granularity,
             )
             self.state_manager.set_current_time(ts)
@@ -572,6 +576,7 @@ class EmitterSetupMixin:
                 "next_renewal": ts.timestamp() + renewal_interval,
                 "renewal_interval": renewal_interval,
                 "renewal_rng": renewal_rng,
+                "renewal_sequence": renewal_sequence + 1,
                 "timer_granularity": timer_granularity,
                 "server_addr": dhcp_server,
                 "system": system,
