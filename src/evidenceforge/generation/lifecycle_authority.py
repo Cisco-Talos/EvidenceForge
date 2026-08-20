@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from threading import Condition, Lock, RLock, Thread, current_thread
-from typing import Any, Generic, Literal, Protocol, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeVar, cast
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
@@ -41,6 +41,7 @@ from evidenceforge.generation.application_channels import (
     ApplicationChannelAdmissionReceipt,
     ApplicationChannelAdmissionResult,
     ApplicationChannelAdmissionToken,
+    ApplicationChannelPreparedCommit,
     ApplicationChannelRegistry,
 )
 from evidenceforge.generation.deferred_session_composition import (
@@ -51,6 +52,7 @@ from evidenceforge.generation.http_channels import (
     HttpApplicationChannelManager,
     HttpChannelAdmissionResult,
     HttpChannelAdmissionToken,
+    HttpChannelPreparedCommit,
 )
 from evidenceforge.generation.indexes import CompactIndexedStore, PackedHandleExpiryIndex
 from evidenceforge.generation.lifecycle_registry import (
@@ -71,12 +73,14 @@ from evidenceforge.generation.lifecycle_registry import (
     LifecycleServiceStagedProcessBindingMember,
     LifecycleSessionStartRequest,
     LifecycleSubjectClosureControl,
+    PreparedLifecycleClosedTransportPublication,
     ProcessLifecycleSnapshot,
 )
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.network_runtime import (
     NetworkConnectionCommitResult,
     NetworkTransactionPreparationReceipt,
+    NetworkTransactionPreparedCommit,
     NetworkTransactionRuntime,
     NetworkTransportLifecycleMode,
     PreparedNetworkTransactionRoot,
@@ -85,11 +89,13 @@ from evidenceforge.generation.proxy_channels import (
     ExplicitProxyAdmissionCommitResult,
     ExplicitProxyAdmissionToken,
     ExplicitProxyChannelManager,
+    ExplicitProxyPreparedCommit,
 )
 from evidenceforge.generation.rdp_sessions import (
     RdpReconnectStateManager,
     RdpSessionAdmissionResult,
     RdpSessionAdmissionToken,
+    RdpSessionPreparedCommit,
 )
 from evidenceforge.generation.source_timing import (
     SourceTimingPlanner,
@@ -101,6 +107,7 @@ from evidenceforge.generation.ssh_channels import (
     SshApplicationChannelManager,
     SshChannelAdmissionResult,
     SshChannelAdmissionToken,
+    SshChannelPreparedCommit,
 )
 from evidenceforge.generation.state_manager import (
     ActionCohortMaterializationPlan,
@@ -110,6 +117,7 @@ from evidenceforge.generation.state_manager import (
     ConnectionMaterializationMode,
     MaterializationBatchPlan,
     PhysicalTransportFingerprint,
+    PreparedConnectionCompositeMaterialization,
     ProcessMaterializationPlan,
     ProcessTerminationMaterializationPlan,
     SessionMaterializationPlan,
@@ -145,6 +153,13 @@ _ApplicationAdmissionResult = (
     | ExplicitProxyAdmissionCommitResult
     | SshChannelAdmissionResult
     | RdpSessionAdmissionResult
+)
+_ApplicationPreparedCommit = (
+    ApplicationChannelPreparedCommit
+    | HttpChannelPreparedCommit
+    | ExplicitProxyPreparedCommit
+    | SshChannelPreparedCommit
+    | RdpSessionPreparedCommit
 )
 
 
@@ -1280,6 +1295,55 @@ class LifecyclePreparedNetworkResult:
     runtime: NetworkTransactionPreparationReceipt
     timing: SourceTimingPreparationReceipt
     receipt: LifecyclePreparedNetworkReceipt
+
+
+@dataclass(frozen=True, slots=True)
+class DeferredSessionPublishedNetworkResult:
+    """Committed deferred root plus its exact dispatcher source publication."""
+
+    materialization: LifecyclePreparedNetworkResult
+    publication: object
+
+
+@dataclass(frozen=True, slots=True)
+class _DeferredSessionPublicationPrecommit:
+    """Exact dispatcher bridge owners revalidated at the canonical commit fence."""
+
+    dispatcher: object
+    precommit: object
+
+
+@dataclass(frozen=True, slots=True)
+class _DeferredSessionMaterializationShells:
+    """Preallocated receipt/result identities finalized after canonical commit."""
+
+    connection_receipt: LifecycleConnectionCompositeReceipt
+    connection_result: LifecycleConnectionCompositeResult
+    network_receipt: LifecyclePreparedNetworkReceipt
+    network_result: LifecyclePreparedNetworkResult
+
+
+@dataclass(slots=True)
+class _DeferredSessionCanonicalProgress:
+    """Authority-private terminal cursor spanning the canonical owner chain."""
+
+    lifecycle_committed: bool = False
+    state_committed: bool = False
+    application_committed: bool = False
+    runtime_committed: bool = False
+    timing_committed: bool = False
+
+    @property
+    def any_owner_committed(self) -> bool:
+        """Return whether precanonical cleanup is permanently forbidden."""
+
+        return (
+            self.lifecycle_committed
+            or self.state_committed
+            or self.application_committed
+            or self.runtime_committed
+            or self.timing_committed
+        )
 
 
 class _OrderedIntent(Protocol):
@@ -3600,7 +3664,7 @@ class GeneratorLifecycleAuthority:
         self,
         stack: ExitStack,
         token: _ApplicationAdmissionToken,
-    ) -> object:
+    ) -> _ApplicationPreparedCommit:
         """Claim one exact engine-owned manager capability without arbitrary callbacks."""
 
         if isinstance(token, HttpChannelAdmissionToken):
@@ -3694,6 +3758,413 @@ class GeneratorLifecycleAuthority:
             raise AssertionError("Application manager returned an incompatible commit result")
         return result
 
+    @staticmethod
+    def _commit_lifecycle_admission_recoverably(
+        prepared: PreparedLifecycleClosedTransportPublication,
+    ) -> LifecycleClosedTransportPublicationReceipt:
+        """Commit or adopt one exact lifecycle owner across a lost return."""
+
+        first_failure: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                receipt = prepared.commit_no_fail()
+            except BaseException as failure:
+                if first_failure is None:
+                    first_failure = failure
+                receipt = prepared.receipt if prepared.committed else None
+                if type(receipt) is LifecycleClosedTransportPublicationReceipt:
+                    return receipt
+                continue
+            if type(receipt) is not LifecycleClosedTransportPublicationReceipt:
+                raise AssertionError("Lifecycle registry returned an incompatible receipt")
+            return receipt
+        assert first_failure is not None
+        raise first_failure
+
+    @staticmethod
+    def _commit_state_composite_recoverably(
+        prepared: PreparedConnectionCompositeMaterialization,
+    ) -> ConnectionCompositeMaterializationResult:
+        """Commit or adopt one exact State composite across a lost return."""
+
+        first_failure: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                result = prepared.commit()
+            except BaseException as failure:
+                if first_failure is None:
+                    first_failure = failure
+                result = prepared._result if prepared.committed else None
+                if type(result) is ConnectionCompositeMaterializationResult:
+                    return result
+                continue
+            if type(result) is not ConnectionCompositeMaterializationResult:
+                raise AssertionError("State manager returned an incompatible composite result")
+            return result
+        assert first_failure is not None
+        raise first_failure
+
+    @classmethod
+    def _commit_application_admission_recoverably(
+        cls,
+        prepared: _ApplicationPreparedCommit,
+    ) -> _ApplicationAdmissionResult:
+        """Commit or adopt one exact application owner across a lost return."""
+
+        first_failure: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                return cls._commit_application_admission_no_fail(prepared)
+            except BaseException as failure:
+                if first_failure is None:
+                    first_failure = failure
+                result = prepared.result if prepared.committed else None
+                if isinstance(
+                    result,
+                    (
+                        ApplicationChannelAdmissionResult,
+                        HttpChannelAdmissionResult,
+                        ExplicitProxyAdmissionCommitResult,
+                        SshChannelAdmissionResult,
+                        RdpSessionAdmissionResult,
+                    ),
+                ):
+                    return result
+        assert first_failure is not None
+        raise first_failure
+
+    @staticmethod
+    def _commit_runtime_recoverably(
+        prepared: NetworkTransactionPreparedCommit,
+    ) -> NetworkTransactionPreparationReceipt:
+        """Commit or adopt one exact network-runtime owner across a lost return."""
+
+        first_failure: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                receipt = prepared.commit_no_fail()
+            except BaseException as failure:
+                if first_failure is None:
+                    first_failure = failure
+                receipt = prepared.receipt if prepared.committed else None
+                if type(receipt) is NetworkTransactionPreparationReceipt:
+                    return receipt
+                continue
+            if type(receipt) is not NetworkTransactionPreparationReceipt:
+                raise AssertionError("Network runtime returned an incompatible receipt")
+            return receipt
+        assert first_failure is not None
+        raise first_failure
+
+    @staticmethod
+    def _commit_source_timing_recoverably(
+        prepared: SourceTimingPreparation,
+    ) -> SourceTimingPreparationReceipt:
+        """Commit or adopt one exact source-timing owner across a lost return."""
+
+        first_failure: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                receipt = prepared.commit_no_fail()
+            except BaseException as failure:
+                if first_failure is None:
+                    first_failure = failure
+                receipt = prepared.receipt if prepared.committed else None
+                if type(receipt) is SourceTimingPreparationReceipt:
+                    return receipt
+                continue
+            if type(receipt) is not SourceTimingPreparationReceipt:
+                raise AssertionError("Source timing returned an incompatible receipt")
+            return receipt
+        assert first_failure is not None
+        raise first_failure
+
+    def _issue_connection_composite_receipt_recoverably(
+        self,
+        *,
+        state_publication_token: str,
+        prior_version: int,
+        committed_version: int,
+        transaction_id: str,
+        physical_transport: PhysicalTransportFingerprint,
+        materializes_connection: bool,
+        lifecycle_receipt: LifecycleClosedTransportPublicationReceipt | None,
+        application_proof: ApplicationChannelCompositeProof | None,
+        prerequisite_proofs: tuple[ConnectionCompositePrerequisiteProof, ...],
+    ) -> LifecycleConnectionCompositeReceipt:
+        """Issue, or reconstruct, the pure outer proof after a lost constructor return."""
+
+        values = (
+            state_publication_token,
+            prior_version,
+            committed_version,
+            transaction_id,
+            physical_transport,
+            materializes_connection,
+            lifecycle_receipt,
+            application_proof,
+            prerequisite_proofs,
+        )
+        try:
+            receipt = LifecycleConnectionCompositeReceipt._issue(
+                authority_secret=self._receipt_secret,
+                state_publication_token=state_publication_token,
+                prior_version=prior_version,
+                committed_version=committed_version,
+                transaction_id=transaction_id,
+                physical_transport=physical_transport,
+                materializes_connection=materializes_connection,
+                lifecycle_receipt=lifecycle_receipt,
+                application_proof=application_proof,
+                prerequisite_proofs=prerequisite_proofs,
+            )
+        except BaseException:
+            receipt = LifecycleConnectionCompositeReceipt(
+                *values,
+                LifecycleConnectionCompositeReceipt._integrity_for(
+                    authority_secret=self._receipt_secret,
+                    values=values,
+                ),
+            )
+        if type(
+            receipt
+        ) is not LifecycleConnectionCompositeReceipt or not receipt._has_valid_integrity(
+            self._receipt_secret
+        ):
+            raise AssertionError(
+                "Connection composite receipt reconstruction failed authentication"
+            )
+        return receipt
+
+    def _issue_prepared_network_receipt_recoverably(
+        self,
+        *,
+        runtime_publication_token: str,
+        state_publication_token: str,
+        transaction_id: str,
+        materialization_mode: ConnectionMaterializationMode,
+        lifecycle_mode: NetworkTransportLifecycleMode,
+        physical_transport: PhysicalTransportFingerprint,
+        result_digest: str,
+        timing_binding_token: SourceTimingPreparationToken,
+        connection_receipt: LifecycleConnectionCompositeReceipt,
+        runtime_receipt: NetworkTransactionPreparationReceipt,
+        timing_receipt: SourceTimingPreparationReceipt,
+    ) -> LifecyclePreparedNetworkReceipt:
+        """Issue, or reconstruct, the complete prepared-network proof exactly once."""
+
+        values = (
+            runtime_publication_token,
+            state_publication_token,
+            transaction_id,
+            materialization_mode,
+            lifecycle_mode,
+            physical_transport,
+            result_digest,
+            timing_binding_token,
+            connection_receipt,
+            runtime_receipt,
+            timing_receipt,
+        )
+        try:
+            receipt = LifecyclePreparedNetworkReceipt._issue(
+                authority_secret=self._receipt_secret,
+                runtime_publication_token=runtime_publication_token,
+                state_publication_token=state_publication_token,
+                transaction_id=transaction_id,
+                materialization_mode=materialization_mode,
+                lifecycle_mode=lifecycle_mode,
+                physical_transport=physical_transport,
+                result_digest=result_digest,
+                timing_binding_token=timing_binding_token,
+                connection_receipt=connection_receipt,
+                runtime_receipt=runtime_receipt,
+                timing_receipt=timing_receipt,
+            )
+        except BaseException:
+            receipt = LifecyclePreparedNetworkReceipt(
+                *values,
+                LifecyclePreparedNetworkReceipt._integrity_for(
+                    authority_secret=self._receipt_secret,
+                    values=values,
+                ),
+            )
+        if type(receipt) is not LifecyclePreparedNetworkReceipt or not receipt._has_valid_integrity(
+            self._receipt_secret
+        ):
+            raise AssertionError("Prepared network receipt reconstruction failed authentication")
+        return receipt
+
+    def _validate_deferred_session_publication_precommit(
+        self,
+        binding: _DeferredSessionPublicationPrecommit,
+    ) -> None:
+        """Reauthenticate the exact dispatcher carrier at the last reversible fence."""
+
+        from evidenceforge.events.dispatcher import (
+            DeferredSessionPublicationPrecommit,
+            EventDispatcher,
+        )
+
+        dispatcher = binding.dispatcher
+        precommit = binding.precommit
+        if (
+            type(dispatcher) is not EventDispatcher
+            or type(precommit) is not DeferredSessionPublicationPrecommit
+            or not dispatcher.authenticates_lifecycle_authority_owner(self)
+            or not dispatcher.claim_deferred_session_publication_precommit(precommit)
+        ):
+            raise StateError(
+                "Deferred-session exact bridge changed at the canonical precommit fence"
+            )
+
+    def _prepare_deferred_session_materialization_shells(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        source_timing_preparation: SourceTimingPreparation,
+        prerequisite_proofs: tuple[ConnectionCompositePrerequisiteProof, ...],
+    ) -> _DeferredSessionMaterializationShells:
+        """Allocate every public result identity before the canonical mutation fence."""
+
+        plan = root.state_plan
+        connection_receipt = LifecycleConnectionCompositeReceipt(
+            plan.publication_token,
+            plan.expected_version,
+            plan.expected_version + 1,
+            plan.transaction.stable_id,
+            plan.physical_transport_fingerprint,
+            plan.materializes_connection,
+            None,
+            None,
+            prerequisite_proofs,
+            "",
+        )
+        connection_result = LifecycleConnectionCompositeResult(
+            state=cast("ConnectionCompositeMaterializationResult", None),
+            lifecycle=None,
+            application=None,
+            receipt=connection_receipt,
+        )
+        network_receipt = LifecyclePreparedNetworkReceipt(
+            root.runtime_token.publication_token,
+            plan.publication_token,
+            root.transaction.stable_id,
+            plan.mode,
+            root.runtime_token.lifecycle_mode,
+            plan.physical_transport_fingerprint,
+            self._prepared_network_result_digest(root.result),
+            source_timing_preparation.binding_token,
+            connection_receipt,
+            cast("NetworkTransactionPreparationReceipt", None),
+            cast("SourceTimingPreparationReceipt", None),
+            "",
+        )
+        object.__setattr__(
+            network_receipt,
+            "_integrity_token",
+            self._deferred_session_materialization_receipt_shell_integrity(
+                root,
+                source_timing_preparation,
+                network_receipt,
+            ),
+        )
+        network_result = LifecyclePreparedNetworkResult(
+            connection=connection_result,
+            runtime=cast("NetworkTransactionPreparationReceipt", None),
+            timing=cast("SourceTimingPreparationReceipt", None),
+            receipt=network_receipt,
+        )
+        return _DeferredSessionMaterializationShells(
+            connection_receipt=connection_receipt,
+            connection_result=connection_result,
+            network_receipt=network_receipt,
+            network_result=network_result,
+        )
+
+    def _deferred_session_materialization_receipt_shell_integrity(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        source_timing_preparation: SourceTimingPreparation,
+        receipt: LifecyclePreparedNetworkReceipt,
+    ) -> str:
+        """Sign one exact provisional result identity before canonical mutation."""
+
+        payload = repr(
+            (
+                "lifecycle-deferred-session-materialization-shell-v1",
+                id(receipt),
+                id(receipt._connection_receipt),
+                root.runtime_token.publication_token,
+                root.state_plan.publication_token,
+                root.transaction.stable_id,
+                root.state_plan.mode,
+                root.runtime_token.lifecycle_mode,
+                root.state_plan.physical_transport_fingerprint,
+                self._prepared_network_result_digest(root.result),
+                id(source_timing_preparation.binding_token),
+            )
+        ).encode("utf-8")
+        return hmac.new(self._receipt_secret, payload, sha256).hexdigest()
+
+    def authenticates_deferred_session_materialization_receipt_shell(
+        self,
+        root: object,
+        source_timing_preparation: object,
+        receipt: object,
+    ) -> bool:
+        """Authenticate one exact blank deferred result identity before commit."""
+
+        if (
+            type(root) is not PreparedNetworkTransactionRoot
+            or type(source_timing_preparation) is not SourceTimingPreparation
+            or type(receipt) is not LifecyclePreparedNetworkReceipt
+        ):
+            return False
+        try:
+            connection = receipt._connection_receipt
+            plan = root.state_plan
+            fingerprint = plan.physical_transport_fingerprint
+            if (
+                type(connection) is not LifecycleConnectionCompositeReceipt
+                or receipt._runtime_publication_token != root.runtime_token.publication_token
+                or receipt._state_publication_token != plan.publication_token
+                or receipt._transaction_id != root.transaction.stable_id
+                or receipt._materialization_mode is not plan.mode
+                or receipt._lifecycle_mode != root.runtime_token.lifecycle_mode
+                or type(receipt._physical_transport) is not PhysicalTransportFingerprint
+                or receipt._physical_transport != fingerprint
+                or receipt._result_digest != self._prepared_network_result_digest(root.result)
+                or receipt._timing_binding_token is not source_timing_preparation.binding_token
+                or receipt._runtime_receipt is not None
+                or receipt._timing_receipt is not None
+                or type(receipt._integrity_token) is not str
+                or len(receipt._integrity_token) != 64
+                or connection._state_publication_token != plan.publication_token
+                or type(connection._prior_version) is not int
+                or connection._prior_version != plan.expected_version
+                or type(connection._committed_version) is not int
+                or connection._committed_version != plan.expected_version + 1
+                or connection._transaction_id != root.transaction.stable_id
+                or type(connection._physical_transport) is not PhysicalTransportFingerprint
+                or connection._physical_transport != fingerprint
+                or type(connection._materializes_connection) is not bool
+                or connection._materializes_connection is not plan.materializes_connection
+                or connection._lifecycle_receipt is not None
+                or connection._application_proof is not None
+                or type(connection._prerequisite_proofs) is not tuple
+                or connection._prerequisite_proofs
+                or connection._integrity_token != ""
+            ):
+                return False
+            expected = self._deferred_session_materialization_receipt_shell_integrity(
+                root,
+                source_timing_preparation,
+                receipt,
+            )
+            return hmac.compare_digest(receipt._integrity_token, expected)
+        except (AttributeError, TypeError, ValueError):
+            return False
+
     def materialize_connection_composite(
         self,
         plan: ConnectionCompositeMaterializationPlan,
@@ -3703,6 +4174,13 @@ class GeneratorLifecycleAuthority:
         application_token: _ApplicationAdmissionToken | None = None,
         prerequisite_receipts: tuple[LifecycleConnectionCompositeReceipt, ...] = (),
         finalize_external_no_fail: Callable[[], None] | None = None,
+        _deferred_session_publication_precommit: (
+            _DeferredSessionPublicationPrecommit | None
+        ) = None,
+        _deferred_session_materialization_shells: (
+            _DeferredSessionMaterializationShells | None
+        ) = None,
+        _deferred_session_canonical_progress: _DeferredSessionCanonicalProgress | None = None,
     ) -> LifecycleConnectionCompositeResult:
         """Atomically consume and publish State, lifecycle, and application admissions.
 
@@ -3713,6 +4191,7 @@ class GeneratorLifecycleAuthority:
         retained and must contain only already-claimed, structurally no-fail commits.
         """
 
+        canonical_committed = False
         try:
             start_members, prerequisite_proofs = self._validate_connection_composite_admissions(
                 plan,
@@ -3768,13 +4247,39 @@ class GeneratorLifecycleAuthority:
                         raise StateError(
                             "Connection composite authority inputs changed during precommit"
                         )
-                    if lifecycle_commit is not None:
-                        lifecycle_receipt = lifecycle_commit.commit_no_fail()
-                    state_result = state_commit.commit()
-                    if application_commit is not None:
-                        application_result = self._commit_application_admission_no_fail(
-                            application_commit
+                    if _deferred_session_publication_precommit is not None:
+                        self._validate_deferred_session_publication_precommit(
+                            _deferred_session_publication_precommit
                         )
+                    if lifecycle_commit is not None:
+                        try:
+                            lifecycle_receipt = self._commit_lifecycle_admission_recoverably(
+                                lifecycle_commit
+                            )
+                        finally:
+                            if lifecycle_commit.committed:
+                                canonical_committed = True
+                                if _deferred_session_canonical_progress is not None:
+                                    _deferred_session_canonical_progress.lifecycle_committed = True
+                    try:
+                        state_result = self._commit_state_composite_recoverably(state_commit)
+                    finally:
+                        if state_commit.committed:
+                            canonical_committed = True
+                            if _deferred_session_canonical_progress is not None:
+                                _deferred_session_canonical_progress.state_committed = True
+                    if application_commit is not None:
+                        try:
+                            application_result = self._commit_application_admission_recoverably(
+                                application_commit
+                            )
+                        finally:
+                            if application_commit.committed:
+                                canonical_committed = True
+                                if _deferred_session_canonical_progress is not None:
+                                    _deferred_session_canonical_progress.application_committed = (
+                                        True
+                                    )
                     application_proof = (
                         self._normalize_application_proof(application_token, application_result)
                         if application_token is not None and application_result is not None
@@ -3803,15 +4308,30 @@ class GeneratorLifecycleAuthority:
                             )
                     if finalize_external_no_fail is not None:
                         finalize_external_no_fail()
-        except BaseException:
-            self._discard_connection_composite_admissions(
-                lifecycle_token,
-                application_token,
-            )
+        except BaseException as primary:
+            if not canonical_committed and _deferred_session_publication_precommit is not None:
+                try:
+                    dispatcher = _deferred_session_publication_precommit.dispatcher
+                    dispatcher.release_deferred_session_publication_precommit(
+                        _deferred_session_publication_precommit.precommit
+                    )
+                except BaseException as cleanup_error:
+                    primary.add_note(
+                        f"Deferred-session precommit cleanup also failed: {cleanup_error!r}"
+                    )
+            if not canonical_committed:
+                try:
+                    self._discard_connection_composite_admissions(
+                        lifecycle_token,
+                        application_token,
+                    )
+                except BaseException as cleanup_error:
+                    primary.add_note(
+                        f"Connection-composite admission cleanup also failed: {cleanup_error!r}"
+                    )
             raise
 
-        receipt = LifecycleConnectionCompositeReceipt._issue(
-            authority_secret=self._receipt_secret,
+        issued_receipt = self._issue_connection_composite_receipt_recoverably(
             state_publication_token=plan.publication_token,
             prior_version=plan.expected_version,
             committed_version=plan.expected_version + 1,
@@ -3822,12 +4342,32 @@ class GeneratorLifecycleAuthority:
             application_proof=application_proof,
             prerequisite_proofs=prerequisite_proofs,
         )
-        return LifecycleConnectionCompositeResult(
-            state=state_result,
-            lifecycle=lifecycle_receipt,
-            application=application_result,
-            receipt=receipt,
-        )
+        if _deferred_session_materialization_shells is None:
+            return LifecycleConnectionCompositeResult(
+                state=state_result,
+                lifecycle=lifecycle_receipt,
+                application=application_result,
+                receipt=issued_receipt,
+            )
+        receipt = _deferred_session_materialization_shells.connection_receipt
+        for field_name in (
+            "_state_publication_token",
+            "_prior_version",
+            "_committed_version",
+            "_transaction_id",
+            "_physical_transport",
+            "_materializes_connection",
+            "_lifecycle_receipt",
+            "_application_proof",
+            "_prerequisite_proofs",
+            "_integrity_token",
+        ):
+            object.__setattr__(receipt, field_name, getattr(issued_receipt, field_name))
+        result = _deferred_session_materialization_shells.connection_result
+        object.__setattr__(result, "state", state_result)
+        object.__setattr__(result, "lifecycle", lifecycle_receipt)
+        object.__setattr__(result, "application", application_result)
+        return result
 
     @staticmethod
     def _prepared_network_result_digest(result: NetworkConnectionCommitResult) -> str:
@@ -4045,6 +4585,15 @@ class GeneratorLifecycleAuthority:
             composition
         ):
             raise StateError("Deferred session composition failed owner authentication")
+        from evidenceforge.events.dispatcher import PreparedDispatchStateIntent
+
+        if (
+            getattr(composition.transport_dispatch, "_state_intent", None)
+            is PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT
+        ):
+            raise StateError(
+                "Deferred-session exact dispatches require the prepared publication bridge"
+            )
         return self._materialize_prepared_network_transaction(
             composition.prepared_root,
             owner_rng,
@@ -4053,6 +4602,73 @@ class GeneratorLifecycleAuthority:
             application_token=composition.application_token,
             prerequisite_receipts=(),
             allow_deferred_session=True,
+        )
+
+    def materialize_prepared_deferred_session_publication(
+        self,
+        composition: DeferredSessionComposition,
+        coordinator: DeferredSessionCompositionCoordinator,
+        owner_rng: random.Random,
+        *,
+        dispatcher: object,
+        publication_batch: object,
+    ) -> DeferredSessionPublishedNetworkResult:
+        """Commit and immediately transfer a deferred root into exact source recovery."""
+
+        from evidenceforge.events.dispatcher import (
+            EventDispatcher,
+            PreparedDeferredSessionPublicationBatch,
+        )
+
+        if type(dispatcher) is not EventDispatcher:
+            raise StateError("Deferred-session exact bridge requires its exact dispatcher")
+        if type(publication_batch) is not PreparedDeferredSessionPublicationBatch:
+            raise StateError("Deferred-session exact bridge requires its exact source batch")
+        if not dispatcher.authenticates_lifecycle_authority_owner(self):
+            raise StateError(
+                "Deferred-session dispatcher belongs to a different lifecycle authority"
+            )
+        precommit_token = dispatcher.prepare_deferred_session_publication_precommit(
+            publication_batch,
+            composition=composition,
+            coordinator=coordinator,
+        )
+        precommit = _DeferredSessionPublicationPrecommit(
+            dispatcher=dispatcher,
+            precommit=precommit_token,
+        )
+        materialization = self._materialize_prepared_network_transaction(
+            composition.prepared_root,
+            owner_rng,
+            source_timing_preparation=composition.source_timing_preparation,
+            lifecycle_token=composition.lifecycle_token,
+            application_token=composition.application_token,
+            prerequisite_receipts=(),
+            allow_deferred_session=True,
+            deferred_publication_precommit=precommit,
+        )
+        try:
+            publication = dispatcher.publish_prepared_deferred_session_publication_batch(
+                publication_batch,
+                materialization_receipt=materialization.receipt,
+            )
+        except BaseException as failure:
+            try:
+                object.__setattr__(
+                    failure,
+                    "deferred_session_materialization",
+                    materialization,
+                )
+                failure.add_note(
+                    "Deferred-session canonical root committed; retry the retained "
+                    "dispatcher publication batch with this materialization receipt"
+                )
+            except BaseException:
+                pass
+            raise
+        return DeferredSessionPublishedNetworkResult(
+            materialization=materialization,
+            publication=publication,
         )
 
     def _materialize_prepared_network_transaction(
@@ -4065,6 +4681,7 @@ class GeneratorLifecycleAuthority:
         application_token: _ApplicationAdmissionToken | None,
         prerequisite_receipts: tuple[LifecyclePreparedNetworkReceipt, ...],
         allow_deferred_session: bool,
+        deferred_publication_precommit: _DeferredSessionPublicationPrecommit | None = None,
     ) -> LifecyclePreparedNetworkResult:
         """Atomically publish a sealed network root through every owning authority.
 
@@ -4077,6 +4694,12 @@ class GeneratorLifecycleAuthority:
         runtime_receipt: NetworkTransactionPreparationReceipt | None = None
         expected_timing_receipt: SourceTimingPreparationReceipt | None = None
         timing_receipt: SourceTimingPreparationReceipt | None = None
+        materialization_shells: _DeferredSessionMaterializationShells | None = None
+        canonical_progress = (
+            _DeferredSessionCanonicalProgress()
+            if deferred_publication_precommit is not None
+            else None
+        )
         try:
             connection_prerequisites = self._validate_prepared_network_transaction(
                 root,
@@ -4086,6 +4709,17 @@ class GeneratorLifecycleAuthority:
                 prerequisite_receipts,
                 allow_deferred_session=allow_deferred_session,
             )
+            if deferred_publication_precommit is not None:
+                materialization_shells = self._prepare_deferred_session_materialization_shells(
+                    root,
+                    source_timing_preparation,
+                    (),
+                )
+                dispatcher = deferred_publication_precommit.dispatcher
+                dispatcher.bind_deferred_session_materialization_receipt_shell(
+                    deferred_publication_precommit.precommit,
+                    materialization_shells.network_receipt,
+                )
             runtime = self._network_runtime
             planner = self._source_timing_planner
             assert runtime is not None and planner is not None
@@ -4101,8 +4735,16 @@ class GeneratorLifecycleAuthority:
 
                     def _finalize_prepared_network_no_fail() -> None:
                         nonlocal runtime_receipt, timing_receipt
-                        runtime_receipt = runtime_commit.commit_no_fail()
-                        timing_receipt = timing_commit.commit_no_fail()
+                        try:
+                            runtime_receipt = self._commit_runtime_recoverably(runtime_commit)
+                        finally:
+                            if runtime_commit.committed and canonical_progress is not None:
+                                canonical_progress.runtime_committed = True
+                        try:
+                            timing_receipt = self._commit_source_timing_recoverably(timing_commit)
+                        finally:
+                            if timing_commit.committed and canonical_progress is not None:
+                                canonical_progress.timing_committed = True
 
                     connection_result = self.materialize_connection_composite(
                         root.state_plan,
@@ -4111,14 +4753,20 @@ class GeneratorLifecycleAuthority:
                         application_token=application_token,
                         prerequisite_receipts=connection_prerequisites,
                         finalize_external_no_fail=_finalize_prepared_network_no_fail,
+                        _deferred_session_publication_precommit=(deferred_publication_precommit),
+                        _deferred_session_materialization_shells=(materialization_shells),
+                        _deferred_session_canonical_progress=canonical_progress,
                     )
         except BaseException:
-            self._discard_prepared_network_transaction(
-                root,
-                source_timing_preparation,
-                lifecycle_token,
-                application_token,
-            )
+            if not source_timing_preparation.committed and not (
+                canonical_progress is not None and canonical_progress.any_owner_committed
+            ):
+                self._discard_prepared_network_transaction(
+                    root,
+                    source_timing_preparation,
+                    lifecycle_token,
+                    application_token,
+                )
             raise
 
         if runtime_receipt is None or expected_timing_receipt is None or timing_receipt is None:
@@ -4136,8 +4784,7 @@ class GeneratorLifecycleAuthority:
         if not planner.authenticates_preparation_receipt(timing_receipt):
             raise AssertionError("Source timing planner returned an unauthenticated receipt")
         result_digest = self._prepared_network_result_digest(root.result)
-        receipt = LifecyclePreparedNetworkReceipt._issue(
-            authority_secret=self._receipt_secret,
+        issued_receipt = self._issue_prepared_network_receipt_recoverably(
             runtime_publication_token=root.runtime_token.publication_token,
             state_publication_token=root.state_plan.publication_token,
             transaction_id=root.transaction.stable_id,
@@ -4150,12 +4797,34 @@ class GeneratorLifecycleAuthority:
             runtime_receipt=runtime_receipt,
             timing_receipt=timing_receipt,
         )
-        return LifecyclePreparedNetworkResult(
-            connection=connection_result,
-            runtime=runtime_receipt,
-            timing=timing_receipt,
-            receipt=receipt,
-        )
+        if materialization_shells is None:
+            return LifecyclePreparedNetworkResult(
+                connection=connection_result,
+                runtime=runtime_receipt,
+                timing=timing_receipt,
+                receipt=issued_receipt,
+            )
+        receipt = materialization_shells.network_receipt
+        for field_name in (
+            "_runtime_publication_token",
+            "_state_publication_token",
+            "_transaction_id",
+            "_materialization_mode",
+            "_lifecycle_mode",
+            "_physical_transport",
+            "_result_digest",
+            "_timing_binding_token",
+            "_connection_receipt",
+            "_runtime_receipt",
+            "_timing_receipt",
+            "_integrity_token",
+        ):
+            object.__setattr__(receipt, field_name, getattr(issued_receipt, field_name))
+        result = materialization_shells.network_result
+        object.__setattr__(result, "connection", connection_result)
+        object.__setattr__(result, "runtime", runtime_receipt)
+        object.__setattr__(result, "timing", timing_receipt)
+        return result
 
     def authenticates_prepared_network_receipt(
         self,

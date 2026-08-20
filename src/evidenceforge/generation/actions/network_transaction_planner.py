@@ -4497,6 +4497,11 @@ class NetworkTransactionPlanner:
                 state_authority=deferred_authority.strict_state_authority,
             )
             deferred_authority.bind_strict_state_authority(executor.state_manager)
+        if deferred_composition is not None:
+            raise StateError(
+                "Deferred-session network callers require the exact publication bridge "
+                "before prepared ownership can transfer"
+            )
         boundary.transfer()
         materialized = (
             executor._lifecycle_authority.materialize_prepared_deferred_session_transaction(

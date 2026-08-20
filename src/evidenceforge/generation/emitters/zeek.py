@@ -68,6 +68,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
     _log_filename = "conn.json"
     _flat_filename = "zeek_conn.json"
     _supported_types: set[str] = {"connection", "dhcp_lease"}
+    supports_exact_projection_publication = True
 
     def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Zeek conn emitter handles canonical network transport events."""

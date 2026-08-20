@@ -4,11 +4,14 @@
 """Frozen owner-level SSH/RDP deferred-session composition contracts."""
 
 import gc
+import json
 import random
 from copy import copy, deepcopy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from threading import Barrier, Thread
+from pathlib import Path
+from threading import Barrier, Lock, Thread
+from unittest.mock import Mock
 
 import pytest
 
@@ -17,9 +20,14 @@ from evidenceforge.events.application import (
     ApplicationTransportBinding,
 )
 from evidenceforge.events.base import OccurrenceBuilder
-from evidenceforge.events.contexts import HostContext, SyslogContext
-from evidenceforge.events.dispatcher import EventDispatcher, PreparedDispatch
-from evidenceforge.events.lifecycle import LifecycleHold
+from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext, SyslogContext
+from evidenceforge.events.dispatcher import (
+    EventDispatcher,
+    PreparedDispatch,
+    PreparedDispatchStateIntent,
+)
+from evidenceforge.events.identity import EventIdentityPlan
+from evidenceforge.events.lifecycle import ActionLifecycleContext, LifecycleHold
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkTrafficLedger,
@@ -30,7 +38,18 @@ from evidenceforge.events.rdp import (
     RdpSessionAffinity,
     RdpTransportPlan,
 )
-from evidenceforge.generation.actions.network_connection import DeferredSessionNetworkAuthority
+from evidenceforge.formats import load_format
+from evidenceforge.generation.actions.network_connection import (
+    DeferredRdpApplicationIntent,
+    DeferredSessionNetworkAuthority,
+    DeferredSessionStateIntent,
+    NetworkConnectionActionBundle,
+    NetworkConnectionRequest,
+)
+from evidenceforge.generation.actions.network_transaction_planner import (
+    _PreparedNetworkBoundary,
+)
+from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.generation.deferred_session_composition import (
@@ -43,7 +62,18 @@ from evidenceforge.generation.deferred_session_preseal import (
     DeferredSessionBindingDisposition,
     DeferredSessionProtocol,
 )
-from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
+from evidenceforge.generation.emitters.base import ExactPublicationBatch, LogEmitter
+from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
+from evidenceforge.generation.emitters.syslog import SyslogEmitter
+from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
+from evidenceforge.generation.emitters.zeek import ZeekEmitter
+from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
+from evidenceforge.generation.lifecycle_authority import (
+    GeneratorLifecycleAuthority,
+    LifecycleConnectionCompositeReceipt,
+    LifecyclePreparedNetworkReceipt,
+)
 from evidenceforge.generation.lifecycle_production_adapters import (
     LifecycleProductionAdapter,
     closed_transport_publication_plan,
@@ -51,9 +81,11 @@ from evidenceforge.generation.lifecycle_production_adapters import (
 from evidenceforge.generation.lifecycle_registry import (
     LifecycleClosedTransportAdmissionToken,
     LifecycleRegistry,
+    PreparedLifecycleClosedTransportPublication,
 )
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.network_runtime import (
+    NetworkTransactionPreparedCommit,
     NetworkTransactionRuntime,
     NetworkTransportLifecycleMode,
     PreparedNetworkTransactionRoot,
@@ -67,6 +99,7 @@ from evidenceforge.generation.ssh_channels import (
     SshApplicationChannelManager,
     SshChannelAdmissionToken,
     SshChannelAffinity,
+    SshChannelPreparedCommit,
     SshOperationKind,
     SshProcessHold,
     SshSessionBinding,
@@ -80,7 +113,8 @@ from evidenceforge.generation.state_manager import (
     SessionMaterializationPlan,
     StateManager,
 )
-from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.exceptions import EventContractError, StateError
+from evidenceforge.models.scenario import System
 
 _START = datetime(2026, 8, 17, 13, 0, tzinfo=UTC)
 _END = _START + timedelta(days=1)
@@ -132,19 +166,21 @@ def _transaction(
     conn_id: str,
     zeek_uid: str,
     dst_port: int,
+    started_at: datetime = _START,
+    src_port: int = 50_001,
 ) -> NetworkTransactionPlan:
     """Return one closed successful SSH or RDP transport."""
 
-    closed_at = _START + timedelta(seconds=30)
+    closed_at = started_at + timedelta(seconds=30)
     return NetworkTransactionPlan(
         stable_id=stable_id,
         hostname="db-01.example.test",
         outcome="success",
-        phase_times=(("transport_start", _START), ("transport_close", closed_at)),
-        started_at=_START,
+        phase_times=(("transport_start", started_at), ("transport_close", closed_at)),
+        started_at=started_at,
         closed_at=closed_at,
         src_ip="10.0.0.10",
-        src_port=50_001,
+        src_port=src_port,
         dst_ip="10.0.0.20",
         dst_port=dst_port,
         protocol="tcp",
@@ -217,7 +253,10 @@ def _ssh_application_token(
         window_start=_START,
         window_end=_END,
     )
-    ready_at = _START + timedelta(milliseconds=120)
+    ready_at = max(
+        _START + timedelta(milliseconds=120),
+        process_plan.identity.started_at + timedelta(milliseconds=10),
+    )
     receiver = SshProcessHold(
         hostname=process_plan.identity.hostname,
         pid=process_plan.identity.pid,
@@ -275,21 +314,24 @@ def _ssh_application_token(
 def _rdp_application_token(
     root: PreparedNetworkTransactionRoot,
     session_plan: SessionMaterializationPlan,
+    *,
+    manager: RdpReconnectStateManager | None = None,
 ) -> tuple[RdpReconnectStateManager, RdpSessionAdmissionToken]:
     """Prepare one initial RDP logical-session generation over the root transport."""
 
     transaction = root.transaction
     assert transaction.closed_at is not None
-    registry = ApplicationChannelRegistry(
-        window_start=_START,
-        window_end=_END,
-        shard_count=8,
-    )
-    manager = RdpReconnectStateManager(
-        application_registry=registry,
-        window_start=_START,
-        window_end=_END,
-    )
+    if manager is None:
+        registry = ApplicationChannelRegistry(
+            window_start=_START,
+            window_end=_END,
+            shard_count=8,
+        )
+        manager = RdpReconnectStateManager(
+            application_registry=registry,
+            window_start=_START,
+            window_end=_END,
+        )
     connected_at = transaction.started_at
     identity = RdpLogicalSessionIdentity(
         logical_session_id=session_plan.identity.object_id,
@@ -335,6 +377,8 @@ def _fixture(
     lifecycle_mode: NetworkTransportLifecycleMode = "deferred_session",
     dst_port: int | None = None,
     include_holds: bool = True,
+    process_start_offset_ms: int = 110,
+    include_responder_process: bool = False,
 ) -> _Fixture:
     """Build one complete uncommitted owner composition using only public planners."""
 
@@ -369,17 +413,18 @@ def _fixture(
         session_kind=kind.value,
     )
     process_plan: ProcessMaterializationPlan | None = None
-    if kind is DeferredSessionKind.SSH:
+    if kind is DeferredSessionKind.SSH or include_responder_process:
+        is_ssh = kind is DeferredSessionKind.SSH
         process_plan = batch_builder.plan_process(
             system="DB-01",
             parent_pid=0,
-            image="/usr/sbin/sshd",
-            command_line="sshd: analyst@pts/0",
+            image=("/usr/sbin/sshd" if is_ssh else r"C:\Windows\System32\rdpclip.exe"),
+            command_line=("sshd: analyst@pts/0" if is_ssh else "rdpclip.exe"),
             username="analyst",
             integrity_level="Medium",
-            os_category="linux",
+            os_category=("linux" if is_ssh else "windows"),
             logon_id=session_plan.identity.logon_id,
-            start_time=_START + timedelta(milliseconds=110),
+            start_time=_START + timedelta(milliseconds=process_start_offset_ms),
             require_session=True,
             session_plan=session_plan,
             auth_session_id=session_plan.identity.session_id,
@@ -451,6 +496,11 @@ def _fixture(
             ),
         )
     binding_time = _START + timedelta(milliseconds=120 if kind is DeferredSessionKind.SSH else 100)
+    if process_plan is not None:
+        binding_time = max(
+            binding_time,
+            process_plan.identity.started_at + timedelta(milliseconds=10),
+        )
     lifecycle_plan = closed_transport_publication_plan(
         transaction=transaction,
         authority_hostname="WS-01",
@@ -1125,3 +1175,1897 @@ def test_coordinator_retains_no_caller_objects_and_failed_issue_is_shape_neutral
     assert not any(
         retained is caller for retained in coordinator_referents for caller in caller_objects
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationFixture:
+    """Concrete exact sinks plus every owner retained by one bridge carrier."""
+
+    fixture: _Fixture
+    authority: GeneratorLifecycleAuthority
+    dispatcher: EventDispatcher
+    ecar: EcarEmitter
+    zeek: ZeekEmitter
+    ecar_root: Path
+    zeek_path: Path
+    composition: DeferredSessionComposition
+    batch: object | None
+
+
+def _foundation_publication_fixture(
+    kind: DeferredSessionKind,
+    tmp_path: Path,
+    *,
+    member_capacity: int = 65_536,
+    preparation_capacity: int = 1_024,
+    byte_capacity: int = 64 * 1_024 * 1_024,
+    receipt_capacity: int = 4_096,
+    extra_emitters: dict[str, LogEmitter] | None = None,
+    with_intent: bool = False,
+    include_syslog_context: bool = False,
+    session_id_delta: int = 0,
+    swap_dependent_target: bool = False,
+    include_process_dependent: bool = False,
+    reverse_process_host: bool = False,
+    process_opposite_ip: bool = False,
+    spoof_transport_source_hostname: bool = False,
+    prepare_publication: bool = True,
+) -> _PublicationFixture:
+    """Build one exact eCAR/Zeek deferred bridge without using caller mocks."""
+
+    fixture = _fixture(
+        kind,
+        process_start_offset_ms=2_000 if include_process_dependent else 110,
+        include_responder_process=include_process_dependent,
+    )
+    planner = SourceTimingPlanner()
+    ecar_root = tmp_path / "ecar"
+    zeek_path = tmp_path / "zeek_conn.json"
+    ecar = EcarEmitter(load_format("ecar"), ecar_root, threaded=False)
+    zeek = ZeekEmitter(load_format("zeek_conn"), zeek_path, threaded=False)
+    emitters: dict[str, LogEmitter] = {"zeek_conn": zeek, "ecar": ecar}
+    if extra_emitters is not None:
+        emitters.update(extra_emitters)
+    intent_ledger = (
+        IntentExecutionLedger(AuthoredIntentLedger("deferred-bridge-foundation", ()))
+        if with_intent
+        else None
+    )
+    dispatcher = EventDispatcher(
+        state_manager=fixture.state,
+        emitters=emitters,
+        intent_execution_ledger=intent_ledger,
+        source_timing_planner=planner,
+        lifecycle_shadow=LifecycleShadow(fixture.state, fixture.lifecycle_registry),
+        enforce_lifecycle_authority=True,
+        action_cohort_preparation_capacity=preparation_capacity,
+        action_cohort_member_capacity=member_capacity,
+        action_cohort_byte_capacity=byte_capacity,
+        action_cohort_receipt_capacity=receipt_capacity,
+    )
+    if with_intent:
+        dispatcher.authored_intent_id = "deferred-bridge-intent"
+    transaction = fixture.prepared_root.transaction
+    src_host = HostContext(
+        hostname="WS-01",
+        ip=transaction.src_ip,
+        os="Windows 11",
+        os_category="windows",
+        system_type="workstation",
+        domain="example.test",
+        fqdn="ws-01.example.test",
+    )
+    dst_host = HostContext(
+        hostname="DB-01",
+        ip=transaction.dst_ip,
+        os=("Ubuntu 24.04" if kind is DeferredSessionKind.SSH else "Windows Server 2022"),
+        os_category=("linux" if kind is DeferredSessionKind.SSH else "windows"),
+        system_type="server",
+        domain="example.test",
+        fqdn="db-01.example.test",
+    )
+    transport_src_host = (
+        replace(src_host, hostname=dst_host.hostname, fqdn=dst_host.fqdn)
+        if spoof_transport_source_hostname
+        else src_host
+    )
+    session = fixture.session_plan.identity
+    dependent_time = session.started_at + timedelta(seconds=5)
+    with planner.prepared_planning() as timing:
+        transport = dispatcher.prepare_builder(
+            OccurrenceBuilder(
+                timestamp=transaction.started_at,
+                event_type="connection",
+                src_host=transport_src_host,
+                dst_host=dst_host,
+                network=transaction,
+            ),
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT,
+            lifecycle_ticket=fixture.prepared_root,
+            source_timing_preparation=timing,
+        )
+        session_dependent = dispatcher.prepare_builder(
+            OccurrenceBuilder(
+                timestamp=dependent_time,
+                event_type="logon",
+                src_host=dst_host if swap_dependent_target else None,
+                dst_host=src_host if swap_dependent_target else dst_host,
+                auth=AuthContext(
+                    username=session.principal,
+                    logon_id=session.logon_id,
+                    session_id=session.session_id + session_id_delta,
+                    logon_type=10,
+                    source_ip=transaction.src_ip,
+                    source_port=transaction.src_port,
+                ),
+                syslog=(
+                    SyslogContext(
+                        app_name="sshd",
+                        pid=1_104,
+                        facility=10,
+                        severity=6,
+                        message="Accepted password for analyst from 10.0.0.10 port 50001 ssh2",
+                    )
+                    if include_syslog_context
+                    else None
+                ),
+                identity_plan=EventIdentityPlan(subject=session, session=session),
+                lifecycle=ActionLifecycleContext(
+                    group_id=session.lifecycle_group_id,
+                    canonical_start=dependent_time,
+                    phase="start",
+                ),
+            ),
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_DEFERRED_DEPENDENT,
+            lifecycle_ticket=fixture.session_plan,
+            source_timing_preparation=timing,
+        )
+        process_dependent: PreparedDispatch | None = None
+        if include_process_dependent:
+            process_plan = fixture.process_plan
+            assert process_plan is not None
+            process_identity = process_plan.identity
+            process_host = src_host if reverse_process_host else dst_host
+            if process_opposite_ip:
+                process_host = replace(dst_host, ip=transaction.src_ip)
+            process_dependent = dispatcher.prepare_builder(
+                OccurrenceBuilder(
+                    timestamp=process_identity.started_at,
+                    event_type="process_create",
+                    src_host=process_host,
+                    process=ProcessContext(
+                        pid=process_identity.pid,
+                        parent_pid=process_identity.parent_pid,
+                        image=process_identity.image,
+                        command_line=process_identity.command_line,
+                        username=process_identity.principal,
+                        integrity_level=process_plan.integrity_level,
+                        logon_id=process_identity.logon_id,
+                        start_time=process_identity.started_at,
+                    ),
+                    identity_plan=EventIdentityPlan(subject=process_identity),
+                    lifecycle=ActionLifecycleContext(
+                        group_id=process_identity.lifecycle_group_id,
+                        canonical_start=process_identity.started_at,
+                        phase="start",
+                        parent_group_id=(process_identity.parent_lifecycle_group_id or None),
+                    ),
+                ),
+                state_intent=PreparedDispatchStateIntent.EXTERNAL_DEFERRED_DEPENDENT,
+                lifecycle_ticket=process_plan,
+                source_timing_preparation=timing,
+            )
+    fixture = replace(
+        fixture,
+        timing_planner=planner,
+        source_timing_preparation=timing,
+        transport_dispatch=transport,
+        dependent_dispatches=(
+            *((process_dependent,) if process_dependent is not None else ()),
+            session_dependent,
+        ),
+    )
+    authority = _bound_authority(fixture)
+    dispatcher.bind_lifecycle_authority(authority)
+    composition = fixture.issue()
+    batch = (
+        dispatcher.prepare_deferred_session_publication_batch(
+            composition,
+            fixture.coordinator,
+        )
+        if prepare_publication
+        else None
+    )
+    return _PublicationFixture(
+        fixture=fixture,
+        authority=authority,
+        dispatcher=dispatcher,
+        ecar=ecar,
+        zeek=zeek,
+        ecar_root=ecar_root,
+        zeek_path=zeek_path,
+        composition=composition,
+        batch=batch,
+    )
+
+
+def _next_rdp_publication_fixture(
+    previous: _PublicationFixture,
+    *,
+    ordinal: int,
+    prepare_publication: bool = True,
+) -> _PublicationFixture:
+    """Prepare another independent RDP root on the same bounded dispatcher."""
+
+    assert ordinal > 1
+    prior = previous.fixture
+    assert type(prior.application_owner) is RdpReconnectStateManager
+    started_at = _START + timedelta(minutes=ordinal)
+    stable_id = f"rdp-transport-{ordinal}"
+    owner_rng = random.Random(17 + ordinal)
+    runtime_preparation = prior.runtime.begin(
+        owner_rng=owner_rng,
+        stable_id=stable_id,
+        linearization_time=started_at,
+    )
+    connection_identity = runtime_preparation.reserve_physical_identity()
+    batch_builder = prior.state.begin_materialization_batch()
+    session_plan = batch_builder.plan_session(
+        username=f"analyst-{ordinal}",
+        system="DB-01",
+        logon_type=10,
+        source_ip="10.0.0.10",
+        start_time=started_at + timedelta(milliseconds=100),
+        source_ready_time=started_at + timedelta(milliseconds=100),
+        session_kind="rdp",
+    )
+    state_batch = batch_builder.seal()
+    transaction = _transaction(
+        stable_id=stable_id,
+        conn_id=connection_identity.conn_id,
+        zeek_uid=connection_identity.zeek_uid,
+        dst_port=3389,
+        started_at=started_at,
+        src_port=50_000 + ordinal,
+    )
+    root = runtime_preparation.seal(
+        transaction=transaction,
+        lifecycle_mode="deferred_session",
+        materialization_mode=ConnectionMaterializationMode.PHYSICAL,
+        source_system="WS-01",
+        source_hostname="ws-01.example.test",
+        hostname="db-01.example.test",
+        initiating_pid=-1,
+        batch=state_batch,
+    )
+    lifecycle_members = previous.authority.connection_composite_start_members(root.state_plan)
+    lifecycle_token = LifecycleProductionAdapter(
+        prior.lifecycle_registry
+    ).prepare_closed_transport_publication(
+        closed_transport_publication_plan(
+            transaction=transaction,
+            authority_hostname="WS-01",
+            src_hostname="WS-01",
+            dst_hostname="DB-01",
+            session_object_id=session_plan.identity.object_id,
+            binding_role="session",
+            bound_at=session_plan.identity.started_at,
+            action_id=f"rdp-session-action-{ordinal}",
+        ),
+        start_members=lifecycle_members,
+    )
+    lifecycle_by_publication = {
+        member.publication_token: member for member in lifecycle_token.request.start_members
+    }
+    state_members = (
+        DeferredSessionStateMemberBinding(
+            state_member=session_plan,
+            lifecycle_member=lifecycle_by_publication[session_plan.publication_token],
+        ),
+    )
+    application_owner, application_token = _rdp_application_token(
+        root,
+        session_plan,
+        manager=prior.application_owner,
+    )
+    src_host = HostContext(
+        hostname="WS-01",
+        ip=transaction.src_ip,
+        os="Windows 11",
+        os_category="windows",
+        system_type="workstation",
+        domain="example.test",
+        fqdn="ws-01.example.test",
+    )
+    dst_host = HostContext(
+        hostname="DB-01",
+        ip=transaction.dst_ip,
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="server",
+        domain="example.test",
+        fqdn="db-01.example.test",
+    )
+    session = session_plan.identity
+    dependent_time = session.started_at + timedelta(seconds=5)
+    with prior.timing_planner.prepared_planning() as timing:
+        transport = previous.dispatcher.prepare_builder(
+            OccurrenceBuilder(
+                timestamp=transaction.started_at,
+                event_type="connection",
+                src_host=src_host,
+                dst_host=dst_host,
+                network=transaction,
+            ),
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT,
+            lifecycle_ticket=root,
+            source_timing_preparation=timing,
+        )
+        dependent = previous.dispatcher.prepare_builder(
+            OccurrenceBuilder(
+                timestamp=dependent_time,
+                event_type="logon",
+                dst_host=dst_host,
+                auth=AuthContext(
+                    username=session.principal,
+                    logon_id=session.logon_id,
+                    session_id=session.session_id,
+                    logon_type=10,
+                    source_ip=transaction.src_ip,
+                    source_port=transaction.src_port,
+                ),
+                identity_plan=EventIdentityPlan(subject=session, session=session),
+                lifecycle=ActionLifecycleContext(
+                    group_id=session.lifecycle_group_id,
+                    canonical_start=dependent_time,
+                    phase="start",
+                ),
+            ),
+            state_intent=PreparedDispatchStateIntent.EXTERNAL_DEFERRED_DEPENDENT,
+            lifecycle_ticket=session_plan,
+            source_timing_preparation=timing,
+        )
+    fixture = _Fixture(
+        kind=DeferredSessionKind.RDP,
+        coordinator=DeferredSessionCompositionCoordinator(kind=DeferredSessionKind.RDP),
+        state=prior.state,
+        runtime=prior.runtime,
+        lifecycle_registry=prior.lifecycle_registry,
+        application_owner=application_owner,
+        timing_planner=prior.timing_planner,
+        owner_rng=owner_rng,
+        prepared_root=root,
+        source_timing_preparation=timing,
+        lifecycle_token=lifecycle_token,
+        state_members=state_members,
+        session_plan=session_plan,
+        process_plan=None,
+        application_token=application_token,
+        transport_dispatch=transport,
+        dependent_dispatches=(dependent,),
+        binding_time=session.started_at,
+        process_holds=(),
+    )
+    composition = fixture.issue()
+    batch = (
+        previous.dispatcher.prepare_deferred_session_publication_batch(
+            composition,
+            fixture.coordinator,
+        )
+        if prepare_publication
+        else None
+    )
+    return _PublicationFixture(
+        fixture=fixture,
+        authority=previous.authority,
+        dispatcher=previous.dispatcher,
+        ecar=previous.ecar,
+        zeek=previous.zeek,
+        ecar_root=previous.ecar_root,
+        zeek_path=previous.zeek_path,
+        composition=composition,
+        batch=batch,
+    )
+
+
+def _close_and_read_publication(
+    publication: _PublicationFixture,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Close concrete sinks and return parsed eCAR and Zeek final rows."""
+
+    publication.ecar.close()
+    publication.zeek.close()
+    ecar_rows = [
+        json.loads(line)
+        for output_path in publication.ecar_root.rglob("ecar.json")
+        for line in output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    zeek_rows = (
+        [
+            json.loads(line)
+            for line in publication.zeek_path.read_text(encoding="utf-8").splitlines()
+        ]
+        if publication.zeek_path.exists()
+        else []
+    )
+    return ecar_rows, zeek_rows
+
+
+def _cancel_unmaterialized_publication(publication: _PublicationFixture) -> None:
+    """Release every caller-owned capability retained by a negative fixture."""
+
+    fixture = publication.fixture
+    if (
+        publication.batch is not None
+        and publication.dispatcher.authenticates_prepared_deferred_session_publication_batch(
+            publication.batch
+        )
+    ):
+        publication.dispatcher.cancel_prepared_deferred_session_publication_batch(publication.batch)
+    if fixture.application_owner is not None and fixture.application_token is not None:
+        fixture.application_owner.cancel_prepared_admission(fixture.application_token)
+    LifecycleProductionAdapter(fixture.lifecycle_registry).cancel_closed_transport_publication(
+        fixture.lifecycle_token
+    )
+    fixture.runtime.cancel_preparation(fixture.prepared_root.runtime_token)
+    if not fixture.source_timing_preparation.committed:
+        fixture.source_timing_preparation.cancel()
+
+
+def _assert_deferred_dispatcher_reservations_released(
+    dispatcher: EventDispatcher,
+) -> None:
+    """Assert every bounded bridge/exact slot returned to its authority."""
+
+    deferred = dispatcher.deferred_session_publication_census()
+    recovery = dispatcher.exact_projection_recovery_census()
+    assert deferred.prepared_batches == 0
+    assert deferred.retained_members == 0
+    assert deferred.retained_bytes == 0
+    assert deferred.pending_receipts == 0
+    assert deferred.receipt_reservations == 0
+    assert deferred.receipt_eviction_reservations == 0
+    assert deferred.recovery_reservations == 0
+    assert recovery.unresolved_recoveries == 0
+    assert recovery.reserved_recoveries == 0
+    assert recovery.authority.active_batches == 0
+
+
+def test_unmigrated_network_planner_stops_before_prepared_ownership_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The newly recognized transport intent cannot activate the legacy caller path."""
+
+    state = StateManager()
+    state.set_current_time(_START)
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    window_start = _START - timedelta(days=1)
+    window_end = _END + timedelta(days=1)
+    generator = ActivityGenerator(
+        state,
+        {"zeek_conn": emitter},
+        generation_window_start=window_start,
+        generation_window_end=window_end,
+    )
+    source = System(
+        hostname="WS-01",
+        ip="10.0.0.10",
+        os="Windows 11",
+        type="workstation",
+    )
+    target = System(
+        hostname="DB-01",
+        ip="10.0.0.20",
+        os="Windows Server 2022",
+        type="server",
+    )
+    generator._ip_to_system = {source.ip: source, target.ip: target}
+    application_manager = RdpReconnectStateManager(
+        application_registry=generator._application_channel_registry,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    generator._lifecycle_authority.bind_rdp_session_manager(application_manager)
+    session_time = _START + timedelta(seconds=5)
+    authority = DeferredSessionNetworkAuthority(
+        kind=DeferredSessionKind.RDP,
+        coordinator=DeferredSessionCompositionCoordinator(kind=DeferredSessionKind.RDP),
+        bound_at=session_time,
+        state_intent=DeferredSessionStateIntent(
+            username="analyst",
+            system=target.hostname,
+            source_ip=source.ip,
+            source_port=50_001,
+            start_time=session_time,
+            source_ready_time=session_time,
+            lifecycle_group_id="rdp-unmigrated-session",
+            session_kind="rdp",
+        ),
+        application_intent=DeferredRdpApplicationIntent(
+            manager=application_manager,
+            source_host=source.hostname,
+            target_host=target.hostname,
+            principal="analyst",
+            hard_deadline=_START + timedelta(hours=1),
+        ),
+    )
+    request = NetworkConnectionRequest(
+        src_ip=source.ip,
+        dst_ip=target.ip,
+        time=_START,
+        dst_port=3389,
+        proto="tcp",
+        service="rdp",
+        duration=30.0,
+        orig_bytes=4_000,
+        resp_bytes=8_000,
+        src_port=50_001,
+        source_system=source,
+        conn_state="SF",
+        preserve_dst_ip=True,
+        preserve_start_time=True,
+        transport_lifecycle_mode="deferred_session",
+        deferred_session_authority=authority,
+    )
+    transfers = 0
+    original_transfer = _PreparedNetworkBoundary.transfer
+
+    def count_transfer(boundary: _PreparedNetworkBoundary) -> None:
+        nonlocal transfers
+        transfers += 1
+        original_transfer(boundary)
+
+    monkeypatch.setattr(_PreparedNetworkBoundary, "transfer", count_transfer)
+    state_version = state.materialization_version
+    state_digest = state.materialization_digest()
+    timing_digest = generator._source_timing_planner.state_digest()
+    runtime_digest = generator._network_transaction_runtime.state_digest()
+
+    with pytest.raises(StateError, match="exact publication bridge"):
+        NetworkConnectionActionBundle(generator, request).execute()
+
+    assert transfers == 0
+    assert state.materialization_version == state_version
+    assert state.materialization_digest() == state_digest
+    assert generator._source_timing_planner.state_digest() == timing_digest
+    assert generator._network_transaction_runtime.state_digest() == runtime_digest
+    timing_census = generator._source_timing_planner.preparation_authority_census()
+    assert timing_census.retained_preparations == 0
+    assert timing_census.active_claims == 0
+    runtime_census = generator._network_transaction_runtime.census()
+    assert runtime_census.open_preparations == 0
+    assert runtime_census.prepared_transactions == 0
+    assert runtime_census.claimed_transactions == 0
+    application_census = application_manager.census()
+    assert application_census.retained_sessions == 0
+    assert application_census.application.prepared_admissions == 0
+    assert application_census.application.claimed_admissions == 0
+    assert generator._lifecycle_authority.registry.stats().live_transports == 0
+    assert emitter.emit.call_count == 0
+    assert generator.dispatcher is not None
+    _assert_deferred_dispatcher_reservations_released(generator.dispatcher)
+
+
+@pytest.mark.parametrize("source_kind", ("syslog", "sysmon"))
+def test_exact_deferred_bridge_rejects_unadapted_sources_before_state_or_render(
+    source_kind: str,
+    tmp_path: Path,
+) -> None:
+    """Current sorted Syslog and Sysmon targets remain explicit foundation stops."""
+
+    if source_kind == "syslog":
+        output_path = tmp_path / "syslog"
+        emitter: LogEmitter = SyslogEmitter(
+            load_format("syslog"),
+            output_path,
+            threaded=False,
+        )
+        format_name = "syslog"
+        kind = DeferredSessionKind.SSH
+    else:
+        output_path = tmp_path / "sysmon"
+        emitter = SysmonEventEmitter(
+            load_format("windows_event_sysmon"),
+            output_path,
+            threaded=False,
+            source_finalization=True,
+        )
+        format_name = "windows_event_sysmon"
+        kind = DeferredSessionKind.RDP
+    publication = _foundation_publication_fixture(
+        kind,
+        tmp_path,
+        extra_emitters={format_name: emitter},
+        include_syslog_context=source_kind == "syslog",
+        prepare_publication=False,
+    )
+    state_version = publication.fixture.state.materialization_version
+    state_digest = publication.fixture.state.materialization_digest()
+    timing_digest = publication.fixture.timing_planner.state_digest()
+
+    with pytest.raises(EventContractError, match="lacks exact projection publication"):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+
+    assert publication.fixture.state.materialization_version == state_version
+    assert publication.fixture.state.materialization_digest() == state_digest
+    assert publication.fixture.timing_planner.state_digest() == timing_digest
+    assert not output_path.exists()
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    _cancel_unmaterialized_publication(publication)
+    publication.ecar.close()
+    publication.zeek.close()
+    emitter.close()
+
+
+def test_exact_deferred_bridge_rejects_marker_impostor_before_render(
+    tmp_path: Path,
+) -> None:
+    """A custom class cannot opt itself into the closed eCAR exact contract."""
+
+    class ImpostorEcarEmitter(EcarEmitter):
+        @property
+        def supports_exact_projection_publication(self) -> bool:
+            return True
+
+    output_path = tmp_path / "impostor"
+    impostor = ImpostorEcarEmitter(
+        load_format("ecar"),
+        output_path,
+        threaded=False,
+    )
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"ecar": impostor},
+        prepare_publication=False,
+    )
+
+    with pytest.raises(EventContractError, match="lacks exact projection publication"):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+
+    assert not output_path.exists()
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    _cancel_unmaterialized_publication(publication)
+    publication.ecar.close()
+    publication.zeek.close()
+    impostor.close()
+
+
+def test_exact_deferred_bridge_rejects_different_lifecycle_authority_before_state(
+    tmp_path: Path,
+) -> None:
+    """A valid batch cannot be committed through another lifecycle authority."""
+
+    publication = _foundation_publication_fixture(DeferredSessionKind.RDP, tmp_path)
+    fixture = publication.fixture
+    other_authority = _bound_authority(fixture)
+    state_version = fixture.state.materialization_version
+    state_digest = fixture.state.materialization_digest()
+
+    with pytest.raises(StateError, match="different lifecycle authority"):
+        other_authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            fixture.coordinator,
+            fixture.owner_rng,
+            dispatcher=publication.dispatcher,
+            publication_batch=publication.batch,
+        )
+
+    assert fixture.state.materialization_version == state_version
+    assert fixture.state.materialization_digest() == state_digest
+    assert not fixture.source_timing_preparation.committed
+    _cancel_unmaterialized_publication(publication)
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    publication.ecar.close()
+    publication.zeek.close()
+
+
+def test_exact_deferred_bridge_rejects_premature_precommit_claim_neutrally(
+    tmp_path: Path,
+) -> None:
+    """Only lifecycle may claim a precommit after binding its exact result shell."""
+
+    publication = _foundation_publication_fixture(DeferredSessionKind.SSH, tmp_path)
+    dispatcher = publication.dispatcher
+    precommit = dispatcher.prepare_deferred_session_publication_precommit(
+        publication.batch,
+        composition=publication.composition,
+        coordinator=publication.fixture.coordinator,
+    )
+    before_deferred = dispatcher.deferred_session_publication_census()
+    before_recovery = dispatcher.exact_projection_recovery_census()
+
+    assert not dispatcher.claim_deferred_session_publication_precommit(precommit)
+
+    assert dispatcher.deferred_session_publication_census() == before_deferred
+    assert dispatcher.exact_projection_recovery_census() == before_recovery
+    _cancel_unmaterialized_publication(publication)
+    _assert_deferred_dispatcher_reservations_released(dispatcher)
+    publication.ecar.close()
+    publication.zeek.close()
+
+
+@pytest.mark.parametrize("malformation", ("copy", "deepcopy", "foreign", "tampered"))
+def test_exact_deferred_bridge_rejects_unauthentic_materialization_shell(
+    malformation: str,
+    tmp_path: Path,
+) -> None:
+    """Copied, foreign, or changed lifecycle result identities cannot reach State."""
+
+    publication = _foundation_publication_fixture(DeferredSessionKind.RDP, tmp_path)
+    fixture = publication.fixture
+    dispatcher = publication.dispatcher
+    precommit = dispatcher.prepare_deferred_session_publication_precommit(
+        publication.batch,
+        composition=publication.composition,
+        coordinator=fixture.coordinator,
+    )
+    shells = publication.authority._prepare_deferred_session_materialization_shells(
+        fixture.prepared_root,
+        fixture.source_timing_preparation,
+        (),
+    )
+    if malformation == "copy":
+        shell = copy(shells.network_receipt)
+    elif malformation == "deepcopy":
+        shell = deepcopy(shells.network_receipt)
+    elif malformation == "foreign":
+        shell = (
+            _bound_authority(fixture)
+            ._prepare_deferred_session_materialization_shells(
+                fixture.prepared_root,
+                fixture.source_timing_preparation,
+                (),
+            )
+            .network_receipt
+        )
+    else:
+        shell = shells.network_receipt
+        object.__setattr__(shell, "_transaction_id", "tampered-transport")
+    state_version = fixture.state.materialization_version
+    before_deferred = dispatcher.deferred_session_publication_census()
+
+    with pytest.raises(EventContractError, match="lifecycle authentication"):
+        dispatcher.bind_deferred_session_materialization_receipt_shell(
+            precommit,
+            shell,
+        )
+
+    assert not dispatcher.claim_deferred_session_publication_precommit(precommit)
+    assert fixture.state.materialization_version == state_version
+    assert dispatcher.deferred_session_publication_census() == before_deferred
+    _cancel_unmaterialized_publication(publication)
+    _assert_deferred_dispatcher_reservations_released(dispatcher)
+    publication.ecar.close()
+    publication.zeek.close()
+
+
+@pytest.mark.parametrize("malformation", ("session_id", "swapped_target"))
+def test_exact_deferred_bridge_rejects_malformed_session_binding_before_state(
+    malformation: str,
+    tmp_path: Path,
+) -> None:
+    """State identity alone cannot authorize a different session or target host."""
+
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.RDP,
+        tmp_path,
+        session_id_delta=1 if malformation == "session_id" else 0,
+        swap_dependent_target=malformation == "swapped_target",
+        prepare_publication=False,
+    )
+    state_version = publication.fixture.state.materialization_version
+    state_digest = publication.fixture.state.materialization_digest()
+
+    with pytest.raises(
+        EventContractError,
+        match=(
+            "authentication dependent" if malformation == "session_id" else "exact State target"
+        ),
+    ):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+
+    assert publication.fixture.state.materialization_version == state_version
+    assert publication.fixture.state.materialization_digest() == state_digest
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    _cancel_unmaterialized_publication(publication)
+    publication.ecar.close()
+    publication.zeek.close()
+
+
+@pytest.mark.parametrize("kind", (DeferredSessionKind.SSH, DeferredSessionKind.RDP))
+def test_exact_deferred_bridge_accepts_exact_root_owned_process_dependent(
+    kind: DeferredSessionKind,
+    tmp_path: Path,
+) -> None:
+    """SSH/RDP may publish an exact State process on the canonical target host."""
+
+    publication = _foundation_publication_fixture(
+        kind,
+        tmp_path,
+        include_process_dependent=True,
+    )
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert len(committed.publication.projections) == 3
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    objects = [row.get("object") for row in ecar_rows if row.get("hostname") == "DB-01"]
+    assert "FLOW" in objects
+    assert "PROCESS" in objects
+    assert "USER_SESSION" in objects
+    assert max(index for index, value in enumerate(objects) if value == "FLOW") < min(
+        index for index, value in enumerate(objects) if value in {"PROCESS", "USER_SESSION"}
+    )
+    assert len(zeek_rows) == 1
+
+
+def test_exact_deferred_bridge_rejects_reversed_process_host_before_state(
+    tmp_path: Path,
+) -> None:
+    """A root process cannot be rendered on the transport's opposite endpoint."""
+
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        include_process_dependent=True,
+        reverse_process_host=True,
+        prepare_publication=False,
+    )
+    fixture = publication.fixture
+    state_version = fixture.state.materialization_version
+    state_digest = fixture.state.materialization_digest()
+
+    with pytest.raises(EventContractError, match="exact State target"):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            fixture.coordinator,
+        )
+
+    assert fixture.state.materialization_version == state_version
+    assert fixture.state.materialization_digest() == state_digest
+    _cancel_unmaterialized_publication(publication)
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    publication.ecar.close()
+    publication.zeek.close()
+
+
+@pytest.mark.parametrize("kind", (DeferredSessionKind.SSH, DeferredSessionKind.RDP))
+@pytest.mark.parametrize(
+    "spoof_transport_source_hostname",
+    (False, True),
+    ids=("canonical-transport-hosts", "spoofed-transport-source-host"),
+)
+def test_exact_deferred_bridge_rejects_process_hostname_with_opposite_endpoint_ip(
+    kind: DeferredSessionKind,
+    spoof_transport_source_hostname: bool,
+    tmp_path: Path,
+) -> None:
+    """A State hostname cannot be paired with the root's other endpoint address."""
+
+    publication = _foundation_publication_fixture(
+        kind,
+        tmp_path,
+        include_process_dependent=True,
+        process_opposite_ip=True,
+        spoof_transport_source_hostname=spoof_transport_source_hostname,
+        prepare_publication=False,
+    )
+    fixture = publication.fixture
+    state_version = fixture.state.materialization_version
+    state_digest = fixture.state.materialization_digest()
+
+    with pytest.raises(EventContractError, match="exact State target"):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            fixture.coordinator,
+        )
+
+    assert fixture.state.materialization_version == state_version
+    assert fixture.state.materialization_digest() == state_digest
+    _cancel_unmaterialized_publication(publication)
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    publication.ecar.close()
+    publication.zeek.close()
+
+
+@pytest.mark.parametrize("kind", (DeferredSessionKind.SSH, DeferredSessionKind.RDP))
+def test_exact_deferred_bridge_commits_and_closes_transport_before_session(
+    kind: DeferredSessionKind,
+    tmp_path: Path,
+) -> None:
+    """Concrete final eCAR rows retain FLOW-before-USER_SESSION ordering."""
+
+    publication = _foundation_publication_fixture(kind, tmp_path)
+    fixture = publication.fixture
+    dispatcher = publication.dispatcher
+    assert dispatcher.authenticates_prepared_deferred_session_publication_batch(publication.batch)
+    assert not publication.zeek_path.exists()
+    assert not tuple(publication.ecar_root.rglob("ecar.json"))
+    with pytest.raises(StateError, match="claimed|batch"):
+        dispatcher.publish_prepared(publication.composition.transport_dispatch)
+
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        fixture.coordinator,
+        fixture.owner_rng,
+        dispatcher=dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    assert dispatcher.authenticates_deferred_session_publication_receipt(
+        committed.publication.receipt
+    )
+    assert fixture.state.get_session(fixture.session_plan.identity.logon_id) is not None
+    assert not dispatcher.authenticates_prepared_deferred_session_publication_batch(
+        publication.batch
+    )
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    target_rows = [row for row in ecar_rows if row.get("hostname") == "DB-01"]
+    flow_indexes = [index for index, row in enumerate(target_rows) if row.get("object") == "FLOW"]
+    session_indexes = [
+        index for index, row in enumerate(target_rows) if row.get("object") == "USER_SESSION"
+    ]
+    assert flow_indexes and session_indexes
+    assert max(flow_indexes) < min(session_indexes)
+    assert len(zeek_rows) == 1
+
+
+@pytest.mark.parametrize(
+    "receipt_type",
+    (LifecycleConnectionCompositeReceipt, LifecyclePreparedNetworkReceipt),
+    ids=("connection", "prepared-network"),
+)
+@pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))
+def test_exact_deferred_bridge_recovers_lifecycle_receipt_issuance(
+    receipt_type: type[LifecycleConnectionCompositeReceipt] | type[LifecyclePreparedNetworkReceipt],
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both outer lifecycle proofs survive constructor failure and lost return."""
+
+    publication = _foundation_publication_fixture(DeferredSessionKind.RDP, tmp_path)
+    original = receipt_type._issue
+    attempts = 0
+
+    def fail_receipt_issue(cls: object, **kwargs: object) -> object:
+        nonlocal attempts
+        attempts += 1
+        if failure_mode == "lost-return":
+            original(**kwargs)
+        raise OSError(f"injected {failure_mode} receipt issuance")
+
+    monkeypatch.setattr(receipt_type, "_issue", classmethod(fail_receipt_issue))
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert attempts == 1
+    assert publication.authority.authenticates_prepared_network_receipt(
+        publication.fixture.prepared_root,
+        committed.materialization.receipt,
+    )
+    assert publication.dispatcher.authenticates_deferred_session_publication_receipt(
+        committed.publication.receipt
+    )
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    assert len(ecar_rows) == 3
+    assert len(zeek_rows) == 1
+
+
+@pytest.mark.parametrize(
+    ("owner_name", "owner_type", "method_name"),
+    (
+        (
+            "lifecycle",
+            PreparedLifecycleClosedTransportPublication,
+            "commit_no_fail",
+        ),
+        (
+            "state",
+            StateManager,
+            "_commit_claimed_connection_composite_materialization",
+        ),
+        ("application", SshChannelPreparedCommit, "commit_no_fail"),
+        ("runtime", NetworkTransactionPreparedCommit, "commit_no_fail"),
+        ("timing", SourceTimingPreparation, "commit_no_fail"),
+    ),
+)
+@pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))
+def test_exact_deferred_bridge_recovers_each_inner_canonical_owner(
+    owner_name: str,
+    owner_type: type[object],
+    method_name: str,
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every claimed canonical owner retries or adopts before claims unwind."""
+
+    publication = _foundation_publication_fixture(DeferredSessionKind.SSH, tmp_path)
+    original = getattr(owner_type, method_name)
+    attempts = 0
+
+    def inject_commit(*args: object) -> object:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            if failure_mode == "lost-return":
+                original(*args)
+            raise OSError(f"injected {owner_name} {failure_mode}")
+        return original(*args)
+
+    monkeypatch.setattr(owner_type, method_name, inject_commit)
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert attempts == (2 if failure_mode == "fail-before" else 1)
+    assert publication.fixture.source_timing_preparation.committed
+    assert (
+        publication.fixture.state.get_session(publication.fixture.session_plan.identity.logon_id)
+        is not None
+    )
+    assert publication.dispatcher.exact_projection_recovery_census().unresolved_recoveries == 0
+    assert publication.authority.authenticates_prepared_network_receipt(
+        publication.fixture.prepared_root,
+        committed.materialization.receipt,
+    )
+    assert publication.dispatcher.authenticates_deferred_session_publication_receipt(
+        committed.publication.receipt
+    )
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    assert len(ecar_rows) == 3
+    assert len(zeek_rows) == 1
+
+
+def test_exact_deferred_bridge_precommit_rejection_cancels_every_reservation(
+    tmp_path: Path,
+) -> None:
+    """A final owner rejection leaves no canonical or exact-source residue."""
+
+    publication = _foundation_publication_fixture(DeferredSessionKind.SSH, tmp_path)
+    fixture = publication.fixture
+    dispatcher = publication.dispatcher
+
+    def reject() -> None:
+        raise StateError("injected deferred publication rejection")
+
+    publication.authority._materialization_precommit_hook = reject
+    with pytest.raises(StateError, match="injected deferred publication rejection"):
+        publication.authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            fixture.coordinator,
+            fixture.owner_rng,
+            dispatcher=dispatcher,
+            publication_batch=publication.batch,
+        )
+
+    assert dispatcher.cancel_prepared_deferred_session_publication_batch(publication.batch)
+    assert fixture.state.get_session(fixture.session_plan.identity.logon_id) is None
+    assert fixture.lifecycle_registry.stats().live_transports == 0
+    assert dispatcher.deferred_session_publication_census().prepared_batches == 0
+    assert dispatcher.deferred_session_publication_census().retained_members == 0
+    assert dispatcher.deferred_session_publication_census().retained_bytes == 0
+    assert dispatcher.exact_projection_recovery_census().authority.active_batches == 0
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    assert ecar_rows == []
+    assert zeek_rows == []
+
+
+def test_exact_deferred_bridge_reauthenticates_after_hook_before_state_commit(
+    tmp_path: Path,
+) -> None:
+    """A hook-time member mutation loses at the final reversible owner fence."""
+
+    publication = _foundation_publication_fixture(DeferredSessionKind.RDP, tmp_path)
+    fixture = publication.fixture
+    dispatcher = publication.dispatcher
+    state_version = fixture.state.materialization_version
+    state_digest = fixture.state.materialization_digest()
+    timing_digest = fixture.timing_planner.state_digest()
+    runtime_digest = fixture.runtime.state_digest()
+
+    def tamper_claimed_member() -> None:
+        fixture.dependent_dispatches[0]._deferred_session_publication_batch_id = -1
+
+    publication.authority._materialization_precommit_hook = tamper_claimed_member
+    with pytest.raises(StateError, match="canonical precommit fence"):
+        publication.authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            fixture.coordinator,
+            fixture.owner_rng,
+            dispatcher=dispatcher,
+            publication_batch=publication.batch,
+        )
+
+    assert fixture.state.materialization_version == state_version
+    assert fixture.state.materialization_digest() == state_digest
+    assert fixture.timing_planner.state_digest() == timing_digest
+    assert fixture.runtime.state_digest() == runtime_digest
+    assert not fixture.source_timing_preparation.committed
+    with pytest.raises(EventContractError, match="reservations were cancelled"):
+        dispatcher.cancel_prepared_deferred_session_publication_batch(publication.batch)
+    assert fixture.dependent_dispatches[0]._deferred_session_publication_batch_id is None
+    _assert_deferred_dispatcher_reservations_released(dispatcher)
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    assert ecar_rows == []
+    assert zeek_rows == []
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    ("missing-claim", "other-claim", "valid-seal", "fresh-lock", "aliased-lock"),
+)
+def test_exact_deferred_bridge_rejects_valid_shaped_hook_member_tamper(
+    malformation: str,
+    tmp_path: Path,
+) -> None:
+    """The last claim verifies exact member ownership, not merely field shape."""
+
+    publication = _foundation_publication_fixture(DeferredSessionKind.RDP, tmp_path)
+    fixture = publication.fixture
+    dispatcher = publication.dispatcher
+    state_version = fixture.state.materialization_version
+    state_digest = fixture.state.materialization_digest()
+    timing_digest = fixture.timing_planner.state_digest()
+    runtime_digest = fixture.runtime.state_digest()
+
+    def tamper_claimed_member() -> None:
+        prepared = fixture.dependent_dispatches[0]
+        if malformation == "missing-claim":
+            prepared._deferred_session_publication_batch_id = None
+        elif malformation == "other-claim":
+            prepared._deferred_session_publication_batch_id = 99_999
+        elif malformation == "valid-seal":
+            prepared._integrity_token = "a" * 64
+        elif malformation == "fresh-lock":
+            prepared._lock = Lock()
+        else:
+            prepared._lock = fixture.transport_dispatch._lock
+
+    publication.authority._materialization_precommit_hook = tamper_claimed_member
+    with pytest.raises(StateError, match="canonical precommit fence"):
+        publication.authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            fixture.coordinator,
+            fixture.owner_rng,
+            dispatcher=dispatcher,
+            publication_batch=publication.batch,
+        )
+
+    assert fixture.state.materialization_version == state_version
+    assert fixture.state.materialization_digest() == state_digest
+    assert fixture.timing_planner.state_digest() == timing_digest
+    assert fixture.runtime.state_digest() == runtime_digest
+    assert not fixture.source_timing_preparation.committed
+    with pytest.raises(EventContractError, match="reservations were cancelled"):
+        dispatcher.cancel_prepared_deferred_session_publication_batch(publication.batch)
+    assert fixture.dependent_dispatches[0]._deferred_session_publication_batch_id is None
+    _assert_deferred_dispatcher_reservations_released(dispatcher)
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    assert ecar_rows == []
+    assert zeek_rows == []
+
+
+def test_exact_deferred_bridge_exposes_materialization_for_preinstall_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A receipt-construction failure leaves the committed root exactly retryable."""
+
+    publication = _foundation_publication_fixture(DeferredSessionKind.SSH, tmp_path)
+    dispatcher = publication.dispatcher
+    original = dispatcher._deferred_session_publication_receipt_integrity
+    attempts = 0
+
+    def fail_once(receipt: object) -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("injected deferred receipt preinstall failure")
+        return original(receipt)
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_deferred_session_publication_receipt_integrity",
+        fail_once,
+    )
+    with pytest.raises(OSError, match="preinstall failure") as raised:
+        publication.authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            publication.fixture.coordinator,
+            publication.fixture.owner_rng,
+            dispatcher=dispatcher,
+            publication_batch=publication.batch,
+        )
+
+    materialization = raised.value.deferred_session_materialization
+    assert (
+        publication.fixture.state.get_session(publication.fixture.session_plan.identity.logon_id)
+        is not None
+    )
+    assert dispatcher.exact_projection_recovery_census().unresolved_recoveries == 1
+    result = dispatcher.publish_prepared_deferred_session_publication_batch(
+        publication.batch,
+        materialization_receipt=materialization.receipt,
+    )
+    assert all(outcome.status == "succeeded" for outcome in result.projections)
+    assert dispatcher.authenticates_deferred_session_publication_receipt(result.receipt)
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    assert len(ecar_rows) == 3
+    assert len(zeek_rows) == 1
+
+
+def test_exact_deferred_bridge_adopts_dispatcher_ledger_lost_return(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A committed dispatcher-ledger tail is adopted without replaying its deltas."""
+
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        with_intent=True,
+    )
+    dispatcher = publication.dispatcher
+    original = dispatcher._commit_deferred_session_dispatcher_ledgers_no_fail
+    attempts = 0
+
+    def lose_ledger_return(record: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        original(record)
+        if attempts == 1:
+            raise OSError("injected dispatcher-ledger lost return")
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_commit_deferred_session_dispatcher_ledgers_no_fail",
+        lose_ledger_return,
+    )
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert attempts == 1
+    assert dispatcher.authenticates_deferred_session_publication_receipt(
+        committed.publication.receipt
+    )
+    assert dispatcher.exact_projection_recovery_census().unresolved_recoveries == 0
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    assert len(ecar_rows) == 3
+    assert len(zeek_rows) == 1
+
+
+def test_exact_deferred_bridge_engine_drain_resumes_owner_tail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An owner-tail failure remains dispatcher-retained and engine-drainable."""
+
+    publication = _foundation_publication_fixture(DeferredSessionKind.RDP, tmp_path)
+    dispatcher = publication.dispatcher
+    original = dispatcher._complete_deferred_session_owner_tail
+    attempts = 0
+
+    def fail_owner_tail_once(record: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("injected deferred owner-tail failure")
+        original(record)
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_complete_deferred_session_owner_tail",
+        fail_owner_tail_once,
+    )
+    with pytest.raises(OSError, match="owner-tail failure") as raised:
+        publication.authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            publication.fixture.coordinator,
+            publication.fixture.owner_rng,
+            dispatcher=dispatcher,
+            publication_batch=publication.batch,
+        )
+
+    receipt = raised.value.deferred_session_publication_receipt
+    assert not dispatcher.authenticates_deferred_session_publication_receipt(receipt)
+    assert dispatcher.exact_projection_recovery_census().unresolved_recoveries == 1
+    results = dispatcher.drain_exact_projection_recoveries()
+    assert len(results) == 1
+    assert dispatcher.authenticates_deferred_session_publication_receipt(receipt)
+    assert all(outcome.status == "succeeded" for outcome in results[0].projections)
+    assert attempts == 2
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    assert len(ecar_rows) == 3
+    assert len(zeek_rows) == 1
+
+
+def test_exact_deferred_bridge_rejects_copied_foreign_and_tampered_batches(
+    tmp_path: Path,
+) -> None:
+    """Only the retained carrier identity may authenticate or release its claims."""
+
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path / "owner",
+    )
+    foreign = _foundation_publication_fixture(
+        DeferredSessionKind.RDP,
+        tmp_path / "foreign",
+    )
+    for candidate in (copy(publication.batch), deepcopy(publication.batch)):
+        assert not publication.dispatcher.authenticates_prepared_deferred_session_publication_batch(
+            candidate
+        )
+        assert not publication.dispatcher.cancel_prepared_deferred_session_publication_batch(
+            candidate
+        )
+    assert not publication.dispatcher.authenticates_prepared_deferred_session_publication_batch(
+        foreign.batch
+    )
+    with pytest.raises(EventContractError):
+        publication.dispatcher.cancel_prepared_deferred_session_publication_batch(foreign.batch)
+
+    publication.batch._dispatcher_id = "tampered-dispatcher"
+    assert not publication.dispatcher.authenticates_prepared_deferred_session_publication_batch(
+        publication.batch
+    )
+    with pytest.raises(EventContractError, match="reservations were cancelled"):
+        publication.dispatcher.cancel_prepared_deferred_session_publication_batch(publication.batch)
+    _cancel_unmaterialized_publication(publication)
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    _cancel_unmaterialized_publication(foreign)
+    _assert_deferred_dispatcher_reservations_released(foreign.dispatcher)
+    publication.ecar.close()
+    publication.zeek.close()
+    foreign.ecar.close()
+    foreign.zeek.close()
+
+
+def test_exact_deferred_bridge_rejects_copied_foreign_and_tampered_receipts(
+    tmp_path: Path,
+) -> None:
+    """Terminal receipt authentication remains identity-, authority-, and HMAC-bound."""
+
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.RDP,
+        tmp_path / "owner",
+    )
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+    foreign = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path / "foreign",
+    )
+    foreign_committed = foreign.authority.materialize_prepared_deferred_session_publication(
+        foreign.composition,
+        foreign.fixture.coordinator,
+        foreign.fixture.owner_rng,
+        dispatcher=foreign.dispatcher,
+        publication_batch=foreign.batch,
+    )
+    receipt = committed.publication.receipt
+    for candidate in (copy(receipt), deepcopy(receipt), foreign_committed.publication.receipt):
+        assert not publication.dispatcher.authenticates_deferred_session_publication_receipt(
+            candidate
+        )
+        with pytest.raises(EventContractError, match="copied|foreign|stale|released"):
+            publication.dispatcher.resume_deferred_session_publication(candidate)
+
+    object.__setattr__(receipt, "publication_token", "0" * 64)
+    assert not publication.dispatcher.authenticates_deferred_session_publication_receipt(receipt)
+    with pytest.raises(EventContractError, match="stale|released"):
+        publication.dispatcher.resume_deferred_session_publication(receipt)
+    _close_and_read_publication(publication)
+    _close_and_read_publication(foreign)
+
+
+def test_exact_deferred_bridge_pending_receipt_cannot_forge_terminal_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Changing the public flag cannot authenticate a still-pending owner tail."""
+
+    publication = _foundation_publication_fixture(DeferredSessionKind.SSH, tmp_path)
+    dispatcher = publication.dispatcher
+    original = dispatcher._complete_deferred_session_owner_tail
+    attempts = 0
+
+    def fail_owner_tail_once(record: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("injected pending owner receipt")
+        original(record)
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_complete_deferred_session_owner_tail",
+        fail_owner_tail_once,
+    )
+    with pytest.raises(OSError, match="pending owner receipt") as raised:
+        publication.authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            publication.fixture.coordinator,
+            publication.fixture.owner_rng,
+            dispatcher=dispatcher,
+            publication_batch=publication.batch,
+        )
+    receipt = raised.value.deferred_session_publication_receipt
+    object.__setattr__(receipt, "_published", True)
+
+    assert not dispatcher.authenticates_deferred_session_publication_receipt(receipt)
+    results = dispatcher.drain_exact_projection_recoveries()
+    assert len(results) == 1
+    assert dispatcher.authenticates_deferred_session_publication_receipt(receipt)
+    _close_and_read_publication(publication)
+
+
+def test_exact_deferred_bridge_capacity_rejects_before_claiming_members(
+    tmp_path: Path,
+) -> None:
+    """The bounded dispatcher rejects a two-row carrier with one member slot."""
+
+    with pytest.raises(StateError, match="member capacity"):
+        _foundation_publication_fixture(
+            DeferredSessionKind.RDP,
+            tmp_path,
+            member_capacity=1,
+        )
+
+
+def test_exact_deferred_bridge_preparation_capacity_rejects_neutrally(
+    tmp_path: Path,
+) -> None:
+    """A full preparation registry does not claim any second-root dispatch."""
+
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.RDP,
+        tmp_path,
+        prepare_publication=False,
+    )
+    publication.dispatcher._action_cohort_preparation_capacity = 0
+    before = publication.dispatcher.deferred_session_publication_census()
+
+    with pytest.raises(StateError, match="preparation capacity"):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+
+    assert publication.dispatcher.deferred_session_publication_census() == before
+    assert all(
+        prepared._deferred_session_publication_batch_id is None
+        for prepared in (
+            publication.fixture.transport_dispatch,
+            *publication.fixture.dependent_dispatches,
+        )
+    )
+    _cancel_unmaterialized_publication(publication)
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    publication.ecar.close()
+    publication.zeek.close()
+
+
+def test_exact_deferred_bridge_retained_byte_capacity_rejects_neutrally(
+    tmp_path: Path,
+) -> None:
+    """A too-small byte budget rejects before installing member or sink claims."""
+
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        byte_capacity=1,
+        prepare_publication=False,
+    )
+    with pytest.raises(StateError, match="retained-byte capacity"):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+
+    assert all(
+        prepared._deferred_session_publication_batch_id is None
+        for prepared in (
+            publication.fixture.transport_dispatch,
+            *publication.fixture.dependent_dispatches,
+        )
+    )
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    _cancel_unmaterialized_publication(publication)
+    publication.ecar.close()
+    publication.zeek.close()
+
+
+@pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))
+def test_exact_deferred_bridge_reconciles_exact_preflight_cancel_failure(
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed exact-batch cleanup remains either terminal or explicitly retryable."""
+
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.RDP,
+        tmp_path,
+        prepare_publication=False,
+    )
+    dispatcher = publication.dispatcher
+    original_integrity = dispatcher._deferred_session_publication_batch_integrity
+    integrity_failed = False
+
+    def fail_after_exact(batch: object, record: object) -> str:
+        nonlocal integrity_failed
+        if not integrity_failed and record.exact_publication_batch is not None:
+            integrity_failed = True
+            raise StateError("injected post-exact preparation failure")
+        return original_integrity(batch, record)
+
+    original_cancel = ExactPublicationBatch.cancel
+
+    def fail_cancel(exact_batch: ExactPublicationBatch) -> None:
+        if failure_mode == "lost-return":
+            original_cancel(exact_batch)
+        raise OSError(f"injected exact cancel {failure_mode}")
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_deferred_session_publication_batch_integrity",
+        fail_after_exact,
+    )
+    monkeypatch.setattr(ExactPublicationBatch, "cancel", fail_cancel)
+    with pytest.raises(StateError, match="post-exact preparation failure") as raised:
+        dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+
+    monkeypatch.setattr(ExactPublicationBatch, "cancel", original_cancel)
+    if failure_mode == "fail-before":
+        retained = raised.value.deferred_session_publication_batch
+        assert dispatcher.cancel_prepared_deferred_session_publication_batch(retained)
+    _assert_deferred_dispatcher_reservations_released(dispatcher)
+    _cancel_unmaterialized_publication(publication)
+    publication.ecar.close()
+    publication.zeek.close()
+
+
+@pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))
+def test_exact_deferred_bridge_reconciles_intent_preflight_cancel_failure(
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An authored-intent cleanup never loses its retained cancellation owner."""
+
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        with_intent=True,
+        prepare_publication=False,
+    )
+    dispatcher = publication.dispatcher
+    original_integrity = dispatcher._deferred_session_publication_batch_integrity
+    integrity_failed = False
+
+    def fail_after_intent(batch: object, record: object) -> str:
+        nonlocal integrity_failed
+        if not integrity_failed and record.intent_token is not None:
+            integrity_failed = True
+            raise StateError("injected post-intent preparation failure")
+        return original_integrity(batch, record)
+
+    original_cancel = IntentExecutionLedger.cancel_batch
+
+    def fail_cancel(
+        ledger: IntentExecutionLedger,
+        token: object,
+    ) -> None:
+        if failure_mode == "lost-return":
+            original_cancel(ledger, token)
+        raise OSError(f"injected intent cancel {failure_mode}")
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_deferred_session_publication_batch_integrity",
+        fail_after_intent,
+    )
+    monkeypatch.setattr(IntentExecutionLedger, "cancel_batch", fail_cancel)
+    with pytest.raises(StateError, match="post-intent preparation failure") as raised:
+        dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+
+    monkeypatch.setattr(IntentExecutionLedger, "cancel_batch", original_cancel)
+    if failure_mode == "fail-before":
+        retained = raised.value.deferred_session_publication_batch
+        assert dispatcher.cancel_prepared_deferred_session_publication_batch(retained)
+    ledger = dispatcher.intent_execution_ledger
+    assert ledger is not None
+    assert ledger.batch_preparation_census().reservations == 0
+    _assert_deferred_dispatcher_reservations_released(dispatcher)
+    _cancel_unmaterialized_publication(publication)
+    publication.ecar.close()
+    publication.zeek.close()
+
+
+@pytest.mark.parametrize("capacity_kind", ("recovery", "receipt"))
+def test_exact_deferred_bridge_precommit_capacity_rejection_cleans_reservations(
+    capacity_kind: str,
+    tmp_path: Path,
+) -> None:
+    """Recovery and receipt saturation remain reversible before State mutation."""
+
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.RDP,
+        tmp_path,
+    )
+    if capacity_kind == "recovery":
+        publication.dispatcher._exact_projection_recovery_capacity = 0
+    else:
+        publication.dispatcher._action_cohort_receipt_capacity = 0
+    state_version = publication.fixture.state.materialization_version
+    state_digest = publication.fixture.state.materialization_digest()
+
+    with pytest.raises(EventContractError, match="precommit source batch"):
+        publication.dispatcher.prepare_deferred_session_publication_precommit(
+            publication.batch,
+            composition=publication.composition,
+            coordinator=publication.fixture.coordinator,
+        )
+
+    assert publication.fixture.state.materialization_version == state_version
+    assert publication.fixture.state.materialization_digest() == state_digest
+    assert publication.dispatcher.cancel_prepared_deferred_session_publication_batch(
+        publication.batch
+    )
+    _cancel_unmaterialized_publication(publication)
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    publication.ecar.close()
+    publication.zeek.close()
+
+
+def test_exact_deferred_bridge_evicts_only_terminal_receipts_at_capacity(
+    tmp_path: Path,
+) -> None:
+    """A capacity-one dispatcher reuses only an acknowledged terminal slot."""
+
+    first = _foundation_publication_fixture(
+        DeferredSessionKind.RDP,
+        tmp_path,
+        receipt_capacity=1,
+    )
+    first_result = first.authority.materialize_prepared_deferred_session_publication(
+        first.composition,
+        first.fixture.coordinator,
+        first.fixture.owner_rng,
+        dispatcher=first.dispatcher,
+        publication_batch=first.batch,
+    )
+    assert first.dispatcher.authenticates_deferred_session_publication_receipt(
+        first_result.publication.receipt
+    )
+
+    second = _next_rdp_publication_fixture(first, ordinal=2)
+    second_result = second.authority.materialize_prepared_deferred_session_publication(
+        second.composition,
+        second.fixture.coordinator,
+        second.fixture.owner_rng,
+        dispatcher=second.dispatcher,
+        publication_batch=second.batch,
+    )
+
+    assert not first.dispatcher.authenticates_deferred_session_publication_receipt(
+        first_result.publication.receipt
+    )
+    with pytest.raises(EventContractError, match="recovery|receipt"):
+        first.dispatcher.resume_deferred_session_publication(first_result.publication.receipt)
+    assert second.dispatcher.authenticates_deferred_session_publication_receipt(
+        second_result.publication.receipt
+    )
+    census = second.dispatcher.deferred_session_publication_census()
+    assert census.committed_receipts == 1
+    assert census.pending_receipts == 0
+    assert census.receipt_reservations == 0
+    assert census.receipt_eviction_reservations == 0
+    ecar_rows, zeek_rows = _close_and_read_publication(second)
+    assert len(ecar_rows) == 6
+    assert len(zeek_rows) == 2
+
+
+def test_exact_deferred_bridge_adopts_owner_tail_lost_return_through_eviction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lost terminal return never reruns receipt installation or eviction."""
+
+    first = _foundation_publication_fixture(
+        DeferredSessionKind.RDP,
+        tmp_path,
+        receipt_capacity=1,
+    )
+    first_result = first.authority.materialize_prepared_deferred_session_publication(
+        first.composition,
+        first.fixture.coordinator,
+        first.fixture.owner_rng,
+        dispatcher=first.dispatcher,
+        publication_batch=first.batch,
+    )
+    second = _next_rdp_publication_fixture(first, ordinal=2)
+    dispatcher = second.dispatcher
+    original = dispatcher._complete_deferred_session_owner_tail
+    attempts = 0
+
+    def lose_owner_tail_return(record: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        original(record)
+        raise OSError("injected owner-tail lost return")
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_complete_deferred_session_owner_tail",
+        lose_owner_tail_return,
+    )
+    with pytest.raises(OSError, match="owner-tail lost return") as raised:
+        second.authority.materialize_prepared_deferred_session_publication(
+            second.composition,
+            second.fixture.coordinator,
+            second.fixture.owner_rng,
+            dispatcher=dispatcher,
+            publication_batch=second.batch,
+        )
+
+    receipt = raised.value.deferred_session_publication_receipt
+    assert attempts == 1
+    assert not dispatcher.authenticates_deferred_session_publication_receipt(
+        first_result.publication.receipt
+    )
+    assert dispatcher.authenticates_deferred_session_publication_receipt(receipt)
+    census = dispatcher.deferred_session_publication_census()
+    assert census.committed_receipts == 1
+    assert census.pending_receipts == 0
+    assert census.receipt_reservations == 0
+    assert census.receipt_eviction_reservations == 0
+    assert dispatcher.exact_projection_recovery_census().unresolved_recoveries == 1
+
+    results = dispatcher.drain_exact_projection_recoveries()
+    assert len(results) == 1
+    assert attempts == 1
+    assert all(outcome.status == "succeeded" for outcome in results[0].projections)
+    assert dispatcher.authenticates_deferred_session_publication_receipt(receipt)
+    ecar_rows, zeek_rows = _close_and_read_publication(second)
+    assert len(ecar_rows) == 6
+    assert len(zeek_rows) == 2
+
+
+def test_exact_deferred_bridge_recovers_transport_lost_return(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A durable Zeek transport row is never repeated after its return is lost."""
+
+    original = ExternalSortedLineWriter._commit_exact_row
+    attempts = 0
+
+    def lose_transport_return(
+        writer: ExternalSortedLineWriter,
+        key: object,
+        digest: str,
+        frozen: object,
+    ) -> None:
+        nonlocal attempts
+        original(writer, key, digest, frozen)
+        if writer.output_path.name == "zeek_conn.json":
+            attempts += 1
+        if writer.output_path.name == "zeek_conn.json" and attempts == 1:
+            raise OSError("injected transport exact-row lost return")
+
+    monkeypatch.setattr(
+        ExternalSortedLineWriter,
+        "_commit_exact_row",
+        lose_transport_return,
+    )
+    publication = _foundation_publication_fixture(DeferredSessionKind.SSH, tmp_path)
+    with pytest.raises(OSError, match="transport exact-row lost return"):
+        publication.authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            publication.fixture.coordinator,
+            publication.fixture.owner_rng,
+            dispatcher=publication.dispatcher,
+            publication_batch=publication.batch,
+        )
+
+    results = publication.dispatcher.drain_exact_projection_recoveries()
+    assert len(results) == 1
+    assert all(outcome.status == "succeeded" for outcome in results[0].projections)
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    assert len(ecar_rows) == 3
+    assert len(zeek_rows) == 1
+
+
+def test_exact_deferred_bridge_recovers_later_target_after_multi_emitter_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later eCAR lost return preserves prior Zeek and FLOW target progress."""
+
+    original = ExternalSortedLineWriter._commit_exact_row
+    dependent_attempts = 0
+
+    def lose_dependent_return(
+        writer: ExternalSortedLineWriter,
+        key: object,
+        digest: str,
+        frozen: object,
+    ) -> None:
+        nonlocal dependent_attempts
+        original(writer, key, digest, frozen)
+        parsed = json.loads(frozen) if type(frozen) is str else {}
+        if parsed.get("object") == "USER_SESSION":
+            dependent_attempts += 1
+            if dependent_attempts == 1:
+                raise OSError("injected dependent exact-row lost return")
+
+    monkeypatch.setattr(
+        ExternalSortedLineWriter,
+        "_commit_exact_row",
+        lose_dependent_return,
+    )
+    publication = _foundation_publication_fixture(DeferredSessionKind.RDP, tmp_path)
+    with pytest.raises(OSError, match="dependent exact-row lost return") as raised:
+        publication.authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            publication.fixture.coordinator,
+            publication.fixture.owner_rng,
+            dispatcher=publication.dispatcher,
+            publication_batch=publication.batch,
+        )
+
+    recovery_result = raised.value.deferred_session_publication_result
+    assert recovery_result.projections[0].status == "succeeded"
+    assert recovery_result.projections[1].status == "recoverable"
+    results = publication.dispatcher.drain_exact_projection_recoveries()
+    assert all(outcome.status == "succeeded" for outcome in results[0].projections)
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    assert len(ecar_rows) == 3
+    assert len(zeek_rows) == 1

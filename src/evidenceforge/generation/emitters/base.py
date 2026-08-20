@@ -730,6 +730,21 @@ class ExactPublicationBatch:
             return self._state
 
     @property
+    def commit_cursor(self) -> int:
+        """Return the exact count of durably acknowledged ordered rows."""
+
+        with self._condition:
+            return self._commit_cursor
+
+    @property
+    def prepared_row_count(self) -> int:
+        """Return the exact frozen row cardinality after successful preparation."""
+
+        with self._condition:
+            rows = self._prepared_rows
+            return len(rows) if rows is not None else 0
+
+    @property
     def released(self) -> bool:
         """Return whether every retained sink receipt and payload was released."""
 
@@ -798,6 +813,39 @@ def exact_publication_attempt_active() -> bool:
     """Return whether the current context is freezing one exact publication batch."""
 
     return _EXACT_PUBLICATION_ATTEMPT.get() is not None
+
+
+def exact_publication_staged_row_count() -> int:
+    """Return the current exact-preflight row count for target provenance checks."""
+
+    attempt = _EXACT_PUBLICATION_ATTEMPT.get()
+    if attempt is None:
+        raise ExactPublicationError(
+            "Exact staged-row count requires an active publication preflight"
+        )
+    return len(attempt.staged_rows)
+
+
+def exact_publication_staged_row_contents(
+    row_start: int,
+    row_end: int,
+) -> tuple[str, ...]:
+    """Return one bounded frozen-row slice during exact provenance preflight."""
+
+    attempt = _EXACT_PUBLICATION_ATTEMPT.get()
+    if attempt is None:
+        raise ExactPublicationError(
+            "Exact staged-row inspection requires an active publication preflight"
+        )
+    if (
+        type(row_start) is not int
+        or type(row_end) is not int
+        or row_start < 0
+        or row_end < row_start
+        or row_end > len(attempt.staged_rows)
+    ):
+        raise ExactPublicationError("Exact staged-row inspection range is invalid")
+    return tuple(row.frozen_content for row in attempt.staged_rows[row_start:row_end])
 
 
 def register_exact_publication_participant(participant: object) -> bool:
@@ -944,6 +992,17 @@ class LogEmitter(ABC):
     def configure_output_target(self, target: str | OutputTarget | None) -> None:
         """Configure the generated-output target for this emitter."""
         self.output_target = normalize_output_target(target)
+
+    @property
+    def supports_exact_projection_publication(self) -> bool:
+        """Return whether ``emit`` stages every visible row in an exact batch.
+
+        The default is deliberately closed.  Emitter families may opt in only
+        when their final writer owns exact reservation, lost-return recovery,
+        and release for every row produced by ``emit``.
+        """
+
+        return False
 
     @abstractmethod
     def emit_event(self, event_data: dict[str, Any]) -> None:

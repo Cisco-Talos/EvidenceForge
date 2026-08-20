@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import secrets
 from collections import Counter
@@ -171,6 +172,8 @@ _DEFAULT_ACTION_COHORT_PREPARATION_CAPACITY = 1_024
 _DEFAULT_ACTION_COHORT_MEMBER_CAPACITY = 65_536
 _DEFAULT_ACTION_COHORT_BYTE_CAPACITY = 64 * 1_024 * 1_024
 _DEFAULT_ACTION_COHORT_RECEIPT_CAPACITY = 4_096
+_MAX_DEFERRED_SESSION_PUBLICATION_MEMBERS = 256
+_MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS = 4_096
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +214,8 @@ class PreparedDispatchStateIntent(StrEnum):
     EXTERNAL_DEPENDENT = "external_dependent"
     EXTERNAL_NETWORK_DEPENDENT = "external_network_dependent"
     EXTERNAL_ACTION_COHORT = "external_action_cohort"
+    EXTERNAL_DEFERRED_TRANSPORT = "external_deferred_transport"
+    EXTERNAL_DEFERRED_DEPENDENT = "external_deferred_dependent"
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +248,7 @@ class PreparedDispatch:
         "_lifecycle_ticket",
         "_lock",
         "_network_dependent_batch_id",
+        "_deferred_session_publication_batch_id",
         "_occurrence",
         "_projection",
         "_source_timing_preparation",
@@ -271,6 +277,7 @@ class PreparedDispatch:
         self._action_cohort_batch_id: int | None = None
         self._authored_intent_id = authored_intent_id
         self._network_dependent_batch_id: int | None = None
+        self._deferred_session_publication_batch_id: int | None = None
         self._binary_identity_kind = binary_identity_kind
         self._artifact_publications = artifact_publications
         self._source_timing_preparation = source_timing_preparation
@@ -546,6 +553,7 @@ class ExactProjectionRecoveryCensus:
     """Constant-time bounded census of dispatcher-retained exact publication work."""
 
     unresolved_recoveries: int
+    reserved_recoveries: int
     active_recoveries: int
     recovery_capacity: int
     high_water_recoveries: int
@@ -824,13 +832,25 @@ class _ExactProjectionRecoveryRecord:
     """Strong receipt-keyed ownership of one prepared exact batch and its cursor."""
 
     kind: str
-    receipt: ActionCohortPublicationReceipt | StateNeutralProjectionPublicationReceipt
-    result: ActionCohortPublicationResult | StateNeutralProjectionPublicationResult
+    receipt: (
+        ActionCohortPublicationReceipt
+        | StateNeutralProjectionPublicationReceipt
+        | DeferredSessionPublicationReceipt
+    )
+    result: (
+        ActionCohortPublicationResult
+        | StateNeutralProjectionPublicationResult
+        | DeferredSessionPublicationResult
+    )
     batch: ExactPublicationBatch
     outcome: ActionCohortProjectionOutcome
     occurrence_ids: tuple[str, ...]
     member_integrity_digest: str
     identifiers: tuple[tuple[str, str], ...]
+    outcomes: tuple[ActionCohortProjectionOutcome, ...] = ()
+    member_identifiers: tuple[tuple[tuple[str, str], ...], ...] = ()
+    target_proofs: tuple[DeferredSessionExactTargetProof, ...] = ()
+    owner_record: object | None = None
     state: str = "reserved"
     active_thread_id: int | None = None
 
@@ -912,6 +932,122 @@ class PreparedNetworkDependentBatch:
         return len(self._dispatches)
 
 
+class PreparedDeferredSessionPublicationBatch:
+    """Opaque dispatcher reservation for one committed-root projection tail.
+
+    The carrier deliberately exposes only bounded cardinality.  The dispatcher
+    retains the authenticated composition, root, timing preparation, and exact
+    ordered dispatch objects needed by immediate SSH/RDP publication.  A future
+    protocol owner may reuse the inner exact-row machinery only through its own
+    exact authenticated adapter; this carrier never accepts a generic owner.
+    """
+
+    __slots__ = (
+        "_batch_id",
+        "_consumed",
+        "_dispatcher_id",
+        "_integrity_token",
+        "_occurrence_count",
+    )
+
+    def __init__(
+        self,
+        *,
+        dispatcher_id: str,
+        batch_id: int,
+        occurrence_count: int,
+    ) -> None:
+        self._dispatcher_id = dispatcher_id
+        self._batch_id = batch_id
+        self._occurrence_count = occurrence_count
+        self._integrity_token = ""
+        self._consumed = False
+
+    @property
+    def occurrence_count(self) -> int:
+        """Return the exact bounded prepared member count."""
+
+        return self._occurrence_count
+
+
+@dataclass(frozen=True, slots=True, eq=False, repr=False)
+class DeferredSessionPublicationPrecommit:
+    """Opaque dispatcher seal claimed by lifecycle at the last reversible fence."""
+
+    dispatcher_id: str
+    batch_id: int
+    composition_token: str
+    member_digest: str
+    target_proof_digest: str
+    _integrity: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class DeferredSessionPublicationCensus:
+    """Constant-time census of retained deferred-session publication work."""
+
+    prepared_batches: int
+    retained_members: int
+    retained_bytes: int
+    committed_receipts: int
+    pending_receipts: int
+    receipt_reservations: int
+    receipt_eviction_reservations: int
+    recovery_reservations: int
+    preparation_capacity: int
+    member_capacity: int
+    retained_byte_capacity: int
+    receipt_capacity: int
+
+
+@dataclass(frozen=True, slots=True)
+class DeferredSessionExactTargetProof:
+    """Frozen exact-row range for one ordered deferred member source target."""
+
+    occurrence_id: str
+    member_ordinal: int
+    target_ordinal: int
+    format_name: str
+    row_start: int
+    row_end: int
+    source_order_keys: tuple[int, ...] = ()
+
+    @property
+    def row_count(self) -> int:
+        """Return the positive exact-row cardinality staged by this target."""
+
+        return self.row_end - self.row_start
+
+
+@dataclass(frozen=True, slots=True, eq=False, repr=False)
+class DeferredSessionPublicationReceipt:
+    """Authenticated proof naming one exact postcanonical source publication."""
+
+    dispatcher_id: str
+    receipt_id: str
+    publication_token: str
+    composition_token: str
+    physical_transport_id: str
+    occurrence_ids: tuple[str, ...]
+    member_integrity_digest: str
+    target_proof_digest: str
+    materialization_receipt_token: str
+    intent_publication_token: str
+    _integrity: str = ""
+    _published: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DeferredSessionPublicationResult:
+    """Terminal exact source result for a committed deferred-session root."""
+
+    receipt: DeferredSessionPublicationReceipt
+    materialization_receipt: object
+    identifiers: tuple[tuple[tuple[str, str], ...], ...]
+    projections: tuple[ActionCohortProjectionOutcome, ...]
+    target_proofs: tuple[DeferredSessionExactTargetProof, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class _PreparedNetworkDependentBatchCapability:
     """Dispatcher-owned trusted preimage for one claimed network-dependent batch."""
@@ -928,6 +1064,62 @@ class _PreparedNetworkDependentBatchCapability:
     audit_claim_context: AbstractContextManager[PreparedExecutionEffectAuditCommit] | None = None
     audit_claimed: PreparedExecutionEffectAuditCommit | None = None
     precommit_authenticated: bool = False
+
+
+@dataclass(slots=True)
+class _PreparedDeferredSessionPublicationRecord:
+    """Trusted preimage and retry cursor for one ordered projection tail."""
+
+    batch_id: int
+    carrier: PreparedDeferredSessionPublicationBatch
+    composition: object
+    coordinator: object
+    composition_token: str
+    physical_transport_id: str
+    root: object
+    source_timing_preparation: SourceTimingPreparation
+    dispatches: tuple[PreparedDispatch, ...]
+    member_locks: tuple[object, ...]
+    member_integrity_tokens: tuple[str, ...]
+    occurrence_ids: tuple[str, ...]
+    member_binary_identity_kinds: tuple[str, ...]
+    retained_bytes: int
+    integrity_token: str
+    exact_publication_batch: ExactPublicationBatch | None = None
+    prepared_identifiers: tuple[tuple[tuple[str, str], ...], ...] = ()
+    prepared_target_proofs: tuple[DeferredSessionExactTargetProof, ...] = ()
+    member_digest: str = ""
+    target_proof_digest: str = ""
+    frozen_latest_network_observations_uid: str = ""
+    frozen_latest_network_observations: tuple[NetworkSensorObservation, ...] = ()
+    frozen_latest_network_plan: NetworkTransactionPlan | None = None
+    observation_deltas: tuple[_ActionCohortObservationDelta, ...] = ()
+    prepared_observation_updates: tuple[_ActionCohortPreparedObservationCluster, ...] | None = None
+    prepared_binary_counts: Counter[str] | None = None
+    prepared_latest_network_observations_uid: str = ""
+    prepared_latest_network_observations: tuple[NetworkSensorObservation, ...] = ()
+    prepared_latest_network_plan: NetworkTransactionPlan | None = None
+    intent_ledger: IntentExecutionLedger | None = None
+    intent_request: IntentExecutionBatchRequest | None = None
+    intent_token: IntentExecutionBatchToken | None = None
+    intent_claim_context: AbstractContextManager[PreparedIntentExecutionBatch] | None = None
+    intent_claimed: PreparedIntentExecutionBatch | None = None
+    expected_intent_receipt: IntentExecutionBatchReceipt | None = None
+    intent_claim_closed: bool = False
+    observation_committed: bool = False
+    dispatcher_ledgers_committed: bool = False
+    state: str = "prepared"
+    active_thread_id: int | None = None
+    materialization_receipt_shell: object | None = None
+    materialization_receipt_shell_digest: str = ""
+    materialization_receipt: object | None = None
+    publication_receipt: DeferredSessionPublicationReceipt | None = None
+    publication_result: DeferredSessionPublicationResult | None = None
+    exact_recovery: _ExactProjectionRecoveryRecord | None = None
+    receipt_eviction_id: int | None = None
+    recovery_capacity_reserved: bool = False
+    receipt_capacity_reserved: bool = False
+    precommit: DeferredSessionPublicationPrecommit | None = None
 
 
 def expand_formats(formats: list[str] | set[str]) -> set[str]:
@@ -1066,6 +1258,7 @@ class EventDispatcher:
         )
         self._exact_projection_recovery_capacity = action_cohort_preparation_capacity
         self._exact_projection_recoveries: dict[int, _ExactProjectionRecoveryRecord] = {}
+        self._exact_projection_recovery_reservations = 0
         self._exact_projection_active_recoveries = 0
         self._exact_projection_recovery_high_water = 0
         self._state_neutral_projection_receipts: dict[
@@ -1078,6 +1271,28 @@ class EventDispatcher:
             int,
             _PreparedNetworkDependentBatchCapability,
         ] = {}
+        self._deferred_session_publication_dispatcher_id = secrets.token_hex(16)
+        self._deferred_session_publication_lock = Lock()
+        self._next_deferred_session_publication_batch_id = 1
+        self._deferred_session_publication_batches: dict[
+            int,
+            _PreparedDeferredSessionPublicationRecord,
+        ] = {}
+        self._deferred_session_publication_locators: dict[int, int] = {}
+        self._deferred_session_publication_precommit_locators: dict[int, int] = {}
+        self._deferred_session_publication_retained_members = 0
+        self._deferred_session_publication_retained_bytes = 0
+        self._deferred_session_publication_receipts: dict[
+            int,
+            DeferredSessionPublicationReceipt,
+        ] = {}
+        self._deferred_session_publication_pending_receipts: dict[
+            int,
+            DeferredSessionPublicationReceipt,
+        ] = {}
+        self._deferred_session_publication_committed_receipts = 0
+        self._deferred_session_publication_receipt_reservations = 0
+        self._deferred_session_publication_receipt_eviction_reservations: set[int] = set()
         self.storyline_cluster_id: str | None = None
         self.authored_intent_id: str | None = None
         self.intent_execution_ledger = intent_execution_ledger
@@ -1190,6 +1405,11 @@ class EventDispatcher:
         ):
             raise ValueError("EventDispatcher lifecycle authority must share its registry")
         self._lifecycle_authority = authority
+
+    def authenticates_lifecycle_authority_owner(self, authority: object) -> bool:
+        """Return whether ``authority`` is this dispatcher's exact receipt verifier."""
+
+        return self._lifecycle_authority is authority
 
     def bind_execution_effect_audit(self, audit: ExecutionEffectAuditCounter) -> None:
         """Bind the generator-owned bounded publication/reconciliation denominator."""
@@ -2274,15 +2494,41 @@ class EventDispatcher:
                 raise EventContractError(
                     "Prepared network dependent version contradicts its network root"
                 )
-        elif state_intent is PreparedDispatchStateIntent.EXTERNAL_TRANSPORT:
+        elif state_intent in {
+            PreparedDispatchStateIntent.EXTERNAL_TRANSPORT,
+            PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT,
+        }:
             if source_timing_preparation is None:
                 raise EventContractError(
                     "Prepared external transport requires source timing authority"
                 )
-            version = self._validate_external_transport_binding(event, lifecycle_ticket)
+            version = self._validate_external_transport_binding(
+                event,
+                lifecycle_ticket,
+                allow_deferred_session=(
+                    state_intent is PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT
+                ),
+            )
             if expected_state_version is not None and expected_state_version != version:
                 raise EventContractError(
                     "Prepared dispatch version contradicts its external transport root"
+                )
+        elif state_intent is PreparedDispatchStateIntent.EXTERNAL_DEFERRED_DEPENDENT:
+            if source_timing_preparation is None:
+                raise EventContractError(
+                    "Prepared deferred-session dependent requires source timing authority"
+                )
+            event = self._rebind_external_deferred_dependent_identity(
+                event,
+                lifecycle_ticket,
+            )
+            version = self._validate_external_deferred_dependent_binding(
+                event,
+                lifecycle_ticket,
+            )
+            if expected_state_version is not None and expected_state_version != version:
+                raise EventContractError(
+                    "Prepared deferred-session dependent version contradicts its State member"
                 )
         elif state_intent is not PreparedDispatchStateIntent.APPLY:
             ticket_version = getattr(lifecycle_ticket, "expected_version", None)
@@ -2447,6 +2693,8 @@ class EventDispatcher:
     def _validate_external_transport_binding(
         event: CanonicalOccurrence,
         lifecycle_ticket: object,
+        *,
+        allow_deferred_session: bool = False,
     ) -> int:
         """Validate exact canonical event/root semantics without consuming the root."""
 
@@ -2478,13 +2726,19 @@ class EventDispatcher:
             raise EventContractError(
                 "Prepared external transport requires one canonical connection occurrence"
             )
-        if token.lifecycle_mode == "deferred_session":
+        if allow_deferred_session:
+            if token.lifecycle_mode != "deferred_session":
+                raise EventContractError(
+                    "Prepared deferred transport requires deferred-session lifecycle authority"
+                )
+        elif token.lifecycle_mode == "deferred_session":
             raise EventContractError("Deferred-session transport requires its session authority")
-        if token.lifecycle_mode not in {"network", "application_child"}:
+        elif token.lifecycle_mode not in {"network", "application_child"}:
             raise EventContractError("Prepared external transport lifecycle mode is unsupported")
         application_child = plan.mode is ConnectionMaterializationMode.APPLICATION_CHILD
         if plan.mode is ConnectionMaterializationMode.PHYSICAL:
-            if token.lifecycle_mode != "network" or event.network.application_layer_only:
+            expected_mode = "deferred_session" if allow_deferred_session else "network"
+            if token.lifecycle_mode != expected_mode or event.network.application_layer_only:
                 raise EventContractError(
                     "Physical external transport root disagrees with its occurrence"
                 )
@@ -2524,6 +2778,126 @@ class EventDispatcher:
         ):
             raise EventContractError(
                 "Prepared external transport requires authenticated State/runtime plans"
+            )
+        return version
+
+    @staticmethod
+    def _rebind_external_deferred_dependent_identity(
+        event: CanonicalOccurrence,
+        lifecycle_ticket: object,
+    ) -> CanonicalOccurrence:
+        """Restore an immutable State identity copied by canonical sealing.
+
+        ``OccurrenceBuilder.seal()`` intentionally deep-snapshots caller-owned
+        values.  Deferred dependents, however, must ultimately pin the exact
+        immutable identity owned by their authenticated State plan.  Rebind only
+        roles that are already exact-type and value-equal to that identity; this
+        preserves the sealed event's semantics while closing identity-by-value
+        substitution at the publication boundary.
+        """
+
+        from evidenceforge.events.identity import EventIdentityPlan
+        from evidenceforge.generation.state_manager import (
+            ProcessMaterializationPlan,
+            SessionMaterializationPlan,
+        )
+
+        if type(lifecycle_ticket) not in {
+            SessionMaterializationPlan,
+            ProcessMaterializationPlan,
+        }:
+            return event
+        plan = cast(
+            "SessionMaterializationPlan | ProcessMaterializationPlan",
+            lifecycle_ticket,
+        )
+        identity_plan = event.identity_plan
+        if type(identity_plan) is not EventIdentityPlan:
+            return event
+        exact_identity = plan.identity
+
+        def rebind(candidate: object | None) -> object | None:
+            if type(candidate) is type(exact_identity) and candidate == exact_identity:
+                return exact_identity
+            return candidate
+
+        rebound = EventIdentityPlan(
+            subject=cast("object", rebind(identity_plan.subject)),
+            actor=cast("object", rebind(identity_plan.actor)),
+            target=cast("object", rebind(identity_plan.target)),
+            session=cast("object", rebind(identity_plan.session)),
+        )
+        if rebound == identity_plan:
+            return replace(event, identity_plan=rebound)
+        return event
+
+    @staticmethod
+    def _validate_external_deferred_dependent_binding(
+        event: CanonicalOccurrence,
+        lifecycle_ticket: object,
+    ) -> int:
+        """Bind one State-neutral dependent to an exact staged session/process plan."""
+
+        from evidenceforge.generation.state_manager import (
+            ProcessMaterializationPlan,
+            SessionMaterializationPlan,
+        )
+
+        if type(lifecycle_ticket) not in {
+            SessionMaterializationPlan,
+            ProcessMaterializationPlan,
+        }:
+            raise EventContractError(
+                "Prepared deferred-session dependent requires an exact State start plan"
+            )
+        plan = cast(
+            "SessionMaterializationPlan | ProcessMaterializationPlan",
+            lifecycle_ticket,
+        )
+        identity_plan = event.identity_plan
+        if identity_plan is None:
+            raise EventContractError(
+                "Prepared deferred-session dependent requires a canonical identity plan"
+            )
+        bound_identities = (
+            identity_plan.subject,
+            identity_plan.actor,
+            identity_plan.target,
+            identity_plan.session,
+        )
+        if not any(candidate is plan.identity for candidate in bound_identities):
+            raise EventContractError(
+                "Prepared deferred-session dependent lost its exact State identity object"
+            )
+        if type(plan) is SessionMaterializationPlan:
+            if event.event_type not in {
+                EventKind.LOGON,
+                EventKind.SSH_SESSION,
+                EventKind.SYSLOG,
+            }:
+                raise EventContractError(
+                    "Prepared deferred-session session dependent has an unsupported event kind"
+                )
+            if identity_plan.session is not plan.identity:
+                raise EventContractError(
+                    "Prepared deferred-session session dependent lost its session identity"
+                )
+        elif event.event_type not in {
+            EventKind.PROCESS_CREATE,
+            EventKind.SYSTEM_PROCESS_CREATE,
+        }:
+            raise EventContractError(
+                "Prepared deferred-session process dependent has an unsupported event kind"
+            )
+        version = plan.expected_version
+        if (
+            type(version) is not int
+            or version < 0
+            or type(plan.publication_token) is not str
+            or not plan.publication_token
+        ):
+            raise EventContractError(
+                "Prepared deferred-session dependent requires an authenticated State plan"
             )
         return version
 
@@ -2670,6 +3044,11 @@ class EventDispatcher:
             or prepared._action_cohort_batch_id <= 0
         ):
             raise EventContractError("Prepared dispatch action-cohort binding is malformed")
+        if prepared._deferred_session_publication_batch_id is not None and (
+            type(prepared._deferred_session_publication_batch_id) is not int
+            or prepared._deferred_session_publication_batch_id <= 0
+        ):
+            raise EventContractError("Prepared dispatch deferred-session binding is malformed")
 
         projection_signature = self._prepared_projection_signature(prepared._projection)
         lifecycle_ticket_signature = self._lifecycle_ticket_signature(prepared._lifecycle_ticket)
@@ -3051,10 +3430,17 @@ class EventDispatcher:
             raise EventContractError(
                 "Network-dependent dispatches require their claimed ordered batch"
             )
+        if prepared._state_intent in {
+            PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT,
+            PreparedDispatchStateIntent.EXTERNAL_DEFERRED_DEPENDENT,
+        }:
+            raise StateError("Deferred-session dispatches require their claimed publication batch")
         if prepared._action_cohort_batch_id is not None:
             raise EventContractError("Action-cohort dispatches require their claimed ordered batch")
         if prepared._network_dependent_batch_id is not None:
             raise EventContractError("Prepared dispatch is claimed by a network-dependent batch")
+        if prepared._deferred_session_publication_batch_id is not None:
+            raise StateError("Prepared dispatch is claimed by a deferred-session batch")
         self.validate_prepared(prepared, before_materialization=False)
         timing_preparation = prepared._source_timing_preparation
         if timing_preparation is not None and (
@@ -5040,7 +5426,8 @@ class EventDispatcher:
             publication.publication_receipt,
         )
         if (
-            len(self._exact_projection_recoveries) >= self._exact_projection_recovery_capacity
+            len(self._exact_projection_recoveries) + self._exact_projection_recovery_reservations
+            >= self._exact_projection_recovery_capacity
             or id(receipt) in self._exact_projection_recoveries
             or id(receipt) in self._state_neutral_projection_receipts
         ):
@@ -5115,6 +5502,7 @@ class EventDispatcher:
         timing_preparation: SourceTimingPreparation | None = None
         exact_batch: ExactPublicationBatch | None = None
         intent_ledger: IntentExecutionLedger | None = None
+        intent_request: IntentExecutionBatchRequest | None = None
         intent_token: IntentExecutionBatchToken | None = None
         publication: _StateNeutralProjectionPublicationRecord | None = None
         recovery: _ExactProjectionRecoveryRecord | None = None
@@ -5542,6 +5930,7 @@ class EventDispatcher:
                 or prepared._projection.mode == "deferred"
                 or prepared._action_cohort_batch_id is not None
                 or prepared._network_dependent_batch_id is not None
+                or prepared._deferred_session_publication_batch_id is not None
                 or prepared.occurrence_id in occurrence_ids
             ):
                 raise EventContractError(
@@ -5768,6 +6157,7 @@ class EventDispatcher:
                         or prepared._consumed
                         or prepared._action_cohort_batch_id is not None
                         or prepared._network_dependent_batch_id is not None
+                        or prepared._deferred_session_publication_batch_id is not None
                     ):
                         raise EventContractError(
                             "Action-cohort dispatch is already claimed or published"
@@ -6255,6 +6645,7 @@ class EventDispatcher:
                     or type(prepared._action_cohort_batch_id) is not int
                     or prepared._action_cohort_batch_id != record.batch_id
                     or prepared._network_dependent_batch_id is not None
+                    or prepared._deferred_session_publication_batch_id is not None
                 ):
                     return False
                 self.validate_prepared(prepared)
@@ -6391,6 +6782,7 @@ class EventDispatcher:
                 or prepared._lifecycle_ticket is not record.state_plan
                 or prepared._source_timing_preparation is not record.source_timing_preparation
                 or prepared._network_dependent_batch_id is not None
+                or prepared._deferred_session_publication_batch_id is not None
                 or type(artifact_publications) is not tuple
             ):
                 return False
@@ -6848,7 +7240,9 @@ class EventDispatcher:
                             )
                         recovery = record.exact_recovery
                         if recovery is not None:
-                            if len(self._exact_projection_recoveries) >= (
+                            if len(
+                                self._exact_projection_recoveries
+                            ) + self._exact_projection_recovery_reservations >= (
                                 self._exact_projection_recovery_capacity
                             ):
                                 raise EventContractError(
@@ -7204,6 +7598,36 @@ class EventDispatcher:
             return self.authenticates_action_cohort_publication_receipt(receipt)
         if expected_kind == "state_neutral":
             return self.authenticates_state_neutral_projection_publication_receipt(receipt)
+        if expected_kind == "deferred_session":
+            if self.authenticates_deferred_session_publication_receipt(receipt):
+                return True
+            if (
+                type(receipt) is not DeferredSessionPublicationReceipt
+                or not self._deferred_session_publication_receipt_shape_is_valid(receipt)
+            ):
+                return False
+            expected_integrity = self._deferred_session_publication_receipt_integrity(receipt)
+            with self._action_cohort_lock:
+                recovery = self._exact_projection_recoveries.get(id(receipt))
+                if (
+                    recovery is None
+                    or recovery.receipt is not receipt
+                    or recovery.kind != "deferred_session"
+                ):
+                    return False
+                with self._deferred_session_publication_lock:
+                    owner = recovery.owner_record
+                    return bool(
+                        type(owner) is _PreparedDeferredSessionPublicationRecord
+                        and owner.exact_recovery is recovery
+                        and owner.publication_receipt is receipt
+                        and owner.publication_result is recovery.result
+                        and self._deferred_session_publication_pending_receipts.get(id(receipt))
+                        is receipt
+                        and hmac.compare_digest(receipt._integrity, expected_integrity)
+                        and receipt.target_proof_digest
+                        == hashlib.sha256(repr(recovery.target_proofs).encode("utf-8")).hexdigest()
+                    )
         return False
 
     @staticmethod
@@ -7215,6 +7639,41 @@ class EventDispatcher:
         receipt = record.receipt
         outcome = record.outcome
         result = record.result
+        if record.kind == "deferred_session":
+            outcomes = record.outcomes
+            return bool(
+                record.batch.released
+                and type(receipt) is DeferredSessionPublicationReceipt
+                and type(result) is DeferredSessionPublicationResult
+                and result.receipt is receipt
+                and result.projections is outcomes
+                and result.target_proofs is record.target_proofs
+                and result.identifiers is record.member_identifiers
+                and receipt.occurrence_ids == record.occurrence_ids
+                and receipt.target_proof_digest
+                == hashlib.sha256(repr(record.target_proofs).encode("utf-8")).hexdigest()
+                and record.target_proofs
+                and record.target_proofs[-1].row_end == record.batch.commit_cursor
+                and hmac.compare_digest(
+                    receipt.member_integrity_digest,
+                    record.member_integrity_digest,
+                )
+                and len(outcomes) == len(record.occurrence_ids)
+                and len(record.member_identifiers) == len(record.occurrence_ids)
+                and all(
+                    type(member_outcome) is ActionCohortProjectionOutcome
+                    and member_outcome.occurrence_id == occurrence_id
+                    and member_outcome.status == "succeeded"
+                    and member_outcome.identifiers == identifiers
+                    and member_outcome.error is None
+                    for member_outcome, occurrence_id, identifiers in zip(
+                        outcomes,
+                        record.occurrence_ids,
+                        record.member_identifiers,
+                        strict=True,
+                    )
+                )
+            )
         if (
             not record.batch.released
             or receipt.occurrence_ids != record.occurrence_ids
@@ -7256,7 +7715,7 @@ class EventDispatcher:
             if record.kind == "action_cohort":
                 object.__setattr__(failure, "action_cohort_receipt", record.receipt)
                 object.__setattr__(failure, "action_cohort_result", record.result)
-            else:
+            elif record.kind == "state_neutral":
                 object.__setattr__(
                     failure,
                     "state_neutral_projection_receipt",
@@ -7265,6 +7724,17 @@ class EventDispatcher:
                 object.__setattr__(
                     failure,
                     "state_neutral_projection_result",
+                    record.result,
+                )
+            else:
+                object.__setattr__(
+                    failure,
+                    "deferred_session_publication_receipt",
+                    record.receipt,
+                )
+                object.__setattr__(
+                    failure,
+                    "deferred_session_publication_result",
                     record.result,
                 )
             failure.add_note(
@@ -7278,10 +7748,14 @@ class EventDispatcher:
         receipt: object,
         *,
         expected_kind: str,
-    ) -> ActionCohortPublicationResult | StateNeutralProjectionPublicationResult:
+    ) -> (
+        ActionCohortPublicationResult
+        | StateNeutralProjectionPublicationResult
+        | DeferredSessionPublicationResult
+    ):
         """Resume one retained exact batch/cursor with every sink callback lock-free."""
 
-        if expected_kind not in {"action_cohort", "state_neutral"}:
+        if expected_kind not in {"action_cohort", "state_neutral", "deferred_session"}:
             raise EventContractError("Exact projection recovery kind is unsupported")
         with self._action_cohort_lock:
             record = self._exact_projection_recoveries.get(id(receipt))
@@ -7289,6 +7763,24 @@ class EventDispatcher:
                 raise EventContractError(
                     "Exact projection receipt is copied, foreign, stale, or already released"
                 )
+            canonical_pending = bool(
+                expected_kind == "deferred_session" and record.state == "canonical_pending"
+            )
+            pending_owner = record.owner_record if canonical_pending else None
+        if canonical_pending:
+            if type(pending_owner) is not _PreparedDeferredSessionPublicationRecord:
+                raise EventContractError(
+                    "Deferred-session canonical recovery lost its bridge owner"
+                )
+            materialization_receipt = pending_owner.materialization_receipt_shell
+            if materialization_receipt is None:
+                raise EventContractError(
+                    "Deferred-session canonical recovery awaits its materialization receipt"
+                )
+            return self.publish_prepared_deferred_session_publication_batch(
+                pending_owner.carrier,
+                materialization_receipt=materialization_receipt,
+            )
         if not self._exact_projection_recovery_receipt_authenticates(
             receipt,
             expected_kind=expected_kind,
@@ -7303,19 +7795,84 @@ class EventDispatcher:
             if record.state == "active":
                 qualifier = "reentrant" if record.active_thread_id == owner_thread else "concurrent"
                 raise EventContractError(f"Exact projection recovery is already {qualifier}")
-            if record.state != "ready" or record.active_thread_id is not None:
+            resumable_states = (
+                {"ready", "owner_pending"} if expected_kind == "deferred_session" else {"ready"}
+            )
+            if record.state not in resumable_states or record.active_thread_id is not None:
                 raise EventContractError("Exact projection recovery is not resumable")
+            owner_tail_complete = record.state != "owner_pending"
             record.state = "active"
             record.active_thread_id = owner_thread
             self._exact_projection_active_recoveries += 1
 
         outcome = record.outcome
+        outcomes = record.outcomes if record.kind == "deferred_session" else (outcome,)
+
+        def update_deferred_outcomes(
+            *,
+            failure: BaseException | None = None,
+            release_pending: bool = False,
+        ) -> None:
+            if record.kind != "deferred_session":
+                return
+            cursor = record.batch.commit_cursor
+            failed_member: int | None = None
+            if failure is not None:
+                failed_member = next(
+                    (
+                        proof.member_ordinal
+                        for proof in record.target_proofs
+                        if proof.row_start <= cursor < proof.row_end
+                    ),
+                    None,
+                )
+            for member_ordinal, (member_outcome, identifiers) in enumerate(
+                zip(outcomes, record.member_identifiers, strict=True)
+            ):
+                member_proofs = tuple(
+                    proof
+                    for proof in record.target_proofs
+                    if proof.member_ordinal == member_ordinal
+                )
+                completed = not member_proofs or all(
+                    proof.row_end <= cursor for proof in member_proofs
+                )
+                if completed:
+                    object.__setattr__(member_outcome, "_identifiers", identifiers)
+                    object.__setattr__(
+                        member_outcome,
+                        "_status",
+                        "release_pending" if release_pending else "succeeded",
+                    )
+                    object.__setattr__(
+                        member_outcome,
+                        "_error",
+                        failure if release_pending else None,
+                    )
+                elif failed_member == member_ordinal:
+                    object.__setattr__(member_outcome, "_status", "recoverable")
+                    object.__setattr__(member_outcome, "_error", failure)
+                else:
+                    object.__setattr__(member_outcome, "_status", "pending")
+                    object.__setattr__(member_outcome, "_error", None)
+
         try:
+            if record.kind == "deferred_session" and not owner_tail_complete:
+                try:
+                    self._complete_deferred_session_owner_tail(record)
+                except BaseException as failure:
+                    self._annotate_exact_projection_failure(failure, record)
+                    if self._deferred_session_owner_tail_terminal_authenticates(record):
+                        owner_tail_complete = True
+                    raise
+                owner_tail_complete = True
             if record.batch.released:
                 if not self._released_exact_projection_result_authenticates(record):
                     raise EventContractError(
                         "Released exact projection retained a malformed terminal result"
                     )
+                if record.kind == "deferred_session":
+                    self._complete_deferred_session_exact_recovery(record)
                 with self._action_cohort_lock:
                     if self._exact_projection_recoveries.get(id(receipt)) is not record:
                         raise EventContractError(
@@ -7324,28 +7881,45 @@ class EventDispatcher:
                     self._exact_projection_recoveries.pop(id(receipt))
                     record.state = "released"
                 return record.result
-            object.__setattr__(outcome, "_status", "started")
-            object.__setattr__(outcome, "_error", None)
+            if record.kind == "deferred_session":
+                update_deferred_outcomes()
+            else:
+                object.__setattr__(outcome, "_status", "started")
+                object.__setattr__(outcome, "_error", None)
             if record.batch.state not in {"committed", "releasing"}:
                 try:
                     record.batch.commit()
                 except BaseException as failure:
                     if record.batch.state != "committed":
-                        object.__setattr__(outcome, "_status", "recoverable")
-                        object.__setattr__(outcome, "_error", failure)
+                        if record.kind == "deferred_session":
+                            update_deferred_outcomes(failure=failure)
+                        else:
+                            object.__setattr__(outcome, "_status", "recoverable")
+                            object.__setattr__(outcome, "_error", failure)
                         self._annotate_exact_projection_failure(failure, record)
                         raise
-            object.__setattr__(outcome, "_identifiers", record.identifiers)
-            object.__setattr__(outcome, "_status", "succeeded")
-            object.__setattr__(outcome, "_error", None)
+            if record.kind == "deferred_session":
+                update_deferred_outcomes()
+            else:
+                object.__setattr__(outcome, "_identifiers", record.identifiers)
+                object.__setattr__(outcome, "_status", "succeeded")
+                object.__setattr__(outcome, "_error", None)
             try:
                 record.batch.release_no_fail()
             except BaseException as failure:
                 if not record.batch.released:
-                    object.__setattr__(outcome, "_status", "release_pending")
-                    object.__setattr__(outcome, "_error", failure)
+                    if record.kind == "deferred_session":
+                        update_deferred_outcomes(
+                            failure=failure,
+                            release_pending=True,
+                        )
+                    else:
+                        object.__setattr__(outcome, "_status", "release_pending")
+                        object.__setattr__(outcome, "_error", failure)
                     self._annotate_exact_projection_failure(failure, record)
                     raise
+            if record.kind == "deferred_session":
+                self._complete_deferred_session_exact_recovery(record)
             with self._action_cohort_lock:
                 if self._exact_projection_recoveries.get(id(receipt)) is not record:
                     raise EventContractError(
@@ -7360,7 +7934,7 @@ class EventDispatcher:
                     record.active_thread_id = None
                     self._exact_projection_active_recoveries -= 1
                     if record.state == "active":
-                        record.state = "ready"
+                        record.state = "ready" if owner_tail_complete else "owner_pending"
 
     def resume_action_cohort_projection(
         self,
@@ -7394,14 +7968,39 @@ class EventDispatcher:
             ),
         )
 
+    def resume_deferred_session_publication(
+        self,
+        receipt: DeferredSessionPublicationReceipt,
+    ) -> DeferredSessionPublicationResult:
+        """Resume the dispatcher-retained exact tail for one committed session root."""
+
+        if type(receipt) is not DeferredSessionPublicationReceipt:
+            raise TypeError("Deferred-session recovery requires its exact receipt type")
+        return cast(
+            DeferredSessionPublicationResult,
+            self._resume_exact_projection_recovery(
+                receipt,
+                expected_kind="deferred_session",
+            ),
+        )
+
     def drain_exact_projection_recoveries(
         self,
-    ) -> tuple[ActionCohortPublicationResult | StateNeutralProjectionPublicationResult, ...]:
+    ) -> tuple[
+        ActionCohortPublicationResult
+        | StateNeutralProjectionPublicationResult
+        | DeferredSessionPublicationResult,
+        ...,
+    ]:
         """Boundedly retry every retained batch before emitters enter close."""
 
         with self._action_cohort_lock:
             recoveries = tuple(self._exact_projection_recoveries.values())
-        results: list[ActionCohortPublicationResult | StateNeutralProjectionPublicationResult] = []
+        results: list[
+            ActionCohortPublicationResult
+            | StateNeutralProjectionPublicationResult
+            | DeferredSessionPublicationResult
+        ] = []
         for recovery in recoveries:
             results.append(
                 self._resume_exact_projection_recovery(
@@ -7430,6 +8029,7 @@ class EventDispatcher:
         with self._action_cohort_lock:
             return ExactProjectionRecoveryCensus(
                 unresolved_recoveries=len(self._exact_projection_recoveries),
+                reserved_recoveries=self._exact_projection_recovery_reservations,
                 active_recoveries=self._exact_projection_active_recoveries,
                 recovery_capacity=self._exact_projection_recovery_capacity,
                 high_water_recoveries=self._exact_projection_recovery_high_water,
@@ -7664,6 +8264,2524 @@ class EventDispatcher:
                 receipt_capacity=self._action_cohort_receipt_capacity,
             )
 
+    def _deferred_session_publication_batch_integrity(
+        self,
+        batch: PreparedDeferredSessionPublicationBatch,
+        record: _PreparedDeferredSessionPublicationRecord,
+    ) -> str:
+        """Authenticate one exact signed composition and frozen dispatch sequence."""
+
+        composition = record.composition
+        coordinator = record.coordinator
+        timing_token = record.source_timing_preparation.binding_token
+        exact_batch = record.exact_publication_batch
+        exact_token = getattr(exact_batch, "_token", None)
+        intent_token = record.intent_token
+        expected_intent_receipt = record.expected_intent_receipt
+        publication_receipt = record.publication_receipt
+        publication_result = record.publication_result
+        exact_recovery = record.exact_recovery
+        payload = repr(
+            (
+                "prepared-deferred-session-publication-v2",
+                batch._dispatcher_id,
+                batch._batch_id,
+                batch._occurrence_count,
+                id(composition),
+                record.composition_token,
+                record.physical_transport_id,
+                id(coordinator),
+                getattr(coordinator, "coordinator_id", None),
+                self._lifecycle_ticket_signature(record.root),
+                (
+                    id(record.source_timing_preparation),
+                    type(timing_token).__module__,
+                    type(timing_token).__qualname__,
+                    getattr(timing_token, "preparation_id", None),
+                    getattr(timing_token, "base_state_digest", None),
+                    getattr(timing_token, "_integrity", None),
+                ),
+                tuple(
+                    (
+                        id(prepared),
+                        prepared.occurrence_id,
+                        integrity,
+                        self._prepared_dispatch_integrity(prepared),
+                    )
+                    for prepared, integrity in zip(
+                        record.dispatches,
+                        record.member_integrity_tokens,
+                        strict=True,
+                    )
+                ),
+                tuple(id(member_lock) for member_lock in record.member_locks),
+                (
+                    id(exact_batch) if exact_batch is not None else None,
+                    id(exact_token) if exact_token is not None else None,
+                    getattr(exact_token, "namespace", None),
+                    getattr(exact_token, "ordinal", None),
+                    getattr(exact_token, "integrity", None),
+                ),
+                record.prepared_identifiers,
+                record.prepared_target_proofs,
+                record.occurrence_ids,
+                record.member_binary_identity_kinds,
+                record.member_digest,
+                record.target_proof_digest,
+                record.frozen_latest_network_observations_uid,
+                record.frozen_latest_network_observations,
+                record.frozen_latest_network_plan,
+                repr(record.observation_deltas),
+                (
+                    id(record.intent_ledger) if record.intent_ledger is not None else None,
+                    repr(record.intent_request),
+                    id(intent_token) if intent_token is not None else None,
+                    getattr(intent_token, "ledger_id", None),
+                    getattr(intent_token, "preparation_id", None),
+                    getattr(intent_token, "plan_digest", None),
+                    getattr(intent_token, "_integrity", None),
+                ),
+                (
+                    id(record.intent_claim_context)
+                    if record.intent_claim_context is not None
+                    else None,
+                    id(record.intent_claimed) if record.intent_claimed is not None else None,
+                    id(expected_intent_receipt) if expected_intent_receipt is not None else None,
+                    getattr(expected_intent_receipt, "ledger_id", None),
+                    getattr(expected_intent_receipt, "preparation_id", None),
+                    getattr(expected_intent_receipt, "plan_digest", None),
+                    getattr(expected_intent_receipt, "_integrity", None),
+                ),
+                (
+                    id(publication_receipt) if publication_receipt is not None else None,
+                    getattr(publication_receipt, "dispatcher_id", None),
+                    getattr(publication_receipt, "receipt_id", None),
+                    getattr(publication_receipt, "publication_token", None),
+                    getattr(publication_receipt, "composition_token", None),
+                    getattr(publication_receipt, "physical_transport_id", None),
+                    getattr(publication_receipt, "occurrence_ids", None),
+                    getattr(publication_receipt, "member_integrity_digest", None),
+                    getattr(publication_receipt, "target_proof_digest", None),
+                    getattr(publication_receipt, "intent_publication_token", None),
+                    id(publication_result) if publication_result is not None else None,
+                    id(exact_recovery) if exact_recovery is not None else None,
+                    id(record.materialization_receipt_shell)
+                    if record.materialization_receipt_shell is not None
+                    else None,
+                    record.materialization_receipt_shell_digest,
+                ),
+                record.retained_bytes,
+            )
+        ).encode("utf-8")
+        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+
+    def _active_deferred_session_publication_batch_locked(
+        self,
+        batch: PreparedDeferredSessionPublicationBatch,
+    ) -> _PreparedDeferredSessionPublicationRecord:
+        """Return one exact retained carrier without invoking nested owners."""
+
+        if type(batch) is not PreparedDeferredSessionPublicationBatch:
+            raise EventContractError(
+                "Deferred-session publication batch must be the exact opaque type"
+            )
+        if (
+            type(batch._dispatcher_id) is not str
+            or not batch._dispatcher_id
+            or len(batch._dispatcher_id) > _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS
+            or type(batch._batch_id) is not int
+            or batch._batch_id <= 0
+            or type(batch._occurrence_count) is not int
+            or not 1 <= batch._occurrence_count <= _MAX_DEFERRED_SESSION_PUBLICATION_MEMBERS
+            or type(batch._integrity_token) is not str
+            or len(batch._integrity_token) != 64
+            or type(batch._consumed) is not bool
+        ):
+            raise EventContractError("Deferred-session publication batch shape is malformed")
+        if batch._dispatcher_id != self._deferred_session_publication_dispatcher_id:
+            raise EventContractError(
+                "Deferred-session publication batch belongs to another dispatcher"
+            )
+        record = self._deferred_session_publication_batches.get(batch._batch_id)
+        if record is None or record.carrier is not batch or batch._consumed:
+            raise EventContractError(
+                "Deferred-session publication batch is stale or already consumed"
+            )
+        expected = self._deferred_session_publication_batch_integrity(batch, record)
+        if (
+            batch._occurrence_count != len(record.dispatches)
+            or not hmac.compare_digest(batch._integrity_token, expected)
+            or not hmac.compare_digest(record.integrity_token, expected)
+        ):
+            raise EventContractError(
+                "Deferred-session publication batch integrity validation failed"
+            )
+        return record
+
+    @staticmethod
+    def _deferred_session_prepared_projection_shape(
+        result: object,
+        *,
+        member_count: int,
+    ) -> tuple[
+        tuple[tuple[tuple[str, str], ...], ...],
+        tuple[DeferredSessionExactTargetProof, ...],
+    ]:
+        """Accept only bounded immutable identifiers and target row proofs."""
+
+        if (
+            type(result) is not tuple
+            or len(result) != 2
+            or type(result[0]) is not tuple
+            or len(result[0]) != member_count
+            or any(
+                type(member) is not tuple
+                or any(
+                    type(item) is not tuple
+                    or len(item) != 2
+                    or type(item[0]) is not str
+                    or type(item[1]) is not str
+                    for item in member
+                )
+                for member in result[0]
+            )
+            or type(result[1]) is not tuple
+            or any(type(proof) is not DeferredSessionExactTargetProof for proof in result[1])
+        ):
+            raise EventContractError(
+                "Deferred-session exact projection returned malformed frozen proof"
+            )
+        return cast(
+            tuple[
+                tuple[tuple[tuple[str, str], ...], ...],
+                tuple[DeferredSessionExactTargetProof, ...],
+            ],
+            result,
+        )
+
+    def _deferred_session_exact_projection_participants(
+        self,
+        dispatches: tuple[PreparedDispatch, ...],
+    ) -> tuple[LogEmitter, ...]:
+        """Return explicitly exact-capable participants or fail before rendering."""
+
+        from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.zeek import ZeekEmitter
+
+        exact_types_by_format: dict[str, type[LogEmitter]] = {
+            "ecar": EcarEmitter,
+            "zeek_conn": ZeekEmitter,
+        }
+        participants: list[LogEmitter] = []
+        participant_ids: set[int] = set()
+        for prepared in dispatches:
+            for format_name, emitter in self._exact_projection_targets(prepared._projection):
+                marker = type(emitter).__dict__.get("supports_exact_projection_publication")
+                if (
+                    exact_types_by_format.get(format_name) is not type(emitter)
+                    or marker is None
+                    or getattr(
+                        emitter,
+                        "supports_exact_projection_publication",
+                        None,
+                    )
+                    is not True
+                ):
+                    raise EventContractError(
+                        f"Deferred-session projection target {format_name!r} lacks exact "
+                        "projection publication"
+                    )
+                if id(emitter) in participant_ids:
+                    continue
+                participant_ids.add(id(emitter))
+                participants.append(emitter)
+        return tuple(participants)
+
+    def _deferred_session_exact_target_slices(
+        self,
+        projection: _PreparedProjection,
+    ) -> tuple[tuple[int, str, LogEmitter, _PreparedProjection], ...]:
+        """Freeze one render-only projection slice per visible source target."""
+
+        slices: list[tuple[int, str, LogEmitter, _PreparedProjection]] = []
+        if projection.mode == "suppressed":
+            return ()
+        if projection.mode == "legacy":
+            for target_ordinal, target in enumerate(projection.legacy_targets):
+                if target.occurrence is None:
+                    continue
+                slices.append(
+                    (
+                        target_ordinal,
+                        target.format_name,
+                        target.emitter,
+                        _PreparedProjection(
+                            mode="legacy",
+                            occurrence=projection.occurrence,
+                            legacy_targets=(target,),
+                        ),
+                    )
+                )
+            return tuple(slices)
+        if projection.mode != "compiled":
+            raise EventContractError("Deferred-session projection mode is unsupported")
+        for target_ordinal, target in enumerate(projection.compiled_targets):
+            if self._action_cohort_compiled_projection_status(
+                projection.occurrence,
+                target,
+            ) not in {"visible", "delayed"}:
+                continue
+            slices.append(
+                (
+                    target_ordinal,
+                    target.format_name,
+                    target.emitter,
+                    _PreparedProjection(
+                        mode="compiled",
+                        occurrence=projection.occurrence,
+                        compiled_targets=(target,),
+                    ),
+                )
+            )
+        return tuple(slices)
+
+    def _freeze_deferred_session_exact_projection(
+        self,
+        dispatches: tuple[PreparedDispatch, ...],
+    ) -> tuple[
+        tuple[tuple[tuple[str, str], ...], ...],
+        tuple[DeferredSessionExactTargetProof, ...],
+    ]:
+        """Render every visible target separately and attest its positive row range."""
+
+        from evidenceforge.generation.emitters.base import (
+            exact_publication_staged_row_contents,
+            exact_publication_staged_row_count,
+        )
+
+        identifiers_by_member: list[tuple[tuple[str, str], ...]] = []
+        proofs: list[DeferredSessionExactTargetProof] = []
+        for member_ordinal, prepared in enumerate(dispatches):
+            member_identifiers: dict[str, str] = {}
+            for (
+                target_ordinal,
+                format_name,
+                _emitter,
+                target_projection,
+            ) in self._deferred_session_exact_target_slices(prepared._projection):
+                row_start = exact_publication_staged_row_count()
+                member_identifiers.update(self._publish_action_cohort_projection(target_projection))
+                row_end = exact_publication_staged_row_count()
+                if row_end <= row_start:
+                    raise EventContractError(
+                        "Deferred-session exact projection target staged no durable row: "
+                        f"member={member_ordinal}, target={target_ordinal}, "
+                        f"format={format_name!r}"
+                    )
+                source_order_keys: tuple[int, ...] = ()
+                if format_name == "ecar":
+                    parsed_order_keys: list[int] = []
+                    for frozen_row in exact_publication_staged_row_contents(
+                        row_start,
+                        row_end,
+                    ):
+                        try:
+                            parsed = json.loads(frozen_row)
+                        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                            raise EventContractError(
+                                "Deferred-session eCAR exact row is not valid JSON"
+                            ) from exc
+                        timestamp_ms = parsed.get("timestamp_ms") if type(parsed) is dict else None
+                        if type(timestamp_ms) is not int or timestamp_ms < 0:
+                            raise EventContractError(
+                                "Deferred-session eCAR exact row lacks source-native time"
+                            )
+                        parsed_order_keys.append(timestamp_ms)
+                    source_order_keys = tuple(parsed_order_keys)
+                proofs.append(
+                    DeferredSessionExactTargetProof(
+                        occurrence_id=prepared.occurrence_id,
+                        member_ordinal=member_ordinal,
+                        target_ordinal=target_ordinal,
+                        format_name=format_name,
+                        row_start=row_start,
+                        row_end=row_end,
+                        source_order_keys=source_order_keys,
+                    )
+                )
+            identifiers_by_member.append(tuple(sorted(member_identifiers.items())))
+        return tuple(identifiers_by_member), tuple(proofs)
+
+    def _validate_deferred_session_target_proofs(
+        self,
+        dispatches: tuple[PreparedDispatch, ...],
+        proofs: tuple[DeferredSessionExactTargetProof, ...],
+        *,
+        prepared_row_count: int,
+    ) -> None:
+        """Authenticate exact ordered provenance for every visible member target."""
+
+        expected = tuple(
+            (
+                member_ordinal,
+                target_ordinal,
+                format_name,
+                prepared.occurrence_id,
+                id(emitter),
+                (
+                    target_projection.legacy_targets[0].occurrence.timestamp
+                    if target_projection.mode == "legacy"
+                    else target_projection.compiled_targets[0].projected_timestamp
+                ),
+            )
+            for member_ordinal, prepared in enumerate(dispatches)
+            for target_ordinal, format_name, emitter, target_projection in (
+                self._deferred_session_exact_target_slices(prepared._projection)
+            )
+        )
+        if type(proofs) is not tuple or len(proofs) != len(expected):
+            raise EventContractError(
+                "Deferred-session exact projection target proof cardinality changed"
+            )
+        proven_members = {proof.member_ordinal for proof in proofs}
+        if proven_members != set(range(len(dispatches))):
+            raise EventContractError(
+                "Deferred-session publication requires a positive exact target for every member"
+            )
+        cursor = 0
+        for proof, expected_target in zip(proofs, expected, strict=True):
+            if (
+                type(proof) is not DeferredSessionExactTargetProof
+                or (
+                    proof.member_ordinal,
+                    proof.target_ordinal,
+                    proof.format_name,
+                    proof.occurrence_id,
+                )
+                != expected_target[:4]
+                or type(proof.row_start) is not int
+                or type(proof.row_end) is not int
+                or proof.row_start != cursor
+                or proof.row_end <= proof.row_start
+                or type(proof.source_order_keys) is not tuple
+                or any(type(value) is not int or value < 0 for value in proof.source_order_keys)
+                or (proof.format_name == "ecar" and len(proof.source_order_keys) != proof.row_count)
+                or (proof.format_name != "ecar" and bool(proof.source_order_keys))
+            ):
+                raise EventContractError(
+                    "Deferred-session exact projection target proof is malformed"
+                )
+            cursor = proof.row_end
+        if cursor != prepared_row_count:
+            raise EventContractError("Deferred-session exact projection row proof is incomplete")
+        transport_targets = tuple(
+            projected_timestamp
+            for (
+                member_ordinal,
+                _target_ordinal,
+                format_name,
+                _occurrence_id,
+                emitter_id,
+                projected_timestamp,
+            ) in expected
+            if member_ordinal == 0
+        )
+        if any(member_ordinal > 0 for member_ordinal, *_rest in expected) and not (
+            transport_targets
+        ):
+            raise EventContractError(
+                "Deferred-session visible dependents require exact transport evidence"
+            )
+        for (
+            member_ordinal,
+            _target_ordinal,
+            _format_name,
+            _occurrence_id,
+            _emitter_id,
+            projected_timestamp,
+        ) in expected:
+            if member_ordinal == 0:
+                continue
+            if (
+                type(projected_timestamp) is not datetime
+                or any(type(value) is not datetime for value in transport_targets)
+                or any(projected_timestamp <= value for value in transport_targets)
+            ):
+                raise EventContractError(
+                    "Deferred-session shared source timing does not place transport "
+                    "strictly before its dependent"
+                )
+        transport_ecar_keys = tuple(
+            value
+            for proof in proofs
+            if proof.member_ordinal == 0 and proof.format_name == "ecar"
+            for value in proof.source_order_keys
+        )
+        for proof in proofs:
+            if proof.member_ordinal == 0 or proof.format_name != "ecar":
+                continue
+            if not transport_ecar_keys or min(proof.source_order_keys) <= max(transport_ecar_keys):
+                raise EventContractError(
+                    "Deferred-session eCAR source-native ordering does not place FLOW "
+                    "before its dependent"
+                )
+
+    @staticmethod
+    def _deferred_session_allowed_state_members(root: object) -> tuple[object, ...]:
+        """Return exact session/process plans carried by one deferred root batch."""
+
+        batch = getattr(getattr(root, "state_plan", None), "batch", None)
+        if batch is None:
+            return ()
+        return (
+            *((batch.session,) if batch.session is not None else ()),
+            *batch.processes,
+        )
+
+    def _deferred_session_intent_request(
+        self,
+        dispatches: tuple[PreparedDispatch, ...],
+        observation_deltas: tuple[tuple[_ActionCohortObservationDelta, ...], ...],
+    ) -> IntentExecutionBatchRequest | None:
+        """Prepare exact occurrence/observation ledger deltas for every member."""
+
+        if self.intent_execution_ledger is None:
+            return None
+        from evidenceforge.generation.intent_ledger import (
+            IntentExecutionBatchRequest,
+            IntentObservationDelta,
+            IntentOccurrenceDelta,
+        )
+
+        deltas: list[IntentOccurrenceDelta | IntentObservationDelta] = []
+        for prepared, member_observations in zip(
+            dispatches,
+            observation_deltas,
+            strict=True,
+        ):
+            intent_id = prepared._authored_intent_id
+            if intent_id is None:
+                continue
+            occurrence_key = prepared._occurrence.occurrence_key
+            if type(occurrence_key) is not SemanticOccurrenceKey:
+                raise EventContractError(
+                    "Deferred-session authored member lost occurrence identity"
+                )
+            deltas.append(
+                IntentOccurrenceDelta(
+                    intent_id,
+                    occurrence_key,
+                    prepared._occurrence.timestamp,
+                )
+            )
+            deltas.extend(
+                IntentObservationDelta(
+                    intent_id,
+                    delta.source,
+                    delta.status,
+                    delta.timestamp,
+                )
+                for delta in member_observations
+            )
+        return IntentExecutionBatchRequest(tuple(deltas)) if deltas else None
+
+    def _detach_deferred_session_publication_batch_locked(
+        self,
+        record: _PreparedDeferredSessionPublicationRecord,
+        *,
+        terminal_state: str,
+    ) -> None:
+        """Release dispatcher/member ownership without invoking source callbacks."""
+
+        if self._deferred_session_publication_batches.get(record.batch_id) is record:
+            self._deferred_session_publication_batches.pop(record.batch_id)
+            self._deferred_session_publication_locators.pop(id(record.carrier), None)
+            if record.precommit is not None:
+                self._deferred_session_publication_precommit_locators.pop(
+                    id(record.precommit),
+                    None,
+                )
+            self._deferred_session_publication_retained_members -= len(record.dispatches)
+            self._deferred_session_publication_retained_bytes -= record.retained_bytes
+            if record.recovery_capacity_reserved:
+                self._exact_projection_recovery_reservations -= 1
+                record.recovery_capacity_reserved = False
+            if record.receipt_capacity_reserved:
+                self._deferred_session_publication_receipt_reservations -= 1
+                record.receipt_capacity_reserved = False
+            if record.receipt_eviction_id is not None:
+                self._deferred_session_publication_receipt_eviction_reservations.discard(
+                    record.receipt_eviction_id
+                )
+                record.receipt_eviction_id = None
+        for prepared, member_lock in zip(
+            record.dispatches,
+            record.member_locks,
+            strict=True,
+        ):
+            with cast(AbstractContextManager[object], member_lock):
+                prepared._deferred_session_publication_batch_id = None
+        record.state = terminal_state
+        record.active_thread_id = None
+        record.carrier._consumed = True
+
+    def prepare_deferred_session_publication_batch(
+        self,
+        composition: object,
+        coordinator: object,
+    ) -> PreparedDeferredSessionPublicationBatch:
+        """Claim and exact-freeze one authenticated SSH/RDP projection sequence."""
+
+        from evidenceforge.generation.deferred_session_composition import (
+            DeferredSessionComposition,
+            DeferredSessionCompositionCoordinator,
+            DeferredSessionKind,
+        )
+        from evidenceforge.generation.state_manager import (
+            ProcessMaterializationPlan,
+            SessionMaterializationPlan,
+        )
+
+        if type(composition) is not DeferredSessionComposition:
+            raise TypeError("Deferred-session publication requires an exact signed composition")
+        if type(coordinator) is not DeferredSessionCompositionCoordinator:
+            raise TypeError(
+                "Deferred-session publication requires an exact composition coordinator"
+            )
+        if not coordinator.authenticates(composition):
+            raise EventContractError("Deferred-session composition failed authentication")
+        root = composition.prepared_root
+        timing_preparation = composition.source_timing_preparation
+        dispatches = composition.publication_order
+        if (
+            type(dispatches) is not tuple
+            or len(dispatches) < 2
+            or len(dispatches) > _MAX_DEFERRED_SESSION_PUBLICATION_MEMBERS
+        ):
+            raise EventContractError(
+                "Deferred-session publication has unsupported ordered cardinality"
+            )
+        allowed_state_members = self._deferred_session_allowed_state_members(root)
+        member_locks = tuple(prepared._lock for prepared in dispatches)
+        if len({id(member_lock) for member_lock in member_locks}) != len(member_locks):
+            raise EventContractError(
+                "Deferred-session publication members must have unique exact locks"
+            )
+        occurrence_ids: set[str] = set()
+        for ordinal, prepared in enumerate(dispatches):
+            if type(prepared) is not PreparedDispatch:
+                raise TypeError("Deferred-session publication contains a non-dispatch member")
+            expected_intent = (
+                PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT
+                if ordinal == 0
+                else PreparedDispatchStateIntent.EXTERNAL_DEFERRED_DEPENDENT
+            )
+            if (
+                prepared._state_intent is not expected_intent
+                or prepared._source_timing_preparation is not timing_preparation
+                or prepared._artifact_publications
+                or prepared._projection.mode == "deferred"
+                or prepared._action_cohort_batch_id is not None
+                or prepared._network_dependent_batch_id is not None
+                or prepared._deferred_session_publication_batch_id is not None
+                or prepared.occurrence_id in occurrence_ids
+            ):
+                raise EventContractError(
+                    "Deferred-session publication member changed intent, timing, or ordering"
+                )
+            if (
+                prepared._occurrence.file is not None
+                or prepared._occurrence.registry is not None
+                or prepared._occurrence.image_load is not None
+                or prepared._occurrence.effect_provenance is not None
+            ):
+                raise EventContractError(
+                    "Deferred-session publication cannot carry an unowned effect occurrence"
+                )
+            if ordinal == 0:
+                if (
+                    prepared is not composition.transport_dispatch
+                    or prepared._lifecycle_ticket is not root
+                ):
+                    raise EventContractError(
+                        "Deferred-session publication lost its exact transport root"
+                    )
+            elif not any(prepared._lifecycle_ticket is member for member in allowed_state_members):
+                raise EventContractError(
+                    "Deferred-session dependent is outside the root State batch"
+                )
+            if ordinal > 0:
+                dependent_event = prepared._occurrence
+                dependent_plan = prepared._lifecycle_ticket
+                if type(dependent_plan) is SessionMaterializationPlan:
+                    session_identity = dependent_plan.identity
+                    auth = dependent_event.auth
+                    allowed_event_kinds = (
+                        {EventKind.LOGON, EventKind.SSH_SESSION, EventKind.SYSLOG}
+                        if composition.kind is DeferredSessionKind.SSH
+                        else {EventKind.LOGON}
+                    )
+                    target_host = (
+                        dependent_event.src_host
+                        if dependent_event.event_type is EventKind.SYSLOG
+                        else dependent_event.dst_host
+                    )
+                    if (
+                        target_host is None
+                        or target_host.ip != root.transaction.dst_ip
+                        or target_host.hostname != session_identity.hostname
+                    ):
+                        raise EventContractError(
+                            "Deferred-session dependent is not projected on its exact State target"
+                        )
+                    if (
+                        dependent_event.event_type not in allowed_event_kinds
+                        or auth is None
+                        or auth.result != "success"
+                        or auth.username != session_identity.principal
+                        or auth.logon_id != session_identity.logon_id
+                        or auth.session_id != session_identity.session_id
+                        or auth.logon_type != 10
+                        or auth.source_ip != root.transaction.src_ip
+                        or auth.source_port != root.transaction.src_port
+                        or session_identity.session_kind != composition.kind.value
+                    ):
+                        raise EventContractError(
+                            "Deferred-session authentication dependent does not match its "
+                            "protocol, State session, and transport tuple"
+                        )
+                elif type(dependent_plan) is ProcessMaterializationPlan:
+                    process_identity = dependent_plan.identity
+                    process = dependent_event.process
+                    target_host = dependent_event.src_host
+                    endpoint_ips: list[str] = []
+                    state_plan = root.state_plan
+                    source_names = {
+                        state_plan._source_system,
+                        state_plan._source_hostname,
+                    }
+                    if (
+                        target_host is not None
+                        and process_identity.hostname in source_names
+                        and target_host.hostname == process_identity.hostname
+                        and (
+                            not state_plan._source_hostname
+                            or state_plan._source_hostname
+                            in {target_host.hostname, target_host.fqdn}
+                        )
+                    ):
+                        endpoint_ips.append(root.transaction.src_ip)
+                    if (
+                        target_host is not None
+                        and target_host.hostname == process_identity.hostname
+                        and state_plan._hostname in {target_host.hostname, target_host.fqdn}
+                    ):
+                        endpoint_ips.append(root.transaction.dst_ip)
+                    if (
+                        target_host is None
+                        or target_host.hostname != process_identity.hostname
+                        or len(endpoint_ips) != 1
+                        or target_host.ip != endpoint_ips[0]
+                    ):
+                        raise EventContractError(
+                            "Deferred-session dependent is not projected on its exact State target"
+                        )
+                    if (
+                        dependent_event.event_type
+                        not in {EventKind.PROCESS_CREATE, EventKind.SYSTEM_PROCESS_CREATE}
+                        or process is None
+                        or process.pid != process_identity.pid
+                        or process.parent_pid != process_identity.parent_pid
+                        or process.image != process_identity.image
+                        or process.command_line != process_identity.command_line
+                        or process.username != process_identity.principal
+                        or process.logon_id != process_identity.logon_id
+                        or process.integrity_level != dependent_plan.integrity_level
+                        or process.start_time != process_identity.started_at
+                    ):
+                        raise EventContractError(
+                            "Deferred-session process dependent does not match its exact "
+                            "root-owned process"
+                        )
+            if prepared._binary_identity_kind and prepared._lifecycle_ticket not in (
+                *getattr(getattr(root.state_plan, "batch", None), "processes", ()),
+            ):
+                raise EventContractError(
+                    "Deferred-session binary projection lacks an exact root-owned process"
+                )
+            occurrence_ids.add(prepared.occurrence_id)
+            self.validate_prepared(prepared)
+        if not coordinator.authenticates(composition):
+            raise EventContractError(
+                "Deferred-session composition changed during dispatcher validation"
+            )
+
+        retained_bytes = len(
+            repr(
+                (
+                    composition.publication_token,
+                    self._lifecycle_ticket_signature(root),
+                    tuple(
+                        (
+                            prepared.occurrence_id,
+                            prepared._integrity_token,
+                            self._prepared_projection_signature(prepared._projection),
+                        )
+                        for prepared in dispatches
+                    ),
+                )
+            ).encode("utf-8")
+        )
+        with self._deferred_session_publication_lock:
+            if (
+                len(self._deferred_session_publication_batches)
+                >= self._action_cohort_preparation_capacity
+            ):
+                raise StateError("Deferred-session publication preparation capacity is exhausted")
+            if (
+                self._deferred_session_publication_retained_members + len(dispatches)
+                > self._action_cohort_member_capacity
+            ):
+                raise StateError("Deferred-session publication member capacity is exhausted")
+            if (
+                self._deferred_session_publication_retained_bytes + retained_bytes
+                > self._action_cohort_byte_capacity
+            ):
+                raise StateError("Deferred-session publication retained-byte capacity is exhausted")
+            batch_id = self._next_deferred_session_publication_batch_id
+            self._next_deferred_session_publication_batch_id += 1
+            carrier = PreparedDeferredSessionPublicationBatch(
+                dispatcher_id=self._deferred_session_publication_dispatcher_id,
+                batch_id=batch_id,
+                occurrence_count=len(dispatches),
+            )
+            record = _PreparedDeferredSessionPublicationRecord(
+                batch_id=batch_id,
+                carrier=carrier,
+                composition=composition,
+                coordinator=coordinator,
+                composition_token=composition.publication_token,
+                physical_transport_id=composition.physical_transport_id,
+                root=root,
+                source_timing_preparation=timing_preparation,
+                dispatches=dispatches,
+                member_locks=member_locks,
+                member_integrity_tokens=tuple(prepared._integrity_token for prepared in dispatches),
+                occurrence_ids=tuple(prepared.occurrence_id for prepared in dispatches),
+                member_binary_identity_kinds=tuple(
+                    prepared._binary_identity_kind for prepared in dispatches
+                ),
+                retained_bytes=retained_bytes,
+                integrity_token="",
+                state="freezing",
+                active_thread_id=get_ident(),
+            )
+            claimed: list[PreparedDispatch] = []
+            try:
+                with ExitStack() as retained_locks:
+                    for member_lock in sorted(member_locks, key=id):
+                        retained_locks.enter_context(
+                            cast(AbstractContextManager[object], member_lock)
+                        )
+                    for prepared, member_lock in zip(
+                        dispatches,
+                        member_locks,
+                        strict=True,
+                    ):
+                        if (
+                            prepared._lock is not member_lock
+                            or prepared._consumed
+                            or prepared._action_cohort_batch_id is not None
+                            or prepared._network_dependent_batch_id is not None
+                            or prepared._deferred_session_publication_batch_id is not None
+                        ):
+                            raise EventContractError(
+                                "Deferred-session dispatch is already claimed or published"
+                            )
+                        prepared._deferred_session_publication_batch_id = batch_id
+                        claimed.append(prepared)
+                integrity = self._deferred_session_publication_batch_integrity(
+                    carrier,
+                    record,
+                )
+                carrier._integrity_token = integrity
+                record.integrity_token = integrity
+                self._deferred_session_publication_batches[batch_id] = record
+                self._deferred_session_publication_locators[id(carrier)] = batch_id
+                self._deferred_session_publication_retained_members += len(dispatches)
+                self._deferred_session_publication_retained_bytes += retained_bytes
+            except BaseException:
+                for prepared, member_lock in zip(
+                    dispatches,
+                    member_locks,
+                    strict=True,
+                ):
+                    if prepared not in claimed:
+                        continue
+                    with cast(AbstractContextManager[object], member_lock):
+                        if prepared._deferred_session_publication_batch_id == batch_id:
+                            prepared._deferred_session_publication_batch_id = None
+                carrier._consumed = True
+                raise
+
+        exact_batch: ExactPublicationBatch | None = None
+        intent_ledger: IntentExecutionLedger | None = None
+        intent_token: IntentExecutionBatchToken | None = None
+        try:
+            participants = self._deferred_session_exact_projection_participants(dispatches)
+            exact_batch = self._exact_publication_authority.issue_batch()
+            exact_batch.reserve_participants(cast(tuple[object, ...], participants))
+            prepared_identifiers, prepared_target_proofs = (
+                self._deferred_session_prepared_projection_shape(
+                    exact_batch.prepare(
+                        lambda: self._freeze_deferred_session_exact_projection(dispatches)
+                    ),
+                    member_count=len(dispatches),
+                )
+            )
+            self._validate_deferred_session_target_proofs(
+                dispatches,
+                prepared_target_proofs,
+                prepared_row_count=exact_batch.prepared_row_count,
+            )
+            observation_deltas_by_member = tuple(
+                self._action_cohort_projection_observation_deltas(prepared._projection)
+                for prepared in dispatches
+            )
+            observation_deltas = tuple(
+                delta for member in observation_deltas_by_member for delta in member
+            )
+            intent_request = self._deferred_session_intent_request(
+                dispatches,
+                observation_deltas_by_member,
+            )
+            if intent_request is not None:
+                intent_ledger = self.intent_execution_ledger
+                if intent_ledger is None:  # pragma: no cover - owner checked by helper
+                    raise EventContractError(
+                        "Deferred-session authored members lost their intent ledger"
+                    )
+                intent_token = intent_ledger.prepare_batch(intent_request)
+            member_digest = hashlib.sha256(
+                repr(
+                    tuple(
+                        (
+                            occurrence_id,
+                            integrity,
+                            identifiers,
+                            tuple(
+                                proof
+                                for proof in prepared_target_proofs
+                                if proof.member_ordinal == member_ordinal
+                            ),
+                        )
+                        for member_ordinal, (
+                            occurrence_id,
+                            integrity,
+                            identifiers,
+                        ) in enumerate(
+                            zip(
+                                record.occurrence_ids,
+                                record.member_integrity_tokens,
+                                prepared_identifiers,
+                                strict=True,
+                            )
+                        )
+                    )
+                ).encode("utf-8")
+            ).hexdigest()
+            target_proof_digest = hashlib.sha256(
+                repr(prepared_target_proofs).encode("utf-8")
+            ).hexdigest()
+            transport_occurrence = dispatches[0]._projection.occurrence
+            frozen_latest_network_observations_uid = ""
+            frozen_latest_network_observations: tuple[NetworkSensorObservation, ...] = ()
+            frozen_latest_network_plan: NetworkTransactionPlan | None = None
+            if (
+                transport_occurrence.network is not None
+                and self._publishes_network_sensor_observations(transport_occurrence)
+            ):
+                frozen_latest_network_observations_uid = transport_occurrence.network.zeek_uid
+                frozen_latest_network_observations = deepcopy(
+                    transport_occurrence.network_observations
+                )
+                frozen_latest_network_plan = deepcopy(transport_occurrence.network)
+            additional_retained_bytes = len(
+                repr(
+                    (
+                        prepared_identifiers,
+                        prepared_target_proofs,
+                        member_digest,
+                        target_proof_digest,
+                        frozen_latest_network_observations_uid,
+                        frozen_latest_network_observations,
+                        frozen_latest_network_plan,
+                        observation_deltas,
+                        intent_request,
+                        (
+                            getattr(intent_token, "ledger_id", None),
+                            getattr(intent_token, "preparation_id", None),
+                            getattr(intent_token, "plan_digest", None),
+                            getattr(intent_token, "_integrity", None),
+                        ),
+                    )
+                ).encode("utf-8")
+            )
+            with self._deferred_session_publication_lock:
+                if self._active_deferred_session_publication_batch_locked(carrier) is not record:
+                    raise EventContractError(
+                        "Deferred-session publication ownership changed during exact preflight"
+                    )
+                if (
+                    self._deferred_session_publication_retained_bytes + additional_retained_bytes
+                    > self._action_cohort_byte_capacity
+                ):
+                    raise StateError(
+                        "Deferred-session publication retained-byte capacity is exhausted"
+                    )
+                record.exact_publication_batch = exact_batch
+                record.prepared_identifiers = prepared_identifiers
+                record.prepared_target_proofs = prepared_target_proofs
+                record.member_digest = member_digest
+                record.target_proof_digest = target_proof_digest
+                record.frozen_latest_network_observations_uid = (
+                    frozen_latest_network_observations_uid
+                )
+                record.frozen_latest_network_observations = frozen_latest_network_observations
+                record.frozen_latest_network_plan = frozen_latest_network_plan
+                record.observation_deltas = observation_deltas
+                record.intent_ledger = intent_ledger
+                record.intent_request = intent_request
+                record.intent_token = intent_token
+                record.retained_bytes += additional_retained_bytes
+                self._deferred_session_publication_retained_bytes += additional_retained_bytes
+                integrity = self._deferred_session_publication_batch_integrity(
+                    carrier,
+                    record,
+                )
+                carrier._integrity_token = integrity
+                record.integrity_token = integrity
+                record.state = "prepared"
+                record.active_thread_id = None
+            return carrier
+        except BaseException as primary:
+            cleanup_incomplete = False
+            if intent_ledger is not None and intent_token is not None:
+                try:
+                    if intent_ledger.authenticates_batch_token(
+                        intent_token,
+                        request=intent_request,
+                    ):
+                        intent_ledger.cancel_batch(intent_token)
+                except BaseException as cleanup_error:
+                    primary.add_note(
+                        "Deferred-session intent cleanup also failed with "
+                        f"{type(cleanup_error).__module__}.{type(cleanup_error).__qualname__}"
+                    )
+                    try:
+                        cleanup_incomplete = cleanup_incomplete or (
+                            intent_ledger.authenticates_batch_token(
+                                intent_token,
+                                request=intent_request,
+                            )
+                        )
+                    except BaseException:
+                        cleanup_incomplete = True
+            if exact_batch is not None and exact_batch.state in {"issued", "ready"}:
+                try:
+                    exact_batch.cancel()
+                except BaseException as cleanup_error:
+                    primary.add_note(
+                        "Deferred-session exact preflight cleanup also failed with "
+                        f"{type(cleanup_error).__module__}.{type(cleanup_error).__qualname__}"
+                    )
+                    cleanup_incomplete = cleanup_incomplete or exact_batch.state != "canceled"
+            with self._deferred_session_publication_lock:
+                if self._deferred_session_publication_batches.get(record.batch_id) is record:
+                    if cleanup_incomplete:
+                        record.exact_publication_batch = exact_batch
+                        record.intent_ledger = intent_ledger
+                        record.intent_request = intent_request
+                        record.intent_token = intent_token
+                        record.state = "cleanup_pending"
+                        record.active_thread_id = None
+                        integrity = self._deferred_session_publication_batch_integrity(
+                            carrier,
+                            record,
+                        )
+                        carrier._integrity_token = integrity
+                        record.integrity_token = integrity
+                        try:
+                            object.__setattr__(
+                                primary,
+                                "deferred_session_publication_batch",
+                                carrier,
+                            )
+                        except BaseException:
+                            pass
+                    else:
+                        self._detach_deferred_session_publication_batch_locked(
+                            record,
+                            terminal_state="failed",
+                        )
+            raise
+
+    def _build_deferred_session_recovery_shell(
+        self,
+        record: _PreparedDeferredSessionPublicationRecord,
+    ) -> tuple[
+        DeferredSessionPublicationReceipt,
+        DeferredSessionPublicationResult,
+        _ExactProjectionRecoveryRecord,
+    ]:
+        """Preallocate the exact postcanonical owner before State can commit."""
+
+        exact_batch = record.exact_publication_batch
+        if exact_batch is None:
+            raise EventContractError(
+                "Deferred-session recovery shell requires its exact source batch"
+            )
+        intent_publication_token = (
+            record.expected_intent_receipt.publication_token
+            if record.expected_intent_receipt is not None
+            else ""
+        )
+        receipt = DeferredSessionPublicationReceipt(
+            dispatcher_id=self._deferred_session_publication_dispatcher_id,
+            receipt_id=secrets.token_hex(16),
+            publication_token=secrets.token_hex(32),
+            composition_token=record.composition_token,
+            physical_transport_id=record.physical_transport_id,
+            occurrence_ids=record.occurrence_ids,
+            member_integrity_digest=record.member_digest,
+            target_proof_digest=record.target_proof_digest,
+            materialization_receipt_token="",
+            intent_publication_token=intent_publication_token,
+        )
+        outcomes = tuple(
+            ActionCohortProjectionOutcome(occurrence_id) for occurrence_id in record.occurrence_ids
+        )
+        result = DeferredSessionPublicationResult(
+            receipt=receipt,
+            materialization_receipt=None,
+            identifiers=record.prepared_identifiers,
+            projections=outcomes,
+            target_proofs=record.prepared_target_proofs,
+        )
+        recovery = _ExactProjectionRecoveryRecord(
+            kind="deferred_session",
+            receipt=receipt,
+            result=result,
+            batch=exact_batch,
+            outcome=outcomes[0],
+            occurrence_ids=record.occurrence_ids,
+            member_integrity_digest=record.member_digest,
+            identifiers=self._flatten_deferred_session_identifiers(record.prepared_identifiers),
+            outcomes=outcomes,
+            member_identifiers=record.prepared_identifiers,
+            target_proofs=record.prepared_target_proofs,
+            owner_record=record,
+            state="prepared",
+        )
+        return receipt, result, recovery
+
+    def authenticates_prepared_deferred_session_publication_batch(
+        self,
+        batch: object,
+        *,
+        composition: object | None = None,
+        coordinator: object | None = None,
+    ) -> bool:
+        """Authenticate every nested owner at the final precanonical barrier."""
+
+        from evidenceforge.generation.intent_ledger import IntentExecutionBatchReceipt
+
+        if type(batch) is not PreparedDeferredSessionPublicationBatch:
+            return False
+        owner_thread = get_ident()
+        try:
+            with self._deferred_session_publication_lock:
+                record = self._active_deferred_session_publication_batch_locked(batch)
+                if (composition is not None and record.composition is not composition) or (
+                    coordinator is not None and record.coordinator is not coordinator
+                ):
+                    return False
+                if record.state not in {"prepared", "precommit_authenticated"}:
+                    return False
+                if record.active_thread_id is not None:
+                    return False
+                prior_state = record.state
+                record.state = "authenticating"
+                record.active_thread_id = owner_thread
+            composition = record.composition
+            coordinator = record.coordinator
+            if not coordinator.authenticates(composition):
+                raise EventContractError("Deferred-session composition failed final authentication")
+            if (
+                composition.prepared_root is not record.root
+                or composition.source_timing_preparation is not record.source_timing_preparation
+                or composition.publication_order != record.dispatches
+            ):
+                raise EventContractError(
+                    "Deferred-session composition changed its retained inner owners"
+                )
+            exact_batch = record.exact_publication_batch
+            if exact_batch is None or exact_batch.state != "ready":
+                raise EventContractError("Deferred-session exact source projection is not ready")
+            exact_batch._require_authority()
+            self._validate_deferred_session_target_proofs(
+                record.dispatches,
+                record.prepared_target_proofs,
+                prepared_row_count=exact_batch.prepared_row_count,
+            )
+            if record.intent_token is None:
+                if any(
+                    value is not None
+                    for value in (
+                        record.intent_ledger,
+                        record.intent_request,
+                        record.intent_claim_context,
+                        record.intent_claimed,
+                        record.expected_intent_receipt,
+                    )
+                ):
+                    raise EventContractError(
+                        "Deferred-session publication retained a partial intent owner"
+                    )
+            else:
+                if (
+                    record.intent_ledger is None
+                    or record.intent_request is None
+                    or not record.intent_ledger.authenticates_batch_token(
+                        record.intent_token,
+                        request=record.intent_request,
+                    )
+                ):
+                    raise EventContractError(
+                        "Deferred-session intent preparation failed final authentication"
+                    )
+                if record.intent_claimed is None:
+                    intent_claim_context = record.intent_ledger.claimed_batch(record.intent_token)
+                    intent_claimed = intent_claim_context.__enter__()
+                    with self._deferred_session_publication_lock:
+                        if (
+                            self._active_deferred_session_publication_batch_locked(batch)
+                            is not record
+                        ):
+                            raise EventContractError(
+                                "Deferred-session intent claim changed bridge ownership"
+                            )
+                        record.intent_claim_context = intent_claim_context
+                        record.intent_claimed = intent_claimed
+                        integrity = self._deferred_session_publication_batch_integrity(
+                            batch,
+                            record,
+                        )
+                        batch._integrity_token = integrity
+                        record.integrity_token = integrity
+                elif record.intent_claim_context is None:
+                    raise EventContractError(
+                        "Deferred-session publication lost its intent claim context"
+                    )
+                intent_claimed = cast(
+                    "PreparedIntentExecutionBatch",
+                    record.intent_claimed,
+                )
+                expected_intent_receipt = intent_claimed.expected_receipt
+                if (
+                    type(expected_intent_receipt) is not IntentExecutionBatchReceipt
+                    or not record.intent_ledger.authenticates_expected_batch_receipt(
+                        expected_intent_receipt,
+                        preparation=intent_claimed,
+                    )
+                ):
+                    raise EventContractError(
+                        "Deferred-session intent expected receipt failed authentication"
+                    )
+                intent_claimed.certify_composite_commit(expected_intent_receipt)
+                with self._deferred_session_publication_lock:
+                    if self._active_deferred_session_publication_batch_locked(batch) is not record:
+                        raise EventContractError(
+                            "Deferred-session intent receipt changed bridge ownership"
+                        )
+                    record.expected_intent_receipt = expected_intent_receipt
+                    integrity = self._deferred_session_publication_batch_integrity(
+                        batch,
+                        record,
+                    )
+                    batch._integrity_token = integrity
+                    record.integrity_token = integrity
+            for prepared, member_lock, integrity in zip(
+                record.dispatches,
+                record.member_locks,
+                record.member_integrity_tokens,
+                strict=True,
+            ):
+                if prepared._lock is not member_lock:
+                    raise EventContractError(
+                        "Deferred-session publication member lost its exact lock"
+                    )
+                self.validate_prepared(prepared)
+                with cast(AbstractContextManager[object], member_lock):
+                    if (
+                        prepared._lock is not member_lock
+                        or prepared._consumed
+                        or prepared._deferred_session_publication_batch_id != record.batch_id
+                        or not hmac.compare_digest(prepared._integrity_token, integrity)
+                    ):
+                        raise EventContractError(
+                            "Deferred-session publication member lost its exact claim"
+                        )
+            recovery_shell = (
+                self._build_deferred_session_recovery_shell(record)
+                if record.exact_recovery is None
+                else None
+            )
+            if recovery_shell is None and (
+                record.publication_receipt is None
+                or record.publication_result is None
+                or record.exact_recovery is None
+                or record.exact_recovery.state != "prepared"
+            ):
+                raise EventContractError(
+                    "Deferred-session publication recovery shell changed before precommit"
+                )
+            with self._action_cohort_lock:
+                with self._deferred_session_publication_lock:
+                    if self._active_deferred_session_publication_batch_locked(batch) is not record:
+                        raise EventContractError(
+                            "Deferred-session publication ownership changed during authentication"
+                        )
+                    if record.state != "authenticating" or record.active_thread_id != owner_thread:
+                        raise EventContractError(
+                            "Deferred-session publication authentication claim changed"
+                        )
+                    if not record.recovery_capacity_reserved:
+                        if (
+                            len(self._exact_projection_recoveries)
+                            + self._exact_projection_recovery_reservations
+                            >= self._exact_projection_recovery_capacity
+                        ):
+                            raise EventContractError(
+                                "Deferred-session exact recovery capacity is exhausted"
+                            )
+                        self._exact_projection_recovery_reservations += 1
+                        record.recovery_capacity_reserved = True
+                    if not record.receipt_capacity_reserved:
+                        effective_retained = (
+                            self._deferred_session_publication_committed_receipts
+                            + self._deferred_session_publication_receipt_reservations
+                            - len(self._deferred_session_publication_receipt_eviction_reservations)
+                        )
+                        if effective_retained >= self._action_cohort_receipt_capacity:
+                            eviction_id = next(
+                                (
+                                    receipt_id
+                                    for receipt_id, retained_receipt in (
+                                        self._deferred_session_publication_receipts.items()
+                                    )
+                                    if retained_receipt._published
+                                    and receipt_id not in self._exact_projection_recoveries
+                                    and receipt_id
+                                    not in (
+                                        self._deferred_session_publication_receipt_eviction_reservations
+                                    )
+                                ),
+                                None,
+                            )
+                            if eviction_id is None:
+                                raise EventContractError(
+                                    "Deferred-session receipt capacity has no terminal eviction"
+                                )
+                            record.receipt_eviction_id = eviction_id
+                            self._deferred_session_publication_receipt_eviction_reservations.add(
+                                eviction_id
+                            )
+                        self._deferred_session_publication_receipt_reservations += 1
+                        record.receipt_capacity_reserved = True
+                    if recovery_shell is not None:
+                        (
+                            record.publication_receipt,
+                            record.publication_result,
+                            record.exact_recovery,
+                        ) = recovery_shell
+                        integrity = self._deferred_session_publication_batch_integrity(
+                            batch,
+                            record,
+                        )
+                        batch._integrity_token = integrity
+                        record.integrity_token = integrity
+                    record.state = "precommit_authenticated"
+                    record.active_thread_id = None
+            return True
+        except BaseException:
+            with self._deferred_session_publication_lock:
+                trusted_batch_id = self._deferred_session_publication_locators.get(id(batch))
+                retained = (
+                    self._deferred_session_publication_batches.get(trusted_batch_id)
+                    if type(trusted_batch_id) is int
+                    else None
+                )
+                if (
+                    retained is not None
+                    and retained.carrier is batch
+                    and retained is locals().get("record")
+                    and retained.active_thread_id == owner_thread
+                    and retained.state == "authenticating"
+                ):
+                    retained.state = locals().get("prior_state", "prepared")
+                    retained.active_thread_id = None
+            return False
+
+    def _deferred_session_precommit_integrity(
+        self,
+        precommit: DeferredSessionPublicationPrecommit,
+        record: _PreparedDeferredSessionPublicationRecord,
+    ) -> str:
+        """Bind one opaque lifecycle claim to the fully frozen dispatcher record."""
+
+        exact_batch = record.exact_publication_batch
+        payload = repr(
+            (
+                "deferred-session-precommit-v1",
+                id(precommit),
+                precommit.dispatcher_id,
+                precommit.batch_id,
+                precommit.composition_token,
+                precommit.member_digest,
+                precommit.target_proof_digest,
+                record.integrity_token,
+                id(record.carrier),
+                id(exact_batch),
+                getattr(getattr(exact_batch, "_token", None), "integrity", None),
+                id(record.publication_receipt),
+                id(record.publication_result),
+                id(record.exact_recovery),
+                id(record.materialization_receipt_shell),
+                record.materialization_receipt_shell_digest,
+            )
+        ).encode("utf-8")
+        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+
+    def _active_deferred_session_precommit_locked(
+        self,
+        precommit: DeferredSessionPublicationPrecommit,
+    ) -> _PreparedDeferredSessionPublicationRecord:
+        """Locate an exact original precommit without hashing mutable public fields."""
+
+        if type(precommit) is not DeferredSessionPublicationPrecommit:
+            raise EventContractError("Deferred-session precommit requires the exact opaque type")
+        batch_id = self._deferred_session_publication_precommit_locators.get(id(precommit))
+        record = (
+            self._deferred_session_publication_batches.get(batch_id)
+            if type(batch_id) is int
+            else None
+        )
+        if record is None or record.precommit is not precommit:
+            raise EventContractError("Deferred-session precommit is copied, foreign, or stale")
+        bounded_strings = (
+            precommit.dispatcher_id,
+            precommit.composition_token,
+            precommit.member_digest,
+            precommit.target_proof_digest,
+            precommit._integrity,
+        )
+        if (
+            any(
+                type(value) is not str
+                or not value
+                or len(value) > _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS
+                for value in bounded_strings
+            )
+            or type(precommit.batch_id) is not int
+            or precommit.batch_id <= 0
+            or precommit.dispatcher_id != self._deferred_session_publication_dispatcher_id
+            or precommit.batch_id != record.batch_id
+            or precommit.composition_token != record.composition_token
+            or precommit.member_digest != record.member_digest
+            or precommit.target_proof_digest != record.target_proof_digest
+            or not hmac.compare_digest(
+                precommit._integrity,
+                self._deferred_session_precommit_integrity(precommit, record),
+            )
+        ):
+            raise EventContractError("Deferred-session precommit failed integrity validation")
+        return record
+
+    def prepare_deferred_session_publication_precommit(
+        self,
+        batch: PreparedDeferredSessionPublicationBatch,
+        *,
+        composition: object,
+        coordinator: object,
+    ) -> DeferredSessionPublicationPrecommit:
+        """Issue the immutable lifecycle claim over one fully frozen source batch."""
+
+        if not self.authenticates_prepared_deferred_session_publication_batch(
+            batch,
+            composition=composition,
+            coordinator=coordinator,
+        ):
+            raise EventContractError(
+                "Deferred-session precommit source batch failed authentication"
+            )
+        with self._deferred_session_publication_lock:
+            record = self._active_deferred_session_publication_batch_locked(batch)
+            if record.state != "precommit_authenticated":
+                raise EventContractError(
+                    "Deferred-session source batch is not ready for lifecycle claim"
+                )
+            if record.precommit is not None:
+                self._active_deferred_session_precommit_locked(record.precommit)
+                return record.precommit
+            precommit = DeferredSessionPublicationPrecommit(
+                dispatcher_id=self._deferred_session_publication_dispatcher_id,
+                batch_id=record.batch_id,
+                composition_token=record.composition_token,
+                member_digest=record.member_digest,
+                target_proof_digest=record.target_proof_digest,
+            )
+            object.__setattr__(
+                precommit,
+                "_integrity",
+                self._deferred_session_precommit_integrity(precommit, record),
+            )
+            record.precommit = precommit
+            self._deferred_session_publication_precommit_locators[id(precommit)] = record.batch_id
+            return precommit
+
+    def claim_deferred_session_publication_precommit(
+        self,
+        precommit: DeferredSessionPublicationPrecommit,
+    ) -> bool:
+        """Revalidate and claim one immutable bridge seal at lifecycle's final fence."""
+
+        with self._action_cohort_lock:
+            with self._deferred_session_publication_lock:
+                try:
+                    record = self._active_deferred_session_precommit_locked(precommit)
+                except EventContractError:
+                    return False
+                batch = record.carrier
+                recovery = record.exact_recovery
+                receipt = record.publication_receipt
+                materialization_shell = record.materialization_receipt_shell
+                if (
+                    record.state != "precommit_authenticated"
+                    or recovery is None
+                    or receipt is None
+                    or materialization_shell is None
+                    or len(record.materialization_receipt_shell_digest) != 64
+                    or record.publication_result is not recovery.result
+                    or recovery.receipt is not receipt
+                    or recovery.state != "prepared"
+                    or not record.recovery_capacity_reserved
+                    or id(receipt) in self._exact_projection_recoveries
+                ):
+                    return False
+                # Source timing, runtime, lifecycle, and application capabilities are
+                # already claimed when lifecycle reaches this fence.  Re-running their
+                # public "active preparation" validators here would reject that valid
+                # transition.  Instead, the dispatcher-issued precommit pins the prior
+                # full authentication and this final lock cohort recomputes every
+                # mutable dispatch/root signature immediately before canonical commit.
+                with ExitStack() as member_locks:
+                    if len({id(lock) for lock in record.member_locks}) != len(record.member_locks):
+                        return False
+                    for member_lock in sorted(record.member_locks, key=id):
+                        member_locks.enter_context(
+                            cast(AbstractContextManager[object], member_lock)
+                        )
+                    try:
+                        if (
+                            self._active_deferred_session_precommit_locked(precommit) is not record
+                            or self._active_deferred_session_publication_batch_locked(batch)
+                            is not record
+                        ):
+                            return False
+                        for prepared, member_lock, retained_integrity in zip(
+                            record.dispatches,
+                            record.member_locks,
+                            record.member_integrity_tokens,
+                            strict=True,
+                        ):
+                            current_integrity = self._prepared_dispatch_integrity(prepared)
+                            if (
+                                prepared._lock is not member_lock
+                                or prepared._consumed
+                                or prepared._deferred_session_publication_batch_id
+                                != record.batch_id
+                                or not hmac.compare_digest(
+                                    prepared._integrity_token,
+                                    retained_integrity,
+                                )
+                                or not hmac.compare_digest(
+                                    prepared._integrity_token,
+                                    current_integrity,
+                                )
+                            ):
+                                return False
+                        current_shell_digest = (
+                            self._deferred_session_materialization_receipt_shell_digest(
+                                record,
+                                materialization_shell,
+                            )
+                        )
+                        if not hmac.compare_digest(
+                            current_shell_digest,
+                            record.materialization_receipt_shell_digest,
+                        ):
+                            return False
+                    except EventContractError:
+                        return False
+                    self._exact_projection_recoveries[id(receipt)] = recovery
+                    self._exact_projection_recovery_reservations -= 1
+                    record.recovery_capacity_reserved = False
+                    recovery.state = "canonical_pending"
+                    record.state = "canonical_claimed"
+                    self._exact_projection_recovery_high_water = max(
+                        self._exact_projection_recovery_high_water,
+                        len(self._exact_projection_recoveries),
+                    )
+                    return True
+
+    def bind_deferred_session_materialization_receipt_shell(
+        self,
+        precommit: DeferredSessionPublicationPrecommit,
+        receipt: object,
+    ) -> None:
+        """Bind the preallocated lifecycle receipt identity before canonical claim."""
+
+        from evidenceforge.generation.lifecycle_authority import (
+            LifecyclePreparedNetworkReceipt,
+        )
+
+        if type(receipt) is not LifecyclePreparedNetworkReceipt:
+            raise EventContractError(
+                "Deferred-session materialization shell has an unsupported type"
+            )
+        with self._deferred_session_publication_lock:
+            record = self._active_deferred_session_precommit_locked(precommit)
+            if record.state != "precommit_authenticated":
+                raise EventContractError(
+                    "Deferred-session materialization shell missed the precommit fence"
+                )
+            authority = self._lifecycle_authority
+            if authority is None or not (
+                authority.authenticates_deferred_session_materialization_receipt_shell(
+                    record.root,
+                    record.source_timing_preparation,
+                    receipt,
+                )
+            ):
+                raise EventContractError(
+                    "Deferred-session materialization shell failed lifecycle authentication"
+                )
+            shell_digest = self._deferred_session_materialization_receipt_shell_digest(
+                record,
+                receipt,
+            )
+            retained = record.materialization_receipt_shell
+            if retained is not None and retained is not receipt:
+                raise EventContractError("Deferred-session materialization shell was already bound")
+            if retained is receipt:
+                if not hmac.compare_digest(
+                    record.materialization_receipt_shell_digest,
+                    shell_digest,
+                ):
+                    raise EventContractError(
+                        "Deferred-session materialization shell changed after binding"
+                    )
+                return
+            record.materialization_receipt_shell = receipt
+            record.materialization_receipt_shell_digest = shell_digest
+            try:
+                integrity = self._deferred_session_publication_batch_integrity(
+                    record.carrier,
+                    record,
+                )
+                record.carrier._integrity_token = integrity
+                record.integrity_token = integrity
+                object.__setattr__(
+                    precommit,
+                    "_integrity",
+                    self._deferred_session_precommit_integrity(precommit, record),
+                )
+            except BaseException:
+                record.materialization_receipt_shell = None
+                record.materialization_receipt_shell_digest = ""
+                raise
+
+    def _deferred_session_materialization_receipt_shell_digest(
+        self,
+        record: _PreparedDeferredSessionPublicationRecord,
+        receipt: object,
+    ) -> str:
+        """Return a local seal over one exact lifecycle-authenticated blank shell."""
+
+        from evidenceforge.generation.lifecycle_authority import (
+            LifecycleConnectionCompositeReceipt,
+            LifecyclePreparedNetworkReceipt,
+        )
+
+        if type(receipt) is not LifecyclePreparedNetworkReceipt:
+            raise EventContractError(
+                "Deferred-session materialization shell must be the exact receipt type"
+            )
+        connection = receipt._connection_receipt
+        expected_fingerprint = record.root.state_plan.physical_transport_fingerprint
+        bounded_outer_strings = (
+            receipt._runtime_publication_token,
+            receipt._state_publication_token,
+            receipt._transaction_id,
+            receipt._result_digest,
+            receipt._integrity_token,
+        )
+        if (
+            any(
+                type(value) is not str
+                or not value
+                or len(value) > _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS
+                for value in bounded_outer_strings
+            )
+            or receipt._runtime_publication_token != record.root.runtime_token.publication_token
+            or receipt._state_publication_token != record.root.state_plan.publication_token
+            or receipt._transaction_id != record.root.transaction.stable_id
+            or receipt._materialization_mode is not record.root.state_plan.mode
+            or type(receipt._lifecycle_mode) is not str
+            or receipt._lifecycle_mode != record.root.runtime_token.lifecycle_mode
+            or type(receipt._physical_transport) is not type(expected_fingerprint)
+            or receipt._physical_transport != expected_fingerprint
+            or receipt._timing_binding_token is not record.source_timing_preparation.binding_token
+            or receipt._runtime_receipt is not None
+            or receipt._timing_receipt is not None
+            or type(connection) is not LifecycleConnectionCompositeReceipt
+        ):
+            raise EventContractError(
+                "Deferred-session materialization shell changed its root binding"
+            )
+        bounded_connection_strings = (
+            connection._state_publication_token,
+            connection._transaction_id,
+        )
+        if (
+            any(
+                type(value) is not str
+                or not value
+                or len(value) > _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS
+                for value in bounded_connection_strings
+            )
+            or connection._state_publication_token != record.root.state_plan.publication_token
+            or type(connection._prior_version) is not int
+            or connection._prior_version != record.root.state_plan.expected_version
+            or type(connection._committed_version) is not int
+            or connection._committed_version != record.root.state_plan.expected_version + 1
+            or connection._transaction_id != record.root.transaction.stable_id
+            or type(connection._physical_transport) is not type(expected_fingerprint)
+            or connection._physical_transport != expected_fingerprint
+            or type(connection._materializes_connection) is not bool
+            or connection._materializes_connection
+            is not record.root.state_plan.materializes_connection
+            or connection._lifecycle_receipt is not None
+            or connection._application_proof is not None
+            or type(connection._prerequisite_proofs) is not tuple
+            or connection._prerequisite_proofs
+            or connection._integrity_token != ""
+        ):
+            raise EventContractError(
+                "Deferred-session materialization shell changed its connection binding"
+            )
+        payload = repr(
+            (
+                "deferred-session-materialization-shell-v1",
+                id(receipt),
+                receipt._runtime_publication_token,
+                receipt._state_publication_token,
+                receipt._transaction_id,
+                receipt._materialization_mode,
+                receipt._lifecycle_mode,
+                receipt._physical_transport,
+                receipt._result_digest,
+                id(receipt._timing_binding_token),
+                id(connection),
+                connection._state_publication_token,
+                connection._prior_version,
+                connection._committed_version,
+                connection._transaction_id,
+                connection._physical_transport,
+                connection._materializes_connection,
+                connection._prerequisite_proofs,
+                receipt._integrity_token,
+            )
+        ).encode("utf-8")
+        return hmac.new(
+            self._prepared_dispatch_secret,
+            payload,
+            hashlib.sha256,
+        ).hexdigest()
+
+    def release_deferred_session_publication_precommit(
+        self,
+        precommit: DeferredSessionPublicationPrecommit,
+    ) -> None:
+        """Return a failed lifecycle claim to its still-reversible batch owner."""
+
+        with self._action_cohort_lock:
+            with self._deferred_session_publication_lock:
+                batch_id = self._deferred_session_publication_precommit_locators.get(id(precommit))
+                record = (
+                    self._deferred_session_publication_batches.get(batch_id)
+                    if type(batch_id) is int
+                    else None
+                )
+                if record is None or record.precommit is not precommit:
+                    raise EventContractError(
+                        "Deferred-session precommit cleanup owner is foreign or stale"
+                    )
+                if record.state == "canonical_claimed":
+                    recovery = record.exact_recovery
+                    receipt = record.publication_receipt
+                    if (
+                        recovery is None
+                        or receipt is None
+                        or recovery.state != "canonical_pending"
+                        or self._exact_projection_recoveries.get(id(receipt)) is not recovery
+                    ):
+                        raise EventContractError(
+                            "Deferred-session precommit cleanup lost its recovery owner"
+                        )
+                    self._exact_projection_recoveries.pop(id(receipt))
+                    self._exact_projection_recovery_reservations += 1
+                    record.recovery_capacity_reserved = True
+                    recovery.state = "prepared"
+                    record.state = "precommit_authenticated"
+
+    def _canonical_deferred_session_publication_record_locked(
+        self,
+        batch: PreparedDeferredSessionPublicationBatch,
+    ) -> _PreparedDeferredSessionPublicationRecord:
+        """Locate the exact carrier after lifecycle crossed the canonical fence.
+
+        Once the immutable precommit has been claimed, canonical State may already
+        exist.  Recovery must therefore use the dispatcher-retained carrier identity
+        and state transition rather than re-reading caller-mutable carrier fields or
+        revalidating preparations that have legitimately committed.
+        """
+
+        if type(batch) is not PreparedDeferredSessionPublicationBatch:
+            raise EventContractError(
+                "Deferred-session canonical publication requires the exact opaque batch"
+            )
+        batch_id = self._deferred_session_publication_locators.get(id(batch))
+        record = (
+            self._deferred_session_publication_batches.get(batch_id)
+            if type(batch_id) is int
+            else None
+        )
+        if (
+            record is None
+            or record.carrier is not batch
+            or record.precommit is None
+            or record.state not in {"canonical_claimed", "publishing", "recovering"}
+        ):
+            raise EventContractError(
+                "Deferred-session canonical publication carrier is foreign or stale"
+            )
+        return record
+
+    def cancel_prepared_deferred_session_publication_batch(
+        self,
+        batch: PreparedDeferredSessionPublicationBatch,
+    ) -> bool:
+        """Cancel one uncommitted exact projection reservation without source writes."""
+
+        if type(batch) is not PreparedDeferredSessionPublicationBatch:
+            raise TypeError("Deferred-session cancellation requires the exact opaque batch")
+        owner_thread = get_ident()
+        integrity_failure: EventContractError | None = None
+        with self._deferred_session_publication_lock:
+            try:
+                record = self._active_deferred_session_publication_batch_locked(batch)
+            except EventContractError as error:
+                trusted_batch_id = self._deferred_session_publication_locators.get(id(batch))
+                retained = (
+                    self._deferred_session_publication_batches.get(trusted_batch_id)
+                    if type(trusted_batch_id) is int
+                    else None
+                )
+                if retained is None:
+                    if (
+                        type(batch._dispatcher_id) is not str
+                        or batch._dispatcher_id != self._deferred_session_publication_dispatcher_id
+                    ):
+                        raise
+                    return False
+                if retained.carrier is not batch:
+                    raise
+                record = retained
+                integrity_failure = error
+            for prepared, member_lock, retained_integrity in zip(
+                record.dispatches,
+                record.member_locks,
+                record.member_integrity_tokens,
+                strict=True,
+            ):
+                with cast(AbstractContextManager[object], member_lock):
+                    try:
+                        member_changed = bool(
+                            prepared._lock is not member_lock
+                            or prepared._consumed
+                            or prepared._deferred_session_publication_batch_id != record.batch_id
+                            or not hmac.compare_digest(
+                                prepared._integrity_token,
+                                retained_integrity,
+                            )
+                            or not hmac.compare_digest(
+                                prepared._integrity_token,
+                                self._prepared_dispatch_integrity(prepared),
+                            )
+                        )
+                    except BaseException:
+                        member_changed = True
+                if member_changed and integrity_failure is None:
+                    integrity_failure = EventContractError(
+                        "Deferred-session publication member changed before cancellation"
+                    )
+            if record.state not in {
+                "prepared",
+                "precommit_authenticated",
+                "cleanup_pending",
+            }:
+                raise StateError("Active deferred-session publication cannot be cancelled")
+            if (
+                record.source_timing_preparation.committed
+                or record.source_timing_preparation.receipt is not None
+                or record.materialization_receipt is not None
+            ):
+                raise StateError("Committed deferred-session publication requires exact recovery")
+            prior_state = record.state
+            record.state = "cancelling"
+            record.active_thread_id = owner_thread
+            exact_batch = record.exact_publication_batch
+            intent_ledger = record.intent_ledger
+            intent_token = record.intent_token
+            intent_claim_context = record.intent_claim_context
+        if intent_claim_context is not None:
+            cancellation = StateError("Deferred-session publication cancelled before root commit")
+            try:
+                intent_claim_context.__exit__(
+                    type(cancellation),
+                    cancellation,
+                    cancellation.__traceback__,
+                )
+            except BaseException:
+                try:
+                    still_active = bool(
+                        intent_ledger is not None
+                        and intent_token is not None
+                        and intent_ledger.authenticates_batch_token(
+                            intent_token,
+                            request=record.intent_request,
+                        )
+                    )
+                except BaseException:
+                    still_active = True
+                if still_active:
+                    with self._deferred_session_publication_lock:
+                        if (
+                            self._deferred_session_publication_batches.get(record.batch_id)
+                            is record
+                            and record.active_thread_id == owner_thread
+                        ):
+                            record.state = prior_state
+                            record.active_thread_id = None
+                    raise
+        elif intent_ledger is not None and intent_token is not None:
+            try:
+                if intent_ledger.authenticates_batch_token(
+                    intent_token,
+                    request=record.intent_request,
+                ):
+                    intent_ledger.cancel_batch(intent_token)
+            except BaseException:
+                try:
+                    still_active = intent_ledger.authenticates_batch_token(
+                        intent_token,
+                        request=record.intent_request,
+                    )
+                except BaseException:
+                    still_active = True
+                if still_active:
+                    with self._deferred_session_publication_lock:
+                        if (
+                            self._deferred_session_publication_batches.get(record.batch_id)
+                            is record
+                            and record.active_thread_id == owner_thread
+                        ):
+                            record.state = prior_state
+                            record.active_thread_id = None
+                    raise
+        if exact_batch is not None and exact_batch.state in {"issued", "ready"}:
+            try:
+                exact_batch.cancel()
+            except BaseException:
+                if exact_batch.state != "canceled":
+                    with self._deferred_session_publication_lock:
+                        if (
+                            self._deferred_session_publication_batches.get(record.batch_id)
+                            is record
+                            and record.active_thread_id == owner_thread
+                        ):
+                            record.state = prior_state
+                            record.active_thread_id = None
+                    raise
+        with self._action_cohort_lock:
+            with self._deferred_session_publication_lock:
+                if self._deferred_session_publication_batches.get(record.batch_id) is not record:
+                    raise EventContractError("Deferred-session cancellation ownership changed")
+                self._detach_deferred_session_publication_batch_locked(
+                    record,
+                    terminal_state="cancelled",
+                )
+        if integrity_failure is not None:
+            raise EventContractError(
+                "Deferred-session publication integrity failed; exact reservations were cancelled"
+            ) from integrity_failure
+        return True
+
+    def deferred_session_publication_census(self) -> DeferredSessionPublicationCensus:
+        """Return bounded retained bridge work without scanning source sinks."""
+
+        with self._action_cohort_lock:
+            recovery_reservations = self._exact_projection_recovery_reservations
+            with self._deferred_session_publication_lock:
+                return DeferredSessionPublicationCensus(
+                    prepared_batches=len(self._deferred_session_publication_batches),
+                    retained_members=self._deferred_session_publication_retained_members,
+                    retained_bytes=self._deferred_session_publication_retained_bytes,
+                    committed_receipts=self._deferred_session_publication_committed_receipts,
+                    pending_receipts=len(self._deferred_session_publication_pending_receipts),
+                    receipt_reservations=(self._deferred_session_publication_receipt_reservations),
+                    receipt_eviction_reservations=len(
+                        self._deferred_session_publication_receipt_eviction_reservations
+                    ),
+                    recovery_reservations=recovery_reservations,
+                    preparation_capacity=self._action_cohort_preparation_capacity,
+                    member_capacity=self._action_cohort_member_capacity,
+                    retained_byte_capacity=self._action_cohort_byte_capacity,
+                    receipt_capacity=self._action_cohort_receipt_capacity,
+                )
+
+    def _deferred_session_publication_receipt_integrity(
+        self,
+        receipt: DeferredSessionPublicationReceipt,
+    ) -> str:
+        """Authenticate one closed postcanonical source-publication receipt."""
+
+        payload = repr(
+            (
+                "deferred-session-publication-receipt-v2",
+                id(receipt),
+                receipt.dispatcher_id,
+                receipt.receipt_id,
+                receipt.publication_token,
+                receipt.composition_token,
+                receipt.physical_transport_id,
+                receipt.occurrence_ids,
+                receipt.member_integrity_digest,
+                receipt.target_proof_digest,
+                receipt.materialization_receipt_token,
+                receipt.intent_publication_token,
+            )
+        ).encode("utf-8")
+        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def _deferred_session_publication_receipt_shape_is_valid(
+        receipt: DeferredSessionPublicationReceipt,
+    ) -> bool:
+        """Reject hostile receipt fields before registry or HMAC work."""
+
+        bounded_strings = (
+            receipt.dispatcher_id,
+            receipt.receipt_id,
+            receipt.publication_token,
+            receipt.composition_token,
+            receipt.physical_transport_id,
+            receipt.member_integrity_digest,
+            receipt.target_proof_digest,
+            receipt.materialization_receipt_token,
+            receipt._integrity,
+        )
+        return bool(
+            all(
+                type(value) is str and 0 < len(value) <= _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS
+                for value in bounded_strings
+            )
+            and type(receipt.occurrence_ids) is tuple
+            and 1 <= len(receipt.occurrence_ids) <= _MAX_DEFERRED_SESSION_PUBLICATION_MEMBERS
+            and all(
+                type(value) is str and 0 < len(value) <= _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS
+                for value in receipt.occurrence_ids
+            )
+            and len(set(receipt.occurrence_ids)) == len(receipt.occurrence_ids)
+            and type(receipt.intent_publication_token) is str
+            and len(receipt.intent_publication_token) <= _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS
+            and type(receipt._published) is bool
+        )
+
+    def authenticates_deferred_session_publication_receipt(
+        self,
+        receipt: object,
+    ) -> bool:
+        """Return whether this dispatcher retained one authentic terminal receipt."""
+
+        if type(receipt) is not DeferredSessionPublicationReceipt:
+            return False
+        try:
+            with self._deferred_session_publication_lock:
+                retained = self._deferred_session_publication_receipts.get(id(receipt))
+                if retained is not receipt:
+                    return False
+            if not self._deferred_session_publication_receipt_shape_is_valid(receipt):
+                return False
+            expected = self._deferred_session_publication_receipt_integrity(receipt)
+            with self._deferred_session_publication_lock:
+                return bool(
+                    self._deferred_session_publication_receipts.get(id(receipt)) is receipt
+                    and receipt.dispatcher_id == self._deferred_session_publication_dispatcher_id
+                    and hmac.compare_digest(receipt._integrity, expected)
+                    and receipt._published
+                )
+        except BaseException:
+            return False
+
+    def _prepare_deferred_session_dispatcher_ledgers(
+        self,
+        record: _PreparedDeferredSessionPublicationRecord,
+    ) -> None:
+        """Allocate all in-memory dispatcher replacements before exact sink admission."""
+
+        binary_counts = self._binary_identity_counts.copy()
+        for identity_kind in record.member_binary_identity_kinds:
+            if identity_kind:
+                binary_counts[identity_kind] += 1
+        record.prepared_binary_counts = binary_counts
+        record.prepared_latest_network_observations_uid = self._latest_network_observations_uid
+        record.prepared_latest_network_observations = self._latest_network_observations
+        record.prepared_latest_network_plan = self._latest_network_plan
+        if record.frozen_latest_network_plan is not None:
+            record.prepared_latest_network_observations_uid = (
+                record.frozen_latest_network_observations_uid
+            )
+            record.prepared_latest_network_observations = record.frozen_latest_network_observations
+            record.prepared_latest_network_plan = record.frozen_latest_network_plan
+
+    def _commit_deferred_session_dispatcher_ledgers_no_fail(
+        self,
+        record: _PreparedDeferredSessionPublicationRecord,
+    ) -> None:
+        """Swap only preallocated ledgers exactly once before sink recovery begins."""
+
+        if record.dispatcher_ledgers_committed:
+            return
+        self._binary_identity_counts = cast(Counter[str], record.prepared_binary_counts)
+        self._latest_network_observations_uid = record.prepared_latest_network_observations_uid
+        self._latest_network_observations = record.prepared_latest_network_observations
+        self._latest_network_plan = record.prepared_latest_network_plan
+        if not record.observation_committed:
+            self._commit_action_cohort_observations_no_fail(record)
+        record.dispatcher_ledgers_committed = True
+
+    @staticmethod
+    def _flatten_deferred_session_identifiers(
+        identifiers: tuple[tuple[tuple[str, str], ...], ...],
+    ) -> tuple[tuple[str, str], ...]:
+        """Bind member ordinals into the generic exact-recovery result shape."""
+
+        return tuple(
+            (f"{member_ordinal}:{format_name}", value)
+            for member_ordinal, member in enumerate(identifiers)
+            for format_name, value in member
+        )
+
+    def _complete_deferred_session_exact_recovery(
+        self,
+        recovery: _ExactProjectionRecoveryRecord,
+    ) -> None:
+        """Consume the bridge carrier after engine-drainable exact release succeeds."""
+
+        record = recovery.owner_record
+        if type(record) is not _PreparedDeferredSessionPublicationRecord:
+            raise EventContractError("Deferred-session exact recovery lost its bridge owner")
+        with self._action_cohort_lock:
+            with self._deferred_session_publication_lock:
+                if self._deferred_session_publication_batches.get(record.batch_id) is record:
+                    for prepared, member_lock in zip(
+                        record.dispatches,
+                        record.member_locks,
+                        strict=True,
+                    ):
+                        with cast(AbstractContextManager[object], member_lock):
+                            prepared._consumed = True
+                    self._detach_deferred_session_publication_batch_locked(
+                        record,
+                        terminal_state="published",
+                    )
+
+    def _complete_deferred_session_owner_tail(
+        self,
+        recovery: _ExactProjectionRecoveryRecord,
+    ) -> None:
+        """Resume every committed canonical owner before exact sink admission."""
+
+        from evidenceforge.generation.intent_ledger import IntentExecutionBatchReceipt
+
+        record = recovery.owner_record
+        if (
+            type(record) is not _PreparedDeferredSessionPublicationRecord
+            or record.exact_recovery is not recovery
+            or record.publication_receipt is not recovery.receipt
+        ):
+            raise EventContractError(
+                "Deferred-session owner-tail recovery lost its exact bridge record"
+            )
+        receipt = cast(DeferredSessionPublicationReceipt, recovery.receipt)
+        with self._publication_ledger_lock:
+            with self._claimed_action_cohort_observations(record):
+                self._prepare_deferred_session_dispatcher_ledgers(record)
+                if record.intent_claimed is not None:
+                    intent_claimed = record.intent_claimed
+                    expected_intent_receipt = record.expected_intent_receipt
+                    intent_ledger = record.intent_ledger
+                    if (
+                        type(expected_intent_receipt) is not IntentExecutionBatchReceipt
+                        or intent_ledger is None
+                        or record.intent_request is None
+                        or not intent_ledger.authenticates_expected_batch_receipt(
+                            expected_intent_receipt,
+                            preparation=intent_claimed,
+                        )
+                    ):
+                        raise EventContractError(
+                            "Deferred-session owner-tail intent proof failed authentication"
+                        )
+                    if not intent_claimed.committed:
+                        self._commit_exact_expected_owner(
+                            intent_claimed.commit_no_fail,
+                            expected=expected_intent_receipt,
+                            terminal_authenticates=lambda: bool(
+                                intent_claimed.committed
+                                and intent_claimed.receipt is expected_intent_receipt
+                                and intent_ledger.authenticates_batch_receipt(
+                                    expected_intent_receipt,
+                                    request=record.intent_request,
+                                )
+                            ),
+                            label="Deferred-session intent owner",
+                        )
+                self._commit_exact_expected_owner(
+                    lambda: self._commit_deferred_session_dispatcher_ledgers_no_fail(record),
+                    expected=None,
+                    terminal_authenticates=lambda: bool(
+                        record.dispatcher_ledgers_committed and record.observation_committed
+                    ),
+                    label="Deferred-session dispatcher ledger owner",
+                )
+        if record.intent_claim_context is not None and not record.intent_claim_closed:
+            try:
+                record.intent_claim_context.__exit__(None, None, None)
+            except BaseException:
+                expected_intent_receipt = record.expected_intent_receipt
+                intent_claimed = record.intent_claimed
+                intent_ledger = record.intent_ledger
+                if not (
+                    type(expected_intent_receipt) is IntentExecutionBatchReceipt
+                    and intent_claimed is not None
+                    and intent_claimed.committed
+                    and intent_claimed.receipt is expected_intent_receipt
+                    and intent_ledger is not None
+                    and intent_ledger.authenticates_batch_receipt(
+                        expected_intent_receipt,
+                        request=record.intent_request,
+                    )
+                ):
+                    raise
+            record.intent_claim_closed = True
+        with self._action_cohort_lock:
+            with self._deferred_session_publication_lock:
+                if (
+                    self._deferred_session_publication_pending_receipts.get(id(receipt))
+                    is not receipt
+                    or self._exact_projection_recoveries.get(id(receipt)) is not recovery
+                ):
+                    raise EventContractError(
+                        "Deferred-session owner-tail recovery registries changed"
+                    )
+                eviction_id = record.receipt_eviction_id
+                evicted: DeferredSessionPublicationReceipt | None = None
+                if eviction_id is not None:
+                    if (
+                        eviction_id
+                        not in self._deferred_session_publication_receipt_eviction_reservations
+                        or eviction_id in self._exact_projection_recoveries
+                    ):
+                        raise EventContractError(
+                            "Deferred-session terminal receipt eviction changed"
+                        )
+                    evicted = self._deferred_session_publication_receipts.get(eviction_id)
+                    if evicted is None or not evicted._published:
+                        raise EventContractError(
+                            "Deferred-session terminal receipt eviction was lost"
+                        )
+                self._deferred_session_publication_pending_receipts.pop(id(receipt))
+                if eviction_id is not None:
+                    self._deferred_session_publication_receipts.pop(eviction_id)
+                    self._deferred_session_publication_receipt_eviction_reservations.remove(
+                        eviction_id
+                    )
+                    self._deferred_session_publication_committed_receipts -= 1
+                    record.receipt_eviction_id = None
+                object.__setattr__(receipt, "_published", True)
+                self._deferred_session_publication_receipts[id(receipt)] = receipt
+                if record.receipt_capacity_reserved:
+                    self._deferred_session_publication_receipt_reservations -= 1
+                    record.receipt_capacity_reserved = False
+                    self._deferred_session_publication_committed_receipts += 1
+
+    def _deferred_session_owner_tail_terminal_authenticates(
+        self,
+        recovery: _ExactProjectionRecoveryRecord,
+    ) -> bool:
+        """Adopt a fully installed owner tail when its callback return is lost."""
+
+        from evidenceforge.generation.intent_ledger import IntentExecutionBatchReceipt
+
+        record = recovery.owner_record
+        receipt = recovery.receipt
+        result = recovery.result
+        if (
+            type(record) is not _PreparedDeferredSessionPublicationRecord
+            or type(receipt) is not DeferredSessionPublicationReceipt
+            or type(result) is not DeferredSessionPublicationResult
+            or record.exact_recovery is not recovery
+            or record.publication_receipt is not receipt
+            or record.publication_result is not result
+            or result.receipt is not receipt
+            or result.materialization_receipt is not record.materialization_receipt
+            or result.projections is not recovery.outcomes
+            or result.identifiers is not recovery.member_identifiers
+            or result.target_proofs is not recovery.target_proofs
+            or not record.dispatcher_ledgers_committed
+            or not record.observation_committed
+            or not self.authenticates_deferred_session_publication_receipt(receipt)
+        ):
+            return False
+        if record.intent_claimed is None:
+            if any(
+                value is not None
+                for value in (
+                    record.intent_claim_context,
+                    record.expected_intent_receipt,
+                )
+            ):
+                return False
+        else:
+            intent_receipt = record.expected_intent_receipt
+            intent_ledger = record.intent_ledger
+            if (
+                type(intent_receipt) is not IntentExecutionBatchReceipt
+                or intent_ledger is None
+                or record.intent_request is None
+                or not record.intent_claimed.committed
+                or record.intent_claimed.receipt is not intent_receipt
+                or not record.intent_claim_closed
+                or not intent_ledger.authenticates_batch_receipt(
+                    intent_receipt,
+                    request=record.intent_request,
+                )
+            ):
+                return False
+        with self._action_cohort_lock:
+            with self._deferred_session_publication_lock:
+                return bool(
+                    self._exact_projection_recoveries.get(id(receipt)) is recovery
+                    and self._deferred_session_publication_receipts.get(id(receipt)) is receipt
+                    and id(receipt) not in self._deferred_session_publication_pending_receipts
+                    and not record.receipt_capacity_reserved
+                    and record.receipt_eviction_id is None
+                    and id(receipt)
+                    not in self._deferred_session_publication_receipt_eviction_reservations
+                    and self._deferred_session_publication_committed_receipts
+                    == len(self._deferred_session_publication_receipts)
+                )
+
+    def publish_prepared_deferred_session_publication_batch(
+        self,
+        batch: PreparedDeferredSessionPublicationBatch,
+        *,
+        materialization_receipt: object,
+    ) -> DeferredSessionPublicationResult:
+        """Publish one exact transport-first tail from its authentic root receipt."""
+
+        from evidenceforge.generation.lifecycle_authority import LifecyclePreparedNetworkReceipt
+
+        if type(batch) is not PreparedDeferredSessionPublicationBatch:
+            raise TypeError("Deferred-session publication requires the exact opaque batch")
+        owner_thread = get_ident()
+        with self._deferred_session_publication_lock:
+            record = self._canonical_deferred_session_publication_record_locked(batch)
+            recovery = record.exact_recovery
+            if recovery is None or recovery.receipt is not record.publication_receipt:
+                raise EventContractError(
+                    "Deferred-session publication lost its preinstalled recovery owner"
+                )
+            receipt = cast(DeferredSessionPublicationReceipt, recovery.receipt)
+            if record.state == "recovering":
+                if record.materialization_receipt is not materialization_receipt:
+                    raise EventContractError(
+                        "Deferred-session recovery requires the original root receipt"
+                    )
+                resume_installed = True
+            elif record.state == "canonical_claimed":
+                if recovery.state != "canonical_pending":
+                    raise EventContractError(
+                        "Deferred-session canonical recovery is not awaiting its root receipt"
+                    )
+                if record.active_thread_id is not None:
+                    raise EventContractError("Deferred-session publication is already active")
+                record.state = "publishing"
+                record.active_thread_id = owner_thread
+                resume_installed = False
+            else:
+                raise EventContractError(
+                    "Deferred-session publication lacks its canonical lifecycle claim"
+                )
+        if resume_installed:
+            return cast(
+                DeferredSessionPublicationResult,
+                self._resume_exact_projection_recovery(
+                    receipt,
+                    expected_kind="deferred_session",
+                ),
+            )
+
+        authority = self._lifecycle_authority
+        timing_preparation = record.source_timing_preparation
+        timing_receipt = timing_preparation.receipt
+        if (
+            authority is None
+            or type(materialization_receipt) is not LifecyclePreparedNetworkReceipt
+            or record.materialization_receipt_shell is not materialization_receipt
+            or not timing_preparation.committed
+            or timing_receipt is None
+            or not self.source_timing_planner.authenticates_preparation_receipt(timing_receipt)
+            or materialization_receipt.timing_binding_token != timing_preparation.binding_token
+            or materialization_receipt.timing_receipt != timing_receipt
+            or not authority.authenticates_prepared_network_receipt(
+                record.root,
+                materialization_receipt,
+            )
+        ):
+            with self._deferred_session_publication_lock:
+                if record.active_thread_id == owner_thread and record.state == "publishing":
+                    record.state = "canonical_claimed"
+                    record.active_thread_id = None
+            raise EventContractError(
+                "Deferred-session publication requires its authentic network/timing receipt"
+            )
+
+        exact_batch = record.exact_publication_batch
+        if exact_batch is None or exact_batch.state != "ready":
+            with self._deferred_session_publication_lock:
+                if (
+                    self._deferred_session_publication_batches.get(record.batch_id) is record
+                    and record.exact_recovery is recovery
+                    and record.active_thread_id == owner_thread
+                    and record.state == "publishing"
+                ):
+                    record.state = "canonical_claimed"
+                    record.active_thread_id = None
+            raise EventContractError("Deferred-session exact projection is not recoverable")
+        try:
+            publication_result = cast(
+                DeferredSessionPublicationResult,
+                record.publication_result,
+            )
+            if (
+                publication_result.receipt is not receipt
+                or publication_result.projections is not recovery.outcomes
+                or publication_result.target_proofs is not recovery.target_proofs
+                or publication_result.identifiers is not recovery.member_identifiers
+                or (
+                    record.materialization_receipt is not None
+                    and record.materialization_receipt is not materialization_receipt
+                )
+                or receipt.materialization_receipt_token
+                not in {"", materialization_receipt.receipt_token}
+            ):
+                raise EventContractError("Deferred-session preinstalled recovery shell changed")
+            object.__setattr__(
+                receipt,
+                "materialization_receipt_token",
+                materialization_receipt.receipt_token,
+            )
+            object.__setattr__(
+                receipt,
+                "_integrity",
+                self._deferred_session_publication_receipt_integrity(receipt),
+            )
+            object.__setattr__(
+                publication_result,
+                "materialization_receipt",
+                materialization_receipt,
+            )
+            with self._action_cohort_lock:
+                with self._deferred_session_publication_lock:
+                    if (
+                        self._canonical_deferred_session_publication_record_locked(batch)
+                        is not record
+                        or record.state != "publishing"
+                        or record.active_thread_id != owner_thread
+                    ):
+                        raise EventContractError(
+                            "Deferred-session publication ownership changed before recovery"
+                        )
+                    if (
+                        record.recovery_capacity_reserved
+                        or not record.receipt_capacity_reserved
+                        or self._exact_projection_recoveries.get(id(receipt)) is not recovery
+                        or recovery.state != "canonical_pending"
+                        or id(receipt) in self._deferred_session_publication_receipts
+                        or id(receipt) in self._deferred_session_publication_pending_receipts
+                    ):
+                        raise EventContractError(
+                            "Deferred-session publication lost its precommitted capacity"
+                        )
+                    record.materialization_receipt = materialization_receipt
+                    record.state = "recovering"
+                    record.active_thread_id = None
+                    self._deferred_session_publication_pending_receipts[id(receipt)] = receipt
+                    recovery.state = "owner_pending"
+        except BaseException:
+            with self._deferred_session_publication_lock:
+                if (
+                    self._deferred_session_publication_batches.get(record.batch_id) is record
+                    and record.exact_recovery is recovery
+                    and record.active_thread_id == owner_thread
+                ):
+                    record.state = "canonical_claimed"
+                    record.active_thread_id = None
+            raise
+
+        return cast(
+            DeferredSessionPublicationResult,
+            self._resume_exact_projection_recovery(
+                receipt,
+                expected_kind="deferred_session",
+            ),
+        )
+
     def _network_dependent_batch_integrity(
         self,
         batch: PreparedNetworkDependentBatch,
@@ -7863,6 +10981,7 @@ class EventDispatcher:
                 or prepared._lifecycle_ticket is not root
                 or prepared._source_timing_preparation is not timing_preparation
                 or prepared._action_cohort_batch_id is not None
+                or prepared._deferred_session_publication_batch_id is not None
                 or prepared._artifact_publications
                 or prepared._projection.mode == "deferred"
                 or prepared._occurrence.effect_provenance != plan.provenance(ordinal)
@@ -7906,6 +11025,7 @@ class EventDispatcher:
                             prepared._consumed
                             or prepared._network_dependent_batch_id is not None
                             or prepared._action_cohort_batch_id is not None
+                            or prepared._deferred_session_publication_batch_id is not None
                         ):
                             raise EventContractError(
                                 "Network-dependent dispatch is already claimed or published"
