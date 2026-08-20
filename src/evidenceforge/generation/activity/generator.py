@@ -4836,6 +4836,25 @@ class _NmapProbeAnchorPlan:
     timing_delta: _FrozenActivityTimingDelta | None
 
 
+@dataclass(frozen=True, slots=True)
+class TerminalTransientOwnerCensus:
+    """Named transient-owner counts retained at the terminal boundary."""
+
+    counts: tuple[tuple[str, int], ...]
+
+    @property
+    def nonzero(self) -> tuple[tuple[str, int], ...]:
+        """Return only owners that still retain terminal work."""
+
+        return tuple((name, count) for name, count in self.counts if count)
+
+    @property
+    def total(self) -> int:
+        """Return the aggregate transient-owner count."""
+
+        return sum(count for _name, count in self.counts)
+
+
 class ActivityGenerator:
     """Generates specific activity events using StateManager and emitters.
 
@@ -5474,22 +5493,46 @@ class ActivityGenerator:
     def advance_application_channel_watermark(self, cutoff: datetime) -> None:
         """Advance bounded application and network retention at the canonical frontier."""
 
+        self._advance_application_channel_watermark(
+            cutoff,
+            advance_rdp_lifecycle=True,
+            reject_terminal_closures=False,
+        )
+
+    def _advance_application_channel_watermark(
+        self,
+        cutoff: datetime,
+        *,
+        advance_rdp_lifecycle: bool,
+        reject_terminal_closures: bool,
+    ) -> None:
+        """Advance protocol sidecars before their shared registry and network runtime."""
+
         canonical_cutoff = max(ensure_utc(cutoff), self._proxy_channel_window_start)
         if canonical_cutoff < self._proxy_channel_watermark:
             raise StateError(
                 "Application-channel watermark cannot move backward: "
                 f"{canonical_cutoff.isoformat()} < {self._proxy_channel_watermark.isoformat()}"
             )
-        self.advance_rdp_session_lifecycle_watermark(canonical_cutoff)
+        if advance_rdp_lifecycle:
+            self.advance_rdp_session_lifecycle_watermark(canonical_cutoff)
         self._advance_rdp_manager_watermark(canonical_cutoff)
         self._proxy_channel_manager.watermark(canonical_cutoff)
         self._http_channel_manager.watermark(canonical_cutoff)
         while True:
             ssh_page = self._ssh_channel_manager.watermark(canonical_cutoff)
+            if reject_terminal_closures and ssh_page.closures:
+                raise StateError(
+                    "SSH manager produced unprojected closures at the terminal watermark"
+                )
             if not ssh_page.has_more:
                 break
         while True:
             smb_page = self._smb_channel_manager.watermark(canonical_cutoff)
+            if reject_terminal_closures and smb_page.closures:
+                raise StateError(
+                    "SMB manager produced unprojected closures at the terminal watermark"
+                )
             if not smb_page.has_more:
                 break
         self._application_channel_registry.watermark(canonical_cutoff)
@@ -5501,6 +5544,96 @@ class ActivityGenerator:
             if not network_page.has_more:
                 break
         self._proxy_channel_watermark = canonical_cutoff
+
+    def advance_terminal_application_channel_watermark(self, cutoff: datetime) -> None:
+        """Advance the shared terminal watermark after action journals are empty."""
+
+        canonical_cutoff = max(ensure_utc(cutoff), self._proxy_channel_window_start)
+        ssh = self._ssh_channel_manager.census()
+        smb = self._smb_channel_manager.census()
+        rdp = self._rdp_session_manager.census()
+        terminal_protocol_owners = (
+            ssh.open_sessions,
+            ssh.active_operations,
+            smb.open_sessions,
+            smb.open_trees,
+            smb.open_handles,
+            rdp.connected_sessions,
+            rdp.disconnected_sessions,
+            rdp.active_operations,
+            rdp.active_leases,
+        )
+        if any(terminal_protocol_owners):
+            raise StateError(
+                "Application protocol sidecars retain terminal owners before shared watermark: "
+                f"ssh_sessions={ssh.open_sessions}, ssh_operations={ssh.active_operations}, "
+                f"smb_sessions={smb.open_sessions}, smb_trees={smb.open_trees}, "
+                f"smb_handles={smb.open_handles}, rdp_connected={rdp.connected_sessions}, "
+                f"rdp_disconnected={rdp.disconnected_sessions}, "
+                f"rdp_operations={rdp.active_operations}, rdp_leases={rdp.active_leases}"
+            )
+        self._advance_application_channel_watermark(
+            canonical_cutoff,
+            advance_rdp_lifecycle=False,
+            reject_terminal_closures=True,
+        )
+        self._assert_terminal_application_channel_watermark(canonical_cutoff)
+
+    def _assert_terminal_application_channel_watermark(self, cutoff: datetime) -> None:
+        """Require exact shared-watermark postconditions after all sidecars advance."""
+
+        proxy = self._proxy_channel_manager.census()
+        http = self._http_channel_manager.census()
+        ssh = self._ssh_channel_manager.census()
+        rdp = self._rdp_session_manager.census()
+        smb = self._smb_channel_manager.census()
+        application = self._application_channel_registry.census()
+        network = self._network_transaction_runtime.census()
+        counts = (
+            proxy.open_tunnel_views,
+            proxy.prepared_admissions,
+            proxy.claimed_admissions,
+            proxy.reserved_channel_ids,
+            proxy.reserved_affinities,
+            proxy.reserved_origin_transport_ids,
+            http.open_transport_views,
+            ssh.open_sessions,
+            ssh.active_operations,
+            rdp.connected_sessions,
+            rdp.disconnected_sessions,
+            rdp.active_operations,
+            rdp.active_leases,
+            smb.open_sessions,
+            smb.open_trees,
+            smb.open_handles,
+            application.open_channels,
+            application.active_operations,
+            application.prepared_admissions,
+            application.claimed_admissions,
+            application.reserved_channel_ids,
+            application.reserved_transport_ids,
+            application.reserved_operation_ids,
+            network.open_preparations,
+            network.prepared_transactions,
+            network.claimed_transactions,
+            network.reserved_points,
+            network.preparation_fences,
+            network.reserved_deadlines,
+        )
+        watermarks = (
+            proxy.application.watermark,
+            http.application.watermark,
+            ssh.watermark,
+            rdp.watermark,
+            smb.application.watermark,
+            application.watermark,
+            network.watermark,
+        )
+        if any(counts) or any(watermark < cutoff for watermark in watermarks):
+            raise StateError(
+                "Shared application-channel terminal watermark did not reach its public "
+                "postcondition"
+            )
 
     def _process_termination_recorded(
         self,
@@ -5666,6 +5799,28 @@ class ActivityGenerator:
                 "SSH source-port expiry reached its bounded 4,096-row watermark page; "
                 "the modeled SSH connection rate exceeds the duration-stability gate"
             )
+
+    def finalize_terminal_runtime_state(self, cutoff: datetime) -> None:
+        """Advance bounded process, lifecycle, and timing owners to one frontier."""
+
+        canonical_cutoff = ensure_utc(cutoff)
+        self.advance_process_state_watermark(canonical_cutoff)
+        self._lifecycle_authority.advance_watermark(canonical_cutoff)
+        self._lifecycle_authority.registry.advance_watermark(canonical_cutoff)
+        self._source_timing_planner.advance_watermark(canonical_cutoff)
+
+        authority = self._lifecycle_authority.census()
+        registry = self._lifecycle_authority.registry.census()
+        timing = self._source_timing_planner.census()
+        if (
+            authority.watermark is None
+            or authority.watermark < canonical_cutoff
+            or registry.watermark is None
+            or registry.watermark < canonical_cutoff
+            or timing.watermark is None
+            or timing.watermark < canonical_cutoff
+        ):
+            raise StateError("Terminal lifecycle/runtime/timing cleanup missed its frontier")
 
     def _remember_process_connection_hold(
         self,
@@ -20135,6 +20290,337 @@ class ActivityGenerator:
         """Return bounded retained terminal work for persistent SMB production."""
 
         return self._persistent_smb_terminal_continuations.census()
+
+    @staticmethod
+    def _terminal_census_fields(
+        prefix: str,
+        census: object,
+        fields: tuple[str, ...],
+    ) -> tuple[tuple[str, int], ...]:
+        """Project exact integer owner fields into one named terminal census."""
+
+        counts: list[tuple[str, int]] = []
+        for field_name in fields:
+            value = getattr(census, field_name)
+            if type(value) is not int or value < 0:
+                raise StateError(
+                    f"Terminal census {prefix}.{field_name} is not a non-negative exact int"
+                )
+            counts.append((f"{prefix}.{field_name}", value))
+        return tuple(counts)
+
+    def _persistent_smb_projection_terminal_counts(self) -> tuple[tuple[str, int], ...]:
+        """Return dispatcher-owned persistent-SMB group and source residue."""
+
+        dispatcher = self.dispatcher
+        group_census = getattr(dispatcher, "persistent_smb_projection_group_census", None)
+        source_census = getattr(dispatcher, "persistent_smb_source_publication_census", None)
+        if not callable(group_census) or not callable(source_census):
+            raise StateError("Dispatcher has no persistent-SMB terminal census")
+        group = group_census()
+        source = source_census()
+        return (
+            *self._terminal_census_fields(
+                "persistent_smb_group",
+                group,
+                (
+                    "retained_groups",
+                    "inactive_members",
+                    "certified_members",
+                    "committed_unacknowledged_members",
+                    "retained_commit_receipts",
+                    "retained_bytes",
+                    "reserved_member_capacity",
+                    "reserved_receipt_capacity",
+                    "reserved_byte_capacity",
+                    "retained_target_generations",
+                ),
+            ),
+            *self._terminal_census_fields(
+                "persistent_smb_source",
+                source,
+                (
+                    "active_publications",
+                    "prepared_publications",
+                    "published_unacknowledged",
+                    "acknowledged_terminal_proofs",
+                    "retained_rows",
+                    "retained_bytes",
+                ),
+            ),
+        )
+
+    def persistent_smb_terminal_state_census(self) -> TerminalTransientOwnerCensus:
+        """Return all synchronous persistent-SMB action and projection residue."""
+
+        state = self.state_manager.get_state_summary()
+        state_fields = (
+            "smb_file_mutation_journals",
+            "smb_file_mutation_capabilities",
+            "smb_file_mutation_operation_indexes",
+            "smb_file_mutation_file_owners",
+            "smb_file_mutation_path_owners",
+            "smb_file_mutation_journal_entries",
+            "smb_file_mutation_commit_results",
+            "smb_file_mutation_commit_receipts",
+            "smb_file_mutation_acknowledging",
+            "smb_file_mutation_cancelling",
+            "smb_file_mutation_journal_locators",
+            "smb_file_mutation_result_locators",
+            "smb_file_mutation_retained_bytes",
+            "smb_connection_pins_active",
+            "smb_connection_pins_terminal",
+            "smb_connection_pin_install_receipts",
+            "smb_connection_finalization_results",
+            "smb_connection_finalization_receipts",
+            "smb_connection_pin_acknowledging",
+            "smb_connection_pin_session_owners",
+            "smb_connection_pin_protected_sessions",
+            "smb_connection_pin_reserved_bytes",
+            "smb_connection_pin_retained_bytes",
+        )
+        state_counts = tuple((f"state.{name}", int(state[name])) for name in state_fields)
+        continuation = self.persistent_smb_terminal_continuation_census()
+        smb = self._smb_channel_manager.census()
+        return TerminalTransientOwnerCensus(
+            counts=(
+                *state_counts,
+                *self._terminal_census_fields(
+                    "persistent_smb_continuation",
+                    continuation,
+                    ("retained_continuations", "active_claims", "retained_bytes"),
+                ),
+                *self._terminal_census_fields(
+                    "smb_channel",
+                    smb,
+                    ("open_sessions", "open_trees", "open_handles"),
+                ),
+                *self._persistent_smb_projection_terminal_counts(),
+            )
+        )
+
+    def assert_persistent_smb_terminal_state_drained(self) -> None:
+        """Reject terminal progression while synchronous SMB action residue remains."""
+
+        census = self.persistent_smb_terminal_state_census()
+        if census.nonzero:
+            raise StateError(f"Persistent SMB terminal state is not drained: {census.nonzero!r}")
+
+    def assert_persistent_smb_projection_state_drained(self) -> None:
+        """Reassert SMB group/source ownership after exact dispatcher recovery."""
+
+        nonzero = tuple(
+            (name, count)
+            for name, count in self._persistent_smb_projection_terminal_counts()
+            if count
+        )
+        if nonzero:
+            raise StateError(f"Persistent SMB projection state is not drained: {nonzero!r}")
+
+    def terminal_transient_owner_census(self) -> TerminalTransientOwnerCensus:
+        """Return the composite terminal census of transient public owners."""
+
+        application = self._application_channel_registry.census()
+        proxy = self._proxy_channel_manager.census()
+        http = self._http_channel_manager.census()
+        ssh = self._ssh_channel_manager.census()
+        rdp = self._rdp_session_manager.census()
+        smb = self._smb_channel_manager.census()
+        network = self._network_transaction_runtime.census()
+        lifecycle = self._lifecycle_authority.census()
+        lifecycle_registry = self._lifecycle_authority.registry
+        action_cohort = lifecycle_registry.action_cohort_preparation_census()
+        closed_transport = lifecycle_registry.closed_transport_preparation_census()
+        service = lifecycle_registry.service_preparation_census()
+        timing = self._source_timing_planner.preparation_authority_census()
+        detached_timing = self._source_timing_planner.detached_binding_census()
+        dispatcher = self.dispatcher
+        exact_census = getattr(dispatcher, "exact_projection_recovery_census", None)
+        cohort_census = getattr(dispatcher, "action_cohort_publication_census", None)
+        if not callable(exact_census) or not callable(cohort_census):
+            raise StateError("Dispatcher has no composite terminal projection census")
+        exact = exact_census()
+        cohort = cohort_census()
+        return TerminalTransientOwnerCensus(
+            counts=(
+                *self.persistent_smb_terminal_state_census().counts,
+                *self._terminal_census_fields(
+                    "application",
+                    application,
+                    (
+                        "open_channels",
+                        "active_operations",
+                        "prepared_admissions",
+                        "claimed_admissions",
+                        "reserved_channel_ids",
+                        "reserved_transport_ids",
+                        "reserved_operation_ids",
+                        "recoverable_admission_slots",
+                        "recoverable_admission_results",
+                        "prepared_admission_tokens",
+                        "prepared_admission_capabilities",
+                        "prepared_close_tokens",
+                        "prepared_close_capabilities",
+                        "prepared_close_projections",
+                        "prepared_commit_journals",
+                        "prepared_close_commit_journals",
+                        "releasing_admissions",
+                        "acknowledging_admission_results",
+                        "acknowledging_close_results",
+                        "recoverable_admission_receipts",
+                        "recoverable_close_results",
+                        "recoverable_close_receipts",
+                    ),
+                ),
+                *self._terminal_census_fields(
+                    "proxy",
+                    proxy,
+                    (
+                        "open_tunnel_views",
+                        "prepared_admissions",
+                        "claimed_admissions",
+                        "reserved_channel_ids",
+                        "reserved_affinities",
+                        "reserved_origin_transport_ids",
+                    ),
+                ),
+                *self._terminal_census_fields(
+                    "http",
+                    http,
+                    ("open_transport_views",),
+                ),
+                *self._terminal_census_fields(
+                    "ssh",
+                    ssh,
+                    ("open_sessions", "active_operations"),
+                ),
+                *self._terminal_census_fields(
+                    "rdp",
+                    rdp,
+                    (
+                        "connected_sessions",
+                        "disconnected_sessions",
+                        "active_operations",
+                        "active_leases",
+                    ),
+                ),
+                *self._terminal_census_fields(
+                    "smb",
+                    smb,
+                    ("open_sessions", "open_trees", "open_handles"),
+                ),
+                *self._terminal_census_fields(
+                    "network",
+                    network,
+                    (
+                        "open_preparations",
+                        "prepared_transactions",
+                        "claimed_transactions",
+                        "reserved_points",
+                        "preparation_fences",
+                        "reserved_deadlines",
+                    ),
+                ),
+                *self._terminal_census_fields(
+                    "lifecycle",
+                    lifecycle,
+                    (
+                        "materialization_batch_transactions_pending",
+                        "materialization_batch_transactions_unacknowledged",
+                    ),
+                ),
+                *self._terminal_census_fields(
+                    "lifecycle_action_cohort",
+                    action_cohort,
+                    (
+                        "reservations",
+                        "unclaimed_reservations",
+                        "claimed_reservations",
+                        "committing_reservations",
+                        "reserved_keys",
+                        "capability_locators",
+                        "claimed_capability_locators",
+                        "certified_authorization_locators",
+                        "expected_receipt_authorities",
+                        "pending_provenance_insertions",
+                        "pending_provenance_evictions",
+                    ),
+                ),
+                *self._terminal_census_fields(
+                    "lifecycle_closed_transport",
+                    closed_transport,
+                    (
+                        "reservations",
+                        "claimed_reservations",
+                        "reserved_keys",
+                        "capability_locators",
+                    ),
+                ),
+                *self._terminal_census_fields(
+                    "lifecycle_service",
+                    service,
+                    (
+                        "publication_reservations",
+                        "closure_reservations",
+                        "claimed_publications",
+                        "claimed_closures",
+                        "reserved_keys",
+                        "capability_locators",
+                    ),
+                ),
+                *self._terminal_census_fields(
+                    "source_timing",
+                    timing,
+                    (
+                        "retained_preparations",
+                        "active_claims",
+                        "terminal_preparations",
+                        "retained_receipts",
+                        "retained_plan_operations",
+                    ),
+                ),
+                *self._terminal_census_fields(
+                    "source_timing_detached",
+                    detached_timing,
+                    ("retained_bindings",),
+                ),
+                *self._terminal_census_fields(
+                    "dispatcher_exact",
+                    exact,
+                    (
+                        "unresolved_recoveries",
+                        "reserved_recoveries",
+                        "active_recoveries",
+                    ),
+                ),
+                *self._terminal_census_fields(
+                    "dispatcher_exact_authority",
+                    exact.authority,
+                    ("active_batches", "prepared_batches", "retained_rows", "retained_bytes"),
+                ),
+                *self._terminal_census_fields(
+                    "dispatcher_cohort",
+                    cohort,
+                    (
+                        "prepared_batches",
+                        "claimed_batches",
+                        "retained_members",
+                        "retained_bytes",
+                        "capability_locators",
+                        "prepared_projections",
+                        "projection_groups",
+                        "projection_retained_bytes",
+                    ),
+                ),
+            )
+        )
+
+    def assert_terminal_transient_state_drained(self) -> None:
+        """Reject source finalization while any transient owner remains."""
+
+        census = self.terminal_transient_owner_census()
+        if census.nonzero:
+            raise StateError(f"Terminal transient state is not drained: {census.nonzero!r}")
 
     def generate_email_message(
         self,

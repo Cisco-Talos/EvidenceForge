@@ -31,6 +31,7 @@ import logging
 import math
 import random
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
@@ -80,6 +81,16 @@ from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 logger = logging.getLogger(__name__)
 
 _ENGINE_TIMING_NAMESPACE = "shared-timing-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class _TerminalOwnerSnapshot:
+    """Exact engine owners pinned before any terminal mutation begins."""
+
+    activity_generator: object | None
+    dispatcher: object | None
+    source_coordinator: object | None
+    emitters: tuple[tuple[str, object], ...]
 
 
 class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
@@ -192,6 +203,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._ssh_lifecycles_finalized = False
         self._rdp_lifecycles_finalized = False
         self._foreground_lifecycles_finalized = False
+        self._persistent_smb_terminal_asserted = False
+        self._application_channels_finalized = False
+        self._terminal_runtime_cleanup_finalized = False
+        self._exact_projection_recoveries_finalized = False
+        self._terminal_transient_census_asserted = False
         self._finalization_complete = False
         self._finalization_aborted = False
         self._initialization_complete = False
@@ -203,6 +219,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._closed_emitter_names: set[str] = set()
         self._source_coordinator_closed = False
         self._exact_projection_recovery_dispatcher: object | None = None
+        self._terminal_owner_snapshot: _TerminalOwnerSnapshot | None = None
 
         # Hawkes process state per user for cross-hour continuity
         self._hawkes_states: dict = {}
@@ -794,6 +811,98 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 return system
         return None
 
+    @staticmethod
+    def _emitter_identity_snapshot(emitters: dict) -> tuple[tuple[str, object], ...]:
+        """Return a deterministic identity-only snapshot of an emitter mapping."""
+
+        return tuple(sorted(emitters.items(), key=lambda item: item[0]))
+
+    def _pin_terminal_owners(self) -> _TerminalOwnerSnapshot:
+        """Pin every public owner before the first terminal stage mutates state."""
+
+        current = _TerminalOwnerSnapshot(
+            activity_generator=getattr(self, "activity_generator", None),
+            dispatcher=getattr(self, "dispatcher", None),
+            source_coordinator=getattr(self, "_source_finalization_coordinator", None),
+            emitters=self._emitter_identity_snapshot(getattr(self, "emitters", {})),
+        )
+        expected = getattr(self, "_terminal_owner_snapshot", None)
+        if expected is None:
+            self._terminal_owner_snapshot = current
+            return current
+        if current.activity_generator is not expected.activity_generator:
+            raise RuntimeError("Activity generator changed identity after terminal ownership")
+        if current.dispatcher is not expected.dispatcher:
+            raise RuntimeError("Generation dispatcher changed identity after terminal ownership")
+        if current.source_coordinator is not expected.source_coordinator:
+            raise RuntimeError(
+                "Source-finalization coordinator changed identity after terminal ownership"
+            )
+        if len(current.emitters) != len(expected.emitters):
+            raise RuntimeError("Emitter mapping keys changed after terminal ownership")
+        for (current_name, current_emitter), (expected_name, expected_emitter) in zip(
+            current.emitters,
+            expected.emitters,
+            strict=True,
+        ):
+            if current_name != expected_name:
+                raise RuntimeError("Emitter mapping keys changed after terminal ownership")
+            if current_emitter is not expected_emitter:
+                raise RuntimeError(
+                    f"Emitter mapping for {current_name!r} changed identity "
+                    "after terminal ownership"
+                )
+        return expected
+
+    def _run_bounded_terminal_stage(
+        self,
+        *,
+        completed_attribute: str,
+        description: str,
+        operation: Callable[[], None],
+    ) -> None:
+        """Run one restartable stage twice at most while preserving its first error."""
+
+        if getattr(self, completed_attribute, False):
+            return
+        primary: BaseException | None = None
+        for attempt in range(2):
+            try:
+                operation()
+            except BaseException as error:
+                if primary is None:
+                    primary = error
+                else:
+                    primary.add_note(f"{description} retry also failed: {error!r}")
+                if attempt == 1:
+                    raise primary from None
+                continue
+
+            setattr(self, completed_attribute, True)
+            if primary is None:
+                return
+            raise primary
+
+    def _activity_terminal_capability(
+        self,
+        name: str,
+        *,
+        owner_attributes: tuple[str, ...],
+        missing_message: str,
+    ) -> Callable[..., object] | None:
+        """Resolve a terminal API while retaining compatibility-only test adapters."""
+
+        activity_generator = getattr(self, "activity_generator", None)
+        if activity_generator is None:
+            return None
+        capability = getattr(activity_generator, name, None)
+        if callable(capability):
+            return capability
+        owner_state = vars(activity_generator)
+        if any(attribute in owner_state for attribute in owner_attributes):
+            raise RuntimeError(missing_message)
+        return None
+
     def _drain_exact_projection_recoveries_before_close(self) -> None:
         """Finish dispatcher-owned exact projection recovery before sink shutdown.
 
@@ -835,7 +944,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
     def _assert_ssh_session_lifecycles_drained_before_close(self) -> None:
         """Require the activity owner's close journal to be terminal before sink close."""
 
-        activity_generator = self.activity_generator
+        activity_generator = getattr(self, "activity_generator", None)
         if activity_generator is None:
             return
         assert_drained = getattr(
@@ -859,7 +968,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
     def _assert_rdp_session_lifecycles_drained_before_close(self) -> None:
         """Require the RDP lifecycle journal to be terminal before sink close."""
 
-        activity_generator = self.activity_generator
+        activity_generator = getattr(self, "activity_generator", None)
         if activity_generator is None:
             return
         assert_drained = getattr(
@@ -880,9 +989,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
     def _finalize_rdp_session_lifecycles_before_close(self) -> None:
         """Drain RDP terminal work with one exact-projection recovery retry."""
 
-        if self._rdp_lifecycles_finalized:
+        if getattr(self, "_rdp_lifecycles_finalized", False):
             return
-        activity_generator = self.activity_generator
+        activity_generator = getattr(self, "activity_generator", None)
         if activity_generator is None:
             self._rdp_lifecycles_finalized = True
             return
@@ -935,9 +1044,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
     def _finalize_ssh_session_lifecycles_before_close(self) -> None:
         """Drain SSH close work with one recovery retry, preserving its first failure."""
 
-        if self._ssh_lifecycles_finalized:
+        if getattr(self, "_ssh_lifecycles_finalized", False):
             return
-        activity_generator = self.activity_generator
+        activity_generator = getattr(self, "activity_generator", None)
         if activity_generator is None:
             self._ssh_lifecycles_finalized = True
             return
@@ -983,33 +1092,166 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 )
             raise primary
 
+    def _assert_persistent_smb_terminal_state_before_close(self) -> None:
+        """Reject synchronous SMB action residue before shared watermarks advance."""
+
+        def assert_drained() -> None:
+            capability = self._activity_terminal_capability(
+                "assert_persistent_smb_terminal_state_drained",
+                owner_attributes=(
+                    "_persistent_smb_terminal_continuations",
+                    "_smb_channel_manager",
+                ),
+                missing_message=(
+                    "Activity generator has no persistent-SMB terminal-state assertion"
+                ),
+            )
+            if capability is not None:
+                capability()
+
+        self._run_bounded_terminal_stage(
+            completed_attribute="_persistent_smb_terminal_asserted",
+            description="Persistent-SMB terminal assertion",
+            operation=assert_drained,
+        )
+
+    def _finalize_application_channels_before_close(self) -> None:
+        """Advance the one shared terminal application/network watermark."""
+
+        def advance() -> None:
+            capability = self._activity_terminal_capability(
+                "advance_terminal_application_channel_watermark",
+                owner_attributes=(
+                    "_application_channel_registry",
+                    "_network_transaction_runtime",
+                ),
+                missing_message=(
+                    "Activity generator has no shared terminal application-channel watermark"
+                ),
+            )
+            end_time = getattr(self, "end_time", None)
+            if capability is not None:
+                if end_time is None:
+                    raise RuntimeError(
+                        "Generation engine lost its terminal application-channel watermark"
+                    )
+                capability(end_time)
+
+        self._run_bounded_terminal_stage(
+            completed_attribute="_application_channels_finalized",
+            description="Shared application-channel watermark",
+            operation=advance,
+        )
+
+    def _finalize_foreground_lifecycles_before_close(self) -> None:
+        """Finalize foreground process lifetimes as a restartable cleanup substage."""
+
+        def finalize() -> None:
+            capability = self._activity_terminal_capability(
+                "finalize_foreground_process_lifetimes",
+                owner_attributes=("_foreground_process_finalizers",),
+                missing_message=("Activity generator has no foreground-process terminal finalizer"),
+            )
+            end_time = getattr(self, "end_time", None)
+            if capability is not None:
+                if end_time is None:
+                    raise RuntimeError("Generation engine lost its foreground-process frontier")
+                capability(end_time)
+
+        self._run_bounded_terminal_stage(
+            completed_attribute="_foreground_lifecycles_finalized",
+            description="Foreground lifecycle finalization",
+            operation=finalize,
+        )
+
+    def _finalize_terminal_runtime_cleanup_before_close(self) -> None:
+        """Advance bounded process, lifecycle, network, and timing retention."""
+
+        def finalize() -> None:
+            capability = self._activity_terminal_capability(
+                "finalize_terminal_runtime_state",
+                owner_attributes=(
+                    "_lifecycle_authority",
+                    "_source_timing_planner",
+                    "_network_transaction_runtime",
+                ),
+                missing_message="Activity generator has no terminal runtime cleanup",
+            )
+            end_time = getattr(self, "end_time", None)
+            if capability is not None:
+                if end_time is None:
+                    raise RuntimeError("Generation engine lost its terminal runtime frontier")
+                capability(end_time)
+
+        self._run_bounded_terminal_stage(
+            completed_attribute="_terminal_runtime_cleanup_finalized",
+            description="Terminal runtime cleanup",
+            operation=finalize,
+        )
+
+    def _finalize_exact_projection_recoveries_before_close(self) -> None:
+        """Drain exact rows, then reassert persistent-SMB group/source ownership."""
+
+        def finalize() -> None:
+            self._drain_exact_projection_recoveries_before_close()
+            capability = self._activity_terminal_capability(
+                "assert_persistent_smb_projection_state_drained",
+                owner_attributes=("_persistent_smb_terminal_continuations",),
+                missing_message=(
+                    "Activity generator has no persistent-SMB projection-state assertion"
+                ),
+            )
+            if capability is not None:
+                capability()
+
+        self._run_bounded_terminal_stage(
+            completed_attribute="_exact_projection_recoveries_finalized",
+            description="Exact projection recovery",
+            operation=finalize,
+        )
+
+    def _assert_terminal_transient_state_before_close(self) -> None:
+        """Require the composite transient-owner census to be empty before shutdown."""
+
+        def assert_drained() -> None:
+            capability = self._activity_terminal_capability(
+                "assert_terminal_transient_state_drained",
+                owner_attributes=(
+                    "_application_channel_registry",
+                    "_lifecycle_authority",
+                    "_source_timing_planner",
+                ),
+                missing_message="Activity generator has no composite terminal-state assertion",
+            )
+            if capability is not None:
+                capability()
+
+        self._run_bounded_terminal_stage(
+            completed_attribute="_terminal_transient_census_asserted",
+            description="Composite terminal transient assertion",
+            operation=assert_drained,
+        )
+
+    def _drain_terminal_stages_before_close(self, *, include_foreground: bool) -> None:
+        """Run every shared terminal stage in its single public shutdown order."""
+
+        self._finalize_ssh_session_lifecycles_before_close()
+        self._finalize_rdp_session_lifecycles_before_close()
+        self._assert_persistent_smb_terminal_state_before_close()
+        self._finalize_application_channels_before_close()
+        if include_foreground:
+            self._finalize_foreground_lifecycles_before_close()
+        self._finalize_terminal_runtime_cleanup_before_close()
+        self._finalize_exact_projection_recoveries_before_close()
+        self._assert_terminal_transient_state_before_close()
+
     def _close_emitters(self, *, primary: BaseException | None = None) -> None:
         """Close every emitter, retaining a supplied lifecycle failure as primary."""
 
         failures: list[BaseException] = []
-        if self._expected_close_emitters is None:
-            self._expected_close_emitters = dict(self.emitters)
-        expected_emitters = self._expected_close_emitters
-        if set(self.emitters) != set(expected_emitters):
-            failures.append(RuntimeError("Emitter mapping keys changed after close ownership"))
-        else:
-            for format_name, expected in expected_emitters.items():
-                if self.emitters[format_name] is not expected:
-                    failures.append(
-                        RuntimeError(
-                            f"Emitter mapping for {format_name!r} changed identity "
-                            "after close ownership"
-                        )
-                    )
-        if failures:
-            if primary is not None:
-                for failure in failures:
-                    primary.add_note(f"Emitter cleanup also failed: {failure!r}")
-                return
-            first, *additional = failures
-            for failure in additional:
-                first.add_note(f"Additional emitter cleanup failure: {failure!r}")
-            raise first
+        snapshot = self._pin_terminal_owners()
+        expected_emitters = dict(snapshot.emitters)
+        self._expected_close_emitters = expected_emitters
 
         for format_name, emitter in expected_emitters.items():
             logger.info("Stopping %s emitter thread", format_name)
@@ -1037,57 +1279,32 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         Flushes remaining buffered events and closes emitter files.
         Phase 2.1: Gracefully stops emitter threads before closing.
         """
-        if self._finalization_complete:
+        if getattr(self, "_finalization_complete", False):
             return
         logger.info("Finalizing generation")
 
         if not generation_succeeded:
             self._finalization_aborted = True
-            self._finalize_ssh_session_lifecycles_before_close()
-            self._finalize_rdp_session_lifecycles_before_close()
-            if self.activity_generator is not None:
-                self._drain_exact_projection_recoveries_before_close()
-                self._assert_ssh_session_lifecycles_drained_before_close()
-                self._assert_rdp_session_lifecycles_drained_before_close()
-            else:
-                self._drain_exact_projection_recoveries_before_close()
+            self._pin_terminal_owners()
+            self._drain_terminal_stages_before_close(include_foreground=False)
             self._close_emitters()
             self._finalization_complete = True
             return
-        if self._finalization_aborted:
+        if getattr(self, "_finalization_aborted", False):
             raise RuntimeError("Aborted generation cannot resume exact source finalization")
 
-        self._finalize_ssh_session_lifecycles_before_close()
-        self._finalize_rdp_session_lifecycles_before_close()
-        if not self._foreground_lifecycles_finalized:
-            try:
-                if self.activity_generator is not None and self.end_time is not None:
-                    self.activity_generator.finalize_foreground_process_lifetimes(self.end_time)
-            except BaseException as primary:
-                self._finalization_aborted = True
-                try:
-                    self._drain_exact_projection_recoveries_before_close()
-                    self._close_emitters()
-                except BaseException as cleanup_error:
-                    primary.add_note(f"Emitter cleanup also failed: {cleanup_error!r}")
-                else:
-                    self._finalization_complete = True
-                raise
-            self._foreground_lifecycles_finalized = True
-
-        coordinator = self._source_finalization_coordinator
+        snapshot = self._pin_terminal_owners()
+        self._drain_terminal_stages_before_close(include_foreground=True)
+        coordinator = snapshot.source_coordinator
         if coordinator is None:
             raise RuntimeError("Generation engine lost its source-finalization coordinator")
-        self._drain_exact_projection_recoveries_before_close()
-        self._assert_ssh_session_lifecycles_drained_before_close()
-        self._assert_rdp_session_lifecycles_drained_before_close()
         coordinator.finalize()
         self._close_emitters()
-        if not self._source_coordinator_closed:
+        if not getattr(self, "_source_coordinator_closed", False):
             coordinator.mark_closed()
             self._source_coordinator_closed = True
 
-        if not self._ids_alert_summary_applied:
+        if not getattr(self, "_ids_alert_summary_applied", False):
             snort_emitter = self.emitters.get("snort_alert")
             ids_summary = getattr(snort_emitter, "ids_alert_summary", {})
             if ids_summary:
