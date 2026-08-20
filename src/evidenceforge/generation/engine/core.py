@@ -55,7 +55,9 @@ from evidenceforge.generation.source_finalization import (
     SourceFinalizationCoordinator,
     SourceFinalizationParticipant,
 )
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.generation.workload import WorkloadLimits, estimate_workload
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
 from evidenceforge.models.scenario import Scenario, System, User
@@ -74,6 +76,8 @@ from evidenceforge.utils.time import parse_duration, resolve_time_window
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
 logger = logging.getLogger(__name__)
+
+_ENGINE_TIMING_NAMESPACE = "shared-timing-v1"
 
 
 class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
@@ -170,6 +174,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.state_manager = StateManager()
         self.emitters: dict = {}
         self.activity_generator: ActivityGenerator | None = None
+        self.timing_runtime: TimingRuntime | None = None
+        self.source_timing_planner: SourceTimingPlanner | None = None
         self.start_time: datetime | None = None
         self.end_time: datetime | None = None
         self.malicious_events: list[dict] = []  # Track for GROUND_TRUTH.md
@@ -470,6 +476,15 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.warmup_start_time = self.start_time - self.warmup_duration
         # Epoch for periodic schedules (DNS, SMB) — covers warm-up + real window
         self._generation_epoch = self.warmup_start_time
+        self.timing_runtime = TimingRuntime(
+            reference_time=self.warmup_start_time,
+            namespace=_ENGINE_TIMING_NAMESPACE,
+            generation_seed=self.generation_seed,
+        )
+        self.source_timing_planner = SourceTimingPlanner(
+            clock_profile_name=self.scenario.observation_profile,
+            timing_runtime=self.timing_runtime,
+        )
         if self.warmup_duration.total_seconds() > 0:
             logger.info(
                 f"Warm-up period: {self.warmup_start_time} to {self.start_time} "
@@ -566,6 +581,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             output_end_time=self.end_time,
             observation_policy=ObservationPolicy(self.scenario.observation_profile),
             intent_execution_ledger=self.intent_execution_ledger,
+            timing_runtime=self.timing_runtime,
+            source_timing_planner=self.source_timing_planner,
             lifecycle_shadow=self.lifecycle_shadow,
             collection_deployment=self.source_deployment_compilation.deployment,
         )
@@ -577,6 +594,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             identity_directory=identity_directory,
             source_timing_profile=self.scenario.observation_profile,
             dispatcher=self.dispatcher,
+            timing_runtime=self.timing_runtime,
+            source_timing_planner=self.source_timing_planner,
             lifecycle_shadow=self.lifecycle_shadow,
             lifecycle_authority=self.lifecycle_authority,
         )

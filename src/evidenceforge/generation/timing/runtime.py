@@ -484,6 +484,7 @@ class TimingRuntime:
         *,
         reference_time: datetime,
         namespace: str = "shared-timing-v1",
+        generation_seed: int | None = None,
         max_clock_cache_entries: int = 2048,
         max_audit_relationship_keys: int = 4096,
     ) -> None:
@@ -491,7 +492,11 @@ class TimingRuntime:
         self._owner_lane: object | None = None
         self._owner_lane_epoch = 0
         self.audit = TimingAudit(max_relationship_keys=max_audit_relationship_keys)
-        self.sampler = TimingSampler(namespace=namespace, observer=self.audit)
+        self.sampler = TimingSampler(
+            namespace=namespace,
+            observer=self.audit,
+            generation_seed=generation_seed,
+        )
         self.clocks = SourceClockRegistry(
             reference_time=reference_time,
             sampler=self.sampler,
