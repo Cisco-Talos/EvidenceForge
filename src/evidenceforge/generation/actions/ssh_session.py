@@ -75,7 +75,6 @@ from evidenceforge.generation.activity.timing_profiles import (
     SshAuthenticationTimingPlan,
     get_timing_window,
     plan_ssh_authentication_timing,
-    sample_timing_delta,
 )
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
@@ -102,10 +101,13 @@ from evidenceforge.generation.state_manager import (
     StateManager,
 )
 from evidenceforge.generation.timing import (
+    ConstantDistribution,
+    DistributionSpec,
     TemporalConstraintGraph,
     TimingRuntime,
     TimingSampler,
     TimingScope,
+    TriangularDistribution,
 )
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
@@ -1716,6 +1718,28 @@ class _SshCloseContinuation:
 
 
 @dataclass(frozen=True, slots=True)
+class _FrozenSshTimingDelta:
+    """One detached SSH timing value and its deferred logical audit write.
+
+    The compatibility SSH path publishes after its current action succeeds;
+    post-mutation rollback remains owned by its later action-cohort migration.
+    """
+
+    value: timedelta
+    relationship_key: str
+    distribution: DistributionSpec
+    sampler: TimingSampler
+
+    def publish(self) -> None:
+        """Record the already-sampled logical draw through its captured owner."""
+
+        self.sampler.record_logical_sample(
+            self.distribution,
+            relationship_key=self.relationship_key,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class _SshLinuxAuthPlan:
     """Linux SSH auth ownership that must be known before transport opens."""
 
@@ -1724,6 +1748,7 @@ class _SshLinuxAuthPlan:
     timing_runtime: TimingRuntime
     timing_scope: TimingScope
     syslog_seed: tuple[Any, ...]
+    ecar_after_accept: _FrozenSshTimingDelta
 
     @property
     def conn_delay_ms(self) -> float:
@@ -2107,9 +2132,10 @@ class SshSessionActionBundle:
             )
             return (state.uid if state.network_visible else ""), state.logon_id
 
+        ecar_after_accept = self._freeze_linux_ecar_readiness()
         state = self._plan_transport()
+        auth_plan = self._prepare_linux_auth_plan(state, ecar_after_accept=ecar_after_accept)
         self._ensure_session_identity(state)
-        auth_plan = self._prepare_linux_auth_plan(state)
         self._open_transport(
             state,
             responding_pid=auth_plan.sshd_pid if auth_plan is not None else self.request.sshd_pid,
@@ -2119,7 +2145,14 @@ class SshSessionActionBundle:
         event = self._build_session_event(state, auth_state)
         if auth_state is not None:
             self._dispatch_linux_connection_message(state, event, auth_state)
-            self._mark_edr_login_readiness(state, event, auth_state)
+            if auth_plan is None:
+                raise StateError("SSH auth state lost its frozen timing plan")
+            self._mark_edr_login_readiness(
+                state,
+                event,
+                auth_state,
+                ecar_after_accept_gap=auth_plan.ecar_after_accept.value,
+            )
         self.executor.dispatcher.dispatch_builder(event)
         if self.request.emit_session_close:
             self._terminate_source_ssh_client_process(state)
@@ -2130,6 +2163,9 @@ class SshSessionActionBundle:
                     self.executor._defer_ssh_session_close(self, state, event, auth_state)
                 else:
                     self._dispatch_linux_session_close_lifecycle(state, event, auth_state)
+            if auth_plan is None:
+                raise StateError("SSH auth completion lost its frozen timing plan")
+            auth_plan.ecar_after_accept.publish()
 
         logger.debug(
             "Generated SSH session: %s -> %s (UID: %s)",
@@ -3733,7 +3769,65 @@ class SshSessionActionBundle:
             logind_time=resolved_times["logind"],
         )
 
-    def _prepare_linux_auth_plan(self, state: _SshTransportState) -> _SshLinuxAuthPlan | None:
+    def _freeze_linux_ecar_readiness(self) -> _FrozenSshTimingDelta | None:
+        """Freeze compatibility EDR readiness before transport planning mutates state."""
+
+        request = self.request
+        if _get_os_category(request.target_system.os) != "linux":
+            return None
+        timing_runtime = getattr(self.executor, "timing_runtime", None)
+        if type(timing_runtime) is not TimingRuntime:
+            raise StateError("SSH readiness planning requires the executor TimingRuntime")
+        timing_scope = TimingScope(
+            stable_id=request.stable_id,
+            host=request.target_system.hostname,
+            source="ssh",
+            lifecycle_id=request.stable_id,
+        )
+        ecar_window = get_timing_window(
+            "source.ecar_ssh_session_after_accept",
+            default_min_ms=275,
+            default_max_ms=650,
+            default_position="after",
+            default_class="source_latency",
+        )
+        minimum_us = float(ecar_window.min_ms * 1_000)
+        maximum_us = float(ecar_window.max_ms * 1_000)
+        if maximum_us <= minimum_us:
+            ecar_distribution = ConstantDistribution(minimum_us)
+        else:
+            maximum_us += 1.0
+            ecar_distribution = TriangularDistribution(
+                minimum=minimum_us,
+                mode=minimum_us + ((maximum_us - minimum_us) * 0.35),
+                maximum=maximum_us,
+            )
+        canonical_sampler = timing_runtime.sampler
+        if type(canonical_sampler) is not TimingSampler:
+            raise StateError("SSH readiness requires the exact engine timing sampler")
+        preview_sampler = TimingSampler(
+            namespace=canonical_sampler.namespace,
+            generation_seed=canonical_sampler.generation_seed,
+        )
+        ecar_after_accept_gap = preview_sampler.sample_timedelta(
+            ecar_distribution,
+            relationship_key="source.ecar_ssh_session_after_accept",
+            scope=timing_scope,
+            sample_key="ecar_session_ready",
+        )
+        return _FrozenSshTimingDelta(
+            value=ecar_after_accept_gap,
+            relationship_key="source.ecar_ssh_session_after_accept",
+            distribution=ecar_distribution,
+            sampler=canonical_sampler,
+        )
+
+    def _prepare_linux_auth_plan(
+        self,
+        state: _SshTransportState,
+        *,
+        ecar_after_accept: _FrozenSshTimingDelta | None = None,
+    ) -> _SshLinuxAuthPlan | None:
         """Resolve Linux SSH responder identity before opening canonical transport."""
 
         request = self.request
@@ -3743,6 +3837,10 @@ class SshSessionActionBundle:
         timing_runtime = getattr(self.executor, "timing_runtime", None)
         if type(timing_runtime) is not TimingRuntime:
             raise StateError("SSH authentication planning requires the executor TimingRuntime")
+        if ecar_after_accept is None:
+            ecar_after_accept = self._freeze_linux_ecar_readiness()
+        if ecar_after_accept is None:
+            raise StateError("Linux SSH authentication requires frozen EDR readiness")
         execution_id = (
             state.execution_anchor.stable_id
             if state.execution_anchor is not None
@@ -3775,6 +3873,7 @@ class SshSessionActionBundle:
                 sshd_pid,
                 request.time.isoformat(),
             ),
+            ecar_after_accept=ecar_after_accept,
         )
 
     def _resolve_linux_auth_lifecycle(
@@ -4032,14 +4131,12 @@ class SshSessionActionBundle:
         state: _SshTransportState,
         event: OccurrenceBuilder,
         auth_state: _SshLinuxAuthState,
+        *,
+        ecar_after_accept_gap: timedelta,
     ) -> None:
         """Record when EDR/session-owned child evidence may appear."""
 
         request = self.request
-        ecar_after_accept_gap = sample_timing_delta(
-            "source.ecar_ssh_session_after_accept",
-            seed_parts=auth_state.syslog_seed,
-        )
         ecar_seed = (
             "login",
             event.dst_host.hostname if event.dst_host else request.target_system.hostname,

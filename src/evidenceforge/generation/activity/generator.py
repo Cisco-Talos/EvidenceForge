@@ -291,9 +291,6 @@ from evidenceforge.generation.activity.smb_profiles import (
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window as _activity_get_timing_window,
 )
-from evidenceforge.generation.activity.timing_profiles import (
-    sample_timing_delta,
-)
 from evidenceforge.generation.activity.windows_auth_realism import (
     failed_logon_config,
     min_unlock_gap_seconds,
@@ -333,6 +330,7 @@ from evidenceforge.generation.source_timing import (
     SourceTimingPlanner,
     SourceTimingPlanningRuntime,
     SourceTimingPreparation,
+    active_source_timing_planning_runtime,
 )
 from evidenceforge.generation.ssh_channels import SshApplicationChannelManager
 from evidenceforge.generation.state_manager import (
@@ -347,6 +345,7 @@ from evidenceforge.generation.timing import (
     MixtureDistribution,
     TemporalConstraintGraph,
     TimingRuntime,
+    TimingSampler,
     TimingScope,
     TriangularDistribution,
     TruncatedLognormalDistribution,
@@ -4770,6 +4769,37 @@ class _SidReservationRecord:
     group: _SidReservationGroup
 
 
+@dataclass(frozen=True, slots=True)
+class _FrozenActivityTimingDelta:
+    """One detached deterministic value and its deferred logical audit write.
+
+    Compatibility owners publish only after their current action succeeds.
+    Post-mutation rollback remains with the later auth/session/scanner cohort
+    migrations rather than adding a second transaction authority here.
+    """
+
+    value: timedelta
+    relationship_key: str
+    distribution: DistributionSpec
+    sampler: TimingSampler
+
+    def publish(self) -> None:
+        """Record the already-sampled logical draw through its captured owner."""
+
+        self.sampler.record_logical_sample(
+            self.distribution,
+            relationship_key=self.relationship_key,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _NmapProbeAnchorPlan:
+    """One scanner anchor plus its deferred timing-audit operation."""
+
+    time: datetime
+    timing_delta: _FrozenActivityTimingDelta | None
+
+
 class ActivityGenerator:
     """Generates specific activity events using StateManager and emitters.
 
@@ -4797,6 +4827,132 @@ class ActivityGenerator:
     def _activity_timing_planner(self, planner: BaselineTimingPlanner) -> None:
         self.__dict__["_activity_timing_planner_instance"] = planner
 
+    @staticmethod
+    def _activity_gap_distribution(
+        minimum_ms: float,
+        maximum_ms: float,
+        mode_fraction: float,
+    ) -> DistributionSpec:
+        """Return the typed microsecond distribution for one configured gap."""
+
+        minimum_us = minimum_ms * 1_000.0
+        maximum_us = maximum_ms * 1_000.0
+        if maximum_us <= minimum_us:
+            return ConstantDistribution(minimum_us)
+        maximum_us += 1.0
+        mode_us = minimum_us + ((maximum_us - minimum_us) * mode_fraction)
+        return TriangularDistribution(
+            minimum=minimum_us,
+            mode=mode_us,
+            maximum=maximum_us,
+        )
+
+    def _activity_timing_runtime(
+        self,
+        timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None,
+    ) -> TimingRuntime | SourceTimingPlanningRuntime:
+        """Return an active staged runtime or the exact generator-owned runtime."""
+
+        if timing_runtime is not None:
+            if type(timing_runtime) not in {TimingRuntime, SourceTimingPlanningRuntime}:
+                raise StateError("Activity timing requires an exact engine timing runtime")
+            return timing_runtime
+        owner_runtime = getattr(self, "timing_runtime", None)
+        if type(owner_runtime) is TimingRuntime:
+            staged_runtime = active_source_timing_planning_runtime(owner_runtime)
+            if staged_runtime is not None:
+                return staged_runtime
+            return owner_runtime
+        return self._activity_timing_planner.runtime
+
+    def _freeze_activity_gap(
+        self,
+        *,
+        relationship_key: str,
+        stable_id: str,
+        minimum_ms: float,
+        maximum_ms: float,
+        host: str = "",
+        source: str = "activity",
+        lifecycle_id: str = "",
+        ordinal: int = 0,
+        sample_key: str = "gap",
+        mode_fraction: float = 0.35,
+        timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
+        timing_scope: TimingScope | None = None,
+    ) -> _FrozenActivityTimingDelta:
+        """Freeze one stateless value before compatibility action mutation."""
+
+        distribution = self._activity_gap_distribution(
+            minimum_ms,
+            maximum_ms,
+            mode_fraction,
+        )
+        runtime = self._activity_timing_runtime(timing_runtime)
+        sampler = runtime.sampler
+        if type(sampler) is not TimingSampler:
+            raise StateError("Activity timing requires the exact engine timing sampler")
+        scope = timing_scope or TimingScope(
+            stable_id=stable_id,
+            host=host,
+            source=source,
+            lifecycle_id=lifecycle_id,
+            ordinal=ordinal,
+        )
+        preview_sampler = TimingSampler(
+            namespace=sampler.namespace,
+            generation_seed=sampler.generation_seed,
+        )
+        value = preview_sampler.sample_timedelta(
+            distribution,
+            relationship_key=relationship_key,
+            scope=scope,
+            sample_key=sample_key,
+        )
+        return _FrozenActivityTimingDelta(
+            value=value,
+            relationship_key=relationship_key,
+            distribution=distribution,
+            sampler=sampler,
+        )
+
+    def _freeze_profile_activity_gap(
+        self,
+        relationship_key: str,
+        *,
+        stable_id: str,
+        host: str = "",
+        source: str = "activity",
+        lifecycle_id: str = "",
+        ordinal: int = 0,
+        sample_key: str = "gap",
+        mode_fraction: float = 0.35,
+        timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
+        timing_scope: TimingScope | None = None,
+    ) -> _FrozenActivityTimingDelta:
+        """Freeze one configured relationship without touching canonical audit."""
+
+        window = _activity_get_timing_window(
+            relationship_key,
+            default_min_ms=0,
+            default_max_ms=0,
+            default_position="after",
+        )
+        return self._freeze_activity_gap(
+            relationship_key=relationship_key,
+            stable_id=stable_id,
+            minimum_ms=window.min_ms,
+            maximum_ms=window.max_ms,
+            host=host,
+            source=source,
+            lifecycle_id=lifecycle_id,
+            ordinal=ordinal,
+            sample_key=sample_key,
+            mode_fraction=mode_fraction,
+            timing_runtime=timing_runtime,
+            timing_scope=timing_scope,
+        )
+
     def _sample_activity_gap(
         self,
         *,
@@ -4815,18 +4971,11 @@ class ActivityGenerator:
     ) -> timedelta:
         """Sample one bounded activity gap through the engine timing runtime."""
 
-        minimum_us = minimum_ms * 1_000.0
-        maximum_us = maximum_ms * 1_000.0
-        if maximum_us <= minimum_us:
-            distribution = ConstantDistribution(minimum_us)
-        else:
-            maximum_us += 1.0
-            mode_us = minimum_us + ((maximum_us - minimum_us) * mode_fraction)
-            distribution = TriangularDistribution(
-                minimum=minimum_us,
-                mode=mode_us,
-                maximum=maximum_us,
-            )
+        distribution = self._activity_gap_distribution(
+            minimum_ms,
+            maximum_ms,
+            mode_fraction,
+        )
         runtime = (
             self._activity_timing_planner.runtime if timing_runtime is None else timing_runtime
         )
@@ -11408,8 +11557,21 @@ class ActivityGenerator:
                 "identity; author an explicit_credentials event using runas.exe /netonly"
             )
 
-        self.state_manager.set_current_time(time)
         os_cat = _get_os_category(system.os)
+        remote_source_ready_delta = (
+            self._freeze_profile_activity_gap(
+                "windows.remote_logon_source_ready",
+                stable_id=request.stable_id,
+                host=system.hostname,
+                source="authentication",
+                lifecycle_id=request.logon_id or request.stable_id,
+                sample_key="remote_source_ready",
+            )
+            if os_cat == "windows" and logon_type == 3
+            else None
+        )
+        remote_source_ready_used = False
+        self.state_manager.set_current_time(time)
         if logon_type == 10 and os_cat == "linux" and source_ip in (None, "", "-", system.ip):
             logon_type = 2
             source_ip = None
@@ -11988,17 +12150,10 @@ class ActivityGenerator:
             self._emit_dc_ntlm_for_logon(user, system, time, source_ip)
 
         if os_cat == "windows" and logon_type == 3 and auth_source_ip not in {"", "-", system.ip}:
-            ready_time = ensure_utc(time) + sample_timing_delta(
-                "windows.remote_logon_source_ready",
-                seed_parts=(
-                    system.hostname,
-                    user.username,
-                    logon_id,
-                    auth_source_ip,
-                    source_port or 0,
-                    time,
-                ),
-            )
+            if remote_source_ready_delta is None:
+                raise StateError("Remote source readiness lost its frozen timing delta")
+            ready_time = ensure_utc(time) + remote_source_ready_delta.value
+            remote_source_ready_used = True
             session = self.state_manager.get_session(logon_id)
             existing_ready_time = _session_source_ready_time(session) if session else None
             if existing_ready_time is None or existing_ready_time < ready_time:
@@ -12076,6 +12231,8 @@ class ActivityGenerator:
                         session.windows_shell_bootstrapped = True
                 session.last_activity_time = time
 
+        if remote_source_ready_used:
+            remote_source_ready_delta.publish()
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
         return logon_id
 
@@ -13192,67 +13349,140 @@ class ActivityGenerator:
             if session_end_plan is not None and session_end_plan.is_authoritative
             else None
         )
+        session = self.state_manager.get_session(logon_id)
+        if session is not None:
+            logon_type = session.logon_type
+        session_transport_pid = session.transport_pid if session is not None else None
+        is_ssh_session = bool(
+            session
+            and (
+                session.session_kind == "ssh"
+                or (_get_os_category(system.os) == "linux" and logon_type == 10)
+            )
+        )
+        ssh_transport_close_time = (
+            ensure_utc(session.network_close_time)
+            if session is not None and is_ssh_session and session.network_close_time is not None
+            else None
+        )
+        frozen_session_processes = (
+            self.state_manager.get_processes_for_session(logon_id, session.system)
+            if session is not None
+            else []
+        )
+        raw_session_end_markers = (
+            (session.last_activity_time, session.network_close_time) if session is not None else ()
+        )
+        session_end_markers = [
+            marker
+            for marker in raw_session_end_markers
+            if marker is not None
+            and (ssh_transport_close_time is None or ensure_utc(marker) <= ssh_transport_close_time)
+        ]
+        session_end_markers.extend(
+            marker
+            for proc in frozen_session_processes
+            for marker in (proc.last_activity_time or proc.start_time,)
+            if marker is not None
+            and (ssh_transport_close_time is None or ensure_utc(marker) <= ssh_transport_close_time)
+        )
+        latest_session_marker = max(session_end_markers) if session_end_markers else None
+        transport_close_delta = (
+            self._freeze_profile_activity_gap(
+                "windows.logoff_after_last_activity",
+                stable_id=_activity_timing_stable_id(
+                    "ssh-transport-logoff",
+                    request.stable_id,
+                    ssh_transport_close_time,
+                ),
+                host=system.hostname,
+                source="session",
+                lifecycle_id=logon_id,
+                sample_key="ssh_transport_close_gap",
+            )
+            if ssh_transport_close_time is not None and authoritative_end_plan is None
+            else None
+        )
+        last_activity_delta = (
+            self._freeze_profile_activity_gap(
+                "windows.logoff_after_last_activity",
+                stable_id=_activity_timing_stable_id(
+                    "session-last-activity-logoff",
+                    request.stable_id,
+                    latest_session_marker,
+                ),
+                host=system.hostname,
+                source="session",
+                lifecycle_id=logon_id,
+                sample_key="last_activity_gap",
+            )
+            if latest_session_marker is not None and not from_storyline
+            else None
+        )
+        rendered_dependents_delta = (
+            self._freeze_profile_activity_gap(
+                "windows.logoff_after_rendered_dependents",
+                stable_id=_activity_timing_stable_id(
+                    "session-rendered-dependent-logoff",
+                    request.stable_id,
+                    session.ecar_object_id if session is not None else "",
+                ),
+                host=system.hostname,
+                source="session",
+                lifecycle_id=logon_id,
+                sample_key="rendered_dependents_gap",
+            )
+            if session is not None and authoritative_end_plan is None
+            else None
+        )
+        ecar_logout_delta = (
+            self._freeze_profile_activity_gap(
+                "source.ecar_session_logout",
+                stable_id=request.stable_id,
+                host=system.hostname,
+                source="ecar",
+                lifecycle_id=logon_id,
+                sample_key="ecar_logout_gap",
+            )
+            if authoritative_end_plan is not None
+            else None
+        )
+        windows_logout_delta = (
+            self._freeze_profile_activity_gap(
+                "source.windows_security_session_logout",
+                stable_id=request.stable_id,
+                host=system.hostname,
+                source="windows_event_security",
+                lifecycle_id=logon_id,
+                sample_key="windows_security_logout_gap",
+            )
+            if authoritative_end_plan is not None
+            else None
+        )
+        used_timing_deltas: list[_FrozenActivityTimingDelta] = []
+
         if authoritative_end_plan is not None:
             time = ensure_utc(authoritative_end_plan.canonical_end)
             self.state_manager.plan_session_end(logon_id, authoritative_end_plan)
 
         # Terminate session-specific processes before ending session
-        session = self.state_manager.get_session(logon_id)
-        session_transport_pid = session.transport_pid if session is not None else None
-        is_ssh_session = session and (
-            session.session_kind == "ssh"
-            or (_get_os_category(system.os) == "linux" and logon_type == 10)
-        )
         deferred_ssh_transport_process = None
         if session:
-            logon_type = session.logon_type
-            ssh_transport_close_time = (
-                ensure_utc(session.network_close_time)
-                if is_ssh_session and session.network_close_time is not None
-                else None
-            )
             if ssh_transport_close_time is not None and authoritative_end_plan is None:
-                transport_logoff_time = ssh_transport_close_time + sample_timing_delta(
-                    "windows.logoff_after_last_activity",
-                    seed_parts=(system.hostname, logon_id, ssh_transport_close_time),
-                )
+                if transport_close_delta is None:
+                    raise StateError("SSH logoff lost its frozen transport-close delta")
+                transport_logoff_time = ssh_transport_close_time + transport_close_delta.value
+                used_timing_deltas.append(transport_close_delta)
                 time = transport_logoff_time
-            raw_session_end_markers = (
-                session.last_activity_time,
-                session.network_close_time,
-            )
-            session_end_markers = [
-                marker
-                for marker in raw_session_end_markers
-                if marker is not None
-                and (
-                    ssh_transport_close_time is None
-                    or ensure_utc(marker) <= ssh_transport_close_time
-                )
-            ]
-            session_end_markers.extend(
-                marker
-                for proc in self.state_manager.get_processes_for_session(
-                    logon_id,
-                    system.hostname,
-                )
-                for marker in (proc.last_activity_time or proc.start_time,)
-                if marker is not None
-                and (
-                    ssh_transport_close_time is None
-                    or ensure_utc(marker) <= ssh_transport_close_time
-                )
-            )
-            if session_end_markers and not from_storyline:
+            if latest_session_marker is not None and not from_storyline:
                 # Source emitters add small native delays (for example Sysmon
                 # Event 1 after canonical process creation). Leave enough room
                 # that final logoff/logout records do not render before those
                 # same-session dependents in another source.
-                latest_session_marker = max(session_end_markers)
-                min_logoff_time = latest_session_marker + sample_timing_delta(
-                    "windows.logoff_after_last_activity",
-                    seed_parts=(system.hostname, logon_id, latest_session_marker),
-                )
+                if last_activity_delta is None:
+                    raise StateError("Logoff lost its frozen last-activity delta")
+                min_logoff_time = latest_session_marker + last_activity_delta.value
+                used_timing_deltas.append(last_activity_delta)
                 if time <= min_logoff_time:
                     time = min_logoff_time
             if (
@@ -13263,10 +13493,7 @@ class ActivityGenerator:
                 self._linux_shell_last_session_close[(system.hostname, user.username)] = ensure_utc(
                     time
                 )
-            session_processes = self.state_manager.get_processes_for_session(
-                logon_id,
-                session.system,
-            )
+            session_processes = list(frozen_session_processes)
             # Per-session winlogon is a SYSTEM-token process, so its immutable
             # process LogonID is 0x3e7 rather than the human session LUID.  The
             # explicit session pointer owns teardown membership across that
@@ -13425,14 +13652,12 @@ class ActivityGenerator:
                     "ecar",
                     "ecar",
                 )
+                if rendered_dependents_delta is None:
+                    raise StateError("Logoff lost its frozen rendered-dependent delta")
                 minimum_logoff_time = (
-                    latest_visible_termination
-                    + sample_timing_delta(
-                        "windows.logoff_after_rendered_dependents",
-                        seed_parts=(system.hostname, logon_id, latest_visible_termination),
-                    )
-                    + observation_gap
+                    latest_visible_termination + rendered_dependents_delta.value + observation_gap
                 )
+                used_timing_deltas.append(rendered_dependents_delta)
                 time = max(time, minimum_logoff_time)
 
             if authoritative_end_plan is not None:
@@ -13542,14 +13767,11 @@ class ActivityGenerator:
 
         pam_close_time: datetime | None = None
         if authoritative_end_plan is not None:
-            ecar_close_time = time + sample_timing_delta(
-                "source.ecar_session_logout",
-                seed_parts=(system.hostname, logon_id, time),
-            )
-            windows_close_time = time + sample_timing_delta(
-                "source.windows_security_session_logout",
-                seed_parts=(system.hostname, logon_id, time),
-            )
+            if ecar_logout_delta is None or windows_logout_delta is None:
+                raise StateError("Authoritative logoff lost its frozen source timing deltas")
+            ecar_close_time = time + ecar_logout_delta.value
+            windows_close_time = time + windows_logout_delta.value
+            used_timing_deltas.extend((ecar_logout_delta, windows_logout_delta))
             self._source_timing_planner.record_session_closure_source_time(
                 event,
                 "ecar",
@@ -13648,6 +13870,8 @@ class ActivityGenerator:
                     )
                 )
 
+        for timing_delta in used_timing_deltas:
+            timing_delta.publish()
         logger.debug(
             f"Generated logoff: {user.username} on {system.hostname} (LogonID: {logon_id})"
         )
@@ -16709,10 +16933,28 @@ class ActivityGenerator:
         visible_create_time, required_floor = visibility
         if time > required_floor:
             return time
-        return required_floor + sample_timing_delta(
-            relationship_key,
-            seed_parts=(system.hostname, pid, visible_create_time, time),
+        runtime = getattr(self, "timing_runtime", None)
+        if type(runtime) not in {TimingRuntime, SourceTimingPlanningRuntime}:
+            raise StateError("Linux visibility clamping requires the engine timing runtime")
+        stable_id = _activity_timing_stable_id(
+            "linux-visible-process-dependent",
+            system.hostname,
+            pid,
+            visible_create_time,
+            time,
         )
+        timing_delta = self._freeze_profile_activity_gap(
+            relationship_key,
+            stable_id=stable_id,
+            host=system.hostname,
+            source="endpoint_process",
+            lifecycle_id=str(pid),
+            sample_key="visible_create_gap",
+            timing_runtime=(runtime if type(runtime) is SourceTimingPlanningRuntime else None),
+        )
+        result = required_floor + timing_delta.value
+        timing_delta.publish()
+        return result
 
     def _clamp_after_visible_linux_process_create_with_runtime(
         self,
@@ -17043,7 +17285,8 @@ class ActivityGenerator:
         # offsets for discovery and connect siblings. Without this action-owned bridge, short
         # failed probes have no admissible FLOW interval after CREATE and render as actorless rows
         # that still reveal the owning scan by tuple and adjacency.
-        probe_anchor = self._nmap_probe_anchor_after_visible_process_create(request)
+        probe_anchor_plan = self._nmap_probe_anchor_after_visible_process_create(request)
+        probe_anchor = probe_anchor_plan.time
 
         rng = random.Random(
             _stable_seed(f"nmap_effects:{system.hostname}:{pid}:{command_line}:{time.isoformat()}")
@@ -17059,6 +17302,8 @@ class ActivityGenerator:
                     planning_profile.discovery_window_seconds_max,
                 ),
             )
+            if probe_anchor_plan.timing_delta is not None and plan.targets:
+                probe_anchor_plan.timing_delta.publish()
             return len(plan.targets)
 
         probe_pairs = [(target, port) for target in plan.targets for port in plan.ports]
@@ -17101,29 +17346,34 @@ class ActivityGenerator:
                 process_image=process_name,
                 suppress_application_side_effects=True,
             )
+        if probe_anchor_plan.timing_delta is not None and probe_pairs:
+            probe_anchor_plan.timing_delta.publish()
         return len(probe_pairs)
 
     def _nmap_probe_anchor_after_visible_process_create(
         self,
         request: NmapCommandProbeRequest,
-    ) -> datetime:
-        """Return one source-ready anchor shared by all probes from an nmap process."""
+    ) -> _NmapProbeAnchorPlan:
+        """Freeze one source-ready anchor shared by all probes from an nmap process."""
 
         visible_create_time = self.process_source_create_time(
             request.system.hostname,
             request.pid,
         )
         if visible_create_time is None:
-            return request.time
-        readiness_time = visible_create_time + sample_timing_delta(
+            return _NmapProbeAnchorPlan(request.time, None)
+        timing_delta = self._freeze_profile_activity_gap(
             "source.ecar_dependent_after_process_create",
-            seed_parts=(
-                "nmap-probe-ready",
-                request.stable_id,
-                visible_create_time,
-            ),
+            stable_id=request.stable_id,
+            host=request.system.hostname,
+            source="ecar",
+            lifecycle_id=str(request.pid),
+            sample_key="probe_readiness_gap",
         )
-        return max(request.time, readiness_time)
+        return _NmapProbeAnchorPlan(
+            max(request.time, visible_create_time + timing_delta.value),
+            timing_delta,
+        )
 
     def _emit_nmap_discovery_probes(
         self,
