@@ -28,6 +28,7 @@ import copy
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from threading import Lock
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
@@ -66,6 +67,7 @@ _ACTIVE_NETWORK_TIMING_RUNTIME: ContextVar[Any | None] = ContextVar(
     "evidenceforge_active_network_timing_runtime",
     default=None,
 )
+_NETWORK_IDENTITY_CAPTURE_LOCK_TYPE = type(Lock())
 
 
 @dataclass(slots=True)
@@ -87,6 +89,7 @@ class _PreparedNetworkBoundary:
     identity_capture_claim: Any = None
     network_dependent_dispatcher: Any = None
     network_dependent_batch: Any = None
+    terminal_materialization: Any = None
     transferred: bool = False
 
     def claim_identity_capture(self, capture: Any) -> None:
@@ -118,11 +121,11 @@ class _PreparedNetworkBoundary:
         receipt: Any,
         application_receipt: Any,
         outcome: Any,
-    ) -> None:
+    ) -> Any:
         """Populate the prevalidated occurrence-local capture after authority success."""
 
         if self.identity_capture is None:
-            return
+            return None
         capture = self.identity_capture
         claim = self.identity_capture_claim
         capture._publish_committed_claimed(
@@ -134,6 +137,155 @@ class _PreparedNetworkBoundary:
         )
         self.identity_capture = None
         self.identity_capture_claim = None
+        return capture
+
+    @staticmethod
+    def authenticate_committed_capture_for_ack(
+        capture: Any,
+        *,
+        authority: Any,
+        root: Any,
+        receipt: Any,
+        application_receipt: Any,
+        outcome: Any,
+    ) -> tuple[Any, ...] | None:
+        """Reauthenticate one exact durable handoff across its final callback."""
+
+        if capture is None:
+            return None
+        from evidenceforge.generation.actions.network_connection import (
+            NetworkConnectionIdentityCapture,
+            NetworkConnectionPublicationOutcome,
+        )
+
+        if type(capture) is not NetworkConnectionIdentityCapture:
+            raise StateError("Prepared network durable identity capture changed type")
+        capture_lock = object.__getattribute__(capture, "_lock")
+        if type(capture_lock) is not _NETWORK_IDENTITY_CAPTURE_LOCK_TYPE:
+            raise StateError("Prepared network durable identity capture changed lock")
+
+        def snapshot() -> tuple[Any, ...]:
+            with capture_lock:
+                return (
+                    object.__getattribute__(capture, "_transaction"),
+                    object.__getattribute__(capture, "_lifecycle_mode"),
+                    object.__getattribute__(capture, "_prepared_root"),
+                    object.__getattribute__(capture, "_source_timing_preparation"),
+                    object.__getattribute__(capture, "_prepared_dispatch"),
+                    object.__getattribute__(capture, "_receipt"),
+                    object.__getattribute__(capture, "_application_receipt"),
+                    object.__getattribute__(capture, "_outcome"),
+                    object.__getattribute__(capture, "_claim"),
+                )
+
+        def matches_expected(observed: tuple[Any, ...]) -> bool:
+            return (
+                len(observed) == 9
+                and observed[0] is root.transaction
+                and type(observed[1]) is str
+                and observed[1] == root.runtime_token.lifecycle_mode
+                and observed[2] is root
+                and observed[5] is receipt
+                and observed[6] is application_receipt
+                and type(observed[7]) is NetworkConnectionPublicationOutcome
+                and observed[7] is outcome
+                and observed[8] is None
+            )
+
+        before = snapshot()
+        if not matches_expected(before):
+            raise StateError("Prepared network durable identity capture changed before ack")
+        authenticated = authority.authenticates_prepared_network_receipt(root, receipt)
+        after = snapshot()
+        exact_snapshot = all(
+            (
+                type(current) is str and type(expected) is str and current == expected
+                if index == 1
+                else current is expected
+            )
+            for index, (current, expected) in enumerate(zip(after, before, strict=True))
+        )
+        if authenticated is not True or not matches_expected(after) or not exact_snapshot:
+            raise StateError("Prepared network durable identity capture changed before ack")
+        return after
+
+    @staticmethod
+    def restore_committed_capture_after_ack(
+        capture: Any,
+        facts: tuple[Any, ...] | None,
+        *,
+        authority: Any,
+        root: Any,
+        receipt: Any,
+        application_receipt: Any,
+        outcome: Any,
+    ) -> None:
+        """Restore and reauthenticate the exact public handoff after acknowledgement."""
+
+        if capture is None:
+            if facts is not None:
+                raise StateError("Prepared network durable identity capture facts are orphaned")
+            return
+        from evidenceforge.generation.actions.network_connection import (
+            NetworkConnectionIdentityCapture,
+            NetworkConnectionPublicationOutcome,
+        )
+
+        if (
+            type(capture) is not NetworkConnectionIdentityCapture
+            or type(facts) is not tuple
+            or len(facts) != 9
+            or facts[0] is not root.transaction
+            or type(facts[1]) is not str
+            or facts[1] != root.runtime_token.lifecycle_mode
+            or facts[2] is not root
+            or facts[5] is not receipt
+            or facts[6] is not application_receipt
+            or type(facts[7]) is not NetworkConnectionPublicationOutcome
+            or facts[7] is not outcome
+            or facts[8] is not None
+        ):
+            raise StateError("Prepared network durable identity capture facts changed after ack")
+
+        def restore() -> None:
+            # Replaced slot values may own arbitrary objects, so their decref must
+            # happen outside the capture lock. The subsequent locked snapshot is
+            # the atomic publication barrier.
+            object.__setattr__(capture, "_transaction", facts[0])
+            object.__setattr__(capture, "_lifecycle_mode", facts[1])
+            object.__setattr__(capture, "_prepared_root", facts[2])
+            object.__setattr__(capture, "_source_timing_preparation", facts[3])
+            object.__setattr__(capture, "_prepared_dispatch", facts[4])
+            object.__setattr__(capture, "_receipt", facts[5])
+            object.__setattr__(capture, "_application_receipt", facts[6])
+            object.__setattr__(capture, "_outcome", facts[7])
+            object.__setattr__(capture, "_claim", facts[8])
+
+        restore()
+        try:
+            observed = _PreparedNetworkBoundary.authenticate_committed_capture_for_ack(
+                capture,
+                authority=authority,
+                root=root,
+                receipt=receipt,
+                application_receipt=application_receipt,
+                outcome=outcome,
+            )
+        except BaseException:
+            restore()
+            raise
+        if type(observed) is not tuple or len(observed) != len(facts):
+            restore()
+            raise StateError("Prepared network durable identity capture changed after ack")
+        for index, (current, expected) in enumerate(zip(observed, facts, strict=True)):
+            exact = (
+                type(current) is str and type(expected) is str and current == expected
+                if index == 1
+                else current is expected
+            )
+            if not exact:
+                restore()
+                raise StateError("Prepared network durable identity capture changed after ack")
 
     def track_network_dependent_batch(self, dispatcher: Any, batch: Any) -> None:
         """Own one claimed projection-only dependent batch until root acceptance."""
@@ -1202,6 +1354,20 @@ class NetworkTransactionPlanner:
             boundary.claim_identity_capture(request.identity_capture)
             result = self._execute(request, boundary)
         except BaseException as error:
+            if boundary.terminal_materialization is not None and boundary.root is not None:
+                try:
+                    object.__setattr__(error, "prepared_network_root", boundary.root)
+                    object.__setattr__(
+                        error,
+                        "prepared_network_materialization",
+                        boundary.terminal_materialization,
+                    )
+                    error.add_note(
+                        "Prepared network canonical root committed; acknowledge or retry "
+                        "the attached exact materialization"
+                    )
+                except BaseException:
+                    pass
             boundary.cancel(error)
             raise
         if not boundary.transferred:
@@ -4519,12 +4685,7 @@ class NetworkTransactionPlanner:
                 prerequisite_receipts=boundary.prerequisite_receipts,
             )
         )
-        if not executor._lifecycle_authority.authenticates_prepared_network_receipt(
-            root,
-            materialized.receipt,
-        ):
-            raise AssertionError("Prepared network authority returned an invalid receipt")
-
+        boundary.terminal_materialization = materialized
         from evidenceforge.generation.actions.network_connection import (
             NetworkConnectionPublicationOutcome,
         )
@@ -4535,14 +4696,83 @@ class NetworkTransactionPlanner:
             else NetworkConnectionPublicationOutcome.PUBLISHED
         )
         application_result = materialized.connection.application
-        boundary.publish_committed_capture_no_fail(
+        application_receipt = (
+            getattr(application_result, "receipt", None) if application_result is not None else None
+        )
+        try:
+            authenticated_materialization = (
+                executor._lifecycle_authority.authenticates_prepared_network_receipt(
+                    root,
+                    materialized.receipt,
+                )
+            )
+        except BaseException:
+            boundary.publish_committed_capture_no_fail(
+                root=root,
+                receipt=materialized.receipt,
+                application_receipt=application_receipt,
+                outcome=outcome,
+            )
+            raise
+        if not authenticated_materialization:
+            boundary.publish_committed_capture_no_fail(
+                root=root,
+                receipt=materialized.receipt,
+                application_receipt=application_receipt,
+                outcome=outcome,
+            )
+            raise AssertionError("Prepared network authority returned an invalid receipt")
+        durable_capture = boundary.publish_committed_capture_no_fail(
             root=root,
             receipt=materialized.receipt,
-            application_receipt=(
-                getattr(application_result, "receipt", None)
-                if application_result is not None
-                else None
-            ),
+            application_receipt=application_receipt,
+            outcome=outcome,
+        )
+        durable_capture_facts = boundary.authenticate_committed_capture_for_ack(
+            durable_capture,
+            authority=executor._lifecycle_authority,
+            root=root,
+            receipt=materialized.receipt,
+            application_receipt=application_receipt,
+            outcome=outcome,
+        )
+        if durable_capture is not None:
+            from evidenceforge.generation.lifecycle_authority import (
+                GeneratorLifecycleAuthority,
+            )
+
+            GeneratorLifecycleAuthority._bind_prepared_network_durable_capture_for_ack(
+                executor._lifecycle_authority,
+                root,
+                materialized,
+                durable_capture,
+                durable_capture_facts,
+            )
+        try:
+            executor._lifecycle_authority.acknowledge_prepared_network_transaction(
+                root,
+                materialized,
+                durable_capture=durable_capture,
+                durable_capture_facts=durable_capture_facts,
+            )
+        except BaseException:
+            boundary.restore_committed_capture_after_ack(
+                durable_capture,
+                durable_capture_facts,
+                authority=executor._lifecycle_authority,
+                root=root,
+                receipt=materialized.receipt,
+                application_receipt=application_receipt,
+                outcome=outcome,
+            )
+            raise
+        boundary.restore_committed_capture_after_ack(
+            durable_capture,
+            durable_capture_facts,
+            authority=executor._lifecycle_authority,
+            root=root,
+            receipt=materialized.receipt,
+            application_receipt=application_receipt,
             outcome=outcome,
         )
 

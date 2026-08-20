@@ -16,13 +16,16 @@ import heapq
 import hmac
 import random
 import secrets
+import struct
 from collections.abc import Callable
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from threading import Condition, Lock, RLock, Thread, current_thread
+from types import FunctionType, MemberDescriptorType
 from typing import Any, Generic, Literal, Protocol, TypeVar, cast
+from weakref import ReferenceType, ref
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
@@ -43,6 +46,9 @@ from evidenceforge.generation.application_channels import (
     ApplicationChannelAdmissionToken,
     ApplicationChannelPreparedCommit,
     ApplicationChannelRegistry,
+)
+from evidenceforge.generation.cryptographic_material import (
+    CryptographicMaterialPreparationReceipt,
 )
 from evidenceforge.generation.deferred_session_composition import (
     DeferredSessionComposition,
@@ -136,6 +142,7 @@ _DEFAULT_DUE_PAGE = 4_096
 _MAX_ACTION_COHORT_OPERATIONS = 256
 _DEFAULT_MATERIALIZATION_BATCH_TRANSACTION_CAPACITY = 64
 _DEFAULT_MATERIALIZATION_BATCH_TRANSACTION_BYTE_CAPACITY = 16 * 1024 * 1024
+_DEFAULT_PREPARED_NETWORK_RECEIPT_ISSUANCE_CAPACITY = 4096
 _MAX_MATERIALIZATION_BATCH_TRANSACTION_BYTES = 4 * 1024 * 1024
 _MAX_MATERIALIZATION_BATCH_PAYLOAD_NODES = 65_536
 _MAX_MATERIALIZATION_BATCH_SCALAR_BYTES = 64 * 1024
@@ -1136,7 +1143,943 @@ class LifecycleConnectionCompositeResult:
     receipt: LifecycleConnectionCompositeReceipt
 
 
+_MAX_DETACHED_NETWORK_BINDING_TEXT_BYTES = 64 * 1024
+_MAX_DETACHED_NETWORK_BINDING_PAYLOAD_BYTES = 1024 * 1024
+_DETACHED_NETWORK_BINDING_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+_DETACHED_NETWORK_BINDING_MIN_DATETIME_US = -62_135_596_800_000_000
+_DETACHED_NETWORK_BINDING_MAX_DATETIME_US = 253_402_300_799_999_999
+
+
+# A sealed capability stores one private Python handler beside inert structural
+# contract data.  Security boundaries create their attester locally, validate
+# the handler immediately before and after invocation, and never execute an
+# externally reachable Python attester.  Replacing both the handler reference
+# and its separate immutable contract (or rewriting the boundary method itself)
+# is arbitrary in-process code execution and is outside the receipt-tampering
+# model; every single handler/code/default/closure-cell mutation remains in
+# scope and fails before the changed handler can run.
+_DetachedNetworkSealedCapability = tuple[object, ...]
+
+
+def _freeze_detached_network_sealed_capability(
+    handler: Callable[[int, tuple[object, ...]], object],
+) -> _DetachedNetworkSealedCapability:
+    """Freeze inert function-state data for one closure-private handler."""
+
+    frozen_getattribute = object.__getattribute__
+    closure = frozen_getattribute(handler, "__closure__")
+    if closure is None:
+        closure_state: tuple[tuple[object, object], ...] = ()
+        cell_type = type((lambda retained: lambda: retained)(None).__closure__[0])
+    else:
+        cell_type = type(closure[0])
+        closure_state = tuple((cell, cell.cell_contents) for cell in closure)
+    cell_contents_get = cell_type.cell_contents.__get__
+    return (
+        handler,
+        frozen_getattribute(handler, "__code__"),
+        frozen_getattribute(handler, "__defaults__"),
+        frozen_getattribute(handler, "__kwdefaults__"),
+        closure,
+        closure_state,
+        frozen_getattribute,
+        FunctionType,
+        cell_type,
+        cell_contents_get,
+    )
+
+
+def _detached_network_binding_datetime_us(value: object, field_name: str) -> int:
+    """Return one exact UTC datetime as a signed fixed-width microsecond scalar."""
+
+    if type(value) is not datetime or value.tzinfo is not UTC:
+        raise ValueError(f"{field_name} must be an exact UTC datetime")
+    delta = value - _DETACHED_NETWORK_BINDING_EPOCH
+    microseconds = ((delta.days * 86_400 + delta.seconds) * 1_000_000) + delta.microseconds
+    if microseconds < -(1 << 63) or microseconds >= 1 << 63:
+        raise ValueError(f"{field_name} exceeds the detached network-binding datetime bound")
+    return microseconds
+
+
+def _detached_network_binding_signed_datetime_us(value: object, field_name: str) -> int:
+    """Validate one exact scalar in Python's UTC datetime range."""
+
+    if type(value) is not int or not (
+        _DETACHED_NETWORK_BINDING_MIN_DATETIME_US
+        <= value
+        <= _DETACHED_NETWORK_BINDING_MAX_DATETIME_US
+    ):
+        raise ValueError(f"{field_name} must be an exact representable UTC microsecond scalar")
+    return value
+
+
+def _detached_network_binding_datetime_from_us(value: object, field_name: str) -> datetime:
+    """Reconstruct an exact UTC datetime from one validated scalar."""
+
+    microseconds = _detached_network_binding_signed_datetime_us(value, field_name)
+    return _DETACHED_NETWORK_BINDING_EPOCH + timedelta(microseconds=microseconds)
+
+
 @dataclass(frozen=True, slots=True)
+class LifecycleDetachedNetworkReceiptBinding:
+    """Stateless scalar proof of one authenticated prepared-network receipt.
+
+    The lifecycle authority retains no row for this value. A future protocol
+    manager owns exact object identity, freshness, and lifetime. Byte-identical
+    copies are intentionally equivalent at this value-proof boundary.
+    """
+
+    transaction_id: str
+    state_publication_token: str
+    runtime_publication_token: str
+    materialization_mode: str
+    lifecycle_mode: str
+    physical_transport_id: str
+    conn_id: str
+    zeek_uid: str
+    src_ip: str
+    src_port: int
+    dst_ip: str
+    dst_port: int
+    protocol: str
+    started_at_us: int
+    closed_at_us: int | None
+    network_result_digest: str
+    timing_binding_digest: str
+    timing_receipt_digest: str
+    runtime_receipt_digest: str
+    connection_receipt_digest: str
+    source_receipt_token: str
+    _integrity_token: str = field(repr=False, default="")
+
+    @property
+    def tuple_key(self) -> tuple[str, int, str, int, str]:
+        """Return the exact physical transport five-tuple."""
+
+        return self.src_ip, self.src_port, self.dst_ip, self.dst_port, self.protocol
+
+    @property
+    def started_at(self) -> datetime:
+        """Return the exact canonical transport start."""
+
+        return _detached_network_binding_datetime_from_us(
+            self.started_at_us,
+            "binding.started_at_us",
+        )
+
+    @property
+    def closed_at(self) -> datetime | None:
+        """Return the exact canonical transport close, if finite."""
+
+        if self.closed_at_us is None:
+            return None
+        return _detached_network_binding_datetime_from_us(
+            self.closed_at_us,
+            "binding.closed_at_us",
+        )
+
+    @property
+    def proof_token(self) -> str:
+        """Return the lifecycle authority's stateless value proof."""
+
+        return self._integrity_token
+
+
+_DETACHED_NETWORK_BINDING_FIELD_NAMES = (
+    "transaction_id",
+    "state_publication_token",
+    "runtime_publication_token",
+    "materialization_mode",
+    "lifecycle_mode",
+    "physical_transport_id",
+    "conn_id",
+    "zeek_uid",
+    "src_ip",
+    "src_port",
+    "dst_ip",
+    "dst_port",
+    "protocol",
+    "started_at_us",
+    "closed_at_us",
+    "network_result_digest",
+    "timing_binding_digest",
+    "timing_receipt_digest",
+    "runtime_receipt_digest",
+    "connection_receipt_digest",
+    "source_receipt_token",
+    "_integrity_token",
+)
+_DETACHED_NETWORK_BINDING_DESCRIPTORS = tuple(
+    vars(LifecycleDetachedNetworkReceiptBinding)[field_name]
+    for field_name in _DETACHED_NETWORK_BINDING_FIELD_NAMES
+)
+_DETACHED_NETWORK_BINDING_TRUSTED_NAMESPACE = tuple(
+    vars(LifecycleDetachedNetworkReceiptBinding).items()
+)
+_DETACHED_NETWORK_BINDING_TRUSTED_METADATA = tuple(
+    vars(LifecycleDetachedNetworkReceiptBinding)["__dataclass_fields__"].items()
+)
+
+
+def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSealedCapability:
+    """Seal binding capture, framing, signing, allocation, and verification."""
+
+    frozen_class = LifecycleDetachedNetworkReceiptBinding
+    frozen_namespace = _DETACHED_NETWORK_BINDING_TRUSTED_NAMESPACE
+    frozen_metadata = _DETACHED_NETWORK_BINDING_TRUSTED_METADATA
+    frozen_descriptors = _DETACHED_NETWORK_BINDING_DESCRIPTORS
+    frozen_field_count = len(_DETACHED_NETWORK_BINDING_FIELD_NAMES)
+    frozen_text_limit = _MAX_DETACHED_NETWORK_BINDING_TEXT_BYTES
+    frozen_payload_limit = _MAX_DETACHED_NETWORK_BINDING_PAYLOAD_BYTES
+    frozen_min_datetime = _DETACHED_NETWORK_BINDING_MIN_DATETIME_US
+    frozen_max_datetime = _DETACHED_NETWORK_BINDING_MAX_DATETIME_US
+    frozen_prefix = b"lifecycle-detached-network-receipt-binding-v1\0"
+    frozen_hex = "0123456789abcdef"
+    frozen_physical_mode = "physical"
+    frozen_application_mode = "application_child"
+    frozen_network_mode = "network"
+    frozen_deferred_mode = "deferred_session"
+    frozen_bool_type = bool
+    frozen_bytes_type = bytes
+    frozen_bytearray_type = bytearray
+    frozen_dict_type = dict
+    frozen_function_type = FunctionType
+    frozen_int_type = int
+    frozen_mapping_type = type(vars(frozen_class))
+    frozen_member_descriptor_type = MemberDescriptorType
+    frozen_str_type = str
+    frozen_tuple_type = tuple
+    frozen_type = type
+    frozen_len = len
+    frozen_zip = zip
+    frozen_object_getattribute = object.__getattribute__
+    frozen_type_getattribute = type.__getattribute__
+    frozen_mapping_get = frozen_mapping_type.get
+    frozen_dict_get = dict.get
+    frozen_member_get = MemberDescriptorType.__get__
+    frozen_member_set = MemberDescriptorType.__set__
+    frozen_object_new = object.__new__
+    frozen_bytearray_extend = bytearray.extend
+    frozen_bytes_from_buffer = bytes
+    frozen_utf8_encode = str.encode
+    frozen_int_to_bytes = int.to_bytes
+    frozen_pack = struct.pack
+    frozen_hmac_new = hmac._hashopenssl.hmac_new
+    frozen_sha256 = sha256
+    frozen_compare_digest = hmac.compare_digest
+    frozen_hmac_type = frozen_type(frozen_hmac_new(b"", digestmod=frozen_sha256))
+    frozen_hmac_hexdigest = frozen_hmac_type.hexdigest
+    frozen_value_error = ValueError
+    frozen_unicode_encode_error = UnicodeEncodeError
+    frozen_sentinel = object()
+
+    pending_functions: list[FunctionType] = []
+    for _name, namespace_value in frozen_namespace:
+        if type(namespace_value) is FunctionType:
+            pending_functions.append(namespace_value)
+        elif type(namespace_value) is property:
+            for accessor in (
+                namespace_value.fget,
+                namespace_value.fset,
+                namespace_value.fdel,
+            ):
+                if type(accessor) is FunctionType:
+                    pending_functions.append(accessor)
+    observed_functions: list[FunctionType] = []
+    function_contracts: list[tuple[object, ...]] = []
+    while pending_functions:
+        trusted_function = pending_functions.pop()
+        if any(retained is trusted_function for retained in observed_functions):
+            continue
+        observed_functions.append(trusted_function)
+        closure = frozen_object_getattribute(trusted_function, "__closure__")
+        closure_state = (
+            () if closure is None else tuple((cell, cell.cell_contents) for cell in closure)
+        )
+        kwdefaults = frozen_object_getattribute(trusted_function, "__kwdefaults__")
+        kwdefault_state = () if kwdefaults is None else tuple(kwdefaults.items())
+        function_contracts.append(
+            (
+                trusted_function,
+                frozen_object_getattribute(trusted_function, "__code__"),
+                frozen_object_getattribute(trusted_function, "__defaults__"),
+                kwdefaults,
+                kwdefault_state,
+                closure,
+                closure_state,
+            )
+        )
+        for _cell, captured in closure_state:
+            if type(captured) is FunctionType:
+                pending_functions.append(captured)
+    frozen_function_contracts = tuple(function_contracts)
+
+    annotations = vars(frozen_class)["__annotations__"]
+    frozen_annotations = tuple(annotations.items())
+    frozen_field_type = type(frozen_metadata[0][1])
+    frozen_field_slots = tuple(frozen_field_type.__slots__)
+    frozen_field_states = tuple(
+        (
+            trusted_field,
+            tuple(
+                (slot_name, frozen_object_getattribute(trusted_field, slot_name))
+                for slot_name in frozen_field_slots
+            ),
+        )
+        for _field_name, trusted_field in frozen_metadata
+    )
+    dataclass_params = vars(frozen_class)["__dataclass_params__"]
+    frozen_params_type = type(dataclass_params)
+    frozen_params_slots = tuple(frozen_params_type.__slots__)
+    frozen_params_state = tuple(
+        (
+            slot_name,
+            frozen_object_getattribute(dataclass_params, slot_name),
+        )
+        for slot_name in frozen_params_slots
+    )
+
+    def invoke(operation: int, arguments: tuple[object, ...]) -> object:
+        def validates_function_contract(contract: tuple[object, ...]) -> bool:
+            (
+                trusted_function,
+                expected_code,
+                expected_defaults,
+                expected_kwdefaults,
+                expected_kwdefault_state,
+                expected_closure,
+                expected_closure_state,
+            ) = contract
+            if frozen_type(trusted_function) is not frozen_function_type:
+                return False
+            if (
+                frozen_object_getattribute(trusted_function, "__code__") is not expected_code
+                or frozen_object_getattribute(trusted_function, "__defaults__")
+                is not expected_defaults
+                or frozen_object_getattribute(trusted_function, "__kwdefaults__")
+                is not expected_kwdefaults
+                or frozen_object_getattribute(trusted_function, "__closure__")
+                is not expected_closure
+            ):
+                return False
+            if expected_kwdefaults is not None:
+                if frozen_type(expected_kwdefaults) is not frozen_dict_type or frozen_len(
+                    expected_kwdefaults
+                ) != frozen_len(expected_kwdefault_state):
+                    return False
+                for name, expected in expected_kwdefault_state:
+                    if frozen_dict_get(expected_kwdefaults, name, frozen_sentinel) is not expected:
+                        return False
+            if expected_closure is not None:
+                if frozen_len(expected_closure) != frozen_len(expected_closure_state):
+                    return False
+                for observed, expected in frozen_zip(
+                    expected_closure,
+                    expected_closure_state,
+                    strict=True,
+                ):
+                    expected_cell, expected_value = expected
+                    if (
+                        observed is not expected_cell
+                        or observed.cell_contents is not expected_value
+                    ):
+                        return False
+            return True
+
+        def class_authenticates() -> bool:
+            namespace = frozen_type_getattribute(frozen_class, "__dict__")
+            if frozen_type(namespace) is not frozen_mapping_type or frozen_len(
+                namespace
+            ) != frozen_len(frozen_namespace):
+                return False
+            for name, trusted in frozen_namespace:
+                if frozen_mapping_get(namespace, name, frozen_sentinel) is not trusted:
+                    return False
+            metadata = frozen_mapping_get(
+                namespace,
+                "__dataclass_fields__",
+                frozen_sentinel,
+            )
+            if frozen_type(metadata) is not frozen_dict_type or frozen_len(metadata) != frozen_len(
+                frozen_metadata
+            ):
+                return False
+            for name, trusted in frozen_metadata:
+                if frozen_dict_get(metadata, name, frozen_sentinel) is not trusted:
+                    return False
+            retained_annotations = frozen_mapping_get(
+                namespace,
+                "__annotations__",
+                frozen_sentinel,
+            )
+            if frozen_type(retained_annotations) is not frozen_dict_type or frozen_len(
+                retained_annotations
+            ) != frozen_len(frozen_annotations):
+                return False
+            for name, trusted in frozen_annotations:
+                if frozen_dict_get(retained_annotations, name, frozen_sentinel) is not trusted:
+                    return False
+            for trusted_field, expected_state in frozen_field_states:
+                if frozen_type(trusted_field) is not frozen_field_type:
+                    return False
+                for slot_name, expected in expected_state:
+                    if frozen_object_getattribute(trusted_field, slot_name) is not expected:
+                        return False
+            if frozen_type(dataclass_params) is not frozen_params_type:
+                return False
+            for slot_name, expected in frozen_params_state:
+                if frozen_object_getattribute(dataclass_params, slot_name) is not expected:
+                    return False
+            for contract in frozen_function_contracts:
+                if not validates_function_contract(contract):
+                    return False
+            return True
+
+        def digest(value: object) -> str:
+            if frozen_type(value) is not frozen_str_type or frozen_len(value) != 64:
+                raise frozen_value_error("detached binding digest is malformed")
+            for character in value:
+                if character not in frozen_hex:
+                    raise frozen_value_error("detached binding digest is malformed")
+            return value
+
+        def text(value: object) -> bytes:
+            if (
+                frozen_type(value) is not frozen_str_type
+                or not value
+                or frozen_len(value) > frozen_text_limit
+            ):
+                raise frozen_value_error("detached binding text is malformed")
+            try:
+                encoded = frozen_utf8_encode(value, "utf-8")
+            except frozen_unicode_encode_error as error:
+                raise frozen_value_error("detached binding text is not UTF-8") from error
+            if (
+                frozen_type(encoded) is not frozen_bytes_type
+                or frozen_len(encoded) > frozen_text_limit
+            ):
+                raise frozen_value_error("detached binding text is malformed")
+            return frozen_pack(">I", frozen_len(encoded)) + encoded
+
+        def capture(binding: object) -> tuple[object, ...]:
+            if frozen_type(binding) is not frozen_class or not class_authenticates():
+                raise frozen_value_error("detached binding class is not authentic")
+            captured: list[object] = []
+            for descriptor in frozen_descriptors:
+                if frozen_type(descriptor) is not frozen_member_descriptor_type:
+                    raise frozen_value_error("detached binding descriptor is not authentic")
+                captured.append(frozen_member_get(descriptor, binding, frozen_class))
+            if not class_authenticates():
+                raise frozen_value_error("detached binding class is not authentic")
+            return frozen_tuple_type(captured)
+
+        def payload(values: object) -> bytes:
+            if (
+                frozen_type(values) is not frozen_tuple_type
+                or frozen_len(values) != frozen_field_count - 1
+            ):
+                raise frozen_value_error("detached binding field vector is malformed")
+            (
+                transaction_id,
+                state_publication_token,
+                runtime_publication_token,
+                materialization_mode,
+                lifecycle_mode,
+                physical_transport_id,
+                conn_id,
+                zeek_uid,
+                src_ip,
+                src_port,
+                dst_ip,
+                dst_port,
+                protocol,
+                started_at_us,
+                closed_at_us,
+                network_result_digest,
+                timing_binding_digest,
+                timing_receipt_digest,
+                runtime_receipt_digest,
+                connection_receipt_digest,
+                source_receipt_token,
+            ) = values
+            digest(state_publication_token)
+            digest(runtime_publication_token)
+            digest(network_result_digest)
+            digest(timing_binding_digest)
+            digest(timing_receipt_digest)
+            digest(runtime_receipt_digest)
+            digest(connection_receipt_digest)
+            digest(source_receipt_token)
+            if frozen_type(materialization_mode) is not frozen_str_type or (
+                materialization_mode != frozen_physical_mode
+                and materialization_mode != frozen_application_mode
+            ):
+                raise frozen_value_error("detached binding materialization mode is malformed")
+            if frozen_type(lifecycle_mode) is not frozen_str_type or (
+                lifecycle_mode != frozen_network_mode
+                and lifecycle_mode != frozen_deferred_mode
+                and lifecycle_mode != frozen_application_mode
+            ):
+                raise frozen_value_error("detached binding lifecycle mode is malformed")
+            retained = frozen_bytearray_type(frozen_prefix)
+            for value in (
+                transaction_id,
+                state_publication_token,
+                runtime_publication_token,
+                materialization_mode,
+                lifecycle_mode,
+                physical_transport_id,
+                conn_id,
+                zeek_uid,
+                src_ip,
+                dst_ip,
+                protocol,
+            ):
+                frozen_bytearray_extend(retained, text(value))
+            for port in (src_port, dst_port):
+                if frozen_type(port) is not frozen_int_type or not 0 <= port < 1 << 16:
+                    raise frozen_value_error("detached binding port is malformed")
+                frozen_bytearray_extend(retained, frozen_int_to_bytes(port, 2, "big"))
+            if frozen_type(started_at_us) is not frozen_int_type or not (
+                frozen_min_datetime <= started_at_us <= frozen_max_datetime
+            ):
+                raise frozen_value_error("detached binding start time is malformed")
+            frozen_bytearray_extend(retained, frozen_pack(">q", started_at_us))
+            if closed_at_us is None:
+                frozen_bytearray_extend(retained, b"\0")
+            else:
+                if frozen_type(closed_at_us) is not frozen_int_type or not (
+                    frozen_min_datetime <= closed_at_us <= frozen_max_datetime
+                ):
+                    raise frozen_value_error("detached binding close time is malformed")
+                frozen_bytearray_extend(retained, b"\1")
+                frozen_bytearray_extend(retained, frozen_pack(">q", closed_at_us))
+            for value in (
+                network_result_digest,
+                timing_binding_digest,
+                timing_receipt_digest,
+                runtime_receipt_digest,
+                connection_receipt_digest,
+                source_receipt_token,
+            ):
+                frozen_bytearray_extend(retained, text(value))
+            if frozen_len(retained) > frozen_payload_limit:
+                raise frozen_value_error("detached binding payload exceeds its bound")
+            return frozen_bytes_from_buffer(retained)
+
+        def sign(secret: object, retained_payload: bytes) -> str:
+            if frozen_type(secret) is not frozen_bytes_type or frozen_len(secret) != 32:
+                raise frozen_value_error("detached binding secret is malformed")
+            retained_hmac = frozen_hmac_new(secret, retained_payload, frozen_sha256)
+            if frozen_type(retained_hmac) is not frozen_hmac_type:
+                raise frozen_value_error("detached binding HMAC constructor is malformed")
+            retained_digest = frozen_hmac_hexdigest(retained_hmac)
+            if frozen_type(retained_digest) is not frozen_str_type:
+                raise frozen_value_error("detached binding HMAC result is malformed")
+            return digest(retained_digest)
+
+        if (
+            frozen_type(operation) is not frozen_int_type
+            or frozen_type(arguments) is not frozen_tuple_type
+        ):
+            raise frozen_value_error("detached binding operation is malformed")
+        if operation == 0:
+            if frozen_len(arguments) != 2:
+                raise frozen_value_error("detached binding signing request is malformed")
+            values, secret = arguments
+            if not class_authenticates():
+                raise frozen_value_error("detached binding class is not authentic")
+            proof = sign(secret, payload(values))
+            if not class_authenticates():
+                raise frozen_value_error("detached binding class is not authentic")
+            return proof
+        if operation == 1:
+            if frozen_len(arguments) != 2:
+                raise frozen_value_error("detached binding allocation request is malformed")
+            values, proof = arguments
+            payload(values)
+            digest(proof)
+            if not class_authenticates():
+                raise frozen_value_error("detached binding class is not authentic")
+            binding = frozen_object_new(frozen_class)
+            field_values = (*values, proof)
+            for descriptor, value in frozen_zip(
+                frozen_descriptors,
+                field_values,
+                strict=True,
+            ):
+                frozen_member_set(descriptor, binding, value)
+            if not class_authenticates():
+                raise frozen_value_error("detached binding class is not authentic")
+            return binding
+        if operation == 2:
+            if frozen_len(arguments) != 2:
+                raise frozen_value_error("detached binding verification request is malformed")
+            binding, secret = arguments
+            captured = capture(binding)
+            retained = digest(captured[-1])
+            expected = sign(secret, payload(captured[:-1]))
+            matches = frozen_compare_digest(retained, expected)
+            if frozen_type(matches) is not frozen_bool_type or not class_authenticates():
+                raise frozen_value_error("detached binding verification result is malformed")
+            return matches
+        if operation == 3:
+            if frozen_len(arguments) != 3:
+                raise frozen_value_error("detached binding result check is malformed")
+            binding, values, proof = arguments
+            payload(values)
+            digest(proof)
+            captured = capture(binding)
+            payload(captured[:-1])
+            digest(captured[-1])
+            if frozen_len(captured) != frozen_field_count:
+                return False
+            expected = (*values, proof)
+            for observed, retained in frozen_zip(captured, expected, strict=True):
+                if frozen_type(observed) is not frozen_type(retained) or observed != retained:
+                    return False
+            return class_authenticates()
+        raise frozen_value_error("detached binding operation is unknown")
+
+    return _freeze_detached_network_sealed_capability(invoke)
+
+
+_DETACHED_NETWORK_BINDING_BOUNDARY_CAPABILITY = (
+    _freeze_detached_network_binding_boundary_capability()
+)
+
+
+def _freeze_detached_network_binding_boundary_methods(
+    capability: _DetachedNetworkSealedCapability,
+    issuance_record_type: type[object],
+    issuance_claim_type: type[object],
+    receipt_type: type[object],
+    issuance_descriptors: tuple[MemberDescriptorType, ...],
+) -> tuple[Callable[..., object], Callable[..., object], Callable[..., object]]:
+    """Create non-injectable authority methods around one sealed capability.
+
+    The trusted handler and its structural contract occupy distinct closure
+    cells.  Single-cell mutation therefore fails before handler execution.
+    Coordinated replacement of both cells, or rewriting these boundary methods,
+    is arbitrary in-process code execution outside the receipt-tampering model.
+    """
+
+    (
+        trusted_call,
+        expected_function,
+        expected_code,
+        expected_defaults,
+        expected_kwdefaults,
+        expected_closure,
+        expected_closure_state,
+        frozen_getattribute,
+        frozen_function_type,
+        frozen_cell_type,
+        frozen_cell_contents_get,
+    ) = (capability[0], *capability)
+    frozen_type = type
+    frozen_len = len
+    frozen_bool_type = bool
+    frozen_str_type = str
+    frozen_value_error = ValueError
+    frozen_state_error = StateError
+    frozen_rejected_errors = (
+        AttributeError,
+        OverflowError,
+        TypeError,
+        UnicodeError,
+        ValueError,
+    )
+    frozen_assertion_error = AssertionError
+    frozen_object_getattribute = object.__getattribute__
+    frozen_dict_type = dict
+    frozen_dict_get = dict.get
+    frozen_bytes_type = bytes
+    frozen_int_type = int
+    frozen_tuple_type = tuple
+    frozen_reference_type = ReferenceType
+    frozen_reference_call = ReferenceType.__call__
+    frozen_member_get = MemberDescriptorType.__get__
+    frozen_lock_type = type(RLock())
+    frozen_id = id
+    frozen_zip = zip
+    frozen_issuance_record_type = issuance_record_type
+    frozen_issuance_claim_type = issuance_claim_type
+    frozen_receipt_type = receipt_type
+    frozen_issuance_descriptors = issuance_descriptors
+
+    def construct(
+        self: object,
+        values: tuple[object, ...],
+        proof: str,
+    ) -> LifecycleDetachedNetworkReceiptBinding:
+        def handler_authenticates() -> bool:
+            if trusted_call is not expected_function or frozen_type(trusted_call) is not (
+                frozen_function_type
+            ):
+                return False
+            if (
+                frozen_getattribute(trusted_call, "__code__") is not expected_code
+                or frozen_getattribute(trusted_call, "__defaults__") is not expected_defaults
+                or frozen_getattribute(trusted_call, "__kwdefaults__") is not expected_kwdefaults
+                or frozen_getattribute(trusted_call, "__closure__") is not expected_closure
+            ):
+                return False
+            if expected_closure is None:
+                return not expected_closure_state
+            if frozen_len(expected_closure) != frozen_len(expected_closure_state):
+                return False
+            for observed, expected in frozen_zip(
+                expected_closure,
+                expected_closure_state,
+                strict=True,
+            ):
+                expected_cell, expected_value = expected
+                if (
+                    frozen_type(observed) is not frozen_cell_type
+                    or observed is not expected_cell
+                    or frozen_cell_contents_get(observed, frozen_cell_type) is not expected_value
+                ):
+                    return False
+            return True
+
+        def invoke(operation: int, arguments: tuple[object, ...]) -> object:
+            if not handler_authenticates():
+                raise frozen_value_error("detached binding capability is not authentic")
+            try:
+                result = trusted_call(operation, arguments)
+            finally:
+                if not handler_authenticates():
+                    raise frozen_value_error("detached binding capability is not authentic")
+            return result
+
+        del self
+        allocated = invoke(1, (values, proof))
+        matches = invoke(3, (allocated, values, proof))
+        if frozen_type(matches) is not frozen_bool_type or not matches:
+            raise frozen_value_error("detached binding allocator returned a mismatched value")
+        return allocated  # type: ignore[return-value]
+
+    def issue(
+        self: object,
+        issuance_record: object,
+        values: tuple[object, ...],
+    ) -> LifecycleDetachedNetworkReceiptBinding:
+        def issuance_authenticates() -> bool:
+            if frozen_type(issuance_record) is not frozen_issuance_record_type:
+                return False
+            try:
+                (
+                    root,
+                    generation,
+                    receipt,
+                    claim_ref,
+                    detached_values,
+                    canonical_committed,
+                    terminal,
+                ) = frozen_tuple_type(
+                    frozen_member_get(
+                        descriptor,
+                        issuance_record,
+                        frozen_issuance_record_type,
+                    )
+                    for descriptor in frozen_issuance_descriptors
+                )
+                instance_namespace = frozen_object_getattribute(self, "__dict__")
+                if frozen_type(instance_namespace) is not frozen_dict_type:
+                    return False
+                issuance_lock = frozen_dict_get(
+                    instance_namespace,
+                    "_prepared_network_receipt_issuance_lock",
+                )
+                issuances = frozen_dict_get(
+                    instance_namespace,
+                    "_prepared_network_receipt_issuances",
+                )
+                generations = frozen_dict_get(
+                    instance_namespace,
+                    "_prepared_network_receipt_issuance_generations",
+                )
+                receipts = frozen_dict_get(
+                    instance_namespace,
+                    "_prepared_network_receipt_issuance_receipts",
+                )
+            except frozen_rejected_errors:
+                return False
+            if (
+                frozen_type(generation) is not frozen_int_type
+                or generation <= 0
+                or frozen_type(receipt) is not frozen_receipt_type
+                or frozen_type(claim_ref) is not frozen_reference_type
+                or frozen_type(frozen_reference_call(claim_ref)) is not frozen_issuance_claim_type
+                or detached_values is not values
+                or canonical_committed is not True
+                or terminal is not False
+                or frozen_type(issuance_lock) is not frozen_lock_type
+                or frozen_type(issuances) is not frozen_dict_type
+                or frozen_type(generations) is not frozen_dict_type
+                or frozen_type(receipts) is not frozen_dict_type
+            ):
+                return False
+            root_id = frozen_id(root)
+            key = (root_id, generation)
+            with issuance_lock:
+                return (
+                    frozen_dict_get(issuances, key) is issuance_record
+                    and frozen_dict_get(generations, root_id) == generation
+                    and frozen_dict_get(receipts, frozen_id(receipt)) == key
+                )
+
+        def handler_authenticates() -> bool:
+            if trusted_call is not expected_function or frozen_type(trusted_call) is not (
+                frozen_function_type
+            ):
+                return False
+            if (
+                frozen_getattribute(trusted_call, "__code__") is not expected_code
+                or frozen_getattribute(trusted_call, "__defaults__") is not expected_defaults
+                or frozen_getattribute(trusted_call, "__kwdefaults__") is not expected_kwdefaults
+                or frozen_getattribute(trusted_call, "__closure__") is not expected_closure
+            ):
+                return False
+            if expected_closure is None:
+                return not expected_closure_state
+            if frozen_len(expected_closure) != frozen_len(expected_closure_state):
+                return False
+            for observed, expected in frozen_zip(
+                expected_closure,
+                expected_closure_state,
+                strict=True,
+            ):
+                expected_cell, expected_value = expected
+                if (
+                    frozen_type(observed) is not frozen_cell_type
+                    or observed is not expected_cell
+                    or frozen_cell_contents_get(observed, frozen_cell_type) is not expected_value
+                ):
+                    return False
+            return True
+
+        def invoke(operation: int, arguments: tuple[object, ...]) -> object:
+            if not handler_authenticates():
+                raise frozen_state_error("Detached binding capability is not trusted")
+            try:
+                result = trusted_call(operation, arguments)
+            finally:
+                if not handler_authenticates():
+                    raise frozen_state_error("Detached binding capability is not trusted")
+            return result
+
+        try:
+            instance_namespace = frozen_object_getattribute(self, "__dict__")
+            if frozen_type(instance_namespace) is not frozen_dict_type:
+                raise frozen_state_error("Detached binding authority has no trusted namespace")
+            secret = frozen_dict_get(instance_namespace, "_receipt_secret")
+            if frozen_type(secret) is not frozen_bytes_type:
+                raise frozen_state_error("Detached binding authority secret is malformed")
+            if not issuance_authenticates():
+                raise frozen_state_error(
+                    "Detached binding requires an exact retained issuance authority"
+                )
+            proof = invoke(0, (values, secret))
+            if frozen_type(proof) is not frozen_str_type:
+                raise frozen_state_error("Detached binding proof has an invalid type")
+            binding = invoke(1, (values, proof))
+            matches_values = invoke(3, (binding, values, proof))
+            authentic = invoke(2, (binding, secret))
+            if not issuance_authenticates():
+                raise frozen_state_error(
+                    "Detached binding requires an exact retained issuance authority"
+                )
+        except frozen_rejected_errors as error:
+            if frozen_type(error) is frozen_state_error:
+                raise
+            raise frozen_state_error("Detached binding issuance failed closed") from error
+        if (
+            frozen_type(matches_values) is not frozen_bool_type
+            or not matches_values
+            or frozen_type(authentic) is not frozen_bool_type
+            or not authentic
+        ):
+            raise frozen_assertion_error("Detached prepared-network proof reconstruction failed")
+        return binding  # type: ignore[return-value]
+
+    def authenticates(self: object, binding: object) -> bool:
+        def handler_authenticates() -> bool:
+            if trusted_call is not expected_function or frozen_type(trusted_call) is not (
+                frozen_function_type
+            ):
+                return False
+            if (
+                frozen_getattribute(trusted_call, "__code__") is not expected_code
+                or frozen_getattribute(trusted_call, "__defaults__") is not expected_defaults
+                or frozen_getattribute(trusted_call, "__kwdefaults__") is not expected_kwdefaults
+                or frozen_getattribute(trusted_call, "__closure__") is not expected_closure
+            ):
+                return False
+            if expected_closure is None:
+                return not expected_closure_state
+            if frozen_len(expected_closure) != frozen_len(expected_closure_state):
+                return False
+            for observed, expected in frozen_zip(
+                expected_closure,
+                expected_closure_state,
+                strict=True,
+            ):
+                expected_cell, expected_value = expected
+                if (
+                    frozen_type(observed) is not frozen_cell_type
+                    or observed is not expected_cell
+                    or frozen_cell_contents_get(observed, frozen_cell_type) is not expected_value
+                ):
+                    return False
+            return True
+
+        def invoke(operation: int, arguments: tuple[object, ...]) -> object:
+            if not handler_authenticates():
+                raise frozen_value_error("detached binding capability is not authentic")
+            try:
+                result = trusted_call(operation, arguments)
+            finally:
+                if not handler_authenticates():
+                    raise frozen_value_error("detached binding capability is not authentic")
+            return result
+
+        try:
+            instance_namespace = frozen_object_getattribute(self, "__dict__")
+            if frozen_type(instance_namespace) is not frozen_dict_type:
+                return False
+            secret = frozen_dict_get(instance_namespace, "_receipt_secret")
+            if frozen_type(secret) is not frozen_bytes_type:
+                return False
+            authentic = invoke(2, (binding, secret))
+        except frozen_rejected_errors:
+            return False
+        return frozen_type(authentic) is frozen_bool_type and authentic
+
+    construct.__name__ = "_construct_detached_network_receipt_binding"
+    construct.__qualname__ = (
+        "GeneratorLifecycleAuthority._construct_detached_network_receipt_binding"
+    )
+    construct.__doc__ = "Construct one exact binding through the sealed allocator."
+    issue.__name__ = "_issue_detached_network_receipt_binding_recoverably"
+    issue.__qualname__ = (
+        "GeneratorLifecycleAuthority._issue_detached_network_receipt_binding_recoverably"
+    )
+    issue.__doc__ = "Issue one stateless proof through the sealed binding boundary."
+    authenticates.__name__ = "authenticates_detached_network_receipt_binding"
+    authenticates.__qualname__ = (
+        "GeneratorLifecycleAuthority.authenticates_detached_network_receipt_binding"
+    )
+    authenticates.__doc__ = (
+        "Authenticate one stateless detached network-receipt value proof.\n\n"
+        "Byte-identical copies are equivalent. Exact object identity, staleness, "
+        "and lifetime belong to the manager capability that cross-binds this proof."
+    )
+    return construct, issue, authenticates
+
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class LifecyclePreparedNetworkReceipt:
     """Authenticated proof of one complete runtime/timing/network publication."""
 
@@ -1287,6 +2230,75 @@ class LifecyclePreparedNetworkReceipt:
         return hmac.compare_digest(self._integrity_token, expected)
 
 
+_PREPARED_NETWORK_RECEIPT_FIELD_NAMES = (
+    "_runtime_publication_token",
+    "_state_publication_token",
+    "_transaction_id",
+    "_materialization_mode",
+    "_lifecycle_mode",
+    "_physical_transport",
+    "_result_digest",
+    "_timing_binding_token",
+    "_connection_receipt",
+    "_runtime_receipt",
+    "_timing_receipt",
+    "_integrity_token",
+)
+_PREPARED_NETWORK_RECEIPT_DESCRIPTORS = tuple(
+    vars(LifecyclePreparedNetworkReceipt)[field_name]
+    for field_name in _PREPARED_NETWORK_RECEIPT_FIELD_NAMES
+)
+
+
+def _allocate_prepared_network_receipt_shell(
+    values: tuple[object, ...] | None = None,
+    *,
+    _receipt_type: type[LifecyclePreparedNetworkReceipt] = LifecyclePreparedNetworkReceipt,
+    _descriptors: tuple[MemberDescriptorType, ...] = _PREPARED_NETWORK_RECEIPT_DESCRIPTORS,
+    _object_new: Callable[[type[object]], object] = object.__new__,
+    _member_set: Callable[[object, object, object], None] = MemberDescriptorType.__set__,
+) -> LifecyclePreparedNetworkReceipt:
+    """Allocate one exact receipt shell without invoking live class behavior."""
+
+    receipt = _object_new(_receipt_type)
+    if values is not None:
+        if type(values) is not tuple or len(values) != len(_descriptors):
+            raise ValueError("Prepared-network receipt shell field vector is malformed")
+        for descriptor, value in zip(_descriptors, values, strict=True):
+            _member_set(descriptor, receipt, value)
+    return cast(LifecyclePreparedNetworkReceipt, receipt)
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedNetworkReceiptAuthority:
+    """Bounded exact-object authority for issuance-time detached scalar facts."""
+
+    receipt_ref: ReferenceType[LifecyclePreparedNetworkReceipt]
+    timing_authority: object
+    timing_receipt_id: int
+    generation: int
+    detached_values: tuple[object, ...] | None = None
+    detached_proof: str = ""
+    committed: bool = False
+    receipt_graph: _PreparedNetworkGraphSnapshot | None = None
+
+
+_PREPARED_NETWORK_RECEIPT_AUTHORITY_FIELD_NAMES = (
+    "receipt_ref",
+    "timing_authority",
+    "timing_receipt_id",
+    "generation",
+    "detached_values",
+    "detached_proof",
+    "committed",
+    "receipt_graph",
+)
+_PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS = tuple(
+    vars(_PreparedNetworkReceiptAuthority)[field_name]
+    for field_name in _PREPARED_NETWORK_RECEIPT_AUTHORITY_FIELD_NAMES
+)
+
+
 @dataclass(frozen=True, slots=True)
 class LifecyclePreparedNetworkResult:
     """Exact committed connection, runtime, and source-timing results."""
@@ -1295,6 +2307,333 @@ class LifecyclePreparedNetworkResult:
     runtime: NetworkTransactionPreparationReceipt
     timing: SourceTimingPreparationReceipt
     receipt: LifecyclePreparedNetworkReceipt
+
+
+_PREPARED_NETWORK_RESULT_FIELD_NAMES = (
+    "connection",
+    "runtime",
+    "timing",
+    "receipt",
+)
+_PREPARED_NETWORK_RESULT_DESCRIPTORS = tuple(
+    vars(LifecyclePreparedNetworkResult)[field_name]
+    for field_name in _PREPARED_NETWORK_RESULT_FIELD_NAMES
+)
+
+_MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_NODES = 65_536
+_MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_TUPLE_MEMBERS = 65_536
+_MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_SCALAR_BYTES = 16 * 1024 * 1024
+_PreparedNetworkGraphSnapshot = tuple[
+    tuple[
+        object | None,
+        type[object],
+        tuple[tuple[str, object], ...],
+    ],
+    ...,
+]
+
+
+def _capture_prepared_network_authoritative_graph(
+    root: object,
+    *,
+    _fields: Callable[[type[object]], tuple[object, ...]] = fields,
+    _is_dataclass: Callable[[object], bool] = is_dataclass,
+    _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
+    _str_encode: Callable[[str, str], bytes] = str.encode,
+) -> _PreparedNetworkGraphSnapshot:
+    """Capture one bounded exact-object graph without retaining its public root twice."""
+
+    pending: list[tuple[object, bool]] = [(root, True)]
+    seen: set[int] = set()
+    nodes: list[
+        tuple[
+            object | None,
+            type[object],
+            tuple[tuple[str, object], ...],
+        ]
+    ] = []
+    charged_nodes = 0
+    charged_scalar_bytes = 0
+    while pending:
+        value, is_root = pending.pop()
+        value_type = type(value)
+        if value is None or value_type in {bool, int, float, str, bytes}:
+            charged_nodes += 1
+            if value_type is str:
+                charged_scalar_bytes += len(_str_encode(value, "utf-8"))
+            elif value_type is bytes:
+                charged_scalar_bytes += len(value)
+            else:
+                charged_scalar_bytes += 8
+            if (
+                charged_nodes > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_NODES
+                or charged_scalar_bytes > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_SCALAR_BYTES
+            ):
+                raise StateError("Prepared-network authority graph exceeds its bound")
+            continue
+
+        identity = id(value)
+        if identity in seen:
+            if value is root:
+                raise StateError("Prepared-network authority graph contains a root cycle")
+            continue
+        seen.add(identity)
+        charged_nodes += 1
+        if charged_nodes > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_NODES:
+            raise StateError("Prepared-network authority graph exceeds its node bound")
+
+        if value_type is tuple:
+            member_count = len(value)
+            if member_count > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_TUPLE_MEMBERS:
+                raise StateError("Prepared-network authority graph tuple exceeds its bound")
+            charged_nodes += member_count
+            if charged_nodes > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_NODES:
+                raise StateError("Prepared-network authority graph exceeds its node bound")
+            for member in value:
+                pending.append((member, False))
+            continue
+
+        if not _is_dataclass(value_type):
+            continue
+        members = _fields(value_type)
+        if type(members) is not tuple:
+            raise StateError("Prepared-network authority graph metadata is malformed")
+        if len(members) > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_TUPLE_MEMBERS:
+            raise StateError("Prepared-network authority object exceeds its field bound")
+        captured_fields: list[tuple[str, object]] = []
+        for member in members:
+            field_name = _object_getattribute(member, "name")
+            if type(field_name) is not str or not field_name:
+                raise StateError("Prepared-network authority graph field is malformed")
+            field_value = _object_getattribute(value, field_name)
+            if field_value is root:
+                raise StateError("Prepared-network authority graph contains a root cycle")
+            captured_fields.append((field_name, field_value))
+            pending.append((field_value, False))
+        nodes.append(
+            (
+                None if is_root else value,
+                value_type,
+                tuple(captured_fields),
+            )
+        )
+    if not nodes or nodes[0][0] is not None or nodes[0][1] is not type(root):
+        raise StateError("Prepared-network authority graph has no exact dataclass root")
+    return tuple(nodes)
+
+
+def _prepared_network_authoritative_graph_matches(
+    root: object,
+    snapshot: object,
+    *,
+    _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
+) -> bool:
+    """Compare one public graph to its neutral snapshot without invoking value callbacks."""
+
+    if type(snapshot) is not tuple or not snapshot:
+        return False
+    scalar_types = {bool, int, float, str, bytes}
+    for index, node in enumerate(snapshot):
+        if type(node) is not tuple or len(node) != 3:
+            return False
+        retained, expected_type, expected_fields = node
+        target = root if index == 0 else retained
+        if (
+            (index == 0 and retained is not None)
+            or (index != 0 and retained is None)
+            or type(expected_type) is not type
+            or type(target) is not expected_type
+            or type(expected_fields) is not tuple
+        ):
+            return False
+        for expected_field in expected_fields:
+            if type(expected_field) is not tuple or len(expected_field) != 2:
+                return False
+            field_name, expected = expected_field
+            if type(field_name) is not str:
+                return False
+            try:
+                actual = _object_getattribute(target, field_name)
+            except AttributeError:
+                return False
+            expected_value_type = type(expected)
+            if expected is None:
+                if actual is not None:
+                    return False
+            elif expected_value_type in scalar_types:
+                if type(actual) is not expected_value_type or actual != expected:
+                    return False
+            elif actual is not expected:
+                return False
+    return True
+
+
+def _restore_prepared_network_authoritative_graph(
+    root: object,
+    snapshot: object,
+    *,
+    _object_setattr: Callable[[object, str, object], None] = object.__setattr__,
+) -> bool:
+    """Restore every exact field in one retained graph without reading caller values."""
+
+    if type(snapshot) is not tuple or not snapshot:
+        return False
+    for index, node in enumerate(snapshot):
+        if type(node) is not tuple or len(node) != 3:
+            return False
+        retained, expected_type, expected_fields = node
+        target = root if index == 0 else retained
+        if (
+            (index == 0 and retained is not None)
+            or (index != 0 and retained is None)
+            or type(expected_type) is not type
+            or type(target) is not expected_type
+            or type(expected_fields) is not tuple
+        ):
+            return False
+        for expected_field in expected_fields:
+            if type(expected_field) is not tuple or len(expected_field) != 2:
+                return False
+            field_name, expected = expected_field
+            if type(field_name) is not str:
+                return False
+            _object_setattr(target, field_name, expected)
+    return _prepared_network_authoritative_graph_matches(root, snapshot)
+
+
+def _allocate_prepared_network_result_shell(
+    values: tuple[object, ...] | None = None,
+    *,
+    _result_type: type[LifecyclePreparedNetworkResult] = LifecyclePreparedNetworkResult,
+    _descriptors: tuple[MemberDescriptorType, ...] = _PREPARED_NETWORK_RESULT_DESCRIPTORS,
+    _object_new: Callable[[type[object]], object] = object.__new__,
+    _member_set: Callable[[object, object, object], None] = MemberDescriptorType.__set__,
+) -> LifecyclePreparedNetworkResult:
+    """Allocate one exact result shell without invoking live class behavior."""
+
+    result = _object_new(_result_type)
+    if values is not None:
+        if type(values) is not tuple or len(values) != len(_descriptors):
+            raise ValueError("Prepared-network result shell field vector is malformed")
+        for descriptor, value in zip(_descriptors, values, strict=True):
+            _member_set(descriptor, result, value)
+    return cast(LifecyclePreparedNetworkResult, result)
+
+
+class _PreparedNetworkReceiptIssuanceClaim:
+    """Ephemeral exact claim whose weak lifetime follows one materialization call."""
+
+    __slots__ = ("__weakref__",)
+
+
+@dataclass(slots=True)
+class _PreparedNetworkReceiptIssuance:
+    """Strong bounded carrier spanning canonical commit through result delivery."""
+
+    root: PreparedNetworkTransactionRoot
+    generation: int
+    receipt: LifecyclePreparedNetworkReceipt
+    result: LifecyclePreparedNetworkResult
+    authority_record: _PreparedNetworkReceiptAuthority
+    claim_ref: ReferenceType[_PreparedNetworkReceiptIssuanceClaim] | None
+    authority_generation: int | None = None
+    issuance_values: tuple[object, ...] | None = None
+    result_values: tuple[object, ...] | None = None
+    receipt_values: tuple[object, ...] | None = None
+    detached_values: tuple[object, ...] | None = None
+    detached_proof: str = ""
+    root_graph: _PreparedNetworkGraphSnapshot | None = None
+    result_graph: _PreparedNetworkGraphSnapshot | None = None
+    receipt_graph: _PreparedNetworkGraphSnapshot | None = None
+    durable_capture: object | None = None
+    durable_capture_facts: tuple[object, ...] | None = None
+    canonical_committed: bool = False
+    terminal: bool = False
+
+
+def _prepared_network_durable_capture_matches(
+    root: object,
+    receipt: object,
+    capture: object,
+    facts: object,
+    *,
+    _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
+    _capture_lock_type: type[object] = type(Lock()),
+) -> bool:
+    """Match one committed public capture to callback-free detached slot facts."""
+
+    from evidenceforge.generation.actions.network_connection import (
+        NetworkConnectionIdentityCapture,
+        NetworkConnectionPublicationOutcome,
+    )
+
+    if (
+        type(root) is not PreparedNetworkTransactionRoot
+        or type(receipt) is not LifecyclePreparedNetworkReceipt
+        or type(capture) is not NetworkConnectionIdentityCapture
+        or type(facts) is not tuple
+        or len(facts) != 9
+    ):
+        return False
+    try:
+        capture_lock = _object_getattribute(capture, "_lock")
+        runtime_token = _object_getattribute(root, "runtime_token")
+        transaction = _object_getattribute(root, "transaction")
+        lifecycle_mode = _object_getattribute(runtime_token, "lifecycle_mode")
+    except AttributeError:
+        return False
+    if type(capture_lock) is not _capture_lock_type:
+        return False
+    with capture_lock:
+        captured = (
+            _object_getattribute(capture, "_transaction"),
+            _object_getattribute(capture, "_lifecycle_mode"),
+            _object_getattribute(capture, "_prepared_root"),
+            _object_getattribute(capture, "_source_timing_preparation"),
+            _object_getattribute(capture, "_prepared_dispatch"),
+            _object_getattribute(capture, "_receipt"),
+            _object_getattribute(capture, "_application_receipt"),
+            _object_getattribute(capture, "_outcome"),
+            _object_getattribute(capture, "_claim"),
+        )
+    for index, (supplied, expected) in enumerate(zip(captured, facts, strict=True)):
+        if index == 1:
+            if type(supplied) is not str or type(expected) is not str or supplied != expected:
+                return False
+        elif supplied is not expected:
+            return False
+    return (
+        facts[0] is transaction
+        and type(facts[1]) is str
+        and type(lifecycle_mode) is str
+        and facts[1] == lifecycle_mode
+        and facts[2] is root
+        and facts[5] is receipt
+        and type(facts[7]) is NetworkConnectionPublicationOutcome
+        and facts[8] is None
+    )
+
+
+_PREPARED_NETWORK_RECEIPT_ISSUANCE_SIGNER_FIELD_NAMES = (
+    "root",
+    "generation",
+    "receipt",
+    "claim_ref",
+    "detached_values",
+    "canonical_committed",
+    "terminal",
+)
+_PREPARED_NETWORK_RECEIPT_ISSUANCE_SIGNER_DESCRIPTORS = tuple(
+    vars(_PreparedNetworkReceiptIssuance)[field_name]
+    for field_name in _PREPARED_NETWORK_RECEIPT_ISSUANCE_SIGNER_FIELD_NAMES
+)
+_DETACHED_NETWORK_BINDING_BOUNDARY_METHODS = _freeze_detached_network_binding_boundary_methods(
+    _DETACHED_NETWORK_BINDING_BOUNDARY_CAPABILITY,
+    _PreparedNetworkReceiptIssuance,
+    _PreparedNetworkReceiptIssuanceClaim,
+    LifecyclePreparedNetworkReceipt,
+    _PREPARED_NETWORK_RECEIPT_ISSUANCE_SIGNER_DESCRIPTORS,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1668,6 +3007,9 @@ class GeneratorLifecycleAuthority:
         materialization_batch_transaction_byte_capacity: int = (
             _DEFAULT_MATERIALIZATION_BATCH_TRANSACTION_BYTE_CAPACITY
         ),
+        prepared_network_receipt_issuance_capacity: int = (
+            _DEFAULT_PREPARED_NETWORK_RECEIPT_ISSUANCE_CAPACITY
+        ),
     ) -> None:
         if shard_count <= 0:
             raise ValueError("Generator lifecycle shard_count must be positive")
@@ -1686,6 +3028,14 @@ class GeneratorLifecycleAuthority:
             raise ValueError(
                 "Generator lifecycle materialization-batch byte capacity must be a positive "
                 "exact integer"
+            )
+        if (
+            type(prepared_network_receipt_issuance_capacity) is not int
+            or prepared_network_receipt_issuance_capacity <= 0
+        ):
+            raise ValueError(
+                "Generator lifecycle prepared-network issuance capacity must be a "
+                "positive exact integer"
             )
         self._state_manager = state_manager
         self._shadow = lifecycle_shadow
@@ -1728,6 +3078,25 @@ class GeneratorLifecycleAuthority:
         self._rdp_session_manager: RdpReconnectStateManager | None = None
         self._network_runtime: NetworkTransactionRuntime | None = None
         self._source_timing_planner: SourceTimingPlanner | None = None
+        self._prepared_network_receipt_authorities: dict[
+            int,
+            _PreparedNetworkReceiptAuthority,
+        ] = {}
+        self._prepared_network_receipt_generation = 0
+        self._prepared_network_receipt_issuance_lock = RLock()
+        self._prepared_network_receipt_issuances: dict[
+            tuple[int, int],
+            _PreparedNetworkReceiptIssuance,
+        ] = {}
+        self._prepared_network_receipt_issuance_generations: dict[int, int] = {}
+        self._prepared_network_receipt_issuance_receipts: dict[
+            int,
+            tuple[int, int],
+        ] = {}
+        self._prepared_network_receipt_issuance_generation = 0
+        self._prepared_network_receipt_issuance_capacity = (
+            prepared_network_receipt_issuance_capacity
+        )
 
     @property
     def registry(self) -> LifecycleRegistry:
@@ -3936,8 +5305,850 @@ class GeneratorLifecycleAuthority:
             )
         return receipt
 
+    def _claim_prepared_network_receipt_issuance(
+        self,
+        root: object,
+    ) -> tuple[
+        _PreparedNetworkReceiptIssuance | None,
+        LifecyclePreparedNetworkResult | None,
+        _PreparedNetworkReceiptIssuanceClaim | None,
+    ]:
+        """Claim a committed retry carrier before reading consumed caller capabilities."""
+
+        if type(root) is not PreparedNetworkTransactionRoot:
+            return None, None, None
+        root_id = id(root)
+        with self._prepared_network_receipt_issuance_lock:
+            generation = self._prepared_network_receipt_issuance_generations.get(root_id)
+            if generation is None:
+                return None, None, None
+            key = (root_id, generation)
+            record = self._prepared_network_receipt_issuances.get(key)
+            if (
+                type(record) is not _PreparedNetworkReceiptIssuance
+                or record.root is not root
+                or record.generation != generation
+            ):
+                raise StateError("Prepared-network issuance carrier identity changed")
+            if not record.canonical_committed or record.issuance_values is None:
+                raise StateError("Prepared-network issuance carrier has no committed facts")
+            retained_claim = None if record.claim_ref is None else record.claim_ref()
+            if retained_claim is not None:
+                raise StateError("Prepared-network issuance recovery is already claimed")
+            claim = _PreparedNetworkReceiptIssuanceClaim()
+            record.claim_ref = ref(claim)
+            return record, None, claim
+
+    def _reserve_prepared_network_receipt_issuance(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        receipt: LifecyclePreparedNetworkReceipt,
+        result: LifecyclePreparedNetworkResult,
+        authority_record: _PreparedNetworkReceiptAuthority,
+        claim: _PreparedNetworkReceiptIssuanceClaim,
+        root_graph: _PreparedNetworkGraphSnapshot,
+    ) -> _PreparedNetworkReceiptIssuance:
+        """Preallocate one strong hard-capped carrier before canonical mutation."""
+
+        planner = self._source_timing_planner
+        if (
+            planner is None
+            or type(root) is not PreparedNetworkTransactionRoot
+            or type(receipt) is not LifecyclePreparedNetworkReceipt
+            or type(result) is not LifecyclePreparedNetworkResult
+            or type(authority_record) is not _PreparedNetworkReceiptAuthority
+            or type(claim) is not _PreparedNetworkReceiptIssuanceClaim
+            or type(root_graph) is not tuple
+            or not root_graph
+        ):
+            raise StateError("Prepared-network issuance reservation is malformed")
+        capacity = object.__getattribute__(
+            self,
+            "_prepared_network_receipt_issuance_capacity",
+        )
+        if type(capacity) is not int or capacity < 1:
+            raise StateError("Prepared-network issuance capacity is malformed")
+        root_id = id(root)
+        receipt_id = id(receipt)
+        with self._prepared_network_receipt_issuance_lock:
+            if len(self._prepared_network_receipt_issuances) >= capacity:
+                raise StateError("Prepared-network issuance carrier capacity is exhausted")
+            if root_id in self._prepared_network_receipt_issuance_generations:
+                raise StateError("Prepared-network root already has an issuance carrier")
+            if receipt_id in self._prepared_network_receipt_issuance_receipts:
+                raise StateError("Prepared-network receipt already has an issuance carrier")
+            self._prepared_network_receipt_issuance_generation += 1
+            generation = self._prepared_network_receipt_issuance_generation
+            key = (root_id, generation)
+
+            record = _PreparedNetworkReceiptIssuance(
+                root=root,
+                generation=generation,
+                receipt=receipt,
+                result=result,
+                authority_record=authority_record,
+                claim_ref=ref(claim),
+                root_graph=root_graph,
+            )
+            self._prepared_network_receipt_issuances[key] = record
+            self._prepared_network_receipt_issuance_generations[root_id] = generation
+            self._prepared_network_receipt_issuance_receipts[receipt_id] = key
+            return record
+
+    def _discard_prepared_network_receipt_issuance(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        record: _PreparedNetworkReceiptIssuance,
+    ) -> None:
+        """Generation-CAS discard one still-reversible strong carrier."""
+
+        root_id = id(root)
+        generation = record.generation
+        key = (root_id, generation)
+        with self._prepared_network_receipt_issuance_lock:
+            retained = self._prepared_network_receipt_issuances.get(key)
+            if (
+                retained is record
+                and retained.root is root
+                and not retained.terminal
+                and not retained.canonical_committed
+                and self._prepared_network_receipt_issuance_generations.get(root_id) == generation
+                and self._prepared_network_receipt_issuance_receipts.get(id(record.receipt)) == key
+            ):
+                self._prepared_network_receipt_issuances.pop(key, None)
+                self._prepared_network_receipt_issuance_generations.pop(root_id, None)
+                self._prepared_network_receipt_issuance_receipts.pop(id(record.receipt), None)
+
+    def _bind_prepared_network_durable_capture_for_ack(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        result: LifecyclePreparedNetworkResult,
+        capture: object,
+        facts: tuple[object, ...],
+        *,
+        _capture_matches: Callable[[object, object, object, object], bool] = (
+            _prepared_network_durable_capture_matches
+        ),
+        _graph_matches: Callable[[object, object], bool] = (
+            _prepared_network_authoritative_graph_matches
+        ),
+    ) -> None:
+        """Bind one exact durable planner handoff into its terminal carrier."""
+
+        if (
+            type(root) is not PreparedNetworkTransactionRoot
+            or type(result) is not LifecyclePreparedNetworkResult
+            or type(facts) is not tuple
+        ):
+            raise StateError("Prepared-network durable capture binding is malformed")
+        root_id = id(root)
+        with self._prepared_network_receipt_issuance_lock:
+            generation = self._prepared_network_receipt_issuance_generations.get(root_id)
+            key = None if generation is None else (root_id, generation)
+            record = None if key is None else self._prepared_network_receipt_issuances.get(key)
+            if (
+                type(record) is not _PreparedNetworkReceiptIssuance
+                or record.root is not root
+                or record.result is not result
+                or record.generation != generation
+                or not record.canonical_committed
+                or not record.terminal
+                or record.claim_ref is not None
+                or self._prepared_network_receipt_issuance_receipts.get(id(record.receipt)) != key
+                or type(record.root_graph) is not tuple
+                or type(record.result_graph) is not tuple
+                or type(record.receipt_graph) is not tuple
+                or not _graph_matches(root, record.root_graph)
+                or not _graph_matches(result, record.result_graph)
+                or not _graph_matches(record.receipt, record.receipt_graph)
+                or not _capture_matches(root, record.receipt, capture, facts)
+            ):
+                raise StateError("Prepared-network durable capture binding is not canonical")
+            if record.durable_capture is None and record.durable_capture_facts is None:
+                record.durable_capture = capture
+                record.durable_capture_facts = facts
+            elif record.durable_capture is not capture or record.durable_capture_facts is not facts:
+                raise StateError("Prepared-network durable capture binding changed")
+
+    def acknowledge_prepared_network_transaction(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        result: LifecyclePreparedNetworkResult,
+        *,
+        durable_capture: object | None = None,
+        durable_capture_facts: tuple[object, ...] | None = None,
+    ) -> None:
+        """Acknowledge exact result delivery and release its strong retry carrier."""
+
+        if not self.acknowledge_prepared_network_transaction_if_retained(
+            root,
+            result,
+            durable_capture=durable_capture,
+            durable_capture_facts=durable_capture_facts,
+        ):
+            raise StateError("Prepared-network issuance carrier is not retained")
+
+    def acknowledge_prepared_network_transaction_if_retained(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        result: LifecyclePreparedNetworkResult,
+        *,
+        durable_capture: object | None = None,
+        durable_capture_facts: tuple[object, ...] | None = None,
+        _result_descriptors: tuple[MemberDescriptorType, ...] = (
+            _PREPARED_NETWORK_RESULT_DESCRIPTORS
+        ),
+        _receipt_descriptors: tuple[MemberDescriptorType, ...] = (
+            _PREPARED_NETWORK_RECEIPT_DESCRIPTORS
+        ),
+        _authority_descriptors: tuple[MemberDescriptorType, ...] = (
+            _PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS
+        ),
+        _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
+        _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
+        _object_new: Callable[[type[object]], object] = object.__new__,
+        _weak_ref: Callable[..., ReferenceType[object]] = ref,
+        _graph_matches: Callable[[object, object], bool] = (
+            _prepared_network_authoritative_graph_matches
+        ),
+        _capture_matches: Callable[[object, object, object, object], bool] = (
+            _prepared_network_durable_capture_matches
+        ),
+    ) -> bool:
+        """Authenticate and generation-CAS release one exact terminal carrier."""
+
+        if (
+            type(root) is not PreparedNetworkTransactionRoot
+            or type(result) is not LifecyclePreparedNetworkResult
+        ):
+            raise StateError("Prepared-network acknowledgement is malformed")
+        planner = _object_getattribute(self, "_source_timing_planner")
+        if planner is None:
+            raise StateError("Prepared-network acknowledgement lost its timing authority")
+        authority_lock = _object_getattribute(planner, "_preparation_authority_lock")
+        timing_authorities = _object_getattribute(
+            planner,
+            "_committed_preparation_receipts",
+        )
+        receipt_authorities = _object_getattribute(
+            self,
+            "_prepared_network_receipt_authorities",
+        )
+        issuance_lock = _object_getattribute(
+            self,
+            "_prepared_network_receipt_issuance_lock",
+        )
+        issuances = _object_getattribute(self, "_prepared_network_receipt_issuances")
+        generations = _object_getattribute(
+            self,
+            "_prepared_network_receipt_issuance_generations",
+        )
+        receipts = _object_getattribute(
+            self,
+            "_prepared_network_receipt_issuance_receipts",
+        )
+        root_id = id(root)
+        with issuance_lock:
+            generation = generations.get(root_id)
+            if generation is None:
+                return False
+            key = (root_id, generation)
+            record = issuances.get(key)
+            if (
+                type(record) is not _PreparedNetworkReceiptIssuance
+                or record.root is not root
+                or record.generation != generation
+                or not record.terminal
+                or record.result is not result
+                or generations.get(root_id) != generation
+                or receipts.get(id(record.receipt)) != key
+            ):
+                raise StateError("Prepared-network acknowledgement is not canonical")
+            retained_claim = None if record.claim_ref is None else record.claim_ref()
+            if retained_claim is not None:
+                raise StateError("Prepared-network acknowledgement is not canonical")
+            claim = cast(
+                _PreparedNetworkReceiptIssuanceClaim,
+                _object_new(_PreparedNetworkReceiptIssuanceClaim),
+            )
+            record.claim_ref = _weak_ref(claim)
+            receipt = record.receipt
+            authority_record = record.authority_record
+            authority_generation = record.authority_generation
+            issuance_values = record.issuance_values
+            expected_result_values = record.result_values
+            expected_receipt_values = record.receipt_values
+            expected_detached_values = record.detached_values
+            expected_detached_proof = record.detached_proof
+            root_graph = record.root_graph
+            result_graph = record.result_graph
+            receipt_graph = record.receipt_graph
+            retained_durable_capture = record.durable_capture
+            retained_durable_capture_facts = record.durable_capture_facts
+
+        def durable_capture_matches() -> bool:
+            if retained_durable_capture is not None or retained_durable_capture_facts is not None:
+                if (
+                    retained_durable_capture is None
+                    or type(retained_durable_capture_facts) is not tuple
+                    or (
+                        durable_capture is not None
+                        and durable_capture is not retained_durable_capture
+                    )
+                    or (
+                        durable_capture_facts is not None
+                        and durable_capture_facts is not retained_durable_capture_facts
+                    )
+                ):
+                    return False
+                return _capture_matches(
+                    root,
+                    receipt,
+                    retained_durable_capture,
+                    retained_durable_capture_facts,
+                )
+            if durable_capture is None and durable_capture_facts is None:
+                return True
+            return _capture_matches(
+                root,
+                receipt,
+                durable_capture,
+                durable_capture_facts,
+            )
+
+        def release_claim() -> None:
+            with issuance_lock:
+                retained = issuances.get(key)
+                if (
+                    retained is record
+                    and type(retained.claim_ref) is ReferenceType
+                    and retained.claim_ref() is claim
+                ):
+                    retained.claim_ref = None
+
+        try:
+            if (
+                type(receipt) is not LifecyclePreparedNetworkReceipt
+                or type(authority_record) is not _PreparedNetworkReceiptAuthority
+                or type(authority_generation) is not int
+                or authority_generation <= 0
+                or type(issuance_values) is not tuple
+                or len(issuance_values) != 11
+                or type(expected_result_values) is not tuple
+                or len(expected_result_values) != len(_result_descriptors)
+                or type(expected_receipt_values) is not tuple
+                or len(expected_receipt_values) != len(_receipt_descriptors)
+                or type(expected_detached_values) is not tuple
+                or type(expected_detached_proof) is not str
+                or not expected_detached_proof
+                or type(root_graph) is not tuple
+                or type(result_graph) is not tuple
+                or type(receipt_graph) is not tuple
+                or expected_result_values[3] is not receipt
+                or issuance_values[10] is not expected_result_values[2]
+                or not _graph_matches(root, root_graph)
+                or not _graph_matches(result, result_graph)
+                or not _graph_matches(receipt, receipt_graph)
+                or not durable_capture_matches()
+            ):
+                raise StateError("Prepared-network acknowledgement is not canonical")
+
+            actual_result_values = tuple(
+                _member_get(
+                    descriptor,
+                    result,
+                    LifecyclePreparedNetworkResult,
+                )
+                for descriptor in _result_descriptors
+            )
+            if any(
+                supplied is not expected
+                for supplied, expected in zip(
+                    actual_result_values,
+                    expected_result_values,
+                    strict=True,
+                )
+            ):
+                raise StateError("Prepared-network acknowledgement is not canonical")
+
+            actual_receipt_values = tuple(
+                _member_get(
+                    descriptor,
+                    receipt,
+                    LifecyclePreparedNetworkReceipt,
+                )
+                for descriptor in _receipt_descriptors
+            )
+            identity_fields = (3, 5, 7, 8, 9, 10)
+            for index, (supplied, expected) in enumerate(
+                zip(actual_receipt_values, expected_receipt_values, strict=True)
+            ):
+                if index in identity_fields:
+                    if supplied is not expected:
+                        raise StateError("Prepared-network acknowledgement is not canonical")
+                elif type(supplied) is not str or type(expected) is not str or supplied != expected:
+                    raise StateError("Prepared-network acknowledgement is not canonical")
+
+            with authority_lock:
+                retained_authority = receipt_authorities.get(id(receipt))
+                if (
+                    retained_authority is not authority_record
+                    or type(retained_authority) is not _PreparedNetworkReceiptAuthority
+                ):
+                    raise StateError("Prepared-network acknowledgement is not canonical")
+                authority_values = tuple(
+                    _member_get(
+                        descriptor,
+                        retained_authority,
+                        _PreparedNetworkReceiptAuthority,
+                    )
+                    for descriptor in _authority_descriptors
+                )
+                (
+                    retained_receipt_ref,
+                    timing_authority,
+                    timing_receipt_id,
+                    retained_generation,
+                    detached_values,
+                    detached_proof,
+                    committed,
+                    retained_receipt_graph,
+                ) = authority_values
+                timing_receipt = issuance_values[10]
+                if (
+                    type(retained_receipt_ref) is not ReferenceType
+                    or retained_receipt_ref() is not receipt
+                    or retained_generation != authority_generation
+                    or timing_receipt_id != id(timing_receipt)
+                    or timing_authorities.get(timing_receipt_id) is not timing_authority
+                    or timing_authority is None
+                    or _object_getattribute(timing_authority, "receipt_ref")() is not timing_receipt
+                    or _object_getattribute(timing_authority, "committed") is not True
+                    or detached_values is not expected_detached_values
+                    or detached_proof != expected_detached_proof
+                    or committed is not True
+                    or retained_receipt_graph is not receipt_graph
+                ):
+                    raise StateError("Prepared-network acknowledgement is not canonical")
+
+                with issuance_lock:
+                    retained = issuances.get(key)
+                    if (
+                        retained is not record
+                        or retained.root is not root
+                        or retained.generation != generation
+                        or retained.receipt is not receipt
+                        or retained.result is not result
+                        or retained.authority_record is not retained_authority
+                        or retained.authority_generation != authority_generation
+                        or retained.issuance_values is not issuance_values
+                        or retained.result_values is not expected_result_values
+                        or retained.receipt_values is not expected_receipt_values
+                        or retained.detached_values is not expected_detached_values
+                        or retained.detached_proof != expected_detached_proof
+                        or retained.root_graph is not root_graph
+                        or retained.result_graph is not result_graph
+                        or retained.receipt_graph is not receipt_graph
+                        or retained.durable_capture is not retained_durable_capture
+                        or retained.durable_capture_facts is not retained_durable_capture_facts
+                        or not retained.canonical_committed
+                        or not retained.terminal
+                        or type(retained.claim_ref) is not ReferenceType
+                        or retained.claim_ref() is not claim
+                        or generations.get(root_id) != generation
+                        or receipts.get(id(receipt)) != key
+                    ):
+                        raise StateError("Prepared-network acknowledgement is not canonical")
+                    if (
+                        not _graph_matches(root, root_graph)
+                        or not _graph_matches(result, result_graph)
+                        or not _graph_matches(receipt, receipt_graph)
+                        or not durable_capture_matches()
+                    ):
+                        raise StateError("Prepared-network acknowledgement is not canonical")
+                    for descriptor, expected in zip(
+                        _result_descriptors,
+                        expected_result_values,
+                        strict=True,
+                    ):
+                        if (
+                            _member_get(
+                                descriptor,
+                                result,
+                                LifecyclePreparedNetworkResult,
+                            )
+                            is not expected
+                        ):
+                            raise StateError("Prepared-network acknowledgement is not canonical")
+                    for index, (descriptor, expected) in enumerate(
+                        zip(
+                            _receipt_descriptors,
+                            expected_receipt_values,
+                            strict=True,
+                        )
+                    ):
+                        supplied = _member_get(
+                            descriptor,
+                            receipt,
+                            LifecyclePreparedNetworkReceipt,
+                        )
+                        if index in identity_fields:
+                            exact = supplied is expected
+                        else:
+                            exact = (
+                                type(supplied) is str
+                                and type(expected) is str
+                                and supplied == expected
+                            )
+                        if not exact:
+                            raise StateError("Prepared-network acknowledgement is not canonical")
+                    retained.claim_ref = None
+                    removed_record = issuances.pop(key, None)
+                    if removed_record is not record:
+                        raise AssertionError(
+                            "Prepared-network issuance changed during acknowledgement CAS"
+                        )
+                    if generations.pop(root_id, None) != generation:
+                        raise AssertionError(
+                            "Prepared-network issuance generation changed during CAS"
+                        )
+                    if receipts.pop(id(receipt), None) != key:
+                        raise AssertionError(
+                            "Prepared-network receipt generation changed during CAS"
+                        )
+            _ = removed_record
+            return True
+        except BaseException as error:
+            release_claim()
+            if type(error) is StateError:
+                raise
+            raise StateError("Prepared-network acknowledgement is not canonical") from error
+
+    def _reserve_prepared_network_receipt_authority(
+        self,
+        receipt: LifecyclePreparedNetworkReceipt,
+        timing_receipt: SourceTimingPreparationReceipt,
+        authority_record: _PreparedNetworkReceiptAuthority,
+        *,
+        _authority_descriptors: tuple[MemberDescriptorType, ...] = (
+            _PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS
+        ),
+        _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
+        _member_set: Callable[[object, object, object], None] = MemberDescriptorType.__set__,
+        _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
+        _weak_ref: Callable[..., ReferenceType[object]] = ref,
+    ) -> int:
+        """Install one preallocated weak sidecar using only primitive locked writes."""
+
+        planner = _object_getattribute(self, "_source_timing_planner")
+        if (
+            planner is None
+            or type(receipt) is not LifecyclePreparedNetworkReceipt
+            or type(timing_receipt) is not SourceTimingPreparationReceipt
+            or type(authority_record) is not _PreparedNetworkReceiptAuthority
+        ):
+            raise StateError("Prepared-network receipt authority reservation is malformed")
+        for descriptor in _authority_descriptors:
+            try:
+                _member_get(descriptor, authority_record, _PreparedNetworkReceiptAuthority)
+            except AttributeError:
+                continue
+            raise StateError("Prepared-network receipt authority shell is already initialized")
+        authority_lock = _object_getattribute(planner, "_preparation_authority_lock")
+        timing_authorities = _object_getattribute(
+            planner,
+            "_committed_preparation_receipts",
+        )
+        capacity = _object_getattribute(planner, "_preparation_authority_capacity")
+        receipt_id = id(receipt)
+        timing_receipt_id = id(timing_receipt)
+        owner_ref = _weak_ref(self)
+        with authority_lock:
+            timing_authority = timing_authorities.get(timing_receipt_id)
+            if (
+                timing_authority is None
+                or _object_getattribute(timing_authority, "receipt_ref")() is not timing_receipt
+            ):
+                raise StateError("Prepared-network timing receipt authority is not active")
+            if len(self._prepared_network_receipt_authorities) >= capacity:
+                raise StateError("Prepared-network receipt authority capacity is exhausted")
+            if receipt_id in self._prepared_network_receipt_authorities:
+                raise StateError("Prepared-network receipt identity is already retained")
+            self._prepared_network_receipt_generation += 1
+            generation = self._prepared_network_receipt_generation
+
+        def remove_collected(
+            receipt_ref: ReferenceType[LifecyclePreparedNetworkReceipt],
+        ) -> None:
+            owner = owner_ref()
+            if owner is None:
+                return
+            retained_planner = _object_getattribute(owner, "_source_timing_planner")
+            if retained_planner is None:
+                return
+            retained_lock = _object_getattribute(
+                retained_planner,
+                "_preparation_authority_lock",
+            )
+            removed: _PreparedNetworkReceiptAuthority | None = None
+            retained: _PreparedNetworkReceiptAuthority | None = None
+            with retained_lock:
+                authorities = _object_getattribute(
+                    owner,
+                    "_prepared_network_receipt_authorities",
+                )
+                retained = authorities.get(receipt_id)
+                if retained is authority_record:
+                    retained_generation = _member_get(
+                        _authority_descriptors[3],
+                        retained,
+                        _PreparedNetworkReceiptAuthority,
+                    )
+                    retained_receipt_ref = _member_get(
+                        _authority_descriptors[0],
+                        retained,
+                        _PreparedNetworkReceiptAuthority,
+                    )
+                    if retained_generation == generation and retained_receipt_ref is receipt_ref:
+                        removed = authorities.pop(receipt_id, None)
+            # Keep the removed record alive until the authority lock is released.
+            _ = retained, removed
+
+        receipt_ref = _weak_ref(receipt, remove_collected)
+        authority_values = (
+            receipt_ref,
+            timing_authority,
+            timing_receipt_id,
+            generation,
+            None,
+            "",
+            False,
+            None,
+        )
+        for descriptor, value in zip(
+            _authority_descriptors,
+            authority_values,
+            strict=True,
+        ):
+            _member_set(descriptor, authority_record, value)
+
+        with authority_lock:
+            retained_timing_authority = timing_authorities.get(timing_receipt_id)
+            if (
+                retained_timing_authority is not timing_authority
+                or _object_getattribute(timing_authority, "receipt_ref")() is not timing_receipt
+                or len(self._prepared_network_receipt_authorities) >= capacity
+                or receipt_id in self._prepared_network_receipt_authorities
+            ):
+                raise StateError("Prepared-network receipt authority reservation changed")
+            self._prepared_network_receipt_authorities[receipt_id] = authority_record
+        return generation
+
+    def _discard_prepared_network_receipt_authority(
+        self,
+        receipt: LifecyclePreparedNetworkReceipt,
+        generation: int,
+        *,
+        _authority_descriptors: tuple[MemberDescriptorType, ...] = (
+            _PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS
+        ),
+        _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
+    ) -> None:
+        """Discard one unpublished receipt reservation after a reversible abort."""
+
+        planner = self._source_timing_planner
+        if planner is None:
+            return
+        authority_lock = object.__getattribute__(planner, "_preparation_authority_lock")
+        receipt_id = id(receipt)
+        retained: _PreparedNetworkReceiptAuthority | None = None
+        removed: _PreparedNetworkReceiptAuthority | None = None
+        with authority_lock:
+            retained = self._prepared_network_receipt_authorities.get(receipt_id)
+            if (
+                retained is not None
+                and _member_get(
+                    _authority_descriptors[3],
+                    retained,
+                    _PreparedNetworkReceiptAuthority,
+                )
+                == generation
+                and _member_get(
+                    _authority_descriptors[6],
+                    retained,
+                    _PreparedNetworkReceiptAuthority,
+                )
+                is False
+                and _member_get(
+                    _authority_descriptors[0],
+                    retained,
+                    _PreparedNetworkReceiptAuthority,
+                )()
+                is receipt
+            ):
+                removed = self._prepared_network_receipt_authorities.pop(receipt_id, None)
+        # Keep the removed record alive until the authority lock is released.
+        _ = retained, removed
+
+    def _commit_prepared_network_receipt_authority(
+        self,
+        receipt: LifecyclePreparedNetworkReceipt,
+        timing_receipt: SourceTimingPreparationReceipt,
+        generation: int,
+        detached_values: tuple[object, ...],
+        detached_proof: str,
+        receipt_graph: _PreparedNetworkGraphSnapshot,
+        *,
+        _authority_descriptors: tuple[MemberDescriptorType, ...] = (
+            _PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS
+        ),
+        _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
+        _member_set: Callable[[object, object, object], None] = MemberDescriptorType.__set__,
+    ) -> None:
+        """Atomically seal issuance facts into one preallocated exact-object record."""
+
+        planner = self._source_timing_planner
+        if (
+            planner is None
+            or type(receipt) is not LifecyclePreparedNetworkReceipt
+            or type(timing_receipt) is not SourceTimingPreparationReceipt
+            or type(generation) is not int
+            or type(detached_values) is not tuple
+            or type(detached_proof) is not str
+            or type(receipt_graph) is not tuple
+            or not receipt_graph
+        ):
+            raise AssertionError("Prepared-network receipt authority lost its timing planner")
+        authority_lock = object.__getattribute__(planner, "_preparation_authority_lock")
+        timing_authorities = object.__getattribute__(
+            planner,
+            "_committed_preparation_receipts",
+        )
+        issuance_lock = object.__getattribute__(
+            self,
+            "_prepared_network_receipt_issuance_lock",
+        )
+        issuance_records = object.__getattribute__(
+            self,
+            "_prepared_network_receipt_issuances",
+        )
+        issuance_receipts = object.__getattribute__(
+            self,
+            "_prepared_network_receipt_issuance_receipts",
+        )
+        issuance_generations = object.__getattribute__(
+            self,
+            "_prepared_network_receipt_issuance_generations",
+        )
+        receipt_id = id(receipt)
+        with authority_lock:
+            retained = self._prepared_network_receipt_authorities.get(receipt_id)
+            timing_authority = timing_authorities.get(id(timing_receipt))
+            with issuance_lock:
+                issuance_key = issuance_receipts.get(receipt_id)
+                issuance = None if issuance_key is None else issuance_records.get(issuance_key)
+                expected_issuance_values = None if issuance is None else issuance.issuance_values
+                expected_detached_values = None if issuance is None else issuance.detached_values
+                exact_detached_values = (
+                    type(issuance) is _PreparedNetworkReceiptIssuance
+                    and issuance.receipt is receipt
+                    and type(issuance_key) is tuple
+                    and len(issuance_key) == 2
+                    and issuance_key[0] == id(issuance.root)
+                    and issuance_key[1] == issuance.generation
+                    and issuance_generations.get(issuance_key[0]) == issuance.generation
+                    and issuance.authority_generation == generation
+                    and type(issuance.claim_ref) is ReferenceType
+                    and issuance.claim_ref() is not None
+                    and type(expected_issuance_values) is tuple
+                    and len(expected_issuance_values) == 11
+                    and expected_issuance_values[10] is timing_receipt
+                    and type(issuance.receipt_values) is tuple
+                    and type(issuance.result_values) is tuple
+                    and type(expected_detached_values) is tuple
+                    and type(issuance.detached_proof) is str
+                    and issuance.receipt_graph is receipt_graph
+                    and len(detached_values) == len(expected_detached_values)
+                )
+                if exact_detached_values:
+                    for supplied, expected in zip(
+                        detached_values,
+                        expected_detached_values,
+                        strict=True,
+                    ):
+                        if expected is None:
+                            if supplied is not None:
+                                exact_detached_values = False
+                                break
+                            continue
+                        expected_type = type(expected)
+                        if expected_type is not str and expected_type is not int:
+                            exact_detached_values = False
+                            break
+                        if type(supplied) is not expected_type:
+                            exact_detached_values = False
+                            break
+                        if supplied != expected:
+                            exact_detached_values = False
+                            break
+            if (
+                retained is None
+                or type(issuance) is not _PreparedNetworkReceiptIssuance
+                or retained is not issuance.authority_record
+                or _member_get(
+                    _authority_descriptors[3],
+                    retained,
+                    _PreparedNetworkReceiptAuthority,
+                )
+                != generation
+                or _member_get(
+                    _authority_descriptors[6],
+                    retained,
+                    _PreparedNetworkReceiptAuthority,
+                )
+                is not False
+                or _member_get(
+                    _authority_descriptors[0],
+                    retained,
+                    _PreparedNetworkReceiptAuthority,
+                )()
+                is not receipt
+                or _member_get(
+                    _authority_descriptors[2],
+                    retained,
+                    _PreparedNetworkReceiptAuthority,
+                )
+                != id(timing_receipt)
+                or _member_get(
+                    _authority_descriptors[1],
+                    retained,
+                    _PreparedNetworkReceiptAuthority,
+                )
+                is not timing_authority
+                or timing_authority is None
+                or object.__getattribute__(timing_authority, "committed") is not True
+                or object.__getattribute__(timing_authority, "receipt_ref")() is not timing_receipt
+                or not exact_detached_values
+                or detached_proof != issuance.detached_proof
+                or receipt_graph is not issuance.receipt_graph
+            ):
+                raise AssertionError("Prepared-network receipt authority changed before seal")
+            _member_set(
+                _authority_descriptors[4],
+                retained,
+                expected_detached_values,
+            )
+            _member_set(
+                _authority_descriptors[5],
+                retained,
+                issuance.detached_proof,
+            )
+            _member_set(_authority_descriptors[7], retained, issuance.receipt_graph)
+            _member_set(_authority_descriptors[6], retained, True)
+
     def _issue_prepared_network_receipt_recoverably(
         self,
+        issuance_record: _PreparedNetworkReceiptIssuance,
         *,
         runtime_publication_token: str,
         state_publication_token: str,
@@ -3950,8 +6161,23 @@ class GeneratorLifecycleAuthority:
         connection_receipt: LifecycleConnectionCompositeReceipt,
         runtime_receipt: NetworkTransactionPreparationReceipt,
         timing_receipt: SourceTimingPreparationReceipt,
+        receipt_shell: LifecyclePreparedNetworkReceipt,
+        authority_generation: int,
+        commit_prepared_network_receipt_authority: Callable[..., None],
+        _receipt_type: type[LifecyclePreparedNetworkReceipt] = LifecyclePreparedNetworkReceipt,
+        _receipt_descriptors: tuple[MemberDescriptorType, ...] = (
+            _PREPARED_NETWORK_RECEIPT_DESCRIPTORS
+        ),
+        _member_set: Callable[[object, object, object], None] = MemberDescriptorType.__set__,
+        _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
+        _dict_get: Callable[[dict[object, object], object], object] = dict.get,
+        _integrity_for: Callable[..., str] = LifecyclePreparedNetworkReceipt._integrity_for,
+        _datetime_us: Callable[[object, str], int] = _detached_network_binding_datetime_us,
+        _sha256: Callable[..., object] = sha256,
+        _bytes_fromhex: Callable[[str], bytes] = bytes.fromhex,
+        _binding_issue: Callable[..., object] = _DETACHED_NETWORK_BINDING_BOUNDARY_METHODS[1],
     ) -> LifecyclePreparedNetworkReceipt:
-        """Issue, or reconstruct, the complete prepared-network proof exactly once."""
+        """Finalize one preallocated receipt and its issuance-time detached proof."""
 
         values = (
             runtime_publication_token,
@@ -3966,34 +6192,213 @@ class GeneratorLifecycleAuthority:
             runtime_receipt,
             timing_receipt,
         )
-        try:
-            receipt = LifecyclePreparedNetworkReceipt._issue(
-                authority_secret=self._receipt_secret,
-                runtime_publication_token=runtime_publication_token,
-                state_publication_token=state_publication_token,
-                transaction_id=transaction_id,
-                materialization_mode=materialization_mode,
-                lifecycle_mode=lifecycle_mode,
-                physical_transport=physical_transport,
-                result_digest=result_digest,
-                timing_binding_token=timing_binding_token,
-                connection_receipt=connection_receipt,
-                runtime_receipt=runtime_receipt,
-                timing_receipt=timing_receipt,
-            )
-        except BaseException:
-            receipt = LifecyclePreparedNetworkReceipt(
-                *values,
-                LifecyclePreparedNetworkReceipt._integrity_for(
-                    authority_secret=self._receipt_secret,
-                    values=values,
-                ),
-            )
-        if type(receipt) is not LifecyclePreparedNetworkReceipt or not receipt._has_valid_integrity(
-            self._receipt_secret
+        if type(issuance_record) is not _PreparedNetworkReceiptIssuance:
+            raise AssertionError("Prepared network receipt has no exact issuance authority")
+        issuance_lock = _object_getattribute(
+            self,
+            "_prepared_network_receipt_issuance_lock",
+        )
+        issuances = _object_getattribute(self, "_prepared_network_receipt_issuances")
+        generations = _object_getattribute(
+            self,
+            "_prepared_network_receipt_issuance_generations",
+        )
+        expected_values = issuance_record.issuance_values
+        exact_values = type(expected_values) is tuple and len(expected_values) == len(values)
+        if exact_values:
+            identity_fields = {3, 5, 7, 8, 9, 10}
+            for index, (supplied, expected) in enumerate(zip(values, expected_values, strict=True)):
+                if index in identity_fields:
+                    if supplied is not expected:
+                        exact_values = False
+                        break
+                elif type(supplied) is not str or type(expected) is not str or supplied != expected:
+                    exact_values = False
+                    break
+        root_id = id(issuance_record.root)
+        with issuance_lock:
+            retained = issuances.get((root_id, issuance_record.generation))
+            if (
+                retained is not issuance_record
+                or retained.root is not issuance_record.root
+                or retained.receipt is not receipt_shell
+                and issuance_record.receipt_values is not None
+                or not retained.canonical_committed
+                or retained.issuance_values is not expected_values
+                or generations.get(root_id) != retained.generation
+                or not exact_values
+            ):
+                raise AssertionError("Prepared-network receipt authority changed before seal")
+        authority_namespace = _object_getattribute(self, "__dict__")
+        receipt_secret = (
+            _dict_get(authority_namespace, "_receipt_secret")
+            if type(authority_namespace) is dict
+            else None
+        )
+        if (
+            type(receipt_shell) is not _receipt_type
+            or type(authority_generation) is not int
+            or authority_generation <= 0
+            or type(connection_receipt) is not LifecycleConnectionCompositeReceipt
+            or type(runtime_receipt) is not NetworkTransactionPreparationReceipt
+            or type(timing_receipt) is not SourceTimingPreparationReceipt
+            or type(timing_binding_token) is not SourceTimingPreparationToken
+            or type(physical_transport) is not PhysicalTransportFingerprint
+            or type(receipt_secret) is not bytes
         ):
-            raise AssertionError("Prepared network receipt reconstruction failed authentication")
-        return receipt
+            raise AssertionError("Prepared network receipt finalization is malformed")
+        integrity_token = _integrity_for(
+            authority_secret=receipt_secret,
+            values=values,
+        )
+
+        def exact_digest_token(value: object, field_name: str) -> str:
+            if (
+                type(value) is not str
+                or len(value) != 64
+                or any(character not in "0123456789abcdef" for character in value)
+            ):
+                raise AssertionError(f"{field_name} is not an exact committed digest")
+            return value
+
+        def sealed_digest(domain: bytes, *tokens: object) -> str:
+            digest = _sha256(domain)
+            for index, token in enumerate(tokens):
+                digest.update(
+                    _bytes_fromhex(exact_digest_token(token, f"detached authority token {index}"))
+                )
+            result = digest.hexdigest()
+            return exact_digest_token(result, "detached authority digest")
+
+        transport_id = _object_getattribute(physical_transport, "transport_id")
+        conn_id = _object_getattribute(physical_transport, "conn_id")
+        zeek_uid = _object_getattribute(physical_transport, "zeek_uid")
+        tuple_key = _object_getattribute(physical_transport, "tuple_key")
+        started_at = _object_getattribute(physical_transport, "started_at")
+        closed_at = _object_getattribute(physical_transport, "closed_at")
+        if type(tuple_key) is not tuple or len(tuple_key) != 5:
+            raise AssertionError("Prepared network physical tuple is malformed")
+        src_ip, src_port, dst_ip, dst_port, protocol = tuple_key
+        if materialization_mode is ConnectionMaterializationMode.PHYSICAL:
+            detached_materialization_mode = "physical"
+        elif materialization_mode is ConnectionMaterializationMode.APPLICATION_CHILD:
+            detached_materialization_mode = "application_child"
+        else:
+            raise AssertionError("Prepared network materialization mode is malformed")
+        if type(lifecycle_mode) is not str or lifecycle_mode not in {
+            "network",
+            "deferred_session",
+            "application_child",
+        }:
+            raise AssertionError("Prepared network lifecycle mode is malformed")
+        timing_integrity = _object_getattribute(timing_receipt, "_integrity")
+        timing_binding_integrity = _object_getattribute(timing_binding_token, "_integrity")
+        runtime_integrity = _object_getattribute(runtime_receipt, "_integrity_token")
+        cryptographic_receipt = _object_getattribute(runtime_receipt, "cryptographic_receipt")
+        if type(cryptographic_receipt) is not CryptographicMaterialPreparationReceipt:
+            raise AssertionError("Prepared network cryptographic receipt is malformed")
+        cryptographic_integrity = _object_getattribute(
+            cryptographic_receipt,
+            "_integrity_token",
+        )
+        connection_integrity = _object_getattribute(connection_receipt, "_integrity_token")
+        detached_values = (
+            transaction_id,
+            state_publication_token,
+            runtime_publication_token,
+            detached_materialization_mode,
+            lifecycle_mode,
+            transport_id,
+            conn_id,
+            zeek_uid,
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+            protocol,
+            _datetime_us(
+                started_at,
+                "physical.started_at",
+            ),
+            (
+                None
+                if closed_at is None
+                else _datetime_us(
+                    closed_at,
+                    "physical.closed_at",
+                )
+            ),
+            exact_digest_token(result_digest, "prepared network result digest"),
+            sealed_digest(
+                b"lifecycle-detached-timing-binding-v1\0",
+                timing_binding_integrity,
+            ),
+            sealed_digest(
+                b"lifecycle-detached-timing-receipt-v1\0",
+                timing_binding_integrity,
+                timing_integrity,
+            ),
+            sealed_digest(
+                b"lifecycle-detached-runtime-receipt-v1\0",
+                cryptographic_integrity,
+                runtime_integrity,
+            ),
+            sealed_digest(
+                b"lifecycle-detached-connection-receipt-v1\0",
+                connection_integrity,
+            ),
+            exact_digest_token(integrity_token, "prepared network receipt integrity"),
+        )
+        root_id = id(issuance_record.root)
+        with issuance_lock:
+            retained = issuances.get((root_id, issuance_record.generation))
+            if (
+                retained is not issuance_record
+                or retained.claim_ref is None
+                or retained.claim_ref() is None
+                or retained.terminal
+                or not retained.canonical_committed
+                or generations.get(root_id) != retained.generation
+            ):
+                raise AssertionError("Prepared-network receipt authority changed before signing")
+            canonical_detached_values = retained.detached_values
+            if canonical_detached_values is None:
+                retained.detached_values = detached_values
+                canonical_detached_values = detached_values
+            else:
+                if type(canonical_detached_values) is not tuple or len(
+                    canonical_detached_values
+                ) != len(detached_values):
+                    raise AssertionError("Prepared-network detached facts changed before signing")
+                for supplied, expected in zip(
+                    detached_values,
+                    canonical_detached_values,
+                    strict=True,
+                ):
+                    if type(expected) not in {str, int, type(None)}:
+                        raise AssertionError(
+                            "Prepared-network detached facts changed before signing"
+                        )
+                    if type(supplied) is not type(expected) or supplied != expected:
+                        raise AssertionError(
+                            "Prepared-network detached facts changed before signing"
+                        )
+                detached_values = canonical_detached_values
+        detached_binding = _binding_issue(self, issuance_record, detached_values)
+        detached_proof = _object_getattribute(detached_binding, "_integrity_token")
+        if type(detached_proof) is not str:
+            raise AssertionError("Prepared network detached proof is malformed")
+        final_values = (*values, integrity_token)
+        for descriptor, value in zip(_receipt_descriptors, final_values, strict=True):
+            _member_set(descriptor, receipt_shell, value)
+        commit_prepared_network_receipt_authority(
+            receipt_shell,
+            timing_receipt,
+            authority_generation,
+            detached_values,
+            detached_proof,
+        )
+        return receipt_shell
 
     def _validate_deferred_session_publication_precommit(
         self,
@@ -4023,6 +6428,10 @@ class GeneratorLifecycleAuthority:
         root: PreparedNetworkTransactionRoot,
         source_timing_preparation: SourceTimingPreparation,
         prerequisite_proofs: tuple[ConnectionCompositePrerequisiteProof, ...],
+        _allocate_network_receipt: Callable[
+            [tuple[object, ...] | None],
+            LifecyclePreparedNetworkReceipt,
+        ] = _allocate_prepared_network_receipt_shell,
     ) -> _DeferredSessionMaterializationShells:
         """Allocate every public result identity before the canonical mutation fence."""
 
@@ -4045,19 +6454,21 @@ class GeneratorLifecycleAuthority:
             application=None,
             receipt=connection_receipt,
         )
-        network_receipt = LifecyclePreparedNetworkReceipt(
-            root.runtime_token.publication_token,
-            plan.publication_token,
-            root.transaction.stable_id,
-            plan.mode,
-            root.runtime_token.lifecycle_mode,
-            plan.physical_transport_fingerprint,
-            self._prepared_network_result_digest(root.result),
-            source_timing_preparation.binding_token,
-            connection_receipt,
-            cast("NetworkTransactionPreparationReceipt", None),
-            cast("SourceTimingPreparationReceipt", None),
-            "",
+        network_receipt = _allocate_network_receipt(
+            (
+                root.runtime_token.publication_token,
+                plan.publication_token,
+                root.transaction.stable_id,
+                plan.mode,
+                root.runtime_token.lifecycle_mode,
+                plan.physical_transport_fingerprint,
+                self._prepared_network_result_digest(root.result),
+                source_timing_preparation.binding_token,
+                connection_receipt,
+                cast("NetworkTransactionPreparationReceipt", None),
+                cast("SourceTimingPreparationReceipt", None),
+                "",
+            )
         )
         object.__setattr__(
             network_receipt,
@@ -4181,6 +6592,9 @@ class GeneratorLifecycleAuthority:
             _DeferredSessionMaterializationShells | None
         ) = None,
         _deferred_session_canonical_progress: _DeferredSessionCanonicalProgress | None = None,
+        _publish_external_result_no_fail: (
+            Callable[[LifecycleConnectionCompositeResult], None] | None
+        ) = None,
     ) -> LifecycleConnectionCompositeResult:
         """Atomically consume and publish State, lifecycle, and application admissions.
 
@@ -4343,30 +6757,33 @@ class GeneratorLifecycleAuthority:
             prerequisite_proofs=prerequisite_proofs,
         )
         if _deferred_session_materialization_shells is None:
-            return LifecycleConnectionCompositeResult(
+            result = LifecycleConnectionCompositeResult(
                 state=state_result,
                 lifecycle=lifecycle_receipt,
                 application=application_result,
                 receipt=issued_receipt,
             )
-        receipt = _deferred_session_materialization_shells.connection_receipt
-        for field_name in (
-            "_state_publication_token",
-            "_prior_version",
-            "_committed_version",
-            "_transaction_id",
-            "_physical_transport",
-            "_materializes_connection",
-            "_lifecycle_receipt",
-            "_application_proof",
-            "_prerequisite_proofs",
-            "_integrity_token",
-        ):
-            object.__setattr__(receipt, field_name, getattr(issued_receipt, field_name))
-        result = _deferred_session_materialization_shells.connection_result
-        object.__setattr__(result, "state", state_result)
-        object.__setattr__(result, "lifecycle", lifecycle_receipt)
-        object.__setattr__(result, "application", application_result)
+        else:
+            receipt = _deferred_session_materialization_shells.connection_receipt
+            for field_name in (
+                "_state_publication_token",
+                "_prior_version",
+                "_committed_version",
+                "_transaction_id",
+                "_physical_transport",
+                "_materializes_connection",
+                "_lifecycle_receipt",
+                "_application_proof",
+                "_prerequisite_proofs",
+                "_integrity_token",
+            ):
+                object.__setattr__(receipt, field_name, getattr(issued_receipt, field_name))
+            result = _deferred_session_materialization_shells.connection_result
+            object.__setattr__(result, "state", state_result)
+            object.__setattr__(result, "lifecycle", lifecycle_receipt)
+            object.__setattr__(result, "application", application_result)
+        if _publish_external_result_no_fail is not None:
+            _publish_external_result_no_fail(result)
         return result
 
     @staticmethod
@@ -4377,74 +6794,112 @@ class GeneratorLifecycleAuthority:
             raise StateError("Prepared network root has no exact commit result")
         return sha256(repr(("prepared-network-result-v1", result)).encode()).hexdigest()
 
-    def _authenticates_issued_prepared_network_receipt(self, receipt: object) -> bool:
-        """Authenticate a complete prior receipt without retained caller root state."""
+    _construct_detached_network_receipt_binding = _DETACHED_NETWORK_BINDING_BOUNDARY_METHODS[0]
+    authenticates_detached_network_receipt_binding = _DETACHED_NETWORK_BINDING_BOUNDARY_METHODS[2]
 
-        runtime = self._network_runtime
-        planner = self._source_timing_planner
-        if (
-            runtime is None
-            or planner is None
-            or type(receipt) is not LifecyclePreparedNetworkReceipt
-        ):
+    def _authenticates_issued_prepared_network_receipt(
+        self,
+        receipt: object,
+        *,
+        _authority_descriptors: tuple[MemberDescriptorType, ...] = (
+            _PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS
+        ),
+        _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
+        _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
+        _graph_matches: Callable[[object, object], bool] = (
+            _prepared_network_authoritative_graph_matches
+        ),
+        _lock_type: type[object] = type(RLock()),
+    ) -> bool:
+        """Authenticate one exact issued identity against its weak sealed sidecar."""
+
+        if type(receipt) is not LifecyclePreparedNetworkReceipt:
             return False
         try:
-            if (
-                type(receipt._runtime_publication_token) is not str
-                or not receipt._runtime_publication_token
-                or type(receipt._state_publication_token) is not str
-                or not receipt._state_publication_token
-                or type(receipt._transaction_id) is not str
-                or not receipt._transaction_id
-                or type(receipt._materialization_mode) is not ConnectionMaterializationMode
-                or receipt._lifecycle_mode
-                not in {"network", "deferred_session", "application_child"}
-                or type(receipt._physical_transport) is not PhysicalTransportFingerprint
-                or type(receipt._result_digest) is not str
-                or not receipt._result_digest
-                or type(receipt._timing_binding_token) is not SourceTimingPreparationToken
-                or type(receipt._connection_receipt) is not LifecycleConnectionCompositeReceipt
-                or type(receipt._runtime_receipt) is not NetworkTransactionPreparationReceipt
-                or type(receipt._timing_receipt) is not SourceTimingPreparationReceipt
-                or type(receipt._integrity_token) is not str
-                or not receipt._integrity_token
-                or not receipt._has_valid_integrity(self._receipt_secret)
-                or not self._authenticates_issued_connection_receipt(receipt._connection_receipt)
-                or not runtime.authenticates_preparation_receipt(receipt._runtime_receipt)
-                or not planner.authenticates_preparation_receipt(receipt._timing_receipt)
-            ):
-                return False
-            connection_receipt = receipt._connection_receipt
-            runtime_receipt = receipt._runtime_receipt
-            timing_receipt = receipt._timing_receipt
-            if (
-                receipt._runtime_publication_token != runtime_receipt.publication_token
-                or receipt._state_publication_token != connection_receipt._state_publication_token
-                or receipt._transaction_id != connection_receipt.transaction_id
-                or receipt._transaction_id != runtime_receipt.transaction_id
-                or receipt._physical_transport != connection_receipt._physical_transport
-                or receipt._timing_binding_token != timing_receipt.binding_token
-            ):
-                return False
-            if receipt._materialization_mode is ConnectionMaterializationMode.PHYSICAL:
-                return (
-                    receipt._lifecycle_mode in {"network", "deferred_session"}
-                    and connection_receipt.materializes_connection
-                )
-            return (
-                receipt._materialization_mode is ConnectionMaterializationMode.APPLICATION_CHILD
-                and receipt._lifecycle_mode == "application_child"
-                and not connection_receipt.materializes_connection
+            planner = _object_getattribute(self, "_source_timing_planner")
+            receipt_authorities = _object_getattribute(
+                self,
+                "_prepared_network_receipt_authorities",
             )
-        except (
-            AttributeError,
-            LookupError,
-            RecursionError,
-            RuntimeError,
-            StateError,
-            TypeError,
-            ValueError,
-        ):
+            if planner is None or type(receipt_authorities) is not dict:
+                return False
+            authority_lock = _object_getattribute(planner, "_preparation_authority_lock")
+            if type(authority_lock) is not _lock_type:
+                return False
+            timing_authorities = _object_getattribute(
+                planner,
+                "_committed_preparation_receipts",
+            )
+            if type(timing_authorities) is not dict:
+                return False
+            with authority_lock:
+                retained = receipt_authorities.get(id(receipt))
+                if type(retained) is not _PreparedNetworkReceiptAuthority:
+                    return False
+                values = tuple(
+                    _member_get(
+                        descriptor,
+                        retained,
+                        _PreparedNetworkReceiptAuthority,
+                    )
+                    for descriptor in _authority_descriptors
+                )
+                if len(values) != 8:
+                    return False
+                (
+                    receipt_ref,
+                    timing_authority,
+                    timing_receipt_id,
+                    generation,
+                    detached_values,
+                    detached_proof,
+                    committed,
+                    receipt_graph,
+                ) = values
+                receipt_graph_root = (
+                    receipt_graph[0] if type(receipt_graph) is tuple and receipt_graph else None
+                )
+                if type(receipt_graph_root) is not tuple or len(receipt_graph_root) != 3:
+                    return False
+                retained_root, retained_root_type, retained_root_fields = receipt_graph_root
+                if (
+                    retained_root is not None
+                    or retained_root_type is not LifecyclePreparedNetworkReceipt
+                    or type(retained_root_fields) is not tuple
+                    or len(retained_root_fields) != len(_PREPARED_NETWORK_RECEIPT_FIELD_NAMES)
+                ):
+                    return False
+                timing_receipt_field = retained_root_fields[10]
+                if (
+                    type(timing_receipt_field) is not tuple
+                    or len(timing_receipt_field) != 2
+                    or timing_receipt_field[0] != "_timing_receipt"
+                    or type(timing_receipt_field[1]) is not SourceTimingPreparationReceipt
+                ):
+                    return False
+                expected_timing_receipt = timing_receipt_field[1]
+                if (
+                    type(receipt_ref) is not ReferenceType
+                    or receipt_ref() is not receipt
+                    or type(timing_receipt_id) is not int
+                    or timing_receipt_id <= 0
+                    or type(generation) is not int
+                    or generation <= 0
+                    or type(detached_values) is not tuple
+                    or type(detached_proof) is not str
+                    or not detached_proof
+                    or committed is not True
+                    or type(receipt_graph) is not tuple
+                    or not receipt_graph
+                    or timing_authorities.get(timing_receipt_id) is not timing_authority
+                    or timing_authority is None
+                    or _object_getattribute(timing_authority, "committed") is not True
+                    or _object_getattribute(timing_authority, "receipt_ref")()
+                    is not expected_timing_receipt
+                ):
+                    return False
+            return _graph_matches(receipt, receipt_graph)
+        except (AttributeError, LookupError, TypeError, ValueError):
             return False
 
     def _validate_prepared_network_transaction(
@@ -4682,6 +7137,42 @@ class GeneratorLifecycleAuthority:
         prerequisite_receipts: tuple[LifecyclePreparedNetworkReceipt, ...],
         allow_deferred_session: bool,
         deferred_publication_precommit: _DeferredSessionPublicationPrecommit | None = None,
+        _allocate_network_receipt: Callable[
+            [tuple[object, ...] | None],
+            LifecyclePreparedNetworkReceipt,
+        ] = _allocate_prepared_network_receipt_shell,
+        _allocate_network_result: Callable[
+            [tuple[object, ...] | None],
+            LifecyclePreparedNetworkResult,
+        ] = _allocate_prepared_network_result_shell,
+        _receipt_authority_type: type[_PreparedNetworkReceiptAuthority] = (
+            _PreparedNetworkReceiptAuthority
+        ),
+        _result_descriptors: tuple[MemberDescriptorType, ...] = (
+            _PREPARED_NETWORK_RESULT_DESCRIPTORS
+        ),
+        _receipt_descriptors: tuple[MemberDescriptorType, ...] = (
+            _PREPARED_NETWORK_RECEIPT_DESCRIPTORS
+        ),
+        _authority_descriptors: tuple[MemberDescriptorType, ...] = (
+            _PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS
+        ),
+        _trusted_issue_prepared_network_receipt: Callable[..., object] = (
+            _issue_prepared_network_receipt_recoverably
+        ),
+        _member_set: Callable[[object, object, object], None] = MemberDescriptorType.__set__,
+        _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
+        _object_new: Callable[[type[object]], object] = object.__new__,
+        _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
+        _capture_graph: Callable[[object], _PreparedNetworkGraphSnapshot] = (
+            _capture_prepared_network_authoritative_graph
+        ),
+        _graph_matches: Callable[[object, object], bool] = (
+            _prepared_network_authoritative_graph_matches
+        ),
+        _restore_graph: Callable[[object, object], bool] = (
+            _restore_prepared_network_authoritative_graph
+        ),
     ) -> LifecyclePreparedNetworkResult:
         """Atomically publish a sealed network root through every owning authority.
 
@@ -4691,140 +7182,663 @@ class GeneratorLifecycleAuthority:
         Every failure releases all still-uncommitted transferred capabilities.
         """
 
+        issue_prepared_network_receipt = _object_getattribute(
+            self,
+            "_issue_prepared_network_receipt_recoverably",
+        )
+        commit_prepared_network_receipt_authority = _object_getattribute(
+            self,
+            "_commit_prepared_network_receipt_authority",
+        )
+        prepared_issuance_lock = _object_getattribute(
+            self,
+            "_prepared_network_receipt_issuance_lock",
+        )
+        prepared_issuances = _object_getattribute(
+            self,
+            "_prepared_network_receipt_issuances",
+        )
+        prepared_issuance_generations = _object_getattribute(
+            self,
+            "_prepared_network_receipt_issuance_generations",
+        )
+        prepared_receipt_authorities = _object_getattribute(
+            self,
+            "_prepared_network_receipt_authorities",
+        )
+        (
+            issuance_record,
+            terminal_result,
+            issuance_claim,
+        ) = self._claim_prepared_network_receipt_issuance(root)
+        if terminal_result is not None:
+            return terminal_result
+
         runtime_receipt: NetworkTransactionPreparationReceipt | None = None
         expected_timing_receipt: SourceTimingPreparationReceipt | None = None
         timing_receipt: SourceTimingPreparationReceipt | None = None
         materialization_shells: _DeferredSessionMaterializationShells | None = None
+        network_receipt_shell: LifecyclePreparedNetworkReceipt | None = None
+        network_result_shell: LifecyclePreparedNetworkResult | None = None
+        receipt_authority_shell: _PreparedNetworkReceiptAuthority | None = None
+        receipt_authority_generation: int | None = None
+        issuance_values: tuple[object, ...] | None = None
         canonical_progress = (
             _DeferredSessionCanonicalProgress()
             if deferred_publication_precommit is not None
             else None
         )
-        try:
-            connection_prerequisites = self._validate_prepared_network_transaction(
-                root,
-                source_timing_preparation,
-                lifecycle_token,
-                application_token,
-                prerequisite_receipts,
-                allow_deferred_session=allow_deferred_session,
-            )
-            if deferred_publication_precommit is not None:
-                materialization_shells = self._prepare_deferred_session_materialization_shells(
-                    root,
-                    source_timing_preparation,
-                    (),
-                )
-                dispatcher = deferred_publication_precommit.dispatcher
-                dispatcher.bind_deferred_session_materialization_receipt_shell(
-                    deferred_publication_precommit.precommit,
-                    materialization_shells.network_receipt,
-                )
-            runtime = self._network_runtime
-            planner = self._source_timing_planner
-            assert runtime is not None and planner is not None
-            with source_timing_preparation.claimed_commit() as timing_commit:
-                expected_timing_receipt = timing_commit.expected_receipt
-                if not planner.authenticates_expected_preparation_receipt(
-                    expected_timing_receipt,
-                    preparation=timing_commit,
-                ):
-                    raise StateError("Prepared network source timing receipt failed authentication")
-                with runtime.claimed_preparation(root.runtime_token) as runtime_commit:
-                    timing_commit.certify_composite_commit(expected_timing_receipt)
-
-                    def _finalize_prepared_network_no_fail() -> None:
-                        nonlocal runtime_receipt, timing_receipt
-                        try:
-                            runtime_receipt = self._commit_runtime_recoverably(runtime_commit)
-                        finally:
-                            if runtime_commit.committed and canonical_progress is not None:
-                                canonical_progress.runtime_committed = True
-                        try:
-                            timing_receipt = self._commit_source_timing_recoverably(timing_commit)
-                        finally:
-                            if timing_commit.committed and canonical_progress is not None:
-                                canonical_progress.timing_committed = True
-
-                    connection_result = self.materialize_connection_composite(
-                        root.state_plan,
-                        owner_rng,
-                        lifecycle_token=lifecycle_token,
-                        application_token=application_token,
-                        prerequisite_receipts=connection_prerequisites,
-                        finalize_external_no_fail=_finalize_prepared_network_no_fail,
-                        _deferred_session_publication_precommit=(deferred_publication_precommit),
-                        _deferred_session_materialization_shells=(materialization_shells),
-                        _deferred_session_canonical_progress=canonical_progress,
-                    )
-        except BaseException:
-            if not source_timing_preparation.committed and not (
-                canonical_progress is not None and canonical_progress.any_owner_committed
-            ):
-                self._discard_prepared_network_transaction(
+        if issuance_record is not None:
+            network_receipt_shell = issuance_record.receipt
+            network_result_shell = issuance_record.result
+            receipt_authority_shell = issuance_record.authority_record
+            receipt_authority_generation = issuance_record.authority_generation
+            issuance_values = issuance_record.issuance_values
+        else:
+            try:
+                connection_prerequisites = self._validate_prepared_network_transaction(
                     root,
                     source_timing_preparation,
                     lifecycle_token,
                     application_token,
+                    prerequisite_receipts,
+                    allow_deferred_session=allow_deferred_session,
                 )
-            raise
+                prepared_issuance_prefix = (
+                    root.runtime_token.publication_token,
+                    root.state_plan.publication_token,
+                    root.transaction.stable_id,
+                    root.state_plan.mode,
+                    root.runtime_token.lifecycle_mode,
+                    root.state_plan.physical_transport_fingerprint,
+                    self._prepared_network_result_digest(root.result),
+                    source_timing_preparation.binding_token,
+                )
+                root_graph = _capture_graph(root)
+                materialization_shells = self._prepare_deferred_session_materialization_shells(
+                    root,
+                    source_timing_preparation,
+                    connection_prerequisites,
+                    _allocate_network_receipt=_allocate_network_receipt,
+                )
+                network_receipt_shell = materialization_shells.network_receipt
+                network_result_shell = materialization_shells.network_result
+                receipt_authority_shell = cast(
+                    _PreparedNetworkReceiptAuthority,
+                    _object_new(_receipt_authority_type),
+                )
+                issuance_claim = _PreparedNetworkReceiptIssuanceClaim()
+                issuance_record = self._reserve_prepared_network_receipt_issuance(
+                    root,
+                    network_receipt_shell,
+                    network_result_shell,
+                    receipt_authority_shell,
+                    issuance_claim,
+                    root_graph,
+                )
+                if deferred_publication_precommit is not None:
+                    dispatcher = deferred_publication_precommit.dispatcher
+                    dispatcher.bind_deferred_session_materialization_receipt_shell(
+                        deferred_publication_precommit.precommit,
+                        network_receipt_shell,
+                    )
+                runtime = self._network_runtime
+                planner = self._source_timing_planner
+                assert runtime is not None and planner is not None
+                with source_timing_preparation.claimed_commit() as timing_commit:
+                    expected_timing_receipt = timing_commit.expected_receipt
+                    if not planner.authenticates_expected_preparation_receipt(
+                        expected_timing_receipt,
+                        preparation=timing_commit,
+                    ):
+                        raise StateError(
+                            "Prepared network source timing receipt failed authentication"
+                        )
+                    prebound_issuance_values = (
+                        *prepared_issuance_prefix,
+                        materialization_shells.connection_receipt,
+                        None,
+                        expected_timing_receipt,
+                    )
+                    prebound_result_values = (
+                        materialization_shells.connection_result,
+                        None,
+                        expected_timing_receipt,
+                        network_receipt_shell,
+                    )
+                    root_id = id(root)
+                    with prepared_issuance_lock:
+                        retained = prepared_issuances.get((root_id, issuance_record.generation))
+                        if (
+                            retained is not issuance_record
+                            or retained.root is not root
+                            or retained.claim_ref is None
+                            or retained.claim_ref() is not issuance_claim
+                            or retained.terminal
+                            or retained.canonical_committed
+                            or retained.issuance_values is not None
+                            or retained.result_values is not None
+                            or prepared_issuance_generations.get(root_id) != retained.generation
+                        ):
+                            raise AssertionError(
+                                "Prepared network issuance carrier changed before commit"
+                            )
+                        retained.issuance_values = prebound_issuance_values
+                        retained.result_values = prebound_result_values
+                    receipt_authority_generation = self._reserve_prepared_network_receipt_authority(
+                        network_receipt_shell,
+                        expected_timing_receipt,
+                        receipt_authority_shell,
+                    )
+                    with runtime.claimed_preparation(root.runtime_token) as runtime_commit:
+                        timing_commit.certify_composite_commit(expected_timing_receipt)
 
-        if runtime_receipt is None or expected_timing_receipt is None or timing_receipt is None:
-            raise AssertionError("Prepared network finalizer returned no complete receipts")
-        if timing_receipt is not expected_timing_receipt:
-            raise AssertionError("Source timing finalizer returned a different receipt object")
-        runtime = self._network_runtime
-        planner = self._source_timing_planner
-        assert runtime is not None and planner is not None
-        if not runtime.authenticates_preparation_receipt(
+                        def _finalize_prepared_network_no_fail() -> None:
+                            nonlocal runtime_receipt, timing_receipt
+                            try:
+                                runtime_receipt = self._commit_runtime_recoverably(runtime_commit)
+                            finally:
+                                if runtime_commit.committed and canonical_progress is not None:
+                                    canonical_progress.runtime_committed = True
+                            try:
+                                timing_receipt = self._commit_source_timing_recoverably(
+                                    timing_commit
+                                )
+                            finally:
+                                if timing_commit.committed and canonical_progress is not None:
+                                    canonical_progress.timing_committed = True
+
+                        def _publish_prepared_connection_result_no_fail(
+                            supplied_connection_result: LifecycleConnectionCompositeResult,
+                        ) -> None:
+                            nonlocal issuance_values
+                            if (
+                                supplied_connection_result
+                                is not materialization_shells.connection_result
+                                or runtime_receipt is None
+                                or timing_receipt is None
+                                or timing_receipt is not expected_timing_receipt
+                            ):
+                                raise AssertionError(
+                                    "Prepared network connection result changed before publish"
+                                )
+                            connection_receipt = _object_getattribute(
+                                supplied_connection_result,
+                                "receipt",
+                            )
+                            if connection_receipt is not materialization_shells.connection_receipt:
+                                raise AssertionError(
+                                    "Prepared network connection receipt identity changed"
+                                )
+                            issuance_values = (
+                                *prepared_issuance_prefix,
+                                connection_receipt,
+                                runtime_receipt,
+                                timing_receipt,
+                            )
+                            result_values = (
+                                supplied_connection_result,
+                                runtime_receipt,
+                                timing_receipt,
+                                network_receipt_shell,
+                            )
+                            for descriptor, value in zip(
+                                _result_descriptors,
+                                result_values,
+                                strict=True,
+                            ):
+                                _member_set(descriptor, network_result_shell, value)
+                            root_id = id(root)
+                            with prepared_issuance_lock:
+                                retained = prepared_issuances.get(
+                                    (root_id, issuance_record.generation)
+                                )
+                                if (
+                                    retained is not issuance_record
+                                    or retained.root is not root
+                                    or retained.claim_ref is None
+                                    or retained.claim_ref() is not issuance_claim
+                                    or retained.terminal
+                                    or retained.canonical_committed
+                                    or retained.issuance_values is not prebound_issuance_values
+                                    or retained.result_values is not prebound_result_values
+                                    or prepared_issuance_generations.get(root_id)
+                                    != retained.generation
+                                ):
+                                    raise AssertionError(
+                                        "Prepared network issuance carrier changed at commit"
+                                    )
+                                retained.authority_generation = receipt_authority_generation
+                                retained.issuance_values = issuance_values
+                                retained.result_values = result_values
+                                retained.canonical_committed = True
+
+                        self.materialize_connection_composite(
+                            root.state_plan,
+                            owner_rng,
+                            lifecycle_token=lifecycle_token,
+                            application_token=application_token,
+                            prerequisite_receipts=connection_prerequisites,
+                            finalize_external_no_fail=_finalize_prepared_network_no_fail,
+                            _deferred_session_publication_precommit=(
+                                deferred_publication_precommit
+                            ),
+                            _deferred_session_materialization_shells=(materialization_shells),
+                            _deferred_session_canonical_progress=canonical_progress,
+                            _publish_external_result_no_fail=(
+                                _publish_prepared_connection_result_no_fail
+                            ),
+                        )
+            except BaseException:
+                carrier_committed = (
+                    issuance_record is not None and issuance_record.canonical_committed
+                )
+                if (
+                    not carrier_committed
+                    and network_receipt_shell is not None
+                    and receipt_authority_generation is not None
+                ):
+                    self._discard_prepared_network_receipt_authority(
+                        network_receipt_shell,
+                        receipt_authority_generation,
+                    )
+                reversible = (
+                    not carrier_committed
+                    and not source_timing_preparation.committed
+                    and not (
+                        canonical_progress is not None and canonical_progress.any_owner_committed
+                    )
+                )
+                if reversible:
+                    if issuance_record is not None:
+                        self._discard_prepared_network_receipt_issuance(root, issuance_record)
+                    self._discard_prepared_network_transaction(
+                        root,
+                        source_timing_preparation,
+                        lifecycle_token,
+                        application_token,
+                    )
+                elif issuance_record is not None:
+                    with prepared_issuance_lock:
+                        issuance_record.claim_ref = None
+                raise
+
+            if (
+                runtime_receipt is None
+                or expected_timing_receipt is None
+                or timing_receipt is not expected_timing_receipt
+                or network_receipt_shell is None
+                or network_result_shell is None
+                or receipt_authority_generation is None
+                or issuance_record is None
+                or not issuance_record.canonical_committed
+            ):
+                raise AssertionError("Prepared network finalizer returned no complete carrier")
+            issuance_values = issuance_record.issuance_values
+
+        if (
+            issuance_record is None
+            or network_receipt_shell is None
+            or network_result_shell is None
+            or receipt_authority_generation is None
+            or issuance_values is None
+            or issuance_claim is None
+        ):
+            raise AssertionError("Prepared network issuance recovery has no committed facts")
+        (
+            runtime_publication_token,
+            state_publication_token,
+            transaction_id,
+            materialization_mode,
+            lifecycle_mode,
+            physical_transport,
+            result_digest,
+            timing_binding_token,
+            connection_receipt,
             runtime_receipt,
-            token=root.runtime_token,
-        ):
-            raise AssertionError("Network runtime returned an unauthenticated receipt")
-        if not planner.authenticates_preparation_receipt(timing_receipt):
-            raise AssertionError("Source timing planner returned an unauthenticated receipt")
-        result_digest = self._prepared_network_result_digest(root.result)
-        issued_receipt = self._issue_prepared_network_receipt_recoverably(
-            runtime_publication_token=root.runtime_token.publication_token,
-            state_publication_token=root.state_plan.publication_token,
-            transaction_id=root.transaction.stable_id,
-            materialization_mode=root.state_plan.mode,
-            lifecycle_mode=root.runtime_token.lifecycle_mode,
-            physical_transport=root.state_plan.physical_transport_fingerprint,
-            result_digest=result_digest,
-            timing_binding_token=source_timing_preparation.binding_token,
-            connection_receipt=connection_result.receipt,
-            runtime_receipt=runtime_receipt,
-            timing_receipt=timing_receipt,
-        )
-        if materialization_shells is None:
-            return LifecyclePreparedNetworkResult(
-                connection=connection_result,
-                runtime=runtime_receipt,
-                timing=timing_receipt,
-                receipt=issued_receipt,
+            timing_receipt,
+        ) = issuance_values
+
+        if issuance_record.receipt_values is None:
+            scratch_receipt = _allocate_network_receipt(None)
+            expected_detached_values: tuple[object, ...] | None = None
+            expected_detached_proof: str | None = None
+
+            def capture_expected_issuance_facts(
+                captured_receipt: LifecyclePreparedNetworkReceipt,
+                captured_timing_receipt: SourceTimingPreparationReceipt,
+                captured_generation: int,
+                captured_detached_values: tuple[object, ...],
+                captured_detached_proof: str,
+            ) -> None:
+                nonlocal expected_detached_values, expected_detached_proof
+                if (
+                    captured_receipt is not scratch_receipt
+                    or captured_timing_receipt is not timing_receipt
+                    or captured_generation != receipt_authority_generation
+                    or type(captured_detached_values) is not tuple
+                    or type(captured_detached_proof) is not str
+                ):
+                    raise AssertionError("Prepared network expected issuance facts changed")
+                expected_detached_values = captured_detached_values
+                expected_detached_proof = captured_detached_proof
+
+            expected_receipt = _trusted_issue_prepared_network_receipt(
+                self,
+                issuance_record,
+                runtime_publication_token=runtime_publication_token,
+                state_publication_token=state_publication_token,
+                transaction_id=transaction_id,
+                materialization_mode=materialization_mode,
+                lifecycle_mode=lifecycle_mode,
+                physical_transport=physical_transport,
+                result_digest=result_digest,
+                timing_binding_token=timing_binding_token,
+                connection_receipt=connection_receipt,
+                runtime_receipt=runtime_receipt,
+                timing_receipt=timing_receipt,
+                receipt_shell=scratch_receipt,
+                authority_generation=receipt_authority_generation,
+                commit_prepared_network_receipt_authority=(capture_expected_issuance_facts),
             )
-        receipt = materialization_shells.network_receipt
-        for field_name in (
-            "_runtime_publication_token",
-            "_state_publication_token",
-            "_transaction_id",
-            "_materialization_mode",
-            "_lifecycle_mode",
-            "_physical_transport",
-            "_result_digest",
-            "_timing_binding_token",
-            "_connection_receipt",
-            "_runtime_receipt",
-            "_timing_receipt",
-            "_integrity_token",
+            if (
+                expected_receipt is not scratch_receipt
+                or expected_detached_values is None
+                or expected_detached_proof is None
+            ):
+                raise AssertionError("Prepared network expected issuance did not complete")
+            expected_receipt_values = tuple(
+                _member_get(descriptor, scratch_receipt, LifecyclePreparedNetworkReceipt)
+                for descriptor in _receipt_descriptors
+            )
+            root_id = id(root)
+            with prepared_issuance_lock:
+                retained = prepared_issuances.get((root_id, issuance_record.generation))
+                if (
+                    retained is not issuance_record
+                    or retained.root is not root
+                    or retained.claim_ref is None
+                    or retained.claim_ref() is not issuance_claim
+                    or retained.terminal
+                    or retained.issuance_values is not issuance_values
+                    or retained.result_values is None
+                    or retained.receipt_values is not None
+                    or retained.detached_values is not expected_detached_values
+                    or retained.detached_proof
+                ):
+                    raise AssertionError("Prepared network issuance facts changed before seal")
+                retained.receipt_values = expected_receipt_values
+                retained.detached_proof = expected_detached_proof
+
+        expected_receipt_values = issuance_record.receipt_values
+        expected_result_values = issuance_record.result_values
+        expected_detached_values = issuance_record.detached_values
+        expected_detached_proof = issuance_record.detached_proof
+        if (
+            type(expected_receipt_values) is not tuple
+            or len(expected_receipt_values) != len(_receipt_descriptors)
+            or type(expected_result_values) is not tuple
+            or len(expected_result_values) != len(_result_descriptors)
+            or type(expected_detached_values) is not tuple
+            or type(expected_detached_proof) is not str
+            or not expected_detached_proof
         ):
-            object.__setattr__(receipt, field_name, getattr(issued_receipt, field_name))
-        result = materialization_shells.network_result
-        object.__setattr__(result, "connection", connection_result)
-        object.__setattr__(result, "runtime", runtime_receipt)
-        object.__setattr__(result, "timing", timing_receipt)
-        return result
+            raise AssertionError("Prepared network issuance carrier facts are malformed")
+        planner = _object_getattribute(self, "_source_timing_planner")
+        if planner is None:
+            raise AssertionError("Prepared network issuance recovery lost its timing planner")
+
+        authority_lock = _object_getattribute(planner, "_preparation_authority_lock")
+        receipt_authorities = prepared_receipt_authorities
+        timing_receipt_authorities = _object_getattribute(
+            planner,
+            "_committed_preparation_receipts",
+        )
+
+        def exact_detached_facts_match(actual: object) -> bool:
+            if type(actual) is not tuple or len(actual) != len(expected_detached_values):
+                return False
+            for supplied, expected in zip(actual, expected_detached_values, strict=True):
+                if expected is None:
+                    if supplied is not None:
+                        return False
+                    continue
+                expected_type = type(expected)
+                if expected_type is not str and expected_type is not int:
+                    return False
+                if type(supplied) is not expected_type:
+                    return False
+                if supplied != expected:
+                    return False
+            return True
+
+        def exact_receipt_values_match(actual: tuple[object, ...]) -> bool:
+            if len(actual) != len(expected_receipt_values):
+                return False
+            identity_fields = {3, 5, 7, 8, 9, 10}
+            for index, (supplied, expected) in enumerate(
+                zip(actual, expected_receipt_values, strict=True)
+            ):
+                if index in identity_fields:
+                    if supplied is not expected:
+                        return False
+                elif type(supplied) is not str or type(expected) is not str or supplied != expected:
+                    return False
+            return True
+
+        def commit_authoritative_issuance_facts(
+            supplied_receipt: LifecyclePreparedNetworkReceipt,
+            supplied_timing_receipt: SourceTimingPreparationReceipt,
+            supplied_generation: int,
+            supplied_detached_values: tuple[object, ...],
+            supplied_detached_proof: str,
+        ) -> None:
+            if (
+                supplied_receipt is not network_receipt_shell
+                or supplied_timing_receipt is not timing_receipt
+                or type(supplied_generation) is not int
+                or supplied_generation != receipt_authority_generation
+                or not exact_detached_facts_match(supplied_detached_values)
+                or type(supplied_detached_proof) is not str
+                or supplied_detached_proof != expected_detached_proof
+            ):
+                raise AssertionError("Prepared-network receipt authority changed before seal")
+            captured_receipt_graph = _capture_graph(supplied_receipt)
+            captured_result_graph = _capture_graph(network_result_shell)
+            root_id = id(root)
+            with prepared_issuance_lock:
+                retained = prepared_issuances.get((root_id, issuance_record.generation))
+                if (
+                    retained is not issuance_record
+                    or retained.root is not root
+                    or retained.receipt is not supplied_receipt
+                    or retained.result is not network_result_shell
+                    or not retained.canonical_committed
+                    or retained.issuance_values is not issuance_values
+                    or retained.receipt_values is not expected_receipt_values
+                    or retained.detached_values is not expected_detached_values
+                    or retained.detached_proof != expected_detached_proof
+                    or type(retained.root_graph) is not tuple
+                    or not _graph_matches(root, retained.root_graph)
+                ):
+                    raise AssertionError("Prepared-network retained graph changed before seal")
+                if retained.receipt_graph is None and retained.result_graph is None:
+                    retained.receipt_graph = captured_receipt_graph
+                    retained.result_graph = captured_result_graph
+                elif (
+                    retained.receipt_graph is None
+                    or retained.result_graph is None
+                    or not _graph_matches(supplied_receipt, retained.receipt_graph)
+                    or not _graph_matches(network_result_shell, retained.result_graph)
+                ):
+                    raise AssertionError("Prepared-network retained graph changed before seal")
+            commit_prepared_network_receipt_authority(
+                supplied_receipt,
+                supplied_timing_receipt,
+                supplied_generation,
+                supplied_detached_values,
+                supplied_detached_proof,
+                issuance_record.receipt_graph,
+            )
+
+        def publish_terminal_if_sealed() -> bool:
+            receipt_id = id(network_receipt_shell)
+
+            def sealed_sidecar_values() -> tuple[object, ...] | None:
+                retained_authority = receipt_authorities.get(receipt_id)
+                if (
+                    type(retained_authority) is not _PreparedNetworkReceiptAuthority
+                    or retained_authority is not receipt_authority_shell
+                ):
+                    return None
+                values = tuple(
+                    _member_get(
+                        descriptor,
+                        retained_authority,
+                        _PreparedNetworkReceiptAuthority,
+                    )
+                    for descriptor in _authority_descriptors
+                )
+                (
+                    retained_receipt_ref,
+                    retained_timing_authority,
+                    retained_timing_receipt_id,
+                    retained_generation,
+                    retained_detached_values,
+                    retained_detached_proof,
+                    retained_committed,
+                    retained_receipt_graph,
+                ) = values
+                if (
+                    type(retained_receipt_ref) is not ReferenceType
+                    or retained_receipt_ref() is not network_receipt_shell
+                    or retained_generation != receipt_authority_generation
+                    or retained_timing_receipt_id != id(timing_receipt)
+                    or timing_receipt_authorities.get(retained_timing_receipt_id)
+                    is not retained_timing_authority
+                    or retained_timing_authority is None
+                    or _object_getattribute(retained_timing_authority, "committed") is not True
+                    or _object_getattribute(retained_timing_authority, "receipt_ref")()
+                    is not timing_receipt
+                    or retained_committed is not True
+                    or not exact_detached_facts_match(retained_detached_values)
+                    or retained_detached_values is not expected_detached_values
+                    or type(retained_detached_proof) is not str
+                    or retained_detached_proof != expected_detached_proof
+                    or retained_receipt_graph is not issuance_record.receipt_graph
+                ):
+                    return None
+                return values
+
+            with authority_lock:
+                initial_sidecar_values = sealed_sidecar_values()
+            if initial_sidecar_values is None:
+                return False
+
+            if type(issuance_record.root_graph) is not tuple or not _graph_matches(
+                root, issuance_record.root_graph
+            ):
+                raise StateError("Prepared network root changed before terminal retry")
+            if (
+                type(issuance_record.result_graph) is not tuple
+                or type(issuance_record.receipt_graph) is not tuple
+                or not _restore_graph(network_result_shell, issuance_record.result_graph)
+                or not _graph_matches(network_receipt_shell, issuance_record.receipt_graph)
+            ):
+                raise AssertionError("Prepared network terminal graph could not be restored")
+
+            with authority_lock:
+                final_sidecar_values = sealed_sidecar_values()
+                if final_sidecar_values is None:
+                    return False
+                if any(
+                    final is not initial
+                    for final, initial in zip(
+                        final_sidecar_values,
+                        initial_sidecar_values,
+                        strict=True,
+                    )
+                ):
+                    raise AssertionError("Prepared network sidecar changed during restoration")
+                root_id = id(root)
+                with prepared_issuance_lock:
+                    retained_issuance = prepared_issuances.get(
+                        (root_id, issuance_record.generation)
+                    )
+                    if (
+                        retained_issuance is not issuance_record
+                        or retained_issuance.root is not root
+                        or retained_issuance.receipt is not network_receipt_shell
+                        or retained_issuance.result is not network_result_shell
+                        or retained_issuance.authority_record is not receipt_authority_shell
+                        or retained_issuance.authority_generation != receipt_authority_generation
+                        or retained_issuance.issuance_values is not issuance_values
+                        or retained_issuance.result_values is not expected_result_values
+                        or retained_issuance.receipt_values is not expected_receipt_values
+                        or retained_issuance.detached_values is not expected_detached_values
+                        or retained_issuance.detached_proof != expected_detached_proof
+                        or retained_issuance.root_graph is not issuance_record.root_graph
+                        or retained_issuance.result_graph is not issuance_record.result_graph
+                        or retained_issuance.receipt_graph is not issuance_record.receipt_graph
+                        or not retained_issuance.canonical_committed
+                        or type(retained_issuance.claim_ref) is not ReferenceType
+                        or retained_issuance.claim_ref() is not issuance_claim
+                        or prepared_issuance_generations.get(root_id)
+                        != retained_issuance.generation
+                    ):
+                        raise AssertionError(
+                            "Prepared network terminal carrier changed before publish"
+                        )
+                    retained_issuance.terminal = True
+                    retained_issuance.claim_ref = None
+            return True
+
+        if publish_terminal_if_sealed():
+            return network_result_shell
+        if type(issuance_record.root_graph) is not tuple or not _graph_matches(
+            root, issuance_record.root_graph
+        ):
+            with prepared_issuance_lock:
+                issuance_record.claim_ref = None
+            raise StateError("Prepared network root changed before issuance retry")
+        if issuance_record.result_graph is not None and not _restore_graph(
+            network_result_shell,
+            issuance_record.result_graph,
+        ):
+            with prepared_issuance_lock:
+                issuance_record.claim_ref = None
+            raise StateError("Prepared network retained graph could not be restored")
+        try:
+            issued_receipt = issue_prepared_network_receipt(
+                issuance_record,
+                runtime_publication_token=runtime_publication_token,
+                state_publication_token=state_publication_token,
+                transaction_id=transaction_id,
+                materialization_mode=materialization_mode,
+                lifecycle_mode=lifecycle_mode,
+                physical_transport=physical_transport,
+                result_digest=result_digest,
+                timing_binding_token=timing_binding_token,
+                connection_receipt=connection_receipt,
+                runtime_receipt=runtime_receipt,
+                timing_receipt=timing_receipt,
+                receipt_shell=network_receipt_shell,
+                authority_generation=receipt_authority_generation,
+                commit_prepared_network_receipt_authority=(commit_authoritative_issuance_facts),
+            )
+        except BaseException:
+            if not publish_terminal_if_sealed():
+                with prepared_issuance_lock:
+                    issuance_record.claim_ref = None
+            raise
+        if issued_receipt is not network_receipt_shell:
+            publish_terminal_if_sealed()
+            raise AssertionError("Prepared-session receipt shell identity changed")
+        if not publish_terminal_if_sealed():
+            with prepared_issuance_lock:
+                issuance_record.claim_ref = None
+            raise AssertionError("Prepared network receipt authority did not seal")
+        return network_result_shell
 
     def authenticates_prepared_network_receipt(
         self,
@@ -4842,8 +7856,18 @@ class GeneratorLifecycleAuthority:
         ):
             return False
         try:
+            runtime_authentic = runtime.authenticates_preparation_receipt(
+                receipt.runtime_receipt,
+                token=root.runtime_token,
+            )
+            connection_authentic = self.authenticates_connection_composite_receipt(
+                root.state_plan,
+                receipt.connection_receipt,
+            )
             if (
-                type(root.result) is not NetworkConnectionCommitResult
+                not runtime_authentic
+                or not connection_authentic
+                or type(root.result) is not NetworkConnectionCommitResult
                 or root.result.transaction != root.transaction
                 or root.state_plan.transaction != root.transaction
                 or root.result.lifecycle_mode != root.runtime_token.lifecycle_mode
@@ -4854,16 +7878,9 @@ class GeneratorLifecycleAuthority:
                 or receipt._lifecycle_mode != root.runtime_token.lifecycle_mode
                 or receipt._physical_transport != root.state_plan.physical_transport_fingerprint
                 or receipt._result_digest != self._prepared_network_result_digest(root.result)
-                or not runtime.authenticates_preparation_receipt(
-                    receipt.runtime_receipt,
-                    token=root.runtime_token,
-                )
             ):
                 return False
-            return self.authenticates_connection_composite_receipt(
-                root.state_plan,
-                receipt.connection_receipt,
-            )
+            return self._authenticates_issued_prepared_network_receipt(receipt)
         except (
             AttributeError,
             LookupError,
@@ -6831,3 +9848,154 @@ class GeneratorLifecycleAuthority:
                     next_order, next_handle = next_head
                     heapq.heappush(heap, (next_order, shard_id, next_handle))
         return tuple(result)
+
+
+# Install the public detach method only after the sealed binding allocator exists.
+# Detachment never reopens the caller-visible receipt graph.  It resolves one
+# exact weak issuance identity and copies the scalar facts sealed beside that
+# identity at the canonical commit fence.
+def _freeze_issued_prepared_network_detach_method(
+    _record_descriptors: tuple[MemberDescriptorType, ...] = (
+        _PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS
+    ),
+    _binding_methods: tuple[Callable[..., object], Callable[..., object], Callable[..., object]] = (
+        _DETACHED_NETWORK_BINDING_BOUNDARY_METHODS
+    ),
+) -> Callable[[GeneratorLifecycleAuthority, object], LifecycleDetachedNetworkReceiptBinding]:
+    frozen_authority_type = GeneratorLifecycleAuthority
+    frozen_receipt_type = LifecyclePreparedNetworkReceipt
+    frozen_record_type = _PreparedNetworkReceiptAuthority
+    frozen_record_descriptors = _record_descriptors
+    frozen_record_field_count = len(_PREPARED_NETWORK_RECEIPT_AUTHORITY_FIELD_NAMES)
+    frozen_binding_type = LifecycleDetachedNetworkReceiptBinding
+    frozen_construct = _binding_methods[0]
+    frozen_authenticates = _binding_methods[2]
+    frozen_type = type
+    frozen_int_type = int
+    frozen_str_type = str
+    frozen_tuple_type = tuple
+    frozen_dict_type = dict
+    frozen_member_descriptor_type = MemberDescriptorType
+    frozen_member_get = MemberDescriptorType.__get__
+    frozen_object_getattribute = object.__getattribute__
+    frozen_dict_get = dict.get
+    frozen_weakref_type = ReferenceType
+    frozen_weakref_call = ReferenceType.__call__
+    frozen_id = id
+    frozen_len = len
+    frozen_lock_type = type(RLock())
+    frozen_state_error = StateError
+    frozen_rejected_errors = (AttributeError, TypeError, ValueError)
+
+    def detach(
+        self: GeneratorLifecycleAuthority,
+        receipt: object,
+    ) -> LifecycleDetachedNetworkReceiptBinding:
+        if frozen_type(self) is not frozen_authority_type or frozen_type(receipt) is not (
+            frozen_receipt_type
+        ):
+            raise frozen_state_error(
+                "Detached binding requires an authentic prepared-network receipt"
+            )
+        try:
+            planner = frozen_object_getattribute(self, "_source_timing_planner")
+            retained_records = frozen_object_getattribute(
+                self,
+                "_prepared_network_receipt_authorities",
+            )
+            if planner is None or frozen_type(retained_records) is not frozen_dict_type:
+                raise frozen_state_error(
+                    "Detached binding requires an authentic prepared-network receipt"
+                )
+            authority_lock = frozen_object_getattribute(
+                planner,
+                "_preparation_authority_lock",
+            )
+            timing_records = frozen_object_getattribute(
+                planner,
+                "_committed_preparation_receipts",
+            )
+            if (
+                frozen_type(authority_lock) is not frozen_lock_type
+                or frozen_type(timing_records) is not frozen_dict_type
+            ):
+                raise frozen_state_error(
+                    "Detached binding requires an authentic prepared-network receipt"
+                )
+            receipt_id = frozen_id(receipt)
+            with authority_lock:
+                retained = frozen_dict_get(retained_records, receipt_id)
+                if frozen_type(retained) is not frozen_record_type:
+                    raise frozen_state_error(
+                        "Detached binding requires an authentic prepared-network receipt"
+                    )
+                captured: list[object] = []
+                for descriptor in frozen_record_descriptors:
+                    if frozen_type(descriptor) is not frozen_member_descriptor_type:
+                        raise frozen_state_error("Detached prepared-network authority is malformed")
+                    captured.append(frozen_member_get(descriptor, retained, frozen_record_type))
+                if frozen_len(captured) != frozen_record_field_count:
+                    raise frozen_state_error("Detached prepared-network authority is malformed")
+                (
+                    receipt_ref,
+                    timing_authority,
+                    timing_receipt_id,
+                    generation,
+                    detached_values,
+                    detached_proof,
+                    committed,
+                    receipt_graph,
+                ) = captured
+                if (
+                    frozen_type(receipt_ref) is not frozen_weakref_type
+                    or frozen_weakref_call(receipt_ref) is not receipt
+                    or frozen_type(timing_receipt_id) is not frozen_int_type
+                    or timing_receipt_id <= 0
+                    or frozen_type(generation) is not frozen_int_type
+                    or generation <= 0
+                    or frozen_type(detached_values) is not frozen_tuple_type
+                    or frozen_type(detached_proof) is not frozen_str_type
+                    or committed is not True
+                    or frozen_type(receipt_graph) is not frozen_tuple_type
+                    or not receipt_graph
+                    or frozen_dict_get(timing_records, timing_receipt_id) is not timing_authority
+                ):
+                    raise frozen_state_error(
+                        "Detached binding requires an authentic prepared-network receipt"
+                    )
+            binding = frozen_construct(self, detached_values, detached_proof)
+            if frozen_type(binding) is not frozen_binding_type or not frozen_authenticates(
+                self,
+                binding,
+            ):
+                raise frozen_state_error("Detached prepared-network proof is not authentic")
+            return binding
+        except frozen_rejected_errors as error:
+            if frozen_type(error) is frozen_state_error:
+                raise
+            raise frozen_state_error(
+                "Detached binding requires an authentic prepared-network receipt"
+            ) from error
+
+    detach.__name__ = "detach_prepared_network_receipt"
+    detach.__qualname__ = "GeneratorLifecycleAuthority.detach_prepared_network_receipt"
+    detach.__doc__ = (
+        "Copy the issuance-sealed scalar proof for one exact live prepared receipt.\n\n"
+        "The caller-visible receipt graph is never traversed. Byte-identical detached "
+        "binding copies remain statelessly equivalent; exact source identity and lifetime "
+        "are enforced by the bounded weak issuance record."
+    )
+    return detach
+
+
+GeneratorLifecycleAuthority.detach_prepared_network_receipt = (
+    _freeze_issued_prepared_network_detach_method()
+)
+
+
+# Security-boundary functions captured exact sealed handlers and inert contract
+# data in distinct closure cells while the module initialized. Do not retain a
+# replaceable module alias to either side of those boundaries.
+del _DETACHED_NETWORK_BINDING_BOUNDARY_CAPABILITY
+del _DETACHED_NETWORK_BINDING_BOUNDARY_METHODS
+del _PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS
