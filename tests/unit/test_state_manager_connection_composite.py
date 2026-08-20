@@ -52,6 +52,7 @@ from evidenceforge.generation.state_manager import (
     SessionActivityPatch,
     StateManager,
 )
+from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.ids import generate_zeek_uid_from_rng
 
@@ -1645,3 +1646,134 @@ def test_connection_composite_normalizes_activity_patches_and_frontier() -> None
     assert manager.get_process("WS-01", process).last_activity_time == later
     assert manager.get_session(logon_id).last_activity_time == _START + timedelta(seconds=7)
     assert manager.state.current_time == later
+
+
+def test_physical_connection_composite_atomically_starts_type3_and_terminalizes_smb_file() -> None:
+    """Initial root, collision-safe Type-3 identity, and first file op commit together."""
+
+    manager = StateManager()
+    manager.set_current_time(_START)
+    compiled = CompiledStorageFile(
+        file_id="file-initial-smb-root",
+        share="FS-01.finance",
+        path="Scratch\\initial-smb-root.txt",
+        size_bytes=10,
+        mime_type="text/plain",
+    )
+    manager.touch_smb_file(compiled)
+    journal = manager.begin_smb_file_mutation_journal("operation-initial-smb-root")
+    manager.update_smb_file(compiled.file_id, size_bytes=20, journal=journal)
+
+    batch_builder = manager.begin_materialization_batch()
+    session_plan = batch_builder.plan_session(
+        username="EXAMPLE\\analyst",
+        system="FS-01",
+        logon_type=3,
+        source_ip="10.0.0.10",
+        source_port=50_001,
+        session_kind="network",
+        start_time=_START,
+        logon_id=None,
+        smb_principal="EXAMPLE\\analyst",
+    )
+    batch = batch_builder.seal()
+    owner = random.Random(833)
+    cursor = manager.begin_connection_planning(owner)
+    cursor.terminalize_smb_file_mutation(journal)
+    identity = cursor.reserve_identity()
+    plan = manager.finalize_connection_composite_materialization(
+        cursor,
+        _transaction(
+            conn_id=identity.conn_id,
+            zeek_uid=identity.zeek_uid,
+            dst_port=445,
+            service="smb",
+        ),
+        source_system="WS-01",
+        source_hostname="ws-01.example.test",
+        hostname="fs-01.example.test",
+        batch=batch,
+    )
+
+    assert manager.smb_file_size(compiled) == 10
+    assert manager.get_session(session_plan.identity.logon_id) is None
+    result = manager.materialize_connection_composite(plan, owner)
+
+    assert result.session is not None
+    assert result.session.logon_id == session_plan.identity.logon_id
+    assert result.smb_file_mutation is not None
+    assert manager.recover_smb_file_mutation_commit(journal) is result.smb_file_mutation
+    assert manager.smb_file_size(compiled) == 20
+    assert manager.state.open_connections[identity.conn_id] is result.connection
+    assert manager.acknowledge_smb_file_mutation_commit(result.smb_file_mutation)
+    summary = manager.get_state_summary()
+    assert summary["smb_file_mutation_journals"] == 0
+    assert summary["smb_file_mutation_retained_bytes"] == 0
+
+
+def test_physical_connection_smb_binding_copy_tamper_and_child_use_fail_precanonical() -> None:
+    """Copied, tampered, stale, and application-child bindings fail before State mutation."""
+
+    manager = StateManager()
+    manager.set_current_time(_START)
+    compiled = CompiledStorageFile(
+        file_id="file-initial-smb-binding",
+        share="FS-01.finance",
+        path="Scratch\\initial-smb-binding.txt",
+        size_bytes=10,
+        mime_type="text/plain",
+    )
+    manager.touch_smb_file(compiled)
+    journal = manager.begin_smb_file_mutation_journal("operation-initial-smb-binding")
+    manager.update_smb_file(compiled.file_id, size_bytes=20, journal=journal)
+    owner = random.Random(834)
+    cursor = manager.begin_connection_planning(owner)
+    cursor.terminalize_smb_file_mutation(journal)
+    identity = cursor.reserve_identity()
+    plan = manager.finalize_connection_composite_materialization(
+        cursor,
+        _transaction(
+            conn_id=identity.conn_id,
+            zeek_uid=identity.zeek_uid,
+            dst_port=445,
+            service="smb",
+        ),
+    )
+    binding = plan._smb_file_mutation_terminalization
+    assert binding is not None
+    digest = manager.materialization_digest()
+    owner_state = owner.getstate()
+
+    copied = replace(
+        plan,
+        _smb_file_mutation_terminalization=replace(binding),
+    )
+    with pytest.raises(StateError, match="integrity validation failed"):
+        manager.materialize_connection_composite(copied, owner)
+    assert manager.materialization_digest() == digest
+    assert owner.getstate() == owner_state
+
+    object.__setattr__(binding, "expected_postimage_digest", "0" * 64)
+    with pytest.raises(StateError, match="integrity validation"):
+        manager.materialize_connection_composite(plan, owner)
+    assert manager.materialization_digest() == digest
+    assert owner.getstate() == owner_state
+
+    child_owner = random.Random(835)
+    child = manager.begin_connection_planning(child_owner)
+    child.terminalize_smb_file_mutation(journal)
+    with pytest.raises(StateError, match="requires a physical root"):
+        manager.finalize_connection_composite_materialization(
+            child,
+            _transaction(
+                conn_id="missing-parent",
+                zeek_uid="Cmissingparent",
+                application_layer_only=True,
+                dst_port=445,
+                service="smb",
+            ),
+            mode=ConnectionMaterializationMode.APPLICATION_CHILD,
+        )
+    child.cancel()
+    manager.cancel_smb_file_mutation_journal(journal)
+    assert manager.get_state_summary()["smb_file_mutation_retained_bytes"] == 0

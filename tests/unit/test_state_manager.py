@@ -44,6 +44,29 @@ from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.models.exceptions import StateError
 
+_SMB_TRANSIENT_SUMMARY_FIELDS = (
+    "smb_file_mutation_journals",
+    "smb_file_mutation_capabilities",
+    "smb_file_mutation_operation_indexes",
+    "smb_file_mutation_file_owners",
+    "smb_file_mutation_path_owners",
+    "smb_file_mutation_journal_entries",
+    "smb_file_mutation_commit_results",
+    "smb_file_mutation_commit_receipts",
+    "smb_file_mutation_acknowledging",
+    "smb_file_mutation_cancelling",
+    "smb_file_mutation_journal_locators",
+    "smb_file_mutation_result_locators",
+    "smb_file_mutation_retained_bytes",
+)
+
+
+def _assert_no_smb_file_mutation_authority(manager: StateManager) -> None:
+    summary = manager.get_state_summary()
+    assert {name: summary[name] for name in _SMB_TRANSIENT_SUMMARY_FIELDS} == {
+        name: 0 for name in _SMB_TRANSIENT_SUMMARY_FIELDS
+    }
+
 
 class TestStateManagerInit:
     """Tests for StateManager initialization."""
@@ -1268,6 +1291,7 @@ class TestSmbState:
             mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         original = sm.touch_smb_file(compiled)
+        canonical = sm._smb_file_overlay[original.file_id]
         digest_before = sm.materialization_digest()
         version_before = sm.materialization_version
 
@@ -1297,12 +1321,12 @@ class TestSmbState:
 
         sm.cancel_smb_file_mutation_journal(journal)
 
-        assert sm._smb_file_overlay[original.file_id] is original
-        assert original.path == compiled.path
-        assert original.version == 1
-        assert original.size_bytes == compiled.size_bytes
-        assert original.deleted is False
-        assert original.prior_paths == ()
+        assert sm._smb_file_overlay[original.file_id] is canonical
+        assert canonical.path == compiled.path
+        assert canonical.version == 1
+        assert canonical.size_bytes == compiled.size_bytes
+        assert canonical.deleted is False
+        assert canonical.prior_paths == ()
         assert sm._smb_file_by_share_path[
             (compiled.share.casefold(), compiled.path.casefold())
         ] == (original.file_id)
@@ -1339,7 +1363,7 @@ class TestSmbState:
 
         tampered = replace(journal)
         object.__setattr__(tampered, "_operation_id", "operation-tampered")
-        with pytest.raises(StateError, match="failed integrity validation"):
+        with pytest.raises(StateError, match="stale, copied, or foreign"):
             sm.update_smb_file(state.file_id, size_bytes=200, journal=tampered)
         assert state.size_bytes == 100
 
@@ -1349,9 +1373,10 @@ class TestSmbState:
         with pytest.raises(StateError, match="owned by an active mutation journal"):
             sm.update_smb_file(state.file_id, size_bytes=300)
 
-        sm.commit_smb_file_mutation_journal(journal)
-        assert state.size_bytes == 200
+        result = sm.commit_smb_file_mutation_journal(journal)
+        assert sm._smb_file_overlay[state.file_id].size_bytes == 200
         assert not sm.authenticates_smb_file_mutation_journal(journal)
+        assert sm.acknowledge_smb_file_mutation_commit(result)
         with pytest.raises(StateError, match="stale, copied, or foreign"):
             sm.cancel_smb_file_mutation_journal(journal)
 
@@ -1400,8 +1425,726 @@ class TestSmbState:
             sm.cancel_smb_file_mutation_journal(journal)
 
         assert sm.materialization_digest() == digest_before
-        assert sm.get_state_summary()["smb_file_mutation_journals"] == 0
-        assert sm.get_state_summary()["smb_file_mutation_journal_entries"] == 0
+        _assert_no_smb_file_mutation_authority(sm)
+
+    def test_file_mutation_journal_commit_is_exact_recoverable_and_reader_isolated(self):
+        """Readers see prestate until one exact retained terminal result linearizes."""
+
+        sm = StateManager()
+        foreign = StateManager()
+        compiled = CompiledStorageFile(
+            file_id="file-reader-isolation",
+            share="FS-01.finance",
+            path="Reports\\forecast.xlsx",
+            size_bytes=100,
+            mime_type="application/octet-stream",
+        )
+        state = sm.touch_smb_file(compiled)
+        journal = sm.begin_smb_file_mutation_journal("operation-reader-isolation")
+        sm.update_smb_file(state.file_id, size_bytes=225, journal=journal)
+        sm.move_smb_file(
+            state.file_id,
+            share=compiled.share,
+            path="Archive\\forecast.xlsx",
+            journal=journal,
+        )
+
+        assert sm.smb_file_is_available(compiled)
+        assert sm.smb_file_size(compiled) == 100
+
+        result = sm.commit_smb_file_mutation_journal(journal)
+
+        assert result.operation_id == journal.operation_id
+        assert result.file_ids == (compiled.file_id,)
+        assert result.path_keys == (
+            (compiled.share.casefold(), compiled.path.casefold()),
+            (compiled.share.casefold(), "archive\\forecast.xlsx"),
+        )
+        assert result.postimage_digest
+        assert sm.recover_smb_file_mutation_commit(journal) is result
+        assert sm.recover_smb_file_mutation_commit(replace(journal)) is None
+        assert foreign.recover_smb_file_mutation_commit(journal) is None
+        tampered = replace(journal)
+        object.__setattr__(tampered, "_operation_id", "operation-retargeted")
+        assert sm.recover_smb_file_mutation_commit(tampered) is None
+        assert sm.authenticates_smb_file_mutation_commit_receipt(result.receipt)
+        assert not sm.authenticates_smb_file_mutation_commit_receipt(replace(result.receipt))
+        assert not foreign.authenticates_smb_file_mutation_commit_receipt(result.receipt)
+        tampered_receipt = replace(result.receipt)
+        object.__setattr__(tampered_receipt, "postimage_digest", "0" * 64)
+        assert not sm.authenticates_smb_file_mutation_commit_receipt(tampered_receipt)
+        tampered_result = replace(result)
+        object.__setattr__(tampered_result, "operation_id", "operation-retargeted")
+        assert not sm.acknowledge_smb_file_mutation_commit(tampered_result)
+        assert not sm.smb_file_is_available(compiled)
+        assert sm.smb_file_size(compiled) == 225
+        with pytest.raises(StateError, match="already committed"):
+            sm.begin_smb_file_mutation_journal(journal.operation_id)
+
+        assert sm.acknowledge_smb_file_mutation_commit(result)
+        assert sm.recover_smb_file_mutation_commit(journal) is None
+        assert not sm.authenticates_smb_file_mutation_commit_receipt(result.receipt)
+        assert not sm.acknowledge_smb_file_mutation_commit(result)
+        assert not sm.acknowledge_smb_file_mutation_commit(replace(result))
+
+    @pytest.mark.parametrize("fault_stage", ("terminal", "ownership"))
+    def test_file_mutation_journal_commit_fault_retains_exact_terminal_result(
+        self,
+        monkeypatch,
+        fault_stage,
+    ):
+        """A lost commit return is operation-recoverable at every release seam."""
+
+        sm = StateManager()
+        compiled = CompiledStorageFile(
+            file_id=f"file-commit-{fault_stage}",
+            share="FS-01.finance",
+            path=f"Scratch\\{fault_stage}.txt",
+            size_bytes=10,
+            mime_type="text/plain",
+        )
+        state = sm.touch_smb_file(compiled)
+        journal = sm.begin_smb_file_mutation_journal(f"operation-commit-{fault_stage}")
+        sm.update_smb_file(state.file_id, size_bytes=20, journal=journal)
+        faulted = False
+
+        def fail_once(stage):
+            nonlocal faulted
+            if stage == fault_stage and not faulted:
+                faulted = True
+                raise RuntimeError(f"injected {stage}")
+
+        monkeypatch.setattr(sm, "_smb_file_mutation_commit_fault", fail_once)
+        with pytest.raises(RuntimeError, match="injected"):
+            sm.commit_smb_file_mutation_journal(journal)
+
+        recovered = sm.recover_smb_file_mutation_commit(journal)
+        assert recovered is not None
+        assert sm.smb_file_size(compiled) == 20
+        assert sm.commit_smb_file_mutation_journal(journal) is recovered
+        assert sm.acknowledge_smb_file_mutation_commit(recovered)
+        _assert_no_smb_file_mutation_authority(sm)
+
+    @pytest.mark.parametrize(
+        "fault_stage",
+        (
+            "ack-record",
+            "ack-ownership",
+            "ack-capability",
+            "ack-acknowledging",
+            "ack-result-locator",
+            "ack-operation-index",
+            "ack-journal-locator",
+        ),
+    )
+    def test_file_mutation_journal_ack_is_restartable(
+        self,
+        monkeypatch,
+        fault_stage,
+    ):
+        """Interrupted acknowledgement preserves exact result authority until retry."""
+
+        sm = StateManager()
+        compiled = CompiledStorageFile(
+            file_id=f"file-ack-{fault_stage}",
+            share="FS-01.finance",
+            path=f"Scratch\\{fault_stage}.txt",
+            size_bytes=10,
+            mime_type="text/plain",
+        )
+        state = sm.touch_smb_file(compiled)
+        journal = sm.begin_smb_file_mutation_journal(f"operation-ack-{fault_stage}")
+        sm.update_smb_file(state.file_id, size_bytes=20, journal=journal)
+        result = sm.commit_smb_file_mutation_journal(journal)
+        faulted = False
+
+        def fail_once(stage):
+            nonlocal faulted
+            if stage == fault_stage and not faulted:
+                faulted = True
+                raise RuntimeError(f"injected {stage}")
+
+        monkeypatch.setattr(sm, "_smb_file_mutation_commit_fault", fail_once)
+        with pytest.raises(RuntimeError, match="injected"):
+            sm.acknowledge_smb_file_mutation_commit(result)
+
+        assert sm.recover_smb_file_mutation_commit(journal) is result
+        assert sm.authenticates_smb_file_mutation_commit_receipt(result.receipt)
+        with pytest.raises(StateError, match="incomplete|already committed"):
+            sm.begin_smb_file_mutation_journal(journal.operation_id)
+        with pytest.raises(StateError, match="incomplete journal release"):
+            sm.update_smb_file(state.file_id, size_bytes=30)
+        assert sm.acknowledge_smb_file_mutation_commit(result)
+        assert sm.recover_smb_file_mutation_commit(journal) is None
+        _assert_no_smb_file_mutation_authority(sm)
+
+    def test_file_mutation_journal_terminal_result_owns_bounded_capacity(self, monkeypatch):
+        """An unacknowledged terminal result remains bounded and operation-recoverable."""
+
+        monkeypatch.setattr(state_manager_module, "_MAX_ACTIVE_SMB_FILE_MUTATION_JOURNALS", 1)
+        sm = StateManager()
+        first = sm.begin_smb_file_mutation_journal("operation-terminal-capacity")
+        result = sm.commit_smb_file_mutation_journal(first)
+
+        assert sm.recover_smb_file_mutation_commit(first) is result
+        with pytest.raises(StateError, match="already committed"):
+            sm.begin_smb_file_mutation_journal(first.operation_id)
+        with pytest.raises(StateError, match="journals exceed 1"):
+            sm.begin_smb_file_mutation_journal("operation-terminal-blocked")
+
+        assert sm.acknowledge_smb_file_mutation_commit(result)
+        replacement = sm.begin_smb_file_mutation_journal("operation-terminal-blocked")
+        sm.cancel_smb_file_mutation_journal(replacement)
+
+    def test_file_mutation_terminal_preparation_is_stale_checked_and_single_swap(self):
+        """Composite enrollment prebuilds allocations and publishes one terminal pointer."""
+
+        sm = StateManager()
+        compiled = CompiledStorageFile(
+            file_id="file-terminal-preparation",
+            share="FS-01.finance",
+            path="Scratch\\terminal-preparation.txt",
+            size_bytes=10,
+            mime_type="text/plain",
+        )
+        state = sm.touch_smb_file(compiled)
+        journal = sm.begin_smb_file_mutation_journal("operation-terminal-preparation")
+        sm.update_smb_file(state.file_id, size_bytes=20, journal=journal)
+        with sm._lock:
+            stale = sm._prepare_smb_file_mutation_terminal_locked(journal)
+
+        assert sm.smb_file_size(compiled) == 10
+        sm.update_smb_file(state.file_id, size_bytes=30, journal=journal)
+        with sm._lock:
+            with pytest.raises(StateError, match="postimage changed"):
+                sm._validate_smb_file_mutation_terminal_preparation_locked(stale)
+            prepared = sm._prepare_smb_file_mutation_terminal_locked(journal)
+            sm._validate_smb_file_mutation_terminal_preparation_locked(prepared)
+            terminal = sm._install_smb_file_mutation_terminal_no_fail_locked(prepared)
+
+        assert terminal.result.postimage_digest != stale.expected_postimage_digest
+        assert sm.smb_file_size(compiled) == 30
+        assert sm.commit_smb_file_mutation_journal(journal) is terminal.result
+        assert sm.acknowledge_smb_file_mutation_commit(terminal.result)
+
+    @pytest.mark.parametrize(
+        "fault_stage",
+        (
+            "cancel-record",
+            "cancel-capability",
+            "cancel-ownership",
+            "cancel-cancelling",
+            "cancel-operation-index",
+            "cancel-journal-locator",
+        ),
+    )
+    def test_file_mutation_journal_cancel_release_is_restartable(
+        self,
+        monkeypatch,
+        fault_stage,
+    ):
+        """Cancellation restores preimages and removes its authority idempotently."""
+
+        sm = StateManager()
+        compiled = CompiledStorageFile(
+            file_id=f"file-cancel-{fault_stage}",
+            share="FS-01.finance",
+            path=f"Scratch\\{fault_stage}.txt",
+            size_bytes=10,
+            mime_type="text/plain",
+        )
+        original = sm.touch_smb_file(compiled)
+        canonical = sm._smb_file_overlay[compiled.file_id]
+        journal = sm.begin_smb_file_mutation_journal(f"operation-cancel-{fault_stage}")
+        sm.update_smb_file(original.file_id, size_bytes=20, journal=journal)
+        faulted = False
+
+        def fail_once(stage):
+            nonlocal faulted
+            if stage == fault_stage and not faulted:
+                faulted = True
+                raise RuntimeError(f"injected {stage}")
+
+        monkeypatch.setattr(sm, "_smb_file_mutation_commit_fault", fail_once)
+        with pytest.raises(RuntimeError, match="injected"):
+            sm.cancel_smb_file_mutation_journal(journal)
+
+        with pytest.raises(StateError, match="incomplete|active mutation|identity collision"):
+            sm.begin_smb_file_mutation_journal(journal.operation_id)
+        with pytest.raises(StateError, match="incomplete journal release"):
+            sm.update_smb_file(original.file_id, size_bytes=30)
+        sm.cancel_smb_file_mutation_journal(journal)
+        assert sm._smb_file_overlay[compiled.file_id] is canonical
+        assert canonical.size_bytes == compiled.size_bytes
+        _assert_no_smb_file_mutation_authority(sm)
+
+    def test_file_mutation_journal_commit_ack_long_run_releases_terminal_authority(self):
+        """Commit/ack churn leaves no retained result, receipt, owner, or operation index."""
+
+        sm = StateManager()
+        for index in range(2_000):
+            journal = sm.begin_smb_file_mutation_journal(f"operation-commit-ack-{index}")
+            result = sm.commit_smb_file_mutation_journal(journal)
+            assert sm.acknowledge_smb_file_mutation_commit(result)
+
+        _assert_no_smb_file_mutation_authority(sm)
+
+    def test_file_mutation_views_are_detached_and_cancel_restores_every_field(self):
+        """Escaped views cannot mutate canonical state and cancel restores exact preimages."""
+
+        sm = StateManager()
+        compiled = CompiledStorageFile(
+            file_id="file-detached",
+            share="FS-01.finance",
+            path="Reports\\detached.txt",
+            size_bytes=100,
+            mime_type="text/plain",
+            tags=("finance",),
+        )
+        view = sm.touch_smb_file(compiled)
+        canonical = sm._smb_file_overlay[compiled.file_id]
+        digest_before = sm.materialization_digest()
+
+        view.file_id = "escaped-file-id"
+        view.size_bytes = 999
+        view.tags = ["escaped"]  # type: ignore[assignment]
+        view.prior_paths = ["escaped"]  # type: ignore[assignment]
+
+        assert canonical.file_id == compiled.file_id
+        assert canonical.size_bytes == compiled.size_bytes
+        assert canonical.tags == compiled.tags
+        assert sm.materialization_digest() == digest_before
+
+        journal = sm.begin_smb_file_mutation_journal("operation-detached-restore")
+        updated = sm.update_smb_file(compiled.file_id, size_bytes=225, journal=journal)
+        assert updated is not canonical
+        canonical.file_id = "tampered-canonical-id"
+        canonical.tags = ["tampered"]  # type: ignore[assignment]
+        canonical.prior_paths = ["tampered"]  # type: ignore[assignment]
+
+        sm.cancel_smb_file_mutation_journal(journal)
+
+        assert sm._smb_file_overlay[compiled.file_id] is canonical
+        assert canonical.file_id == compiled.file_id
+        assert canonical.size_bytes == compiled.size_bytes
+        assert canonical.tags == compiled.tags
+        assert canonical.prior_paths == ()
+        assert sm.materialization_digest() == digest_before
+        _assert_no_smb_file_mutation_authority(sm)
+
+    def test_created_file_identity_collision_rejects_without_overwrite(self):
+        """A retained deterministic identity cannot be replaced after path deletion."""
+
+        sm = StateManager()
+        timestamp = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
+        created = sm.create_smb_file(
+            share="FS-01.finance",
+            path="Scratch\\collision.txt",
+            size_bytes=10,
+            mime_type="text/plain",
+            timestamp=timestamp,
+        )
+        canonical = sm._smb_file_overlay[created.file_id]
+        sm.delete_smb_file(created.file_id)
+        digest = sm.materialization_digest()
+
+        with pytest.raises(StateError, match="identity collision"):
+            sm.create_smb_file(
+                share="FS-01.finance",
+                path="Scratch\\collision.txt",
+                size_bytes=20,
+                mime_type="text/plain",
+                timestamp=timestamp,
+            )
+
+        assert sm._smb_file_overlay[created.file_id] is canonical
+        assert canonical.deleted
+        assert sm.materialization_digest() == digest
+
+    def test_exact_active_journal_tamper_is_rejected_but_cleanup_remains_available(self):
+        """In-place token tamper cannot authenticate or strand its trusted private owner."""
+
+        sm = StateManager()
+        compiled = CompiledStorageFile(
+            file_id="file-exact-journal-tamper",
+            share="FS-01.finance",
+            path="Scratch\\exact-journal-tamper.txt",
+            size_bytes=10,
+            mime_type="text/plain",
+        )
+        sm.touch_smb_file(compiled)
+        operation_id = "operation-exact-journal-tamper"
+        journal = sm.begin_smb_file_mutation_journal(operation_id)
+        old_publication_token = journal._integrity_token
+        object.__setattr__(journal, "_operation_id", "operation-tampered")
+
+        assert not sm.authenticates_smb_file_mutation_journal(journal)
+        with pytest.raises(StateError, match="tampered"):
+            sm.begin_smb_file_mutation_journal(operation_id)
+        sm.cancel_smb_file_mutation_journal(journal)
+        _assert_no_smb_file_mutation_authority(sm)
+
+        replacement = sm.begin_smb_file_mutation_journal(operation_id)
+        assert replacement._integrity_token != old_publication_token
+        sm.update_smb_file(compiled.file_id, size_bytes=20, journal=replacement)
+        object.__setattr__(replacement, "_operation_id", "operation-tampered-again")
+        with pytest.raises(StateError, match="tampered"):
+            sm.update_smb_file(compiled.file_id, size_bytes=30, journal=replacement)
+        sm.cancel_smb_file_mutation_journal(replacement)
+        _assert_no_smb_file_mutation_authority(sm)
+
+    @pytest.mark.parametrize("fault_stage", ("terminal", "ownership"))
+    def test_lost_commit_recovers_after_exact_journal_tamper(
+        self,
+        monkeypatch,
+        fault_stage,
+    ):
+        """Trusted exact-object recovery survives a lost return and public token tamper."""
+
+        sm = StateManager()
+        compiled = CompiledStorageFile(
+            file_id=f"file-lost-tamper-{fault_stage}",
+            share="FS-01.finance",
+            path=f"Scratch\\lost-tamper-{fault_stage}.txt",
+            size_bytes=10,
+            mime_type="text/plain",
+        )
+        sm.touch_smb_file(compiled)
+        journal = sm.begin_smb_file_mutation_journal(f"operation-lost-tamper-{fault_stage}")
+        sm.update_smb_file(compiled.file_id, size_bytes=20, journal=journal)
+        faulted = False
+
+        def fail_once(stage):
+            nonlocal faulted
+            if stage == fault_stage and not faulted:
+                faulted = True
+                raise RuntimeError(f"injected {stage}")
+
+        monkeypatch.setattr(sm, "_smb_file_mutation_commit_fault", fail_once)
+        with pytest.raises(RuntimeError, match="injected"):
+            sm.commit_smb_file_mutation_journal(journal)
+        object.__setattr__(journal, "_journal_id", "0" * 64)
+
+        assert not sm.authenticates_smb_file_mutation_journal(journal)
+        recovered = sm.recover_smb_file_mutation_commit(journal)
+        assert recovered is not None
+        assert sm.acknowledge_smb_file_mutation_commit(recovered)
+        _assert_no_smb_file_mutation_authority(sm)
+
+    def test_exact_terminal_result_tamper_can_still_be_acknowledged(self):
+        """Public result/receipt corruption fails authentication but cannot leak authority."""
+
+        sm = StateManager()
+        journal = sm.begin_smb_file_mutation_journal("operation-result-tamper")
+        result = sm.commit_smb_file_mutation_journal(journal)
+        object.__setattr__(result, "operation_id", "operation-retargeted")
+        object.__setattr__(result.receipt, "postimage_digest", "0" * 64)
+
+        assert sm.recover_smb_file_mutation_commit(journal) is None
+        assert not sm.authenticates_smb_file_mutation_commit_receipt(result.receipt)
+        assert sm.acknowledge_smb_file_mutation_commit(result)
+        _assert_no_smb_file_mutation_authority(sm)
+
+    @pytest.mark.parametrize(
+        "fault_stage",
+        (
+            "ack-acknowledging",
+            "ack-result-locator",
+            "ack-operation-index",
+            "ack-journal-locator",
+        ),
+    )
+    def test_mid_ack_exact_result_tamper_does_not_break_retry(
+        self,
+        monkeypatch,
+        fault_stage,
+    ):
+        """Every late acknowledgement seam retains trusted cleanup authority."""
+
+        sm = StateManager()
+        operation_id = f"operation-mid-ack-tamper-{fault_stage}"
+        journal = sm.begin_smb_file_mutation_journal(operation_id)
+        result = sm.commit_smb_file_mutation_journal(journal)
+        faulted = False
+
+        def fail_once(stage):
+            nonlocal faulted
+            if stage == fault_stage and not faulted:
+                faulted = True
+                raise RuntimeError(f"injected {stage}")
+
+        monkeypatch.setattr(sm, "_smb_file_mutation_commit_fault", fail_once)
+        with pytest.raises(RuntimeError, match="injected"):
+            sm.acknowledge_smb_file_mutation_commit(result)
+        with pytest.raises(StateError, match="incomplete"):
+            sm.begin_smb_file_mutation_journal(operation_id)
+        object.__setattr__(result, "operation_id", "operation-tampered")
+        object.__setattr__(result.receipt, "postimage_digest", "f" * 64)
+
+        assert sm.acknowledge_smb_file_mutation_commit(result)
+        _assert_no_smb_file_mutation_authority(sm)
+        replacement = sm.begin_smb_file_mutation_journal(operation_id)
+        sm.cancel_smb_file_mutation_journal(replacement)
+
+    @pytest.mark.parametrize(
+        "fault_stage",
+        ("cancel-cancelling", "cancel-operation-index", "cancel-journal-locator"),
+    )
+    def test_mid_cancel_exact_journal_tamper_does_not_break_retry(
+        self,
+        monkeypatch,
+        fault_stage,
+    ):
+        """Every late cancellation seam keeps the old operation generation fenced."""
+
+        sm = StateManager()
+        operation_id = f"operation-mid-cancel-tamper-{fault_stage}"
+        journal = sm.begin_smb_file_mutation_journal(operation_id)
+        faulted = False
+
+        def fail_once(stage):
+            nonlocal faulted
+            if stage == fault_stage and not faulted:
+                faulted = True
+                raise RuntimeError(f"injected {stage}")
+
+        monkeypatch.setattr(sm, "_smb_file_mutation_commit_fault", fail_once)
+        with pytest.raises(RuntimeError, match="injected"):
+            sm.cancel_smb_file_mutation_journal(journal)
+        with pytest.raises(StateError, match="incomplete"):
+            sm.begin_smb_file_mutation_journal(operation_id)
+        object.__setattr__(journal, "_operation_id", "operation-tampered")
+
+        sm.cancel_smb_file_mutation_journal(journal)
+        _assert_no_smb_file_mutation_authority(sm)
+        replacement = sm.begin_smb_file_mutation_journal(operation_id)
+        sm.cancel_smb_file_mutation_journal(replacement)
+
+    def test_reserved_terminal_capacity_survives_full_byte_cap(self, monkeypatch):
+        """An admitted journal terminalizes at its exact cap while new work fails cleanly."""
+
+        sm = StateManager()
+        compiled = CompiledStorageFile(
+            file_id="file-terminal-byte-reservation",
+            share="FS-01.finance",
+            path="Scratch\\terminal-byte-reservation.txt",
+            size_bytes=10,
+            mime_type="text/plain",
+        )
+        sm.touch_smb_file(compiled)
+        journal = sm.begin_smb_file_mutation_journal("operation-terminal-byte-reservation")
+        sm.update_smb_file(compiled.file_id, size_bytes=20, journal=journal)
+        exact_retained_bytes = sm.get_state_summary()["smb_file_mutation_retained_bytes"]
+        monkeypatch.setattr(
+            state_manager_module,
+            "_MAX_RETAINED_SMB_FILE_MUTATION_BYTES",
+            exact_retained_bytes,
+        )
+
+        with pytest.raises(StateError, match="retained SMB file mutation authority exceeds"):
+            sm.begin_smb_file_mutation_journal("operation-byte-cap-blocked")
+        result = sm.commit_smb_file_mutation_journal(journal)
+        assert sm.recover_smb_file_mutation_commit(journal) is result
+        assert sm.get_state_summary()["smb_file_mutation_retained_bytes"] == exact_retained_bytes
+        assert sm.acknowledge_smb_file_mutation_commit(result)
+        _assert_no_smb_file_mutation_authority(sm)
+
+    def test_smb_file_numeric_bounds_reject_huge_values_without_journal_drift(self):
+        """Arbitrary-precision file values cannot poison an admitted journal terminal."""
+
+        sm = StateManager()
+        compiled = CompiledStorageFile(
+            file_id="file-numeric-bound",
+            share="FS-01.finance",
+            path="Scratch\\numeric-bound.txt",
+            size_bytes=10,
+            mime_type="text/plain",
+        )
+        original = sm.touch_smb_file(compiled)
+        journal = sm.begin_smb_file_mutation_journal("operation-numeric-bound")
+        summary_before = sm.get_state_summary()
+
+        with pytest.raises(StateError, match="size exceeds the 63-bit SMB file bound"):
+            sm.update_smb_file(
+                original.file_id,
+                size_bytes=1 << 100_000,
+                journal=journal,
+            )
+
+        assert sm._smb_file_overlay[original.file_id].size_bytes == 10
+        assert sm.get_state_summary() == summary_before
+        assert sm.authenticates_smb_file_mutation_journal(journal)
+        result = sm.commit_smb_file_mutation_journal(journal)
+        assert sm.acknowledge_smb_file_mutation_commit(result)
+        _assert_no_smb_file_mutation_authority(sm)
+
+    def test_smb_file_numeric_bounds_cover_touch_create_update_and_version_overflow(self):
+        """Every file ingress enforces fixed-width integers before canonical mutation."""
+
+        sm = StateManager()
+        huge = 1 << 100_000
+        now = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
+
+        huge_size = CompiledStorageFile(
+            file_id="file-huge-size",
+            share="FS-01.finance",
+            path="Scratch\\huge-size.txt",
+            size_bytes=huge,
+            mime_type="text/plain",
+        )
+        with pytest.raises(StateError, match="size exceeds the 63-bit SMB file bound"):
+            sm.touch_smb_file(huge_size)
+
+        huge_version = CompiledStorageFile(
+            file_id="file-huge-version",
+            share="FS-01.finance",
+            path="Scratch\\huge-version.txt",
+            version=huge,
+            size_bytes=1,
+            mime_type="text/plain",
+        )
+        with pytest.raises(StateError, match="version exceeds the 63-bit SMB file bound"):
+            sm.touch_smb_file(huge_version)
+
+        with pytest.raises(StateError, match="size exceeds the 63-bit SMB file bound"):
+            sm.create_smb_file(
+                share="FS-01.finance",
+                path="Scratch\\huge-create.txt",
+                size_bytes=huge,
+                mime_type="text/plain",
+                timestamp=now,
+            )
+
+        maximum = state_manager_module._MAX_SMB_FILE_SIZE_BYTES
+        assert maximum == state_manager_module._MAX_SMB_FILE_VERSION
+        boundary = CompiledStorageFile(
+            file_id="file-version-boundary",
+            share="FS-01.finance",
+            path="Scratch\\version-boundary.txt",
+            version=maximum - 1,
+            size_bytes=maximum,
+            mime_type="text/plain",
+        )
+        touched = sm.touch_smb_file(boundary)
+        with pytest.raises(StateError, match="size exceeds the 63-bit SMB file bound"):
+            sm.update_smb_file(touched.file_id, size_bytes=huge)
+        assert sm._smb_file_overlay[touched.file_id].version == maximum - 1
+        assert sm._smb_file_overlay[touched.file_id].size_bytes == maximum
+
+        journal = sm.begin_smb_file_mutation_journal("operation-numeric-boundary")
+        updated = sm.update_smb_file(touched.file_id, size_bytes=maximum, journal=journal)
+        assert updated.version == maximum
+        assert updated.size_bytes == maximum
+        result = sm.commit_smb_file_mutation_journal(journal)
+        assert sm.recover_smb_file_mutation_commit(journal) is result
+        assert sm.acknowledge_smb_file_mutation_commit(result)
+        with pytest.raises(StateError, match="version cannot advance beyond"):
+            sm.update_smb_file(touched.file_id, size_bytes=1)
+
+        assert sm._smb_file_overlay[touched.file_id].version == maximum
+        assert sm._smb_file_overlay[touched.file_id].size_bytes == maximum
+        assert set(sm._smb_file_overlay) == {touched.file_id}
+        _assert_no_smb_file_mutation_authority(sm)
+
+    def test_compiled_file_callbacks_run_before_the_state_lock(self):
+        """Caller-controlled container iteration cannot re-enter while State is locked."""
+
+        sm = StateManager()
+        callback_lock_states: list[bool] = []
+        callback_time = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
+
+        class HostileTags:
+            def __iter__(self):
+                callback_lock_states.append(sm._lock._is_owned())
+                sm.set_current_time(callback_time)
+                yield "detached-before-lock"
+
+        compiled = CompiledStorageFile(
+            file_id="file-callback-boundary",
+            share="FS-01.finance",
+            path="Scratch\\callback-boundary.txt",
+            size_bytes=10,
+            mime_type="text/plain",
+        )
+        compiled.__dict__["tags"] = HostileTags()
+
+        state = sm.touch_smb_file(compiled)
+
+        assert callback_lock_states == [False]
+        assert sm.state.current_time == callback_time
+        assert state.tags == ("detached-before-lock",)
+
+        class HostileFile:
+            @property
+            def file_id(self):
+                raise AssertionError("unsupported file getters must not run")
+
+        with pytest.raises(StateError, match="exact compiled storage file"):
+            sm.smb_file_is_available(HostileFile())  # type: ignore[arg-type]
+
+    def test_compiled_file_tag_detachment_stops_at_the_exact_tuple_bound(self):
+        """Tampered catalog iterables are consumed only through the bounded prefix."""
+
+        sm = StateManager()
+        yielded = 0
+        callback_lock_states: list[bool] = []
+
+        class OversizedTags:
+            def __iter__(self):
+                nonlocal yielded
+                for _index in range(10_000):
+                    yielded += 1
+                    callback_lock_states.append(sm._lock._is_owned())
+                    yield "tag"
+
+        compiled = CompiledStorageFile(
+            file_id="file-tag-bound",
+            share="FS-01.finance",
+            path="Scratch\\tag-bound.txt",
+            size_bytes=1,
+            mime_type="text/plain",
+        )
+        compiled.__dict__["tags"] = OversizedTags()
+
+        with pytest.raises(StateError, match="tags exceed the retained tuple bound"):
+            sm.touch_smb_file(compiled)
+
+        assert yielded == state_manager_module._MAX_SMB_FILE_TAGS + 1
+        assert callback_lock_states == [False] * yielded
+        assert not sm._smb_file_overlay
+        _assert_no_smb_file_mutation_authority(sm)
+
+    def test_oversized_smb_text_is_rejected_before_state_admission(
+        self,
+        monkeypatch,
+    ):
+        """Huge exact strings fail by character count before entering the State lane."""
+
+        sm = StateManager()
+        admission_called = False
+
+        def unexpected_admission(_operation, *, admitted_at=None):
+            nonlocal admission_called
+            admission_called = True
+            return 0
+
+        monkeypatch.setattr(
+            sm,
+            "_reject_mutation_during_action_cohort_claim",
+            unexpected_admission,
+        )
+        with pytest.raises(StateError, match="exceeds 1024 retained UTF-8 bytes"):
+            sm.create_smb_file(
+                share="x" * 1_025,
+                path="Scratch\\oversized.txt",
+                size_bytes=1,
+                mime_type="text/plain",
+                timestamp=datetime(2026, 8, 13, 12, 0, tzinfo=UTC),
+            )
+        with pytest.raises(StateError, match="nonempty bounded string"):
+            sm.begin_smb_file_mutation_journal(" " * 100_000)
+
+        assert not admission_called
 
 
 class TestSessionManagement:

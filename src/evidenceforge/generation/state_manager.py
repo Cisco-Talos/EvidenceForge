@@ -39,6 +39,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import datetime, timedelta
 from enum import Enum, StrEnum
+from itertools import islice
 from threading import RLock, Thread, current_thread, get_ident
 
 from evidenceforge.events.authentication import windows_logon_can_own_desktop
@@ -56,6 +57,7 @@ from evidenceforge.generation.indexes import (
     IndexedEntityStore,
     TemporalAllocationIndex,
 )
+from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import (
     ActiveSession,
@@ -177,6 +179,19 @@ _MAX_RETAINED_THREAD_IDENTITIES = 1_000_000
 _MAX_SMB_MUTATION_OVERLAY = 100_000
 _MAX_ACTIVE_SMB_FILE_MUTATION_JOURNALS = 4_096
 _MAX_SMB_FILE_MUTATION_JOURNAL_ENTRIES = 1_024
+_MAX_RETAINED_SMB_FILE_MUTATION_BYTES = 64 * 1_024 * 1_024
+_MAX_SMB_FILE_ID_UTF8_BYTES = 1_024
+_MAX_SMB_SHARE_UTF8_BYTES = 1_024
+_MAX_SMB_PATH_UTF8_BYTES = 16_384
+_MAX_SMB_MIME_TYPE_UTF8_BYTES = 1_024
+_MAX_SMB_TAG_UTF8_BYTES = 1_024
+_MAX_SMB_FILE_TAGS = 64
+_MAX_SMB_FILE_TAGS_UTF8_BYTES = 16_384
+_MAX_SMB_FILE_PRIOR_PATHS = 128
+_MAX_SMB_FILE_PRIOR_PATHS_UTF8_BYTES = 64 * 1_024
+_MAX_SMB_FILE_SIZE_BYTES = (1 << 63) - 1
+_MAX_SMB_FILE_VERSION = (1 << 63) - 1
+_SMB_FILE_STATE_INTEGER_RETAINED_BYTES = 16
 _MAX_ACTION_COHORT_LIVE_SESSION_PROCESS_ROLE_PATCHES = 256
 _SESSION_PROCESS_REFERENCE_FIELDS = (
     "explorer_pid",
@@ -204,11 +219,26 @@ class SmbFileMutationJournal:
 
 
 @dataclass(frozen=True, slots=True)
+class _SmbFileStateSnapshot:
+    """Detached immutable value snapshot for one journal-owned file identity."""
+
+    file_id: str
+    share: str
+    path: str
+    version: int
+    size_bytes: int
+    mime_type: str
+    tags: tuple[str, ...]
+    deleted: bool
+    prior_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _SmbFileStatePreimage:
     """Exact object and value snapshot for one journal-owned overlay identity."""
 
     original: SmbFileState | None
-    snapshot: SmbFileState | None
+    snapshot: _SmbFileStateSnapshot | None
 
 
 @dataclass(slots=True)
@@ -216,8 +246,94 @@ class _SmbFileMutationJournalCapability:
     """StateManager-retained preimages for one live SMB mutation transaction."""
 
     journal: SmbFileMutationJournal
+    journal_id: str
+    operation_id: str
+    generation_nonce: str
+    integrity_token: str
     file_preimages: dict[str, _SmbFileStatePreimage] = field(default_factory=dict)
     path_preimages: dict[tuple[str, str], str | None] = field(default_factory=dict)
+    retained_bytes: int = 0
+    terminal_reserved_bytes: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SmbFileMutationCommitReceipt:
+    """Exact authenticated proof that one journal reached its terminal poststate."""
+
+    operation_id: str
+    file_ids: tuple[str, ...]
+    path_keys: tuple[tuple[str, str], ...]
+    postimage_digest: str
+    _journal_id: str = field(repr=False)
+    _integrity_token: str = field(repr=False, default="")
+
+
+@dataclass(frozen=True, slots=True)
+class SmbFileMutationCommitResult:
+    """Frozen recoverable result for one terminal SMB file mutation journal."""
+
+    operation_id: str
+    file_ids: tuple[str, ...]
+    path_keys: tuple[tuple[str, str], ...]
+    postimage_digest: str
+    receipt: SmbFileMutationCommitReceipt
+    _journal_id: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _SmbFileMutationTerminalSnapshot:
+    """Private immutable scalar preimage for terminal proof and tamper cleanup."""
+
+    operation_id: str
+    file_ids: tuple[str, ...]
+    path_keys: tuple[tuple[str, str], ...]
+    postimage_digest: str
+    journal_id: str
+    receipt_integrity_token: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SmbFileMutationCommittedCapability:
+    """Atomically installed terminal state retaining exact preimages until ack."""
+
+    journal: SmbFileMutationJournal
+    active: _SmbFileMutationJournalCapability
+    receipt: SmbFileMutationCommitReceipt
+    result: SmbFileMutationCommitResult
+    trusted: _SmbFileMutationTerminalSnapshot
+    retained_bytes: int
+
+
+@dataclass(slots=True)
+class _SmbFileMutationAuthorityLocator:
+    """Private exact-object locator retained through cancel/ack cleanup."""
+
+    journal: SmbFileMutationJournal
+    active: _SmbFileMutationJournalCapability
+    terminal: _SmbFileMutationCommittedCapability | None = None
+    phase: str = "active"
+
+
+@dataclass(frozen=True, slots=True)
+class _SmbFileMutationTerminalPreparation:
+    """Prebuilt exact terminal pointer for later same-State-lock enrollment."""
+
+    journal: SmbFileMutationJournal
+    expected_active: _SmbFileMutationJournalCapability
+    expected_postimage_digest: str
+    terminal: _SmbFileMutationCommittedCapability
+
+
+@dataclass(frozen=True, slots=True)
+class _SmbFileMutationTerminalBinding:
+    """Opaque bounded public-plan binding to one manager-retained preparation."""
+
+    binding_id: str
+    journal_id: str
+    journal_publication_token: str
+    operation_id: str
+    expected_postimage_digest: str
+    _integrity_token: str = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -539,6 +655,7 @@ class ConnectionPlanningCursor:
         "_proxy",
         "_identity",
         "_identity_binding_token",
+        "_smb_file_mutation_terminalization",
         "_cursor_token",
         "_sealed",
         "_cancelled",
@@ -570,6 +687,7 @@ class ConnectionPlanningCursor:
         self._proxy = _ConnectionPlanningRandom(self)
         self._identity: ConnectionIdentityPlan | None = None
         self._identity_binding_token = ""
+        self._smb_file_mutation_terminalization: _SmbFileMutationTerminalBinding | None = None
         self._cursor_token = cursor_token
         self._sealed = False
         self._cancelled = False
@@ -593,6 +711,19 @@ class ConnectionPlanningCursor:
         self._require_active()
         return self._manager._reserve_connection_cursor_identity(self)
 
+    def terminalize_smb_file_mutation(self, journal: SmbFileMutationJournal) -> None:
+        """Bind one exact initial SMB file journal to this physical root."""
+
+        self._require_active()
+        if self._smb_file_mutation_terminalization is not None:
+            raise StateError("Connection planning cursor already owns an SMB file mutation")
+        self._smb_file_mutation_terminalization = (
+            self._manager._prepare_connection_cursor_smb_file_mutation_terminalization(
+                self,
+                journal,
+            )
+        )
+
     def cancel(self) -> None:
         """Revoke the cursor without changing its RNG owner or StateManager."""
 
@@ -602,6 +733,7 @@ class ConnectionPlanningCursor:
             raise StateError("Connection planning cursor is already sealed")
         self._cancelled = True
         self._preview_rng = None
+        self._smb_file_mutation_terminalization = None
 
     def _require_active(self) -> None:
         if self._cancelled:
@@ -1497,6 +1629,7 @@ class ConnectionCompositeMaterializationPlan:
     _existing_session_process_roles_patch: ConnectionExistingSessionProcessRolesPatch | None
     _process_activity: tuple[ProcessActivityPatch, ...]
     _session_activity: tuple[SessionActivityPatch, ...]
+    _smb_file_mutation_terminalization: _SmbFileMutationTerminalBinding | None
     _final_state_time: datetime
     _integrity_token: str = field(repr=False)
 
@@ -1621,6 +1754,7 @@ class ConnectionCompositeMaterializationResult:
     connection: OpenConnection | None
     session: ActiveSession | None
     processes: tuple[RunningProcess, ...]
+    smb_file_mutation: SmbFileMutationCommitResult | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1835,6 +1969,7 @@ class ActionCohortMaterializationPlan:
     _session_activity: tuple[ActionCohortSessionActivityPatch, ...]
     _process_terminations: tuple[ActionCohortProcessTermination, ...]
     _session_terminalizations: tuple[ActionCohortSessionTerminalization, ...]
+    _smb_file_mutation_terminalization: _SmbFileMutationTerminalBinding | None
     _semantic_id: str
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
     _integrity_token: str = field(repr=False, compare=False)
@@ -1925,6 +2060,7 @@ class ActionCohortMaterializationResult:
     started_processes: tuple[ProcessIdentity, ...]
     terminated_processes: tuple[ProcessIdentity, ...]
     terminalized_sessions: tuple[SessionIdentity, ...]
+    smb_file_mutation: SmbFileMutationCommitResult | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2086,6 +2222,7 @@ class _ActionCohortRollbackJournal:
     retention_mapped_set_entries: list[_ActionCohortMappedSetSavepoint]
     retention_expiring_indexes: list[_ActionCohortExpiringIndexSavepoint]
     retention_grouped_temporal_entries: list[_ActionCohortGroupedTemporalSavepoint]
+    smb_file_mutation_terminalization: _SmbFileMutationTerminalPreparation | None
     state_time: datetime | None
     materialization_version: int
 
@@ -2110,6 +2247,7 @@ class _PreparedActionCohortCommitPlan:
     processes: tuple[_PreparedActionCohortProcessStart, ...]
     process_terminations: tuple[_PreparedActionCohortProcessTermination, ...]
     session_terminalizations: tuple[_PreparedActionCohortSessionTerminalization, ...]
+    smb_file_mutation_terminalization: _SmbFileMutationTerminalPreparation | None
     rollback_journal: _ActionCohortRollbackJournal
     claim_version: int
     claim_state_time: datetime | None
@@ -2164,6 +2302,7 @@ class _PreparedConnectionCompositeMaterializationRecord:
     claim_version: int
     claim_state_time: datetime | None
     rng_state: object
+    smb_file_mutation_terminalization: _SmbFileMutationTerminalPreparation | None
     committed: bool = False
     failed: bool = False
     terminal: bool = False
@@ -2206,6 +2345,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         self._session_activity_patches: list[ActionCohortSessionActivityPatch] = []
         self._process_termination_drafts: list[ActionCohortProcessTermination] = []
         self._session_terminalization_drafts: list[ActionCohortSessionTerminalization] = []
+        self._smb_file_mutation_terminalization: _SmbFileMutationTerminalBinding | None = None
         self._cancelled = False
         self._planned_host_bases: dict[str, int] = {}
         self._planned_host_epochs: dict[str, datetime] = {}
@@ -2237,6 +2377,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         self._session_activity_patches.clear()
         self._process_termination_drafts.clear()
         self._session_terminalization_drafts.clear()
+        self._smb_file_mutation_terminalization = None
         self._session_process_plans.clear()
 
     def plan_session(
@@ -2596,6 +2737,19 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             )
         )
 
+    def terminalize_smb_file_mutation(self, journal: SmbFileMutationJournal) -> None:
+        """Bind one exact active SMB file journal to this State transaction."""
+
+        self._require_open()
+        if self._smb_file_mutation_terminalization is not None:
+            raise StateError("Action cohort already owns an SMB file mutation terminalization")
+        self._smb_file_mutation_terminalization = (
+            self._manager._prepare_action_cohort_smb_file_mutation_terminalization(
+                self,
+                journal,
+            )
+        )
+
     def seal(self) -> ActionCohortMaterializationPlan:
         """Freeze and authenticate the complete allocation-free cohort."""
 
@@ -2761,6 +2915,7 @@ def _connection_composite_integrity_token(
     existing_session_process_roles_patch: ConnectionExistingSessionProcessRolesPatch | None,
     process_activity: tuple[ProcessActivityPatch, ...],
     session_activity: tuple[SessionActivityPatch, ...],
+    smb_file_mutation_terminalization: _SmbFileMutationTerminalBinding | None,
     final_state_time: datetime,
 ) -> str:
     """Authenticate every State-owned field in one connection composite."""
@@ -2792,6 +2947,17 @@ def _connection_composite_integrity_token(
             ),
             process_activity,
             session_activity,
+            (
+                id(smb_file_mutation_terminalization),
+                smb_file_mutation_terminalization.binding_id,
+                smb_file_mutation_terminalization.journal_id,
+                smb_file_mutation_terminalization.journal_publication_token,
+                smb_file_mutation_terminalization.operation_id,
+                smb_file_mutation_terminalization.expected_postimage_digest,
+                smb_file_mutation_terminalization._integrity_token,
+            )
+            if smb_file_mutation_terminalization is not None
+            else (),
             final_state_time,
         )
     ).encode()
@@ -2925,6 +3091,29 @@ def _action_cohort_process_target_semantic(
     return ("live-process", target)
 
 
+def _action_cohort_smb_file_mutation_semantic(
+    binding: _SmbFileMutationTerminalBinding | None,
+) -> tuple[object, ...] | None:
+    """Return bounded semantic truth for one enrolled SMB file mutation."""
+
+    if binding is None:
+        return None
+    if (
+        type(binding) is not _SmbFileMutationTerminalBinding
+        or type(binding.binding_id) is not str
+        or type(binding.journal_id) is not str
+        or type(binding.journal_publication_token) is not str
+        or type(binding.operation_id) is not str
+        or type(binding.expected_postimage_digest) is not str
+    ):
+        raise StateError("Action cohort SMB file terminalization has malformed authority")
+    return (
+        "smb-file-mutation-terminal-v1",
+        binding.operation_id,
+        binding.expected_postimage_digest,
+    )
+
+
 def _action_cohort_semantic_preimage(
     *,
     expected_version: int,
@@ -2939,6 +3128,7 @@ def _action_cohort_semantic_preimage(
     session_activity: tuple[ActionCohortSessionActivityPatch, ...],
     process_terminations: tuple[ActionCohortProcessTermination, ...],
     session_terminalizations: tuple[ActionCohortSessionTerminalization, ...],
+    smb_file_mutation_terminalization: _SmbFileMutationTerminalBinding | None,
 ) -> tuple[object, ...]:
     """Return deterministic semantics without secrets or object addresses."""
 
@@ -3015,6 +3205,7 @@ def _action_cohort_semantic_preimage(
             )
             for terminalization in session_terminalizations
         ),
+        _action_cohort_smb_file_mutation_semantic(smb_file_mutation_terminalization),
     )
 
 
@@ -3059,6 +3250,7 @@ def _action_cohort_integrity_token(
     session_activity: tuple[ActionCohortSessionActivityPatch, ...],
     process_terminations: tuple[ActionCohortProcessTermination, ...],
     session_terminalizations: tuple[ActionCohortSessionTerminalization, ...],
+    smb_file_mutation_terminalization: _SmbFileMutationTerminalBinding | None,
 ) -> str:
     """Authenticate the exact ephemeral capabilities and their tuple order."""
 
@@ -3128,6 +3320,17 @@ def _action_cohort_integrity_token(
             )
             for terminalization in session_terminalizations
         ),
+        (
+            id(smb_file_mutation_terminalization),
+            smb_file_mutation_terminalization.binding_id,
+            smb_file_mutation_terminalization.journal_id,
+            smb_file_mutation_terminalization.journal_publication_token,
+            smb_file_mutation_terminalization.operation_id,
+            smb_file_mutation_terminalization.expected_postimage_digest,
+            smb_file_mutation_terminalization._integrity_token,
+        )
+        if smb_file_mutation_terminalization is not None
+        else (),
     )
     return hmac.new(authority_secret, repr(canonical).encode(), hashlib.sha256).hexdigest()
 
@@ -3481,11 +3684,27 @@ class StateManager:
         self._smb_file_by_share_path: dict[tuple[str, str], str] = {}
         self._smb_file_mutation_journals: dict[
             str,
-            _SmbFileMutationJournalCapability,
+            _SmbFileMutationJournalCapability | _SmbFileMutationCommittedCapability,
         ] = {}
         self._smb_file_mutation_journal_by_operation: dict[str, str] = {}
+        self._smb_file_mutation_locator_by_journal_identity: dict[
+            int,
+            _SmbFileMutationAuthorityLocator,
+        ] = {}
+        self._smb_file_mutation_locator_by_result_identity: dict[
+            int,
+            _SmbFileMutationAuthorityLocator,
+        ] = {}
         self._smb_file_mutation_owner_by_file_id: dict[str, str] = {}
         self._smb_file_mutation_owner_by_path: dict[tuple[str, str], str] = {}
+        self._smb_file_mutation_acknowledging: dict[
+            str,
+            _SmbFileMutationCommittedCapability,
+        ] = {}
+        self._smb_file_mutation_cancelling: dict[
+            str,
+            _SmbFileMutationJournalCapability,
+        ] = {}
 
     @property
     def materialization_version(self) -> int:
@@ -3703,6 +3922,10 @@ class StateManager:
                     != commit_plan.claim_preimage
                 ):
                     raise StateError("Prepared action cohort touched State changed before apply")
+                if commit_plan.smb_file_mutation_terminalization is not None:
+                    self._validate_smb_file_mutation_terminal_preparation_locked(
+                        commit_plan.smb_file_mutation_terminalization
+                    )
             except StateError:
                 record.failed = True
                 raise
@@ -3954,12 +4177,17 @@ class StateManager:
                 if record.owner_rng.getstate() != record.rng_state:
                     raise StateError("Connection composite RNG owner changed before commit")
                 self._validate_connection_composite_semantics(record.plan, record.owner_rng)
+                if record.smb_file_mutation_terminalization is not None:
+                    self._validate_smb_file_mutation_terminal_preparation_locked(
+                        record.smb_file_mutation_terminalization
+                    )
             except StateError:
                 record.failed = True
                 raise
             result = self._commit_prevalidated_connection_composite(
                 record.plan,
                 record.owner_rng,
+                smb_file_mutation_terminalization=(record.smb_file_mutation_terminalization),
             )
             record.result = result
             record.committed = True
@@ -4408,6 +4636,12 @@ class StateManager:
             self._validate_connection_identity_plan(plan._identity)
         if plan._batch is not None:
             self._validate_materialization_batch_plan(plan._batch)
+        if plan._smb_file_mutation_terminalization is not None:
+            if type(plan._smb_file_mutation_terminalization) is not _SmbFileMutationTerminalBinding:
+                raise StateError("Connection composite SMB terminalization is malformed")
+            self._active_smb_file_mutation_for_terminal_binding_locked(
+                plan._smb_file_mutation_terminalization
+            )
         expected = _connection_composite_integrity_token(
             self._materialization_secret,
             expected_version=plan._expected_version,
@@ -4430,6 +4664,7 @@ class StateManager:
             existing_session_process_roles_patch=(plan._existing_session_process_roles_patch),
             process_activity=plan._process_activity,
             session_activity=plan._session_activity,
+            smb_file_mutation_terminalization=(plan._smb_file_mutation_terminalization),
             final_state_time=plan._final_state_time,
         )
         if not hmac.compare_digest(plan._integrity_token, expected):
@@ -4508,6 +4743,12 @@ class StateManager:
             raise StateError("Action cohort materialization integrity token is malformed")
         if type(plan._capability) is not _ActionCohortCapability:
             raise StateError("Action cohort materialization capability is malformed")
+        if plan._smb_file_mutation_terminalization is not None:
+            if type(plan._smb_file_mutation_terminalization) is not _SmbFileMutationTerminalBinding:
+                raise StateError("Action cohort SMB file terminalization is malformed")
+            self._active_smb_file_mutation_for_terminal_binding_locked(
+                plan._smb_file_mutation_terminalization
+            )
 
         tuple_fields = (
             plan._sessions,
@@ -4646,6 +4887,7 @@ class StateManager:
             "session_activity": plan._session_activity,
             "process_terminations": plan._process_terminations,
             "session_terminalizations": plan._session_terminalizations,
+            "smb_file_mutation_terminalization": (plan._smb_file_mutation_terminalization),
         }
         semantic_id = _action_cohort_semantic_id(**semantic_kwargs)
         if not hmac.compare_digest(plan._semantic_id, semantic_id):
@@ -4662,6 +4904,7 @@ class StateManager:
             session_activity=plan._session_activity,
             process_terminations=plan._process_terminations,
             session_terminalizations=plan._session_terminalizations,
+            smb_file_mutation_terminalization=plan._smb_file_mutation_terminalization,
         )
         if not hmac.compare_digest(plan._integrity_token, integrity):
             raise StateError("Action cohort materialization integrity validation failed")
@@ -5273,6 +5516,27 @@ class StateManager:
             )
         return tuple(references)
 
+    def _prepare_action_cohort_smb_file_mutation_terminalization(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        journal: SmbFileMutationJournal,
+    ) -> _SmbFileMutationTerminalBinding:
+        """Bind detached journal semantics to an open cohort builder."""
+
+        with self._capability_minting_guard(
+            "ActionCohortMaterializationBuilder.terminalize_smb_file_mutation"
+        ):
+            if (
+                builder._manager is not self
+                or builder._admission_epoch != self._prepared_state_admission_epoch
+            ):
+                raise StateError("Action cohort builder belongs to another StateManager")
+            if builder.expected_version != self._materialization_version:
+                raise StateError("Action cohort builder became stale before SMB enrollment")
+            if self.state.current_time != builder._expected_state_time:
+                raise StateError("Action cohort State time changed before SMB enrollment")
+            return self._plan_smb_file_mutation_terminal_binding_locked(journal)
+
     def _seal_action_cohort_materialization(
         self,
         builder: ActionCohortMaterializationBuilder,
@@ -5303,6 +5567,7 @@ class StateManager:
                     builder._session_activity_patches,
                     builder._process_termination_drafts,
                     builder._session_terminalization_drafts,
+                    builder._smb_file_mutation_terminalization,
                 )
             ):
                 raise StateError("Action cohort materialization cannot be empty")
@@ -5367,6 +5632,10 @@ class StateManager:
                 terminalization.end_time
                 for terminalization in builder._session_terminalization_drafts
             )
+            if not times:
+                raise StateError(
+                    "Action cohort SMB file terminalization requires a canonical State time"
+                )
             final_state_time = max(times)
             capability = _ActionCohortCapability()
             semantic_kwargs = {
@@ -5382,6 +5651,7 @@ class StateManager:
                 "session_activity": tuple(builder._session_activity_patches),
                 "process_terminations": tuple(process_terminations),
                 "session_terminalizations": tuple(builder._session_terminalization_drafts),
+                "smb_file_mutation_terminalization": (builder._smb_file_mutation_terminalization),
             }
             semantic_id = _action_cohort_semantic_id(**semantic_kwargs)
             plan = ActionCohortMaterializationPlan(
@@ -5397,6 +5667,7 @@ class StateManager:
                 _session_activity=tuple(builder._session_activity_patches),
                 _process_terminations=tuple(process_terminations),
                 _session_terminalizations=tuple(builder._session_terminalization_drafts),
+                _smb_file_mutation_terminalization=(builder._smb_file_mutation_terminalization),
                 _semantic_id=semantic_id,
                 _capability=capability,
                 _integrity_token="",
@@ -5415,6 +5686,7 @@ class StateManager:
                     session_activity=plan._session_activity,
                     process_terminations=plan._process_terminations,
                     session_terminalizations=plan._session_terminalizations,
+                    smb_file_mutation_terminalization=(plan._smb_file_mutation_terminalization),
                 ),
             )
             self.validate_action_cohort_materialization(plan)
@@ -8935,6 +9207,7 @@ class StateManager:
         process_terminations: tuple[_PreparedActionCohortProcessTermination, ...],
         session_terminalizations: tuple[_PreparedActionCohortSessionTerminalization, ...],
         boot_times: tuple[tuple[str, datetime], ...] = (),
+        smb_file_mutation_terminalization: (_SmbFileMutationTerminalPreparation | None) = None,
     ) -> _ActionCohortRollbackJournal:
         """Capture only cohort-addressable keys, members, and runtime rows."""
 
@@ -9345,6 +9618,7 @@ class StateManager:
             retention_mapped_set_entries=[],
             retention_expiring_indexes=[],
             retention_grouped_temporal_entries=[],
+            smb_file_mutation_terminalization=smb_file_mutation_terminalization,
             state_time=self.state.current_time,
             materialization_version=self._materialization_version,
         )
@@ -9543,6 +9817,29 @@ class StateManager:
             (name, self._action_cohort_observation_value(getattr(self, name)))
             for name, _value in journal.scalar_entries
         )
+        smb_terminalization = journal.smb_file_mutation_terminalization
+        smb_file_mutation_observation = None
+        if smb_terminalization is not None:
+            journal_id = smb_terminalization.expected_active.journal_id
+            retained = self._smb_file_mutation_journals.get(journal_id)
+            active = self._smb_file_mutation_active_capability(retained) if retained else None
+            locator = self._smb_file_mutation_locator_by_journal_identity.get(
+                id(smb_terminalization.journal)
+            )
+            smb_file_mutation_observation = (
+                journal_id,
+                id(retained),
+                retained is smb_terminalization.expected_active,
+                retained is smb_terminalization.terminal,
+                id(locator),
+                locator.phase if locator is not None else None,
+                locator.terminal is smb_terminalization.terminal if locator is not None else False,
+                self._smb_file_mutation_locator_by_result_identity.get(
+                    id(smb_terminalization.terminal.result)
+                )
+                is locator,
+                (self._smb_file_mutation_postimage_digest(active) if active is not None else None),
+            )
         return (
             mapping_observation,
             set_observation,
@@ -9553,6 +9850,7 @@ class StateManager:
             temporal_observation,
             object_observation,
             scalar_observation,
+            smb_file_mutation_observation,
             self.state.current_time,
             self._materialization_version,
         )
@@ -9757,6 +10055,16 @@ class StateManager:
     ) -> None:
         """Undo every cohort-owned mutation without scanning retained State."""
 
+        smb_terminalization = journal.smb_file_mutation_terminalization
+        if smb_terminalization is not None:
+            retained = self._smb_file_mutation_journals.get(
+                smb_terminalization.expected_active.journal_id
+            )
+            if retained is not smb_terminalization.expected_active and (
+                retained is not smb_terminalization.terminal
+            ):
+                raise StateError("Action cohort SMB file terminalization drifted before rollback")
+
         for savepoint in reversed(journal.temporal_allocations):
             self._rollback_action_cohort_temporal_allocation(savepoint)
         for savepoint in journal.object_entries:
@@ -9811,6 +10119,35 @@ class StateManager:
             setattr(self, name, value)
         self.state.current_time = journal.state_time
         self._materialization_version = journal.materialization_version
+        if (
+            smb_terminalization is not None
+            and self._smb_file_mutation_journals.get(smb_terminalization.expected_active.journal_id)
+            is smb_terminalization.terminal
+        ):
+            self._smb_file_mutation_journals[smb_terminalization.expected_active.journal_id] = (
+                smb_terminalization.expected_active
+            )
+            locator = self._smb_file_mutation_locator_by_journal_identity.get(
+                id(smb_terminalization.journal)
+            )
+            if (
+                locator is None
+                or locator.journal is not smb_terminalization.journal
+                or locator.active is not smb_terminalization.expected_active
+                or locator.terminal is not smb_terminalization.terminal
+            ):
+                raise StateError("Action cohort SMB file locator drifted before rollback")
+            if (
+                self._smb_file_mutation_locator_by_result_identity.get(
+                    id(smb_terminalization.terminal.result)
+                )
+                is locator
+            ):
+                self._smb_file_mutation_locator_by_result_identity.pop(
+                    id(smb_terminalization.terminal.result)
+                )
+            locator.terminal = None
+            locator.phase = "active"
 
     def _prepare_action_cohort_commit_plan(
         self,
@@ -9846,12 +10183,20 @@ class StateManager:
             for item in plan.process_terminations
         )
         session_terminalizations = tuple(terminalizations)
+        smb_file_mutation_terminalization = (
+            self._prepare_smb_file_mutation_terminal_from_binding_locked(
+                plan._smb_file_mutation_terminalization
+            )
+            if plan._smb_file_mutation_terminalization is not None
+            else None
+        )
         rollback_journal = self._prepare_action_cohort_rollback_journal(
             plan,
             sessions=sessions,
             processes=processes,
             process_terminations=process_terminations,
             session_terminalizations=session_terminalizations,
+            smb_file_mutation_terminalization=smb_file_mutation_terminalization,
         )
         return _PreparedActionCohortCommitPlan(
             plan=plan,
@@ -9860,6 +10205,7 @@ class StateManager:
             processes=processes,
             process_terminations=process_terminations,
             session_terminalizations=session_terminalizations,
+            smb_file_mutation_terminalization=smb_file_mutation_terminalization,
             rollback_journal=rollback_journal,
             claim_version=self._materialization_version,
             claim_state_time=self.state.current_time,
@@ -9896,6 +10242,11 @@ class StateManager:
                 terminated_processes=tuple(item.identity for item in plan.process_terminations),
                 terminalized_sessions=tuple(
                     item.identity for item in plan.session_terminalizations
+                ),
+                smb_file_mutation=(
+                    commit_plan.smb_file_mutation_terminalization.terminal.result
+                    if commit_plan.smb_file_mutation_terminalization is not None
+                    else None
                 ),
             )
             prepared = PreparedActionCohortMaterialization(
@@ -10359,6 +10710,10 @@ class StateManager:
         self._commit_action_cohort_retention_evictions(prepared)
         self.state.current_time = plan.final_state_time
         self._materialization_version = prepared.committed_version
+        if prepared.smb_file_mutation_terminalization is not None:
+            self._install_smb_file_mutation_terminal_no_fail_locked(
+                prepared.smb_file_mutation_terminalization
+            )
 
     def validate_materialization_batch(self, plan: MaterializationBatchPlan) -> None:
         """Validate every batch member and dependency without publishing state."""
@@ -13078,6 +13433,19 @@ class StateManager:
             )
             return identity
 
+    def _prepare_connection_cursor_smb_file_mutation_terminalization(
+        self,
+        cursor: ConnectionPlanningCursor,
+        journal: SmbFileMutationJournal,
+    ) -> _SmbFileMutationTerminalBinding:
+        """Bind detached journal semantics to an unsealed connection cursor."""
+
+        with self._capability_minting_guard(
+            "ConnectionPlanningCursor.terminalize_smb_file_mutation"
+        ):
+            self._validate_connection_cursor(cursor)
+            return self._plan_smb_file_mutation_terminal_binding_locked(journal)
+
     def _validate_application_child_transaction(
         self,
         transaction: NetworkTransactionPlan,
@@ -13213,6 +13581,15 @@ class StateManager:
                 batch,
                 rdp_existing_session_patch,
             )
+            smb_file_mutation_terminalization = cursor._smb_file_mutation_terminalization
+            if smb_file_mutation_terminalization is not None:
+                if mode is not ConnectionMaterializationMode.PHYSICAL:
+                    raise StateError(
+                        "Initial SMB file mutation terminalization requires a physical root"
+                    )
+                self._active_smb_file_mutation_for_terminal_binding_locked(
+                    smb_file_mutation_terminalization
+                )
 
             identity = cursor._identity
             parent_patch: _ConnectionParentAccountingPatch | None = None
@@ -13294,6 +13671,7 @@ class StateManager:
                 _existing_session_process_roles_patch=(existing_session_process_roles_patch),
                 _process_activity=normalized_process_activity,
                 _session_activity=normalized_session_activity,
+                _smb_file_mutation_terminalization=(smb_file_mutation_terminalization),
                 _final_state_time=final_state_time,
                 _integrity_token="",
             )
@@ -13319,6 +13697,7 @@ class StateManager:
                 existing_session_process_roles_patch=(plan._existing_session_process_roles_patch),
                 process_activity=plan._process_activity,
                 session_activity=plan._session_activity,
+                smb_file_mutation_terminalization=(plan._smb_file_mutation_terminalization),
                 final_state_time=plan._final_state_time,
             )
             return replace(plan, _integrity_token=token)
@@ -13383,6 +13762,13 @@ class StateManager:
             self._validate_application_child_transaction(plan.transaction, parent)
             if patch.after_traffic != parent.traffic_ledger.accumulate(plan.transaction.traffic):
                 raise StateError("Application-child accounting changed after planning")
+
+        if plan._smb_file_mutation_terminalization is not None:
+            if not plan.materializes_connection:
+                raise StateError("Initial SMB file mutation terminalization lost its physical root")
+            self._active_smb_file_mutation_for_terminal_binding_locked(
+                plan._smb_file_mutation_terminalization
+            )
 
         if plan.batch is not None:
             self.validate_materialization_batch(plan.batch)
@@ -13457,6 +13843,13 @@ class StateManager:
                 admitted_at=admission_epoch,
             )
             self._validate_connection_composite_semantics(plan, owner_rng)
+            smb_file_mutation_terminalization = (
+                self._prepare_smb_file_mutation_terminal_from_binding_locked(
+                    plan._smb_file_mutation_terminalization
+                )
+                if plan._smb_file_mutation_terminalization is not None
+                else None
+            )
             prepared = PreparedConnectionCompositeMaterialization(
                 _manager=self,
                 _plan=plan,
@@ -13472,6 +13865,7 @@ class StateManager:
                 claim_version=self._materialization_version,
                 claim_state_time=self.state.current_time,
                 rng_state=owner_rng.getstate(),
+                smb_file_mutation_terminalization=smb_file_mutation_terminalization,
             )
             locator = id(prepared)
             self._active_connection_composite_preparations[locator] = record
@@ -13529,6 +13923,8 @@ class StateManager:
         self,
         plan: ConnectionCompositeMaterializationPlan,
         owner_rng: random.Random,
+        *,
+        smb_file_mutation_terminalization: (_SmbFileMutationTerminalPreparation | None),
     ) -> ConnectionCompositeMaterializationResult:
         """Apply primitive composite writes after the retained guard validates all inputs."""
 
@@ -13632,10 +14028,17 @@ class StateManager:
         self.state.current_time = plan.final_state_time
         owner_rng.setstate(plan._rng_state_final)
         self._materialization_version += 1
+        smb_file_mutation = None
+        if smb_file_mutation_terminalization is not None:
+            smb_terminal = self._install_smb_file_mutation_terminal_no_fail_locked(
+                smb_file_mutation_terminalization
+            )
+            smb_file_mutation = smb_terminal.result
         return ConnectionCompositeMaterializationResult(
             connection=connection,
             session=session,
             processes=processes,
+            smb_file_mutation=smb_file_mutation,
         )
 
     def plan_connection_identity(self, rng: random.Random) -> ConnectionIdentityPlan:
@@ -14322,17 +14725,269 @@ class StateManager:
     # Canonical SMB Runtime State
     # ========================================
 
+    @staticmethod
+    def _bounded_smb_file_mutation_text(
+        value: object,
+        *,
+        label: str,
+        max_utf8_bytes: int,
+        allow_empty: bool = False,
+    ) -> str:
+        """Validate one exact bounded string before it enters retained journal state."""
+
+        if type(value) is not str or (not allow_empty and not value):
+            raise StateError(f"SMB file mutation {label} must be an exact bounded string")
+        if len(value) > max_utf8_bytes:
+            raise StateError(
+                f"SMB file mutation {label} exceeds {max_utf8_bytes} retained UTF-8 bytes"
+            )
+        try:
+            encoded = value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise StateError(f"SMB file mutation {label} must contain valid UTF-8 text") from exc
+        if len(encoded) > max_utf8_bytes:
+            raise StateError(
+                f"SMB file mutation {label} exceeds {max_utf8_bytes} retained UTF-8 bytes"
+            )
+        return value
+
+    @staticmethod
+    def _bounded_smb_file_mutation_integer(
+        value: object,
+        *,
+        label: str,
+        maximum: int,
+    ) -> int:
+        """Validate one fixed-width nonnegative integer before State admission."""
+
+        if type(value) is not int or value < 0:
+            raise StateError(f"SMB file mutation {label} must be a nonnegative exact integer")
+        if value > maximum:
+            raise StateError(f"SMB file mutation {label} exceeds the 63-bit SMB file bound")
+        return value
+
+    @staticmethod
+    def _bounded_smb_file_mutation_operation_id(value: object) -> str:
+        """Validate one operation ID with constant-memory work before blank scanning."""
+
+        if type(value) is not str or len(value) > 512:
+            raise StateError("SMB file mutation operation_id must be a nonempty bounded string")
+        try:
+            encoded = value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise StateError(
+                "SMB file mutation operation_id must contain valid UTF-8 text"
+            ) from exc
+        if len(encoded) > 2_048:
+            raise StateError("SMB file mutation operation_id exceeds 2048 retained UTF-8 bytes")
+        if not value.strip():
+            raise StateError("SMB file mutation operation_id must be a nonempty bounded string")
+        return value
+
+    def _validate_smb_file_state_shape(self, state: SmbFileState) -> None:
+        """Reject malformed or byte-unbounded mutable file rows before retention."""
+
+        if type(state) is not SmbFileState:
+            raise StateError("SMB file mutation requires an exact file-state row")
+        self._bounded_smb_file_mutation_text(
+            state.file_id,
+            label="file_id",
+            max_utf8_bytes=_MAX_SMB_FILE_ID_UTF8_BYTES,
+        )
+        self._bounded_smb_file_mutation_text(
+            state.share,
+            label="share",
+            max_utf8_bytes=_MAX_SMB_SHARE_UTF8_BYTES,
+        )
+        self._bounded_smb_file_mutation_text(
+            state.path,
+            label="path",
+            max_utf8_bytes=_MAX_SMB_PATH_UTF8_BYTES,
+        )
+        self._bounded_smb_file_mutation_text(
+            state.mime_type,
+            label="mime_type",
+            max_utf8_bytes=_MAX_SMB_MIME_TYPE_UTF8_BYTES,
+            allow_empty=True,
+        )
+        self._bounded_smb_file_mutation_integer(
+            state.version,
+            label="version",
+            maximum=_MAX_SMB_FILE_VERSION,
+        )
+        self._bounded_smb_file_mutation_integer(
+            state.size_bytes,
+            label="size",
+            maximum=_MAX_SMB_FILE_SIZE_BYTES,
+        )
+        if type(state.deleted) is not bool:
+            raise StateError("SMB file mutation deleted marker must be an exact boolean")
+        if type(state.tags) is not tuple or len(state.tags) > _MAX_SMB_FILE_TAGS:
+            raise StateError("SMB file mutation tags exceed the retained tuple bound")
+        tag_bytes = 0
+        for tag in state.tags:
+            validated = self._bounded_smb_file_mutation_text(
+                tag,
+                label="tag",
+                max_utf8_bytes=_MAX_SMB_TAG_UTF8_BYTES,
+                allow_empty=True,
+            )
+            tag_bytes += len(validated.encode("utf-8"))
+        if tag_bytes > _MAX_SMB_FILE_TAGS_UTF8_BYTES:
+            raise StateError("SMB file mutation tags exceed the retained UTF-8 byte bound")
+        if (
+            type(state.prior_paths) is not tuple
+            or len(state.prior_paths) > _MAX_SMB_FILE_PRIOR_PATHS
+        ):
+            raise StateError("SMB file mutation prior paths exceed the retained tuple bound")
+        prior_path_bytes = 0
+        for prior_path in state.prior_paths:
+            validated = self._bounded_smb_file_mutation_text(
+                prior_path,
+                label="prior path",
+                max_utf8_bytes=_MAX_SMB_PATH_UTF8_BYTES,
+                allow_empty=True,
+            )
+            prior_path_bytes += len(validated.encode("utf-8"))
+        if prior_path_bytes > _MAX_SMB_FILE_PRIOR_PATHS_UTF8_BYTES:
+            raise StateError("SMB file mutation prior paths exceed the retained UTF-8 byte bound")
+
+    def _detach_compiled_smb_file(self, file: CompiledStorageFile) -> SmbFileState:
+        """Copy one exact compiled catalog row before entering the State lock."""
+
+        if type(file) is not CompiledStorageFile:
+            raise StateError("SMB file access requires an exact compiled storage file")
+        detached_tags = tuple(islice(iter(file.tags), _MAX_SMB_FILE_TAGS + 1))
+        if len(detached_tags) > _MAX_SMB_FILE_TAGS:
+            raise StateError("SMB file mutation tags exceed the retained tuple bound")
+        candidate = SmbFileState(
+            file_id=file.file_id,
+            share=file.share,
+            path=file.path,
+            version=file.version,
+            size_bytes=file.size_bytes,
+            mime_type=file.mime_type,
+            tags=detached_tags,
+        )
+        self._validate_smb_file_state_shape(candidate)
+        return candidate
+
+    @staticmethod
+    def _smb_file_state_retained_bytes(snapshot: _SmbFileStateSnapshot | None) -> int:
+        """Return a conservative byte charge for one immutable file preimage."""
+
+        if snapshot is None:
+            return 64
+        return (
+            256
+            + _SMB_FILE_STATE_INTEGER_RETAINED_BYTES
+            + sum(
+                len(value.encode("utf-8"))
+                for value in (
+                    snapshot.file_id,
+                    snapshot.share,
+                    snapshot.path,
+                    snapshot.mime_type,
+                    *snapshot.tags,
+                    *snapshot.prior_paths,
+                )
+            )
+        )
+
+    @staticmethod
+    def _smb_file_mutation_journal_base_retained_bytes(
+        journal_id: str,
+        operation_id: str,
+    ) -> int:
+        """Charge one journal token and its operation locator."""
+
+        return 256 + len(journal_id.encode("utf-8")) + len(operation_id.encode("utf-8"))
+
+    @staticmethod
+    def _smb_file_mutation_terminal_retained_bytes(
+        *,
+        operation_id: str,
+        file_ids: tuple[str, ...],
+        path_keys: tuple[tuple[str, str], ...],
+    ) -> int:
+        """Charge the exact retained result/receipt terminal wrapper."""
+
+        semantic_bytes = (
+            len(operation_id.encode("utf-8"))
+            + sum(len(file_id.encode("utf-8")) for file_id in file_ids)
+            + sum(
+                len(share.encode("utf-8")) + len(path.encode("utf-8")) for share, path in path_keys
+            )
+        )
+        return 768 + (2 * semantic_bytes)
+
+    def _retained_smb_file_mutation_bytes(self) -> int:
+        """Count unique active and terminal authority across retry maps."""
+
+        retained_bytes = 0
+        for locator in self._smb_file_mutation_authority_locators():
+            retained_bytes += locator.active.retained_bytes
+            if locator.terminal is not None:
+                retained_bytes += locator.terminal.retained_bytes
+            else:
+                retained_bytes += locator.active.terminal_reserved_bytes
+        return retained_bytes
+
+    def _smb_file_mutation_authority_locators(
+        self,
+    ) -> tuple[_SmbFileMutationAuthorityLocator, ...]:
+        """Return each exact retained locator once across all cleanup indexes."""
+
+        unique: dict[int, _SmbFileMutationAuthorityLocator] = {}
+        for locator in self._smb_file_mutation_locator_by_journal_identity.values():
+            unique[id(locator)] = locator
+        for locator in self._smb_file_mutation_locator_by_result_identity.values():
+            unique[id(locator)] = locator
+        return tuple(unique.values())
+
     def _smb_file_mutation_journal_integrity_token(
         self,
         journal_id: str,
         operation_id: str,
+        generation_nonce: str,
     ) -> str:
         """Authenticate one bounded file-mutation journal."""
 
-        canonical = ("smb-file-mutation-journal-v1", journal_id, operation_id)
+        canonical = (
+            "smb-file-mutation-journal-v2",
+            journal_id,
+            operation_id,
+            generation_nonce,
+        )
         return hmac.new(
             self._materialization_secret,
             repr(canonical).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def _smb_file_mutation_terminal_binding_integrity_token(
+        self,
+        *,
+        binding_id: str,
+        journal_id: str,
+        journal_publication_token: str,
+        operation_id: str,
+        expected_postimage_digest: str,
+    ) -> str:
+        """Authenticate one detached plan binding with explicit typed framing."""
+
+        values = (
+            b"smb-file-mutation-terminal-binding-v1",
+            binding_id.encode("utf-8"),
+            journal_id.encode("utf-8"),
+            journal_publication_token.encode("utf-8"),
+            operation_id.encode("utf-8"),
+            expected_postimage_digest.encode("utf-8"),
+        )
+        canonical = b"".join(len(value).to_bytes(8, "big") + value for value in values)
+        return hmac.new(
+            self._materialization_secret,
+            canonical,
             hashlib.sha256,
         ).hexdigest()
 
@@ -14346,22 +15001,468 @@ class StateManager:
             hashlib.sha256,
         ).hexdigest()
 
+    def _smb_file_mutation_commit_receipt_integrity_token(
+        self,
+        receipt: SmbFileMutationCommitReceipt,
+    ) -> str:
+        """Authenticate one exact terminal result using only bounded scalar fields."""
+
+        return self._smb_file_mutation_commit_integrity_token(
+            operation_id=receipt.operation_id,
+            file_ids=receipt.file_ids,
+            path_keys=receipt.path_keys,
+            postimage_digest=receipt.postimage_digest,
+            journal_id=receipt._journal_id,
+        )
+
+    def _smb_file_mutation_commit_integrity_token(
+        self,
+        *,
+        operation_id: str,
+        file_ids: tuple[str, ...],
+        path_keys: tuple[tuple[str, str], ...],
+        postimage_digest: str,
+        journal_id: str,
+    ) -> str:
+        """Authenticate trusted terminal scalars without consulting a public object."""
+
+        canonical = (
+            "smb-file-mutation-commit-receipt-v1",
+            operation_id,
+            file_ids,
+            path_keys,
+            postimage_digest,
+            journal_id,
+        )
+        return hmac.new(
+            self._materialization_secret,
+            repr(canonical).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    @staticmethod
+    def _smb_file_state_digest_value(state: SmbFileState | None) -> object:
+        """Return one deterministic immutable file-state projection for a terminal digest."""
+
+        if state is None:
+            return None
+        return (
+            state.file_id,
+            state.share,
+            state.path,
+            state.version,
+            state.size_bytes,
+            state.mime_type,
+            state.tags,
+            state.deleted,
+            state.prior_paths,
+        )
+
+    def _snapshot_smb_file_state(self, state: SmbFileState) -> _SmbFileStateSnapshot:
+        """Freeze every mutable file field into an exact detached preimage."""
+
+        self._validate_smb_file_state_shape(state)
+        return _SmbFileStateSnapshot(
+            file_id=state.file_id,
+            share=state.share,
+            path=state.path,
+            version=state.version,
+            size_bytes=state.size_bytes,
+            mime_type=state.mime_type,
+            tags=tuple(state.tags),
+            deleted=state.deleted,
+            prior_paths=tuple(state.prior_paths),
+        )
+
+    def _detached_smb_file_state(self, state: SmbFileState) -> SmbFileState:
+        """Return a caller-owned value copy without leaking the canonical mutable row."""
+
+        self._validate_smb_file_state_shape(state)
+        return replace(
+            state,
+            tags=tuple(state.tags),
+            prior_paths=tuple(state.prior_paths),
+        )
+
+    def _smb_file_mutation_postimage_digest(
+        self,
+        capability: _SmbFileMutationJournalCapability,
+    ) -> str:
+        """Digest every journal-owned file and path after its tentative mutations."""
+
+        file_postimages = tuple(
+            (
+                file_id,
+                self._smb_file_state_digest_value(self._smb_file_overlay.get(file_id)),
+            )
+            for file_id in sorted(capability.file_preimages)
+        )
+        path_postimages = tuple(
+            (path_key, self._smb_file_by_share_path.get(path_key))
+            for path_key in sorted(capability.path_preimages)
+        )
+        return hashlib.sha256(
+            repr(
+                (
+                    "smb-file-mutation-postimage-v1",
+                    capability.operation_id,
+                    file_postimages,
+                    path_postimages,
+                )
+            ).encode()
+        ).hexdigest()
+
+    def _validate_smb_file_mutation_active_capability_shape(
+        self,
+        capability: _SmbFileMutationJournalCapability,
+        *,
+        validate_postimages: bool,
+    ) -> None:
+        """Validate exact immutable preimages, byte charge, and optional live postimages."""
+
+        if type(capability) is not _SmbFileMutationJournalCapability:
+            raise StateError("SMB file mutation journal capability has an invalid exact type")
+        try:
+            self._bounded_smb_file_mutation_operation_id(capability.operation_id)
+        except StateError as exc:
+            raise StateError(
+                "SMB file mutation journal generation failed integrity validation"
+            ) from exc
+        if (
+            type(capability.journal_id) is not str
+            or len(capability.journal_id) != 64
+            or type(capability.generation_nonce) is not str
+            or len(capability.generation_nonce) != 64
+            or type(capability.integrity_token) is not str
+            or not hmac.compare_digest(
+                capability.integrity_token,
+                self._smb_file_mutation_journal_integrity_token(
+                    capability.journal_id,
+                    capability.operation_id,
+                    capability.generation_nonce,
+                ),
+            )
+        ):
+            raise StateError("SMB file mutation journal generation failed integrity validation")
+        expected_bytes = self._smb_file_mutation_journal_base_retained_bytes(
+            capability.journal_id,
+            capability.operation_id,
+        )
+        for file_id, preimage in capability.file_preimages.items():
+            self._bounded_smb_file_mutation_text(
+                file_id,
+                label="file_id",
+                max_utf8_bytes=_MAX_SMB_FILE_ID_UTF8_BYTES,
+            )
+            if type(preimage) is not _SmbFileStatePreimage:
+                raise StateError("SMB file mutation preimage has an invalid exact type")
+            snapshot = preimage.snapshot
+            if snapshot is None:
+                if preimage.original is not None:
+                    raise StateError("SMB file mutation absent preimage retained an object")
+            else:
+                if (
+                    type(snapshot) is not _SmbFileStateSnapshot
+                    or type(preimage.original) is not SmbFileState
+                    or snapshot.file_id != file_id
+                ):
+                    raise StateError("SMB file mutation snapshot has an invalid exact shape")
+                snapshot_view = SmbFileState(
+                    file_id=snapshot.file_id,
+                    share=snapshot.share,
+                    path=snapshot.path,
+                    version=snapshot.version,
+                    size_bytes=snapshot.size_bytes,
+                    mime_type=snapshot.mime_type,
+                    tags=snapshot.tags,
+                    deleted=snapshot.deleted,
+                    prior_paths=snapshot.prior_paths,
+                )
+                self._validate_smb_file_state_shape(snapshot_view)
+            expected_bytes += (
+                128 + len(file_id.encode("utf-8")) + self._smb_file_state_retained_bytes(snapshot)
+            )
+            if validate_postimages:
+                current = self._smb_file_overlay.get(file_id)
+                if type(current) is not SmbFileState or (
+                    preimage.original is not None and current is not preimage.original
+                ):
+                    raise StateError("SMB file mutation postimage lost its exact file identity")
+                self._validate_smb_file_state_shape(current)
+                if current.file_id != file_id:
+                    raise StateError("SMB file mutation postimage changed its durable file_id")
+        for path_key, prior_file_id in capability.path_preimages.items():
+            if type(path_key) is not tuple or len(path_key) != 2:
+                raise StateError("SMB file mutation path preimage has an invalid exact shape")
+            share = self._bounded_smb_file_mutation_text(
+                path_key[0],
+                label="share",
+                max_utf8_bytes=_MAX_SMB_SHARE_UTF8_BYTES,
+            )
+            path = self._bounded_smb_file_mutation_text(
+                path_key[1],
+                label="path",
+                max_utf8_bytes=_MAX_SMB_PATH_UTF8_BYTES,
+            )
+            if prior_file_id is not None:
+                self._bounded_smb_file_mutation_text(
+                    prior_file_id,
+                    label="prior file_id",
+                    max_utf8_bytes=_MAX_SMB_FILE_ID_UTF8_BYTES,
+                )
+            expected_bytes += (
+                128
+                + len(share.encode("utf-8"))
+                + len(path.encode("utf-8"))
+                + (len(prior_file_id.encode("utf-8")) if prior_file_id is not None else 0)
+            )
+            if validate_postimages:
+                current_file_id = self._smb_file_by_share_path.get(path_key)
+                if current_file_id is not None:
+                    self._bounded_smb_file_mutation_text(
+                        current_file_id,
+                        label="postimage file_id",
+                        max_utf8_bytes=_MAX_SMB_FILE_ID_UTF8_BYTES,
+                    )
+        if type(capability.retained_bytes) is not int or (
+            capability.retained_bytes != expected_bytes
+        ):
+            raise StateError("SMB file mutation retained-byte reservation drifted")
+        expected_terminal_reserved_bytes = self._smb_file_mutation_terminal_retained_bytes(
+            operation_id=capability.operation_id,
+            file_ids=tuple(capability.file_preimages),
+            path_keys=tuple(capability.path_preimages),
+        )
+        if (
+            type(capability.terminal_reserved_bytes) is not int
+            or capability.terminal_reserved_bytes != expected_terminal_reserved_bytes
+        ):
+            raise StateError("SMB file mutation terminal-byte reservation drifted")
+
+    def _retained_smb_file_mutation_journal(
+        self,
+        journal: SmbFileMutationJournal,
+        *,
+        allow_exact_tamper_for_release: bool = False,
+    ) -> _SmbFileMutationJournalCapability | _SmbFileMutationCommittedCapability:
+        """Return exact active, terminal, or acknowledging authority for one token."""
+
+        if type(journal) is not SmbFileMutationJournal:
+            raise StateError("SMB file mutation journal has invalid authority type")
+        locator = self._smb_file_mutation_locator_by_journal_identity.get(id(journal))
+        if locator is None or locator.journal is not journal:
+            raise StateError("SMB file mutation journal is stale, copied, or foreign")
+        active = locator.active
+        capability = self._smb_file_mutation_journals.get(active.journal_id)
+        if capability is None:
+            capability = self._smb_file_mutation_acknowledging.get(active.journal_id)
+        if capability is None:
+            capability = self._smb_file_mutation_cancelling.get(active.journal_id)
+        if capability is None:
+            if allow_exact_tamper_for_release and locator.phase in {
+                "cancelling",
+                "acknowledging",
+            }:
+                capability = locator.terminal or active
+            else:
+                raise StateError("SMB file mutation journal is stale, copied, or foreign")
+        if capability.journal is not journal or locator.phase not in {
+            "active",
+            "terminal",
+            "cancelling",
+            "acknowledging",
+        }:
+            raise StateError("SMB file mutation retained locator failed integrity validation")
+        try:
+            self._bounded_smb_file_mutation_operation_id(active.operation_id)
+        except StateError as exc:
+            raise StateError(
+                "SMB file mutation retained authority failed integrity validation"
+            ) from exc
+        if (
+            type(active.journal_id) is not str
+            or len(active.journal_id) != 64
+            or type(active.generation_nonce) is not str
+            or len(active.generation_nonce) != 64
+            or type(active.integrity_token) is not str
+            or not hmac.compare_digest(
+                active.integrity_token,
+                self._smb_file_mutation_journal_integrity_token(
+                    active.journal_id,
+                    active.operation_id,
+                    active.generation_nonce,
+                ),
+            )
+        ):
+            raise StateError("SMB file mutation retained authority failed integrity validation")
+        public_intact = (
+            type(journal._journal_id) is str
+            and journal._journal_id == active.journal_id
+            and type(journal._operation_id) is str
+            and journal._operation_id == active.operation_id
+            and type(journal._integrity_token) is str
+            and hmac.compare_digest(journal._integrity_token, active.integrity_token)
+        )
+        if not public_intact and not allow_exact_tamper_for_release:
+            raise StateError("SMB file mutation exact journal token was tampered")
+        return capability
+
     def _active_smb_file_mutation_journal(
         self,
         journal: SmbFileMutationJournal,
     ) -> _SmbFileMutationJournalCapability:
-        if type(journal) is not SmbFileMutationJournal:
-            raise StateError("SMB file mutation journal has invalid authority type")
-        expected = self._smb_file_mutation_journal_integrity_token(
-            journal._journal_id,
-            journal._operation_id,
-        )
-        if not hmac.compare_digest(journal._integrity_token, expected):
-            raise StateError("SMB file mutation journal failed integrity validation")
-        capability = self._smb_file_mutation_journals.get(journal._journal_id)
-        if capability is None or capability.journal is not journal:
-            raise StateError("SMB file mutation journal is stale, copied, or foreign")
+        capability = self._retained_smb_file_mutation_journal(journal)
+        if type(capability) is not _SmbFileMutationJournalCapability:
+            raise StateError("SMB file mutation journal is already committed")
         return capability
+
+    @staticmethod
+    def _smb_file_mutation_active_capability(
+        capability: _SmbFileMutationJournalCapability | _SmbFileMutationCommittedCapability,
+    ) -> _SmbFileMutationJournalCapability:
+        """Return the retained preimage owner from either journal phase."""
+
+        if type(capability) is _SmbFileMutationJournalCapability:
+            return capability
+        return capability.active
+
+    def _authenticates_smb_file_mutation_terminal(
+        self,
+        capability: _SmbFileMutationCommittedCapability,
+    ) -> bool:
+        """Validate the exact retained result and its separately retained receipt."""
+
+        if not self._authenticates_smb_file_mutation_terminal_trusted(capability):
+            return False
+        result = capability.result
+        receipt = capability.receipt
+        if (
+            type(result) is not SmbFileMutationCommitResult
+            or type(receipt) is not SmbFileMutationCommitReceipt
+        ):
+            return False
+        result_shape_is_valid = (
+            type(result.operation_id) is str
+            and type(result.file_ids) is tuple
+            and all(type(file_id) is str for file_id in result.file_ids)
+            and type(result.path_keys) is tuple
+            and all(
+                type(path_key) is tuple
+                and len(path_key) == 2
+                and all(type(part) is str for part in path_key)
+                for path_key in result.path_keys
+            )
+            and type(result.postimage_digest) is str
+            and len(result.postimage_digest) == 64
+            and type(result._journal_id) is str
+            and len(result._journal_id) == 64
+        )
+        receipt_shape_is_valid = (
+            type(receipt.operation_id) is str
+            and type(receipt.file_ids) is tuple
+            and all(type(file_id) is str for file_id in receipt.file_ids)
+            and type(receipt.path_keys) is tuple
+            and all(
+                type(path_key) is tuple
+                and len(path_key) == 2
+                and all(type(part) is str for part in path_key)
+                for path_key in receipt.path_keys
+            )
+            and type(receipt.postimage_digest) is str
+            and len(receipt.postimage_digest) == 64
+            and type(receipt._journal_id) is str
+            and len(receipt._journal_id) == 64
+            and type(receipt._integrity_token) is str
+        )
+        if (
+            not result_shape_is_valid
+            or not receipt_shape_is_valid
+            or result.receipt is not receipt
+            or result.operation_id != capability.trusted.operation_id
+            or result.file_ids != capability.trusted.file_ids
+            or result.path_keys != capability.trusted.path_keys
+            or result.postimage_digest != capability.trusted.postimage_digest
+            or result._journal_id != capability.trusted.journal_id
+            or result.operation_id != receipt.operation_id
+            or result.file_ids != receipt.file_ids
+            or result.path_keys != receipt.path_keys
+            or result.postimage_digest != receipt.postimage_digest
+            or result._journal_id != receipt._journal_id
+            or receipt._integrity_token != capability.trusted.receipt_integrity_token
+        ):
+            return False
+        expected = self._smb_file_mutation_commit_receipt_integrity_token(receipt)
+        return hmac.compare_digest(
+            receipt._integrity_token,
+            expected,
+        )
+
+    def _authenticates_smb_file_mutation_terminal_trusted(
+        self,
+        capability: _SmbFileMutationCommittedCapability,
+    ) -> bool:
+        """Authenticate private terminal scalars without trusting returned objects."""
+
+        if (
+            type(capability) is not _SmbFileMutationCommittedCapability
+            or type(capability.active) is not _SmbFileMutationJournalCapability
+            or type(capability.trusted) is not _SmbFileMutationTerminalSnapshot
+            or capability.journal is not capability.active.journal
+        ):
+            return False
+        trusted = capability.trusted
+        active = capability.active
+        try:
+            self._validate_smb_file_mutation_active_capability_shape(
+                active,
+                validate_postimages=False,
+            )
+        except StateError:
+            return False
+        trusted_shape_is_valid = (
+            type(trusted.operation_id) is str
+            and trusted.operation_id == active.operation_id
+            and type(trusted.file_ids) is tuple
+            and all(type(file_id) is str for file_id in trusted.file_ids)
+            and type(trusted.path_keys) is tuple
+            and all(
+                type(path_key) is tuple
+                and len(path_key) == 2
+                and all(type(part) is str for part in path_key)
+                for path_key in trusted.path_keys
+            )
+            and type(trusted.postimage_digest) is str
+            and len(trusted.postimage_digest) == 64
+            and type(trusted.journal_id) is str
+            and trusted.journal_id == active.journal_id
+            and type(trusted.receipt_integrity_token) is str
+            and type(active.integrity_token) is str
+            and hmac.compare_digest(
+                active.integrity_token,
+                self._smb_file_mutation_journal_integrity_token(
+                    active.journal_id,
+                    active.operation_id,
+                    active.generation_nonce,
+                ),
+            )
+        )
+        if not trusted_shape_is_valid:
+            return False
+        expected_integrity = self._smb_file_mutation_commit_integrity_token(
+            operation_id=trusted.operation_id,
+            file_ids=trusted.file_ids,
+            path_keys=trusted.path_keys,
+            postimage_digest=trusted.postimage_digest,
+            journal_id=trusted.journal_id,
+        )
+        return hmac.compare_digest(
+            trusted.receipt_integrity_token,
+            expected_integrity,
+        ) and capability.retained_bytes == self._smb_file_mutation_terminal_retained_bytes(
+            operation_id=trusted.operation_id,
+            file_ids=trusted.file_ids,
+            path_keys=trusted.path_keys,
+        )
 
     def _record_smb_file_mutation_preimages(
         self,
@@ -14372,14 +15473,41 @@ class StateManager:
     ) -> None:
         """Reserve and snapshot each exact file/path identity before mutation."""
 
-        journal_id = capability.journal._journal_id
+        self._reject_incomplete_smb_file_mutation_release()
+        journal_id = capability.journal_id
+        if (
+            type(capability) is not _SmbFileMutationJournalCapability
+            or self._smb_file_mutation_journals.get(journal_id) is not capability
+        ):
+            raise StateError("SMB file mutation preimage owner is not the exact active journal")
+        self._validate_smb_file_mutation_active_capability_shape(
+            capability,
+            validate_postimages=True,
+        )
         unique_file_ids = tuple(dict.fromkeys(file_ids))
         unique_path_keys = tuple(dict.fromkeys(path_keys))
         for file_id in unique_file_ids:
+            self._bounded_smb_file_mutation_text(
+                file_id,
+                label="file_id",
+                max_utf8_bytes=_MAX_SMB_FILE_ID_UTF8_BYTES,
+            )
             owner = self._smb_file_mutation_owner_by_file_id.get(file_id)
             if owner is not None and owner != journal_id:
                 raise StateError(f"SMB file {file_id} is already owned by another mutation")
         for path_key in unique_path_keys:
+            if type(path_key) is not tuple or len(path_key) != 2:
+                raise StateError("SMB file mutation path key must be an exact pair")
+            self._bounded_smb_file_mutation_text(
+                path_key[0],
+                label="share",
+                max_utf8_bytes=_MAX_SMB_SHARE_UTF8_BYTES,
+            )
+            self._bounded_smb_file_mutation_text(
+                path_key[1],
+                label="path",
+                max_utf8_bytes=_MAX_SMB_PATH_UTF8_BYTES,
+            )
             owner = self._smb_file_mutation_owner_by_path.get(path_key)
             if owner is not None and owner != journal_id:
                 raise StateError(
@@ -14394,20 +15522,75 @@ class StateManager:
                 "SMB file mutation journal exceeds "
                 f"{_MAX_SMB_FILE_MUTATION_JOURNAL_ENTRIES} retained entries"
             )
+
+        prepared_files: list[tuple[str, _SmbFileStatePreimage]] = []
+        prepared_paths: list[tuple[tuple[str, str], str | None]] = []
+        added_retained_bytes = 0
         for file_id in unique_file_ids:
             if file_id in capability.file_preimages:
                 continue
             original = self._smb_file_overlay.get(file_id)
-            capability.file_preimages[file_id] = _SmbFileStatePreimage(
-                original=original,
-                snapshot=replace(original) if original is not None else None,
+            snapshot = self._snapshot_smb_file_state(original) if original is not None else None
+            prepared_files.append(
+                (
+                    file_id,
+                    _SmbFileStatePreimage(
+                        original=original,
+                        snapshot=snapshot,
+                    ),
+                )
             )
-            self._smb_file_mutation_owner_by_file_id[file_id] = journal_id
+            added_retained_bytes += (
+                128 + len(file_id.encode("utf-8")) + self._smb_file_state_retained_bytes(snapshot)
+            )
         for path_key in unique_path_keys:
             if path_key in capability.path_preimages:
                 continue
-            capability.path_preimages[path_key] = self._smb_file_by_share_path.get(path_key)
+            prior_file_id = self._smb_file_by_share_path.get(path_key)
+            if prior_file_id is not None:
+                self._bounded_smb_file_mutation_text(
+                    prior_file_id,
+                    label="prior file_id",
+                    max_utf8_bytes=_MAX_SMB_FILE_ID_UTF8_BYTES,
+                )
+            prepared_paths.append((path_key, prior_file_id))
+            added_retained_bytes += (
+                128
+                + len(path_key[0].encode("utf-8"))
+                + len(path_key[1].encode("utf-8"))
+                + (len(prior_file_id.encode("utf-8")) if prior_file_id is not None else 0)
+            )
+        terminal_reserved_bytes = self._smb_file_mutation_terminal_retained_bytes(
+            operation_id=capability.operation_id,
+            file_ids=(
+                *capability.file_preimages,
+                *(file_id for file_id, _preimage in prepared_files),
+            ),
+            path_keys=(
+                *capability.path_preimages,
+                *(path_key for path_key, _prior_file_id in prepared_paths),
+            ),
+        )
+        added_terminal_reserved_bytes = terminal_reserved_bytes - capability.terminal_reserved_bytes
+        if (
+            self._retained_smb_file_mutation_bytes()
+            + added_retained_bytes
+            + added_terminal_reserved_bytes
+            > _MAX_RETAINED_SMB_FILE_MUTATION_BYTES
+        ):
+            raise StateError(
+                "retained SMB file mutation authority exceeds "
+                f"{_MAX_RETAINED_SMB_FILE_MUTATION_BYTES} bytes"
+            )
+
+        for file_id, preimage in prepared_files:
+            capability.file_preimages[file_id] = preimage
+            self._smb_file_mutation_owner_by_file_id[file_id] = journal_id
+        for path_key, prior_file_id in prepared_paths:
+            capability.path_preimages[path_key] = prior_file_id
             self._smb_file_mutation_owner_by_path[path_key] = journal_id
+        capability.retained_bytes += added_retained_bytes
+        capability.terminal_reserved_bytes = terminal_reserved_bytes
 
     def _require_unowned_smb_file_mutation(
         self,
@@ -14417,16 +15600,30 @@ class StateManager:
     ) -> None:
         """Fence nontransactional callers from identities owned by an active journal."""
 
+        self._reject_incomplete_smb_file_mutation_release()
         if any(file_id in self._smb_file_mutation_owner_by_file_id for file_id in file_ids):
             raise StateError("SMB file is owned by an active mutation journal")
         if any(path_key in self._smb_file_mutation_owner_by_path for path_key in path_keys):
             raise StateError("SMB path is owned by an active mutation journal")
 
+    def _reject_incomplete_smb_file_mutation_release(self) -> None:
+        """Fence file mutations while an exceptional terminal/cancel release retries."""
+
+        if (
+            self._smb_file_mutation_acknowledging
+            or self._smb_file_mutation_cancelling
+            or any(
+                locator.phase in {"acknowledging", "cancelling"}
+                for locator in self._smb_file_mutation_authority_locators()
+            )
+        ):
+            raise StateError("SMB file mutation is fenced by an incomplete journal release")
+
     def _release_smb_file_mutation_ownership(
         self,
         capability: _SmbFileMutationJournalCapability,
     ) -> None:
-        journal_id = capability.journal._journal_id
+        journal_id = capability.journal_id
         for file_id in capability.file_preimages:
             if self._smb_file_mutation_owner_by_file_id.get(file_id) == journal_id:
                 self._smb_file_mutation_owner_by_file_id.pop(file_id)
@@ -14437,8 +15634,7 @@ class StateManager:
     def begin_smb_file_mutation_journal(self, operation_id: str) -> SmbFileMutationJournal:
         """Reserve one bounded rollback journal for an SMB operation."""
 
-        if type(operation_id) is not str or not operation_id.strip() or len(operation_id) > 512:
-            raise StateError("SMB file mutation operation_id must be a nonempty bounded string")
+        validated_operation_id = self._bounded_smb_file_mutation_operation_id(operation_id)
         admission_epoch = self._reject_mutation_during_action_cohort_claim(
             "begin_smb_file_mutation_journal"
         )
@@ -14447,32 +15643,80 @@ class StateManager:
                 "begin_smb_file_mutation_journal",
                 admitted_at=admission_epoch,
             )
-            existing_id = self._smb_file_mutation_journal_by_operation.get(operation_id)
+            self._reject_incomplete_smb_file_mutation_release()
+            journal_id = self._smb_file_mutation_journal_id(validated_operation_id)
+            existing_id = self._smb_file_mutation_journal_by_operation.get(validated_operation_id)
             if existing_id is not None:
-                existing = self._smb_file_mutation_journals[existing_id]
+                existing = self._smb_file_mutation_journals.get(existing_id)
+                if existing is None:
+                    raise StateError("SMB operation is fenced by an incomplete journal release")
+                if type(existing) is _SmbFileMutationCommittedCapability:
+                    raise StateError(
+                        "SMB operation journal is already committed; recover and acknowledge "
+                        "its exact result"
+                    )
                 if existing.file_preimages or existing.path_preimages:
                     raise StateError("SMB operation already owns an active mutation in progress")
+                if self._retained_smb_file_mutation_journal(existing.journal) is not existing:
+                    raise StateError("SMB operation journal recovery token failed authentication")
                 return existing.journal
-            if len(self._smb_file_mutation_journals) >= _MAX_ACTIVE_SMB_FILE_MUTATION_JOURNALS:
+            retained_journal_ids = set(self._smb_file_mutation_journals) | set(
+                self._smb_file_mutation_acknowledging
+            )
+            if len(retained_journal_ids) >= _MAX_ACTIVE_SMB_FILE_MUTATION_JOURNALS:
                 raise StateError(
                     "active SMB file mutation journals exceed "
                     f"{_MAX_ACTIVE_SMB_FILE_MUTATION_JOURNALS}"
                 )
-            journal_id = self._smb_file_mutation_journal_id(operation_id)
-            if journal_id in self._smb_file_mutation_journals:
+            if journal_id in retained_journal_ids:
                 raise StateError("SMB file mutation journal identity collision")
+            base_retained_bytes = self._smb_file_mutation_journal_base_retained_bytes(
+                journal_id,
+                validated_operation_id,
+            )
+            terminal_reserved_bytes = self._smb_file_mutation_terminal_retained_bytes(
+                operation_id=validated_operation_id,
+                file_ids=(),
+                path_keys=(),
+            )
+            if (
+                self._retained_smb_file_mutation_bytes()
+                + base_retained_bytes
+                + terminal_reserved_bytes
+                > _MAX_RETAINED_SMB_FILE_MUTATION_BYTES
+            ):
+                raise StateError(
+                    "retained SMB file mutation authority exceeds "
+                    f"{_MAX_RETAINED_SMB_FILE_MUTATION_BYTES} bytes"
+                )
+            generation_nonce = secrets.token_hex(32)
+            journal_integrity_token = self._smb_file_mutation_journal_integrity_token(
+                journal_id,
+                validated_operation_id,
+                generation_nonce,
+            )
             journal = SmbFileMutationJournal(
                 _journal_id=journal_id,
-                _operation_id=operation_id,
-                _integrity_token=self._smb_file_mutation_journal_integrity_token(
-                    journal_id,
-                    operation_id,
-                ),
+                _operation_id=validated_operation_id,
+                _integrity_token=journal_integrity_token,
             )
-            self._smb_file_mutation_journals[journal_id] = _SmbFileMutationJournalCapability(
-                journal=journal
+            capability = _SmbFileMutationJournalCapability(
+                journal=journal,
+                journal_id=journal_id,
+                operation_id=validated_operation_id,
+                generation_nonce=generation_nonce,
+                integrity_token=journal_integrity_token,
+                retained_bytes=base_retained_bytes,
+                terminal_reserved_bytes=terminal_reserved_bytes,
             )
-            self._smb_file_mutation_journal_by_operation[operation_id] = journal_id
+            self._smb_file_mutation_journals[journal_id] = capability
+            self._smb_file_mutation_locator_by_journal_identity[id(journal)] = (
+                _SmbFileMutationAuthorityLocator(
+                    journal=journal,
+                    active=capability,
+                )
+            )
+            self._smb_file_mutation_journal_by_operation[validated_operation_id] = journal_id
             return journal
 
     def authenticates_smb_file_mutation_journal(
@@ -14488,8 +15732,252 @@ class StateManager:
                 return False
             return True
 
-    def commit_smb_file_mutation_journal(self, journal: SmbFileMutationJournal) -> None:
-        """Accept journaled file mutations and release their transient preimages."""
+    def _smb_file_mutation_commit_fault(self, stage: str) -> None:
+        """Fault-injection seam around terminalization and idempotent cleanup."""
+
+        del stage
+
+    def _plan_smb_file_mutation_terminal_binding_locked(
+        self,
+        journal: SmbFileMutationJournal,
+    ) -> _SmbFileMutationTerminalBinding:
+        """Freeze only detached journal semantics for a later prepared-State claim."""
+
+        active = self._active_smb_file_mutation_journal(journal)
+        self._validate_smb_file_mutation_active_capability_shape(
+            active,
+            validate_postimages=True,
+        )
+        postimage_digest = self._smb_file_mutation_postimage_digest(active)
+        binding_id = secrets.token_hex(32)
+        integrity_token = self._smb_file_mutation_terminal_binding_integrity_token(
+            binding_id=binding_id,
+            journal_id=active.journal_id,
+            journal_publication_token=active.integrity_token,
+            operation_id=active.operation_id,
+            expected_postimage_digest=postimage_digest,
+        )
+        return _SmbFileMutationTerminalBinding(
+            binding_id=binding_id,
+            journal_id=active.journal_id,
+            journal_publication_token=active.integrity_token,
+            operation_id=active.operation_id,
+            expected_postimage_digest=postimage_digest,
+            _integrity_token=integrity_token,
+        )
+
+    def _active_smb_file_mutation_for_terminal_binding_locked(
+        self,
+        binding: _SmbFileMutationTerminalBinding,
+    ) -> _SmbFileMutationJournalCapability:
+        """Resolve one intact detached binding to its exact current private owner."""
+
+        if (
+            type(binding) is not _SmbFileMutationTerminalBinding
+            or type(binding.binding_id) is not str
+            or len(binding.binding_id) != 64
+            or type(binding.journal_id) is not str
+            or len(binding.journal_id) != 64
+            or type(binding.journal_publication_token) is not str
+            or len(binding.journal_publication_token) != 64
+            or type(binding.expected_postimage_digest) is not str
+            or len(binding.expected_postimage_digest) != 64
+            or type(binding._integrity_token) is not str
+            or len(binding._integrity_token) != 64
+        ):
+            raise StateError("SMB file mutation terminal binding has a malformed shape")
+        try:
+            self._bounded_smb_file_mutation_operation_id(binding.operation_id)
+        except StateError as exc:
+            raise StateError("SMB file mutation terminal binding has a malformed shape") from exc
+        expected_integrity = self._smb_file_mutation_terminal_binding_integrity_token(
+            binding_id=binding.binding_id,
+            journal_id=binding.journal_id,
+            journal_publication_token=binding.journal_publication_token,
+            operation_id=binding.operation_id,
+            expected_postimage_digest=binding.expected_postimage_digest,
+        )
+        if not hmac.compare_digest(binding._integrity_token, expected_integrity):
+            raise StateError("SMB file mutation terminal binding failed integrity validation")
+        retained = self._smb_file_mutation_journals.get(binding.journal_id)
+        if type(retained) is not _SmbFileMutationJournalCapability:
+            raise StateError("SMB file mutation terminal binding is stale")
+        active = retained
+        if active.operation_id != binding.operation_id or not hmac.compare_digest(
+            active.integrity_token,
+            binding.journal_publication_token,
+        ):
+            raise StateError("SMB file mutation terminal binding names another journal generation")
+        if self._retained_smb_file_mutation_journal(active.journal) is not active:
+            raise StateError("SMB file mutation terminal binding lost its exact journal")
+        self._validate_smb_file_mutation_active_capability_shape(
+            active,
+            validate_postimages=True,
+        )
+        if self._smb_file_mutation_postimage_digest(active) != (binding.expected_postimage_digest):
+            raise StateError("SMB file mutation terminal binding postimage changed")
+        return active
+
+    def _prepare_smb_file_mutation_terminal_from_binding_locked(
+        self,
+        binding: _SmbFileMutationTerminalBinding,
+    ) -> _SmbFileMutationTerminalPreparation:
+        """Allocate the private terminal carrier only after a State claim is held."""
+
+        active = self._active_smb_file_mutation_for_terminal_binding_locked(binding)
+        preparation = self._prepare_smb_file_mutation_terminal_locked(active.journal)
+        if preparation.expected_postimage_digest != binding.expected_postimage_digest:
+            raise StateError("SMB file mutation terminal binding changed during preparation")
+        self._validate_smb_file_mutation_terminal_preparation_locked(preparation)
+        return preparation
+
+    def _prepare_smb_file_mutation_terminal_locked(
+        self,
+        journal: SmbFileMutationJournal,
+    ) -> _SmbFileMutationTerminalPreparation:
+        """Prebuild the allocation-bearing terminal result without publishing it."""
+
+        retained = self._retained_smb_file_mutation_journal(journal)
+        if type(retained) is _SmbFileMutationCommittedCapability:
+            raise StateError("SMB file mutation journal is already terminal")
+        self._validate_smb_file_mutation_active_capability_shape(
+            retained,
+            validate_postimages=True,
+        )
+        file_ids = tuple(retained.file_preimages)
+        path_keys = tuple(retained.path_preimages)
+        postimage_digest = self._smb_file_mutation_postimage_digest(retained)
+        terminal_retained_bytes = self._smb_file_mutation_terminal_retained_bytes(
+            operation_id=retained.operation_id,
+            file_ids=file_ids,
+            path_keys=path_keys,
+        )
+        if terminal_retained_bytes != retained.terminal_reserved_bytes:
+            raise StateError("SMB file mutation terminal preparation lost its byte reservation")
+        placeholder = SmbFileMutationCommitReceipt(
+            operation_id=retained.operation_id,
+            file_ids=file_ids,
+            path_keys=path_keys,
+            postimage_digest=postimage_digest,
+            _journal_id=retained.journal_id,
+        )
+        receipt = replace(
+            placeholder,
+            _integrity_token=self._smb_file_mutation_commit_receipt_integrity_token(placeholder),
+        )
+        result = SmbFileMutationCommitResult(
+            operation_id=retained.operation_id,
+            file_ids=file_ids,
+            path_keys=path_keys,
+            postimage_digest=postimage_digest,
+            receipt=receipt,
+            _journal_id=retained.journal_id,
+        )
+        trusted = _SmbFileMutationTerminalSnapshot(
+            operation_id=retained.operation_id,
+            file_ids=file_ids,
+            path_keys=path_keys,
+            postimage_digest=postimage_digest,
+            journal_id=retained.journal_id,
+            receipt_integrity_token=receipt._integrity_token,
+        )
+        terminal = _SmbFileMutationCommittedCapability(
+            journal=journal,
+            active=retained,
+            receipt=receipt,
+            result=result,
+            trusted=trusted,
+            retained_bytes=terminal_retained_bytes,
+        )
+        return _SmbFileMutationTerminalPreparation(
+            journal=journal,
+            expected_active=retained,
+            expected_postimage_digest=postimage_digest,
+            terminal=terminal,
+        )
+
+    def _validate_smb_file_mutation_terminal_preparation_locked(
+        self,
+        preparation: _SmbFileMutationTerminalPreparation,
+    ) -> None:
+        """Validate one prebuilt terminal pointer before any composite mutation."""
+
+        if type(preparation) is not _SmbFileMutationTerminalPreparation:
+            raise StateError("SMB file mutation terminal preparation has invalid authority type")
+        retained = self._retained_smb_file_mutation_journal(preparation.journal)
+        if retained is not preparation.expected_active:
+            raise StateError("SMB file mutation terminal preparation is stale")
+        if (
+            preparation.terminal.journal is not preparation.journal
+            or preparation.terminal.active is not preparation.expected_active
+            or not self._authenticates_smb_file_mutation_terminal(preparation.terminal)
+        ):
+            raise StateError("SMB file mutation terminal preparation failed integrity validation")
+        current_digest = self._smb_file_mutation_postimage_digest(preparation.expected_active)
+        if current_digest != preparation.expected_postimage_digest:
+            raise StateError("SMB file mutation terminal preparation postimage changed")
+        if preparation.terminal.retained_bytes != (
+            preparation.expected_active.terminal_reserved_bytes
+        ):
+            raise StateError("SMB file mutation terminal preparation lost byte capacity")
+
+    def _install_smb_file_mutation_terminal_no_fail_locked(
+        self,
+        preparation: _SmbFileMutationTerminalPreparation,
+    ) -> _SmbFileMutationCommittedCapability:
+        """Install one prevalidated terminal pointer as a single map-value swap."""
+
+        journal_id = preparation.expected_active.journal_id
+        if self._smb_file_mutation_journals.get(journal_id) is not preparation.expected_active:
+            raise StateError("SMB file mutation terminal preparation lost its exact active owner")
+        locator = self._smb_file_mutation_locator_by_journal_identity.get(id(preparation.journal))
+        if (
+            locator is None
+            or locator.journal is not preparation.journal
+            or locator.active is not preparation.expected_active
+            or (locator.terminal is not None and locator.terminal is not preparation.terminal)
+        ):
+            raise StateError("SMB file mutation terminal preparation lost its exact locator")
+        result_identity = id(preparation.terminal.result)
+        result_locator = self._smb_file_mutation_locator_by_result_identity.get(result_identity)
+        if result_locator is not None and result_locator is not locator:
+            raise StateError("SMB file mutation terminal result identity collision")
+        locator.terminal = preparation.terminal
+        locator.phase = "terminal"
+        self._smb_file_mutation_locator_by_result_identity[result_identity] = locator
+        self._smb_file_mutation_journals[journal_id] = preparation.terminal
+        return preparation.terminal
+
+    def _terminalize_smb_file_mutation_journal_locked(
+        self,
+        journal: SmbFileMutationJournal,
+    ) -> _SmbFileMutationCommittedCapability:
+        """Prepare, validate, and atomically install a standalone terminal pointer.
+
+        Action-cohort production code instead retains the preparation, validates
+        it before composite mutation, and enrolls only the final pointer swap in
+        the same State-lock commit as connection/session finalization.
+        """
+
+        retained = self._retained_smb_file_mutation_journal(journal)
+        if type(retained) is _SmbFileMutationCommittedCapability:
+            if not self._authenticates_smb_file_mutation_terminal(retained):
+                raise StateError("SMB file mutation terminal result failed integrity validation")
+            return retained
+        preparation = self._prepare_smb_file_mutation_terminal_locked(journal)
+        self._validate_smb_file_mutation_terminal_preparation_locked(preparation)
+        return self._install_smb_file_mutation_terminal_no_fail_locked(preparation)
+
+    def commit_smb_file_mutation_journal(
+        self,
+        journal: SmbFileMutationJournal,
+    ) -> SmbFileMutationCommitResult:
+        """Terminalize a standalone journal and release transient ownership.
+
+        Production SMB close enrolls the private terminalization seam in the
+        same State composite as transport/session finalization; this public
+        method remains the exact recoverable owner for standalone callers.
+        """
 
         admission_epoch = self._reject_mutation_during_action_cohort_claim(
             "commit_smb_file_mutation_journal"
@@ -14499,10 +15987,118 @@ class StateManager:
                 "commit_smb_file_mutation_journal",
                 admitted_at=admission_epoch,
             )
-            capability = self._active_smb_file_mutation_journal(journal)
-            self._release_smb_file_mutation_ownership(capability)
-            self._smb_file_mutation_journals.pop(journal._journal_id)
-            self._smb_file_mutation_journal_by_operation.pop(journal._operation_id, None)
+            terminal = self._terminalize_smb_file_mutation_journal_locked(journal)
+            self._smb_file_mutation_commit_fault("terminal")
+            self._release_smb_file_mutation_ownership(terminal.active)
+            self._smb_file_mutation_commit_fault("ownership")
+            return terminal.result
+
+    def recover_smb_file_mutation_commit(
+        self,
+        journal: SmbFileMutationJournal,
+    ) -> SmbFileMutationCommitResult | None:
+        """Return the exact retained terminal result for one intact journal token."""
+
+        with self._lock:
+            try:
+                retained = self._retained_smb_file_mutation_journal(
+                    journal,
+                    allow_exact_tamper_for_release=True,
+                )
+            except (StateError, TypeError, ValueError):
+                return None
+            if type(retained) is not _SmbFileMutationCommittedCapability or not (
+                self._authenticates_smb_file_mutation_terminal(retained)
+            ):
+                return None
+            return retained.result
+
+    def authenticates_smb_file_mutation_commit_receipt(
+        self,
+        receipt: SmbFileMutationCommitReceipt,
+    ) -> bool:
+        """Return whether this owner retains the exact unacknowledged receipt."""
+
+        if type(receipt) is not SmbFileMutationCommitReceipt:
+            return False
+        with self._lock:
+            retained = next(
+                (
+                    locator.terminal
+                    for locator in self._smb_file_mutation_authority_locators()
+                    if locator.terminal is not None and locator.terminal.receipt is receipt
+                ),
+                None,
+            )
+            if (
+                type(retained) is not _SmbFileMutationCommittedCapability
+                or not self._authenticates_smb_file_mutation_terminal(retained)
+            ):
+                return False
+            return True
+
+    def acknowledge_smb_file_mutation_commit(
+        self,
+        result: SmbFileMutationCommitResult,
+    ) -> bool:
+        """Consume one exact terminal result after its outer owner retains success."""
+
+        if type(result) is not SmbFileMutationCommitResult:
+            return False
+        admission_epoch = self._reject_mutation_during_action_cohort_claim(
+            "acknowledge_smb_file_mutation_commit"
+        )
+        with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "acknowledge_smb_file_mutation_commit",
+                admitted_at=admission_epoch,
+            )
+            locator = self._smb_file_mutation_locator_by_result_identity.get(id(result))
+            if locator is None:
+                locator = next(
+                    (
+                        candidate
+                        for candidate in self._smb_file_mutation_authority_locators()
+                        if candidate.terminal is not None and candidate.terminal.result is result
+                    ),
+                    None,
+                )
+            retained = locator.terminal if locator is not None else None
+            if (
+                type(retained) is not _SmbFileMutationCommittedCapability
+                or retained.result is not result
+                or locator is None
+                or locator.journal is not retained.journal
+                or not self._authenticates_smb_file_mutation_terminal_trusted(retained)
+            ):
+                return False
+            trusted = retained.trusted
+            locator.phase = "acknowledging"
+            self._smb_file_mutation_acknowledging[trusted.journal_id] = retained
+            self._smb_file_mutation_commit_fault("ack-record")
+            self._release_smb_file_mutation_ownership(retained.active)
+            self._smb_file_mutation_commit_fault("ack-ownership")
+            if self._smb_file_mutation_journals.get(trusted.journal_id) is retained:
+                self._smb_file_mutation_journals.pop(trusted.journal_id)
+            self._smb_file_mutation_commit_fault("ack-capability")
+            self._smb_file_mutation_acknowledging.pop(trusted.journal_id, None)
+            self._smb_file_mutation_commit_fault("ack-acknowledging")
+            if self._smb_file_mutation_locator_by_result_identity.get(id(result)) is locator:
+                self._smb_file_mutation_locator_by_result_identity.pop(id(result))
+            self._smb_file_mutation_commit_fault("ack-result-locator")
+            self._smb_file_mutation_commit_fault("ack-operation-index")
+            self._smb_file_mutation_commit_fault("ack-journal-locator")
+            if (
+                self._smb_file_mutation_journal_by_operation.get(trusted.operation_id)
+                == trusted.journal_id
+            ):
+                self._smb_file_mutation_journal_by_operation.pop(trusted.operation_id)
+            if (
+                self._smb_file_mutation_locator_by_journal_identity.get(id(locator.journal))
+                is locator
+            ):
+                self._smb_file_mutation_locator_by_journal_identity.pop(id(locator.journal))
+            return True
 
     def cancel_smb_file_mutation_journal(self, journal: SmbFileMutationJournal) -> None:
         """Restore every exact file/path preimage retained by a live journal."""
@@ -14515,7 +16111,27 @@ class StateManager:
                 "cancel_smb_file_mutation_journal",
                 admitted_at=admission_epoch,
             )
-            capability = self._active_smb_file_mutation_journal(journal)
+            retained = self._retained_smb_file_mutation_journal(
+                journal,
+                allow_exact_tamper_for_release=True,
+            )
+            if type(retained) is not _SmbFileMutationJournalCapability:
+                raise StateError("SMB file mutation journal is already committed")
+            capability = retained
+            self._validate_smb_file_mutation_active_capability_shape(
+                capability,
+                validate_postimages=False,
+            )
+            locator = self._smb_file_mutation_locator_by_journal_identity.get(id(journal))
+            if (
+                locator is None
+                or locator.journal is not journal
+                or locator.active is not capability
+            ):
+                raise StateError("SMB file mutation cancel lost its exact locator")
+            locator.phase = "cancelling"
+            self._smb_file_mutation_cancelling[capability.journal_id] = capability
+            self._smb_file_mutation_commit_fault("cancel-record")
             for file_id, preimage in capability.file_preimages.items():
                 if preimage.snapshot is None:
                     self._smb_file_overlay.pop(file_id, None)
@@ -14524,64 +16140,108 @@ class StateManager:
                 if original is None:
                     raise StateError("SMB mutation journal lost its original file object")
                 snapshot = preimage.snapshot
+                if type(snapshot) is not _SmbFileStateSnapshot:
+                    raise StateError("SMB mutation journal snapshot lost its exact type")
+                original.file_id = snapshot.file_id
                 original.share = snapshot.share
                 original.path = snapshot.path
                 original.version = snapshot.version
                 original.size_bytes = snapshot.size_bytes
                 original.mime_type = snapshot.mime_type
-                original.tags = snapshot.tags
+                original.tags = tuple(snapshot.tags)
                 original.deleted = snapshot.deleted
-                original.prior_paths = snapshot.prior_paths
+                original.prior_paths = tuple(snapshot.prior_paths)
                 self._smb_file_overlay[file_id] = original
             for path_key, prior_file_id in capability.path_preimages.items():
                 if prior_file_id is None:
                     self._smb_file_by_share_path.pop(path_key, None)
                 else:
                     self._smb_file_by_share_path[path_key] = prior_file_id
+            if self._smb_file_mutation_journals.get(capability.journal_id) is capability:
+                self._smb_file_mutation_journals.pop(capability.journal_id)
+            self._smb_file_mutation_commit_fault("cancel-capability")
             self._release_smb_file_mutation_ownership(capability)
-            self._smb_file_mutation_journals.pop(journal._journal_id)
-            self._smb_file_mutation_journal_by_operation.pop(journal._operation_id, None)
+            self._smb_file_mutation_commit_fault("cancel-ownership")
+            self._smb_file_mutation_cancelling.pop(capability.journal_id, None)
+            self._smb_file_mutation_commit_fault("cancel-cancelling")
+            self._smb_file_mutation_commit_fault("cancel-operation-index")
+            self._smb_file_mutation_commit_fault("cancel-journal-locator")
+            if (
+                self._smb_file_mutation_journal_by_operation.get(capability.operation_id)
+                == capability.journal_id
+            ):
+                self._smb_file_mutation_journal_by_operation.pop(capability.operation_id)
+            if self._smb_file_mutation_locator_by_journal_identity.get(id(journal)) is locator:
+                self._smb_file_mutation_locator_by_journal_identity.pop(id(journal))
 
-    def smb_file_is_available(self, file: object) -> bool:
+    def _smb_file_state_for_observation(
+        self,
+        file_id: str,
+    ) -> SmbFileState | _SmbFileStateSnapshot | None:
+        """Return active prestate or terminal poststate for one external reader."""
+
+        owner_id = self._smb_file_mutation_owner_by_file_id.get(file_id)
+        if owner_id is None:
+            return self._smb_file_overlay.get(file_id)
+        retained = self._smb_file_mutation_journals.get(owner_id)
+        if retained is None:
+            retained = self._smb_file_mutation_acknowledging.get(owner_id)
+        if retained is None:
+            retained = self._smb_file_mutation_cancelling.get(owner_id)
+        if type(retained) is _SmbFileMutationJournalCapability:
+            preimage = retained.file_preimages.get(file_id)
+            if preimage is not None:
+                if preimage.snapshot is not None and (
+                    type(preimage.snapshot) is not _SmbFileStateSnapshot
+                ):
+                    raise StateError("SMB mutation journal snapshot lost its exact type")
+                return preimage.snapshot
+        return self._smb_file_overlay.get(file_id)
+
+    def smb_file_is_available(self, file: CompiledStorageFile) -> bool:
         """Return whether a compiled catalog entry still exists at its original path."""
 
+        candidate = self._detach_compiled_smb_file(file)
         with self._lock:
-            state = self._smb_file_overlay.get(file.file_id)
+            state = self._smb_file_state_for_observation(candidate.file_id)
             if state is None:
                 return True
             return (
                 not state.deleted
-                and state.share.casefold() == file.share.casefold()
-                and state.path.casefold() == file.path.casefold()
+                and state.share.casefold() == candidate.share.casefold()
+                and state.path.casefold() == candidate.path.casefold()
             )
 
-    def smb_file_size(self, file: object) -> int:
+    def smb_file_size(self, file: CompiledStorageFile) -> int:
         """Return the current size for a compiled catalog entry without touching it."""
 
+        candidate = self._detach_compiled_smb_file(file)
         with self._lock:
-            state = self._smb_file_overlay.get(file.file_id)
+            state = self._smb_file_state_for_observation(candidate.file_id)
             if state is None:
-                return max(0, int(file.size_bytes))
+                return candidate.size_bytes
             return 0 if state.deleted else state.size_bytes
 
     def touch_smb_file(
         self,
-        file: object,
+        file: CompiledStorageFile,
         *,
         journal: SmbFileMutationJournal | None = None,
     ) -> SmbFileState:
-        """Return a mutable overlay view for one compiled storage file."""
+        """Touch one compiled file and return a detached value snapshot."""
 
+        candidate = self._detach_compiled_smb_file(file)
         admission_epoch = self._reject_mutation_during_action_cohort_claim("touch_smb_file")
         with self._lock:
             self._reject_mutation_during_action_cohort_claim(
                 "touch_smb_file", admitted_at=admission_epoch
             )
+            self._validate_smb_file_state_shape(candidate)
             capability = (
                 self._active_smb_file_mutation_journal(journal) if journal is not None else None
             )
-            file_id = file.file_id
-            path_key = (file.share.casefold(), file.path.casefold())
+            file_id = candidate.file_id
+            path_key = (candidate.share.casefold(), candidate.path.casefold())
             if capability is not None:
                 self._record_smb_file_mutation_preimages(
                     capability,
@@ -14593,27 +16253,19 @@ class StateManager:
                     file_ids=(file_id,),
                     path_keys=(path_key,),
                 )
-            existing = self._smb_file_overlay.get(file.file_id)
+            existing = self._smb_file_overlay.get(candidate.file_id)
             if existing is not None:
-                return existing
+                return self._detached_smb_file_state(existing)
             if len(self._smb_file_overlay) >= _MAX_SMB_MUTATION_OVERLAY:
                 raise StateError(
                     f"SMB mutation overlay exceeds {_MAX_SMB_MUTATION_OVERLAY} touched files"
                 )
-            state = SmbFileState(
-                file_id=file.file_id,
-                share=file.share,
-                path=file.path,
-                version=file.version,
-                size_bytes=file.size_bytes,
-                mime_type=file.mime_type,
-                tags=tuple(file.tags),
-            )
+            state = candidate
             self._smb_file_overlay[state.file_id] = state
             self._smb_file_by_share_path[(state.share.casefold(), state.path.casefold())] = (
                 state.file_id
             )
-            return state
+            return self._detached_smb_file_state(state)
 
     def create_smb_file(
         self,
@@ -14626,13 +16278,54 @@ class StateManager:
         tags: tuple[str, ...] = (),
         journal: SmbFileMutationJournal | None = None,
     ) -> SmbFileState:
-        """Create a new file identity in the mutation overlay."""
+        """Create a new file identity and return a detached value snapshot."""
 
+        validated_share = self._bounded_smb_file_mutation_text(
+            share,
+            label="share",
+            max_utf8_bytes=_MAX_SMB_SHARE_UTF8_BYTES,
+        )
+        validated_path = self._bounded_smb_file_mutation_text(
+            path,
+            label="path",
+            max_utf8_bytes=_MAX_SMB_PATH_UTF8_BYTES,
+        )
+        validated_mime_type = self._bounded_smb_file_mutation_text(
+            mime_type,
+            label="mime_type",
+            max_utf8_bytes=_MAX_SMB_MIME_TYPE_UTF8_BYTES,
+            allow_empty=True,
+        )
+        if type(timestamp) is not datetime:
+            raise StateError("SMB file mutation timestamp must be an exact datetime")
+        validated_size_bytes = self._bounded_smb_file_mutation_integer(
+            size_bytes,
+            label="size",
+            maximum=_MAX_SMB_FILE_SIZE_BYTES,
+        )
+        if type(tags) is not tuple:
+            raise StateError("SMB file mutation tags must be an exact tuple")
+        file_id = (
+            "file-"
+            f"{stable_uuid('smb-created-file', validated_share, validated_path, ensure_utc(timestamp))}"
+        )
+        state = SmbFileState(
+            file_id=file_id,
+            share=validated_share,
+            path=validated_path,
+            version=1,
+            size_bytes=validated_size_bytes,
+            mime_type=validated_mime_type,
+            tags=tuple(tags),
+        )
+        self._validate_smb_file_state_shape(state)
+        key = (validated_share.casefold(), validated_path.casefold())
         admission_epoch = self._reject_mutation_during_action_cohort_claim("create_smb_file")
         with self._lock:
             self._reject_mutation_during_action_cohort_claim(
                 "create_smb_file", admitted_at=admission_epoch
             )
+            self._validate_smb_file_state_shape(state)
             capability = (
                 self._active_smb_file_mutation_journal(journal) if journal is not None else None
             )
@@ -14640,12 +16333,14 @@ class StateManager:
                 raise StateError(
                     f"SMB mutation overlay exceeds {_MAX_SMB_MUTATION_OVERLAY} touched files"
                 )
-            key = (share.casefold(), path.casefold())
             prior_id = self._smb_file_by_share_path.get(key)
             prior = self._smb_file_overlay.get(prior_id or "")
             if prior is not None and not prior.deleted:
-                raise StateError(f"SMB path already exists: {share}:{path}")
-            file_id = f"file-{stable_uuid('smb-created-file', share, path, ensure_utc(timestamp))}"
+                raise StateError(f"SMB path already exists: {validated_share}:{validated_path}")
+            if file_id in self._smb_file_overlay:
+                raise StateError(
+                    "SMB created file identity collision for retained deterministic identity"
+                )
             if capability is not None:
                 self._record_smb_file_mutation_preimages(
                     capability,
@@ -14657,18 +16352,9 @@ class StateManager:
                     file_ids=(file_id,),
                     path_keys=(key,),
                 )
-            state = SmbFileState(
-                file_id=file_id,
-                share=share,
-                path=path,
-                version=1,
-                size_bytes=max(0, size_bytes),
-                mime_type=mime_type,
-                tags=tags,
-            )
             self._smb_file_overlay[file_id] = state
             self._smb_file_by_share_path[key] = file_id
-            return state
+            return self._detached_smb_file_state(state)
 
     def update_smb_file(
         self,
@@ -14677,27 +16363,48 @@ class StateManager:
         size_bytes: int,
         journal: SmbFileMutationJournal | None = None,
     ) -> SmbFileState:
-        """Advance a file content version and size."""
+        """Advance file contents and return a detached value snapshot."""
 
+        validated_file_id = self._bounded_smb_file_mutation_text(
+            file_id,
+            label="file_id",
+            max_utf8_bytes=_MAX_SMB_FILE_ID_UTF8_BYTES,
+        )
+        validated_size_bytes = self._bounded_smb_file_mutation_integer(
+            size_bytes,
+            label="size",
+            maximum=_MAX_SMB_FILE_SIZE_BYTES,
+        )
         admission_epoch = self._reject_mutation_during_action_cohort_claim("update_smb_file")
         with self._lock:
             self._reject_mutation_during_action_cohort_claim(
                 "update_smb_file", admitted_at=admission_epoch
             )
+            state = self._smb_file_overlay[validated_file_id]
+            self._validate_smb_file_state_shape(state)
+            if state.deleted:
+                raise StateError(f"cannot update deleted SMB file {validated_file_id}")
+            if state.version == _MAX_SMB_FILE_VERSION:
+                raise StateError(
+                    "SMB file mutation version cannot advance beyond the 63-bit SMB file bound"
+                )
+            candidate = replace(
+                state,
+                version=state.version + 1,
+                size_bytes=validated_size_bytes,
+            )
+            self._validate_smb_file_state_shape(candidate)
             if journal is not None:
                 capability = self._active_smb_file_mutation_journal(journal)
                 self._record_smb_file_mutation_preimages(
                     capability,
-                    file_ids=(file_id,),
+                    file_ids=(validated_file_id,),
                 )
             else:
-                self._require_unowned_smb_file_mutation(file_ids=(file_id,))
-            state = self._smb_file_overlay[file_id]
-            if state.deleted:
-                raise StateError(f"cannot update deleted SMB file {file_id}")
-            state.version += 1
-            state.size_bytes = max(0, size_bytes)
-            return state
+                self._require_unowned_smb_file_mutation(file_ids=(validated_file_id,))
+            state.version = candidate.version
+            state.size_bytes = candidate.size_bytes
+            return self._detached_smb_file_state(state)
 
     def move_smb_file(
         self,
@@ -14707,8 +16414,24 @@ class StateManager:
         path: str,
         journal: SmbFileMutationJournal | None = None,
     ) -> SmbFileState:
-        """Move a file while preserving its durable identity."""
+        """Move a file and return a detached value snapshot of its durable identity."""
 
+        validated_file_id = self._bounded_smb_file_mutation_text(
+            file_id,
+            label="file_id",
+            max_utf8_bytes=_MAX_SMB_FILE_ID_UTF8_BYTES,
+        )
+        validated_share = self._bounded_smb_file_mutation_text(
+            share,
+            label="share",
+            max_utf8_bytes=_MAX_SMB_SHARE_UTF8_BYTES,
+        )
+        validated_path = self._bounded_smb_file_mutation_text(
+            path,
+            label="path",
+            max_utf8_bytes=_MAX_SMB_PATH_UTF8_BYTES,
+        )
+        destination_key = (validated_share.casefold(), validated_path.casefold())
         admission_epoch = self._reject_mutation_during_action_cohort_claim("move_smb_file")
         with self._lock:
             self._reject_mutation_during_action_cohort_claim(
@@ -14717,30 +16440,41 @@ class StateManager:
             capability = (
                 self._active_smb_file_mutation_journal(journal) if journal is not None else None
             )
-            state = self._smb_file_overlay[file_id]
-            destination_key = (share.casefold(), path.casefold())
+            state = self._smb_file_overlay[validated_file_id]
+            self._validate_smb_file_state_shape(state)
+            candidate = replace(
+                state,
+                share=validated_share,
+                path=validated_path,
+                prior_paths=(*state.prior_paths, state.path),
+            )
+            self._validate_smb_file_state_shape(candidate)
             destination_id = self._smb_file_by_share_path.get(destination_key)
             destination = self._smb_file_overlay.get(destination_id or "")
-            if destination is not None and not destination.deleted and destination_id != file_id:
-                raise StateError(f"SMB path already exists: {share}:{path}")
+            if (
+                destination is not None
+                and not destination.deleted
+                and destination_id != validated_file_id
+            ):
+                raise StateError(f"SMB path already exists: {validated_share}:{validated_path}")
             old_key = (state.share.casefold(), state.path.casefold())
             if capability is not None:
                 self._record_smb_file_mutation_preimages(
                     capability,
-                    file_ids=(file_id,),
+                    file_ids=(validated_file_id,),
                     path_keys=(old_key, destination_key),
                 )
             else:
                 self._require_unowned_smb_file_mutation(
-                    file_ids=(file_id,),
+                    file_ids=(validated_file_id,),
                     path_keys=(old_key, destination_key),
                 )
             self._smb_file_by_share_path.pop(old_key, None)
-            state.prior_paths = (*state.prior_paths, state.path)
-            state.share = share
-            state.path = path
-            self._smb_file_by_share_path[destination_key] = file_id
-            return state
+            state.prior_paths = candidate.prior_paths
+            state.share = candidate.share
+            state.path = candidate.path
+            self._smb_file_by_share_path[destination_key] = validated_file_id
+            return self._detached_smb_file_state(state)
 
     def delete_smb_file(
         self,
@@ -14748,8 +16482,13 @@ class StateManager:
         *,
         journal: SmbFileMutationJournal | None = None,
     ) -> SmbFileState:
-        """Tombstone a file identity."""
+        """Tombstone a file identity and return a detached value snapshot."""
 
+        validated_file_id = self._bounded_smb_file_mutation_text(
+            file_id,
+            label="file_id",
+            max_utf8_bytes=_MAX_SMB_FILE_ID_UTF8_BYTES,
+        )
         admission_epoch = self._reject_mutation_during_action_cohort_claim("delete_smb_file")
         with self._lock:
             self._reject_mutation_during_action_cohort_claim(
@@ -14758,17 +16497,18 @@ class StateManager:
             capability = (
                 self._active_smb_file_mutation_journal(journal) if journal is not None else None
             )
-            state = self._smb_file_overlay[file_id]
+            state = self._smb_file_overlay[validated_file_id]
+            self._validate_smb_file_state_shape(state)
             path_key = (state.share.casefold(), state.path.casefold())
             if capability is not None:
                 self._record_smb_file_mutation_preimages(
                     capability,
-                    file_ids=(file_id,),
+                    file_ids=(validated_file_id,),
                     path_keys=(path_key,),
                 )
             else:
                 self._require_unowned_smb_file_mutation(
-                    file_ids=(file_id,),
+                    file_ids=(validated_file_id,),
                     path_keys=(path_key,),
                 )
             state.deleted = True
@@ -14776,7 +16516,7 @@ class StateManager:
                 path_key,
                 None,
             )
-            return state
+            return self._detached_smb_file_state(state)
 
     def get_state_summary(self) -> dict:
         """Get a summary of current state for logging/debugging.
@@ -14785,17 +16525,38 @@ class StateManager:
             Dict with counts and current time
         """
         with self._lock:
+            smb_locators = self._smb_file_mutation_authority_locators()
+            smb_terminal_locators = tuple(
+                locator for locator in smb_locators if locator.terminal is not None
+            )
             return {
                 "active_sessions": len(self.state.active_sessions),
                 "running_processes": len(self.state.running_processes),
                 "open_connections": len(self.state.open_connections),
                 "dns_cache_entries": len(self.state.dns_cache),
                 "smb_mutations": len(self._smb_file_overlay),
-                "smb_file_mutation_journals": len(self._smb_file_mutation_journals),
-                "smb_file_mutation_journal_entries": sum(
-                    len(capability.file_preimages) + len(capability.path_preimages)
-                    for capability in self._smb_file_mutation_journals.values()
+                "smb_file_mutation_journals": len(smb_locators),
+                "smb_file_mutation_capabilities": len(self._smb_file_mutation_journals),
+                "smb_file_mutation_operation_indexes": len(
+                    self._smb_file_mutation_journal_by_operation
                 ),
+                "smb_file_mutation_file_owners": len(self._smb_file_mutation_owner_by_file_id),
+                "smb_file_mutation_path_owners": len(self._smb_file_mutation_owner_by_path),
+                "smb_file_mutation_journal_entries": sum(
+                    len(locator.active.file_preimages) + len(locator.active.path_preimages)
+                    for locator in smb_locators
+                ),
+                "smb_file_mutation_commit_results": len(smb_terminal_locators),
+                "smb_file_mutation_commit_receipts": len(smb_terminal_locators),
+                "smb_file_mutation_acknowledging": len(self._smb_file_mutation_acknowledging),
+                "smb_file_mutation_cancelling": len(self._smb_file_mutation_cancelling),
+                "smb_file_mutation_journal_locators": len(
+                    self._smb_file_mutation_locator_by_journal_identity
+                ),
+                "smb_file_mutation_result_locators": len(
+                    self._smb_file_mutation_locator_by_result_identity
+                ),
+                "smb_file_mutation_retained_bytes": self._retained_smb_file_mutation_bytes(),
                 "current_time": str(self.state.current_time) if self.state.current_time else None,
             }
 

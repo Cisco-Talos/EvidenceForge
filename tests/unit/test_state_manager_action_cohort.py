@@ -14,11 +14,30 @@ from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.state_manager import (
     ActionCohortMaterializationPlan,
     ActionCohortSessionMetadataState,
+    SmbFileMutationJournal,
     StateManager,
 )
+from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.models.exceptions import StateError
 
 _START = datetime(2026, 8, 17, 14, 0, tzinfo=UTC)
+
+
+def _journal_file(
+    manager: StateManager,
+    suffix: str,
+) -> tuple[CompiledStorageFile, SmbFileMutationJournal]:
+    compiled = CompiledStorageFile(
+        file_id=f"file-cohort-{suffix}",
+        share="FS-01.finance",
+        path=f"Scratch\\cohort-{suffix}.txt",
+        size_bytes=10,
+        mime_type="text/plain",
+    )
+    manager.touch_smb_file(compiled)
+    journal = manager.begin_smb_file_mutation_journal(f"operation-cohort-{suffix}")
+    manager.update_smb_file(compiled.file_id, size_bytes=20, journal=journal)
+    return compiled, journal
 
 
 def _windows_cohort(manager: StateManager) -> ActionCohortMaterializationPlan:
@@ -830,3 +849,92 @@ def test_ended_session_retention_hard_cap_evicts_oldest_without_live_residue(
     assert set(manager._ended_sessions_by_system_end.keys_after("linux01", _START)) == set(
         logon_ids[1:]
     )
+
+
+def test_action_cohort_smb_terminalization_rolls_back_before_canonical_finalize() -> None:
+    """A provisional journal terminal remains reader-visible only until claim rollback."""
+
+    manager = StateManager()
+    manager.set_current_time(_START)
+    compiled, journal = _journal_file(manager, "rollback")
+    builder = manager.begin_action_cohort_materialization()
+    builder.terminalize_smb_file_mutation(journal)
+    plan = builder.seal()
+
+    assert manager.smb_file_size(compiled) == 10
+    with manager.prepared_action_cohort_materialization(plan) as prepared:
+        prepared.certify_composite_commit(prepared.expected_result)
+        prepared.apply_provisional()
+        assert manager.smb_file_size(compiled) == 20
+        assert manager.recover_smb_file_mutation_commit(journal) is (
+            prepared.expected_result.smb_file_mutation
+        )
+        object.__setattr__(journal, "_operation_id", "operation-public-tamper")
+
+    assert manager.smb_file_size(compiled) == 10
+    assert manager.recover_smb_file_mutation_commit(journal) is None
+    manager.cancel_smb_file_mutation_journal(journal)
+    summary = manager.get_state_summary()
+    assert summary["smb_file_mutation_journals"] == 0
+    assert summary["smb_file_mutation_retained_bytes"] == 0
+
+
+def test_action_cohort_smb_terminalization_commits_once_and_returns_detached_result() -> None:
+    """Reuse-operation files and State truth cross one action-cohort terminal pointer."""
+
+    manager = StateManager()
+    manager.set_current_time(_START)
+    compiled, journal = _journal_file(manager, "success")
+    builder = manager.begin_action_cohort_materialization()
+    builder.terminalize_smb_file_mutation(journal)
+    plan = builder.seal()
+
+    result = manager.materialize_action_cohort(plan)
+
+    assert result.smb_file_mutation is not None
+    assert manager.recover_smb_file_mutation_commit(journal) is result.smb_file_mutation
+    assert manager.smb_file_size(compiled) == 20
+    assert manager.acknowledge_smb_file_mutation_commit(result.smb_file_mutation)
+    summary = manager.get_state_summary()
+    assert summary["smb_file_mutation_journals"] == 0
+    assert summary["smb_file_mutation_retained_bytes"] == 0
+
+
+def test_action_cohort_smb_plan_exposes_only_opaque_scalar_binding() -> None:
+    """Returned plans cannot reach private preimages, terminal caps, or canonical rows."""
+
+    manager = StateManager()
+    manager.set_current_time(_START)
+    _compiled, journal = _journal_file(manager, "opaque")
+    builder = manager.begin_action_cohort_materialization()
+    builder.terminalize_smb_file_mutation(journal)
+    plan = builder.seal()
+    binding = plan._smb_file_mutation_terminalization
+    assert binding is not None
+
+    assert all(
+        type(getattr(binding, name)) is str
+        for name in (
+            "binding_id",
+            "journal_id",
+            "journal_publication_token",
+            "operation_id",
+            "expected_postimage_digest",
+            "_integrity_token",
+        )
+    )
+    assert not any(
+        forbidden in repr(binding)
+        for forbidden in (
+            "SmbFileMutationJournalCapability",
+            "SmbFileStatePreimage",
+            "SmbFileState(",
+        )
+    )
+    copied_binding = replace(binding)
+    copied_plan = replace(plan, _smb_file_mutation_terminalization=copied_binding)
+    assert not manager.authenticates_action_cohort_plan(copied_plan)
+
+    object.__setattr__(binding, "operation_id", "operation-tampered")
+    assert not manager.authenticates_action_cohort_plan(plan)
+    manager.cancel_smb_file_mutation_journal(journal)
