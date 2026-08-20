@@ -420,6 +420,34 @@ def _ntp_sync_interval_seconds(
     return max(300.0, interval)
 
 
+def _dns_query_seconds_for_hour(
+    hostname: str,
+    hour_start_sec: float,
+    interval_seconds: int,
+    rng: random.Random,
+) -> list[float]:
+    """Return DNS observation times inside one half-open generation hour.
+
+    Jitter models whether a nominal periodic lookup is observed in the current
+    generation pass. Candidates whose jitter crosses an hour boundary are
+    omitted instead of being clamped to that boundary.
+    """
+
+    hour_end_sec = hour_start_sec + 3600
+    phase = _stable_seed(f"dns_ph_{hostname}") % interval_seconds
+    scheduled_second = phase
+    while scheduled_second < hour_start_sec:
+        scheduled_second += interval_seconds
+
+    observed_seconds: list[float] = []
+    while scheduled_second < hour_end_sec:
+        observed_second = scheduled_second + rng.gauss(0, interval_seconds * 0.02)
+        if hour_start_sec <= observed_second < hour_end_sec:
+            observed_seconds.append(observed_second)
+        scheduled_second += interval_seconds
+    return observed_seconds
+
+
 def _ntp_observed_second(
     hostname: str,
     ntp_ip: str,
@@ -8768,13 +8796,13 @@ class BaselineMixin:
                 )
                 _dns_range = max(1, _dns_hi - _dns_lo)
                 dns_interval = _dns_lo + (_stable_seed(f"dns_iv_{system.hostname}") % _dns_range)
-                dns_phase = _stable_seed(f"dns_ph_{system.hostname}") % dns_interval
-                t = dns_phase
-                while t < hour_start_sec:
-                    t += dns_interval
-                while t < hour_start_sec + 3600:
-                    jitter = rng.gauss(0, dns_interval * 0.02)
-                    ts = self._generation_epoch + timedelta(seconds=t + jitter)
+                for observed_second in _dns_query_seconds_for_hour(
+                    system.hostname,
+                    hour_start_sec,
+                    dns_interval,
+                    rng,
+                ):
+                    ts = self._generation_epoch + timedelta(seconds=observed_second)
                     self.state_manager.set_current_time(ts)
                     dns_pid = (
                         _svc_pid("svchost_net_svc")
@@ -8796,7 +8824,6 @@ class BaselineMixin:
                         source_system=system,
                         pid=dns_pid,
                     )
-                    t += dns_interval
 
             # NTP syncs follow a stable per-association poll schedule rather
             # than a fixed hourly tick.
