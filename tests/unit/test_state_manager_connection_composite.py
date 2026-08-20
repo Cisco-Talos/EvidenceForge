@@ -28,6 +28,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import HostContext, ProcessContext
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkTrafficLedger,
@@ -59,6 +62,29 @@ from evidenceforge.utils.ids import generate_zeek_uid_from_rng
 _START = datetime(2026, 8, 16, 13, 0, tzinfo=UTC)
 
 
+class _CallbackTrap:
+    """Fail if a malformed public carrier invokes caller-controlled behavior."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def _fail(self, *_args: object, **_kwargs: object) -> object:
+        self.calls += 1
+        raise RuntimeError("caller callback executed under State validation")
+
+    __bool__ = _fail
+    __eq__ = _fail
+    __hash__ = _fail
+    __iter__ = _fail
+    __repr__ = _fail
+
+    @property
+    def identity(self) -> object:
+        """Fail if a generic activity normalizer reads this property."""
+
+        return self._fail()
+
+
 def _traffic(*, orig: int = 120, resp: int = 480) -> NetworkTrafficLedger:
     return NetworkTrafficLedger(
         orig=DirectionalTrafficLedger(payload_bytes=orig, packets=2, ip_bytes=orig + 80),
@@ -75,21 +101,23 @@ def _transaction(
     duration: float = 1.25,
     traffic: NetworkTrafficLedger | None = None,
     application_layer_only: bool = False,
+    src_port: int = 50_001,
     dst_port: int = 443,
     service: str = "https",
     initiating_pid: int = -1,
     responding_pid: int = -1,
+    hostname: str = "example.test",
 ) -> NetworkTransactionPlan:
     closed_at = started_at + timedelta(seconds=duration)
     return NetworkTransactionPlan(
         stable_id=stable_id,
-        hostname="example.test",
+        hostname=hostname,
         outcome="success",
         phase_times=(("transport_start", started_at), ("transport_close", closed_at)),
         started_at=started_at,
         closed_at=closed_at,
         src_ip="10.0.0.10",
-        src_port=50_001,
+        src_port=src_port,
         dst_ip="10.0.0.20",
         dst_port=dst_port,
         protocol="tcp",
@@ -1675,6 +1703,9 @@ def test_physical_connection_composite_atomically_starts_type3_and_terminalizes_
         start_time=_START,
         logon_id=None,
         smb_principal="EXAMPLE\\analyst",
+        auth_protocol="NTLMv2",
+        auth_session_ref="smb-auth-root",
+        account_scope="EXAMPLE",
     )
     batch = batch_builder.seal()
     owner = random.Random(833)
@@ -1777,3 +1808,504 @@ def test_physical_connection_smb_binding_copy_tamper_and_child_use_fail_precanon
     child.cancel()
     manager.cancel_smb_file_mutation_journal(journal)
     assert manager.get_state_summary()["smb_file_mutation_retained_bytes"] == 0
+
+
+def _pinned_smb_root(
+    *,
+    acknowledge_install: bool = True,
+) -> tuple[
+    StateManager,
+    random.Random,
+    object,
+    object,
+    NetworkTransactionPlan,
+]:
+    """Materialize one exact TCP/445 root with a generated Type-3 session pin."""
+
+    manager = StateManager()
+    manager.set_current_time(_START)
+    transaction_owner = random.Random(9_445)
+    cursor = manager.begin_connection_planning(transaction_owner)
+    identity = cursor.reserve_identity()
+    pin = cursor.reserve_smb_connection_pin()
+    transaction = _transaction(
+        conn_id=identity.conn_id,
+        zeek_uid=identity.zeek_uid,
+        dst_port=445,
+        service="smb",
+        hostname="FS-01",
+    )
+    batch_builder = manager.begin_materialization_batch()
+    session_plan = batch_builder.plan_session(
+        username="EXAMPLE\\analyst",
+        system="FS-01",
+        logon_type=3,
+        source_ip=transaction.src_ip,
+        source_port=transaction.src_port,
+        session_kind="network",
+        start_time=transaction.started_at + timedelta(milliseconds=50),
+        logon_id=None,
+        network_close_time=transaction.closed_at,
+        closure_owned_by_bundle=True,
+        end_plan=SessionEndPlan(
+            canonical_end=transaction.closed_at,
+            authority="action_bundle",
+        ),
+        smb_principal="EXAMPLE\\analyst",
+        auth_protocol="NTLMv2",
+        auth_session_ref="smb-auth-root",
+        account_scope="EXAMPLE",
+    )
+    plan = manager.finalize_connection_composite_materialization(
+        cursor,
+        transaction,
+        source_system="WS-01",
+        source_hostname="WS-01",
+        hostname="FS-01",
+        batch=batch_builder.seal(),
+    )
+    result = manager.materialize_connection_composite(plan, transaction_owner)
+    receipt = result.smb_connection_pin_install
+    assert receipt is not None
+    assert receipt.pin is pin
+    assert receipt.session_identity == session_plan.identity
+    assert manager.recover_smb_connection_pin_install(pin) is receipt
+    assert manager.authenticates_smb_connection_pin(pin)
+    if acknowledge_install:
+        assert manager.acknowledge_smb_connection_pin_install(receipt)
+        assert manager.recover_smb_connection_pin_install(pin) is None
+    return manager, transaction_owner, pin, session_plan.identity, transaction
+
+
+def _planned_smb_root(
+    *,
+    started_at: datetime = _START,
+    duration: float = 1.25,
+    src_port: int = 50_001,
+) -> tuple[
+    StateManager,
+    random.Random,
+    ConnectionPlanningCursor,
+    object,
+    NetworkTransactionPlan,
+    MaterializationBatchPlan,
+]:
+    """Return one valid unsealed SMB root for adversarial preflight tests."""
+
+    manager = StateManager()
+    manager.set_current_time(started_at)
+    owner = random.Random(9_448)
+    cursor = manager.begin_connection_planning(owner)
+    identity = cursor.reserve_identity()
+    pin = cursor.reserve_smb_connection_pin()
+    transaction = _transaction(
+        conn_id=identity.conn_id,
+        zeek_uid=identity.zeek_uid,
+        started_at=started_at,
+        duration=duration,
+        src_port=src_port,
+        dst_port=445,
+        service="smb",
+        hostname="FS-01",
+    )
+    batch_builder = manager.begin_materialization_batch()
+    batch_builder.plan_session(
+        username="EXAMPLE\\analyst",
+        system="FS-01",
+        logon_type=3,
+        source_ip=transaction.src_ip,
+        source_port=transaction.src_port,
+        session_kind="network",
+        start_time=transaction.started_at + timedelta(milliseconds=50),
+        logon_id=None,
+        network_close_time=transaction.closed_at,
+        closure_owned_by_bundle=True,
+        end_plan=SessionEndPlan(
+            canonical_end=transaction.closed_at,
+            authority="action_bundle",
+        ),
+        smb_principal="EXAMPLE\\analyst",
+        auth_protocol="NTLMv2",
+        auth_session_ref="smb-auth-preflight",
+        account_scope="EXAMPLE",
+    )
+    return manager, owner, cursor, pin, transaction, batch_builder.seal()
+
+
+@pytest.mark.parametrize("tampered_field", ["_cancelled", "_preview_rng", "_identity"])
+def test_smb_cursor_preflight_rejects_hostile_fields_without_callbacks(
+    tampered_field: str,
+) -> None:
+    """Cursor entry points exact-type every public field before using it."""
+
+    manager = StateManager()
+    manager.set_current_time(_START)
+    cursor = manager.begin_connection_planning(random.Random(9_449))
+    if tampered_field == "_identity":
+        cursor.reserve_identity()
+    original = getattr(cursor, tampered_field)
+    trap = _CallbackTrap()
+    object.__setattr__(cursor, tampered_field, trap)
+    digest = manager.materialization_digest()
+
+    with pytest.raises(StateError):
+        if tampered_field == "_identity":
+            cursor.reserve_smb_connection_pin()
+        else:
+            cursor.reserve_identity()
+
+    assert trap.calls == 0
+    assert manager.materialization_digest() == digest
+    object.__setattr__(cursor, tampered_field, original)
+    cursor.cancel()
+    assert manager.get_state_summary()["smb_connection_pins_active"] == 0
+
+
+def test_smb_root_preflight_rejects_hostile_activity_before_normalization() -> None:
+    """A pin-bearing root rejects forbidden activity before reading its properties."""
+
+    manager, _owner, cursor, _pin, transaction, batch = _planned_smb_root()
+    trap = _CallbackTrap()
+    digest = manager.materialization_digest()
+
+    with pytest.raises(StateError, match="unsupported activity"):
+        manager.finalize_connection_composite_materialization(
+            cursor,
+            transaction,
+            source_system="WS-01",
+            source_hostname="WS-01",
+            hostname="FS-01",
+            batch=batch,
+            process_activity=(trap,),  # type: ignore[arg-type]
+        )
+
+    assert trap.calls == 0
+    assert manager.materialization_digest() == digest
+    cursor.cancel()
+
+
+def test_smb_root_preflight_rejects_hostile_transaction_before_hmac() -> None:
+    """The root transaction exact-type gate precedes model access and legacy HMAC."""
+
+    manager, owner, cursor, _pin, _transaction_plan, batch = _planned_smb_root()
+    trap = _CallbackTrap()
+    digest = manager.materialization_digest()
+    owner_state = owner.getstate()
+
+    with pytest.raises(StateError):
+        manager.finalize_connection_composite_materialization(
+            cursor,
+            trap,  # type: ignore[arg-type]
+            source_system="WS-01",
+            source_hostname="WS-01",
+            hostname="FS-01",
+            batch=batch,
+        )
+
+    assert trap.calls == 0
+    assert manager.materialization_digest() == digest
+    assert owner.getstate() == owner_state
+    cursor.cancel()
+
+
+@pytest.mark.parametrize("src_port", [0, 65_536])
+def test_smb_root_rejects_invalid_source_port_before_state_or_rng_mutation(
+    src_port: int,
+) -> None:
+    """A physical SMB root admits only a positive 16-bit client port."""
+
+    manager, owner, cursor, _pin, transaction, batch = _planned_smb_root(
+        src_port=src_port,
+    )
+    before_digest = manager.materialization_digest()
+    before_summary = manager.get_state_summary()
+    before_owner_state = owner.getstate()
+
+    with pytest.raises(StateError, match="source port"):
+        manager.finalize_connection_composite_materialization(
+            cursor,
+            transaction,
+            source_system="WS-01",
+            source_hostname="WS-01",
+            hostname="FS-01",
+            batch=batch,
+        )
+
+    assert manager.materialization_digest() == before_digest
+    assert manager.get_state_summary() == before_summary
+    assert owner.getstate() == before_owner_state
+    cursor.cancel()
+
+
+@pytest.mark.parametrize("src_port", [1, 65_535])
+def test_smb_root_accepts_source_port_boundaries(src_port: int) -> None:
+    """The positive 16-bit SMB client-port boundaries seal and publish exactly."""
+
+    manager, owner, cursor, pin, transaction, batch = _planned_smb_root(
+        src_port=src_port,
+    )
+    plan = manager.finalize_connection_composite_materialization(
+        cursor,
+        transaction,
+        source_system="WS-01",
+        source_hostname="WS-01",
+        hostname="FS-01",
+        batch=batch,
+    )
+
+    assert manager.authenticates_materialization_plan(plan)
+    result = manager.materialize_connection_composite(plan, owner)
+    receipt = result.smb_connection_pin_install
+    assert receipt is not None
+    assert receipt.pin is pin
+    assert result.connection.src_port == src_port
+    assert manager.acknowledge_smb_connection_pin_install(receipt)
+
+
+def test_smb_root_preflight_rejects_hostile_nested_session_before_hmac() -> None:
+    """Nested Type-3 payload fields are gated before legacy repr-based HMACs."""
+
+    manager, _owner, cursor, _pin, transaction, batch = _planned_smb_root()
+    session = batch.session
+    assert session is not None
+    trap = _CallbackTrap()
+    object.__setattr__(session._payload, "auth_protocol", trap)
+    digest = manager.materialization_digest()
+
+    with pytest.raises(StateError):
+        manager.finalize_connection_composite_materialization(
+            cursor,
+            transaction,
+            source_system="WS-01",
+            source_hostname="WS-01",
+            hostname="FS-01",
+            batch=batch,
+        )
+
+    assert trap.calls == 0
+    assert manager.materialization_digest() == digest
+    cursor.cancel()
+
+
+def test_smb_root_requires_full_terminal_retention_time_headroom() -> None:
+    """Root admission reserves the exact close plus ended-session retention interval."""
+
+    latest_close = datetime.max.replace(tzinfo=UTC) - timedelta(hours=48)
+    valid_start = latest_close - timedelta(seconds=1)
+    manager, _owner, cursor, _pin, transaction, batch = _planned_smb_root(
+        started_at=valid_start,
+        duration=1.0,
+    )
+    plan = manager.finalize_connection_composite_materialization(
+        cursor,
+        transaction,
+        source_system="WS-01",
+        source_hostname="WS-01",
+        hostname="FS-01",
+        batch=batch,
+    )
+    assert manager.authenticates_materialization_plan(plan)
+
+    invalid_start = valid_start + timedelta(microseconds=1)
+    manager, owner, cursor, _pin, transaction, batch = _planned_smb_root(
+        started_at=invalid_start,
+        duration=1.0,
+    )
+    digest = manager.materialization_digest()
+    owner_state = owner.getstate()
+    with pytest.raises(StateError, match="retention headroom"):
+        manager.finalize_connection_composite_materialization(
+            cursor,
+            transaction,
+            source_system="WS-01",
+            source_hostname="WS-01",
+            hostname="FS-01",
+            batch=batch,
+        )
+    assert manager.materialization_digest() == digest
+    assert owner.getstate() == owner_state
+    cursor.cancel()
+
+
+def test_connection_pin_installs_with_type3_and_fences_every_connection_writer() -> None:
+    """One exact pin hides terminal indexes and blocks every ordinary root writer."""
+
+    manager, owner, pin, _session_identity, transaction = _pinned_smb_root()
+    connection = manager.state.open_connections[transaction.conn_id]
+    digest = manager.materialization_digest()
+
+    assert transaction.conn_id not in manager._connection_expirations
+    assert transaction.conn_id not in manager._terminal_connection_ids
+    assert manager.sweep_closed_connections(transaction.closed_at) == 0
+    assert manager.state.open_connections[transaction.conn_id] is connection
+    with pytest.raises(StateError, match="pinned SMB connection"):
+        manager.update_connection_interval(
+            transaction.conn_id,
+            transaction.started_at,
+            transaction.closed_at,
+        )
+    with pytest.raises(StateError, match="pinned SMB connection"):
+        manager.update_connection_bytes(transaction.conn_id, 1, 1)
+    with pytest.raises(StateError, match="pinned SMB connection"):
+        manager.update_connection_transaction(transaction.conn_id, transaction)
+    with pytest.raises(StateError, match="pinned SMB connection"):
+        manager.close_connection(transaction.conn_id)
+
+    child_owner = random.Random(9_446)
+    child_cursor = manager.begin_connection_planning(child_owner)
+    child = replace(
+        transaction,
+        stable_id="pinned-application-child",
+        application_layer_only=True,
+    )
+    with pytest.raises(StateError, match="pinned SMB connection"):
+        manager.finalize_connection_composite_materialization(
+            child_cursor,
+            child,
+            mode=ConnectionMaterializationMode.APPLICATION_CHILD,
+        )
+    child_cursor.cancel()
+
+    assert manager.materialization_digest() == digest
+    assert owner is not None and pin is not None
+
+
+def test_connection_composite_rejects_pinned_session_activity_precanonical() -> None:
+    """An unrelated physical root cannot patch a pinned Type-3 activity frontier."""
+
+    manager, _owner, pin, session_identity, pinned = _pinned_smb_root()
+    session = manager.get_session(session_identity.logon_id)
+    assert session is not None
+    owner = random.Random(9_450)
+    cursor = manager.begin_connection_planning(owner)
+    identity = cursor.reserve_identity()
+    transaction = _transaction(
+        conn_id=identity.conn_id,
+        zeek_uid=identity.zeek_uid,
+        stable_id="unrelated-pinned-session-activity",
+        started_at=pinned.started_at,
+    )
+    before = manager.materialization_digest()
+    before_fields = dict(session.__dict__)
+    owner_state = owner.getstate()
+
+    with pytest.raises(StateError, match="pinned SMB session"):
+        manager.finalize_connection_composite_materialization(
+            cursor,
+            transaction,
+            source_system="WS-01",
+            source_hostname="WS-01",
+            hostname="example.test",
+            session_activity=(SessionActivityPatch(session_identity, pinned.closed_at),),
+        )
+
+    assert manager.materialization_digest() == before
+    assert session.__dict__ == before_fields
+    assert owner.getstate() == owner_state
+    assert manager.authenticates_smb_connection_pin(pin)
+    cursor.cancel()
+
+
+def test_apply_rejects_pinned_connection_before_process_or_row_mutation() -> None:
+    """The compatibility apply path checks the pin before any related activity write."""
+
+    manager, _owner, pin, _session_identity, transaction = _pinned_smb_root()
+    pid = manager.create_process(
+        "WS-01",
+        0,
+        r"C:\Windows\System32\client.exe",
+        "client.exe",
+        "EXAMPLE\\analyst",
+        "Medium",
+    )
+    process = manager.get_process("WS-01", pid)
+    connection = manager.state.open_connections[transaction.conn_id]
+    assert process is not None
+    before = manager.materialization_digest()
+    process_before = dict(process.__dict__)
+    connection_before = dict(connection.__dict__)
+
+    with pytest.raises(StateError, match="pinned SMB connection"):
+        manager.apply(
+            OccurrenceBuilder(
+                timestamp=transaction.closed_at,
+                event_type="connection",
+                src_host=HostContext(
+                    hostname="WS-01",
+                    ip=transaction.src_ip,
+                    os="Windows 11",
+                    os_category="windows",
+                    system_type="workstation",
+                ),
+                process=ProcessContext(
+                    pid=pid,
+                    parent_pid=0,
+                    image=r"C:\Windows\System32\client.exe",
+                    command_line="client.exe",
+                    username="EXAMPLE\\analyst",
+                ),
+                network=transaction,
+            )
+        )
+
+    assert manager.materialization_digest() == before
+    assert process.__dict__ == process_before
+    assert connection.__dict__ == connection_before
+    assert manager.authenticates_smb_connection_pin(pin)
+
+
+@pytest.mark.parametrize("supplied_logon_id", ["0x3e4", "0x3e5", "0x3e7"])
+def test_connection_pin_rejects_supplied_reserved_type3_logon_ids(
+    supplied_logon_id: str,
+) -> None:
+    """SMB roots accept only collision-probed generated Type-3 identities."""
+
+    manager = StateManager()
+    manager.set_current_time(_START)
+    owner = random.Random(9_447)
+    cursor = manager.begin_connection_planning(owner)
+    identity = cursor.reserve_identity()
+    cursor.reserve_smb_connection_pin()
+    transaction = _transaction(
+        conn_id=identity.conn_id,
+        zeek_uid=identity.zeek_uid,
+        dst_port=445,
+        service="smb",
+        hostname="FS-01",
+    )
+    batch_builder = manager.begin_materialization_batch()
+    batch_builder.plan_session(
+        username="EXAMPLE\\analyst",
+        system="FS-01",
+        logon_type=3,
+        source_ip=transaction.src_ip,
+        source_port=transaction.src_port,
+        session_kind="network",
+        start_time=transaction.started_at,
+        logon_id=supplied_logon_id,
+        network_close_time=transaction.closed_at,
+        closure_owned_by_bundle=True,
+        end_plan=SessionEndPlan(
+            canonical_end=transaction.closed_at,
+            authority="action_bundle",
+        ),
+        smb_principal="EXAMPLE\\analyst",
+        auth_protocol="NTLMv2",
+        auth_session_ref="reserved-logon-negative",
+        account_scope="EXAMPLE",
+    )
+    batch = batch_builder.seal()
+    digest = manager.materialization_digest()
+
+    with pytest.raises(StateError, match="generated LogonID"):
+        manager.finalize_connection_composite_materialization(
+            cursor,
+            transaction,
+            source_system="WS-01",
+            source_hostname="WS-01",
+            hostname="FS-01",
+            batch=batch,
+        )
+
+    assert manager.materialization_digest() == digest
+    cursor.cancel()
