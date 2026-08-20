@@ -1003,6 +1003,7 @@ class TestStorylineCommandNetworks:
 class _FakeActivityGenerator:
     def __init__(self) -> None:
         self.reserved_ports: list[int] = []
+        self.previewed_ports: list[int] = []
         self.connections: list[dict] = []
         self.smb_activities: list[dict[str, Any]] = []
         self.ssh_sessions: list[dict] = []
@@ -1125,6 +1126,12 @@ class _FakeActivityGenerator:
 
     def reserve_ssh_source_port(self, *args: Any, **kwargs: Any) -> int:
         self.reserved_ports.append(45678)
+        return 45678
+
+    def preview_ssh_source_port(self, *args: Any, **kwargs: Any) -> int:
+        """Capture the allocation-free SSH port selection used by storyline SCP."""
+
+        self.previewed_ports.append(45678)
         return 45678
 
     def generate_connection(self, **kwargs: Any) -> str:
@@ -1777,12 +1784,54 @@ class TestStorylineScpCorrelation:
             explicit_types={"process"},
         )
 
-        assert engine.activity_generator.reserved_ports == [45678]
+        assert engine.activity_generator.reserved_ports == []
+        assert engine.activity_generator.previewed_ports == [45678]
         assert engine.activity_generator.connections == []
         assert engine.activity_generator.ssh_sessions[0]["source_port"] == 45678
         assert engine.activity_generator.ssh_sessions[0]["source"] == "storyline_scp"
         assert engine.activity_generator.ssh_sessions[0]["defer_session_close"] is True
         assert receiver_ports == [45678]
+
+    def test_unmodeled_scp_target_preserves_compatibility_port_reservation(self):
+        """Only modeled Linux SSH delegation uses allocation-free tuple preview."""
+
+        source = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="process",
+            process_name="scp",
+            command_line=("scp /tmp/archive.tar.gz root@203.0.113.77:/var/tmp/archive.tar.gz"),
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="copy archive to an unmodeled host",
+            explicit_types={"process"},
+        )
+
+        assert engine.activity_generator.reserved_ports == [45678]
+        assert engine.activity_generator.previewed_ports == []
+        assert engine.activity_generator.connections[0]["src_port"] == 45678
+        assert engine.activity_generator.ssh_sessions == []
 
     def test_scp_network_and_receiver_artifacts_wait_for_visible_source_process_create(self):
         source = System(

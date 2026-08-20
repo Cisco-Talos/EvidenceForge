@@ -5789,12 +5789,207 @@ class EventDispatcher:
         ):
             raise EventContractError("Exact projection is limited to successful Type-5 logons")
 
+    @staticmethod
+    def _require_ssh_terminal_projection(
+        record: _PreparedActionCohortBatchRecord,
+    ) -> str:
+        """Authenticate one narrow SSH terminal State/event cohort.
+
+        SSH terminal exact mode is deliberately limited to one client-process
+        termination or one target SSH-session logout.  It cannot be used as a
+        generic exact action-cohort escape hatch.
+        """
+
+        from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+        from evidenceforge.events.identity import (
+            EventIdentityPlan,
+            ProcessIdentity,
+            SessionIdentity,
+        )
+        from evidenceforge.events.lifecycle import ActionLifecycleContext
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact SSH terminal projection requires one member")
+        projection = record.trusted_projections[0]
+        event = projection.occurrence
+        plan = record.state_plan
+        identity_plan = event.identity_plan
+        lifecycle = event.lifecycle
+        empty_common_state = not any(
+            (
+                plan.sessions,
+                plan.processes,
+                plan.live_session_process_role_patches,
+                plan.session_metadata_patches,
+                plan.process_activity_patches,
+            )
+        )
+        if (
+            not record.root_action_id.startswith("ssh-close:")
+            or not empty_common_state
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+            or type(identity_plan) is not EventIdentityPlan
+            or type(lifecycle) is not ActionLifecycleContext
+            or lifecycle.phase != "closure"
+        ):
+            raise EventContractError("Exact SSH terminal projection changed its closed owner")
+
+        if event.event_type is EventKind.PROCESS_TERMINATE:
+            source_terminal = record.root_action_id.endswith(":source-terminate")
+            receiver_terminal = record.root_action_id.endswith(":receiver-terminate")
+            if (
+                not (source_terminal or receiver_terminal)
+                or len(plan.process_terminations) != 1
+                or plan.session_terminalizations
+                or type(identity_plan.subject) is not ProcessIdentity
+                or identity_plan.actor is not None
+                or identity_plan.target is not None
+                or len(plan.session_activity_patches) > 1
+                or type(event.src_host) is not HostContext
+                or event.dst_host is not None
+                or type(event.process) is not ProcessContext
+                or type(event.auth) is not AuthContext
+            ):
+                raise EventContractError(
+                    "Exact SSH source termination changed its singleton State/event shape"
+                )
+            identity = identity_plan.subject
+            termination = plan.process_terminations[0]
+            session_patch_identity = (
+                EventDispatcher._action_cohort_target_identity(
+                    plan.session_activity_patches[0].target
+                )
+                if plan.session_activity_patches
+                else None
+            )
+            executable = identity.image.casefold().replace("\\", "/").rsplit("/", 1)[-1]
+            if (
+                termination.identity != identity
+                or termination.end_time != event.timestamp
+                or ((identity_plan.session is None) is not (session_patch_identity is None))
+                or (
+                    identity_plan.session is not None
+                    and identity_plan.session != session_patch_identity
+                )
+                or (
+                    plan.session_activity_patches
+                    and plan.session_activity_patches[0].activity_time != event.timestamp
+                )
+                or (
+                    source_terminal
+                    and executable not in {"ssh", "ssh.exe", "scp", "scp.exe", "sftp", "sftp.exe"}
+                )
+                or (receiver_terminal and executable != "sshd")
+                or (receiver_terminal and identity.principal.casefold() != "root")
+                or event.src_host.hostname != identity.hostname
+                or event.process.pid != identity.pid
+                or event.process.parent_pid not in {0, identity.parent_pid}
+                or event.process.image != identity.image
+                or event.process.username != identity.principal
+                or event.process.logon_id != identity.logon_id
+                or event.process.start_time != identity.started_at
+                or event.auth.username != identity.principal
+                or event.auth.logon_id != identity.logon_id
+                or lifecycle.group_id != identity.lifecycle_group_id
+                or lifecycle.canonical_start != identity.started_at
+                or lifecycle.parent_group_id != (identity.parent_lifecycle_group_id or None)
+            ):
+                raise EventContractError(
+                    "Exact SSH source termination disagrees with its live process identity"
+                )
+            return "ssh_process_terminate"
+
+        if event.event_type is EventKind.LOGOFF:
+            if (
+                not record.root_action_id.endswith(":logout")
+                or plan.process_terminations
+                or len(plan.session_terminalizations) != 1
+                or plan.session_activity_patches
+                or type(identity_plan.subject) is not SessionIdentity
+                or identity_plan.actor is not None
+                or identity_plan.target is not None
+                or identity_plan.session != identity_plan.subject
+                or event.src_host is not None
+                or type(event.dst_host) is not HostContext
+                or event.dst_host.os_category != "linux"
+                or type(event.auth) is not AuthContext
+                or event.syslog is None
+                or event.syslog.app_name != "sshd"
+            ):
+                raise EventContractError("Exact SSH logout changed its singleton State/event shape")
+            identity = identity_plan.subject
+            terminalization = plan.session_terminalizations[0]
+            if (
+                identity.session_kind != "ssh"
+                or terminalization.identity != identity
+                or terminalization.end_time != event.timestamp
+                or event.dst_host.hostname != identity.hostname
+                or event.auth.username != identity.principal
+                or event.auth.logon_id != identity.logon_id
+                or event.auth.session_id != identity.session_id
+                or event.auth.logon_type != 10
+                or event.auth.source_ip in {"", "-"}
+                or type(event.auth.source_port) is not int
+                or not 1 <= event.auth.source_port <= 65_535
+                or lifecycle.group_id != identity.lifecycle_group_id
+                or lifecycle.canonical_start != identity.started_at
+                or lifecycle.parent_group_id != (identity.parent_lifecycle_group_id or None)
+            ):
+                raise EventContractError(
+                    "Exact SSH logout disagrees with its live session identity"
+                )
+            return "ssh_logout"
+
+        raise EventContractError("Exact SSH terminal projection event kind is unsupported")
+
+    def _exact_action_cohort_projection_kind(
+        self,
+        record: _PreparedActionCohortBatchRecord,
+    ) -> str:
+        """Return the authenticated closed semantic kind for exact cohort projection."""
+
+        projection = record.trusted_projections[0]
+        try:
+            self._require_type_five_projection(projection)
+        except EventContractError:
+            return self._require_ssh_terminal_projection(record)
+        return "type5"
+
+    def _ssh_terminal_exact_projection_participants(
+        self,
+        projection: _PreparedProjection,
+    ) -> tuple[LogEmitter, ...]:
+        """Require one concrete exact eCAR terminal target and no other source."""
+
+        from evidenceforge.generation.emitters.ecar import EcarEmitter
+
+        participants: list[LogEmitter] = []
+        participant_ids: set[int] = set()
+        for format_name, emitter in self._exact_projection_targets(projection):
+            marker = type(emitter).__dict__.get("supports_exact_projection_publication")
+            if (
+                format_name != "ecar"
+                or type(emitter) is not EcarEmitter
+                or marker is None
+                or getattr(emitter, "supports_exact_projection_publication", None) is not True
+            ):
+                raise EventContractError(
+                    f"Exact SSH terminal target {format_name!r} is unsupported before State"
+                )
+            if id(emitter) not in participant_ids:
+                participant_ids.add(id(emitter))
+                participants.append(emitter)
+        if len(participants) != 1:
+            raise EventContractError("Exact SSH terminal projection requires one eCAR target")
+        return tuple(participants)
+
     def _initialize_action_cohort_exact_projection(
         self,
         record: _PreparedActionCohortBatchRecord,
         cleanup_record: _ActionCohortPreparationCleanupRecord,
     ) -> None:
-        """Validate one State-backed Type-5 member and issue its private exact batch."""
+        """Validate one closed State-backed member and issue its private exact batch."""
 
         if (
             not record.exact_projection
@@ -5802,22 +5997,26 @@ class EventDispatcher:
             or len(record.dispatches) != 1
         ):
             raise EventContractError(
-                "Exact action-cohort projection requires exactly one Type-5 member"
+                "Exact action-cohort projection requires exactly one closed member"
             )
         projection = record.trusted_projections[0]
-        self._require_type_five_projection(projection)
+        exact_kind = self._exact_action_cohort_projection_kind(record)
         if (
             record.artifact_publications
             or record.effect_member_bindings
             or record.external_effect_links
             or record.owned_effect_plans
             or record.published_provenances
-            or record.member_binary_identity_kinds != ("",)
         ):
             raise EventContractError(
-                "Exact Type-5 projection cannot carry artifact, effect, or binary owners"
+                "Exact action-cohort projection cannot carry artifact or effect owners"
             )
-        self._exact_projection_participants(projection)
+        if exact_kind == "type5":
+            if record.member_binary_identity_kinds != ("",):
+                raise EventContractError("Exact Type-5 projection cannot carry binary owners")
+            self._exact_projection_participants(projection)
+        else:
+            self._ssh_terminal_exact_projection_participants(projection)
         cleanup_record.exact_publication_batch = self._exact_publication_authority.issue_batch()
         record.exact_publication_batch = cleanup_record.exact_publication_batch
 
@@ -5831,7 +6030,12 @@ class EventDispatcher:
         if batch is None or len(record.trusted_projections) != 1:
             raise EventContractError("Exact action-cohort batch was not issued")
         projection = record.trusted_projections[0]
-        participants = self._exact_projection_participants(projection)
+        exact_kind = self._exact_action_cohort_projection_kind(record)
+        participants = (
+            self._exact_projection_participants(projection)
+            if exact_kind == "type5"
+            else self._ssh_terminal_exact_projection_participants(projection)
+        )
         batch.reserve_participants(cast(tuple[object, ...], participants))
         prepared_result = batch.prepare(
             lambda: tuple(sorted(self._publish_action_cohort_projection(projection).items()))

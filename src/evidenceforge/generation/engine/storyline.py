@@ -4142,21 +4142,40 @@ class StorylineMixin:
                         network_time=time + timedelta(milliseconds=rng.randint(250, 900)),
                         rng=rng,
                     )
-                    source_port = self.activity_generator.reserve_ssh_source_port(
-                        system.ip,
-                        dst_ip,
-                        None,
-                        rng,
-                        _get_os_category(system.os),
-                        time=transfer_time,
+                    target_system = self._system_for_ip(dst_ip)
+                    modeled_linux_receiver = bool(
+                        target_system is not None and _get_os_category(target_system.os) == "linux"
                     )
-                    transfer_duration = rng.uniform(2.0, 30.0)
+                    source_port = (
+                        self.activity_generator.preview_ssh_source_port(
+                            system.ip,
+                            dst_ip,
+                            None,
+                            rng,
+                            _get_os_category(system.os),
+                            transfer_time,
+                        )
+                        if modeled_linux_receiver
+                        else self.activity_generator.reserve_ssh_source_port(
+                            system.ip,
+                            dst_ip,
+                            None,
+                            rng,
+                            _get_os_category(system.os),
+                            time=transfer_time,
+                        )
+                    )
+                    transfer_duration = (
+                        # Leave a real authentication window before exact SCP close.
+                        rng.uniform(12.0, 40.0)
+                        if modeled_linux_receiver
+                        else rng.uniform(2.0, 30.0)
+                    )
                     orig_bytes = rng.randint(20_000, 250_000)
                     resp_bytes = rng.randint(4_000, 40_000)
-                    target_system = self._system_for_ip(dst_ip)
                     if (
-                        target_system is not None
-                        and _get_os_category(target_system.os) == "linux"
+                        modeled_linux_receiver
+                        and target_system is not None
                         and scp_destination is not None
                     ):
                         target_user = self._resolve_scp_target_user(

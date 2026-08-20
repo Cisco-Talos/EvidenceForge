@@ -90,6 +90,8 @@ class _PreparedNetworkBoundary:
     network_dependent_dispatcher: Any = None
     network_dependent_batch: Any = None
     terminal_materialization: Any = None
+    deferred_session_dispatcher: Any = None
+    deferred_session_publication_batch: Any = None
     transferred: bool = False
 
     def claim_identity_capture(self, capture: Any) -> None:
@@ -128,13 +130,23 @@ class _PreparedNetworkBoundary:
             return None
         capture = self.identity_capture
         claim = self.identity_capture_claim
-        capture._publish_committed_claimed(
+        publication_result = capture._publish_committed_claimed(
             claim,
             root=root,
             receipt=receipt,
             application_receipt=application_receipt,
             outcome=outcome,
         )
+        if publication_result is not None:
+            raise StateError("Network identity capture returned a forged publication result")
+        if not capture._authenticates_committed_claimed_publication(
+            claim,
+            root=root,
+            receipt=receipt,
+            application_receipt=application_receipt,
+            outcome=outcome,
+        ):
+            raise StateError("Network identity capture did not publish its exact committed owner")
         self.identity_capture = None
         self.identity_capture_claim = None
         return capture
@@ -287,6 +299,68 @@ class _PreparedNetworkBoundary:
                 restore()
                 raise StateError("Prepared network durable identity capture changed after ack")
 
+    def recover_committed_capture_no_fail(self, *, executor: Any, root: Any) -> bool:
+        """Publish exact transport identity when a postcommit bridge return is lost."""
+
+        if self.identity_capture is None:
+            return False
+        capture = self.identity_capture
+        claim = self.identity_capture_claim
+        if not capture._authenticates_claim(claim):
+            return False
+        transaction = root.transaction
+        if not executor.state_manager.authenticates_materialization_plan(root.state_plan):
+            return False
+        connection = executor.state_manager.get_connection_by_transaction_id(transaction.stable_id)
+        if connection is None:
+            return False
+        committed = (
+            connection.conn_id,
+            connection.zeek_uid,
+            connection.src_ip,
+            connection.src_port,
+            connection.dst_ip,
+            connection.dst_port,
+            connection.protocol,
+            connection.start_time,
+            connection.close_time,
+            connection.bytes_sent,
+            connection.bytes_received,
+            connection.transaction_id,
+            connection.conn_state,
+            connection.history,
+            connection.duration,
+            connection.traffic_ledger,
+        )
+        expected = (
+            transaction.conn_id,
+            transaction.zeek_uid,
+            transaction.src_ip,
+            transaction.src_port,
+            transaction.dst_ip,
+            transaction.dst_port,
+            transaction.protocol,
+            transaction.started_at,
+            transaction.closed_at,
+            transaction.traffic.orig.payload_bytes,
+            transaction.traffic.resp.payload_bytes,
+            transaction.stable_id,
+            transaction.conn_state,
+            transaction.history,
+            transaction.duration,
+            transaction.traffic,
+        )
+        if committed != expected:
+            return False
+        capture._publish_claimed(
+            claim,
+            transaction,
+            lifecycle_mode=root.runtime_token.lifecycle_mode,
+        )
+        self.identity_capture = None
+        self.identity_capture_claim = None
+        return True
+
     def track_network_dependent_batch(self, dispatcher: Any, batch: Any) -> None:
         """Own one claimed projection-only dependent batch until root acceptance."""
 
@@ -304,6 +378,24 @@ class _PreparedNetworkBoundary:
             self.network_dependent_batch
         ):
             raise StateError("Network-dependent dispatch batch changed before publication")
+
+    def track_deferred_session_publication_batch(self, dispatcher: Any, batch: Any) -> None:
+        """Own one exact SSH/RDP source batch until lifecycle transfer."""
+
+        if self.deferred_session_publication_batch is not None:
+            raise StateError("Network root cannot own two deferred-session source batches")
+        self.deferred_session_dispatcher = dispatcher
+        self.deferred_session_publication_batch = batch
+
+    def validate_deferred_session_publication_batch(self) -> None:
+        """Authenticate the exact deferred-session source batch before transfer."""
+
+        if self.deferred_session_publication_batch is None:
+            return
+        if not self.deferred_session_dispatcher.authenticates_prepared_deferred_session_publication_batch(
+            self.deferred_session_publication_batch
+        ):
+            raise StateError("Deferred-session source publication batch changed before transfer")
 
     def track_application(
         self,
@@ -383,6 +475,15 @@ class _PreparedNetworkBoundary:
             self.network_dependent_batch = None
         if self.transferred:
             return
+        if self.deferred_session_publication_batch is not None:
+            try:
+                self.deferred_session_dispatcher.cancel_prepared_deferred_session_publication_batch(
+                    self.deferred_session_publication_batch
+                )
+            except (AttributeError, EventContractError, StateError, TypeError, ValueError):
+                pass
+            self.deferred_session_dispatcher = None
+            self.deferred_session_publication_batch = None
         if self.lifecycle_token is not None and self.lifecycle_adapter is not None:
             try:
                 self.lifecycle_adapter.cancel_closed_transport_publication(self.lifecycle_token)
@@ -520,6 +621,130 @@ class NetworkTransactionPlanner:
 
     def __init__(self, executor: ActivityGenerator) -> None:
         self._executor = executor
+
+    @staticmethod
+    def _deferred_session_dependent_builders(
+        authority: Any,
+        event: OccurrenceBuilder,
+        root: Any,
+    ) -> tuple[tuple[OccurrenceBuilder, Any], ...]:
+        """Resolve inert SSH dependent specifications into canonical builders.
+
+        The protocol caller owns only frozen semantic specifications.  This network
+        boundary resolves them after the physical tuple and exact State batch are
+        frozen, but before any State, lifecycle, timing, application, or source
+        publication capability transfers.
+        """
+
+        from evidenceforge.events.base import OccurrenceBuilder
+        from evidenceforge.events.contexts import AuthContext, ProcessContext
+        from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
+        from evidenceforge.events.identity import EventIdentityPlan
+        from evidenceforge.events.lifecycle import ActionLifecycleContext
+        from evidenceforge.generation.actions.network_connection import (
+            DeferredSessionNetworkAuthority,
+        )
+        from evidenceforge.generation.deferred_session_preseal import (
+            DeferredSessionDependentOccurrenceSpec,
+        )
+        from evidenceforge.generation.state_manager import (
+            ProcessMaterializationPlan,
+            SessionMaterializationPlan,
+        )
+
+        if type(authority) is not DeferredSessionNetworkAuthority:
+            raise TypeError("Deferred SSH dependent authority changed exact type")
+        specs = DeferredSessionNetworkAuthority.validate_dependent_occurrences(authority)
+        if not specs:
+            return ()
+        batch = root.state_plan.batch
+        if batch is None:
+            raise StateError("Deferred SSH dependent specifications lost their State batch")
+        if batch is not authority.state_batch:
+            raise StateError("Deferred SSH dependent specifications changed their State owner")
+        members = (
+            *((batch.session,) if batch.session is not None else ()),
+            *batch.processes,
+        )
+        members_by_object_id = {member.identity.object_id: member for member in members}
+        transaction = root.transaction
+        resolved: list[tuple[OccurrenceBuilder, Any]] = []
+        for spec in specs:
+            if type(spec) is not DeferredSessionDependentOccurrenceSpec:
+                raise TypeError("Deferred SSH dependent specification changed type")
+            member = members_by_object_id.get(spec.member_references[0])
+            if member is None:
+                raise StateError("Deferred SSH dependent specification names no State member")
+            identity = member.identity
+            occurrence_key = SemanticOccurrenceKey(
+                action_id=transaction.stable_id,
+                role=OccurrenceRole.DEPENDENT,
+                instance_key=spec.occurrence_id,
+            )
+            if type(member) is SessionMaterializationPlan:
+                if event.dst_host is None:
+                    raise StateError("Deferred SSH login projection requires its target host")
+                builder = OccurrenceBuilder(
+                    timestamp=spec.canonical_time,
+                    event_type=spec.event_type.value,
+                    dst_host=event.dst_host,
+                    auth=AuthContext(
+                        username=identity.principal,
+                        logon_id=identity.logon_id,
+                        session_id=identity.session_id,
+                        logon_type=10,
+                        auth_package="SSH",
+                        source_ip=transaction.src_ip,
+                        source_port=transaction.src_port,
+                        session_kind="ssh",
+                        auth_protocol="ssh",
+                    ),
+                    occurrence_key=occurrence_key,
+                    identity_plan=EventIdentityPlan(subject=identity, session=identity),
+                    lifecycle=ActionLifecycleContext(
+                        group_id=identity.lifecycle_group_id,
+                        canonical_start=identity.started_at,
+                        phase="start",
+                        parent_group_id=(identity.parent_lifecycle_group_id or None),
+                    ),
+                )
+            elif type(member) is ProcessMaterializationPlan:
+                candidate_hosts = tuple(
+                    host
+                    for host in (event.src_host, event.dst_host)
+                    if host is not None and identity.hostname in {host.hostname, host.fqdn}
+                )
+                if len(candidate_hosts) != 1:
+                    raise StateError(
+                        "Deferred SSH process projection has no unique transport endpoint"
+                    )
+                builder = OccurrenceBuilder(
+                    timestamp=spec.canonical_time,
+                    event_type=spec.event_type.value,
+                    src_host=candidate_hosts[0],
+                    process=ProcessContext(
+                        pid=identity.pid,
+                        parent_pid=identity.parent_pid,
+                        image=identity.image,
+                        command_line=identity.command_line,
+                        username=identity.principal,
+                        integrity_level=member.integrity_level,
+                        logon_id=identity.logon_id,
+                        start_time=identity.started_at,
+                    ),
+                    occurrence_key=occurrence_key,
+                    identity_plan=EventIdentityPlan(subject=identity),
+                    lifecycle=ActionLifecycleContext(
+                        group_id=identity.lifecycle_group_id,
+                        canonical_start=identity.started_at,
+                        phase="start",
+                        parent_group_id=(identity.parent_lifecycle_group_id or None),
+                    ),
+                )
+            else:
+                raise TypeError("Deferred SSH State-start member changed exact type")
+            resolved.append((builder, member))
+        return tuple(resolved)
 
     @property
     def _timing_runtime(self) -> Any:
@@ -2337,6 +2562,10 @@ class NetworkTransactionPlanner:
             linearization_time=ensure_utc(time),
             action_group_id=parent_action_group_id or request.stable_id,
         )
+        if deferred_authority is not None:
+            deferred_authority = deferred_authority.prepare_timing_authority(
+                boundary.timing_preparation.planning_runtime,
+            )
         rng = network_preparation.rng
         if explicit_proxy_request_preparation is not None:
             prepared_application_token, proxy = explicit_proxy_request_preparation.prepare(
@@ -3142,6 +3371,7 @@ class NetworkTransactionPlanner:
             and dst_port == 22
             and conn_state == "SF"
             and (service in {"", "ssh"} or target_has_ssh)
+            and deferred_authority is None
         ):
             infer_generic_ssh_preauth = responding_pid <= 0
             prepared_responder = executor.prepare_network_responder(
@@ -4555,6 +4785,7 @@ class NetworkTransactionPlanner:
 
         prepared_dispatch = None
         prepared_multipart_dispatches = ()
+        prepared_deferred_session_dispatches = ()
         if lifecycle_mode == "deferred_session" and committed_suppressed:
             raise StateError("Deferred-session transport cannot suppress its root occurrence")
         if lifecycle_mode == "deferred_session" or (
@@ -4586,10 +4817,27 @@ class NetworkTransactionPlanner:
                     for builder in multipart_reads.builders
                 )
             )
+            if deferred_authority is not None:
+                deferred_state_starts = self._deferred_session_dependent_builders(
+                    deferred_authority,
+                    event,
+                    root,
+                )
+                prepared_deferred_session_dispatches = tuple(
+                    executor.dispatcher.prepare_builder(
+                        builder,
+                        state_intent=(PreparedDispatchStateIntent.EXTERNAL_DEFERRED_DEPENDENT),
+                        lifecycle_ticket=state_member,
+                        source_timing_preparation=boundary.timing_preparation,
+                    )
+                    for builder, state_member in deferred_state_starts
+                )
 
         boundary.seal_timing()
         if prepared_dispatch is not None:
             executor.dispatcher.validate_prepared(prepared_dispatch)
+        for dependent_dispatch in prepared_deferred_session_dispatches:
+            executor.dispatcher.validate_prepared(dependent_dispatch)
         if prepared_responder is not None:
             for responder_process in prepared_responder.processes:
                 executor.dispatcher.validate_prepared(responder_process.publication)
@@ -4654,6 +4902,7 @@ class NetworkTransactionPlanner:
                 state_members=state_members,
                 application_token=deferred_authority.application_token,
                 transport_dispatch=prepared_dispatch,
+                dependent_dispatches=prepared_deferred_session_dispatches,
                 existing_state_session=existing_state_session,
                 binding_disposition=(
                     deferred_authority.binding_disposition
@@ -4663,99 +4912,150 @@ class NetworkTransactionPlanner:
                 state_authority=deferred_authority.strict_state_authority,
             )
             deferred_authority.bind_strict_state_authority(executor.state_manager)
+        deferred_publication_batch = None
         if deferred_composition is not None:
-            raise StateError(
-                "Deferred-session network callers require the exact publication bridge "
-                "before prepared ownership can transfer"
+            if not prepared_deferred_session_dispatches:
+                raise StateError(
+                    "Deferred-session network callers require the exact publication bridge "
+                    "with typed dependent starts"
+                )
+            try:
+                deferred_publication_batch = (
+                    executor.dispatcher.prepare_deferred_session_publication_batch(
+                        deferred_composition,
+                        deferred_authority.coordinator,
+                    )
+                )
+            except BaseException as error:
+                retained_batch = getattr(
+                    error,
+                    "deferred_session_publication_batch",
+                    None,
+                )
+                if retained_batch is not None and (
+                    executor.dispatcher.authenticates_prepared_deferred_session_publication_batch(
+                        retained_batch
+                    )
+                ):
+                    boundary.track_deferred_session_publication_batch(
+                        executor.dispatcher,
+                        retained_batch,
+                    )
+                raise
+            boundary.track_deferred_session_publication_batch(
+                executor.dispatcher,
+                deferred_publication_batch,
             )
+        boundary.validate_deferred_session_publication_batch()
         boundary.transfer()
-        materialized = (
-            executor._lifecycle_authority.materialize_prepared_deferred_session_transaction(
-                deferred_composition,
-                deferred_authority.coordinator,
-                owner_rng,
-            )
-            if deferred_composition is not None and deferred_authority is not None
-            else executor._lifecycle_authority.materialize_prepared_network_transaction(
-                root,
-                owner_rng,
-                source_timing_preparation=boundary.timing_preparation,
-                lifecycle_token=lifecycle_token,
-                application_token=boundary.application_token,
-                prerequisite_receipts=boundary.prerequisite_receipts,
-            )
-        )
-        boundary.terminal_materialization = materialized
-        from evidenceforge.generation.actions.network_connection import (
-            NetworkConnectionPublicationOutcome,
-        )
-
-        outcome = (
-            NetworkConnectionPublicationOutcome.COMMITTED_SUPPRESSED
-            if committed_suppressed
-            else NetworkConnectionPublicationOutcome.PUBLISHED
-        )
-        application_result = materialized.connection.application
-        application_receipt = (
-            getattr(application_result, "receipt", None) if application_result is not None else None
-        )
         try:
-            authenticated_materialization = (
-                executor._lifecycle_authority.authenticates_prepared_network_receipt(
+            deferred_published = (
+                executor._lifecycle_authority.materialize_prepared_deferred_session_publication(
+                    deferred_composition,
+                    deferred_authority.coordinator,
+                    owner_rng,
+                    dispatcher=executor.dispatcher,
+                    publication_batch=deferred_publication_batch,
+                )
+                if deferred_composition is not None and deferred_authority is not None
+                else None
+            )
+            materialized = (
+                deferred_published.materialization
+                if deferred_published is not None
+                else executor._lifecycle_authority.materialize_prepared_network_transaction(
                     root,
-                    materialized.receipt,
+                    owner_rng,
+                    source_timing_preparation=boundary.timing_preparation,
+                    lifecycle_token=lifecycle_token,
+                    application_token=boundary.application_token,
+                    prerequisite_receipts=boundary.prerequisite_receipts,
                 )
             )
-        except BaseException:
-            boundary.publish_committed_capture_no_fail(
-                root=root,
-                receipt=materialized.receipt,
-                application_receipt=application_receipt,
-                outcome=outcome,
-            )
-            raise
-        if not authenticated_materialization:
-            boundary.publish_committed_capture_no_fail(
-                root=root,
-                receipt=materialized.receipt,
-                application_receipt=application_receipt,
-                outcome=outcome,
-            )
-            raise AssertionError("Prepared network authority returned an invalid receipt")
-        durable_capture = boundary.publish_committed_capture_no_fail(
-            root=root,
-            receipt=materialized.receipt,
-            application_receipt=application_receipt,
-            outcome=outcome,
-        )
-        durable_capture_facts = boundary.authenticate_committed_capture_for_ack(
-            durable_capture,
-            authority=executor._lifecycle_authority,
-            root=root,
-            receipt=materialized.receipt,
-            application_receipt=application_receipt,
-            outcome=outcome,
-        )
-        if durable_capture is not None:
-            from evidenceforge.generation.lifecycle_authority import (
-                GeneratorLifecycleAuthority,
+            boundary.terminal_materialization = materialized
+
+            from evidenceforge.generation.actions.network_connection import (
+                NetworkConnectionPublicationOutcome,
             )
 
-            GeneratorLifecycleAuthority._bind_prepared_network_durable_capture_for_ack(
-                executor._lifecycle_authority,
-                root,
-                materialized,
+            outcome = (
+                NetworkConnectionPublicationOutcome.COMMITTED_SUPPRESSED
+                if committed_suppressed
+                else NetworkConnectionPublicationOutcome.PUBLISHED
+            )
+            application_result = materialized.connection.application
+            application_receipt = (
+                getattr(application_result, "receipt", None)
+                if application_result is not None
+                else None
+            )
+            try:
+                authenticated_materialization = (
+                    executor._lifecycle_authority.authenticates_prepared_network_receipt(
+                        root,
+                        materialized.receipt,
+                    )
+                )
+            except BaseException:
+                boundary.publish_committed_capture_no_fail(
+                    root=root,
+                    receipt=materialized.receipt,
+                    application_receipt=application_receipt,
+                    outcome=outcome,
+                )
+                raise
+            if not authenticated_materialization:
+                boundary.publish_committed_capture_no_fail(
+                    root=root,
+                    receipt=materialized.receipt,
+                    application_receipt=application_receipt,
+                    outcome=outcome,
+                )
+                raise AssertionError("Prepared network authority returned an invalid receipt")
+            durable_capture = boundary.publish_committed_capture_no_fail(
+                root=root,
+                receipt=materialized.receipt,
+                application_receipt=application_receipt,
+                outcome=outcome,
+            )
+            durable_capture_facts = boundary.authenticate_committed_capture_for_ack(
                 durable_capture,
-                durable_capture_facts,
+                authority=executor._lifecycle_authority,
+                root=root,
+                receipt=materialized.receipt,
+                application_receipt=application_receipt,
+                outcome=outcome,
             )
-        try:
-            executor._lifecycle_authority.acknowledge_prepared_network_transaction(
-                root,
-                materialized,
-                durable_capture=durable_capture,
-                durable_capture_facts=durable_capture_facts,
-            )
-        except BaseException:
+            if durable_capture is not None:
+                from evidenceforge.generation.lifecycle_authority import (
+                    GeneratorLifecycleAuthority,
+                )
+
+                GeneratorLifecycleAuthority._bind_prepared_network_durable_capture_for_ack(
+                    executor._lifecycle_authority,
+                    root,
+                    materialized,
+                    durable_capture,
+                    durable_capture_facts,
+                )
+            try:
+                executor._lifecycle_authority.acknowledge_prepared_network_transaction(
+                    root,
+                    materialized,
+                    durable_capture=durable_capture,
+                    durable_capture_facts=durable_capture_facts,
+                )
+            except BaseException:
+                boundary.restore_committed_capture_after_ack(
+                    durable_capture,
+                    durable_capture_facts,
+                    authority=executor._lifecycle_authority,
+                    root=root,
+                    receipt=materialized.receipt,
+                    application_receipt=application_receipt,
+                    outcome=outcome,
+                )
+                raise
             boundary.restore_committed_capture_after_ack(
                 durable_capture,
                 durable_capture_facts,
@@ -4765,16 +5065,20 @@ class NetworkTransactionPlanner:
                 application_receipt=application_receipt,
                 outcome=outcome,
             )
+        except BaseException as primary:
+            # Re-enable exact-token cleanup at the caller boundary.  Reversible
+            # precommit reservations cancel; committed owners and exact source
+            # recovery reject cancellation without losing their durable truth.
+            # Receipt authentication and capture publication are inside this
+            # window because either may lose its return after canonical commit.
+            try:
+                boundary.recover_committed_capture_no_fail(executor=executor, root=root)
+            except BaseException as recovery_error:
+                primary.add_note(
+                    f"Committed network identity recovery also failed: {recovery_error!r}"
+                )
+            boundary.transferred = False
             raise
-        boundary.restore_committed_capture_after_ack(
-            durable_capture,
-            durable_capture_facts,
-            authority=executor._lifecycle_authority,
-            root=root,
-            receipt=materialized.receipt,
-            application_receipt=application_receipt,
-            outcome=outcome,
-        )
 
         executor._last_connection_effective_dst_ip = event.network.dst_ip
         executor._last_connection_effective_tuple = None
@@ -4792,6 +5096,20 @@ class NetworkTransactionPlanner:
             executor._last_connection_effective_transaction_id = event.network.stable_id
             executor._last_connection_http_context = event.protocol.http
             executor._last_connection_file_transfers = event.protocol.file_transfers
+        if deferred_published is not None:
+            publication = deferred_published.publication
+            identifiers_by_member = getattr(publication, "identifiers", ())
+            if type(identifiers_by_member) is not tuple or not identifiers_by_member:
+                raise AssertionError("Deferred-session bridge returned no exact source identifiers")
+            network_identifiers_by_format = dict(identifiers_by_member[0])
+            identifier_publisher = getattr(
+                executor.dispatcher,
+                "publish_network_identifiers",
+                None,
+            )
+            if callable(identifier_publisher):
+                identifier_publisher(uid, network_identifiers_by_format)
+            return uid
         if committed_suppressed:
             if prepared_multipart_batch is not None:
                 executor.dispatcher.publish_prepared_network_dependent_batch(

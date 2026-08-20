@@ -816,6 +816,81 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         drain()
         assert_drained()
 
+    def _assert_ssh_session_lifecycles_drained_before_close(self) -> None:
+        """Require the activity owner's close journal to be terminal before sink close."""
+
+        activity_generator = self.activity_generator
+        if activity_generator is None:
+            return
+        assert_drained = getattr(
+            activity_generator,
+            "assert_ssh_session_lifecycles_drained",
+            None,
+        )
+        if not callable(assert_drained):
+            # Compatibility adapters that predate action-owned SSH journals
+            # have nothing to assert. A real owner exposing journal storage may
+            # never silently omit the matching terminal capability.
+            owner_state = vars(activity_generator)
+            if (
+                "_pending_ssh_session_closures" in owner_state
+                or "_prepared_ssh_close_continuations" in owner_state
+            ):
+                raise RuntimeError("Activity generator has no SSH close-journal terminal assertion")
+            return
+        assert_drained()
+
+    def _finalize_ssh_session_lifecycles_before_close(self) -> None:
+        """Drain SSH close work with one recovery retry, preserving its first failure."""
+
+        if self._ssh_lifecycles_finalized:
+            return
+        activity_generator = self.activity_generator
+        if activity_generator is None:
+            self._ssh_lifecycles_finalized = True
+            return
+        finalizer = getattr(activity_generator, "finalize_ssh_session_lifecycles", None)
+        if not callable(finalizer):
+            raise RuntimeError("Activity generator has no SSH close-journal finalizer")
+
+        primary: BaseException | None = None
+        for attempt in range(2):
+            try:
+                if self.end_time is not None:
+                    finalizer(self.end_time)
+                self._assert_ssh_session_lifecycles_drained_before_close()
+            except BaseException as error:
+                if primary is None:
+                    primary = error
+                else:
+                    primary.add_note(f"SSH close-journal retry also failed: {error!r}")
+                try:
+                    self._drain_exact_projection_recoveries_before_close()
+                except BaseException as recovery_error:
+                    primary.add_note(
+                        "Exact projection recovery after SSH close failure also failed: "
+                        f"{recovery_error!r}"
+                    )
+                    raise primary from recovery_error
+                if attempt == 1:
+                    raise primary from None
+                continue
+
+            self._ssh_lifecycles_finalized = True
+            if primary is None:
+                return
+            try:
+                # The recovered retry may itself have admitted terminal source
+                # rows. Finish those while sinks remain open, but preserve the
+                # caller-visible first failure.
+                self._drain_exact_projection_recoveries_before_close()
+                self._assert_ssh_session_lifecycles_drained_before_close()
+            except BaseException as recovery_error:
+                primary.add_note(
+                    f"Terminal recovery after SSH close retry also failed: {recovery_error!r}"
+                )
+            raise primary
+
     def _close_emitters(self, *, primary: BaseException | None = None) -> None:
         """Close every emitter, retaining a supplied lifecycle failure as primary."""
 
@@ -876,28 +951,19 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         if not generation_succeeded:
             self._finalization_aborted = True
-            self._drain_exact_projection_recoveries_before_close()
+            self._finalize_ssh_session_lifecycles_before_close()
+            if self.activity_generator is not None:
+                self._drain_exact_projection_recoveries_before_close()
+                self._assert_ssh_session_lifecycles_drained_before_close()
+            else:
+                self._drain_exact_projection_recoveries_before_close()
             self._close_emitters()
             self._finalization_complete = True
             return
         if self._finalization_aborted:
             raise RuntimeError("Aborted generation cannot resume exact source finalization")
 
-        if not self._ssh_lifecycles_finalized:
-            try:
-                if self.activity_generator is not None and self.end_time is not None:
-                    self.activity_generator.finalize_ssh_session_lifecycles(self.end_time)
-            except BaseException as primary:
-                self._finalization_aborted = True
-                try:
-                    self._drain_exact_projection_recoveries_before_close()
-                    self._close_emitters()
-                except BaseException as cleanup_error:
-                    primary.add_note(f"Emitter cleanup also failed: {cleanup_error!r}")
-                else:
-                    self._finalization_complete = True
-                raise
-            self._ssh_lifecycles_finalized = True
+        self._finalize_ssh_session_lifecycles_before_close()
         if not self._foreground_lifecycles_finalized:
             try:
                 if self.activity_generator is not None and self.end_time is not None:
@@ -918,6 +984,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if coordinator is None:
             raise RuntimeError("Generation engine lost its source-finalization coordinator")
         self._drain_exact_projection_recoveries_before_close()
+        self._assert_ssh_session_lifecycles_drained_before_close()
         coordinator.finalize()
         self._close_emitters()
         if not self._source_coordinator_closed:

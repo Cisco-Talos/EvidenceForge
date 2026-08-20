@@ -245,6 +245,9 @@ from evidenceforge.generation.actions.endpoint_effects import (
     PreparedProcessEffectActor,
     PreparedProcessEndpointEffectPlan,
 )
+from evidenceforge.generation.actions.network_connection import (
+    DeferredSessionNetworkAuthority,
+)
 from evidenceforge.generation.actions.scanner_probe import NmapCommandProbePlanningProfile
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
@@ -331,6 +334,7 @@ from evidenceforge.generation.source_timing import (
     SourceTimingPlanningRuntime,
     SourceTimingPreparation,
 )
+from evidenceforge.generation.ssh_channels import SshApplicationChannelManager
 from evidenceforge.generation.state_manager import (
     MaterializationBatchPlan,
     ProcessMaterializationPlan,
@@ -4620,6 +4624,22 @@ class EmailCorpusEntry:
     storyline: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class SshCloseJournalCensus:
+    """Bounded count-only view of action-owned SSH terminal work."""
+
+    prepared_reservations: int
+    exact_pending: int
+    legacy_pending: int
+    capacity: int
+
+    @property
+    def total_pending(self) -> int:
+        """Return all installed exact and compatibility close entries."""
+
+        return self.exact_pending + self.legacy_pending
+
+
 _FailedLogonAttemptKey = tuple[str, str, int, str]
 
 
@@ -5080,6 +5100,11 @@ class ActivityGenerator:
             window_end=proxy_window_end,
             registry=application_channel_registry,
         )
+        self._ssh_channel_manager = SshApplicationChannelManager(
+            application_registry=application_channel_registry,
+            window_start=proxy_window_start,
+            window_end=proxy_window_end,
+        )
         self._proxy_channel_window_start = proxy_window_start
         self._proxy_channel_watermark = proxy_window_start
         self._http_persistent_connections: dict[
@@ -5147,6 +5172,7 @@ class ActivityGenerator:
         )
         self._lifecycle_authority.bind_http_channel_manager(self._http_channel_manager)
         self._lifecycle_authority.bind_explicit_proxy_manager(self._proxy_channel_manager)
+        self._lifecycle_authority.bind_ssh_channel_manager(self._ssh_channel_manager)
         self._tls_certificate_planner = TlsCertificatePlanner(
             self._cryptographic_material_registry,
             timing_runtime=self.timing_runtime,
@@ -5176,9 +5202,10 @@ class ActivityGenerator:
         self._linux_sudo_tty_available: dict[tuple[str, str, str], datetime] = {}
         self._linux_sudo_tty_publication_hook: Callable[[str], None] | None = None
         self._ssh_session_ready_times: dict[str, datetime] = {}
-        self._pending_ssh_session_closures: list[
-            tuple[datetime, Any, Any, OccurrenceBuilder, Any]
-        ] = []
+        self._ssh_close_journal_lock = Lock()
+        self._ssh_close_journal_capacity = 65_536
+        self._prepared_ssh_close_continuations: dict[str, Any] = {}
+        self._pending_ssh_session_closures: list[Any] = []
         self._foreground_shell_next_time: dict[tuple[str, str, str, int], datetime] = {}
         self._foreground_shell_release_groups: dict[tuple[str, str, str, int], str] = {}
         self._foreground_process_finalizers: ExpiringIndex[
@@ -5228,6 +5255,10 @@ class ActivityGenerator:
             )
         self._proxy_channel_manager.watermark(canonical_cutoff)
         self._http_channel_manager.watermark(canonical_cutoff)
+        while True:
+            ssh_page = self._ssh_channel_manager.watermark(canonical_cutoff)
+            if not ssh_page.has_more:
+                break
         self._application_channel_registry.watermark(canonical_cutoff)
         while True:
             network_page = self._network_transaction_runtime.advance_watermark_page(
@@ -5620,31 +5651,226 @@ class ActivityGenerator:
 
     def _defer_ssh_session_close(
         self,
-        bundle: Any,
-        state: Any,
-        event: OccurrenceBuilder,
-        auth_state: Any,
+        bundle_or_continuation: Any,
+        state: Any = None,
+        event: OccurrenceBuilder | None = None,
+        auth_state: Any = None,
     ) -> None:
         """Queue an SSH bundle closure until all dependent activity is generated."""
 
-        self._pending_ssh_session_closures.append(
-            (ensure_utc(state.close_time), bundle, state, event, auth_state)
+        from evidenceforge.generation.actions.ssh_session import _SshCloseContinuation
+
+        if type(bundle_or_continuation) is _SshCloseContinuation:
+            if state is not None or event is not None or auth_state is not None:
+                raise TypeError("Exact SSH close continuation cannot mix legacy close fields")
+            self._recover_exact_ssh_close_continuation_no_fail(bundle_or_continuation)
+            return
+        if state is None or event is None or auth_state is None:
+            raise TypeError("Legacy SSH close requires bundle, state, event, and auth state")
+        with self._ssh_close_journal_lock:
+            self._pending_ssh_session_closures.append(
+                (
+                    ensure_utc(state.close_time),
+                    bundle_or_continuation,
+                    state,
+                    event,
+                    auth_state,
+                )
+            )
+
+    def _reserve_exact_ssh_close_continuation(self, prepared: Any) -> None:
+        """Reserve bounded terminal-journal capacity before canonical mutation."""
+
+        from evidenceforge.generation.actions.ssh_session import (
+            _PreparedSshCloseContinuation,
+            _SshCloseContinuation,
         )
+
+        if type(prepared) is not _PreparedSshCloseContinuation:
+            raise TypeError("Exact SSH close reservation requires its built-in payload")
+        continuation_id = prepared.plan.continuation_id
+        with self._ssh_close_journal_lock:
+            retained = self._prepared_ssh_close_continuations.get(continuation_id)
+            if retained is not None:
+                if retained is not prepared:
+                    raise StateError("Exact SSH close reservation identity was reused")
+                return
+            for existing in self._pending_ssh_session_closures:
+                if (
+                    type(existing) is _SshCloseContinuation
+                    and existing.continuation_id == continuation_id
+                ):
+                    raise StateError("Exact SSH close reservation is already installed")
+            exact_pending = sum(
+                type(existing) is _SshCloseContinuation
+                for existing in self._pending_ssh_session_closures
+            )
+            if (
+                len(self._prepared_ssh_close_continuations) + exact_pending
+                >= self._ssh_close_journal_capacity
+            ):
+                raise StateError(
+                    "Exact SSH close journal capacity is exhausted before session publication"
+                )
+            self._prepared_ssh_close_continuations[continuation_id] = prepared
+
+    def _cancel_exact_ssh_close_continuation_reservation(self, prepared: Any) -> None:
+        """Idempotently release one exact reservation after precommit rejection."""
+
+        from evidenceforge.generation.actions.ssh_session import _PreparedSshCloseContinuation
+
+        if type(prepared) is not _PreparedSshCloseContinuation:
+            raise TypeError("Exact SSH close cancellation requires its built-in payload")
+        continuation_id = prepared.plan.continuation_id
+        with self._ssh_close_journal_lock:
+            retained = self._prepared_ssh_close_continuations.get(continuation_id)
+            if retained is None:
+                return
+            if retained is not prepared:
+                raise StateError("Exact SSH close cancellation crossed its reservation owner")
+            self._prepared_ssh_close_continuations.pop(continuation_id)
+
+    def _recover_exact_ssh_close_continuation_no_fail(self, continuation: Any) -> None:
+        """Idempotently install one already-validated exact SSH close continuation."""
+
+        from evidenceforge.generation.actions.ssh_session import _SshCloseContinuation
+
+        if type(continuation) is not _SshCloseContinuation:
+            raise TypeError("Exact SSH close journal requires its built-in continuation")
+        if not continuation.prepared.authenticates_bound(continuation):
+            raise StateError("Exact SSH close continuation is a copied or foreign carrier")
+        with self._ssh_close_journal_lock:
+            for existing in self._pending_ssh_session_closures:
+                if type(existing) is not _SshCloseContinuation:
+                    continue
+                if existing.continuation_id != continuation.continuation_id:
+                    continue
+                if not existing.authenticates(continuation):
+                    raise StateError("Exact SSH close continuation identity was reused")
+                return
+            prepared = self._prepared_ssh_close_continuations.get(continuation.continuation_id)
+            if prepared is None:
+                raise StateError("Exact SSH close continuation has no reserved journal owner")
+            if prepared is not continuation.prepared:
+                raise StateError("Exact SSH close continuation crossed its reservation owner")
+            # Append before consuming the reservation. If allocation itself
+            # fails, the same exact payload remains retryable.
+            self._pending_ssh_session_closures.append(continuation)
+            self._prepared_ssh_close_continuations.pop(continuation.continuation_id)
+
+    def _installed_exact_ssh_close_continuation(self, continuation: Any) -> Any:
+        """Return the canonical installed entry authenticated by exact identities."""
+
+        from evidenceforge.generation.actions.ssh_session import _SshCloseContinuation
+
+        if type(continuation) is not _SshCloseContinuation:
+            raise TypeError("Exact SSH close execution requires its built-in continuation")
+        if not continuation.prepared.authenticates_bound(continuation):
+            raise StateError("Exact SSH close execution received a copied carrier")
+        with self._ssh_close_journal_lock:
+            for existing in self._pending_ssh_session_closures:
+                if type(existing) is not _SshCloseContinuation:
+                    continue
+                if existing.continuation_id != continuation.continuation_id:
+                    continue
+                if not existing.authenticates(continuation):
+                    raise StateError("Exact SSH close continuation changed after installation")
+                return existing
+        raise StateError("Exact SSH close continuation was not durably installed")
+
+    def _execute_exact_ssh_close_continuation(self, continuation: Any) -> None:
+        """Execute one authenticated terminal continuation outside owner locks."""
+
+        continuation = self._installed_exact_ssh_close_continuation(continuation)
+        state = continuation.materialize_state()
+        bundle = continuation.materialize_bundle(self)
+        bundle._terminate_source_ssh_client_process(
+            state,
+            continuation=continuation,
+        )
+        bundle._dispatch_linux_session_close_lifecycle(
+            state,
+            continuation.materialize_event(state),
+            continuation.plan.auth_state,
+            continuation=continuation,
+        )
+        continuation.prepared.require_projection_owner(self)
+        continuation.prepared.require_application_session_retired()
+
+    def _finalize_exact_ssh_close_continuation(self, continuation: Any) -> None:
+        """Execute and acknowledge one installed immediate SSH close continuation."""
+
+        from evidenceforge.generation.actions.ssh_session import _SshCloseContinuation
+
+        if type(continuation) is not _SshCloseContinuation:
+            raise TypeError("Exact SSH close finalization requires its built-in continuation")
+        installed = self._installed_exact_ssh_close_continuation(continuation)
+        self._execute_exact_ssh_close_continuation(installed)
+        with self._ssh_close_journal_lock:
+            for index, existing in enumerate(self._pending_ssh_session_closures):
+                if existing is installed:
+                    del self._pending_ssh_session_closures[index]
+                    return
+        raise StateError("Exact SSH close continuation disappeared before acknowledgement")
 
     def finalize_ssh_session_lifecycles(self, end_time: datetime) -> None:
         """Dispatch due action-owned SSH closures after dependent generation completes."""
 
+        from evidenceforge.generation.actions.ssh_session import _SshCloseContinuation
+
         window_end = ensure_utc(end_time)
-        pending = sorted(self._pending_ssh_session_closures, key=lambda item: item[0])
-        remaining = []
-        for close_time, bundle, state, event, auth_state in pending:
-            if close_time >= window_end:
-                remaining.append((close_time, bundle, state, event, auth_state))
-                continue
-            if not state.logon_id or self.state_manager.get_session(state.logon_id) is None:
-                continue
-            bundle._dispatch_linux_session_close_lifecycle(state, event, auth_state)
-        self._pending_ssh_session_closures = remaining
+        with self._ssh_close_journal_lock:
+            pending = sorted(
+                tuple(self._pending_ssh_session_closures),
+                key=lambda item: (
+                    item.close_time if type(item) is _SshCloseContinuation else item[0]
+                ),
+            )
+        for item in pending:
+            if type(item) is _SshCloseContinuation:
+                if item.close_time > window_end:
+                    continue
+                self._execute_exact_ssh_close_continuation(item)
+            else:
+                close_time, bundle, state, event, auth_state = item
+                if close_time > window_end:
+                    continue
+                if state.logon_id and self.state_manager.get_session(state.logon_id) is not None:
+                    bundle._terminate_source_ssh_client_process(state)
+                    bundle._dispatch_linux_session_close_lifecycle(state, event, auth_state)
+            with self._ssh_close_journal_lock:
+                for index, existing in enumerate(self._pending_ssh_session_closures):
+                    if existing is item:
+                        del self._pending_ssh_session_closures[index]
+                        break
+
+    def ssh_close_journal_census(self) -> SshCloseJournalCensus:
+        """Return bounded counts for prepared and installed SSH close work."""
+
+        from evidenceforge.generation.actions.ssh_session import _SshCloseContinuation
+
+        with self._ssh_close_journal_lock:
+            exact_pending = sum(
+                type(existing) is _SshCloseContinuation
+                for existing in self._pending_ssh_session_closures
+            )
+            return SshCloseJournalCensus(
+                prepared_reservations=len(self._prepared_ssh_close_continuations),
+                exact_pending=exact_pending,
+                legacy_pending=len(self._pending_ssh_session_closures) - exact_pending,
+                capacity=self._ssh_close_journal_capacity,
+            )
+
+    def assert_ssh_session_lifecycles_drained(self) -> None:
+        """Reject sink shutdown while any prepared or installed SSH close remains."""
+
+        census = self.ssh_close_journal_census()
+        if census.prepared_reservations or census.total_pending:
+            raise StateError(
+                "SSH close journal is not drained: "
+                f"prepared={census.prepared_reservations}, "
+                f"exact={census.exact_pending}, legacy={census.legacy_pending}"
+            )
 
     def _generate_bounded_foreground_process_termination(
         self,
@@ -16631,6 +16857,16 @@ class ActivityGenerator:
     ) -> None:
         """Remember the rendered eCAR source timestamp for process termination."""
         self._plan_process_source_terminate_times(event)
+        self._remember_process_source_terminate_time(hostname, pid, event)
+
+    def _remember_process_source_terminate_time(
+        self,
+        hostname: str,
+        pid: int,
+        event: OccurrenceBuilder,
+    ) -> None:
+        """Adopt already-planned source timing without advancing its canonical owner."""
+
         source_timing = event.source_timing
         if source_timing is None:
             return
@@ -16659,6 +16895,28 @@ class ActivityGenerator:
                 previous = self._session_process_source_terminate_times.get(key)
                 if previous is None or visible_terminate_time > previous:
                     self._session_process_source_terminate_times[key] = visible_terminate_time
+
+    def _commit_exact_ssh_source_process_termination(
+        self,
+        event: OccurrenceBuilder,
+    ) -> None:
+        """Adopt one committed exact SSH client termination into compatibility caches."""
+
+        host = event.src_host
+        process = event.process
+        if (
+            type(event) is not OccurrenceBuilder
+            or event.event_type != "process_terminate"
+            or host is None
+            or process is None
+            or process.pid <= 0
+            or process.start_time is None
+        ):
+            raise StateError("Exact SSH process termination cache facts are malformed")
+        key = (host.hostname, process.pid, ensure_utc(process.start_time))
+        self._remember_process_source_terminate_time(host.hostname, process.pid, event)
+        self._terminated_process_keys.add(key)
+        self._terminated_process_times[key] = ensure_utc(event.timestamp)
 
     def _plan_process_source_terminate_times(self, event: OccurrenceBuilder) -> None:
         """Precompute eCAR terminate timestamps for source-visible shell ordering."""
@@ -18151,6 +18409,58 @@ class ActivityGenerator:
             f"{source_ip} -> {target_ip}:22 inside the 24-hour tuple-reuse window"
         )
 
+    def preview_ssh_source_port(
+        self,
+        source_ip: str,
+        target_ip: str,
+        source_port: int | None,
+        rng: random.Random,
+        source_os: str,
+        time: datetime,
+    ) -> int:
+        """Select an SSH source port without publishing compatibility-cache state."""
+
+        reservation_time = ensure_utc(time)
+        reservation_cutoff = reservation_time - timedelta(
+            seconds=_RECENT_CONNECTION_REUSE_WINDOW_SECONDS
+        )
+        candidate = source_port or _ephemeral_port(rng, source_os)
+        network_runtime = self._network_transaction_runtime
+        for _ in range(100):
+            key = (source_ip, target_ip, candidate)
+            reserved_at = self._ssh_source_ports.get(key)
+            if reserved_at is not None and reserved_at < reservation_cutoff:
+                reserved_at = None
+            recent_key = (source_ip, candidate, target_ip, 22, "tcp")
+            recent_seen = self._recent_connection_tuples.get(recent_key)
+            runtime_seen = network_runtime.get_point(
+                NetworkRuntimePointFamily.RECENT_TUPLE,
+                recent_key,
+                None,
+                at=reservation_time,
+            )
+            if runtime_seen is not None:
+                if type(runtime_seen) is not float:
+                    raise StateError(
+                        "Network runtime SSH source-port tuple contains a malformed timestamp"
+                    )
+                recent_seen = max(
+                    recent_seen if recent_seen is not None else float("-inf"),
+                    runtime_seen,
+                )
+            recent_is_active = bool(
+                recent_seen is not None
+                and reservation_time.timestamp() - recent_seen
+                <= _RECENT_CONNECTION_REUSE_WINDOW_SECONDS
+            )
+            if reserved_at is None and not recent_is_active:
+                return candidate
+            candidate = _ephemeral_port(rng, source_os)
+        raise StateError(
+            "Unable to preview a unique SSH source port after 100 exact-key attempts for "
+            f"{source_ip} -> {target_ip}:22 inside the 24-hour tuple-reuse window"
+        )
+
     def generate_process_termination(
         self,
         user: User,
@@ -18778,6 +19088,7 @@ class ActivityGenerator:
         parent_action_group_id: str | None = None,
         preserve_start_time: bool = False,
         transport_lifecycle_mode: Literal["network", "deferred_session"] = "network",
+        deferred_session_authority: DeferredSessionNetworkAuthority | None = None,
         identity_capture: NetworkConnectionIdentityCapture | None = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
@@ -18865,6 +19176,7 @@ class ActivityGenerator:
             parent_action_group_id=parent_action_group_id,
             preserve_start_time=preserve_start_time,
             transport_lifecycle_mode=transport_lifecycle_mode,
+            deferred_session_authority=deferred_session_authority,
             identity_capture=identity_capture,
         )
         return NetworkConnectionActionBundle(

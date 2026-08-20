@@ -26,8 +26,9 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
+from math import isfinite
 from threading import Lock
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -49,6 +50,7 @@ from evidenceforge.events.contexts import (
     SslContext,
     X509Context,
 )
+from evidenceforge.events.contracts import EventKind
 from evidenceforge.events.cryptography import (
     OcspTransactionPlan,
     TlsCertificatePresentationPlan,
@@ -67,6 +69,11 @@ from evidenceforge.generation.actions.network_identity import (
     _network_request_stable_id,
     _register_network_request_type,
 )
+from evidenceforge.generation.activity.timing_profiles import (
+    SshAcceptedAuthenticationTiming,
+    SshAuthenticationTimingPlan,
+    plan_ssh_authentication_timing,
+)
 from evidenceforge.generation.deferred_session_composition import (
     DeferredSessionApplicationToken,
     DeferredSessionCompositionCoordinator,
@@ -74,10 +81,15 @@ from evidenceforge.generation.deferred_session_composition import (
 )
 from evidenceforge.generation.deferred_session_preseal import (
     DeferredSessionBindingDisposition,
+    DeferredSessionDependentOccurrenceSpec,
 )
 from evidenceforge.generation.rdp_sessions import (
     RdpReconnectStateManager,
     RdpSessionAdmissionToken,
+)
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanningRuntime,
+    active_source_timing_planning_runtime,
 )
 from evidenceforge.generation.ssh_channels import (
     SshApplicationChannelManager,
@@ -96,6 +108,7 @@ from evidenceforge.generation.state_manager import (
     SessionActivityPatch,
     StateManager,
 )
+from evidenceforge.generation.timing import TimingRuntime, TimingScope
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
@@ -333,6 +346,105 @@ class DeferredLiveSessionStateIntent:
 
 
 @dataclass(frozen=True, slots=True)
+class DeferredSshTimingIntent:
+    """Replay one previewed SSH authentication plan inside exact SourceTiming ownership."""
+
+    auth_method: str
+    public_key_type: str
+    route_class: str
+    scope: TimingScope
+    expected_plan: SshAuthenticationTimingPlan
+    transport_open_time: datetime
+    ready_at: datetime
+
+    def __post_init__(self) -> None:
+        """Require bounded inert inputs and an internally consistent ready time."""
+
+        if type(self.auth_method) is not str or not self.auth_method.strip():
+            raise TypeError("Deferred SSH timing auth method requires an exact non-empty string")
+        if len(self.auth_method) > 64:
+            raise ValueError("Deferred SSH timing auth method exceeds its bounded length")
+        if type(self.public_key_type) is not str:
+            raise TypeError("Deferred SSH timing key type requires an exact string")
+        if len(self.public_key_type) > 64:
+            raise ValueError("Deferred SSH timing key type exceeds its bounded length")
+        if type(self.route_class) is not str or self.route_class not in {"private", "public"}:
+            raise ValueError("Deferred SSH timing route class must be private or public")
+        if type(self.scope) is not TimingScope:
+            raise TypeError("Deferred SSH timing scope requires its exact inert type")
+        replace(self.scope)
+        scope_strings = (
+            self.scope.stable_id,
+            self.scope.host,
+            self.scope.source,
+            self.scope.lifecycle_id,
+        )
+        if any(type(value) is not str or len(value) > 4_096 for value in scope_strings):
+            raise ValueError("Deferred SSH timing scope contains malformed or oversized identity")
+        if type(self.scope.ordinal) is not int or not 0 <= self.scope.ordinal <= 1_000_000:
+            raise ValueError("Deferred SSH timing scope ordinal exceeds its bounded range")
+        if type(self.expected_plan) is not SshAuthenticationTimingPlan or (
+            type(self.expected_plan.accepted) is not SshAcceptedAuthenticationTiming
+        ):
+            raise TypeError("Deferred SSH timing preview has an unsupported exact type")
+        numeric_values = (
+            self.expected_plan.connection_gap_ms,
+            self.expected_plan.accepted.phase_ms,
+            self.expected_plan.accepted.cache_delay_ms,
+            self.expected_plan.accepted.route_delay_ms,
+            self.expected_plan.accepted.receiver_delay_ms,
+            self.expected_plan.accepted.key_penalty_ms,
+            self.expected_plan.pam_gap_ms,
+            self.expected_plan.logind_gap_ms,
+        )
+        if any(
+            type(value) is not float or not isfinite(value) or value < 0 for value in numeric_values
+        ):
+            raise ValueError("Deferred SSH timing preview contains an invalid numeric component")
+        open_time = ensure_utc(self.transport_open_time)
+        ready_at = ensure_utc(self.ready_at)
+        accepted_at = (
+            open_time
+            + timedelta(seconds=2)
+            + timedelta(milliseconds=max(1.0, self.expected_plan.connection_gap_ms))
+            + timedelta(milliseconds=max(250.0, self.expected_plan.accepted_gap_ms))
+        )
+        pam_at = accepted_at + timedelta(milliseconds=max(1.0, self.expected_plan.pam_gap_ms))
+        expected_ready = pam_at + timedelta(milliseconds=max(1.0, self.expected_plan.logind_gap_ms))
+        if ready_at != expected_ready:
+            raise ValueError("Deferred SSH timing preview changed its authentication ready time")
+        object.__setattr__(self, "auth_method", self.auth_method.strip())
+        object.__setattr__(self, "public_key_type", self.public_key_type.strip())
+        object.__setattr__(self, "transport_open_time", open_time)
+        object.__setattr__(self, "ready_at", ready_at)
+
+    def replay(
+        self,
+        runtime: SourceTimingPlanningRuntime,
+        *,
+        bound_at: datetime,
+    ) -> None:
+        """Stage the exact previewed audit draws or reject before canonical transfer."""
+
+        # Reconstructing the frozen value catches ``object.__setattr__`` mutation
+        # before its fields can influence the shared timing preparation.
+        replace(self)
+        if type(runtime) is not SourceTimingPlanningRuntime:
+            raise TypeError("Deferred SSH timing replay requires exact SourceTiming ownership")
+        if self.ready_at != ensure_utc(bound_at):
+            raise StateError("Deferred SSH timing replay changed its State binding time")
+        replayed = plan_ssh_authentication_timing(
+            self.auth_method,
+            public_key_type=self.public_key_type,
+            route_class=self.route_class,
+            timing_runtime=runtime,
+            scope=self.scope,
+        )
+        if type(replayed) is not SshAuthenticationTimingPlan or replayed != self.expected_plan:
+            raise StateError("Deferred SSH timing replay disagrees with its previewed plan")
+
+
+@dataclass(frozen=True, slots=True)
 class DeferredSshApplicationIntent:
     """Typed SSH sidecar values resolved only after the network tuple is frozen."""
 
@@ -492,7 +604,7 @@ class DeferredSshApplicationIntent:
                     identity.object_id,
                 ),
                 subject=LifecycleEntityRef("process", identity.object_id),
-                acquired_at=transaction.started_at,
+                acquired_at=identity.started_at,
                 hold_until=closes_at,
                 action_id=stable_uuid(
                     "deferred-ssh-process-hold-action",
@@ -699,6 +811,22 @@ class DeferredSessionNetworkAuthority:
         compare=False,
         repr=False,
     )
+    dependent_occurrences: tuple[DeferredSessionDependentOccurrenceSpec, ...] = field(
+        default=(),
+        compare=False,
+        repr=False,
+    )
+    ssh_timing_intent: DeferredSshTimingIntent | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    ssh_timing_runtime: TimingRuntime | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    ssh_timing_replayed: bool = False
 
     def __post_init__(self) -> None:
         """Require one exact staged or already-live session authority."""
@@ -873,6 +1001,53 @@ class DeferredSessionNetworkAuthority:
         ):
             if type(values) is not tuple or any(type(value) is not exact_type for value in values):
                 raise TypeError(f"Deferred application {label} has an unsupported exact type")
+        if type(self.ssh_timing_replayed) is not bool:
+            raise TypeError("Deferred SSH timing replay marker requires an exact boolean")
+        if self.ssh_timing_intent is not None:
+            if type(self.ssh_timing_intent) is not DeferredSshTimingIntent:
+                raise TypeError("Deferred SSH timing intent has an unsupported exact type")
+            if type(self.ssh_timing_runtime) is not TimingRuntime:
+                raise TypeError("Deferred SSH timing intent requires its exact runtime owner")
+            replace(self.ssh_timing_intent)
+            if self.kind is not DeferredSessionKind.SSH or not self.dependent_occurrences:
+                raise ValueError("Deferred SSH timing intent requires the exact SSH source cohort")
+            if self.ssh_timing_replayed:
+                raise ValueError("Deferred SSH timing intent cannot already be marked replayed")
+            if self.ssh_timing_intent.ready_at != bound_at:
+                raise ValueError("Deferred SSH timing intent changed the State binding time")
+            session_plan = self.state_batch.session if self.state_batch is not None else None
+            application_intent = self.application_intent
+            if session_plan is None or type(application_intent) is not DeferredSshApplicationIntent:
+                raise ValueError("Deferred SSH timing intent lost its State/application cohort")
+            scope = self.ssh_timing_intent.scope
+            if (
+                scope.stable_id != session_plan.identity.lifecycle_group_id
+                or scope.lifecycle_id != session_plan.identity.lifecycle_group_id
+                or scope.host != session_plan.identity.hostname
+                or scope.source != "ssh"
+            ):
+                raise ValueError("Deferred SSH timing scope changed its State identity")
+            timing_auth_method = self.ssh_timing_intent.auth_method.casefold().replace("_", "-")
+            timing_auth_method = {
+                "keyboardinteractive": "keyboard-interactive",
+                "gssapi": "gssapi-with-mic",
+            }.get(timing_auth_method, timing_auth_method)
+            if timing_auth_method != application_intent.auth_method:
+                raise ValueError("Deferred SSH timing changed its application auth method")
+            receiver_plan = self.state_batch.processes[0]
+            if receiver_plan.identity.started_at != (
+                self.ssh_timing_intent.transport_open_time + timedelta(seconds=2)
+            ):
+                raise ValueError("Deferred SSH timing changed its receiver process boundary")
+        elif self.ssh_timing_runtime is not None:
+            raise ValueError("Deferred SSH timing runtime cannot outlive its replay intent")
+        elif (
+            self.dependent_occurrences
+            and self.kind is DeferredSessionKind.SSH
+            and not (self.ssh_timing_replayed)
+        ):
+            raise ValueError("Deferred SSH source cohort requires exact timing replay authority")
+        self.validate_dependent_occurrences()
         if (
             self.state_intent is None
             and self.existing_state_intent is None
@@ -882,6 +1057,86 @@ class DeferredSessionNetworkAuthority:
             raise ValueError("Deferred network authority requires a staged or live session")
         object.__setattr__(self, "session_object_id", session_object_id)
         object.__setattr__(self, "bound_at", bound_at)
+
+    def validate_dependent_occurrences(
+        self,
+    ) -> tuple[DeferredSessionDependentOccurrenceSpec, ...]:
+        """Revalidate exact SSH source-start specifications immediately before use."""
+
+        specs = self.dependent_occurrences
+        if type(specs) is not tuple or any(
+            type(spec) is not DeferredSessionDependentOccurrenceSpec for spec in specs
+        ):
+            raise TypeError(
+                "Deferred session dependent occurrences require exact inert specifications"
+            )
+        if not specs:
+            return ()
+        if self.kind is not DeferredSessionKind.SSH:
+            raise ValueError("Deferred dependent occurrence migration is currently scoped to SSH")
+        if type(self.bound_at) is not datetime:
+            raise TypeError("Deferred SSH dependent authority changed its binding-time type")
+        if self.strict_state_authority is None or self.state_batch is None:
+            raise ValueError("Deferred SSH dependent occurrences require strict State authority")
+        state_members = (
+            *((self.state_batch.session,) if self.state_batch.session is not None else ()),
+            *self.state_batch.processes,
+        )
+        if self.state_batch.session is None or len(self.state_batch.processes) != 1:
+            raise ValueError("Deferred SSH source cohort requires one session and one sshd process")
+        if len(specs) != len(state_members):
+            raise ValueError("Deferred SSH dependent occurrences must cover every State member")
+        if any(
+            type(spec.occurrence_id) is not str
+            or not spec.occurrence_id.strip()
+            or type(spec.event_type) is not EventKind
+            or type(spec.canonical_time) is not datetime
+            or type(spec.member_references) is not tuple
+            or any(
+                type(reference) is not str or not reference for reference in spec.member_references
+            )
+            or type(spec.publication_ordinal) is not int
+            for spec in specs
+        ):
+            raise TypeError("Deferred SSH dependent occurrence fields changed exact type")
+        if len({spec.occurrence_id for spec in specs}) != len(specs):
+            raise ValueError("Deferred SSH dependent occurrence IDs must be unique")
+        if tuple(spec.publication_ordinal for spec in specs) != tuple(
+            range(1, len(state_members) + 1)
+        ):
+            raise ValueError("Deferred SSH dependent occurrence ordinals must be contiguous")
+        members_by_object_id = {member.identity.object_id: member for member in state_members}
+        if any(len(spec.member_references) != 1 for spec in specs):
+            raise ValueError("Deferred SSH dependent occurrences require one exact State member")
+        if {spec.member_references[0] for spec in specs} != set(members_by_object_id):
+            raise ValueError("Deferred SSH dependent occurrences changed State membership")
+        for spec in specs:
+            member = members_by_object_id[spec.member_references[0]]
+            identity = member.identity
+            if member is self.state_batch.session:
+                if spec.publication_ordinal != 2:
+                    raise ValueError("Deferred SSH login dependent changed its publication ordinal")
+                if spec.event_type is not EventKind.SSH_SESSION:
+                    raise ValueError("Deferred SSH session dependent requires SSH login evidence")
+                if spec.canonical_time != ensure_utc(self.bound_at):
+                    raise ValueError("Deferred SSH login dependent changed its authentication time")
+                if spec.occurrence_id != stable_uuid(
+                    "ssh-deferred-login-occurrence",
+                    identity.object_id,
+                ):
+                    raise ValueError("Deferred SSH login dependent changed semantic identity")
+            elif spec.publication_ordinal != 1:
+                raise ValueError("Deferred SSH process dependent changed its publication ordinal")
+            elif spec.event_type is not EventKind.SYSTEM_PROCESS_CREATE:
+                raise ValueError("Deferred SSH process dependent requires system-process evidence")
+            elif spec.canonical_time != identity.started_at:
+                raise ValueError("Deferred SSH process dependent changed its State start time")
+            elif spec.occurrence_id != stable_uuid(
+                "ssh-deferred-receiver-occurrence",
+                identity.object_id,
+            ):
+                raise ValueError("Deferred SSH process dependent changed semantic identity")
+        return specs
 
     @property
     def has_strict_state_authority(self) -> bool:
@@ -905,6 +1160,40 @@ class DeferredSessionNetworkAuthority:
         if payload._owner is not state_manager:
             raise StateError("Deferred network strict State authority belongs to another owner")
         state_manager.bind_deferred_session_state_authority(payload, self)
+
+    def prepare_timing_authority(
+        self,
+        runtime: SourceTimingPlanningRuntime,
+    ) -> DeferredSessionNetworkAuthority:
+        """Replay previewed SSH timing inside the network-owned exact preparation."""
+
+        intent = self.ssh_timing_intent
+        if intent is None:
+            return self
+        if self.kind is not DeferredSessionKind.SSH or not self.dependent_occurrences:
+            raise StateError("Deferred SSH timing replay crossed its source cohort")
+        strict = self.strict_state_authority
+        if strict is None or not strict._owner.authenticates_deferred_session_state_authority(
+            strict
+        ):
+            raise StateError("Deferred SSH timing replay lost its strict State authority")
+        try:
+            replace(self)
+        except (TypeError, ValueError) as error:
+            raise StateError("Deferred SSH authority changed before timing replay") from error
+        owner_runtime = self.ssh_timing_runtime
+        if (
+            type(owner_runtime) is not TimingRuntime
+            or active_source_timing_planning_runtime(owner_runtime) is not runtime
+        ):
+            raise StateError("Deferred SSH timing replay crossed its exact runtime owner")
+        intent.replay(runtime, bound_at=self.bound_at)
+        return replace(
+            self,
+            ssh_timing_intent=None,
+            ssh_timing_runtime=None,
+            ssh_timing_replayed=True,
+        )
 
     def prepare_state_authority(
         self,
@@ -1160,6 +1449,32 @@ class NetworkConnectionIdentityCapture:
             self._outcome = outcome
             claim._active = False
             self._claim = None
+
+    def _authenticates_committed_claimed_publication(
+        self,
+        claim: _NetworkConnectionIdentityCaptureClaim,
+        *,
+        root: PreparedNetworkTransactionRoot,
+        receipt: LifecyclePreparedNetworkReceipt,
+        application_receipt: object | None,
+        outcome: NetworkConnectionPublicationOutcome,
+    ) -> bool:
+        """Authenticate the exact postcondition before its boundary drops the claim."""
+
+        if type(claim) is not _NetworkConnectionIdentityCaptureClaim:
+            return False
+        with self._lock:
+            return bool(
+                self._claim is None
+                and claim._capture is self
+                and not claim._active
+                and self._transaction is root.transaction
+                and self._lifecycle_mode == root.runtime_token.lifecycle_mode
+                and self._prepared_root is root
+                and self._receipt is receipt
+                and self._application_receipt is application_receipt
+                and self._outcome is outcome
+            )
 
     def _publish_deferred_claimed(
         self,
