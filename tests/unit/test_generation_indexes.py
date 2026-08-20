@@ -8,6 +8,7 @@ from time import perf_counter
 
 import pytest
 
+import evidenceforge.generation.indexes as indexes_module
 from evidenceforge.generation.indexes import (
     CompactHandleStore,
     CompactIndexedStore,
@@ -508,6 +509,199 @@ def test_expiring_index_rejects_negative_capacity() -> None:
         index.trim_earliest(-1)
 
     assert index.get("one") == "value"
+
+
+@pytest.mark.parametrize("trim_kind", ["rank", "earliest"])
+def test_expiring_index_capacity_rejects_smaller_than_protected_lane_neutrally(
+    trim_kind: str,
+) -> None:
+    """Capacity validation cannot silently overrun or invoke a rank callback."""
+
+    index: ExpiringIndex[str, str] = ExpiringIndex()
+    index.set("protected-one", "protected-one", 10.0)
+    index.set("protected-two", "protected-two", 20.0)
+    index.set("ordinary", "ordinary", 30.0)
+    index.protect("protected-one")
+    index.protect("protected-two")
+    before = (
+        dict(index._items),
+        dict(index._deadlines),
+        dict(index._orders),
+        dict(index._versions),
+        list(index._heap),
+        set(index._protected),
+    )
+    rank_calls = 0
+
+    def rank(_key: str, _value: str) -> int:
+        nonlocal rank_calls
+        rank_calls += 1
+        return 0
+
+    with pytest.raises(ValueError, match="protected entries"):
+        if trim_kind == "rank":
+            index.trim(1, rank=rank)
+        else:
+            index.trim_earliest(1)
+    assert rank_calls == 0
+    assert (
+        dict(index._items),
+        dict(index._deadlines),
+        dict(index._orders),
+        dict(index._versions),
+        list(index._heap),
+        set(index._protected),
+    ) == before
+
+    if trim_kind == "rank":
+        assert index.trim(2, rank=rank) == [("ordinary", "ordinary")]
+        assert rank_calls == 1
+    else:
+        assert index.trim_earliest(2) == [("ordinary", "ordinary")]
+    assert set(index) == {"protected-one", "protected-two"}
+
+
+def test_expiring_index_protection_preserves_exact_order_update_and_capacity() -> None:
+    """Protected keys keep their row/order while displacing ordinary cap victims."""
+
+    index: ExpiringIndex[str, str] = ExpiringIndex()
+    index.set("protected", "old", 10.0)
+    index.set("first", "first", 10.0)
+    index.set("second", "second", 10.0)
+
+    assert index.protect("protected")
+    assert not index.protect("protected")
+    assert index.is_protected("protected")
+    assert index.protected_count() == 1
+    index.set("protected", "updated", 30.0)
+    assert index.expire_before(10.0, inclusive=True) == [
+        ("first", "first"),
+        ("second", "second"),
+    ]
+    assert index.get("protected") == "updated"
+    assert index.deadline("protected") == 30.0
+
+    index.set("ordinary", "ordinary", 20.0)
+    assert index.trim_earliest(1) == [("ordinary", "ordinary")]
+    assert list(index.items()) == [("protected", "updated")]
+    metrics = index.metrics(estimate_bytes=True)
+    assert metrics.protected_entries == 1
+    assert metrics.protected_high_water_mark == 1
+    assert metrics.estimated_bytes > 0
+
+    assert index.release("protected")
+    assert index.expire_before(29.0, inclusive=True) == []
+    assert index.expire_before(30.0, inclusive=True) == [("protected", "updated")]
+    assert index.protected_count() == 0
+    index.set("removed", "removed", 25.0)
+    index.protect("removed")
+    assert index.pop("removed") == "removed"
+    assert index.protected_count() == 0
+    index.set("replacement", "replacement", 30.0)
+    index.protect("replacement")
+    index.clear()
+    assert not index
+    assert index.protected_count() == 0
+
+
+def test_expiring_index_release_is_ordered_and_lost_return_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Release allocates first, restores original tie order, and converges on retry."""
+
+    index: ExpiringIndex[str, str] = ExpiringIndex()
+    index.set("protected", "protected", 10.0)
+    index.set("peer", "peer", 10.0)
+    index.protect("protected")
+
+    with monkeypatch.context() as release_fault:
+        release_fault.setattr(
+            indexes_module.heapq,
+            "heappush",
+            lambda _heap, _record: (_ for _ in ()).throw(RuntimeError("before release")),
+        )
+        with pytest.raises(RuntimeError, match="before release"):
+            index.release("protected")
+    assert index.is_protected("protected")
+    assert index.expire_before(10.0, inclusive=True) == [("peer", "peer")]
+
+    original_heappush = indexes_module.heapq.heappush
+    for _attempt in range(3):
+        with monkeypatch.context() as partial_release_fault:
+
+            def append_then_raise(
+                heap: list[tuple[float, int, int, str]],
+                record: tuple[float, int, int, str],
+            ) -> None:
+                original_heappush(heap, record)
+                raise RuntimeError("partial release push")
+
+            partial_release_fault.setattr(
+                indexes_module.heapq,
+                "heappush",
+                append_then_raise,
+            )
+            with pytest.raises(RuntimeError, match="partial release push"):
+                index.release("protected")
+        assert index.is_protected("protected")
+        assert index.metrics().backing_entries == 1
+        assert index.expire_before(10.0, inclusive=True) == []
+        assert index.metrics().backing_entries == 0
+
+    def release_then_lose_return() -> None:
+        assert index.release("protected")
+        raise RuntimeError("lost release return")
+
+    with pytest.raises(RuntimeError, match="lost release return"):
+        release_then_lose_return()
+    assert not index.is_protected("protected")
+    assert not index.release("protected")
+    assert index.expire_before(10.0, inclusive=True) == [("protected", "protected")]
+
+
+def test_expiring_index_release_restores_original_stable_tie_order() -> None:
+    """A protected key returns to its original insertion order within a deadline tie."""
+
+    index: ExpiringIndex[str, str] = ExpiringIndex()
+    index.set("protected-first", "protected-first", 10.0)
+    index.set("second", "second", 10.0)
+    index.set("third", "third", 10.0)
+    index.protect("protected-first")
+    assert index.release("protected-first")
+
+    assert index.expire_before(10.0, inclusive=True) == [
+        ("protected-first", "protected-first"),
+        ("second", "second"),
+        ("third", "third"),
+    ]
+
+
+def test_expiring_index_protected_update_plateaus_at_100k_operations() -> None:
+    """Protected updates do not append heap work on every clock or value change."""
+
+    index: ExpiringIndex[str, int] = ExpiringIndex()
+    index.set("protected", 0, 1.0)
+    index.protect("protected")
+    for ordinal in range(1, 100_001):
+        index.set("protected", ordinal, float(ordinal + 1))
+
+    before_clock = index.metrics()
+    assert before_clock.live_entries == 1
+    assert before_clock.protected_entries == 1
+    assert before_clock.backing_entries == 1
+    assert before_clock.stale_entries == 1
+    for _ in range(100):
+        assert index.expire_before(200_000.0, inclusive=True) == []
+    after_clock = index.metrics()
+    assert after_clock.backing_entries == 0
+    assert after_clock.stale_entries == 0
+    assert index.get("protected") == 100_000
+
+    assert index.release("protected")
+    released = index.metrics()
+    assert released.backing_entries == 1
+    assert released.protected_entries == 0
+    assert index.expire_before(200_000.0, inclusive=True) == [("protected", 100_000)]
 
 
 def test_expiring_index_reports_and_compacts_stale_backing_state() -> None:

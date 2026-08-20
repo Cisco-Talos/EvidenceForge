@@ -74,6 +74,8 @@ class IndexMetrics:
     primary_compaction_rotations: int = 0
     primary_compaction_work: int = 0
     primary_compaction_seconds: float = 0.0
+    protected_entries: int = 0
+    protected_high_water_mark: int = 0
 
     @property
     def backing_amplification(self) -> float:
@@ -1295,6 +1297,8 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
         self._versions: dict[K, int] = {}
         self._heap: list[tuple[float, int, int, K]] = []
         self._retired_heap: list[tuple[float, int, int, K]] | None = None
+        self._protected: set[K] = set()
+        self._protected_high_water_mark = 0
         self._next_order = 0
         self._deadline_extractor = deadline
         self._high_water_mark = 0
@@ -1348,16 +1352,73 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
         self._items[key] = value
         self._deadlines[key] = deadline
         self._high_water_mark = max(self._high_water_mark, len(self._items))
+        if key not in self._protected:
+            heapq.heappush(
+                self._heap,
+                (deadline, self._orders[key], version, key),
+            )
+
+    def protect(self, key: K) -> bool:
+        """Suspend one live key from expiry and capacity eviction.
+
+        Protection preserves the exact value, deadline, and insertion order.
+        The generation bump invalidates its prior heap record, which ordinary
+        expiry or compaction will discard once without repeatedly inspecting
+        the protected key.
+        """
+
+        if key not in self._items:
+            raise KeyError(key)
+        if key in self._protected:
+            return False
+        self._protected.add(key)
+        self._protected_high_water_mark = max(
+            self._protected_high_water_mark,
+            len(self._protected),
+        )
+        self._versions[key] += 1
+        return True
+
+    def is_protected(self, key: K) -> bool:
+        """Return whether one live key is suspended from heap eligibility."""
+
+        return key in self._protected
+
+    def protected_count(self) -> int:
+        """Return the exact number of live protected keys."""
+
+        return len(self._protected)
+
+    def release(self, key: K) -> bool:
+        """Requeue and release one protected key with a restart-safe tail.
+
+        The future-version heap node is allocated first while protection still
+        fences the key.  Only then do existing scalar/set entries flip to make
+        that node live.  A caller retry after a lost successful return is an
+        idempotent no-op and never queues another live generation.
+        """
+
+        if key not in self._items:
+            raise KeyError(key)
+        if key not in self._protected:
+            return False
+        deadline = self._deadlines[key]
+        order = self._orders[key]
+        release_version = self._versions[key] + 1
         heapq.heappush(
             self._heap,
-            (deadline, self._orders[key], version, key),
+            (deadline, order, release_version, key),
         )
+        self._versions[key] = release_version
+        self._protected.remove(key)
+        return True
 
     def pop(self, key: K, default: V | None = None) -> V | None:
         """Remove a key while leaving any stale heap entry harmless."""
         if key not in self._items:
             return default
         value = self._items.pop(key)
+        self._protected.discard(key)
         self._deadlines.pop(key, None)
         self._orders.pop(key, None)
         self._versions.pop(key, None)
@@ -1368,6 +1429,7 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
             self._versions = {}
             self._heap = []
             self._retired_heap = None
+            self._protected = set()
             self._next_order = 0
         return value
 
@@ -1400,7 +1462,8 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
                 break
             heapq.heappop(heap)
             if (
-                self._versions.get(key) != version
+                key in self._protected
+                or self._versions.get(key) != version
                 or self._deadlines.get(key) != deadline
                 or self._orders.get(key) != order
             ):
@@ -1436,16 +1499,23 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
         reverse: bool = True,
     ) -> list[tuple[K, V]]:
         """Retain the highest-ranked entries using stable insertion ordering."""
+        if capacity < 0:
+            raise ValueError("ExpiringIndex capacity must be non-negative")
+        if capacity < len(self._protected):
+            raise ValueError("ExpiringIndex capacity cannot be smaller than protected entries")
         if len(self._items) <= capacity:
             return []
         ranked = sorted(
-            self._items.items(),
+            ((key, value) for key, value in self._items.items() if key not in self._protected),
             key=lambda item: rank(item[0], item[1]),
             reverse=reverse,
         )
-        retained = {key for key, _value in ranked[:capacity]}
+        available = max(0, capacity - len(self._protected))
+        retained = {key for key, _value in ranked[:available]}
         removed: list[tuple[K, V]] = []
         for key in tuple(self._items):
+            if key in self._protected:
+                continue
             if key in retained:
                 continue
             value = self.pop(key)
@@ -1464,6 +1534,8 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
 
         if capacity < 0:
             raise ValueError("ExpiringIndex capacity must be non-negative")
+        if capacity < len(self._protected):
+            raise ValueError("ExpiringIndex capacity cannot be smaller than protected entries")
         removed: list[tuple[K, V]] = []
         while len(self._items) > capacity:
             heap = self._earliest_heap()
@@ -1471,7 +1543,8 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
                 break
             deadline, order, version, key = heapq.heappop(heap)
             if (
-                self._versions.get(key) != version
+                key in self._protected
+                or self._versions.get(key) != version
                 or self._deadlines.get(key) != deadline
                 or self._orders.get(key) != order
             ):
@@ -1483,9 +1556,10 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
         return removed
 
     def _compact_heap_if_needed(self) -> None:
+        eligible_entries = len(self._items) - len(self._protected)
         if self._retired_heap is None and len(self._heap) > max(
             self._COMPACT_MIN_BACKING,
-            len(self._items) * self._COMPACT_RATIO,
+            eligible_entries * self._COMPACT_RATIO,
         ):
             self._retired_heap = self._heap
             self._heap = []
@@ -1501,8 +1575,9 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
         if max_entries < 0:
             raise ValueError("ExpiringIndex max_entries must be non-negative")
         started = perf_counter()
+        eligible_entries = len(self._items) - len(self._protected)
         if self._retired_heap is None:
-            if len(self._heap) <= len(self._items):
+            if len(self._heap) <= eligible_entries:
                 self._compaction_seconds += perf_counter() - started
                 return 0
             self._retired_heap = self._heap
@@ -1514,7 +1589,8 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
             deadline, order, version, key = heapq.heappop(retired)
             work += 1
             if (
-                self._versions.get(key) == version
+                key not in self._protected
+                and self._versions.get(key) == version
                 and self._deadlines.get(key) == deadline
                 and self._orders.get(key) == order
             ):
@@ -1553,25 +1629,30 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
                     self._orders,
                     self._versions,
                     self._heap,
+                    self._protected,
                 )
             )
             if self._retired_heap is not None:
                 estimated_bytes += sys.getsizeof(self._retired_heap)
             estimated_bytes += sum(sys.getsizeof(entry) for entry in self._heap)
+            estimated_bytes += sum(sys.getsizeof(key) for key in self._protected)
             if self._retired_heap is not None:
                 estimated_bytes += sum(sys.getsizeof(entry) for entry in self._retired_heap)
         backing_entries = len(self._heap) + (
             0 if self._retired_heap is None else len(self._retired_heap)
         )
+        eligible_entries = len(self._items) - len(self._protected)
         return IndexMetrics(
             live_entries=len(self._items),
             backing_entries=backing_entries,
-            stale_entries=max(0, backing_entries - len(self._items)),
+            stale_entries=max(0, backing_entries - eligible_entries),
             high_water_mark=self._high_water_mark,
             compaction_work=self._compaction_work,
             compaction_seconds=self._compaction_seconds,
             compaction_pending=self._retired_heap is not None,
             estimated_bytes=estimated_bytes,
+            protected_entries=len(self._protected),
+            protected_high_water_mark=self._protected_high_water_mark,
         )
 
 
