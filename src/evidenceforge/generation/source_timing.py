@@ -78,8 +78,29 @@ _SOURCE_TIMING_LIFECYCLE_RETENTION = timedelta(hours=48)
 _SOURCE_TIMING_TRANSPORT_RETENTION = timedelta(minutes=10)
 _SOURCE_TIMING_TICKET_RETENTION = timedelta(seconds=10)
 _DEFAULT_SOURCE_TIMING_PREPARATION_AUTHORITY_CAPACITY = 4_096
+_DEFAULT_SOURCE_TIMING_DETACHED_BINDING_CAPACITY = 4_096
 _MAX_UTC_DATETIME = datetime.max.replace(tzinfo=UTC)
 _CACHE_TOMBSTONE = object()
+
+
+def _exact_sha256_hex(value: object, field_name: str) -> str:
+    """Return one exact lowercase SHA-256 digest or reject the value."""
+
+    if type(value) is not str or len(value) != 64:
+        raise StateError(f"{field_name} must be one exact SHA-256 digest")
+    try:
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError as error:
+        raise StateError(f"{field_name} must be one exact SHA-256 digest") from error
+    if any(byte not in b"0123456789abcdef" for byte in encoded):
+        raise StateError(f"{field_name} must be one exact SHA-256 digest")
+    return value
+
+
+def _source_timing_detached_frame(*values: bytes) -> bytes:
+    """Frame trusted bounded byte fields without repr or delimiter ambiguity."""
+
+    return b"".join(len(value).to_bytes(8, "big") + value for value in values)
 
 
 class SourceTimingPlanningRuntime:
@@ -483,6 +504,71 @@ class SourceTimingPreparationReceipt:
     _integrity: str = field(repr=False)
 
 
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class SourceTimingDetachedPreparationBinding:
+    """Exact detached proof of one sealed timing overlay and caller context.
+
+    The planner retains only a weak exact-object locator and bounded scalar
+    metadata.  It never retains the source timing preparation through this
+    proof.  A later owner can therefore authenticate the exact committed
+    receipt without retaining the mutable copy-on-write overlay.
+    """
+
+    binding_id: str
+    preparation_id: int
+    base_state_digest: str
+    overlay_digest: str
+    context_digest: str
+    _integrity: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTimingDetachedBindingCensus:
+    """Constant-time detached timing-binding authority counts and bytes."""
+
+    retained_bindings: int
+    capacity: int
+    high_water_bindings: int
+    binding_semantic_bytes: int
+    generation_semantic_bytes: int
+    claim_semantic_bytes: int
+    receipt_semantic_bytes: int
+    entry_semantic_bytes: int
+    table_backing_bytes: int
+    estimated_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceTimingDetachedBindingRecord:
+    """Planner-private exact locator with no preparation reference."""
+
+    owner_ref: ReferenceType[SourceTimingPlanner]
+    owner_marker: object
+    binding_ref: ReferenceType[SourceTimingDetachedPreparationBinding]
+    binding_id: str
+    preparation_id: int
+    base_state_digest: str
+    overlay_digest: str
+    context_digest: str
+    integrity: str
+    generation_marker: object
+    lane_epoch: int
+    binding_token: SourceTimingPreparationToken
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceTimingDetachedBindingFacts:
+    """Callback-free public detached-binding snapshot."""
+
+    binding: SourceTimingDetachedPreparationBinding
+    binding_id: str
+    preparation_id: int
+    base_state_digest: str
+    overlay_digest: str
+    context_digest: str
+    integrity: str
+
+
 @dataclass(frozen=True, slots=True)
 class SourceTimingPreparationCensus:
     """Constant-time structural census for one bounded batch overlay."""
@@ -558,7 +644,57 @@ class _SourceTimingReceiptAuthority:
     """Owner-side exact-object receipt publication truth."""
 
     receipt_ref: ReferenceType[SourceTimingPreparationReceipt]
+    facts: _SourceTimingReceiptFacts
+    generation_marker: object
     committed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceTimingTokenFacts:
+    """Callback-free exact primitive snapshot of one public binding token."""
+
+    token: SourceTimingPreparationToken
+    preparation_id: int
+    base_state_digest: str
+    integrity: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceTimingReceiptFacts:
+    """Callback-free exact primitive snapshot retained by receipt authority."""
+
+    token: SourceTimingPreparationToken
+    preparation_id: int
+    base_state_digest: str
+    token_integrity: str
+    overlay_digest: str
+    committed_state_digest: str
+    integrity: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceTimingLaneGenerationRecord:
+    """Private identity for one exact preparation carrier and owner-lane epoch."""
+
+    carrier_ref: ReferenceType[SourceTimingPreparation]
+    lane_marker: object
+    lane_epoch: int
+    generation_marker: object
+    token_facts: _SourceTimingTokenFacts
+    sealed: bool
+    overlay_digest: str
+    seal_integrity: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceTimingSealedCarrierFacts:
+    """One callback-free public carrier snapshot used only for private revalidation."""
+
+    preparation: SourceTimingPreparation
+    token_facts: _SourceTimingTokenFacts
+    overlay_digest: str
+    seal_integrity: str
+    lane_marker: object
 
 
 @dataclass(slots=True)
@@ -570,6 +706,8 @@ class _SourceTimingClaimRecord:
     owner: SourceTimingPlanner
     claim_thread_id: int
     lane_marker: object
+    lane_epoch: int
+    generation_marker: object
     base_watermark: datetime | None
     binding_token: SourceTimingPreparationToken
     sealed_overlay_digest: str
@@ -587,6 +725,80 @@ class _SourceTimingClaimRecord:
     retained_plan_operations: int
     state: str = "claimed"
     certified_receipt: SourceTimingPreparationReceipt | None = None
+
+
+def _source_timing_generation_semantic_bytes(
+    record: _SourceTimingLaneGenerationRecord,
+) -> int:
+    """Estimate one private generation record from exact bounded fields."""
+
+    token = record.token_facts
+    return (
+        sys.getsizeof(record)
+        + sys.getsizeof(record.carrier_ref)
+        + sys.getsizeof(record.lane_marker)
+        + sys.getsizeof(record.generation_marker)
+        + sys.getsizeof(record.lane_epoch)
+        + sys.getsizeof(token)
+        + sys.getsizeof(token.preparation_id)
+        + len(token.base_state_digest)
+        + len(token.integrity)
+        + len(record.overlay_digest)
+        + len(record.seal_integrity)
+    )
+
+
+def _source_timing_claim_semantic_bytes(record: _SourceTimingClaimRecord) -> int:
+    """Estimate one claim locator without traversing its prepared payload graph."""
+
+    return (
+        sys.getsizeof(record)
+        + sys.getsizeof(record.preparation_ref)
+        + sys.getsizeof(record.preparation_id)
+    )
+
+
+def _source_timing_receipt_semantic_bytes(
+    receipt_identity: int,
+    authority: _SourceTimingReceiptAuthority,
+) -> int:
+    """Estimate one retained receipt authority from its trusted scalar snapshot."""
+
+    facts = authority.facts
+    return (
+        sys.getsizeof(receipt_identity)
+        + sys.getsizeof(authority)
+        + sys.getsizeof(authority.receipt_ref)
+        + sys.getsizeof(facts)
+        + sys.getsizeof(facts.preparation_id)
+        + len(facts.base_state_digest)
+        + len(facts.token_integrity)
+        + len(facts.overlay_digest)
+        + len(facts.committed_state_digest)
+        + len(facts.integrity)
+    )
+
+
+def _source_timing_detached_binding_semantic_bytes(
+    binding_identity: int,
+    record: _SourceTimingDetachedBindingRecord,
+) -> int:
+    """Estimate one detached locator and its exact semantic-key storage."""
+
+    semantic_key = (record.lane_epoch, record.preparation_id, record.context_digest)
+    return (
+        sys.getsizeof(binding_identity)
+        + sys.getsizeof(record)
+        + sys.getsizeof(record.binding_ref)
+        + sys.getsizeof(semantic_key)
+        + sys.getsizeof(record.preparation_id)
+        + sys.getsizeof(record.lane_epoch)
+        + len(record.binding_id)
+        + len(record.base_state_digest)
+        + len(record.overlay_digest)
+        + len(record.context_digest)
+        + len(record.integrity)
+    )
 
 
 class _SourceTimingCache:
@@ -879,9 +1091,12 @@ class SourceTimingPlanner:
         preparation_authority_capacity: int = (
             _DEFAULT_SOURCE_TIMING_PREPARATION_AUTHORITY_CAPACITY
         ),
+        detached_binding_capacity: int = _DEFAULT_SOURCE_TIMING_DETACHED_BINDING_CAPACITY,
     ) -> None:
         if type(preparation_authority_capacity) is not int or preparation_authority_capacity < 1:
             raise ValueError("preparation_authority_capacity must be a positive integer")
+        if type(detached_binding_capacity) is not int or detached_binding_capacity < 1:
+            raise ValueError("detached_binding_capacity must be a positive integer")
         self.clock_profile_name = clock_profile_name or "complete"
         self.timing_runtime = timing_runtime or TimingRuntime.compatibility_default()
         self._ecar_process_create_times = _SourceTimingCache(
@@ -938,6 +1153,7 @@ class SourceTimingPlanner:
         self._preparation_lane_epoch = 0
         self._preparation_lane: SourceTimingPreparation | None = None
         self._preparation_lane_marker: object | None = None
+        self._preparation_lane_generation: _SourceTimingLaneGenerationRecord | None = None
         self._preparation_authority_lock = RLock()
         self._preparation_secret = secrets.token_bytes(32)
         self._next_preparation_id = 1
@@ -952,8 +1168,55 @@ class SourceTimingPlanner:
         self._active_preparation_claims = 0
         self._terminal_preparations = 0
         self._retained_preparation_plan_operations = 0
+        self._detached_binding_capacity = detached_binding_capacity
+        self._detached_binding_owner_marker = object()
+        self._detached_binding_semantic_bytes = 0
+        self._preparation_generation_semantic_bytes = 0
+        self._preparation_claim_semantic_bytes = 0
+        self._preparation_receipt_semantic_bytes = 0
+        self._detached_bindings: dict[int, _SourceTimingDetachedBindingRecord] = {}
+        self._detached_binding_by_context: dict[tuple[int, int, str], int] = {}
+        self._detached_binding_high_water = 0
         for _name, cache in self._bounded_indexes():
             cache._owner = self
+
+    def __copy__(self) -> SourceTimingPlanner:
+        """Reject shallow copies that could alias private timing authority."""
+
+        raise StateError("Source timing planners cannot be copied")
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> SourceTimingPlanner:
+        """Reject deep copies that cannot preserve exact timing authority."""
+
+        raise StateError("Source timing planners cannot be copied")
+
+    def _isolate_preparation_authority_for_overlay(self) -> None:
+        """Install empty, non-owning authority state on one planner overlay clone."""
+
+        self._preparation_lock = RLock()
+        self._preparation_admission_lock = RLock()
+        self._preparation_lane_epoch = 0
+        self._preparation_lane = None
+        self._preparation_lane_marker = None
+        self._preparation_lane_generation = None
+        self._preparation_authority_lock = RLock()
+        self._preparation_secret = secrets.token_bytes(32)
+        self._next_preparation_id = 1
+        self._preparation_claim_records = {}
+        self._committed_preparation_receipts = {}
+        self._preparation_authority_high_water = 0
+        self._preparation_receipt_high_water = 0
+        self._active_preparation_claims = 0
+        self._terminal_preparations = 0
+        self._retained_preparation_plan_operations = 0
+        self._detached_binding_owner_marker = object()
+        self._detached_binding_semantic_bytes = 0
+        self._preparation_generation_semantic_bytes = 0
+        self._preparation_claim_semantic_bytes = 0
+        self._preparation_receipt_semantic_bytes = 0
+        self._detached_bindings = {}
+        self._detached_binding_by_context = {}
+        self._detached_binding_high_water = 0
 
     def _require_public_mutation_lane(self) -> None:
         """Reject canonical planner mutation while one preparation owns the lane."""
@@ -1012,16 +1275,85 @@ class SourceTimingPlanner:
             self._preparation_lane_epoch += 1
             self._preparation_lane_marker = marker
 
+    def _set_preparation_lane_generation_locked(
+        self,
+        generation: _SourceTimingLaneGenerationRecord | None,
+    ) -> None:
+        """Replace one lane generation and its constant-time semantic byte count."""
+
+        semantic_bytes = (
+            0 if generation is None else _source_timing_generation_semantic_bytes(generation)
+        )
+        self._preparation_lane_generation = generation
+        self._preparation_generation_semantic_bytes = semantic_bytes
+
     def _bind_preparation_lane(
         self,
         preparation: SourceTimingPreparation,
         marker: object,
     ) -> None:
-        """Bind the installed marker to its exact public preparation carrier."""
+        """Bind the installed marker and private generation to one exact carrier."""
 
-        if self._preparation_lane_marker is not marker or self._preparation_lane is not None:
-            raise StateError("Source timing preparation owner lane changed before binding")
-        self._preparation_lane = preparation
+        with self._preparation_admission_lock:
+            if (
+                self._preparation_lane_marker is not marker
+                or self._preparation_lane is not None
+                or self._preparation_lane_generation is not None
+            ):
+                raise StateError("Source timing preparation owner lane changed before binding")
+            token = object.__getattribute__(preparation, "_binding_token")
+            token_facts = self._snapshot_preparation_token(token)
+            if token_facts is None:
+                raise StateError("Source timing preparation token failed private generation issue")
+            generation = _SourceTimingLaneGenerationRecord(
+                carrier_ref=ref(preparation),
+                lane_marker=marker,
+                lane_epoch=self._preparation_lane_epoch,
+                generation_marker=object(),
+                token_facts=token_facts,
+                sealed=False,
+                overlay_digest="",
+                seal_integrity="",
+            )
+            self._preparation_lane = preparation
+            self._set_preparation_lane_generation_locked(generation)
+
+    def _seal_preparation_lane_generation(
+        self,
+        preparation: SourceTimingPreparation,
+        overlay_digest: str,
+    ) -> tuple[SourceTimingPreparationToken, str]:
+        """Seal the exact private lane generation without trusting carrier token slots."""
+
+        overlay = _exact_sha256_hex(overlay_digest, "source timing sealed overlay digest")
+        with self._preparation_admission_lock:
+            record = self._preparation_lane_generation
+            if (
+                record is None
+                or record.sealed
+                or record.carrier_ref() is not preparation
+                or self._preparation_lane is not preparation
+                or self._preparation_lane_marker is not record.lane_marker
+                or self._preparation_lane_epoch != record.lane_epoch
+            ):
+                raise StateError("Source timing preparation private generation cannot seal")
+            seal_integrity = self._preparation_seal_integrity_from_fields(
+                preparation_id=record.token_facts.preparation_id,
+                token_integrity=record.token_facts.integrity,
+                overlay_digest=overlay,
+            )
+            sealed_generation = _SourceTimingLaneGenerationRecord(
+                carrier_ref=record.carrier_ref,
+                lane_marker=record.lane_marker,
+                lane_epoch=record.lane_epoch,
+                generation_marker=record.generation_marker,
+                token_facts=record.token_facts,
+                sealed=True,
+                overlay_digest=overlay,
+                seal_integrity=seal_integrity,
+            )
+            self._set_preparation_lane_generation_locked(sealed_generation)
+            return record.token_facts.token, seal_integrity
 
     def _release_preparation_lane(
         self,
@@ -1037,13 +1369,23 @@ class SourceTimingPlanner:
                     or self._preparation_lane_marker is not marker
                 ):
                     raise StateError("Source timing preparation owner lane is not active")
+                generation = self._preparation_lane_generation
+                if (
+                    generation is None
+                    or generation.carrier_ref() is not preparation
+                    or generation.lane_marker is not marker
+                    or generation.lane_epoch != self._preparation_lane_epoch
+                ):
+                    raise StateError("Source timing preparation private generation is not active")
                 self._preparation_lane = None
                 self._preparation_lane_marker = None
+                self._set_preparation_lane_generation_locked(None)
                 try:
                     self.timing_runtime._release_owner_lane(marker)
                 except TimingDistributionError as error:
                     self._preparation_lane = preparation
                     self._preparation_lane_marker = marker
+                    self._set_preparation_lane_generation_locked(generation)
                     raise StateError(str(error)) from error
                 self._preparation_lane_epoch += 1
 
@@ -1055,12 +1397,14 @@ class SourceTimingPlanner:
         """Install one exact weak carrier locator while the preparation lock is held."""
 
         preparation_id = id(preparation)
+        semantic_bytes = _source_timing_claim_semantic_bytes(record)
         with self._preparation_authority_lock:
             if len(self._preparation_claim_records) >= self._preparation_authority_capacity:
                 raise StateError("Source timing preparation authority capacity is exhausted")
             if preparation_id in self._preparation_claim_records:
                 raise StateError("Source timing preparation already owns an active claim record")
             self._preparation_claim_records[preparation_id] = record
+            self._preparation_claim_semantic_bytes += semantic_bytes
             self._active_preparation_claims += 1
             self._retained_preparation_plan_operations += record.retained_plan_operations
             self._preparation_authority_high_water = max(
@@ -1088,11 +1432,17 @@ class SourceTimingPlanner:
     ) -> bool:
         """Match one claim to the exact canonical primitives it will replace."""
 
+        generation = self._preparation_lane_generation
         if (
             record.owner is not self
             or record.claim_thread_id != get_ident()
             or self._preparation_lane_marker is not record.lane_marker
             or self._preparation_lane is not record.preparation_ref()
+            or generation is None
+            or generation.generation_marker is not record.generation_marker
+            or generation.lane_epoch != record.lane_epoch
+            or generation.lane_marker is not record.lane_marker
+            or generation.token_facts.token is not record.binding_token
             or self._watermark != record.base_watermark
         ):
             return False
@@ -1134,6 +1484,9 @@ class SourceTimingPlanner:
         elif record.state == "committed":
             self._terminal_preparations -= 1
         self._retained_preparation_plan_operations -= record.retained_plan_operations
+        self._preparation_claim_semantic_bytes -= _source_timing_claim_semantic_bytes(record)
+        if not self._preparation_claim_records:
+            self._preparation_claim_records.clear()
 
     def _terminalize_preparation_record_no_fail(
         self,
@@ -1162,12 +1515,35 @@ class SourceTimingPlanner:
                 self._preparation_claim_records.pop(preparation_id, None)
                 self._remove_preparation_record_counts_locked(record)
 
+    def _remove_preparation_receipt_authority_locked(
+        self,
+        receipt_identity: int,
+        authority: _SourceTimingReceiptAuthority,
+    ) -> bool:
+        """Remove one exact receipt authority and its semantic byte charge."""
+
+        if self._committed_preparation_receipts.get(receipt_identity) is not authority:
+            return False
+        self._committed_preparation_receipts.pop(receipt_identity, None)
+        self._preparation_receipt_semantic_bytes -= _source_timing_receipt_semantic_bytes(
+            receipt_identity,
+            authority,
+        )
+        if not self._committed_preparation_receipts:
+            self._committed_preparation_receipts.clear()
+        return True
+
     def _retain_expected_preparation_receipt(
         self,
         receipt: SourceTimingPreparationReceipt,
+        *,
+        generation_marker: object,
     ) -> _SourceTimingReceiptAuthority:
         """Preallocate exact receipt authority before any canonical mutation."""
 
+        facts = self._snapshot_preparation_receipt(receipt)
+        if facts is None:
+            raise StateError("Source timing expected receipt is malformed")
         receipt_id = id(receipt)
         owner_ref = ref(self)
 
@@ -1180,16 +1556,21 @@ class SourceTimingPlanner:
             with owner._preparation_authority_lock:
                 authority = owner._committed_preparation_receipts.get(receipt_id)
                 if authority is not None and authority.receipt_ref is receipt_ref:
-                    owner._committed_preparation_receipts.pop(receipt_id, None)
+                    owner._remove_preparation_receipt_authority_locked(
+                        receipt_id,
+                        authority,
+                    )
 
         receipt_ref = ref(receipt, remove_collected)
-        authority = _SourceTimingReceiptAuthority(receipt_ref)
+        authority = _SourceTimingReceiptAuthority(receipt_ref, facts, generation_marker)
+        semantic_bytes = _source_timing_receipt_semantic_bytes(receipt_id, authority)
         with self._preparation_authority_lock:
             if len(self._committed_preparation_receipts) >= self._preparation_authority_capacity:
                 raise StateError("Source timing preparation receipt capacity is exhausted")
             if receipt_id in self._committed_preparation_receipts:
                 raise StateError("Source timing receipt identity is already retained")
             self._committed_preparation_receipts[receipt_id] = authority
+            self._preparation_receipt_semantic_bytes += semantic_bytes
             self._preparation_receipt_high_water = max(
                 self._preparation_receipt_high_water,
                 len(self._committed_preparation_receipts),
@@ -1203,13 +1584,17 @@ class SourceTimingPlanner:
         """Discard one unpublished exact receipt authority after claim abort."""
 
         with self._preparation_authority_lock:
-            authority = self._committed_preparation_receipts.get(id(receipt))
+            receipt_identity = id(receipt)
+            authority = self._committed_preparation_receipts.get(receipt_identity)
             if (
                 authority is not None
                 and not authority.committed
                 and authority.receipt_ref() is receipt
             ):
-                self._committed_preparation_receipts.pop(id(receipt), None)
+                self._remove_preparation_receipt_authority_locked(
+                    receipt_identity,
+                    authority,
+                )
 
     def preparation_authority_census(self) -> SourceTimingPreparationAuthorityCensus:
         """Return exact bounded preparation and terminal-receipt counts."""
@@ -1480,6 +1865,7 @@ class SourceTimingPlanner:
                 with self._preparation_admission_lock:
                     self._preparation_lane = None
                     self._preparation_lane_marker = None
+                    self._set_preparation_lane_generation_locked(None)
                     self.timing_runtime._release_owner_lane(marker)
                     self._preparation_lane_epoch += 1
                 raise
@@ -1494,25 +1880,694 @@ class SourceTimingPlanner:
         finally:
             _ACTIVE_SOURCE_TIMING_PREPARATION.reset(context_token)
 
+    def _snapshot_preparation_token(self, token: object) -> _SourceTimingTokenFacts | None:
+        """Read every public token slot once before performing typed comparisons."""
+
+        if type(token) is not SourceTimingPreparationToken:
+            return None
+        try:
+            preparation_id = object.__getattribute__(token, "preparation_id")
+            base_value = object.__getattribute__(token, "base_state_digest")
+            integrity = object.__getattribute__(token, "_integrity")
+            if type(preparation_id) is not int or preparation_id < 1 or type(integrity) is not str:
+                return None
+            base_digest = _exact_sha256_hex(
+                base_value,
+                "source timing preparation base-state digest",
+            )
+            expected = self._preparation_token_integrity(preparation_id, base_digest)
+            if not hmac.compare_digest(integrity, expected):
+                return None
+            return _SourceTimingTokenFacts(
+                token=token,
+                preparation_id=preparation_id,
+                base_state_digest=base_digest,
+                integrity=integrity,
+            )
+        except BaseException:
+            return None
+
+    def _snapshot_preparation_receipt(
+        self,
+        receipt: object,
+    ) -> _SourceTimingReceiptFacts | None:
+        """Read a receipt and nested token once without invoking peer callbacks."""
+
+        if type(receipt) is not SourceTimingPreparationReceipt:
+            return None
+        try:
+            token = object.__getattribute__(receipt, "binding_token")
+            overlay_value = object.__getattribute__(receipt, "overlay_digest")
+            committed_value = object.__getattribute__(receipt, "committed_state_digest")
+            integrity = object.__getattribute__(receipt, "_integrity")
+            if type(integrity) is not str:
+                return None
+            token_facts = self._snapshot_preparation_token(token)
+            if token_facts is None:
+                return None
+            overlay_digest = _exact_sha256_hex(
+                overlay_value,
+                "source timing receipt overlay digest",
+            )
+            committed_digest = _exact_sha256_hex(
+                committed_value,
+                "source timing receipt committed-state digest",
+            )
+            expected = self._preparation_receipt_integrity_from_fields(
+                preparation_id=token_facts.preparation_id,
+                token_integrity=token_facts.integrity,
+                overlay_digest=overlay_digest,
+                committed_state_digest=committed_digest,
+            )
+            if not hmac.compare_digest(integrity, expected):
+                return None
+            return _SourceTimingReceiptFacts(
+                token=token_facts.token,
+                preparation_id=token_facts.preparation_id,
+                base_state_digest=token_facts.base_state_digest,
+                token_integrity=token_facts.integrity,
+                overlay_digest=overlay_digest,
+                committed_state_digest=committed_digest,
+                integrity=integrity,
+            )
+        except BaseException:
+            return None
+
+    @staticmethod
+    def _receipt_facts_match(
+        snapshot: _SourceTimingReceiptFacts,
+        trusted: _SourceTimingReceiptFacts,
+    ) -> bool:
+        """Compare only exact primitive locals and exact retained carriers."""
+
+        return bool(
+            snapshot.token is trusted.token
+            and snapshot.preparation_id == trusted.preparation_id
+            and snapshot.base_state_digest == trusted.base_state_digest
+            and hmac.compare_digest(snapshot.token_integrity, trusted.token_integrity)
+            and snapshot.overlay_digest == trusted.overlay_digest
+            and snapshot.committed_state_digest == trusted.committed_state_digest
+            and hmac.compare_digest(snapshot.integrity, trusted.integrity)
+        )
+
     def authenticates_binding_token(self, token: object) -> bool:
         """Return whether ``token`` belongs to this exact planner instance."""
 
-        if type(token) is not SourceTimingPreparationToken:
-            return False
-        try:
+        return self._snapshot_preparation_token(token) is not None
+
+    def _detached_preparation_binding_integrity(
+        self,
+        *,
+        binding_id: str,
+        preparation_id: int,
+        base_state_digest: str,
+        overlay_digest: str,
+        context_digest: str,
+    ) -> str:
+        """Authenticate one detached overlay/context proof with typed framing."""
+
+        payload = _source_timing_detached_frame(
+            b"source-timing-detached-preparation-v1",
+            binding_id.encode("ascii"),
+            preparation_id.to_bytes(8, "big", signed=False),
+            base_state_digest.encode("ascii"),
+            overlay_digest.encode("ascii"),
+            context_digest.encode("ascii"),
+        )
+        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+
+    def _detached_binding_collected(
+        self,
+        binding_identity: int,
+        binding_ref: ReferenceType[SourceTimingDetachedPreparationBinding],
+    ) -> None:
+        """Reclaim one dead exact binding locator in constant time."""
+
+        with self._preparation_authority_lock:
+            record = self._detached_bindings.get(binding_identity)
             if (
-                type(token.preparation_id) is not int
-                or type(token.base_state_digest) is not str
-                or type(token._integrity) is not str
+                record is None
+                or not self._owns_detached_binding_record(record)
+                or record.binding_ref is not binding_ref
             ):
-                return False
-            expected = self._preparation_token_integrity(
-                token.preparation_id,
-                token.base_state_digest,
+                return
+            self._remove_detached_binding_record_locked(binding_identity, record)
+
+    def _owns_detached_binding_record(
+        self,
+        record: _SourceTimingDetachedBindingRecord,
+    ) -> bool:
+        """Return whether one private record belongs to this exact planner owner."""
+
+        return bool(
+            record.owner_ref() is self
+            and record.owner_marker is self._detached_binding_owner_marker
+        )
+
+    def _snapshot_sealed_preparation_for_detach(
+        self,
+        preparation: object,
+    ) -> tuple[_SourceTimingSealedCarrierFacts, _SourceTimingLaneGenerationRecord] | None:
+        """Snapshot public slots once, then resolve the exact private lane generation."""
+
+        if type(preparation) is not SourceTimingPreparation:
+            return None
+        try:
+            owner = object.__getattribute__(preparation, "_owner")
+            state = object.__getattribute__(preparation, "_state")
+            token = object.__getattribute__(preparation, "_binding_token")
+            overlay_value = object.__getattribute__(preparation, "_sealed_overlay_digest")
+            seal_integrity = object.__getattribute__(preparation, "_seal_integrity")
+            lane_active = object.__getattribute__(preparation, "_lane_active")
+            lane_marker = object.__getattribute__(preparation, "_lane_marker")
+            context_closed = object.__getattribute__(preparation, "_context_closed")
+            if (
+                owner is not self
+                or type(state) is not str
+                or state != "sealed"
+                or type(lane_active) is not bool
+                or not lane_active
+                or type(context_closed) is not bool
+                or not context_closed
+                or type(seal_integrity) is not str
+            ):
+                return None
+            token_facts = self._snapshot_preparation_token(token)
+            if token_facts is None:
+                return None
+            overlay_digest = _exact_sha256_hex(
+                overlay_value,
+                "detached timing overlay digest",
             )
-            return hmac.compare_digest(token._integrity, expected)
+            expected_seal = self._preparation_seal_integrity_from_fields(
+                preparation_id=token_facts.preparation_id,
+                token_integrity=token_facts.integrity,
+                overlay_digest=overlay_digest,
+            )
+            if not hmac.compare_digest(seal_integrity, expected_seal):
+                return None
+            snapshot = _SourceTimingSealedCarrierFacts(
+                preparation=preparation,
+                token_facts=token_facts,
+                overlay_digest=overlay_digest,
+                seal_integrity=seal_integrity,
+                lane_marker=lane_marker,
+            )
+            with self._preparation_admission_lock:
+                generation = self._preparation_lane_generation
+                if generation is None or not self._sealed_lane_generation_matches_locked(
+                    generation,
+                    snapshot,
+                ):
+                    return None
+                return snapshot, generation
         except BaseException:
+            return None
+
+    def _sealed_lane_generation_matches_locked(
+        self,
+        generation: _SourceTimingLaneGenerationRecord | None,
+        snapshot: _SourceTimingSealedCarrierFacts,
+    ) -> bool:
+        """Compare callback-free public locals with current private lane truth."""
+
+        if generation is None:
             return False
+        trusted_token = generation.token_facts
+        public_token = snapshot.token_facts
+        return bool(
+            generation.sealed
+            and generation.carrier_ref() is snapshot.preparation
+            and self._preparation_lane is snapshot.preparation
+            and generation.lane_marker is snapshot.lane_marker
+            and self._preparation_lane_marker is generation.lane_marker
+            and self._preparation_lane_epoch == generation.lane_epoch
+            and public_token.token is trusted_token.token
+            and public_token.preparation_id == trusted_token.preparation_id
+            and public_token.base_state_digest == trusted_token.base_state_digest
+            and hmac.compare_digest(public_token.integrity, trusted_token.integrity)
+            and snapshot.overlay_digest == generation.overlay_digest
+            and hmac.compare_digest(snapshot.seal_integrity, generation.seal_integrity)
+        )
+
+    @staticmethod
+    def _detached_semantic_key(
+        generation: _SourceTimingLaneGenerationRecord,
+        context_digest: str,
+    ) -> tuple[int, int, str]:
+        return (
+            generation.lane_epoch,
+            generation.token_facts.preparation_id,
+            context_digest,
+        )
+
+    def _remove_detached_binding_record_locked(
+        self,
+        binding_identity: int,
+        record: _SourceTimingDetachedBindingRecord,
+    ) -> bool:
+        """Remove one exact-owner record while authority lock is held."""
+
+        if (
+            not self._owns_detached_binding_record(record)
+            or self._detached_bindings.get(binding_identity) is not record
+        ):
+            return False
+        self._detached_bindings.pop(binding_identity, None)
+        semantic_key = (record.lane_epoch, record.preparation_id, record.context_digest)
+        if self._detached_binding_by_context.get(semantic_key) == binding_identity:
+            self._detached_binding_by_context.pop(semantic_key, None)
+        self._detached_binding_semantic_bytes -= _source_timing_detached_binding_semantic_bytes(
+            binding_identity, record
+        )
+        if not self._detached_bindings:
+            self._detached_bindings.clear()
+            if not self._detached_binding_by_context:
+                self._detached_binding_by_context.clear()
+        return True
+
+    def _recover_detached_binding_locked(
+        self,
+        semantic_key: tuple[int, int, str],
+        generation: _SourceTimingLaneGenerationRecord,
+        context_digest: str,
+    ) -> SourceTimingDetachedPreparationBinding | None:
+        """Recover only an intact exact binding for the same private generation."""
+
+        existing_identity = self._detached_binding_by_context.get(semantic_key)
+        if existing_identity is None:
+            return None
+        record = self._detached_bindings.get(existing_identity)
+        if record is None:
+            raise StateError("Retained detached timing binding authority is inconsistent")
+        if not self._owns_detached_binding_record(record):
+            raise StateError("Retained detached timing binding belongs to another owner")
+        binding = record.binding_ref()
+        if binding is None:
+            self._remove_detached_binding_record_locked(existing_identity, record)
+            return None
+        facts = self._snapshot_detached_preparation_binding(
+            binding,
+            context_digest=context_digest,
+        )
+        if (
+            facts is None
+            or not self._detached_binding_record_matches_facts(record, facts)
+            or record.generation_marker is not generation.generation_marker
+            or record.lane_epoch != generation.lane_epoch
+            or record.binding_token is not generation.token_facts.token
+        ):
+            self._remove_detached_binding_record_locked(existing_identity, record)
+            raise StateError("Retained detached timing binding is tampered or stale")
+        return binding
+
+    def detach_preparation_binding(
+        self,
+        preparation: SourceTimingPreparation,
+        *,
+        context_digest: str,
+    ) -> SourceTimingDetachedPreparationBinding:
+        """Detach one sealed overlay into an exact callback-free scalar proof.
+
+        This method is called after staged projection facts are final but before
+        any canonical owner commits.  The returned proof is cross-bound to a
+        caller-supplied SHA-256 context digest and retains no preparation.
+        """
+
+        context = _exact_sha256_hex(context_digest, "detached timing context digest")
+        sealed = self._snapshot_sealed_preparation_for_detach(preparation)
+        if sealed is None:
+            raise StateError("Detached timing bindings require this planner's sealed preparation")
+        public_snapshot, generation = sealed
+        token_facts = generation.token_facts
+        preparation_id = token_facts.preparation_id
+        base_digest = token_facts.base_state_digest
+        overlay_digest = generation.overlay_digest
+        semantic_key = self._detached_semantic_key(generation, context)
+
+        # Lock order for detached admission is always admission -> authority.
+        # All random/allocation work for a new binding happens after this first
+        # check and before the same private generation is atomically revalidated
+        # with its final authority insertion.
+        with self._preparation_admission_lock:
+            if not self._sealed_lane_generation_matches_locked(generation, public_snapshot):
+                raise StateError(
+                    "Detached timing bindings require this planner's sealed preparation"
+                )
+            with self._preparation_authority_lock:
+                recovered = self._recover_detached_binding_locked(
+                    semantic_key,
+                    generation,
+                    context,
+                )
+                if recovered is not None:
+                    return recovered
+                if len(self._detached_bindings) >= self._detached_binding_capacity:
+                    raise StateError("Source timing detached-binding capacity is exhausted")
+
+        binding_id = secrets.token_hex(32)
+        integrity = self._detached_preparation_binding_integrity(
+            binding_id=binding_id,
+            preparation_id=preparation_id,
+            base_state_digest=base_digest,
+            overlay_digest=overlay_digest,
+            context_digest=context,
+        )
+        binding = SourceTimingDetachedPreparationBinding(
+            binding_id=binding_id,
+            preparation_id=preparation_id,
+            base_state_digest=base_digest.encode("ascii").decode("ascii"),
+            overlay_digest=overlay_digest.encode("ascii").decode("ascii"),
+            context_digest=context.encode("ascii").decode("ascii"),
+            _integrity=integrity,
+        )
+        binding_identity = id(binding)
+        detached_owner_ref = ref(self)
+
+        def remove_collected(
+            collected: ReferenceType[SourceTimingDetachedPreparationBinding],
+            *,
+            identity: int = binding_identity,
+        ) -> None:
+            owner = detached_owner_ref()
+            if owner is not None:
+                owner._detached_binding_collected(identity, collected)
+
+        binding_ref = ref(
+            binding,
+            remove_collected,
+        )
+        record = _SourceTimingDetachedBindingRecord(
+            owner_ref=detached_owner_ref,
+            owner_marker=self._detached_binding_owner_marker,
+            binding_ref=binding_ref,
+            binding_id=binding_id,
+            preparation_id=preparation_id,
+            base_state_digest=base_digest,
+            overlay_digest=overlay_digest,
+            context_digest=context,
+            integrity=integrity,
+            generation_marker=generation.generation_marker,
+            lane_epoch=generation.lane_epoch,
+            binding_token=token_facts.token,
+        )
+        semantic_bytes = _source_timing_detached_binding_semantic_bytes(
+            binding_identity,
+            record,
+        )
+        with self._preparation_admission_lock:
+            if (
+                self._preparation_lane_generation is not generation
+                or not self._sealed_lane_generation_matches_locked(generation, public_snapshot)
+            ):
+                raise StateError(
+                    "Detached timing bindings require this planner's sealed preparation"
+                )
+            with self._preparation_authority_lock:
+                recovered = self._recover_detached_binding_locked(
+                    semantic_key,
+                    generation,
+                    context,
+                )
+                if recovered is not None:
+                    return recovered
+                if len(self._detached_bindings) >= self._detached_binding_capacity:
+                    raise StateError("Source timing detached-binding capacity is exhausted")
+                self._detached_bindings[binding_identity] = record
+                self._detached_binding_by_context[semantic_key] = binding_identity
+                self._detached_binding_semantic_bytes += semantic_bytes
+                self._detached_binding_high_water = max(
+                    self._detached_binding_high_water,
+                    len(self._detached_bindings),
+                )
+        return binding
+
+    def authenticates_detached_preparation_binding(
+        self,
+        binding: object,
+        *,
+        context_digest: str,
+    ) -> bool:
+        """Return whether one exact retained detached binding is intact."""
+
+        return (
+            self._authenticated_detached_preparation_binding_record(
+                binding,
+                context_digest=context_digest,
+            )
+            is not None
+        )
+
+    def _authenticated_detached_preparation_binding_record(
+        self,
+        binding: object,
+        *,
+        context_digest: str,
+    ) -> _SourceTimingDetachedBindingRecord | None:
+        """Snapshot public slots once, then resolve only private truth under lock."""
+
+        facts = self._snapshot_detached_preparation_binding(
+            binding,
+            context_digest=context_digest,
+        )
+        if facts is None:
+            return None
+        binding_identity = id(binding)
+        with self._preparation_authority_lock:
+            record = self._detached_bindings.get(binding_identity)
+            if (
+                record is None
+                or not self._owns_detached_binding_record(record)
+                or record.binding_ref() is not binding
+                or not self._detached_binding_record_matches_facts(record, facts)
+                or self._detached_binding_by_context.get(
+                    (record.lane_epoch, record.preparation_id, record.context_digest)
+                )
+                != binding_identity
+            ):
+                return None
+            return record
+
+    def _snapshot_detached_preparation_binding(
+        self,
+        binding: object,
+        *,
+        context_digest: str,
+    ) -> _SourceTimingDetachedBindingFacts | None:
+        """Read every public binding slot once and authenticate only exact primitives."""
+
+        if type(binding) is not SourceTimingDetachedPreparationBinding:
+            return None
+        try:
+            context = _exact_sha256_hex(context_digest, "detached timing context digest")
+            binding_id_value = object.__getattribute__(binding, "binding_id")
+            preparation_id = object.__getattribute__(binding, "preparation_id")
+            base_state_value = object.__getattribute__(binding, "base_state_digest")
+            overlay_value = object.__getattribute__(binding, "overlay_digest")
+            retained_context_value = object.__getattribute__(binding, "context_digest")
+            integrity = object.__getattribute__(binding, "_integrity")
+            binding_id = _exact_sha256_hex(binding_id_value, "detached timing binding id")
+            base_digest = _exact_sha256_hex(
+                base_state_value,
+                "detached timing base-state digest",
+            )
+            overlay_digest = _exact_sha256_hex(
+                overlay_value,
+                "detached timing overlay digest",
+            )
+            retained_context = _exact_sha256_hex(
+                retained_context_value,
+                "detached timing retained context digest",
+            )
+            if (
+                type(preparation_id) is not int
+                or preparation_id < 1
+                or type(integrity) is not str
+                or retained_context != context
+            ):
+                return None
+            expected = self._detached_preparation_binding_integrity(
+                binding_id=binding_id,
+                preparation_id=preparation_id,
+                base_state_digest=base_digest,
+                overlay_digest=overlay_digest,
+                context_digest=context,
+            )
+            if not hmac.compare_digest(integrity, expected):
+                return None
+            return _SourceTimingDetachedBindingFacts(
+                binding=binding,
+                binding_id=binding_id,
+                preparation_id=preparation_id,
+                base_state_digest=base_digest,
+                overlay_digest=overlay_digest,
+                context_digest=context,
+                integrity=integrity,
+            )
+        except BaseException:
+            return None
+
+    @staticmethod
+    def _detached_binding_record_matches_facts(
+        record: _SourceTimingDetachedBindingRecord,
+        facts: _SourceTimingDetachedBindingFacts,
+    ) -> bool:
+        return bool(
+            record.binding_ref() is facts.binding
+            and record.binding_id == facts.binding_id
+            and record.preparation_id == facts.preparation_id
+            and record.base_state_digest == facts.base_state_digest
+            and record.overlay_digest == facts.overlay_digest
+            and record.context_digest == facts.context_digest
+            and hmac.compare_digest(record.integrity, facts.integrity)
+        )
+
+    def authenticates_committed_detached_preparation_binding(
+        self,
+        binding: object,
+        receipt: object,
+        *,
+        context_digest: str,
+    ) -> bool:
+        """Cross-bind one exact detached proof to its exact committed receipt."""
+
+        record = self._authenticated_detached_preparation_binding_record(
+            binding,
+            context_digest=context_digest,
+        )
+        if record is None:
+            return False
+        snapshot = self._snapshot_preparation_receipt(receipt)
+        if (
+            snapshot is None
+            or snapshot.preparation_id != record.preparation_id
+            or snapshot.base_state_digest != record.base_state_digest
+            or snapshot.overlay_digest != record.overlay_digest
+        ):
+            return False
+        with self._preparation_authority_lock:
+            retained = self._detached_bindings.get(id(binding))
+            authority = self._committed_preparation_receipts.get(id(receipt))
+            return bool(
+                retained is record
+                and self._owns_detached_binding_record(record)
+                and record.binding_ref() is binding
+                and authority is not None
+                and authority.committed
+                and authority.receipt_ref() is receipt
+                and authority.generation_marker is record.generation_marker
+                and snapshot.token is record.binding_token
+                and self._receipt_facts_match(snapshot, authority.facts)
+            )
+
+    def authenticates_expected_detached_preparation_binding(
+        self,
+        binding: object,
+        receipt: object,
+        *,
+        context_digest: str,
+    ) -> bool:
+        """Cross-bind a detached proof to an exact preallocated receipt shell."""
+
+        record = self._authenticated_detached_preparation_binding_record(
+            binding,
+            context_digest=context_digest,
+        )
+        if record is None:
+            return False
+        snapshot = self._snapshot_preparation_receipt(receipt)
+        if (
+            snapshot is None
+            or snapshot.preparation_id != record.preparation_id
+            or snapshot.base_state_digest != record.base_state_digest
+            or snapshot.overlay_digest != record.overlay_digest
+        ):
+            return False
+        with self._preparation_authority_lock:
+            retained = self._detached_bindings.get(id(binding))
+            authority = self._committed_preparation_receipts.get(id(receipt))
+            return bool(
+                retained is record
+                and self._owns_detached_binding_record(record)
+                and record.binding_ref() is binding
+                and authority is not None
+                and not authority.committed
+                and authority.receipt_ref() is receipt
+                and authority.generation_marker is record.generation_marker
+                and snapshot.token is record.binding_token
+                and self._receipt_facts_match(snapshot, authority.facts)
+            )
+
+    def discard_detached_preparation_binding(
+        self,
+        binding: SourceTimingDetachedPreparationBinding,
+    ) -> None:
+        """Release one exact detached proof after cancellation or activation."""
+
+        if type(binding) is not SourceTimingDetachedPreparationBinding:
+            raise StateError("Detached timing binding is copied, foreign, tampered, or stale")
+        binding_identity = id(binding)
+        with self._preparation_authority_lock:
+            record = self._detached_bindings.get(binding_identity)
+            if (
+                record is None
+                or not self._owns_detached_binding_record(record)
+                or record.binding_ref() is not binding
+            ):
+                raise StateError("Detached timing binding is copied, foreign, tampered, or stale")
+            if not self._remove_detached_binding_record_locked(binding_identity, record):
+                raise StateError("Detached timing binding is copied, foreign, tampered, or stale")
+
+    def detached_binding_census(
+        self,
+        *,
+        estimate_bytes: bool = False,
+    ) -> SourceTimingDetachedBindingCensus:
+        """Return constant-time detached and supporting authority diagnostics."""
+
+        # Detached snapshots follow the established admission -> authority order
+        # so the current lane-generation charge and retained-table charges agree.
+        with self._preparation_admission_lock:
+            with self._preparation_authority_lock:
+                if estimate_bytes:
+                    binding_semantic_bytes = self._detached_binding_semantic_bytes
+                    generation_semantic_bytes = self._preparation_generation_semantic_bytes
+                    claim_semantic_bytes = self._preparation_claim_semantic_bytes
+                    receipt_semantic_bytes = self._preparation_receipt_semantic_bytes
+                    entry_semantic_bytes = (
+                        binding_semantic_bytes
+                        + generation_semantic_bytes
+                        + claim_semantic_bytes
+                        + receipt_semantic_bytes
+                    )
+                    table_backing_bytes = sum(
+                        sys.getsizeof(table)
+                        for table in (
+                            self._preparation_claim_records,
+                            self._committed_preparation_receipts,
+                            self._detached_bindings,
+                            self._detached_binding_by_context,
+                        )
+                    )
+                else:
+                    binding_semantic_bytes = 0
+                    generation_semantic_bytes = 0
+                    claim_semantic_bytes = 0
+                    receipt_semantic_bytes = 0
+                    entry_semantic_bytes = 0
+                    table_backing_bytes = 0
+                return SourceTimingDetachedBindingCensus(
+                    retained_bindings=len(self._detached_bindings),
+                    capacity=self._detached_binding_capacity,
+                    high_water_bindings=self._detached_binding_high_water,
+                    binding_semantic_bytes=binding_semantic_bytes,
+                    generation_semantic_bytes=generation_semantic_bytes,
+                    claim_semantic_bytes=claim_semantic_bytes,
+                    receipt_semantic_bytes=receipt_semantic_bytes,
+                    entry_semantic_bytes=entry_semantic_bytes,
+                    table_backing_bytes=table_backing_bytes,
+                    estimated_bytes=entry_semantic_bytes + table_backing_bytes,
+                )
 
     def is_active_preparation(self, preparation: object) -> bool:
         """Return whether ``preparation`` owns the current planning context."""
@@ -1546,41 +2601,36 @@ class SourceTimingPlanner:
     ) -> bool:
         """Authenticate one exact precommit receipt against its active claim record."""
 
+        if type(preparation) is not SourceTimingPreparation:
+            return False
+        snapshot = self._snapshot_preparation_receipt(receipt)
+        if snapshot is None:
+            return False
+        record = self._active_preparation_claim_record(preparation)
         if (
-            type(receipt) is not SourceTimingPreparationReceipt
-            or type(preparation) is not SourceTimingPreparation
+            record is None
+            or record.state not in {"claimed", "certified"}
+            or record.expected_receipt is not receipt
+            or not self._receipt_facts_match(snapshot, record.receipt_authority.facts)
+            or not self._claim_record_matches_current_state(record)
         ):
             return False
-        try:
-            record = self._active_preparation_claim_record(preparation)
-            if (
-                record is None
-                or record.state not in {"claimed", "certified"}
-                or record.expected_receipt is not receipt
-                or not self._claim_record_matches_current_state(record)
-            ):
-                return False
-            return self._preparation_receipt_shape_authenticates(receipt)
-        except BaseException:
-            return False
+        return True
 
     def authenticates_preparation_receipt(self, receipt: object) -> bool:
         """Authenticate a receipt that can exist only after one committed overlay."""
 
-        if type(receipt) is not SourceTimingPreparationReceipt:
+        snapshot = self._snapshot_preparation_receipt(receipt)
+        if snapshot is None:
             return False
-        try:
-            with self._preparation_authority_lock:
-                authority = self._committed_preparation_receipts.get(id(receipt))
-                if (
-                    authority is None
-                    or not authority.committed
-                    or authority.receipt_ref() is not receipt
-                ):
-                    return False
-            return self._preparation_receipt_shape_authenticates(receipt)
-        except BaseException:
-            return False
+        with self._preparation_authority_lock:
+            authority = self._committed_preparation_receipts.get(id(receipt))
+            return bool(
+                authority is not None
+                and authority.committed
+                and authority.receipt_ref() is receipt
+                and self._receipt_facts_match(snapshot, authority.facts)
+            )
 
     def _preparation_receipt_shape_authenticates(
         self,
@@ -1588,20 +2638,7 @@ class SourceTimingPlanner:
     ) -> bool:
         """Authenticate exact primitive receipt fields without terminal-state inference."""
 
-        if (
-            type(receipt.binding_token) is not SourceTimingPreparationToken
-            or type(receipt.overlay_digest) is not str
-            or type(receipt.committed_state_digest) is not str
-            or type(receipt._integrity) is not str
-            or not self.authenticates_binding_token(receipt.binding_token)
-        ):
-            return False
-        expected = self._preparation_receipt_integrity(
-            receipt.binding_token,
-            receipt.overlay_digest,
-            receipt.committed_state_digest,
-        )
-        return hmac.compare_digest(receipt._integrity, expected)
+        return self._snapshot_preparation_receipt(receipt) is not None
 
     def _preparation_token_integrity(self, preparation_id: int, base_digest: str) -> str:
         payload = f"source-timing-preparation\0{preparation_id}\0{base_digest}".encode()
@@ -1612,8 +2649,21 @@ class SourceTimingPlanner:
         token: SourceTimingPreparationToken,
         overlay_digest: str,
     ) -> str:
+        return self._preparation_seal_integrity_from_fields(
+            preparation_id=token.preparation_id,
+            token_integrity=token._integrity,
+            overlay_digest=overlay_digest,
+        )
+
+    def _preparation_seal_integrity_from_fields(
+        self,
+        *,
+        preparation_id: int,
+        token_integrity: str,
+        overlay_digest: str,
+    ) -> str:
         payload = (
-            f"source-timing-seal\0{token.preparation_id}\0{token._integrity}\0{overlay_digest}"
+            f"source-timing-seal\0{preparation_id}\0{token_integrity}\0{overlay_digest}"
         ).encode()
         return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
 
@@ -1623,10 +2673,24 @@ class SourceTimingPlanner:
         overlay_digest: str,
         committed_state_digest: str,
     ) -> str:
+        return self._preparation_receipt_integrity_from_fields(
+            preparation_id=token.preparation_id,
+            token_integrity=token._integrity,
+            overlay_digest=overlay_digest,
+            committed_state_digest=committed_state_digest,
+        )
+
+    def _preparation_receipt_integrity_from_fields(
+        self,
+        *,
+        preparation_id: int,
+        token_integrity: str,
+        overlay_digest: str,
+        committed_state_digest: str,
+    ) -> str:
         payload = (
             "source-timing-receipt\0"
-            f"{token.preparation_id}\0{token._integrity}\0{overlay_digest}\0"
-            f"{committed_state_digest}"
+            f"{preparation_id}\0{token_integrity}\0{overlay_digest}\0{committed_state_digest}"
         ).encode()
         return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
 
@@ -5660,6 +6724,7 @@ class SourceTimingPreparation:
 
         overlay_planner = object.__new__(SourceTimingPlanner)
         overlay_planner.__dict__ = owner.__dict__.copy()
+        overlay_planner._isolate_preparation_authority_for_overlay()
         overlay_planner.timing_runtime = runtime_preparation
         for attribute, value in tuple(overlay_planner.__dict__.items()):
             prepared_cache = cache_by_identity.get(id(value))
@@ -5850,11 +6915,14 @@ class SourceTimingPreparation:
             return
         if self._state != "open":
             raise StateError(f"Source timing preparation cannot seal from {self._state!r}")
-        self._sealed_overlay_digest = self._current_overlay_digest()
-        self._seal_integrity = self._owner._preparation_seal_integrity(
-            self._binding_token,
-            self._sealed_overlay_digest,
+        overlay_digest = self._current_overlay_digest()
+        binding_token, seal_integrity = self._owner._seal_preparation_lane_generation(
+            self,
+            overlay_digest,
         )
+        self._binding_token = binding_token
+        self._sealed_overlay_digest = overlay_digest
+        self._seal_integrity = seal_integrity
         self._state = "sealed"
         self._context_closed = True
 
@@ -5862,6 +6930,7 @@ class SourceTimingPreparation:
         self,
         *,
         owner: SourceTimingPlanner,
+        generation: _SourceTimingLaneGenerationRecord,
         claim_thread_id: int,
         binding_token: SourceTimingPreparationToken,
         cache_overlays: tuple[tuple[str, _SourceTimingCache, _PreparedSourceTimingCache], ...],
@@ -5917,7 +6986,10 @@ class SourceTimingPreparation:
                 clocks_target._mutation_version + prepared_clocks._version_delta
             ),
         )
-        receipt_authority = owner._retain_expected_preparation_receipt(expected_receipt)
+        receipt_authority = owner._retain_expected_preparation_receipt(
+            expected_receipt,
+            generation_marker=generation.generation_marker,
+        )
         preparation_id = id(self)
         owner_ref = ref(owner)
 
@@ -5936,7 +7008,9 @@ class SourceTimingPreparation:
             preparation_ref=ref(self, remove_collected),
             owner=owner,
             claim_thread_id=claim_thread_id,
-            lane_marker=self._lane_marker,
+            lane_marker=generation.lane_marker,
+            lane_epoch=generation.lane_epoch,
+            generation_marker=generation.generation_marker,
             base_watermark=self._watermark,
             binding_token=binding_token,
             sealed_overlay_digest=sealed_overlay_digest,
@@ -6024,8 +7098,10 @@ class SourceTimingPreparation:
             raise StateError("Source timing preparation must be sealed before claim")
         if self._planning_thread_id != get_ident():
             raise StateError("Source timing preparation must claim on its planning thread")
-        if not self._authenticates(owner):
+        sealed = owner._snapshot_sealed_preparation_for_detach(self)
+        if sealed is None:
             raise StateError("Source timing preparation integrity check failed")
+        public_snapshot, generation = sealed
 
         preparation_lock = owner._preparation_lock
         watermark = self._watermark
@@ -6038,9 +7114,9 @@ class SourceTimingPreparation:
             or owner._preparation_lane_marker is not self._lane_marker
         ):
             raise StateError("Source timing preparation owner lane is not active")
-        binding_token = self._binding_token
-        sealed_overlay_digest = self._sealed_overlay_digest
-        seal_integrity = self._seal_integrity
+        binding_token = generation.token_facts.token
+        sealed_overlay_digest = generation.overlay_digest
+        seal_integrity = generation.seal_integrity
         preparation_lock.acquire()
         acquired_cache_locks: list[RLock] = []
         runtime_claimed = False
@@ -6059,6 +7135,15 @@ class SourceTimingPreparation:
                     raise StateError("Source timing preparation is stale")
             runtime_preparation._acquire_claim()
             runtime_claimed = True
+            with owner._preparation_admission_lock:
+                if (
+                    owner._preparation_lane_generation is not generation
+                    or not owner._sealed_lane_generation_matches_locked(
+                        generation,
+                        public_snapshot,
+                    )
+                ):
+                    raise StateError("Source timing preparation private generation is stale")
             self._state = "claimed"
             claim_thread_id = get_ident()
             self._claim_thread_id = claim_thread_id
@@ -6089,6 +7174,7 @@ class SourceTimingPreparation:
             self._expected_receipt = expected_receipt
             record = self._freeze_claim_record(
                 owner=owner,
+                generation=generation,
                 claim_thread_id=claim_thread_id,
                 binding_token=binding_token,
                 cache_overlays=cache_overlays,
@@ -6276,11 +7362,19 @@ class SourceTimingPreparation:
             return False
         record = owner._active_preparation_claim_record(self)
         if self._state == "sealed":
+            generation = owner._preparation_lane_generation
             if (
                 record is not None
                 or not self._lane_active
                 or owner._preparation_lane is not self
                 or owner._preparation_lane_marker is not self._lane_marker
+                or generation is None
+                or generation.carrier_ref() is not self
+                or generation.lane_marker is not self._lane_marker
+                or generation.lane_epoch != owner._preparation_lane_epoch
+                or generation.token_facts.token is not self._binding_token
+                or generation.overlay_digest != self._sealed_overlay_digest
+                or not hmac.compare_digest(generation.seal_integrity, self._seal_integrity)
             ):
                 return False
         elif self._state == "claimed":
@@ -6298,6 +7392,8 @@ class SourceTimingPreparation:
         if record is not None and (
             record.owner is not owner
             or record.binding_token is not self._binding_token
+            or record.receipt_authority.generation_marker is not record.generation_marker
+            or record.lane_marker is not self._lane_marker
             or record.admitted_cache_overlays is not self._cache_overlays
             or record.admitted_runtime_preparation is not self._runtime_preparation
             or record.sealed_overlay_digest != self._sealed_overlay_digest
