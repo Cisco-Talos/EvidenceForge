@@ -132,6 +132,8 @@ from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionIdentityCapture,
     NetworkConnectionPublicationOutcome,
     NetworkConnectionRequest,
+    PersistentSmbRootHandoff,
+    PersistentSmbRootIntent,
 )
 from evidenceforge.generation.actions.network_transaction_planner import (
     NetworkTransactionPlanner,
@@ -173,6 +175,8 @@ from evidenceforge.generation.actions.scanner_probe import (
     estimate_nmap_command_probe_occurrences,
 )
 from evidenceforge.generation.actions.smb_activity import (
+    PersistentSmbTerminalContinuationAuthority,
+    PersistentSmbTerminalContinuationCensus,
     SmbActivityActionBundle,
     SmbActivityRequest,
     SmbActivityResult,
@@ -308,6 +312,8 @@ __all__ = [
     "NetworkConnectionIdentityCapture",
     "NetworkConnectionPublicationOutcome",
     "NetworkConnectionRequest",
+    "PersistentSmbRootHandoff",
+    "PersistentSmbRootIntent",
     "NetworkTransactionPlanner",
     "NmapCommandProbeActionBundle",
     "NmapCommandProbeRequest",

@@ -78,6 +78,7 @@ from evidenceforge.generation.state_manager import (
     MaterializationBatchPlan,
     ProcessActivityPatch,
     SessionActivityPatch,
+    SmbConnectionPin,
     StateManager,
 )
 from evidenceforge.models.exceptions import StateError
@@ -1341,6 +1342,12 @@ class NetworkTransactionPreparation:
         self._require_open()
         return self._owner._reserve_physical_identity(self)
 
+    def reserve_smb_connection_pin(self) -> SmbConnectionPin:
+        """Reserve the future persistent-SMB pin through the owned State cursor."""
+
+        self._require_open()
+        return self._owner._reserve_smb_connection_pin(self)
+
     def read_point(
         self,
         family: NetworkRuntimePointFamily,
@@ -2395,6 +2402,16 @@ class NetworkTransactionRuntime:
         with self._lock:
             cursor = self._active_open_preparation_locked(preparation).cursor
         return cursor.reserve_identity()
+
+    def _reserve_smb_connection_pin(
+        self,
+        preparation: NetworkTransactionPreparation,
+    ) -> SmbConnectionPin:
+        """Reserve one persistent-SMB pin through the runtime-owned State cursor."""
+
+        with self._lock:
+            cursor = self._active_open_preparation_locked(preparation).cursor
+        return cursor.reserve_smb_connection_pin()
 
     def _active_crypto_view_locked(
         self,

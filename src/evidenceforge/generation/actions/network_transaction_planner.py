@@ -122,6 +122,7 @@ class _PreparedNetworkBoundary:
         root: Any,
         receipt: Any,
         application_receipt: Any,
+        prepared_dispatch: Any = None,
         outcome: Any,
     ) -> Any:
         """Populate the prevalidated occurrence-local capture after authority success."""
@@ -135,6 +136,7 @@ class _PreparedNetworkBoundary:
             root=root,
             receipt=receipt,
             application_receipt=application_receipt,
+            prepared_dispatch=prepared_dispatch,
             outcome=outcome,
         )
         if publication_result is not None:
@@ -144,6 +146,7 @@ class _PreparedNetworkBoundary:
             root=root,
             receipt=receipt,
             application_receipt=application_receipt,
+            prepared_dispatch=prepared_dispatch,
             outcome=outcome,
         ):
             raise StateError("Network identity capture did not publish its exact committed owner")
@@ -1685,7 +1688,14 @@ class NetworkTransactionPlanner:
         from evidenceforge.generation.activity import generator as generator_module
 
         executor = self._executor
+        from evidenceforge.generation.actions.network_connection import PersistentSmbRootIntent
+
         deferred_authority = request.deferred_session_authority
+        persistent_smb_intent = (
+            None
+            if request.persistent_smb_root_intent is None
+            else PersistentSmbRootIntent.from_identity_snapshot(request.persistent_smb_root_intent)
+        )
         prepared_application_token = request.prepared_application_token
         explicit_proxy_request_preparation = request.explicit_proxy_request_preparation
         if prepared_application_token is not None:
@@ -3427,6 +3437,7 @@ class NetworkTransactionPlanner:
             target_system is not None
             and dst_host_ctx is not None
             and dst_host_ctx.os_category == "windows"
+            and persistent_smb_intent is None
             and responding_pid <= 0
         ):
             responding_pid = executor._resolve_windows_inbound_service_pid(
@@ -4626,6 +4637,7 @@ class NetworkTransactionPlanner:
         process_holds = ()
         if (
             materialization_mode is ConnectionMaterializationMode.PHYSICAL
+            and persistent_smb_intent is None
             and pid > 0
             and resolved_source_system is not None
         ):
@@ -4758,6 +4770,15 @@ class NetworkTransactionPlanner:
             file_transfers=event.protocol.file_transfers,
         )
         deferred_batch = deferred_authority.state_batch if deferred_authority is not None else None
+        persistent_smb_batch = None
+        if persistent_smb_intent is not None:
+            if materialization_mode is not ConnectionMaterializationMode.PHYSICAL:
+                raise StateError("Persistent SMB root requires physical network materialization")
+            persistent_smb_batch = persistent_smb_intent.prepare(
+                executor.state_manager,
+                event.network,
+            )
+            network_preparation.reserve_smb_connection_pin()
         deferred_existing_session_patch = (
             deferred_authority.existing_state_patch if deferred_authority is not None else None
         )
@@ -4786,10 +4807,13 @@ class NetworkTransactionPlanner:
                 ),
             )
         responder_batch = prepared_responder.batch if prepared_responder is not None else None
-        if (deferred_batch is not None or deferred_existing_session_patch is not None) and (
-            responder_batch is not None
-        ):
-            raise StateError("Deferred session root cannot also own a responder State batch")
+        owned_batches = tuple(
+            candidate
+            for candidate in (deferred_batch, responder_batch, persistent_smb_batch)
+            if candidate is not None
+        )
+        if len(owned_batches) > 1:
+            raise StateError("Network root cannot own multiple State batches")
         root = network_preparation.seal(
             transaction=event.network,
             lifecycle_mode=lifecycle_mode,
@@ -4798,7 +4822,7 @@ class NetworkTransactionPlanner:
             source_hostname=state_source_hostname,
             hostname=hostname or event.network.dst_ip,
             initiating_pid=pid,
-            batch=deferred_batch or responder_batch,
+            batch=owned_batches[0] if owned_batches else None,
             rdp_existing_session_patch=deferred_existing_session_patch,
             existing_session_process_roles_patch=(deferred_existing_session_process_roles_patch),
             process_activity=process_activity,
@@ -4855,6 +4879,7 @@ class NetworkTransactionPlanner:
             boundary.lifecycle_token = lifecycle_token
 
         prepared_dispatch = None
+        persistent_smb_observations = ()
         prepared_multipart_dispatches = ()
         prepared_deferred_session_dispatches = ()
         if lifecycle_mode == "deferred_session" and committed_suppressed:
@@ -4907,6 +4932,12 @@ class NetworkTransactionPlanner:
         boundary.seal_timing()
         if prepared_dispatch is not None:
             executor.dispatcher.validate_prepared(prepared_dispatch)
+            if persistent_smb_intent is not None:
+                prepared_transaction, persistent_smb_observations = (
+                    executor.dispatcher.persistent_smb_prepared_transport_facts(prepared_dispatch)
+                )
+                if prepared_transaction != event.network:
+                    raise StateError("Persistent SMB prepared transport changed identity")
         for dependent_dispatch in prepared_deferred_session_dispatches:
             executor.dispatcher.validate_prepared(dependent_dispatch)
         if prepared_responder is not None:
@@ -5060,6 +5091,26 @@ class NetworkTransactionPlanner:
                 if application_result is not None
                 else None
             )
+            persistent_smb_handoff = None
+            if persistent_smb_intent is not None:
+                from evidenceforge.generation.actions.network_connection import (
+                    PersistentSmbRootHandoff,
+                )
+
+                pin_install = materialized.connection.state.smb_connection_pin_install
+                if (
+                    prepared_dispatch is None
+                    or pin_install is None
+                    or not executor.state_manager.authenticates_smb_connection_pin_install_receipt(
+                        pin_install
+                    )
+                ):
+                    raise StateError("Persistent SMB root lost its exact State pin installation")
+                persistent_smb_handoff = PersistentSmbRootHandoff(
+                    prepared_dispatch=prepared_dispatch,
+                    observations=persistent_smb_observations,
+                    pin_install_receipt=pin_install,
+                )
             try:
                 authenticated_materialization = (
                     executor._lifecycle_authority.authenticates_prepared_network_receipt(
@@ -5072,6 +5123,7 @@ class NetworkTransactionPlanner:
                     root=root,
                     receipt=materialized.receipt,
                     application_receipt=application_receipt,
+                    prepared_dispatch=persistent_smb_handoff,
                     outcome=outcome,
                 )
                 raise
@@ -5080,6 +5132,7 @@ class NetworkTransactionPlanner:
                     root=root,
                     receipt=materialized.receipt,
                     application_receipt=application_receipt,
+                    prepared_dispatch=persistent_smb_handoff,
                     outcome=outcome,
                 )
                 raise AssertionError("Prepared network authority returned an invalid receipt")
@@ -5087,6 +5140,7 @@ class NetworkTransactionPlanner:
                 root=root,
                 receipt=materialized.receipt,
                 application_receipt=application_receipt,
+                prepared_dispatch=persistent_smb_handoff,
                 outcome=outcome,
             )
             durable_capture_facts = boundary.authenticate_committed_capture_for_ack(
@@ -5200,6 +5254,8 @@ class NetworkTransactionPlanner:
                 close_time=event.network.closed_at,
             )
         assert prepared_dispatch is not None
+        if request.defer_source_publication:
+            return uid
         network_identifiers_by_format = (
             executor.dispatcher.publish_prepared(
                 prepared_dispatch,

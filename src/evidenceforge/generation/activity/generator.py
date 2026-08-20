@@ -203,6 +203,9 @@ from evidenceforge.generation.actions import (
     PasswordChangeRequest,
     PasswordResetActionBundle,
     PasswordResetRequest,
+    PersistentSmbRootIntent,
+    PersistentSmbTerminalContinuationAuthority,
+    PersistentSmbTerminalContinuationCensus,
     ProcessAccessActionBundle,
     ProcessAccessRequest,
     ProcessExecutionActionBundle,
@@ -314,6 +317,7 @@ from evidenceforge.generation.lifecycle_authority import (
 )
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+from evidenceforge.generation.network_observation import PersistentSmbTrafficRebindAuthority
 from evidenceforge.generation.network_runtime import (
     NetworkPointBatchToken,
     NetworkRuntimePointFamily,
@@ -327,6 +331,7 @@ from evidenceforge.generation.runtime_content import (
     RuntimeContentIdentityManager,
     RuntimeContentOwnerError,
 )
+from evidenceforge.generation.smb_channels import SmbApplicationChannelManager
 from evidenceforge.generation.source_timing import (
     SourceTimingPlanner,
     SourceTimingPlanningRuntime,
@@ -5298,6 +5303,13 @@ class ActivityGenerator:
                 "ActivityGenerator and RDP manager must share one exact application registry"
             )
         self._rdp_session_manager = rdp_session_manager
+        self._smb_channel_manager = SmbApplicationChannelManager(
+            application_registry=application_channel_registry,
+            window_start=proxy_window_start,
+            window_end=proxy_window_end,
+        )
+        self._persistent_smb_traffic_authority = PersistentSmbTrafficRebindAuthority()
+        self._persistent_smb_terminal_continuations = PersistentSmbTerminalContinuationAuthority()
         self._proxy_channel_window_start = proxy_window_start
         self._proxy_channel_watermark = proxy_window_start
         self._http_persistent_connections: dict[
@@ -5469,6 +5481,10 @@ class ActivityGenerator:
         while True:
             ssh_page = self._ssh_channel_manager.watermark(canonical_cutoff)
             if not ssh_page.has_more:
+                break
+        while True:
+            smb_page = self._smb_channel_manager.watermark(canonical_cutoff)
+            if not smb_page.has_more:
                 break
         self._application_channel_registry.watermark(canonical_cutoff)
         while True:
@@ -19977,6 +19993,8 @@ class ActivityGenerator:
         transport_lifecycle_mode: Literal["network", "deferred_session"] = "network",
         deferred_session_authority: DeferredSessionNetworkAuthority | None = None,
         identity_capture: NetworkConnectionIdentityCapture | None = None,
+        persistent_smb_root_intent: PersistentSmbRootIntent | None = None,
+        defer_source_publication: bool = False,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -20065,6 +20083,12 @@ class ActivityGenerator:
             transport_lifecycle_mode=transport_lifecycle_mode,
             deferred_session_authority=deferred_session_authority,
             identity_capture=identity_capture,
+            persistent_smb_root_intent=(
+                None
+                if persistent_smb_root_intent is None
+                else persistent_smb_root_intent.identity_snapshot()
+            ),
+            defer_source_publication=defer_source_publication,
         )
         return NetworkConnectionActionBundle(
             executor=self,
@@ -20098,6 +20122,13 @@ class ActivityGenerator:
                 files_override=files_override,
             ),
         ).execute()
+
+    def persistent_smb_terminal_continuation_census(
+        self,
+    ) -> PersistentSmbTerminalContinuationCensus:
+        """Return bounded retained terminal work for persistent SMB production."""
+
+        return self._persistent_smb_terminal_continuations.census()
 
     def generate_email_message(
         self,
