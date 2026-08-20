@@ -40,7 +40,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from threading import Lock, RLock, get_ident
 from typing import TYPE_CHECKING, cast
@@ -1019,6 +1019,7 @@ class DeferredSessionExactTargetProof:
     row_start: int
     row_end: int
     source_order_keys: tuple[int, ...] = ()
+    windows_ordering_facts: tuple[tuple[int, str, str, int], ...] = ()
 
     @property
     def row_count(self) -> int:
@@ -9014,27 +9015,34 @@ class EventDispatcher:
         """Return explicitly exact-capable participants or fail before rendering."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.windows import (
+            WindowsEventEmitter,
+            _supports_windows_exact_projection_publication,
+        )
         from evidenceforge.generation.emitters.zeek import ZeekEmitter
 
         exact_types_by_format: dict[str, type[LogEmitter]] = {
             "ecar": EcarEmitter,
+            "windows_event_security": WindowsEventEmitter,
             "zeek_conn": ZeekEmitter,
         }
         participants: list[LogEmitter] = []
         participant_ids: set[int] = set()
         for prepared in dispatches:
             for format_name, emitter in self._exact_projection_targets(prepared._projection):
-                marker = type(emitter).__dict__.get("supports_exact_projection_publication")
-                if (
-                    exact_types_by_format.get(format_name) is not type(emitter)
-                    or marker is None
-                    or getattr(
-                        emitter,
-                        "supports_exact_projection_publication",
-                        None,
-                    )
-                    is not True
-                ):
+                emitter_type = type(emitter)
+                expected_type = (
+                    exact_types_by_format.get(format_name) if type(format_name) is str else None
+                )
+                marker = (
+                    emitter_type.__dict__.get("supports_exact_projection_publication")
+                    if expected_type is emitter_type
+                    else None
+                )
+                supported = expected_type is emitter_type and marker is True
+                if supported and emitter_type is WindowsEventEmitter:
+                    supported = _supports_windows_exact_projection_publication(emitter)
+                if not supported:
                     raise EventContractError(
                         f"Deferred-session projection target {format_name!r} lacks exact "
                         "projection publication"
@@ -9093,6 +9101,65 @@ class EventDispatcher:
             )
         return tuple(slices)
 
+    @staticmethod
+    def _deferred_session_ecar_order_keys(
+        row_facts: tuple[tuple[str, str, int], ...],
+    ) -> tuple[int, ...]:
+        """Parse exact eCAR source times from authenticated staged bytes."""
+
+        parsed_order_keys: list[int] = []
+        for frozen_row, _content_digest, _retained_bytes in row_facts:
+            try:
+                parsed = json.loads(frozen_row)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise EventContractError(
+                    "Deferred-session eCAR exact row is not valid JSON"
+                ) from exc
+            timestamp_ms = parsed.get("timestamp_ms") if type(parsed) is dict else None
+            if type(timestamp_ms) is not int or timestamp_ms < 0:
+                raise EventContractError("Deferred-session eCAR exact row lacks source-native time")
+            parsed_order_keys.append(timestamp_ms)
+        return tuple(parsed_order_keys)
+
+    @staticmethod
+    def _deferred_session_windows_ordering_facts(
+        row_facts: tuple[tuple[str, str, int], ...],
+    ) -> tuple[tuple[int, str, str, int], ...]:
+        """Parse exact Windows source facts from authenticated staged bytes."""
+
+        from evidenceforge.generation.emitters.windows import _spool_decode
+
+        parsed_windows_facts: list[tuple[int, str, str, int]] = []
+        for frozen_row, content_digest, retained_bytes in row_facts:
+            try:
+                decoded = _spool_decode(frozen_row)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise EventContractError(
+                    "Deferred-session Windows exact row is not a valid candidate"
+                ) from exc
+            event_id = decoded.get("EventID")
+            time_created = decoded.get("TimeCreated")
+            if (
+                type(event_id) is not int
+                or event_id <= 0
+                or event_id > (2**31 - 1)
+                or type(time_created) is not datetime
+                or time_created.tzinfo is None
+                or time_created.utcoffset() is None
+            ):
+                raise EventContractError(
+                    "Deferred-session Windows exact row lacks inert EventID/time"
+                )
+            parsed_windows_facts.append(
+                (
+                    event_id,
+                    time_created.isoformat(),
+                    content_digest,
+                    retained_bytes,
+                )
+            )
+        return tuple(parsed_windows_facts)
+
     def _freeze_deferred_session_exact_projection(
         self,
         dispatches: tuple[PreparedDispatch, ...],
@@ -9103,8 +9170,8 @@ class EventDispatcher:
         """Render every visible target separately and attest its positive row range."""
 
         from evidenceforge.generation.emitters.base import (
-            exact_publication_staged_row_contents,
             exact_publication_staged_row_count,
+            exact_publication_staged_row_facts,
         )
 
         identifiers_by_member: list[tuple[tuple[str, str], ...]] = []
@@ -9127,25 +9194,15 @@ class EventDispatcher:
                         f"format={format_name!r}"
                     )
                 source_order_keys: tuple[int, ...] = ()
+                windows_ordering_facts: tuple[tuple[int, str, str, int], ...] = ()
                 if format_name == "ecar":
-                    parsed_order_keys: list[int] = []
-                    for frozen_row in exact_publication_staged_row_contents(
-                        row_start,
-                        row_end,
-                    ):
-                        try:
-                            parsed = json.loads(frozen_row)
-                        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                            raise EventContractError(
-                                "Deferred-session eCAR exact row is not valid JSON"
-                            ) from exc
-                        timestamp_ms = parsed.get("timestamp_ms") if type(parsed) is dict else None
-                        if type(timestamp_ms) is not int or timestamp_ms < 0:
-                            raise EventContractError(
-                                "Deferred-session eCAR exact row lacks source-native time"
-                            )
-                        parsed_order_keys.append(timestamp_ms)
-                    source_order_keys = tuple(parsed_order_keys)
+                    source_order_keys = self._deferred_session_ecar_order_keys(
+                        exact_publication_staged_row_facts(row_start, row_end)
+                    )
+                elif format_name == "windows_event_security":
+                    windows_ordering_facts = self._deferred_session_windows_ordering_facts(
+                        exact_publication_staged_row_facts(row_start, row_end)
+                    )
                 proofs.append(
                     DeferredSessionExactTargetProof(
                         occurrence_id=prepared.occurrence_id,
@@ -9155,6 +9212,7 @@ class EventDispatcher:
                         row_start=row_start,
                         row_end=row_end,
                         source_order_keys=source_order_keys,
+                        windows_ordering_facts=windows_ordering_facts,
                     )
                 )
             identifiers_by_member.append(tuple(sorted(member_identifiers.items())))
@@ -9165,9 +9223,26 @@ class EventDispatcher:
         dispatches: tuple[PreparedDispatch, ...],
         proofs: tuple[DeferredSessionExactTargetProof, ...],
         *,
-        prepared_row_count: int,
+        prepared_row_facts: tuple[tuple[str, str, int], ...],
     ) -> None:
         """Authenticate exact ordered provenance for every visible member target."""
+
+        self._deferred_session_exact_projection_participants(dispatches)
+        if type(prepared_row_facts) is not tuple or any(
+            type(fact) is not tuple
+            or len(fact) != 3
+            or type(fact[0]) is not str
+            or type(fact[1]) is not str
+            or len(fact[1]) != 64
+            or any(character not in "0123456789abcdef" for character in fact[1])
+            or type(fact[2]) is not int
+            or fact[2] <= 0
+            or hashlib.sha256(fact[0].encode("utf-8")).hexdigest() != fact[1]
+            or len(fact[0].encode("utf-8")) != fact[2]
+            for fact in prepared_row_facts
+        ):
+            raise EventContractError("Deferred-session exact prepared-row facts are malformed")
+        prepared_row_count = len(prepared_row_facts)
 
         expected = tuple(
             (
@@ -9215,10 +9290,94 @@ class EventDispatcher:
                 or any(type(value) is not int or value < 0 for value in proof.source_order_keys)
                 or (proof.format_name == "ecar" and len(proof.source_order_keys) != proof.row_count)
                 or (proof.format_name != "ecar" and bool(proof.source_order_keys))
+                or type(proof.windows_ordering_facts) is not tuple
+                or any(
+                    type(fact) is not tuple
+                    or len(fact) != 4
+                    or type(fact[0]) is not int
+                    or fact[0] <= 0
+                    or fact[0] > (2**31 - 1)
+                    or type(fact[1]) is not str
+                    or not fact[1]
+                    or len(fact[1]) > 64
+                    or type(fact[2]) is not str
+                    or len(fact[2]) != 64
+                    or any(character not in "0123456789abcdef" for character in fact[2])
+                    or type(fact[3]) is not int
+                    or fact[3] <= 0
+                    for fact in proof.windows_ordering_facts
+                )
+                or (
+                    proof.format_name == "windows_event_security"
+                    and len(proof.windows_ordering_facts) != proof.row_count
+                )
+                or (
+                    proof.format_name != "windows_event_security"
+                    and bool(proof.windows_ordering_facts)
+                )
             ):
                 raise EventContractError(
                     "Deferred-session exact projection target proof is malformed"
                 )
+            actual_row_facts = prepared_row_facts[proof.row_start : proof.row_end]
+            if proof.format_name == "ecar" and (
+                proof.source_order_keys != self._deferred_session_ecar_order_keys(actual_row_facts)
+            ):
+                raise EventContractError(
+                    "Deferred-session eCAR source proof changed from its prepared bytes"
+                )
+            if proof.format_name == "windows_event_security":
+                if proof.windows_ordering_facts != self._deferred_session_windows_ordering_facts(
+                    actual_row_facts
+                ):
+                    raise EventContractError(
+                        "Deferred-session Windows source proof changed from its prepared bytes"
+                    )
+                event = dispatches[proof.member_ordinal]._occurrence
+                auth = event.auth
+                if (
+                    event.event_type is not EventKind.LOGON
+                    or auth is None
+                    or type(auth.logon_type) is not int
+                    or auth.logon_type != 10
+                    or auth.result != "success"
+                    or type(auth.elevated) is not bool
+                    or type(auth.emit_special_privileges) is not bool
+                ):
+                    raise EventContractError(
+                        "Deferred-session Windows exact target is not an RDP logon"
+                    )
+                expected_event_ids = (
+                    (4624, 4672) if auth.elevated and auth.emit_special_privileges else (4624,)
+                )
+                if tuple(fact[0] for fact in proof.windows_ordering_facts) != expected_event_ids:
+                    raise EventContractError(
+                        "Deferred-session Windows exact target changed its EventID sequence"
+                    )
+                parsed_windows_times: list[datetime] = []
+                for _event_id, raw_time, _digest, _retained_bytes in proof.windows_ordering_facts:
+                    try:
+                        parsed_time = datetime.fromisoformat(raw_time)
+                    except ValueError as exc:
+                        raise EventContractError(
+                            "Deferred-session Windows exact target has malformed TimeCreated"
+                        ) from exc
+                    if (
+                        parsed_time.tzinfo is None
+                        or parsed_time.utcoffset() is None
+                        or parsed_time.isoformat() != raw_time
+                    ):
+                        raise EventContractError(
+                            "Deferred-session Windows exact target has noncanonical TimeCreated"
+                        )
+                    parsed_windows_times.append(parsed_time)
+                if any(
+                    parsed_windows_times[index] <= parsed_windows_times[index - 1]
+                    for index in range(1, len(parsed_windows_times))
+                ):
+                    raise EventContractError(
+                        "Deferred-session Windows exact rows are not strictly ordered"
+                    )
             cursor = proof.row_end
         if cursor != prepared_row_count:
             raise EventContractError("Deferred-session exact projection row proof is incomplete")
@@ -9272,6 +9431,32 @@ class EventDispatcher:
                 raise EventContractError(
                     "Deferred-session eCAR source-native ordering does not place FLOW "
                     "before its dependent"
+                )
+        transport_source_times = (
+            tuple(
+                datetime.fromtimestamp(
+                    value / 1_000,
+                    tz=UTC,
+                )
+                for value in transport_ecar_keys
+            )
+            if transport_ecar_keys
+            else cast(tuple[datetime, ...], transport_targets)
+        )
+        for proof in proofs:
+            if proof.member_ordinal == 0 or proof.format_name != "windows_event_security":
+                continue
+            windows_times = tuple(
+                datetime.fromisoformat(fact[1]) for fact in proof.windows_ordering_facts
+            )
+            if (
+                not transport_source_times
+                or not windows_times
+                or min(windows_times) <= max(transport_source_times)
+            ):
+                raise EventContractError(
+                    "Deferred-session Windows source-native ordering does not place transport "
+                    "before EventID 4624"
                 )
 
     @staticmethod
@@ -9690,7 +9875,7 @@ class EventDispatcher:
             self._validate_deferred_session_target_proofs(
                 dispatches,
                 prepared_target_proofs,
-                prepared_row_count=exact_batch.prepared_row_count,
+                prepared_row_facts=exact_batch._prepared_row_facts(),
             )
             observation_deltas_by_member = tuple(
                 self._action_cohort_projection_observation_deltas(prepared._projection)
@@ -9980,7 +10165,7 @@ class EventDispatcher:
             self._validate_deferred_session_target_proofs(
                 record.dispatches,
                 record.prepared_target_proofs,
-                prepared_row_count=exact_batch.prepared_row_count,
+                prepared_row_facts=exact_batch._prepared_row_facts(),
             )
             if record.intent_token is None:
                 if any(

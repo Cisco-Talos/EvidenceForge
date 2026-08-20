@@ -30,6 +30,7 @@ order), then renders to XML and writes to per-host FQDN directories.
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import secrets
@@ -37,7 +38,7 @@ import sqlite3
 import stat
 import tempfile
 from bisect import bisect_left
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -46,11 +47,21 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty, Full
 from threading import Lock, get_ident, local
-from typing import Any
+from typing import Any, cast
+from weakref import ReferenceType, ref
+
+from jinja2.sandbox import SandboxedEnvironment
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.contexts import AuthContext, HostContext
-from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.formats.format_def import (
+    EventVariant,
+    FieldConstraint,
+    FieldDefinition,
+    FieldType,
+    FormatDefinition,
+    OutputTemplate,
+)
 from evidenceforge.generation.activity.timing_profiles import windows_collision_spacing_config
 from evidenceforge.generation.activity.windows_auth_realism import min_unlock_gap_seconds
 from evidenceforge.generation.emitters.base import (
@@ -133,6 +144,298 @@ _WFP_OUTBOUND_LAYER_RTID = 48
 _WFP_INBOUND_LAYER_NAME = "%%14610"
 _WFP_INBOUND_LAYER_RTID = 44
 _LOCAL_SERVICE_LOGON_IDS = {"0x3e7", "0x3e4", "0x3e5", "-", "0x0"}
+
+
+_EXACT_FORMAT_MODEL_TAGS: tuple[tuple[type[object], str], ...] = (
+    (FieldConstraint, "field_constraint"),
+    (FieldDefinition, "field_definition"),
+    (EventVariant, "event_variant"),
+    (OutputTemplate, "output_template"),
+    (FormatDefinition, "format_definition"),
+)
+_EXACT_FORMAT_SNAPSHOT_MAX_DEPTH = 64
+_EXACT_FORMAT_SNAPSHOT_MAX_NODES = 100_000
+
+
+def _exact_format_snapshot_value(value: object) -> object:
+    """Freeze one format-model value without invoking participant callbacks."""
+
+    active_ids: set[int] = set()
+    remaining_nodes = _EXACT_FORMAT_SNAPSHOT_MAX_NODES
+
+    def freeze(item: object, depth: int) -> object:
+        nonlocal remaining_nodes
+        if depth > _EXACT_FORMAT_SNAPSHOT_MAX_DEPTH or remaining_nodes <= 0:
+            raise ExactPublicationError("Exact Windows format snapshot exceeds its bound")
+        remaining_nodes -= 1
+        item_type = type(item)
+        if item is None:
+            return ("none",)
+        if item_type is bool:
+            return ("bool", item)
+        if item_type is int:
+            return ("int", item)
+        if item_type is float:
+            if not math.isfinite(cast(float, item)):
+                raise ExactPublicationError("Exact Windows format contains a non-finite number")
+            return ("float", item)
+        if item_type is str:
+            return ("str", item)
+        if item_type is FieldType:
+            enum_value = object.__getattribute__(item, "_value_")
+            if type(enum_value) is not str:
+                raise ExactPublicationError("Exact Windows format contains a malformed field type")
+            return ("field_type", enum_value)
+
+        item_id = id(item)
+        if item_id in active_ids:
+            raise ExactPublicationError("Exact Windows format contains a reference cycle")
+        active_ids.add(item_id)
+        try:
+            if item_type is list:
+                return ("list", tuple(freeze(child, depth + 1) for child in item))
+            if item_type is tuple:
+                return ("tuple", tuple(freeze(child, depth + 1) for child in item))
+            if item_type is dict:
+                entries: list[tuple[object, object]] = []
+                for key, child in dict.items(cast(dict[object, object], item)):
+                    if type(key) is not str and type(key) is not int:
+                        raise ExactPublicationError(
+                            "Exact Windows format contains a non-scalar mapping key"
+                        )
+                    entries.append(
+                        (
+                            freeze(key, depth + 1),
+                            freeze(child, depth + 1),
+                        )
+                    )
+                return ("dict", tuple(entries))
+            model_tag = None
+            for model_type, tag in _EXACT_FORMAT_MODEL_TAGS:
+                if item_type is model_type:
+                    model_tag = tag
+                    break
+            if model_tag is not None:
+                state = object.__getattribute__(item, "__dict__")
+                if type(state) is not dict:
+                    raise ExactPublicationError(
+                        "Exact Windows format model state must be an exact dict"
+                    )
+                fields: list[tuple[str, object]] = []
+                for key, child in dict.items(state):
+                    if type(key) is not str:
+                        raise ExactPublicationError(
+                            "Exact Windows format model key must be an exact str"
+                        )
+                    fields.append((key, freeze(child, depth + 1)))
+                return ("model", model_tag, tuple(fields))
+            raise ExactPublicationError("Exact Windows format contains an unsupported value type")
+        finally:
+            active_ids.remove(item_id)
+
+    return freeze(value, 0)
+
+
+def _exact_windows_format_snapshot(format_definition: object) -> tuple[object, ...]:
+    """Return the callback-free inert snapshot of one exact built-in format."""
+
+    if type(format_definition) is not FormatDefinition:
+        raise ExactPublicationError("Exact Windows format must be one exact FormatDefinition")
+    snapshot = _exact_format_snapshot_value(format_definition)
+    if type(snapshot) is not tuple:
+        raise ExactPublicationError("Exact Windows format snapshot is malformed")
+    return cast(tuple[object, ...], snapshot)
+
+
+@dataclass(frozen=True, slots=True)
+class _WindowsExactProjectionBinding:
+    """Closure-retained constructor truth for deferred exact publication."""
+
+    source_finalization: bool
+    builtin_format: bool
+    format_definition_id: int
+    format_snapshot: tuple[object, ...] | None
+
+
+def _new_windows_exact_projection_binding_registry() -> tuple[
+    Callable[[object, bool, object], None],
+    Callable[[object, FormatDefinition], bool],
+    Callable[[object], bool | None],
+    Callable[[object], tuple[str, str] | None],
+    Callable[[object], bool],
+    Callable[[dict[str, Any]], str],
+]:
+    """Create a non-instance registry for exact constructor bindings."""
+
+    from evidenceforge.config import get_formats_directory
+    from evidenceforge.formats.loader import load_format
+    from evidenceforge.utils.files import load_yaml
+
+    canonical_path = get_formats_directory() / "windows_event_security.yaml"
+    canonical_data = load_yaml(canonical_path)
+    if type(canonical_data) is not dict:
+        raise ExactPublicationError(
+            "Built-in Windows Security format must decode to one exact mapping"
+        )
+    canonical_definition = FormatDefinition(**canonical_data)
+    canonical_snapshot = _exact_windows_format_snapshot(canonical_definition)
+    canonical_header = canonical_definition.output.header_template or ""
+    canonical_footer = canonical_definition.output.footer_template or ""
+    canonical_template_source = canonical_definition.output.template
+
+    bindings: dict[
+        int,
+        tuple[ReferenceType[object], _WindowsExactProjectionBinding],
+    ] = {}
+    registry_lock = Lock()
+
+    def discard(owner_id: int, owner_reference: ReferenceType[object]) -> None:
+        with registry_lock:
+            retained = bindings.get(owner_id)
+            if retained is not None and retained[0] is owner_reference:
+                bindings.pop(owner_id, None)
+
+    def bind(
+        owner: object,
+        source_finalization: bool,
+        format_definition: object,
+    ) -> None:
+        if type(source_finalization) is not bool:
+            raise ExactPublicationError(
+                "Exact Windows constructor binding requires one exact finalization bool"
+            )
+        current_snapshot: tuple[object, ...] | None = None
+        if type(format_definition) is FormatDefinition:
+            try:
+                current_snapshot = _exact_windows_format_snapshot(format_definition)
+            except ExactPublicationError:
+                current_snapshot = None
+        owner_id = id(owner)
+        owner_reference = ref(
+            owner,
+            lambda expired, retained_id=owner_id: discard(retained_id, expired),
+        )
+        binding = _WindowsExactProjectionBinding(
+            source_finalization=source_finalization,
+            builtin_format=(
+                format_definition is load_format("windows_event_security")
+                and current_snapshot == canonical_snapshot
+            ),
+            format_definition_id=id(format_definition),
+            format_snapshot=current_snapshot,
+        )
+        with registry_lock:
+            retained = bindings.get(owner_id)
+            if retained is not None and retained[0]() is not owner:
+                raise ExactPublicationError("Exact Windows emitter identity was recycled")
+            bindings[owner_id] = (owner_reference, binding)
+
+    def authenticates(owner: object, format_definition: FormatDefinition) -> bool:
+        try:
+            current_snapshot = _exact_windows_format_snapshot(format_definition)
+        except ExactPublicationError:
+            return False
+        with registry_lock:
+            retained = bindings.get(id(owner))
+            return (
+                retained is not None
+                and retained[0]() is owner
+                and retained[1].source_finalization
+                and retained[1].builtin_format
+                and retained[1].format_definition_id == id(format_definition)
+                and retained[1].format_snapshot == current_snapshot
+                and current_snapshot == canonical_snapshot
+            )
+
+    def source_finalization(owner: object) -> bool | None:
+        with registry_lock:
+            retained = bindings.get(id(owner))
+            if retained is None or retained[0]() is not owner:
+                return None
+            return retained[1].source_finalization
+
+    def output_contract(owner: object) -> tuple[str, str] | None:
+        with registry_lock:
+            retained = bindings.get(id(owner))
+            if (
+                retained is None
+                or retained[0]() is not owner
+                or not retained[1].source_finalization
+                or not retained[1].builtin_format
+            ):
+                return None
+        return canonical_header, canonical_footer
+
+    def uses_canonical_renderer(owner: object) -> bool:
+        with registry_lock:
+            retained = bindings.get(id(owner))
+            return bool(
+                retained is not None
+                and retained[0]() is owner
+                and retained[1].source_finalization
+                and retained[1].builtin_format
+            )
+
+    def render(event_data: dict[str, Any]) -> str:
+        # A reusable Jinja Template or Environment would be mutable through this
+        # function's public closure cells.  Retain only the authoritative immutable
+        # source string and compile an unreachable sandboxed graph for this row.
+        environment = SandboxedEnvironment(autoescape=False)
+        template = environment.from_string(canonical_template_source)
+        return template.render(**event_data)
+
+    return (
+        bind,
+        authenticates,
+        source_finalization,
+        output_contract,
+        uses_canonical_renderer,
+        render,
+    )
+
+
+(
+    _bind_windows_exact_projection_publication,
+    _authenticates_windows_exact_projection_publication,
+    _windows_constructor_source_finalization,
+    _windows_exact_projection_output_contract,
+    _uses_windows_exact_projection_renderer,
+    _render_windows_exact_projection,
+) = _new_windows_exact_projection_binding_registry()
+
+
+def _windows_source_finalization_bound(emitter: object) -> bool:
+    """Return immutable constructor finalization truth for one Windows emitter."""
+
+    retained = _windows_constructor_source_finalization(emitter)
+    if retained is not None:
+        return retained
+    emitter_state = object.__getattribute__(emitter, "__dict__")
+    return (
+        type(emitter_state) is dict
+        and dict.get(
+            emitter_state,
+            "_source_finalization_bound",
+        )
+        is True
+    )
+
+
+def _supports_windows_exact_projection_publication(emitter: object) -> bool:
+    """Authenticate exact type, raw state, constructor binding, and format snapshot."""
+
+    if type(emitter) is not WindowsEventEmitter:
+        return False
+    emitter_state = object.__getattribute__(emitter, "__dict__")
+    if type(emitter_state) is not dict:
+        return False
+    format_definition = dict.get(emitter_state, "format_def")
+    if type(format_definition) is not FormatDefinition:
+        return False
+    return _authenticates_windows_exact_projection_publication(
+        emitter,
+        format_definition,
+    )
 
 
 def _require_windows_source_finalization_capabilities() -> None:
@@ -697,6 +1000,28 @@ class _WindowsAbortExactPendingRow:
     digest: str
 
 
+@dataclass(frozen=True, slots=True)
+class _WindowsExactTerminalCandidateBinding:
+    """Post-fixup immutable facts for one authenticated exact candidate row."""
+
+    sort_key: str
+    route_key: str
+    receipt_digest: str
+    payload_digest: str
+    payload_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class _WindowsExactTerminalFinalBinding:
+    """Immutable final-byte facts retained until the mixed seal commits."""
+
+    ordinal: int
+    route_kind: str
+    route_key: str
+    payload_digest: str
+    payload_bytes: int
+
+
 class _WindowsSourceFinalizationEpoch(SourceFinalizationEpoch):
     """Emitter-owned opaque reference to one sealed Windows Security cohort."""
 
@@ -749,6 +1074,11 @@ class WindowsEventEmitter(LogEmitter):
 
     _supported_types will be populated during Phase 7.2 migration.
     """
+
+    # This class-level marker is intentionally concrete-type gated by the
+    # dispatcher.  Runtime admission additionally requires the constructor-bound
+    # built-in format identity and terminal source-finalization journal.
+    supports_exact_projection_publication = True
 
     _supported_types: set[str] = {
         "logon",
@@ -2129,6 +2459,11 @@ class WindowsEventEmitter(LogEmitter):
         self._source_finalization_output_target: OutputTarget | None = None
         self._source_finalization_header: str | None = None
         self._source_finalization_footer: str | None = None
+        _bind_windows_exact_projection_publication(
+            self,
+            source_finalization,
+            format_def,
+        )
 
     def _preflight_private_spool_root(self) -> None:
         """Validate configured exact-spool trust and disjointness before generation."""
@@ -2155,7 +2490,7 @@ class WindowsEventEmitter(LogEmitter):
         """Reject target mutation after the terminal source cohort starts quiescing."""
 
         with self._close_condition:
-            if self._source_finalization_bound and (
+            if _windows_source_finalization_bound(self) and (
                 self._source_finalization_state != "open"
                 or self._close_state != "open"
                 or self._exact_candidate_abort_close_rendering
@@ -2164,6 +2499,17 @@ class WindowsEventEmitter(LogEmitter):
                     "Windows output target cannot change during terminal source ownership"
                 )
             super().configure_output_target(target)
+
+    def _source_format_contract(self) -> tuple[str, str]:
+        """Return constructor-bound exact framing or the legacy mutable framing."""
+
+        exact_contract = _windows_exact_projection_output_contract(self)
+        if exact_contract is not None:
+            return exact_contract
+        return (
+            self.format_def.output.header_template or "",
+            self.format_def.output.footer_template or "",
+        )
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host_fqdn = sanitize_path_component(host_fqdn)
@@ -2184,11 +2530,15 @@ class WindowsEventEmitter(LogEmitter):
             writer = _SingleHostWriter(path, self.buffer_size)
             # The Splunk target is an event stream, not a rooted XML document.
             source_state, _ = self._source_lifecycle_snapshot()
-            terminal = self._source_finalization_bound and source_state != "open"
+            terminal = _windows_source_finalization_bound(self) and source_state != "open"
+            exact_contract = _windows_exact_projection_output_contract(self)
+            source_header, _source_footer = self._source_format_contract()
             header = (
-                self._source_finalization_header
+                exact_contract[0]
+                if exact_contract is not None
+                else self._source_finalization_header
                 if terminal
-                else self.format_def.output.header_template
+                else source_header
             )
             output_target = (
                 self._source_finalization_output_target if terminal else self.output_target
@@ -2255,7 +2605,7 @@ class WindowsEventEmitter(LogEmitter):
     def supports_exact_candidate_publication(self) -> bool:
         """Return whether this emitter owns the journal required for exact candidates."""
 
-        return self._source_finalization_bound
+        return _windows_source_finalization_bound(self)
 
     def _register_exact_publication_batch(
         self,
@@ -2269,7 +2619,7 @@ class WindowsEventEmitter(LogEmitter):
             raise ExactPublicationError(
                 "Windows exact publication cannot register from its emitter worker"
             )
-        if not self._source_finalization_bound:
+        if not _windows_source_finalization_bound(self):
             raise ExactPublicationError(
                 "Windows exact candidate publication requires source finalization"
             )
@@ -2392,7 +2742,7 @@ class WindowsEventEmitter(LogEmitter):
                         try:
                             self._spool_event_dicts_unlocked()
                         except BaseException:
-                            if self._source_finalization_bound:
+                            if _windows_source_finalization_bound(self):
                                 retained = self._event_dicts.pop()
                                 handed_off = False
                                 if retained is not event_data:
@@ -2401,7 +2751,7 @@ class WindowsEventEmitter(LogEmitter):
                                     ) from None
                             raise
         except BaseException:
-            if self._source_finalization_bound and not handed_off:
+            if _windows_source_finalization_bound(self) and not handed_off:
                 with self._candidate_admission_lock:
                     self._release_candidate_admission_unlocked(reserved_bytes)
             raise
@@ -2414,7 +2764,7 @@ class WindowsEventEmitter(LogEmitter):
     ) -> tuple[dict[str, Any], int]:
         """Charge one exact candidate before retaining it in memory or the FIFO."""
 
-        if not self._source_finalization_bound:
+        if not _windows_source_finalization_bound(self):
             return event_data, 0
         payload = _spool_encode(event_data)
         payload_bytes = len(payload.encode("utf-8"))
@@ -2426,7 +2776,7 @@ class WindowsEventEmitter(LogEmitter):
 
         if type(payload_bytes) is not int or payload_bytes < 0:
             raise SourceFinalizationError("Windows candidate byte reservation is malformed")
-        if not self._source_finalization_bound:
+        if not _windows_source_finalization_bound(self):
             if payload_bytes != 0:
                 raise SourceFinalizationError(
                     "Legacy Windows candidate cannot retain finalization capacity"
@@ -2507,7 +2857,7 @@ class WindowsEventEmitter(LogEmitter):
                         "Windows exact candidate reservation changed on retry"
                     )
                 return
-            if not self._source_finalization_bound:
+            if not _windows_source_finalization_bound(self):
                 raise ExactPublicationError(
                     "Windows exact candidate reservation requires source finalization"
                 )
@@ -2895,7 +3245,12 @@ class WindowsEventEmitter(LogEmitter):
         self._candidate_admitted_rows -= rows
         self._candidate_admitted_bytes -= payload_bytes
 
-    def _render_event(self, event_data: dict[str, Any]) -> str:
+    def _render_event(
+        self,
+        event_data: dict[str, Any],
+        *,
+        exact_candidate: bool = False,
+    ) -> str:
         """Render Windows Event dict to XML format."""
         from xml.sax.saxutils import escape as xml_escape
 
@@ -2912,6 +3267,12 @@ class WindowsEventEmitter(LogEmitter):
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":
                 event_data[key] = xml_escape(val)
+        if exact_candidate:
+            if not _uses_windows_exact_projection_renderer(self):
+                raise ExactPublicationError(
+                    "Windows exact candidate lost its canonical renderer binding"
+                )
+            return _render_windows_exact_projection(event_data)
         return self._template.render(**event_data)
 
     def _run(self) -> None:
@@ -2958,12 +3319,12 @@ class WindowsEventEmitter(LogEmitter):
     def _get_spool_conn_unlocked(self) -> sqlite3.Connection:
         """Open the on-disk Windows event spool database while holding _file_lock."""
         if self._spool_conn is not None:
-            if self._source_finalization_bound and self._spool_file_initialization_pending:
+            if _windows_source_finalization_bound(self) and self._spool_file_initialization_pending:
                 self._finish_private_journal_initialization_unlocked()
             return self._spool_conn
 
         spool_dir = self._get_spool_dir_unlocked()
-        if not self._source_finalization_bound:
+        if not _windows_source_finalization_bound(self):
             descriptor, path = tempfile.mkstemp(
                 prefix=".windows_event_spool_",
                 suffix=".sqlite3",
@@ -3248,7 +3609,7 @@ class WindowsEventEmitter(LogEmitter):
     def _validate_spool_directory_unlocked(self) -> None:
         """Revalidate the owner-only private directory and its pinned identity."""
 
-        if not self._source_finalization_bound:
+        if not _windows_source_finalization_bound(self):
             if self._spool_dir is None or not self._spool_dir.is_dir():
                 raise ExactPublicationError("Windows legacy spool directory disappeared")
             return
@@ -3288,7 +3649,7 @@ class WindowsEventEmitter(LogEmitter):
     def _validate_spool_file_unlocked(self) -> None:
         """Revalidate the SQLite main file without following its directory entry."""
 
-        if not self._source_finalization_bound:
+        if not _windows_source_finalization_bound(self):
             if self._spool_path is None or not self._spool_path.is_file():
                 raise ExactPublicationError("Windows legacy spool file disappeared")
             return
@@ -3312,20 +3673,20 @@ class WindowsEventEmitter(LogEmitter):
     def _get_spool_dir_unlocked(self) -> Path:
         """Return the local runtime directory used for SQLite spool state."""
         if self._spool_dir is not None:
-            if self._source_finalization_bound and self._spool_initialization_pending:
+            if _windows_source_finalization_bound(self) and self._spool_initialization_pending:
                 self._finish_private_spool_initialization_unlocked()
             self._validate_spool_directory_unlocked()
             return self._spool_dir
 
         configured = os.environ.get("EFORGE_SPOOL_DIR")
-        if configured and not self._source_finalization_bound:
+        if configured and not _windows_source_finalization_bound(self):
             requested = Path(configured).expanduser()
             requested.mkdir(parents=True, exist_ok=True)
             spool_dir = Path(os.path.realpath(os.fspath(requested)))
             self._spool_dir = spool_dir
             self._owns_spool_dir = False
             return self._spool_dir
-        if not self._source_finalization_bound:
+        if not _windows_source_finalization_bound(self):
             self._spool_dir = Path(tempfile.mkdtemp(prefix="evidenceforge-windows-spool-"))
             self._owns_spool_dir = True
             return self._spool_dir
@@ -3461,7 +3822,10 @@ class WindowsEventEmitter(LogEmitter):
         for offset, event in enumerate(self._event_dicts):
             payload = _spool_encode(event)
             payload_bytes = len(payload.encode("utf-8"))
-            if self._source_finalization_bound and payload_bytes > _FINALIZATION_CHUNK_BYTES:
+            if (
+                _windows_source_finalization_bound(self)
+                and payload_bytes > _FINALIZATION_CHUNK_BYTES
+            ):
                 raise SourceFinalizationError(
                     "Windows candidate row exceeds the finalization chunk byte capacity"
                 )
@@ -3483,16 +3847,22 @@ class WindowsEventEmitter(LogEmitter):
             raise SourceFinalizationError("Windows journal rejected a late candidate cohort")
         candidate_rows = int(state[1]) + len(rows)
         candidate_bytes = int(state[2]) + added_bytes
-        if self._source_finalization_bound and candidate_rows > self._finalization_row_capacity:
+        if (
+            _windows_source_finalization_bound(self)
+            and candidate_rows > self._finalization_row_capacity
+        ):
             raise SourceFinalizationError("Windows finalization row capacity is exhausted")
-        if self._source_finalization_bound and candidate_bytes > self._finalization_byte_capacity:
+        if (
+            _windows_source_finalization_bound(self)
+            and candidate_bytes > self._finalization_byte_capacity
+        ):
             raise SourceFinalizationError("Windows finalization byte capacity is exhausted")
         with self._candidate_admission_lock:
             admitted_rows = self._candidate_admitted_rows
             admitted_bytes = self._candidate_admitted_bytes
             high_water_rows = self._candidate_high_water_rows
             high_water_bytes = self._candidate_high_water_bytes
-        if self._source_finalization_bound and (
+        if _windows_source_finalization_bound(self) and (
             candidate_rows > admitted_rows or candidate_bytes > admitted_bytes
         ):
             raise SourceFinalizationError("Windows candidate journal exceeded admitted capacity")
@@ -3517,7 +3887,7 @@ class WindowsEventEmitter(LogEmitter):
                     1,
                 ),
             )
-            if self._source_finalization_bound:
+            if _windows_source_finalization_bound(self):
                 self._commit_journal_unlocked()
             else:
                 conn.commit()
@@ -4120,7 +4490,7 @@ class WindowsEventEmitter(LogEmitter):
         if self._spool_conn is not None:
             self._spool_conn.close()
             self._spool_conn = None
-        if not self._source_finalization_bound:
+        if not _windows_source_finalization_bound(self):
             if self._spool_path is not None:
                 for candidate in (
                     self._spool_path,
@@ -4236,11 +4606,22 @@ class WindowsEventEmitter(LogEmitter):
         event: dict[str, Any],
         sequence: int,
         state: _WindowsRenderState,
+        *,
+        candidate_route_kind: str | None = None,
     ) -> tuple[str, str, _SingleHostWriter, str] | None:
         """Apply legacy source fixups and render one final immutable output string."""
 
+        if candidate_route_kind not in {None, _EXACT_CANDIDATE_MARKER}:
+            raise SourceFinalizationError(
+                "Windows candidate retained an invalid terminal route marker"
+            )
+        exact_candidate = candidate_route_kind == _EXACT_CANDIDATE_MARKER
+        if exact_candidate and not _uses_windows_exact_projection_renderer(self):
+            raise ExactPublicationError(
+                "Windows exact candidate lost its canonical renderer binding"
+            )
         source_state, _ = self._source_lifecycle_snapshot()
-        terminal = self._source_finalization_bound and source_state != "open"
+        terminal = _windows_source_finalization_bound(self) and source_state != "open"
         output_target = self._source_finalization_output_target if terminal else self.output_target
         if output_target is None:
             raise SourceFinalizationError("Windows final output target was not frozen")
@@ -4318,7 +4699,11 @@ class WindowsEventEmitter(LogEmitter):
             )
         if output_target in {OutputTarget.DEFAULT, OutputTarget.SPLUNK}:
             route_key = "" if self._direct_file_mode else sanitize_path_component(host_fqdn)
-            rendered = self._render_event(event)
+            rendered = (
+                self._render_event(event, exact_candidate=True)
+                if exact_candidate
+                else self._render_event(event)
+            )
             if output_target == OutputTarget.SPLUNK:
                 rendered = compact_windows_event_xml(rendered)
             return ("xml", route_key, self._get_host_writer(host_fqdn), rendered)
@@ -4890,10 +5275,11 @@ class WindowsEventEmitter(LogEmitter):
     def _quiesce_source_finalization(self) -> None:
         """Run source quiescence under the current operation capability."""
 
-        if not self._source_finalization_bound:
+        if not _windows_source_finalization_bound(self):
             raise SourceFinalizationError(
                 "Direct Windows emitters retain legacy close and cannot bind an exact epoch"
             )
+        source_header, source_footer = self._source_format_contract()
         owner = get_ident()
         with self._close_condition:
             state = self._source_finalization_state
@@ -4911,8 +5297,10 @@ class WindowsEventEmitter(LogEmitter):
                 self._source_finalization_state = "quiescing"
                 self._source_finalization_owner = owner
                 self._source_finalization_output_target = self.output_target
-                self._source_finalization_header = self.format_def.output.header_template or ""
-                self._source_finalization_footer = self.format_def.output.footer_template or ""
+                (
+                    self._source_finalization_header,
+                    self._source_finalization_footer,
+                ) = (source_header, source_footer)
                 self._close_state = "closing"
                 self._close_thread = owner
             elif state != "quiescing" or self._source_finalization_owner != owner:
@@ -5093,31 +5481,177 @@ class WindowsEventEmitter(LogEmitter):
             self._shift_spooled_process_terminations_after_dependents_unlocked()
         self._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
 
+    def _exact_terminal_candidate_bindings_unlocked(
+        self,
+    ) -> dict[int, _WindowsExactTerminalCandidateBinding]:
+        """Bind each exact marker to its trusted post-fixup candidate bytes."""
+
+        connection = self._spool_conn
+        if connection is None:
+            raise SourceFinalizationError("Windows source journal is not open")
+        bindings: dict[int, _WindowsExactTerminalCandidateBinding] = {}
+        cursor = connection.execute(
+            """SELECT sequence, sort_key, route_key, payload_digest, payload_bytes, payload
+               FROM events WHERE phase = ? AND route_kind = ? ORDER BY sequence""",
+            ("candidate", _EXACT_CANDIDATE_MARKER),
+        )
+        for row in cursor:
+            if (
+                len(row) != 6
+                or type(row[0]) is not int
+                or type(row[1]) is not str
+                or type(row[2]) is not str
+                or type(row[3]) is not str
+                or type(row[4]) is not int
+                or row[4] <= 0
+                or type(row[5]) is not str
+            ):
+                raise ExactPublicationError(
+                    "Windows exact candidate lost its post-fixup terminal binding"
+                )
+            sequence, sort_key, route_key, receipt_digest, payload_bytes, payload = row
+            encoded = payload.encode("utf-8")
+            try:
+                expected_sort_key = self._event_sort_key(_spool_decode(payload))
+            except (RecursionError, TypeError, ValueError):
+                raise ExactPublicationError(
+                    "Windows exact candidate post-fixup payload is malformed"
+                ) from None
+            if (
+                sequence in bindings
+                or len(encoded) != payload_bytes
+                or expected_sort_key != sort_key
+            ):
+                raise ExactPublicationError("Windows exact candidate post-fixup metadata changed")
+            bindings[sequence] = _WindowsExactTerminalCandidateBinding(
+                sort_key=sort_key,
+                route_key=route_key,
+                receipt_digest=receipt_digest,
+                payload_digest=hashlib.sha256(encoded).hexdigest(),
+                payload_bytes=payload_bytes,
+            )
+        if len(bindings) != self._exact_candidate_current_rows:
+            raise ExactPublicationError(
+                "Windows exact candidate lost its post-fixup terminal binding"
+            )
+        return bindings
+
     def _next_candidate_unlocked(
         self,
         after_sort_key: str | None,
         after_sequence: int,
-    ) -> tuple[int, str, dict[str, Any]] | None:
+        exact_bindings: dict[int, _WindowsExactTerminalCandidateBinding],
+    ) -> tuple[int, str, str | None, dict[str, Any]] | None:
         """Load one chronological candidate without retaining the cohort in Python."""
 
         if self._spool_conn is None:
             raise SourceFinalizationError("Windows source journal is not open")
         if after_sort_key is None:
             row = self._spool_conn.execute(
-                """SELECT sequence, sort_key, payload FROM events
+                """SELECT sequence, sort_key, route_kind, route_key, payload_digest,
+                          payload_bytes, payload FROM events
                    WHERE phase = ? ORDER BY sort_key, sequence LIMIT ?""",
                 ("candidate", 1),
             ).fetchone()
         else:
             row = self._spool_conn.execute(
-                """SELECT sequence, sort_key, payload FROM events
+                """SELECT sequence, sort_key, route_kind, route_key, payload_digest,
+                          payload_bytes, payload FROM events
                    WHERE phase = ? AND (sort_key > ? OR (sort_key = ? AND sequence > ?))
                    ORDER BY sort_key, sequence LIMIT ?""",
                 ("candidate", after_sort_key, after_sort_key, after_sequence, 1),
             ).fetchone()
         if row is None:
             return None
-        return int(row[0]), str(row[1]), _spool_decode(row[2])
+        if (
+            len(row) != 7
+            or type(row[0]) is not int
+            or type(row[1]) is not str
+            or row[2] not in {None, _EXACT_CANDIDATE_MARKER}
+            or type(row[5]) is not int
+            or row[5] <= 0
+            or type(row[6]) is not str
+        ):
+            raise SourceFinalizationError(
+                "Windows candidate retained an invalid terminal route marker"
+            )
+        sequence, sort_key, route_kind, route_key, receipt_digest, payload_bytes, payload = row
+        encoded = payload.encode("utf-8")
+        binding = exact_bindings.get(sequence)
+        if binding is None:
+            if route_kind is not None or route_key is not None or receipt_digest is not None:
+                raise SourceFinalizationError(
+                    "Windows ordinary candidate retained exact terminal route metadata"
+                )
+        elif (
+            route_kind != _EXACT_CANDIDATE_MARKER
+            or type(route_key) is not str
+            or type(receipt_digest) is not str
+            or binding.sort_key != sort_key
+            or binding.route_key != route_key
+            or binding.receipt_digest != receipt_digest
+            or binding.payload_bytes != payload_bytes
+            or binding.payload_digest != hashlib.sha256(encoded).hexdigest()
+        ):
+            raise ExactPublicationError("Windows exact candidate terminal binding changed")
+        if len(encoded) != payload_bytes:
+            raise SourceFinalizationError("Windows candidate terminal payload size changed")
+        try:
+            event = _spool_decode(payload)
+        except (RecursionError, TypeError, ValueError):
+            raise SourceFinalizationError(
+                "Windows candidate terminal payload is malformed"
+            ) from None
+        if self._event_sort_key(event) != sort_key:
+            raise SourceFinalizationError("Windows candidate terminal sort key changed")
+        return sequence, sort_key, route_kind, event
+
+    def _validate_exact_terminal_final_bindings_unlocked(
+        self,
+        bindings: dict[int, _WindowsExactTerminalFinalBinding],
+    ) -> None:
+        """Reauthenticate every exact final byte string after ordinary callbacks finish."""
+
+        connection = self._spool_conn
+        if connection is None:
+            raise SourceFinalizationError("Windows source journal is not open")
+        matched = 0
+        cursor = connection.execute(
+            """SELECT sequence, ordinal, route_kind, route_key, payload_digest,
+                      payload_bytes, payload
+               FROM events WHERE phase = ? ORDER BY ordinal""",
+            ("final",),
+        )
+        for row in cursor:
+            if len(row) != 7 or type(row[0]) is not int:
+                raise SourceFinalizationError("Windows final row metadata is malformed")
+            binding = bindings.get(row[0])
+            if binding is None:
+                continue
+            if (
+                type(row[1]) is not int
+                or type(row[2]) is not str
+                or type(row[3]) is not str
+                or type(row[4]) is not str
+                or type(row[5]) is not int
+                or row[5] <= 0
+                or type(row[6]) is not str
+            ):
+                raise ExactPublicationError("Windows exact final binding metadata changed")
+            encoded = row[6].encode("utf-8")
+            if (
+                binding.ordinal != row[1]
+                or binding.route_kind != row[2]
+                or binding.route_key != row[3]
+                or binding.payload_digest != row[4]
+                or binding.payload_bytes != row[5]
+                or len(encoded) != row[5]
+                or hashlib.sha256(encoded).hexdigest() != binding.payload_digest
+            ):
+                raise ExactPublicationError("Windows exact final binding changed")
+            matched += 1
+        if matched != len(bindings):
+            raise ExactPublicationError("Windows exact final binding owner was lost")
 
     def _route_id_unlocked(
         self,
@@ -5150,8 +5684,12 @@ class WindowsEventEmitter(LogEmitter):
 
         epoch = self._source_finalization_epoch
         output_target = self._source_finalization_output_target
-        header = self._source_finalization_header
-        footer = self._source_finalization_footer
+        exact_contract = _windows_exact_projection_output_contract(self)
+        if exact_contract is not None:
+            header, footer = exact_contract
+        else:
+            header = self._source_finalization_header
+            footer = self._source_finalization_footer
         if output_target is None or header is None or footer is None:
             raise SourceFinalizationError("Windows source epoch lost its frozen output contract")
         if epoch is not None:
@@ -5277,27 +5815,40 @@ class WindowsEventEmitter(LogEmitter):
             try:
                 self._validate_exact_candidate_receipts_before_seal_unlocked()
                 self._apply_spooled_terminal_fixups_unlocked()
+                exact_terminal_bindings = self._exact_terminal_candidate_bindings_unlocked()
+                exact_final_bindings: dict[int, _WindowsExactTerminalFinalBinding] = {}
                 while True:
                     candidate = self._next_candidate_unlocked(
                         after_sort_key,
                         after_sequence,
+                        exact_terminal_bindings,
                     )
                     if candidate is None:
                         break
-                    sequence, sort_key, event = candidate
+                    sequence, sort_key, candidate_route_kind, event = candidate
                     after_sort_key = sort_key
                     after_sequence = sequence
                     final = self._finalize_event_for_output(
                         event,
                         processed_rows,
                         render_state,
+                        candidate_route_kind=candidate_route_kind,
                     )
                     processed_rows += 1
                     if final is None:
-                        connection.execute(
-                            "DELETE FROM events WHERE sequence = ? AND phase = ?",
-                            (sequence, "candidate"),
+                        if candidate_route_kind == _EXACT_CANDIDATE_MARKER:
+                            raise ExactPublicationError(
+                                "Windows exact candidate lost its terminal output route"
+                            )
+                        deleted = connection.execute(
+                            """DELETE FROM events
+                               WHERE sequence = ? AND phase = ? AND route_kind IS ?""",
+                            (sequence, "candidate", candidate_route_kind),
                         )
+                        if deleted.rowcount != 1:
+                            raise SourceFinalizationError(
+                                "Windows candidate changed during terminal suppression"
+                            )
                         continue
                     route_kind, route_key, writer, rendered = final
                     self._route_id_unlocked(route_kind, route_key, writer)
@@ -5321,7 +5872,7 @@ class WindowsEventEmitter(LogEmitter):
                         """UPDATE events
                            SET phase = ?, payload = ?, payload_bytes = ?, ordinal = ?,
                                route_kind = ?, route_key = ?, payload_digest = ?
-                           WHERE sequence = ? AND phase = ?""",
+                           WHERE sequence = ? AND phase = ? AND route_kind IS ?""",
                         (
                             "final",
                             rendered,
@@ -5332,12 +5883,35 @@ class WindowsEventEmitter(LogEmitter):
                             digest,
                             sequence,
                             "candidate",
+                            candidate_route_kind,
                         ),
                     )
                     if updated.rowcount != 1:
                         raise SourceFinalizationError(
                             "Windows candidate changed during terminal sealing"
                         )
+                    if candidate_route_kind == _EXACT_CANDIDATE_MARKER:
+                        if exact_terminal_bindings.pop(sequence, None) is None:
+                            raise ExactPublicationError(
+                                "Windows exact candidate lost its terminal binding owner"
+                            )
+                        if sequence in exact_final_bindings:
+                            raise ExactPublicationError(
+                                "Windows exact candidate reused its terminal sequence"
+                            )
+                        exact_final_bindings[sequence] = _WindowsExactTerminalFinalBinding(
+                            ordinal=final_rows - 1,
+                            route_kind=route_kind,
+                            route_key=route_key,
+                            payload_digest=digest,
+                            payload_bytes=rendered_bytes,
+                        )
+
+                if exact_terminal_bindings:
+                    raise ExactPublicationError(
+                        "Windows exact candidate terminal bindings were not exhausted"
+                    )
+                self._validate_exact_terminal_final_bindings_unlocked(exact_final_bindings)
 
                 routes = len(self._source_finalization_route_ids)
                 connection.execute(
@@ -5702,11 +6276,11 @@ class WindowsEventEmitter(LogEmitter):
                 raise SourceFinalizationError(
                     "Windows abort close retry owner rejects an external flush"
                 )
-            if self._source_finalization_bound and force and retained_exact_candidates:
+            if _windows_source_finalization_bound(self) and force and retained_exact_candidates:
                 raise SourceFinalizationError(
                     "Windows released exact candidates require authenticated abort close"
                 )
-        if self._source_finalization_bound and source_state != "open":
+        if _windows_source_finalization_bound(self) and source_state != "open":
             raise SourceFinalizationError(
                 "Windows source-finalization rejected legacy flush after quiescence"
             )
@@ -5724,7 +6298,7 @@ class WindowsEventEmitter(LogEmitter):
     def close(self) -> None:
         """Close emitter — flush and write XML footers for each host file."""
 
-        if self._source_finalization_bound:
+        if _windows_source_finalization_bound(self):
             with self._source_finalization_operation():
                 self._close_windows_emitter()
             return
@@ -5941,18 +6515,24 @@ class WindowsEventEmitter(LogEmitter):
             output_target = self._source_finalization_output_target
             header = self._source_finalization_header
             footer = self._source_finalization_footer
+            exact_contract = _windows_exact_projection_output_contract(self)
+            expected_header, expected_footer = self._source_format_contract()
             if output_target is None and header is None and footer is None:
                 self._source_finalization_output_target = self.output_target
-                self._source_finalization_header = self.format_def.output.header_template or ""
-                self._source_finalization_footer = self.format_def.output.footer_template or ""
-            elif (
-                output_target != self.output_target
-                or header != (self.format_def.output.header_template or "")
-                or footer != (self.format_def.output.footer_template or "")
+                self._source_finalization_header = expected_header
+                self._source_finalization_footer = expected_footer
+            elif output_target != self.output_target or (
+                exact_contract is None and (header != expected_header or footer != expected_footer)
             ):
                 raise ExactPublicationError(
                     "Windows exact abort publication changed its frozen output contract"
                 )
+            elif exact_contract is not None:
+                # Compatibility fields remain observable for census/retry state, but
+                # exact framing is retained only by the closure and never read from
+                # these mutable instance attributes at a publication side effect.
+                self._source_finalization_header = expected_header
+                self._source_finalization_footer = expected_footer
         self._set_source_lifecycle_state("quiesced")
         try:
             with self._file_lock:
@@ -6003,7 +6583,7 @@ class WindowsEventEmitter(LogEmitter):
         """Run exact or legacy close while any required source capability is held."""
 
         source_state, source_owner = self._source_lifecycle_snapshot()
-        if self._source_finalization_bound and source_state != "open":
+        if _windows_source_finalization_bound(self) and source_state != "open":
             if source_state in {"aborted", "closed"}:
                 return
             if source_state != "published":
@@ -6014,7 +6594,12 @@ class WindowsEventEmitter(LogEmitter):
                 raise SourceFinalizationError(
                     "Windows source close has a different finalization owner"
                 )
-            footer = self._source_finalization_footer
+            exact_contract = _windows_exact_projection_output_contract(self)
+            footer = (
+                exact_contract[1]
+                if exact_contract is not None
+                else self._source_finalization_footer
+            )
             output_target = self._source_finalization_output_target
             if footer is None or output_target is None:
                 raise SourceFinalizationError(
@@ -6042,7 +6627,7 @@ class WindowsEventEmitter(LogEmitter):
             if self.threaded:
                 self.stop_thread()
             skip_render = False
-            if self._source_finalization_bound:
+            if _windows_source_finalization_bound(self):
                 skip_render = self._prepare_exact_candidate_abort_close_render()
             if not skip_render:
                 self.flush(force=True)
@@ -6053,7 +6638,7 @@ class WindowsEventEmitter(LogEmitter):
                 raise ExactPublicationError(
                     "Windows abort close did not complete its authenticated exact render"
                 )
-            footer = self.format_def.output.footer_template or ""
+            _header, footer = self._source_format_contract()
             for writer in self._host_writers.values():
                 if footer and writer.event_count > 0 and self.output_target != OutputTarget.SPLUNK:
                     writer.write_footer(footer)
@@ -6067,7 +6652,7 @@ class WindowsEventEmitter(LogEmitter):
         except BaseException:
             self._fail_close()
             raise
-        if self._source_finalization_bound:
+        if _windows_source_finalization_bound(self):
             self._exact_candidate_abort_close_rendering = False
             self._exact_candidate_abort_close_rows_rendered = False
             self._exact_candidate_abort_close_render_complete = False

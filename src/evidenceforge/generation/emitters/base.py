@@ -744,6 +744,43 @@ class ExactPublicationBatch:
             rows = self._prepared_rows
             return len(rows) if rows is not None else 0
 
+    def _prepared_row_facts(self) -> tuple[tuple[str, str, int], ...]:
+        """Return callback-free content facts for exact ready-row authentication."""
+
+        self._require_authority()
+        with self._condition:
+            if self._state != "ready" or self._prepared_rows is None:
+                raise ExactPublicationError(
+                    "Exact prepared-row facts require one ready publication batch"
+                )
+            facts: list[tuple[str, str, int]] = []
+            for row in self._prepared_rows:
+                if (
+                    type(row) is not _ExactPublicationRow
+                    or type(row.frozen_content) is not str
+                    or type(row.content_digest) is not str
+                    or len(row.content_digest) != 64
+                    or any(character not in "0123456789abcdef" for character in row.content_digest)
+                    or type(row.retained_bytes) is not int
+                    or row.retained_bytes <= 0
+                ):
+                    raise ExactPublicationError("Exact prepared-row facts are malformed")
+                expected_digest, expected_bytes = self._exact_row_digest_and_size(
+                    row.frozen_content
+                )
+                if row.content_digest != expected_digest or row.retained_bytes != expected_bytes:
+                    raise ExactPublicationError(
+                        "Exact prepared-row content changed after reservation"
+                    )
+                facts.append(
+                    (
+                        row.frozen_content,
+                        row.content_digest,
+                        row.retained_bytes,
+                    )
+                )
+            return tuple(facts)
+
     @property
     def released(self) -> bool:
         """Return whether every retained sink receipt and payload was released."""
@@ -846,6 +883,51 @@ def exact_publication_staged_row_contents(
     ):
         raise ExactPublicationError("Exact staged-row inspection range is invalid")
     return tuple(row.frozen_content for row in attempt.staged_rows[row_start:row_end])
+
+
+def exact_publication_staged_row_facts(
+    row_start: int,
+    row_end: int,
+) -> tuple[tuple[str, str, int], ...]:
+    """Return actual inert content, digest, and byte count for one staged slice.
+
+    This inspection API is deliberately available only inside the active exact
+    preflight.  It lets a closed source adapter bind semantic ordering proofs to
+    the same immutable bytes that the batch will later commit, without exposing
+    participant callbacks or mutable row objects.
+    """
+
+    attempt = _EXACT_PUBLICATION_ATTEMPT.get()
+    if attempt is None:
+        raise ExactPublicationError(
+            "Exact staged-row facts require an active publication preflight"
+        )
+    if (
+        type(row_start) is not int
+        or type(row_end) is not int
+        or row_start < 0
+        or row_end < row_start
+        or row_end > len(attempt.staged_rows)
+    ):
+        raise ExactPublicationError("Exact staged-row facts range is invalid")
+    facts: list[tuple[str, str, int]] = []
+    for row in attempt.staged_rows[row_start:row_end]:
+        if (
+            type(row.frozen_content) is not str
+            or type(row.content_digest) is not str
+            or len(row.content_digest) != 64
+            or any(character not in "0123456789abcdef" for character in row.content_digest)
+            or type(row.retained_bytes) is not int
+            or row.retained_bytes <= 0
+        ):
+            raise ExactPublicationError("Exact staged-row facts are malformed")
+        expected_digest, expected_bytes = ExactPublicationBatch._exact_row_digest_and_size(
+            row.frozen_content
+        )
+        if row.content_digest != expected_digest or row.retained_bytes != expected_bytes:
+            raise ExactPublicationError("Exact staged-row facts changed after reservation")
+        facts.append((row.frozen_content, row.content_digest, row.retained_bytes))
+    return tuple(facts)
 
 
 def register_exact_publication_participant(participant: object) -> bool:

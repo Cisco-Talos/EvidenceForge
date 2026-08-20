@@ -33,6 +33,7 @@ from evidenceforge.events.network import (
     NetworkTrafficLedger,
     NetworkTransactionPlan,
 )
+from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.events.rdp import (
     RdpLogicalSessionIdentity,
     RdpSessionAffinity,
@@ -51,6 +52,7 @@ from evidenceforge.generation.actions.network_transaction_planner import (
 )
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
+from evidenceforge.generation.collection_deployment import CompiledCollectionDeployment
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.generation.deferred_session_composition import (
     DeferredSessionComposition,
@@ -1210,6 +1212,11 @@ def _foundation_publication_fixture(
     process_opposite_ip: bool = False,
     spoof_transport_source_hostname: bool = False,
     prepare_publication: bool = True,
+    collection_deployment: CompiledCollectionDeployment | None = None,
+    observation_policy: ObservationPolicy | None = None,
+    output_start_time: datetime | None = None,
+    output_end_time: datetime | None = None,
+    rdp_elevated: bool = False,
 ) -> _PublicationFixture:
     """Build one exact eCAR/Zeek deferred bridge without using caller mocks."""
 
@@ -1236,6 +1243,10 @@ def _foundation_publication_fixture(
         emitters=emitters,
         intent_execution_ledger=intent_ledger,
         source_timing_planner=planner,
+        collection_deployment=collection_deployment,
+        observation_policy=observation_policy,
+        output_start_time=output_start_time,
+        output_end_time=output_end_time,
         lifecycle_shadow=LifecycleShadow(fixture.state, fixture.lifecycle_registry),
         enforce_lifecycle_authority=True,
         action_cohort_preparation_capacity=preparation_capacity,
@@ -1297,6 +1308,7 @@ def _foundation_publication_fixture(
                     logon_type=10,
                     source_ip=transaction.src_ip,
                     source_port=transaction.src_port,
+                    elevated=rdp_elevated,
                 ),
                 syslog=(
                     SyslogContext(
