@@ -34,9 +34,9 @@ import math
 import random
 import secrets
 from bisect import bisect_left
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field, fields, is_dataclass, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum, StrEnum
 from itertools import islice
@@ -87,85 +87,153 @@ _NULL_LOGON_GUID = "{00000000-0000-0000-0000-000000000000}"
 _LINUX_PID_BLOCK_SECONDS = 300
 
 
-def _freeze_materialization_digest_value(
-    value: object,
-    active: set[int],
-) -> object:
-    """Return a deterministic test snapshot for one StateManager-owned value."""
+def _bind_materialization_digest_freezer() -> Callable[[object, set[int]], object]:
+    """Bind a deep freezer that never dispatches through caller-owned values."""
 
-    if value is None or isinstance(value, (bool, int, float, str, bytes)):
-        return value
-    if isinstance(value, datetime):
-        return ("datetime", ensure_utc(value).isoformat())
-    if isinstance(value, Enum):
-        return (type(value).__qualname__, value.value)
-    if isinstance(value, random.Random):
-        return ("random.Random", value.getstate())
-    if callable(value):
+    exact_scalar_types = frozenset({bool, int, float, str, bytes})
+    exact_container_types = frozenset({dict, list, tuple, set, frozenset})
+    rejected_subclass_bases = (
+        bool,
+        int,
+        float,
+        str,
+        bytes,
+        datetime,
+        dict,
+        list,
+        tuple,
+        set,
+        frozenset,
+        random.Random,
+    )
+    datetime_type = datetime
+    datetime_isoformat = datetime.isoformat
+    enum_type = Enum
+    random_type = random.Random
+    random_getstate = random.Random.getstate
+    ensure_utc_value = ensure_utc
+    object_getattribute = object.__getattribute__
+    object_identity = id
+    sort_values = sorted
+    render = repr
+    state_error_type = StateError
+    type_getattribute = type.__getattribute__
+    type_type = type
+    non_authority_metrics = frozenset(
+        {
+            "_compaction_seconds",
+            "_compaction_work",
+            "_lookup_candidates_inspected",
+            "_primary_compaction_seconds",
+            "_primary_compaction_work",
+        }
+    )
+
+    def type_metadata(value_type: type[object]) -> tuple[str, str]:
         return (
-            "callable",
-            getattr(value, "__module__", ""),
-            getattr(value, "__qualname__", type(value).__qualname__),
+            type_getattribute(value_type, "__module__"),
+            type_getattribute(value_type, "__qualname__"),
         )
 
-    object_id = id(value)
-    if object_id in active:
-        return ("cycle", type(value).__module__, type(value).__qualname__)
-    active.add(object_id)
-    try:
-        if is_dataclass(value) and not isinstance(value, type):
+    def freeze(value: object, active: set[int]) -> object:
+        """Return exact built-in-only data without invoking value protocols."""
+
+        if value is None:
+            return None
+        value_type = type_type(value)
+        if value_type in exact_scalar_types:
+            return value
+        if value_type is datetime_type:
             return (
-                type(value).__module__,
-                type(value).__qualname__,
-                tuple(
-                    (
-                        item.name,
-                        _freeze_materialization_digest_value(getattr(value, item.name), active),
-                    )
-                    for item in fields(value)
-                ),
+                "datetime",
+                datetime_isoformat(ensure_utc_value(value)),  # type: ignore[arg-type]
             )
-        if isinstance(value, Mapping):
-            frozen_items = [
-                (
-                    _freeze_materialization_digest_value(key, active),
-                    _freeze_materialization_digest_value(item, active),
+        if value_type is random_type:
+            return ("random.Random", random_getstate(value))  # type: ignore[arg-type]
+
+        value_mro = type_getattribute(value_type, "__mro__")
+        if value_type not in exact_container_types and any(
+            base in value_mro for base in rejected_subclass_bases
+        ):
+            module, qualname = type_metadata(value_type)
+            raise state_error_type(
+                "Materialization digest rejects callback-capable value subclass: "
+                f"{module}.{qualname}"
+            )
+        if enum_type in value_mro:
+            module, qualname = type_metadata(value_type)
+            enum_value = object_getattribute(value, "_value_")
+            return (module, qualname, freeze(enum_value, active))
+
+        value_id = object_identity(value)
+        if value_id in active:
+            module, qualname = type_metadata(value_type)
+            return ("cycle", module, qualname)
+        active.add(value_id)
+        try:
+            if value_type is dict:
+                frozen_items = [
+                    (freeze(key, active), freeze(item, active))
+                    for key, item in dict.items(value)  # type: ignore[arg-type]
+                ]
+                return ("mapping", tuple(sort_values(frozen_items, key=render)))
+            if value_type in {set, frozenset}:
+                frozen_items = [freeze(item, active) for item in value]  # type: ignore[union-attr]
+                return ("set", tuple(sort_values(frozen_items, key=render)))
+            if value_type in {list, tuple}:
+                return (
+                    type_getattribute(value_type, "__qualname__"),
+                    tuple(freeze(item, active) for item in value),  # type: ignore[union-attr]
                 )
-                for key, item in value.items()
-            ]
-            return ("mapping", tuple(sorted(frozen_items, key=repr)))
-        if isinstance(value, (set, frozenset)):
-            frozen = [_freeze_materialization_digest_value(item, active) for item in value]
-            return ("set", tuple(sorted(frozen, key=repr)))
-        if isinstance(value, (list, tuple)):
-            return (
-                type(value).__qualname__,
-                tuple(_freeze_materialization_digest_value(item, active) for item in value),
-            )
-        attributes = getattr(value, "__dict__", None)
-        if isinstance(attributes, dict):
-            return (
-                type(value).__module__,
-                type(value).__qualname__,
-                tuple(
-                    sorted(
+
+            class_namespace = type_getattribute(value_type, "__dict__")
+            dataclass_fields = class_namespace.get("__dataclass_fields__")
+            if type(dataclass_fields) is dict:
+                module, qualname = type_metadata(value_type)
+                return (
+                    module,
+                    qualname,
+                    tuple(
                         (
-                            name,
-                            _freeze_materialization_digest_value(item, active),
+                            field_name,
+                            freeze(object_getattribute(value, field_name), active),
                         )
-                        for name, item in attributes.items()
-                        if name != "_lock"
-                    )
-                ),
-            )
-        if hasattr(value, "tolist"):
-            return (
-                type(value).__qualname__,
-                _freeze_materialization_digest_value(value.tolist(), active),
-            )
-        return (type(value).__module__, type(value).__qualname__, repr(value))
-    finally:
-        active.remove(object_id)
+                        for field_name in dataclass_fields
+                    ),
+                )
+
+            try:
+                attributes = object_getattribute(value, "__dict__")
+            except AttributeError:
+                attributes = None
+            if type(attributes) is dict:
+                module, qualname = type_metadata(value_type)
+                return (
+                    module,
+                    qualname,
+                    tuple(
+                        sort_values(
+                            (
+                                name,
+                                freeze(item, active),
+                            )
+                            for name, item in dict.items(attributes)
+                            if type(name) is str
+                            and name != "_lock"
+                            and name not in non_authority_metrics
+                        )
+                    ),
+                )
+            module, qualname = type_metadata(value_type)
+            return ("opaque-owner", module, qualname, value_id)
+        finally:
+            active.remove(value_id)
+
+    return freeze
+
+
+_freeze_materialization_digest_value = _bind_materialization_digest_freezer()
+del _bind_materialization_digest_freezer
 
 
 _LINUX_PID_MIN = 500
@@ -2458,6 +2526,46 @@ class _MaterializationBatchRollbackProjection:
     _session_activity: tuple[()] = ()
 
 
+def _clone_materialization_batch_rollback_journal(
+    journal: _ActionCohortRollbackJournal,
+) -> _ActionCohortRollbackJournal:
+    """Clone generic-batch savepoint carriers while retaining exact State targets."""
+
+    return replace(
+        journal,
+        mapping_entries=tuple(replace(entry) for entry in journal.mapping_entries),
+        set_entries=tuple(replace(entry) for entry in journal.set_entries),
+        mapped_set_entries=tuple(replace(entry) for entry in journal.mapped_set_entries),
+        indexed_store_entries=tuple(
+            replace(
+                entry,
+                indexed_values=(
+                    dict(entry.indexed_values) if entry.indexed_values is not None else None
+                ),
+                buckets=tuple(entry.buckets),
+            )
+            for entry in journal.indexed_store_entries
+        ),
+        expiring_indexes=tuple(
+            replace(
+                entry,
+                keys=tuple(replace(key) for key in entry.keys),
+            )
+            for entry in journal.expiring_indexes
+        ),
+        grouped_temporal_entries=tuple(
+            replace(entry) for entry in journal.grouped_temporal_entries
+        ),
+        temporal_allocations=tuple(replace(entry) for entry in journal.temporal_allocations),
+        object_entries=tuple(replace(entry) for entry in journal.object_entries),
+        scalar_entries=tuple(journal.scalar_entries),
+        retention_mapping_entries=[],
+        retention_mapped_set_entries=[],
+        retention_expiring_indexes=[],
+        retention_grouped_temporal_entries=[],
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _PreparedActionCohortCommitPlan:
     """Every explicit object needed by the action-cohort primitive tail."""
@@ -2566,6 +2674,81 @@ class _PreparedMaterializationBatchRecord:
     terminal: bool = False
     provisional_postimage: object | None = None
     result: tuple[ActiveSession | None, tuple[RunningProcess, ...]] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _MaterializationBatchAdmissionClaim:
+    """Early mutation fence installed before replaceable batch preparation calls."""
+
+    plan: MaterializationBatchPlan
+    claim_thread: Thread
+    admission_epoch: int
+    claim_version: int
+    claim_state_time: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class _MaterializationBatchPrivateRollbackAuthority:
+    """Context-private exact rollback graph for one generic State batch."""
+
+    record: _PreparedMaterializationBatchRecord
+    preparation: "PreparedMaterializationBatch"
+    plan: MaterializationBatchPlan
+    claim_thread: Thread
+    claim_epoch: int
+    claim_version: int
+    claim_state_time: datetime | None
+    observation_journal: _ActionCohortRollbackJournal
+    claim_preimage: object
+    rollback_journal: _ActionCohortRollbackJournal
+    rollback_preimage: object
+    rollback_observation: Callable[["StateManager", _ActionCohortRollbackJournal], object]
+    rollback_restore: Callable[["StateManager", _ActionCohortRollbackJournal], None]
+    prepared_session: _PreparedActionCohortSessionStart | None
+    prepared_processes: tuple[_PreparedActionCohortProcessStart, ...]
+    expected_result_digest: str
+    expected_state_digest: str
+    result_digest: Callable[[object], str]
+    state_digest: Callable[["StateManager"], str]
+    preparation_locator: int
+    _integrity_token: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _MaterializationBatchPrivateRollbackLocator:
+    """Manager-exposed identity locator with no rollback graph or phase truth."""
+
+    preparation_locator: int
+    authority_identity: int
+    claim_epoch: int
+    _integrity_token: str = field(repr=False)
+
+
+@dataclass(slots=True)
+class _MaterializationBatchPrivateOwner:
+    """Closure-registry-only owner for one exact generic State batch."""
+
+    context: "_PreparedMaterializationBatchContext"
+    record: _PreparedMaterializationBatchRecord
+    preparation: "PreparedMaterializationBatch"
+    authority: _MaterializationBatchPrivateRollbackAuthority
+    cleanup_authority: _MaterializationBatchPrivateRollbackAuthority
+    callback_plan: MaterializationBatchPlan
+    locator: _MaterializationBatchPrivateRollbackLocator
+    preparation_locator: int
+    locator_authority_identity: int
+    authority_integrity_token: str
+    locator_integrity_token: str
+    claim_epoch: int
+    rollback_preimage_digest: str
+    phase: str
+    phase_seal: str
+    primitive_commit_invoked: bool = False
+    result: tuple[ActiveSession | None, tuple[RunningProcess, ...]] | None = None
+    postimage: object | None = None
+    result_digest: str = ""
+    postimage_digest: str = ""
+    finalization_receipt: str | None = None
 
 
 class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
@@ -3277,6 +3460,61 @@ def _materialization_batch_integrity_token(
     return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
 
 
+def _materialization_batch_private_rollback_integrity_token(
+    authority_secret: bytes,
+    *,
+    record: _PreparedMaterializationBatchRecord,
+    preparation: "PreparedMaterializationBatch",
+    plan: MaterializationBatchPlan,
+    claim_thread: Thread,
+    claim_epoch: int,
+    claim_version: int,
+    claim_state_time: datetime | None,
+    observation_journal: _ActionCohortRollbackJournal,
+    claim_preimage: object,
+    rollback_journal: _ActionCohortRollbackJournal,
+    rollback_preimage: object,
+    rollback_observation: Callable[["StateManager", _ActionCohortRollbackJournal], object],
+    rollback_restore: Callable[["StateManager", _ActionCohortRollbackJournal], None],
+    prepared_session: _PreparedActionCohortSessionStart | None,
+    prepared_processes: tuple[_PreparedActionCohortProcessStart, ...],
+    expected_result_digest: str,
+    expected_state_digest: str,
+    result_digest: Callable[[object], str],
+    state_digest: Callable[["StateManager"], str],
+    preparation_locator: int,
+) -> str:
+    """Authenticate one context-private generic-batch rollback graph."""
+
+    canonical = repr(
+        (
+            "materialization-batch-private-rollback-v1",
+            id(record),
+            id(preparation),
+            id(plan),
+            plan.publication_token,
+            id(claim_thread),
+            claim_epoch,
+            claim_version,
+            claim_state_time,
+            id(observation_journal),
+            hashlib.sha256(repr(claim_preimage).encode()).hexdigest(),
+            id(rollback_journal),
+            hashlib.sha256(repr(rollback_preimage).encode()).hexdigest(),
+            id(rollback_observation),
+            id(rollback_restore),
+            id(prepared_session),
+            tuple(id(item) for item in prepared_processes),
+            expected_result_digest,
+            expected_state_digest,
+            id(result_digest),
+            id(state_digest),
+            preparation_locator,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
 _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
     {
         SessionIdentity,
@@ -3305,6 +3543,62 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         _ActionCohortSessionProcessLinks,
     }
 )
+
+
+_MATERIALIZATION_BATCH_DETACH_RECORD_TYPES = frozenset(
+    {*_ACTION_COHORT_SAFE_RECORD_TYPES, MaterializationBatchPlan}
+)
+
+
+def _detach_materialization_batch_safe_value(
+    value: object,
+    active: set[int],
+) -> object:
+    """Clone one exact authenticated batch value without running value protocols."""
+
+    value_type = type(value)
+    if value is None or value_type in {bool, int, float, str, bytes, datetime}:
+        return value
+    value_id = id(value)
+    if value_id in active:
+        raise StateError("Materialization batch capability contains a recursive value")
+    active.add(value_id)
+    try:
+        if value_type is tuple:
+            return tuple(_detach_materialization_batch_safe_value(item, active) for item in value)
+        if value_type in _MATERIALIZATION_BATCH_DETACH_RECORD_TYPES:
+            detached = object.__new__(value_type)
+            for item in fields(value_type):
+                object.__setattr__(
+                    detached,
+                    item.name,
+                    _detach_materialization_batch_safe_value(
+                        object.__getattribute__(value, item.name),
+                        active,
+                    ),
+                )
+            return detached
+    finally:
+        active.remove(value_id)
+    value_module = type.__getattribute__(value_type, "__module__")
+    value_qualname = type.__getattribute__(value_type, "__qualname__")
+    raise StateError(
+        "Materialization batch capability contains an unsupported value type: "
+        f"{value_module}.{value_qualname}"
+    )
+
+
+def _detach_materialization_batch_plan(
+    plan: MaterializationBatchPlan,
+) -> MaterializationBatchPlan:
+    """Return a detached exact-record clone of one untrusted public batch plan."""
+
+    if type(plan) is not MaterializationBatchPlan:
+        raise StateError("Materialization batch requires an exact plan type")
+    detached = _detach_materialization_batch_safe_value(plan, set())
+    if type(detached) is not MaterializationBatchPlan:
+        raise StateError("Materialization batch detachment produced a malformed plan")
+    return detached
 
 
 def _validate_action_cohort_safe_value(value: object, active: set[int]) -> None:
@@ -3808,37 +4102,161 @@ class PreparedConnectionCompositeMaterialization:
 
 
 @dataclass(slots=True)
-class PreparedMaterializationBatch:
-    """State-guard-scoped one-shot start-batch commit capability."""
+class _PreparedMaterializationBatchPublicState:
+    """Caller-visible compatibility controls excluded from private owner truth."""
 
-    _manager: "StateManager"
-    _plan: MaterializationBatchPlan
-    _claim_thread: Thread
-    _active: bool = True
-    _committed: bool = False
-    _result: tuple[ActiveSession | None, tuple[RunningProcess, ...]] | None = None
+    manager: "StateManager"
+    plan: MaterializationBatchPlan
+    claim_thread: Thread
+    active: bool = True
+    committed: bool = False
+    result: tuple[ActiveSession | None, tuple[RunningProcess, ...]] | None = None
+
+
+class _PreparedMaterializationBatchContext(tuple):
+    """Immutable context locator with no generator frame or rollback authority."""
+
+    __slots__ = ()
+
+    def __new__(
+        cls,
+        manager: "StateManager",
+        plan: MaterializationBatchPlan,
+    ) -> "_PreparedMaterializationBatchContext":
+        return tuple.__new__(cls, (manager, plan))
+
+    def __enter__(self) -> "PreparedMaterializationBatch":
+        manager = tuple.__getitem__(self, 0)
+        return type(manager)._enter_private_materialization_batch_context(manager, self)
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: object | None,
+    ) -> bool:
+        del exc_type, traceback
+        manager = tuple.__getitem__(self, 0)
+        type(manager)._exit_private_materialization_batch_context(
+            manager,
+            self,
+            exc_value,
+        )
+        return False
+
+    def __copy__(self) -> "_PreparedMaterializationBatchContext":
+        return type(self)(tuple.__getitem__(self, 0), tuple.__getitem__(self, 1))
+
+
+class PreparedMaterializationBatch(tuple):
+    """Opaque one-shot start-batch capability backed by a private owner registry."""
+
+    __slots__ = ()
+
+    def __new__(
+        cls,
+        manager: "StateManager",
+        plan: MaterializationBatchPlan,
+        claim_thread: Thread,
+        context: _PreparedMaterializationBatchContext,
+    ) -> "PreparedMaterializationBatch":
+        public = _PreparedMaterializationBatchPublicState(
+            manager=manager,
+            plan=plan,
+            claim_thread=claim_thread,
+        )
+        return tuple.__new__(cls, (manager, plan, claim_thread, context, public))
+
+    @property
+    def _manager(self) -> "StateManager":
+        return tuple.__getitem__(self, 4).manager
+
+    @_manager.setter
+    def _manager(self, value: "StateManager") -> None:
+        tuple.__getitem__(self, 4).manager = value
+
+    @property
+    def _plan(self) -> MaterializationBatchPlan:
+        return tuple.__getitem__(self, 4).plan
+
+    @_plan.setter
+    def _plan(self, value: MaterializationBatchPlan) -> None:
+        tuple.__getitem__(self, 4).plan = value
+
+    @property
+    def _claim_thread(self) -> Thread:
+        return tuple.__getitem__(self, 4).claim_thread
+
+    @_claim_thread.setter
+    def _claim_thread(self, value: Thread) -> None:
+        tuple.__getitem__(self, 4).claim_thread = value
+
+    @property
+    def _active(self) -> bool:
+        return tuple.__getitem__(self, 4).active
+
+    @_active.setter
+    def _active(self, value: bool) -> None:
+        tuple.__getitem__(self, 4).active = value
+
+    @property
+    def _committed(self) -> bool:
+        return tuple.__getitem__(self, 4).committed
+
+    @_committed.setter
+    def _committed(self, value: bool) -> None:
+        tuple.__getitem__(self, 4).committed = value
+
+    @property
+    def _result(self) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]] | None:
+        return tuple.__getitem__(self, 4).result
+
+    @_result.setter
+    def _result(
+        self,
+        value: tuple[ActiveSession | None, tuple[RunningProcess, ...]] | None,
+    ) -> None:
+        tuple.__getitem__(self, 4).result = value
+
+    def _owner_manager(self) -> "StateManager":
+        return tuple.__getitem__(self, 0)
+
+    def _owner_context(self) -> _PreparedMaterializationBatchContext:
+        return tuple.__getitem__(self, 3)
+
+    def __copy__(self) -> "PreparedMaterializationBatch":
+        return type(self)(
+            tuple.__getitem__(self, 0),
+            tuple.__getitem__(self, 1),
+            tuple.__getitem__(self, 2),
+            tuple.__getitem__(self, 3),
+        )
 
     @property
     def committed(self) -> bool:
         """Return whether this exact claimed batch reached canonical State."""
 
-        return self._manager._prepared_materialization_batch_committed(self)
+        manager = self._owner_manager()
+        return type(manager)._private_materialization_batch_committed(manager, self)
 
     @property
     def provisionally_applied(self) -> bool:
         """Return whether exact reversible State writes are currently installed."""
 
-        return self._manager._prepared_materialization_batch_provisionally_applied(self)
+        manager = self._owner_manager()
+        return type(manager)._private_materialization_batch_provisional(manager, self)
 
     def apply_provisional(self) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
         """Apply and certify reversible State writes under the retained claim."""
 
-        return self._manager._apply_claimed_materialization_batch(self)
+        manager = self._owner_manager()
+        return type(manager)._apply_private_materialization_batch(manager, self)
 
     def finalize_no_fail(self) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
         """Make an already-certified provisional State batch terminal."""
 
-        return self._manager._finalize_claimed_materialization_batch_no_fail(self)
+        manager = self._owner_manager()
+        return type(manager)._finalize_private_materialization_batch(manager, self)
 
     def commit_no_fail(self) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
         """Compatibility commit as one provisional apply and terminal finalize pair."""
@@ -4046,12 +4464,16 @@ class StateManager:
         self._active_materialization_batch_preparations: dict[
             int, _PreparedMaterializationBatchRecord
         ] = {}
+        self._active_materialization_batch_private_rollback: (
+            _MaterializationBatchPrivateRollbackLocator | None
+        ) = None
         self._active_action_cohort_preparations: dict[int, _ActionCohortPreparationRecord] = {}
         self._active_action_cohort_claim: _ActionCohortPreparationRecord | None = None
         self._active_prepared_state_claim: (
             _PreparedConnectionMaterializationRecord
             | _PreparedConnectionCompositeMaterializationRecord
             | _PreparedMaterializationBatchRecord
+            | _MaterializationBatchAdmissionClaim
             | _ActionCohortPreparationRecord
             | None
         ) = None
@@ -4584,26 +5006,6 @@ class StateManager:
             raise StateError("Prepared connection composite belongs to its claiming thread")
         return record
 
-    def _materialization_batch_preparation_record_for(
-        self,
-        preparation: PreparedMaterializationBatch,
-    ) -> _PreparedMaterializationBatchRecord:
-        """Resolve one exact active batch preparation and claiming thread."""
-
-        record = self._active_materialization_batch_preparations.get(id(preparation))
-        if (
-            record is None
-            or record.preparation is not preparation
-            or record.terminal
-            or self._active_prepared_state_claim is not record
-            or preparation._manager is not self
-            or preparation._plan is not record.plan
-        ):
-            raise StateError("Prepared materialization batch is no longer active")
-        if record.claim_thread is not current_thread():
-            raise StateError("Prepared materialization batch belongs to its claiming thread")
-        return record
-
     def _prepared_connection_materialization_committed(
         self,
         preparation: PreparedConnectionMaterialization,
@@ -4625,26 +5027,6 @@ class StateManager:
         if record is not None and record.preparation is preparation and not record.terminal:
             return record.committed
         return preparation._committed
-
-    def _prepared_materialization_batch_committed(
-        self,
-        preparation: PreparedMaterializationBatch,
-    ) -> bool:
-        """Return exact manager-owned batch commit truth while active."""
-
-        record = self._active_materialization_batch_preparations.get(id(preparation))
-        if record is not None and record.preparation is preparation and not record.terminal:
-            return record.committed
-        return preparation._committed
-
-    def _prepared_materialization_batch_provisionally_applied(
-        self,
-        preparation: PreparedMaterializationBatch,
-    ) -> bool:
-        """Return exact reversible-apply truth while the batch claim is active."""
-
-        record = self._materialization_batch_preparation_record_for(preparation)
-        return record.provisional
 
     def _commit_claimed_connection_materialization(
         self,
@@ -4738,122 +5120,333 @@ class StateManager:
             preparation._committed = True
             return result
 
-    def _apply_claimed_materialization_batch(
+    def _validate_materialization_batch_context_precommit(
         self,
-        preparation: PreparedMaterializationBatch,
-    ) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
-        """Apply and certify one reversible batch under the unified State claim."""
+        authority: _MaterializationBatchPrivateRollbackAuthority,
+        locator_authenticates: Callable[[], bool],
+    ) -> None:
+        """Reauthenticate closure-owned commit inputs after a fallible observer."""
 
-        record = self._materialization_batch_preparation_record_for(preparation)
+        record = authority.record
+        preparation = authority.preparation
+        public_plan = tuple.__getitem__(preparation, 1)
+        if (
+            not locator_authenticates()
+            or self._active_prepared_state_claim is not record
+            or self._active_materialization_batch_preparations.get(authority.preparation_locator)
+            is not record
+            or self._prepared_state_admission_epoch != authority.claim_epoch
+            or authority.claim_thread is not current_thread()
+            or record.preparation is not preparation
+            or record.plan is not public_plan
+            or record.claim_thread is not authority.claim_thread
+            or record.claim_epoch != authority.claim_epoch
+            or record.claim_version != authority.claim_version
+            or record.claim_state_time != authority.claim_state_time
+            or record.rollback_journal is not authority.observation_journal
+            or record.claim_preimage is not authority.claim_preimage
+            or record.certified
+            or record.provisional
+            or record.committed
+            or record.failed
+            or record.terminal
+            or record.provisional_postimage is not None
+            or record.result is not None
+            or preparation._manager is not self
+            or preparation._plan is not public_plan
+            or preparation._claim_thread is not authority.claim_thread
+            or not preparation._active
+            or preparation._committed
+            or preparation._result is not None
+        ):
+            raise StateError("Prepared materialization batch control state drifted before apply")
+
+    def _validate_materialization_batch_context_result(
+        self,
+        authority: _MaterializationBatchPrivateRollbackAuthority,
+        locator_authenticates: Callable[[], bool],
+    ) -> None:
+        """Reject locator or public-control drift before exposing a result."""
+
+        record = authority.record
+        preparation = authority.preparation
+        public_plan = tuple.__getitem__(preparation, 1)
+        if (
+            not locator_authenticates()
+            or self._active_prepared_state_claim is not record
+            or self._active_materialization_batch_preparations.get(authority.preparation_locator)
+            is not record
+            or self._prepared_state_admission_epoch != authority.claim_epoch
+            or authority.claim_thread is not current_thread()
+            or record.preparation is not preparation
+            or record.plan is not public_plan
+            or record.claim_thread is not authority.claim_thread
+            or record.claim_epoch != authority.claim_epoch
+            or record.claim_version != authority.claim_version
+            or record.claim_state_time != authority.claim_state_time
+            or record.rollback_journal is not authority.observation_journal
+            or record.claim_preimage is not authority.claim_preimage
+            or record.certified
+            or not record.provisional
+            or record.committed
+            or record.failed
+            or record.terminal
+            or record.provisional_postimage is not None
+            or record.result is not None
+            or preparation._manager is not self
+            or preparation._plan is not public_plan
+            or preparation._claim_thread is not authority.claim_thread
+            or not preparation._active
+            or preparation._committed
+            or preparation._result is not None
+        ):
+            raise StateError("Prepared materialization batch control state drifted after apply")
+
+    def _restore_materialization_batch_context_preimage(
+        self,
+        authority: _MaterializationBatchPrivateRollbackAuthority,
+    ) -> None:
+        """Restore and prove closure-held State without exposed locator truth."""
+
+        if authority.claim_thread is not current_thread():
+            raise StateError("Prepared materialization batch changed owner thread")
+        authority.rollback_restore(self, authority.rollback_journal)
+        if (
+            authority.rollback_observation(self, authority.rollback_journal)
+            != authority.rollback_preimage
+        ):
+            raise StateError("Prepared materialization batch private rollback was incomplete")
+
+        record = authority.record
+        preparation = authority.preparation
+        public_plan = tuple.__getitem__(preparation, 1)
+        record.preparation = preparation
+        record.plan = public_plan
+        record.claim_thread = authority.claim_thread
+        record.claim_epoch = authority.claim_epoch
+        record.claim_version = authority.claim_version
+        record.claim_state_time = authority.claim_state_time
+        record.rollback_journal = authority.observation_journal
+        record.claim_preimage = authority.claim_preimage
+        record.certified = False
+        record.provisional = False
+        record.committed = False
+        record.failed = True
+        record.terminal = False
+        record.provisional_postimage = None
+        record.result = None
+        preparation._manager = self
+        preparation._plan = public_plan
+        preparation._claim_thread = authority.claim_thread
+        preparation._active = True
+        preparation._committed = False
+        preparation._result = None
+        self._active_materialization_batch_preparations.clear()
+        self._active_materialization_batch_preparations[authority.preparation_locator] = record
+        self._active_prepared_state_claim = record
+        self._prepared_state_admission_epoch = authority.claim_epoch
+
+    def _apply_claimed_materialization_batch_context(
+        self,
+        authority: _MaterializationBatchPrivateRollbackAuthority,
+        callback_plan: MaterializationBatchPlan,
+        locator_authenticates: Callable[[], bool],
+    ) -> tuple[
+        tuple[ActiveSession | None, tuple[RunningProcess, ...]],
+        object,
+    ]:
+        """Apply one batch using only context-private rollback and input truth."""
+
+        record = authority.record
         with self._lock:
-            record = self._materialization_batch_preparation_record_for(preparation)
-            if record.committed:
-                raise StateError("Prepared materialization batch is already committed")
-            if record.failed:
-                raise StateError("Prepared materialization batch has already failed")
-            if record.provisional:
-                raise StateError("Prepared materialization batch is already provisionally applied")
             try:
-                if record.claim_epoch != self._prepared_state_admission_epoch:
+                if authority.claim_epoch != self._prepared_state_admission_epoch:
                     raise StateError("Prepared materialization batch claim epoch changed")
                 if (
-                    record.plan.expected_version != record.claim_version
-                    or self._materialization_version != record.claim_version
+                    authority.plan.expected_version != authority.claim_version
+                    or self._materialization_version != authority.claim_version
                 ):
                     raise StateError("Prepared materialization batch became stale before commit")
-                if self.state.current_time != record.claim_state_time:
+                if self.state.current_time != authority.claim_state_time:
                     raise StateError(
                         "Prepared materialization batch State time changed before commit"
                     )
-                self.validate_materialization_batch(record.plan)
+                self.validate_materialization_batch(callback_plan)
                 if (
-                    self._action_cohort_rollback_observation(record.rollback_journal)
-                    != record.claim_preimage
+                    self._action_cohort_rollback_observation(authority.observation_journal)
+                    != authority.claim_preimage
                 ):
                     raise StateError("Prepared materialization batch touched State changed")
-            except StateError:
-                record.failed = True
+                self._validate_materialization_batch_context_precommit(
+                    authority,
+                    locator_authenticates,
+                )
+            except BaseException:
+                self._restore_materialization_batch_context_preimage(authority)
                 raise
+
             record.provisional = True
             try:
-                result = self._commit_prevalidated_materialization_batch(record.plan)
+                seam_result = self._commit_prevalidated_materialization_batch(callback_plan)
+                canonical_session = (
+                    self.state.active_sessions.get(authority.plan.session.identity.logon_id)
+                    if authority.plan.session is not None
+                    else None
+                )
+                if authority.plan.session is not None and canonical_session is None:
+                    raise StateError(
+                        "Prepared materialization batch lost its canonical result session"
+                    )
+                canonical_processes: list[RunningProcess] = []
+                for process_plan in authority.plan.processes:
+                    canonical_process = self.state.running_processes.get(
+                        (
+                            process_plan.identity.hostname,
+                            process_plan.identity.pid,
+                        )
+                    )
+                    if canonical_process is None:
+                        raise StateError(
+                            "Prepared materialization batch lost a canonical result process"
+                        )
+                    canonical_processes.append(canonical_process)
+                result = canonical_session, tuple(canonical_processes)
+                if (
+                    type(seam_result) is not tuple
+                    or len(seam_result) != 2
+                    or seam_result[0] is not canonical_session
+                    or type(seam_result[1]) is not tuple
+                    or len(seam_result[1]) != len(canonical_processes)
+                    or any(
+                        returned is not canonical
+                        for returned, canonical in zip(
+                            seam_result[1],
+                            canonical_processes,
+                            strict=True,
+                        )
+                    )
+                ):
+                    raise StateError(
+                        "Prepared materialization batch commit returned a non-canonical result"
+                    )
+                if (
+                    authority.result_digest(result) != authority.expected_result_digest
+                    or authority.state_digest(self) != authority.expected_state_digest
+                ):
+                    raise StateError(
+                        "Prepared materialization batch changed its canonical postimage"
+                    )
             except BaseException:
                 record.failed = True
-                record.provisional_postimage = self._action_cohort_rollback_observation(
-                    record.rollback_journal
-                )
                 try:
-                    self._restore_materialization_batch_rollback(record)
-                finally:
-                    record.provisional = False
-                    record.provisional_postimage = None
+                    self._action_cohort_rollback_observation(authority.observation_journal)
+                except BaseException:
+                    pass
+                self._restore_materialization_batch_context_preimage(authority)
                 raise
-            record.provisional_postimage = self._action_cohort_rollback_observation(
-                record.rollback_journal
-            )
+
             try:
-                if self._materialization_version != record.claim_version + 1:
-                    raise StateError("Prepared materialization batch State version drifted")
-                if self.state.current_time != record.plan.final_state_time:
-                    raise StateError("Prepared materialization batch State time drifted")
-                if record.provisional_postimage is None:
+                observed_postimage = self._action_cohort_rollback_observation(
+                    authority.observation_journal
+                )
+                if observed_postimage is None:
                     raise StateError("Prepared materialization batch has no rollback postimage")
-            except StateError:
+                self._validate_materialization_batch_context_result(
+                    authority,
+                    locator_authenticates,
+                )
+                postimage = authority.rollback_observation(self, authority.rollback_journal)
+                if self._materialization_version != authority.claim_version + 1:
+                    raise StateError("Prepared materialization batch State version drifted")
+                if self.state.current_time != authority.plan.final_state_time:
+                    raise StateError("Prepared materialization batch State time drifted")
+                if postimage is None:
+                    raise StateError("Prepared materialization batch has no rollback postimage")
+                if not locator_authenticates():
+                    raise StateError("Prepared materialization batch private locator drifted")
+            except BaseException:
                 record.failed = True
-                try:
-                    self._restore_materialization_batch_rollback(record)
-                finally:
-                    record.provisional = False
-                    record.provisional_postimage = None
+                self._restore_materialization_batch_context_preimage(authority)
                 raise
+
+            record.rollback_journal = authority.observation_journal
+            record.provisional_postimage = postimage
             record.result = result
-            preparation._result = result
             record.certified = True
-            return result
+            authority.preparation._result = result
+            return result, postimage
 
-    def _restore_materialization_batch_rollback(
+    def _normalize_materialization_batch_context_finalized(
         self,
-        record: _PreparedMaterializationBatchRecord,
+        authority: _MaterializationBatchPrivateRollbackAuthority,
+        *,
+        result: tuple[ActiveSession | None, tuple[RunningProcess, ...]],
+        postimage: object,
     ) -> None:
-        """Restore exact touched State while one provisional batch owns the lane."""
+        """Normalize committed controls from closure-held terminal truth."""
 
-        preparation = record.preparation
-        if (
-            self._active_prepared_state_claim is not record
-            or self._active_materialization_batch_preparations.get(id(preparation)) is not record
-            or record.claim_thread is not current_thread()
-            or record.claim_epoch != self._prepared_state_admission_epoch
-            or record.terminal
-            or not record.provisional
-            or record.provisional_postimage is None
+        if authority.claim_thread is not current_thread() or (
+            authority.rollback_observation(self, authority.rollback_journal) != postimage
         ):
-            raise StateError("Prepared materialization batch no longer owns rollback authority")
-        if (
-            self._action_cohort_rollback_observation(record.rollback_journal)
-            != record.provisional_postimage
-        ):
-            raise StateError(
-                "Prepared materialization batch touched State drifted after provisional apply"
-            )
-        self._restore_action_cohort_rollback_journal(record.rollback_journal)
+            raise StateError("Prepared materialization batch finalization authority drifted")
 
-    def _finalize_claimed_materialization_batch_no_fail(
+        record = authority.record
+        preparation = authority.preparation
+        public_plan = tuple.__getitem__(preparation, 1)
+        record.preparation = preparation
+        record.plan = public_plan
+        record.claim_thread = authority.claim_thread
+        record.claim_epoch = authority.claim_epoch
+        record.claim_version = authority.claim_version
+        record.claim_state_time = authority.claim_state_time
+        record.rollback_journal = authority.observation_journal
+        record.claim_preimage = authority.claim_preimage
+        record.certified = True
+        record.provisional = False
+        record.committed = True
+        record.failed = False
+        record.terminal = False
+        record.provisional_postimage = None
+        record.result = result
+        preparation._manager = self
+        preparation._plan = public_plan
+        preparation._claim_thread = authority.claim_thread
+        preparation._active = True
+        preparation._committed = True
+        preparation._result = result
+        self._active_materialization_batch_preparations.clear()
+        self._active_materialization_batch_preparations[authority.preparation_locator] = record
+        self._active_prepared_state_claim = record
+        self._prepared_state_admission_epoch = authority.claim_epoch
+
+    def _finalize_claimed_materialization_batch_context(
         self,
-        preparation: PreparedMaterializationBatch,
+        authority: _MaterializationBatchPrivateRollbackAuthority,
+        *,
+        result: tuple[ActiveSession | None, tuple[RunningProcess, ...]],
+        postimage: object,
+        locator_authenticates: Callable[[], bool],
     ) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
-        """Terminalize an already-certified provisional batch using scalar writes only."""
+        """Finalize only the result certified by the context-private carrier."""
 
-        record = self._materialization_batch_preparation_record_for(preparation)
         with self._lock:
-            record = self._materialization_batch_preparation_record_for(preparation)
-            if not record.certified or not record.provisional or record.result is None:
+            if (
+                not locator_authenticates()
+                or self._active_prepared_state_claim is not authority.record
+                or self._active_materialization_batch_preparations.get(
+                    authority.preparation_locator
+                )
+                is not authority.record
+                or self._prepared_state_admission_epoch != authority.claim_epoch
+                or authority.claim_thread is not current_thread()
+            ):
                 raise StateError("Prepared materialization batch is not certified for finalize")
-            record.committed = True
-            record.provisional = False
-            record.provisional_postimage = None
-            preparation._committed = True
-            preparation._result = record.result
-            return record.result
+            self._normalize_materialization_batch_context_finalized(
+                authority,
+                result=result,
+                postimage=postimage,
+            )
+            return result
 
     def _reject_mutation_during_action_cohort_claim(
         self,
@@ -4925,6 +5518,7 @@ class StateManager:
                         "_active_connection_preparations",
                         "_active_connection_composite_preparations",
                         "_active_materialization_batch_preparations",
+                        "_active_materialization_batch_private_rollback",
                         "_active_action_cohort_preparations",
                         "_active_action_cohort_claim",
                         "_active_prepared_state_claim",
@@ -4943,99 +5537,13 @@ class StateManager:
             )
             return hashlib.sha256(repr(frozen).encode()).hexdigest()
 
-    @contextmanager
     def prepared_materialization_batch(
         self,
         plan: MaterializationBatchPlan,
-    ) -> Iterator[PreparedMaterializationBatch]:
-        """Claim the unified public State lane for one exact start batch."""
+    ) -> _PreparedMaterializationBatchContext:
+        """Return an immutable context locator backed by a private owner registry."""
 
-        claim_admission_epoch = self._prepared_state_admission_epoch
-        if self._active_prepared_state_claim is not None:
-            raise StateError("StateManager already has an active prepared-State claim")
-        with self._lock:
-            if self._active_prepared_state_claim is not None:
-                raise StateError("StateManager already has an active prepared-State claim")
-            if claim_admission_epoch != self._prepared_state_admission_epoch:
-                raise StateError("Materialization-batch claim overlapped another State claim")
-            self.validate_materialization_batch(plan)
-            prepared_sessions = (
-                (self._prepare_action_cohort_session_start(plan.session),)
-                if plan.session is not None
-                else ()
-            )
-            prepared_processes = tuple(
-                self._prepare_action_cohort_process_start(item) for item in plan.processes
-            )
-            rollback_journal = self._prepare_action_cohort_rollback_journal(
-                _MaterializationBatchRollbackProjection(),
-                sessions=prepared_sessions,
-                processes=prepared_processes,
-                process_terminations=(),
-                session_terminalizations=(),
-                boot_times=plan.boot_times,
-            )
-            prepared = PreparedMaterializationBatch(
-                _manager=self,
-                _plan=plan,
-                _claim_thread=current_thread(),
-            )
-            claim_epoch = self._prepared_state_admission_epoch + 1
-            record = _PreparedMaterializationBatchRecord(
-                preparation=prepared,
-                plan=plan,
-                claim_thread=prepared._claim_thread,
-                claim_epoch=claim_epoch,
-                claim_version=self._materialization_version,
-                claim_state_time=self.state.current_time,
-                rollback_journal=rollback_journal,
-                claim_preimage=self._action_cohort_rollback_observation(rollback_journal),
-            )
-            locator = id(prepared)
-            self._active_materialization_batch_preparations[locator] = record
-            self._prepared_state_admission_epoch = claim_epoch
-            self._active_prepared_state_claim = record
-            primary_error: BaseException | None = None
-            try:
-                yield prepared
-            except BaseException as error:
-                primary_error = error
-                raise
-            finally:
-                cleanup_error: BaseException | None = None
-                if (
-                    self._active_materialization_batch_preparations.get(locator) is record
-                    and self._active_prepared_state_claim is record
-                    and record.provisional
-                    and not record.committed
-                ):
-                    try:
-                        self._restore_materialization_batch_rollback(record)
-                    except BaseException as error:
-                        cleanup_error = error
-                    finally:
-                        record.provisional = False
-                        record.provisional_postimage = None
-                if (
-                    self._active_materialization_batch_preparations.get(locator) is not record
-                    or self._active_prepared_state_claim is not record
-                ):
-                    if cleanup_error is None:
-                        cleanup_error = StateError(
-                            "Prepared materialization batch no longer owns its State lane"
-                        )
-                if self._active_materialization_batch_preparations.get(locator) is record:
-                    self._active_materialization_batch_preparations.pop(locator)
-                if self._active_prepared_state_claim is record:
-                    self._active_prepared_state_claim = None
-                    self._prepared_state_admission_epoch += 1
-                record.terminal = True
-                prepared._active = False
-                prepared._committed = record.committed
-                if not record.committed:
-                    prepared._result = None
-                if cleanup_error is not None and primary_error is None:
-                    raise cleanup_error
+        return _PreparedMaterializationBatchContext(self, plan)
 
     @contextmanager
     def materialization_guard(self, plan: _MaterializationPlan | int) -> Iterator[None]:
@@ -12612,7 +13120,7 @@ class StateManager:
                 staged_pids.add(process_key)
                 staged_threads.add(thread_key)
 
-    def _commit_prevalidated_materialization_batch(
+    def _commit_prevalidated_materialization_batch_unclaimed(
         self,
         plan: MaterializationBatchPlan,
         *,
@@ -15600,7 +16108,11 @@ class StateManager:
         if type(active) is _PreparedConnectionCompositeMaterializationRecord:
             return active.plan.batch is plan and active.claim_epoch == current_epoch
         if type(active) is _PreparedMaterializationBatchRecord:
-            return active.plan is plan and active.claim_epoch == current_epoch
+            context = tuple.__getitem__(active.preparation, 3)
+            public_plan = tuple.__getitem__(context, 1)
+            return active.claim_epoch == current_epoch and (
+                active.plan is plan or public_plan is plan
+            )
         return False
 
     @staticmethod
@@ -20026,7 +20538,7 @@ class StateManager:
                     emit_log=False,
                 )
             else:
-                session, processes = self._commit_prevalidated_materialization_batch(
+                session, processes = self._commit_prevalidated_materialization_batch_unclaimed(
                     plan.batch,
                     advance_version=False,
                     update_state_time=False,
@@ -22851,3 +23363,865 @@ class StateManager:
                             conn.hostname = event.protocol.ssl.server_name
                         self._open_connections.refresh(conn.conn_id)
                         self._refresh_connection_lifecycle(conn)
+
+
+def _bind_private_materialization_batch_owner_registry() -> tuple[
+    Callable[[StateManager, _PreparedMaterializationBatchContext], PreparedMaterializationBatch],
+    Callable[
+        [StateManager, _PreparedMaterializationBatchContext, BaseException | None],
+        None,
+    ],
+    Callable[
+        [StateManager, PreparedMaterializationBatch],
+        tuple[ActiveSession | None, tuple[RunningProcess, ...]],
+    ],
+    Callable[
+        [StateManager, PreparedMaterializationBatch],
+        tuple[ActiveSession | None, tuple[RunningProcess, ...]],
+    ],
+    Callable[[StateManager, PreparedMaterializationBatch], bool],
+    Callable[[StateManager, PreparedMaterializationBatch], bool],
+    Callable[..., tuple[ActiveSession | None, tuple[RunningProcess, ...]]],
+]:
+    """Bind generic-batch owners outside every returned Python object surface."""
+
+    owners_by_context: dict[
+        tuple[int, int],
+        _MaterializationBatchPrivateOwner,
+    ] = {}
+    owners_by_preparation: dict[
+        tuple[int, int],
+        _MaterializationBatchPrivateOwner,
+    ] = {}
+    rollback_observation = StateManager._action_cohort_rollback_observation
+    rollback_restore = StateManager._restore_action_cohort_rollback_journal
+    trusted_validate_plan = StateManager.validate_materialization_batch
+    trusted_prepare_session = StateManager._prepare_action_cohort_session_start
+    trusted_prepare_process = StateManager._prepare_action_cohort_process_start
+    trusted_prepare_journal = StateManager._prepare_action_cohort_rollback_journal
+    trusted_commit_session = StateManager._commit_prevalidated_session_materialization
+    trusted_commit_process = StateManager._commit_prevalidated_process_materialization
+    apply_context = StateManager._apply_claimed_materialization_batch_context
+    finalize_context = StateManager._finalize_claimed_materialization_batch_context
+    restore_context = StateManager._restore_materialization_batch_context_preimage
+    normalize_finalized = StateManager._normalize_materialization_batch_context_finalized
+    clone_rollback_journal = _clone_materialization_batch_rollback_journal
+    authority_token_factory = _materialization_batch_private_rollback_integrity_token
+    private_authority_type = _MaterializationBatchPrivateRollbackAuthority
+    private_locator_type = _MaterializationBatchPrivateRollbackLocator
+    private_owner_type = _MaterializationBatchPrivateOwner
+    preparation_type = PreparedMaterializationBatch
+    admission_claim_type = _MaterializationBatchAdmissionClaim
+    record_type = _PreparedMaterializationBatchRecord
+    projection_type = _MaterializationBatchRollbackProjection
+    hmac_new = hmac.new
+    sha256 = hashlib.sha256
+    compare_digest = hmac.compare_digest
+    render = repr
+    object_identity = id
+    active_thread = current_thread
+    freeze_digest_value = _freeze_materialization_digest_value
+    detach_plan = _detach_materialization_batch_plan
+
+    def state_digest(manager: StateManager) -> str:
+        """Digest canonical State while excluding active transaction carriers."""
+
+        payload = tuple(
+            sorted(
+                (
+                    name,
+                    freeze_digest_value(value, set()),
+                )
+                for name, value in manager.__dict__.items()
+                if name
+                not in {
+                    "_lock",
+                    "_materialization_secret",
+                    "_active_connection_preparations",
+                    "_active_connection_composite_preparations",
+                    "_active_materialization_batch_preparations",
+                    "_active_materialization_batch_private_rollback",
+                    "_active_action_cohort_preparations",
+                    "_active_action_cohort_claim",
+                    "_active_prepared_state_claim",
+                    "_prepared_state_admission_epoch",
+                    "state",
+                }
+            )
+        )
+        state_payload = (
+            ("current_time", manager.state.current_time),
+            ("dns_cache", manager.state.dns_cache),
+        )
+        frozen = freeze_digest_value((payload, state_payload), set())
+        return sha256(render(frozen).encode()).hexdigest()
+
+    def result_digest(result: object) -> str:
+        """Digest a canonical batch result without retaining its mutable rows."""
+
+        frozen = freeze_digest_value(result, set())
+        return sha256(render(frozen).encode()).hexdigest()
+
+    def trusted_commit_batch(
+        manager: StateManager,
+        plan: MaterializationBatchPlan,
+        prepared_session: _PreparedActionCohortSessionStart | None,
+        prepared_processes: tuple[_PreparedActionCohortProcessStart, ...],
+    ) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
+        """Publish one trial postimage through captured primitive commit functions."""
+
+        for hostname, boot_time in plan.boot_times:
+            manager._system_boot_times[hostname] = boot_time
+        session = (
+            trusted_commit_session(
+                manager,
+                plan.session,
+                advance_version=False,
+                update_state_time=False,
+                prepared=prepared_session,
+                emit_log=False,
+            )
+            if plan.session is not None
+            else None
+        )
+        processes = tuple(
+            trusted_commit_process(
+                manager,
+                process.plan,
+                advance_version=False,
+                update_state_time=False,
+                prepared=process,
+                emit_log=False,
+            )
+            for process in prepared_processes
+        )
+        if session is not None:
+            links = plan._session_process_links
+
+            def linked_pid(index: int) -> int | None:
+                return processes[index].pid if index >= 0 else None
+
+            session.transport_pid = linked_pid(links.transport) or session.transport_pid
+            session.session_shell_pid = linked_pid(links.shell)
+            session.session_user_manager_pid = linked_pid(links.user_manager)
+            session.session_winlogon_pid = linked_pid(links.winlogon)
+            session.process_tree_root = linked_pid(links.process_tree_root)
+            explorer_pid = linked_pid(links.explorer)
+            if explorer_pid is not None:
+                session.explorer_pid = explorer_pid
+                session.initial_explorer_pid = explorer_pid
+                session.windows_shell_bootstrapped = True
+        manager.state.current_time = plan.final_state_time
+        manager._materialization_version += 1
+        return session, processes
+
+    def value_digest(value: object) -> str:
+        frozen = freeze_digest_value(value, set())
+        return sha256(render(frozen).encode()).hexdigest()
+
+    def phase_seal(
+        manager: StateManager,
+        owner: _MaterializationBatchPrivateOwner,
+        *,
+        phase: str,
+        result_digest: str,
+        postimage_digest: str,
+    ) -> str:
+        canonical = render(
+            (
+                "materialization-batch-context-phase-v1",
+                owner.locator_authority_identity,
+                owner.authority_integrity_token,
+                owner.claim_epoch,
+                phase,
+                owner.rollback_preimage_digest,
+                result_digest,
+                postimage_digest,
+            )
+        ).encode()
+        return hmac_new(manager._materialization_secret, canonical, sha256).hexdigest()
+
+    def phase_authenticates(
+        manager: StateManager,
+        owner: _MaterializationBatchPrivateOwner,
+    ) -> bool:
+        return compare_digest(
+            owner.phase_seal,
+            phase_seal(
+                manager,
+                owner,
+                phase=owner.phase,
+                result_digest=owner.result_digest,
+                postimage_digest=owner.postimage_digest,
+            ),
+        )
+
+    def finalization_receipt(
+        manager: StateManager,
+        owner: _MaterializationBatchPrivateOwner,
+        *,
+        result_digest: str,
+        postimage_digest: str,
+    ) -> str:
+        canonical = render(
+            (
+                "materialization-batch-finalization-receipt-v1",
+                owner.locator_authority_identity,
+                owner.authority_integrity_token,
+                owner.claim_epoch,
+                owner.rollback_preimage_digest,
+                result_digest,
+                postimage_digest,
+            )
+        ).encode()
+        return hmac_new(manager._materialization_secret, canonical, sha256).hexdigest()
+
+    def authority_authenticates(owner: _MaterializationBatchPrivateOwner) -> bool:
+        authority = owner.authority
+        return (
+            authority.record is owner.record
+            and authority.preparation is owner.preparation
+            and type(authority.plan) is MaterializationBatchPlan
+            and authority.claim_thread is tuple.__getitem__(owner.preparation, 2)
+            and authority.claim_epoch == owner.claim_epoch
+            and authority.preparation_locator == owner.preparation_locator
+            and authority.result_digest is result_digest
+            and authority.state_digest is state_digest
+            and compare_digest(
+                authority._integrity_token,
+                owner.authority_integrity_token,
+            )
+        )
+
+    def locator_token(
+        manager: StateManager,
+        owner: _MaterializationBatchPrivateOwner,
+    ) -> str:
+        canonical = render(
+            (
+                "materialization-batch-private-locator-v1",
+                owner.preparation_locator,
+                owner.locator_authority_identity,
+                owner.claim_epoch,
+                owner.authority_integrity_token,
+            )
+        ).encode()
+        return hmac_new(manager._materialization_secret, canonical, sha256).hexdigest()
+
+    def locator_authenticates(
+        manager: StateManager,
+        owner: _MaterializationBatchPrivateOwner,
+    ) -> bool:
+        candidate = manager._active_materialization_batch_private_rollback
+        return (
+            candidate is owner.locator
+            and candidate.preparation_locator == owner.preparation_locator
+            and candidate.authority_identity == owner.locator_authority_identity
+            and candidate.claim_epoch == owner.claim_epoch
+            and compare_digest(candidate._integrity_token, owner.locator_integrity_token)
+            and compare_digest(owner.locator_integrity_token, locator_token(manager, owner))
+            and authority_authenticates(owner)
+            and manager._active_materialization_batch_preparations.get(owner.preparation_locator)
+            is owner.record
+            and manager._active_prepared_state_claim is owner.record
+            and manager._prepared_state_admission_epoch == owner.claim_epoch
+        )
+
+    def owner_for_preparation(
+        manager: StateManager,
+        preparation: PreparedMaterializationBatch,
+    ) -> _MaterializationBatchPrivateOwner:
+        owner = owners_by_preparation.get((object_identity(manager), object_identity(preparation)))
+        if (
+            owner is None
+            or owner.preparation is not preparation
+            or owner.context is not preparation._owner_context()
+            or tuple.__getitem__(preparation, 0) is not manager
+            or owner.record.terminal
+            or owner.authority.claim_thread is not active_thread()
+        ):
+            raise StateError("Prepared materialization batch is no longer active")
+        return owner
+
+    def commit_private_primitive(
+        manager: StateManager,
+        callback_plan: MaterializationBatchPlan,
+        *,
+        advance_version: bool = True,
+        update_state_time: bool = True,
+    ) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
+        """Resolve a callback argument to one unreachable detached commit graph."""
+
+        with manager._lock:
+            record = manager._active_prepared_state_claim
+            if type(record) is not record_type:
+                raise StateError("Materialization batch has no private primitive owner")
+            owner = owners_by_preparation.get(
+                (object_identity(manager), object_identity(record.preparation))
+            )
+            if (
+                owner is None
+                or owner.record is not record
+                or owner.callback_plan is not callback_plan
+                or owner.phase != "prepared"
+                or owner.primitive_commit_invoked
+                or type(advance_version) is not bool
+                or not advance_version
+                or type(update_state_time) is not bool
+                or not update_state_time
+                or not locator_authenticates(manager, owner)
+            ):
+                raise StateError("Materialization batch primitive locator drifted")
+            owner.primitive_commit_invoked = True
+            result = trusted_commit_batch(
+                manager,
+                owner.authority.plan,
+                owner.authority.prepared_session,
+                owner.authority.prepared_processes,
+            )
+            return result
+
+    def enter(
+        manager: StateManager,
+        context: _PreparedMaterializationBatchContext,
+    ) -> PreparedMaterializationBatch:
+        if tuple.__getitem__(context, 0) is not manager:
+            raise StateError("Materialization-batch context changed StateManager")
+        context_key = (object_identity(manager), object_identity(context))
+        if context_key in owners_by_context:
+            raise StateError("Materialization-batch context is already active")
+        public_plan = tuple.__getitem__(context, 1)
+        claim_thread = active_thread()
+        if manager._active_prepared_state_claim is not None:
+            raise StateError("StateManager already has an active prepared-State claim")
+        with manager._lock:
+            if manager._active_prepared_state_claim is not None:
+                raise StateError("StateManager already has an active prepared-State claim")
+            claim_admission_epoch = manager._prepared_state_admission_epoch
+            claim_version = manager._materialization_version
+            claim_state_time = manager.state.current_time
+            admission_claim = admission_claim_type(
+                plan=public_plan,
+                claim_thread=claim_thread,
+                admission_epoch=claim_admission_epoch,
+                claim_version=claim_version,
+                claim_state_time=claim_state_time,
+            )
+            manager._active_prepared_state_claim = admission_claim
+            admission_preimage_proven = True
+            try:
+                private_plan = detach_plan(public_plan)
+                callback_plan = detach_plan(private_plan)
+                trusted_validate_plan(manager, private_plan)
+                prepared_session = (
+                    trusted_prepare_session(private_plan.session)
+                    if private_plan.session is not None
+                    else None
+                )
+                prepared_sessions = (prepared_session,) if prepared_session is not None else ()
+                prepared_processes = tuple(
+                    trusted_prepare_process(item) for item in private_plan.processes
+                )
+                journal_arguments = dict(
+                    sessions=prepared_sessions,
+                    processes=prepared_processes,
+                    process_terminations=(),
+                    session_terminalizations=(),
+                    boot_times=private_plan.boot_times,
+                )
+                observation_journal = trusted_prepare_journal(
+                    manager,
+                    projection_type(),
+                    **journal_arguments,
+                )
+                trial_rollback_journal = trusted_prepare_journal(
+                    manager,
+                    projection_type(),
+                    **journal_arguments,
+                )
+                private_rollback_journal = clone_rollback_journal(trial_rollback_journal)
+                cleanup_rollback_journal = clone_rollback_journal(trial_rollback_journal)
+                private_rollback_preimage = rollback_observation(
+                    manager,
+                    private_rollback_journal,
+                )
+                cleanup_rollback_preimage = rollback_observation(
+                    manager,
+                    cleanup_rollback_journal,
+                )
+                claim_preimage = rollback_observation(manager, observation_journal)
+                pretrial_state_digest = state_digest(manager)
+                trial_rollback_preimage = rollback_observation(
+                    manager,
+                    trial_rollback_journal,
+                )
+                try:
+                    expected_result = trusted_commit_batch(
+                        manager,
+                        private_plan,
+                        prepared_session,
+                        prepared_processes,
+                    )
+                    expected_result_digest = result_digest(expected_result)
+                    expected_state_digest = state_digest(manager)
+                finally:
+                    try:
+                        rollback_restore(manager, trial_rollback_journal)
+                        if (
+                            rollback_observation(manager, trial_rollback_journal)
+                            != trial_rollback_preimage
+                            or state_digest(manager) != pretrial_state_digest
+                        ):
+                            raise StateError(
+                                "Materialization-batch expected-postimage trial did not restore"
+                            )
+                    except BaseException:
+                        admission_preimage_proven = False
+                        raise
+
+                callback_prepared_session = (
+                    trusted_prepare_session(callback_plan.session)
+                    if callback_plan.session is not None
+                    else None
+                )
+                callback_prepared_sessions = (
+                    (callback_prepared_session,) if callback_prepared_session is not None else ()
+                )
+                callback_prepared_processes = tuple(
+                    trusted_prepare_process(item) for item in callback_plan.processes
+                )
+                callback_journal_arguments = dict(
+                    sessions=callback_prepared_sessions,
+                    processes=callback_prepared_processes,
+                    process_terminations=(),
+                    session_terminalizations=(),
+                    boot_times=callback_plan.boot_times,
+                )
+                manager.validate_materialization_batch(callback_plan)
+                if callback_plan.session is not None:
+                    manager._prepare_action_cohort_session_start(callback_plan.session)
+                for item in callback_plan.processes:
+                    manager._prepare_action_cohort_process_start(item)
+                manager._prepare_action_cohort_rollback_journal(
+                    projection_type(),
+                    **callback_journal_arguments,
+                )
+
+                callback_state_digest = state_digest(manager)
+                if callback_state_digest != pretrial_state_digest:
+                    admission_preimage_proven = False
+                    raise StateError(
+                        "Materialization-batch preparation callback changed canonical State"
+                    )
+            except BaseException:
+                if (
+                    admission_preimage_proven
+                    and manager._active_prepared_state_claim is admission_claim
+                ):
+                    manager._active_prepared_state_claim = None
+                raise
+            if (
+                manager._active_prepared_state_claim is not admission_claim
+                or manager._prepared_state_admission_epoch != claim_admission_epoch
+                or manager._materialization_version != claim_version
+                or manager.state.current_time != claim_state_time
+            ):
+                if manager._active_prepared_state_claim is admission_claim:
+                    manager._active_prepared_state_claim = None
+                raise StateError("Materialization-batch admission claim drifted during prepare")
+            preparation = preparation_type(manager, callback_plan, claim_thread, context)
+            preparation_locator = object_identity(preparation)
+            claim_epoch = claim_admission_epoch + 1
+            record = record_type(
+                preparation=preparation,
+                plan=callback_plan,
+                claim_thread=claim_thread,
+                claim_epoch=claim_epoch,
+                claim_version=claim_version,
+                claim_state_time=claim_state_time,
+                rollback_journal=observation_journal,
+                claim_preimage=claim_preimage,
+            )
+            authority_integrity_token = authority_token_factory(
+                manager._materialization_secret,
+                record=record,
+                preparation=preparation,
+                plan=private_plan,
+                claim_thread=claim_thread,
+                claim_epoch=claim_epoch,
+                claim_version=claim_version,
+                claim_state_time=claim_state_time,
+                observation_journal=observation_journal,
+                claim_preimage=claim_preimage,
+                rollback_journal=private_rollback_journal,
+                rollback_preimage=private_rollback_preimage,
+                rollback_observation=rollback_observation,
+                rollback_restore=rollback_restore,
+                prepared_session=prepared_session,
+                prepared_processes=prepared_processes,
+                expected_result_digest=expected_result_digest,
+                expected_state_digest=expected_state_digest,
+                result_digest=result_digest,
+                state_digest=state_digest,
+                preparation_locator=preparation_locator,
+            )
+            authority = private_authority_type(
+                record=record,
+                preparation=preparation,
+                plan=private_plan,
+                claim_thread=claim_thread,
+                claim_epoch=claim_epoch,
+                claim_version=claim_version,
+                claim_state_time=claim_state_time,
+                observation_journal=observation_journal,
+                claim_preimage=claim_preimage,
+                rollback_journal=private_rollback_journal,
+                rollback_preimage=private_rollback_preimage,
+                rollback_observation=rollback_observation,
+                rollback_restore=rollback_restore,
+                prepared_session=prepared_session,
+                prepared_processes=prepared_processes,
+                expected_result_digest=expected_result_digest,
+                expected_state_digest=expected_state_digest,
+                result_digest=result_digest,
+                state_digest=state_digest,
+                preparation_locator=preparation_locator,
+                _integrity_token=authority_integrity_token,
+            )
+            cleanup_authority_integrity_token = authority_token_factory(
+                manager._materialization_secret,
+                record=record,
+                preparation=preparation,
+                plan=private_plan,
+                claim_thread=claim_thread,
+                claim_epoch=claim_epoch,
+                claim_version=claim_version,
+                claim_state_time=claim_state_time,
+                observation_journal=observation_journal,
+                claim_preimage=claim_preimage,
+                rollback_journal=cleanup_rollback_journal,
+                rollback_preimage=cleanup_rollback_preimage,
+                rollback_observation=rollback_observation,
+                rollback_restore=rollback_restore,
+                prepared_session=prepared_session,
+                prepared_processes=prepared_processes,
+                expected_result_digest=expected_result_digest,
+                expected_state_digest=expected_state_digest,
+                result_digest=result_digest,
+                state_digest=state_digest,
+                preparation_locator=preparation_locator,
+            )
+            cleanup_authority = private_authority_type(
+                record=record,
+                preparation=preparation,
+                plan=private_plan,
+                claim_thread=claim_thread,
+                claim_epoch=claim_epoch,
+                claim_version=claim_version,
+                claim_state_time=claim_state_time,
+                observation_journal=observation_journal,
+                claim_preimage=claim_preimage,
+                rollback_journal=cleanup_rollback_journal,
+                rollback_preimage=cleanup_rollback_preimage,
+                rollback_observation=rollback_observation,
+                rollback_restore=rollback_restore,
+                prepared_session=prepared_session,
+                prepared_processes=prepared_processes,
+                expected_result_digest=expected_result_digest,
+                expected_state_digest=expected_state_digest,
+                result_digest=result_digest,
+                state_digest=state_digest,
+                preparation_locator=preparation_locator,
+                _integrity_token=cleanup_authority_integrity_token,
+            )
+            locator_authority_identity = object_identity(authority)
+            provisional_owner = private_owner_type(
+                context=context,
+                record=record,
+                preparation=preparation,
+                authority=authority,
+                cleanup_authority=cleanup_authority,
+                callback_plan=callback_plan,
+                locator=private_locator_type(
+                    preparation_locator=preparation_locator,
+                    authority_identity=locator_authority_identity,
+                    claim_epoch=claim_epoch,
+                    _integrity_token="",
+                ),
+                preparation_locator=preparation_locator,
+                locator_authority_identity=locator_authority_identity,
+                authority_integrity_token=authority_integrity_token,
+                locator_integrity_token="",
+                claim_epoch=claim_epoch,
+                rollback_preimage_digest=value_digest(private_rollback_preimage),
+                phase="prepared",
+                phase_seal="",
+            )
+            locator_integrity_token = locator_token(manager, provisional_owner)
+            locator = private_locator_type(
+                preparation_locator=preparation_locator,
+                authority_identity=locator_authority_identity,
+                claim_epoch=claim_epoch,
+                _integrity_token=locator_integrity_token,
+            )
+            provisional_owner.locator = locator
+            provisional_owner.locator_integrity_token = locator_integrity_token
+            provisional_owner.phase_seal = phase_seal(
+                manager,
+                provisional_owner,
+                phase="prepared",
+                result_digest="",
+                postimage_digest="",
+            )
+            owners_by_context[context_key] = provisional_owner
+            owners_by_preparation[(object_identity(manager), preparation_locator)] = (
+                provisional_owner
+            )
+            manager._active_materialization_batch_preparations[preparation_locator] = record
+            manager._prepared_state_admission_epoch = claim_epoch
+            manager._active_prepared_state_claim = record
+            manager._active_materialization_batch_private_rollback = locator
+            return preparation
+
+    def apply(
+        manager: StateManager,
+        preparation: PreparedMaterializationBatch,
+    ) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
+        with manager._lock:
+            owner = owner_for_preparation(manager, preparation)
+            if (
+                owner.phase != "prepared"
+                or owner.result is not None
+                or owner.postimage is not None
+                or not phase_authenticates(manager, owner)
+            ):
+                raise StateError("Prepared materialization batch cannot be applied again")
+
+            def exact_locator_authenticates() -> bool:
+                return locator_authenticates(manager, owner)
+
+            result, postimage = apply_context(
+                manager,
+                owner.authority,
+                owner.callback_plan,
+                exact_locator_authenticates,
+            )
+            result_digest = value_digest(result)
+            postimage_digest = value_digest(postimage)
+            owner.result = result
+            owner.postimage = postimage
+            owner.result_digest = result_digest
+            owner.postimage_digest = postimage_digest
+            owner.phase = "result-exposed"
+            owner.phase_seal = phase_seal(
+                manager,
+                owner,
+                phase=owner.phase,
+                result_digest=result_digest,
+                postimage_digest=postimage_digest,
+            )
+            return result
+
+    def finalize(
+        manager: StateManager,
+        preparation: PreparedMaterializationBatch,
+    ) -> tuple[ActiveSession | None, tuple[RunningProcess, ...]]:
+        with manager._lock:
+            owner = owner_for_preparation(manager, preparation)
+            result = owner.result
+            postimage = owner.postimage
+            if (
+                owner.phase != "result-exposed"
+                or result is None
+                or postimage is None
+                or value_digest(result) != owner.result_digest
+                or value_digest(postimage) != owner.postimage_digest
+                or not phase_authenticates(manager, owner)
+            ):
+                raise StateError("Prepared materialization batch is not certified for finalize")
+
+            def exact_locator_authenticates() -> bool:
+                return locator_authenticates(manager, owner)
+
+            finalized_result = finalize_context(
+                manager,
+                owner.authority,
+                result=result,
+                postimage=postimage,
+                locator_authenticates=exact_locator_authenticates,
+            )
+            receipt = finalization_receipt(
+                manager,
+                owner,
+                result_digest=owner.result_digest,
+                postimage_digest=owner.postimage_digest,
+            )
+            owner.phase = "finalized"
+            owner.phase_seal = phase_seal(
+                manager,
+                owner,
+                phase=owner.phase,
+                result_digest=owner.result_digest,
+                postimage_digest=owner.postimage_digest,
+            )
+            owner.finalization_receipt = receipt
+            return finalized_result
+
+    def terminal_receipt_authenticates(
+        manager: StateManager,
+        owner: _MaterializationBatchPrivateOwner,
+    ) -> bool:
+        result = owner.result
+        postimage = owner.postimage
+        receipt = owner.finalization_receipt
+        return (
+            owner.phase == "finalized"
+            and result is not None
+            and postimage is not None
+            and receipt is not None
+            and value_digest(result) == owner.result_digest
+            and value_digest(postimage) == owner.postimage_digest
+            and phase_authenticates(manager, owner)
+            and compare_digest(
+                receipt,
+                finalization_receipt(
+                    manager,
+                    owner,
+                    result_digest=owner.result_digest,
+                    postimage_digest=owner.postimage_digest,
+                ),
+            )
+        )
+
+    def normalize_private_locator(
+        manager: StateManager,
+        owner: _MaterializationBatchPrivateOwner,
+    ) -> bool:
+        locator = private_locator_type(
+            preparation_locator=owner.preparation_locator,
+            authority_identity=owner.locator_authority_identity,
+            claim_epoch=owner.claim_epoch,
+            _integrity_token=owner.locator_integrity_token,
+        )
+        owner.locator = locator
+        manager._active_materialization_batch_private_rollback = locator
+        manager._active_materialization_batch_preparations.clear()
+        manager._active_materialization_batch_preparations[owner.preparation_locator] = owner.record
+        manager._active_prepared_state_claim = owner.record
+        manager._prepared_state_admission_epoch = owner.claim_epoch
+        return (
+            compare_digest(owner.locator_integrity_token, locator_token(manager, owner))
+            and manager._active_materialization_batch_private_rollback is locator
+            and manager._active_materialization_batch_preparations.get(owner.preparation_locator)
+            is owner.record
+            and manager._active_prepared_state_claim is owner.record
+            and manager._prepared_state_admission_epoch == owner.claim_epoch
+        )
+
+    def exit_context(
+        manager: StateManager,
+        context: _PreparedMaterializationBatchContext,
+        primary_error: BaseException | None,
+    ) -> None:
+        with manager._lock:
+            owner = owners_by_context.get((object_identity(manager), object_identity(context)))
+            if owner is None or owner.context is not context:
+                raise StateError("Materialization-batch context is no longer active")
+            terminal_committed = terminal_receipt_authenticates(manager, owner)
+            cleanup_error: BaseException | None = None
+            try:
+                if terminal_committed:
+                    assert owner.result is not None
+                    assert owner.postimage is not None
+                    normalize_finalized(
+                        manager,
+                        owner.cleanup_authority,
+                        result=owner.result,
+                        postimage=owner.postimage,
+                    )
+                else:
+                    restore_context(manager, owner.cleanup_authority)
+                    owner.phase = "rolled-back"
+                    owner.phase_seal = ""
+                    owner.finalization_receipt = None
+            except BaseException as error:
+                cleanup_error = error
+            if not normalize_private_locator(manager, owner) and cleanup_error is None:
+                cleanup_error = StateError(
+                    "Prepared materialization batch locator normalization failed"
+                )
+            if cleanup_error is not None:
+                if primary_error is not None:
+                    cleanup_error.add_note(
+                        "A prior materialization-batch error was replaced because exact rollback "
+                        "could not be proven; the State claim remains retained."
+                    )
+                raise cleanup_error
+            manager._active_materialization_batch_private_rollback = None
+            manager._active_materialization_batch_preparations.clear()
+            manager._active_prepared_state_claim = None
+            manager._prepared_state_admission_epoch += 1
+            owner.record.terminal = True
+            owner.record.committed = terminal_committed
+            owner.preparation._active = False
+            owner.preparation._committed = terminal_committed
+            if not terminal_committed:
+                owner.preparation._result = None
+            owners_by_context.pop((object_identity(manager), object_identity(context)), None)
+            owners_by_preparation.pop(
+                (object_identity(manager), owner.preparation_locator),
+                None,
+            )
+
+    def committed(
+        manager: StateManager,
+        preparation: PreparedMaterializationBatch,
+    ) -> bool:
+        with manager._lock:
+            owner = owners_by_preparation.get(
+                (object_identity(manager), object_identity(preparation))
+            )
+            if owner is not None and owner.preparation is preparation:
+                return terminal_receipt_authenticates(manager, owner)
+            return preparation._committed
+
+    def provisional(
+        manager: StateManager,
+        preparation: PreparedMaterializationBatch,
+    ) -> bool:
+        with manager._lock:
+            owner = owners_by_preparation.get(
+                (object_identity(manager), object_identity(preparation))
+            )
+            return (
+                owner is not None
+                and owner.preparation is preparation
+                and owner.phase == "result-exposed"
+                and owner.finalization_receipt is None
+                and phase_authenticates(manager, owner)
+            )
+
+    return (
+        enter,
+        exit_context,
+        apply,
+        finalize,
+        committed,
+        provisional,
+        commit_private_primitive,
+    )
+
+
+# These underscore dispatchers are manager-private implementation under the
+# documented public-method threat model. Returned context/preparation objects
+# retain no dispatcher, registry, signer, phase, receipt, or rollback graph.
+(
+    StateManager._enter_private_materialization_batch_context,
+    StateManager._exit_private_materialization_batch_context,
+    StateManager._apply_private_materialization_batch,
+    StateManager._finalize_private_materialization_batch,
+    StateManager._private_materialization_batch_committed,
+    StateManager._private_materialization_batch_provisional,
+    StateManager._commit_prevalidated_materialization_batch,
+) = _bind_private_materialization_batch_owner_registry()  # type: ignore[attr-defined]
+del _bind_private_materialization_batch_owner_registry
