@@ -128,8 +128,11 @@ if TYPE_CHECKING:
     )
     from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
     from evidenceforge.generation.persistent_smb_projection import (
+        PersistentSmbProjectionCommittedMemberRecovery,
         PersistentSmbProjectionGroupCensus,
         PersistentSmbProjectionGroupToken,
+        PersistentSmbProjectionMemberCertification,
+        PersistentSmbProjectionMemberCommitReceipt,
         PersistentSmbProjectionMemberRecovery,
         PersistentSmbProjectionMemberToken,
         PersistentSmbProjectionPhase,
@@ -182,6 +185,14 @@ _DEFAULT_ACTION_COHORT_BYTE_CAPACITY = 64 * 1_024 * 1_024
 _DEFAULT_ACTION_COHORT_RECEIPT_CAPACITY = 4_096
 _MAX_DEFERRED_SESSION_PUBLICATION_MEMBERS = 256
 _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS = 4_096
+_PERSISTENT_SMB_PROJECTION_TARGET_ORDER = (
+    "zeek_conn",
+    "zeek_smb_mapping",
+    "zeek_smb_files",
+    "zeek_files",
+    "ecar",
+    "windows_event_security",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1185,6 +1196,27 @@ class _PersistentSmbTopologyPreparation:
     next_target_generation: int
     target_generation_semantic_bytes: int
     target_generation_table_backing_bytes: int
+    projection_targets: tuple[_PersistentSmbProjectionTargetSnapshot, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _PersistentSmbProjectionTargetSnapshot:
+    """One weak, generation-bound projection target retained for a group."""
+
+    format_name: str
+    target_ref: ReferenceType[object]
+    target_generation: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PersistentSmbGroupTopologySnapshot:
+    """Private exact target-generation truth retained for one open group."""
+
+    group_id: int
+    generation_id: str
+    configuration_digest: str
+    targets: tuple[_PersistentSmbProjectionTargetSnapshot, ...]
+    semantic_bytes: int
 
 
 class EventDispatcher:
@@ -1388,12 +1420,17 @@ class EventDispatcher:
             int,
             tuple[ReferenceType[object], str],
         ] = {}
+        self._persistent_smb_group_topologies: dict[
+            int,
+            _PersistentSmbGroupTopologySnapshot,
+        ] = {}
         self._persistent_smb_next_target_generation = 1
         self._persistent_smb_target_generation_capacity = 16_385
         self._persistent_smb_target_generation_semantic_bytes = 0
         self._persistent_smb_target_generation_table_backing_bytes = sys.getsizeof(
             self._persistent_smb_target_generations
-        )
+        ) + sys.getsizeof(self._persistent_smb_group_topologies)
+        self._persistent_smb_group_topology_semantic_bytes = 0
         self._persistent_smb_high_water_target_generations = 0
         self._persistent_smb_high_water_target_generation_table_backing_bytes = (
             self._persistent_smb_target_generation_table_backing_bytes
@@ -1677,6 +1714,15 @@ class EventDispatcher:
             update(visibility_type_bytes[1])
             update(target_generations[id(visibility)].encode("ascii"))
         retained_targets = tuple(target for target, _target_ref in active_targets)
+        projection_targets = tuple(
+            _PersistentSmbProjectionTargetSnapshot(
+                format_name=format_bytes.decode("utf-8"),
+                target_ref=emitter_ref,
+                target_generation=target_generations[id(emitter)],
+            )
+            for format_bytes, emitter, emitter_ref, _module_bytes, _qualified_bytes in target_rows
+            if format_bytes.decode("utf-8") in _PERSISTENT_SMB_PROJECTION_TARGET_ORDER
+        )
         return (
             _PersistentSmbTopologyPreparation(
                 configuration_digest=digest.hexdigest(),
@@ -1685,6 +1731,7 @@ class EventDispatcher:
                 next_target_generation=next_generation,
                 target_generation_semantic_bytes=target_semantic_bytes,
                 target_generation_table_backing_bytes=target_table_backing_bytes,
+                projection_targets=projection_targets,
             ),
             retained_targets,
         )
@@ -1692,23 +1739,61 @@ class EventDispatcher:
     def _persistent_smb_commit_projection_configuration(
         self,
         preparation: _PersistentSmbTopologyPreparation,
+        group: PersistentSmbProjectionGroupToken,
     ) -> None:
-        """Install a staged weak topology after group reservation succeeds."""
+        """Install staged global and per-group weak topology snapshots."""
+
+        group_id = object.__getattribute__(group, "group_id")
+        generation_id = object.__getattribute__(group, "generation_id")
+        configuration_digest = object.__getattribute__(
+            group,
+            "projection_configuration_digest",
+        )
+        if (
+            type(group_id) is not int
+            or group_id < 1
+            or not self._persistent_smb_target_generation_is_valid(generation_id)
+            or configuration_digest != preparation.configuration_digest
+        ):
+            raise EventContractError("Persistent SMB group topology carrier is malformed")
+        targets = preparation.projection_targets
+        semantic_bytes = sum(
+            sys.getsizeof(target)
+            + sys.getsizeof(target.format_name)
+            + sys.getsizeof(target.target_ref)
+            + sys.getsizeof(target.target_generation)
+            for target in targets
+        )
+        group_topology = _PersistentSmbGroupTopologySnapshot(
+            group_id=group_id,
+            generation_id=generation_id,
+            configuration_digest=configuration_digest,
+            targets=targets,
+            semantic_bytes=semantic_bytes,
+        )
 
         with self._persistent_smb_topology_lock:
             if self._persistent_smb_target_generations is not preparation.base_registry:
                 raise EventContractError("Persistent SMB topology changed before reservation")
+            staged_group_topologies = dict.copy(self._persistent_smb_group_topologies)
+            if group_id in staged_group_topologies:
+                raise EventContractError("Persistent SMB group topology identity was reused")
+            staged_group_topologies[group_id] = group_topology
             released_registry: dict[int, tuple[ReferenceType[object], str]] = (
                 self._persistent_smb_target_generations
             )
+            released_group_topologies = self._persistent_smb_group_topologies
             self._persistent_smb_target_generations = preparation.target_generations
+            self._persistent_smb_group_topologies = staged_group_topologies
             self._persistent_smb_next_target_generation = preparation.next_target_generation
             retained_target_generations = len(preparation.target_generations)
             self._persistent_smb_target_generation_semantic_bytes = (
                 preparation.target_generation_semantic_bytes
             )
+            self._persistent_smb_group_topology_semantic_bytes += semantic_bytes
             self._persistent_smb_target_generation_table_backing_bytes = (
                 preparation.target_generation_table_backing_bytes
+                + sys.getsizeof(staged_group_topologies)
             )
             self._persistent_smb_high_water_target_generations = max(
                 self._persistent_smb_high_water_target_generations,
@@ -1716,24 +1801,154 @@ class EventDispatcher:
             )
             self._persistent_smb_high_water_target_generation_table_backing_bytes = max(
                 self._persistent_smb_high_water_target_generation_table_backing_bytes,
-                preparation.target_generation_table_backing_bytes,
+                self._persistent_smb_target_generation_table_backing_bytes,
             )
         released_registry.clear()
+        released_group_topologies.clear()
+
+    def _persistent_smb_retire_group_topology(self, group_id: int) -> None:
+        """Release one exact group's private target-generation snapshot."""
+
+        with self._persistent_smb_topology_lock:
+            topology = self._persistent_smb_group_topologies.pop(group_id, None)
+            if topology is None:
+                raise EventContractError("Persistent SMB group topology is missing or stale")
+            self._persistent_smb_group_topology_semantic_bytes -= topology.semantic_bytes
+            if not self._persistent_smb_group_topologies:
+                self._persistent_smb_group_topologies.clear()
+            self._persistent_smb_target_generation_table_backing_bytes = sys.getsizeof(
+                self._persistent_smb_target_generations
+            ) + sys.getsizeof(self._persistent_smb_group_topologies)
 
     def _persistent_smb_retire_projection_topology(self) -> None:
         """Drop every weak topology row after the last group is reclaimed."""
 
         empty_registry: dict[int, tuple[ReferenceType[object], str]] = {}
+        empty_group_topologies: dict[int, _PersistentSmbGroupTopologySnapshot] = {}
         with self._persistent_smb_topology_lock:
             released_registry: dict[int, tuple[ReferenceType[object], str]] = (
                 self._persistent_smb_target_generations
             )
+            released_group_topologies = self._persistent_smb_group_topologies
             self._persistent_smb_target_generations = empty_registry
+            self._persistent_smb_group_topologies = empty_group_topologies
             self._persistent_smb_target_generation_semantic_bytes = 0
+            self._persistent_smb_group_topology_semantic_bytes = 0
             self._persistent_smb_target_generation_table_backing_bytes = sys.getsizeof(
                 empty_registry
-            )
+            ) + sys.getsizeof(empty_group_topologies)
         released_registry.clear()
+        released_group_topologies.clear()
+
+    @staticmethod
+    def _persistent_smb_projection_target_types() -> dict[str, type[object]]:
+        """Return the closed exact source-type allowlist for SMB projections."""
+
+        from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.windows import WindowsEventEmitter
+        from evidenceforge.generation.emitters.zeek import ZeekEmitter
+        from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
+        from evidenceforge.generation.emitters.zeek_smb import (
+            ZeekSmbFilesEmitter,
+            ZeekSmbMappingEmitter,
+        )
+
+        return {
+            "zeek_conn": ZeekEmitter,
+            "zeek_smb_mapping": ZeekSmbMappingEmitter,
+            "zeek_smb_files": ZeekSmbFilesEmitter,
+            "zeek_files": ZeekFilesEmitter,
+            "ecar": EcarEmitter,
+            "windows_event_security": WindowsEventEmitter,
+        }
+
+    def _persistent_smb_projection_target_intent(
+        self,
+        *,
+        group_id: int,
+        generation_id: str,
+        target_formats: object,
+    ) -> tuple[tuple[str, ...], str]:
+        """Authenticate exact live targets and derive private topology truth."""
+
+        if type(group_id) is not int or group_id < 1:
+            raise EventContractError("Persistent SMB target topology group is malformed")
+        group_generation = self._persistent_smb_sha256_digest(
+            generation_id,
+            "persistent SMB target topology generation",
+        )
+        if type(target_formats) is not tuple:
+            raise EventContractError("Persistent SMB target formats require an exact tuple")
+        if not target_formats or len(target_formats) > len(_PERSISTENT_SMB_PROJECTION_TARGET_ORDER):
+            raise EventContractError("Persistent SMB target formats exceed their non-empty bound")
+        selected: set[str] = set()
+        for target_format in target_formats:
+            if type(target_format) is not str:
+                raise EventContractError("Persistent SMB target formats require exact strings")
+            if target_format not in _PERSISTENT_SMB_PROJECTION_TARGET_ORDER:
+                raise EventContractError(
+                    f"Persistent SMB unsupported target format: {target_format}"
+                )
+            if target_format in selected:
+                raise EventContractError("Persistent SMB target formats must be unique")
+            selected.add(target_format)
+        canonical_targets = tuple(
+            target for target in _PERSISTENT_SMB_PROJECTION_TARGET_ORDER if target in selected
+        )
+        expected_types = self._persistent_smb_projection_target_types()
+        emitter_map = object.__getattribute__(self, "emitters")
+        if type(emitter_map) is not dict:
+            raise EventContractError("Persistent SMB projection requires an exact emitter map")
+
+        with self._persistent_smb_topology_lock:
+            topology = self._persistent_smb_group_topologies.get(group_id)
+            if topology is None or topology.generation_id != group_generation:
+                raise EventContractError("Persistent SMB topology generation is foreign or stale")
+            retained_targets = {target.format_name: target for target in topology.targets}
+            emitter_count = dict.__len__(emitter_map)
+            target_generations: list[str] = []
+            for target_format in canonical_targets:
+                retained = retained_targets.get(target_format)
+                current_target = dict.get(emitter_map, target_format)
+                if (
+                    retained is None
+                    or current_target is None
+                    or retained.target_ref() is not current_target
+                ):
+                    raise EventContractError(
+                        "Persistent SMB topology generation changed after reservation"
+                    )
+                if type(current_target) is not expected_types[target_format]:
+                    raise EventContractError(
+                        "Persistent SMB projection target requires its exact target type"
+                    )
+                target_generations.append(retained.target_generation)
+            if dict.__len__(emitter_map) != emitter_count:
+                raise EventContractError(
+                    "Persistent SMB projection emitter map changed during target validation"
+                )
+            configuration_digest = topology.configuration_digest
+
+        digest = hashlib.sha256()
+
+        def update(value: bytes) -> None:
+            digest.update(len(value).to_bytes(8, "big"))
+            digest.update(value)
+
+        update(b"persistent-smb-projection-target-intent-v1")
+        update(self._persistent_smb_projection_authority.dispatcher_id.encode("ascii"))
+        update(group_id.to_bytes(8, "big"))
+        update(group_generation.encode("ascii"))
+        update(configuration_digest.encode("ascii"))
+        update(len(canonical_targets).to_bytes(8, "big"))
+        for target_format, target_generation in zip(
+            canonical_targets,
+            target_generations,
+            strict=True,
+        ):
+            update(target_format.encode("ascii"))
+            update(target_generation.encode("ascii"))
+        return canonical_targets, digest.hexdigest()
 
     def reserve_persistent_smb_projection_group(
         self,
@@ -1774,7 +1989,7 @@ class EventDispatcher:
                         byte_budget=retained_bytes,
                     )
                     try:
-                        self._persistent_smb_commit_projection_configuration(topology)
+                        self._persistent_smb_commit_projection_configuration(topology, group)
                     except BaseException:
                         self._persistent_smb_projection_authority.cancel_empty_group(group)
                         raise
@@ -1802,6 +2017,157 @@ class EventDispatcher:
             projection_capsule=projection_capsule,
             timing_planner=self.source_timing_planner,
             timing_preparation=timing_preparation,
+        )
+
+    def certify_persistent_smb_projection_member(
+        self,
+        token: PersistentSmbProjectionMemberToken,
+        *,
+        target_formats: tuple[str, ...],
+        lifecycle_binding_digest: str,
+        lifecycle_binding_generation: int,
+        network_binding_digest: str,
+        network_binding_generation: int,
+        traffic_binding_digest: str,
+        traffic_binding_generation: int,
+        expected_timing_receipt: SourceTimingPreparationReceipt,
+    ) -> PersistentSmbProjectionMemberCertification:
+        """Certify exact coordinator intent without invoking projection targets."""
+
+        from evidenceforge.generation.persistent_smb_projection import (
+            PersistentSmbProjectionMemberToken,
+        )
+
+        if type(token) is not PersistentSmbProjectionMemberToken:
+            raise EventContractError("Persistent SMB member is foreign, copied, or stale")
+        try:
+            group_id = object.__getattribute__(token, "group_id")
+            generation_id = object.__getattribute__(token, "generation_id")
+        except AttributeError as error:
+            raise EventContractError(
+                "Persistent SMB member is foreign, copied, or stale"
+            ) from error
+        canonical_targets, topology_digest = self._persistent_smb_projection_target_intent(
+            group_id=group_id,
+            generation_id=generation_id,
+            target_formats=target_formats,
+        )
+        return self._persistent_smb_projection_authority.certify_member(
+            token,
+            target_formats=canonical_targets,
+            lifecycle_binding_digest=lifecycle_binding_digest,
+            lifecycle_binding_generation=lifecycle_binding_generation,
+            network_binding_digest=network_binding_digest,
+            network_binding_generation=network_binding_generation,
+            traffic_binding_digest=traffic_binding_digest,
+            traffic_binding_generation=traffic_binding_generation,
+            topology_generation_digest=topology_digest,
+            timing_planner=self.source_timing_planner,
+            expected_timing_receipt=expected_timing_receipt,
+        )
+
+    def commit_persistent_smb_projection_member(
+        self,
+        certification: PersistentSmbProjectionMemberCertification,
+    ) -> PersistentSmbProjectionMemberCommitReceipt:
+        """Commit one certified member without invoking projection targets."""
+
+        from evidenceforge.generation.persistent_smb_projection import (
+            PersistentSmbProjectionMemberCertification,
+        )
+
+        if type(certification) is not PersistentSmbProjectionMemberCertification:
+            raise EventContractError(
+                "Persistent SMB certification is copied, foreign, tampered, or stale"
+            )
+        try:
+            group_id = object.__getattribute__(certification, "group_id")
+            generation_id = object.__getattribute__(certification, "generation_id")
+            target_formats = object.__getattribute__(certification, "target_formats")
+            certified_topology = object.__getattribute__(
+                certification,
+                "topology_generation_digest",
+            )
+            _targets, current_topology = self._persistent_smb_projection_target_intent(
+                group_id=group_id,
+                generation_id=generation_id,
+                target_formats=target_formats,
+            )
+        except (AttributeError, EventContractError) as error:
+            raise EventContractError(
+                "Persistent SMB certification is copied, foreign, tampered, or stale"
+            ) from error
+        if type(certified_topology) is not str or not hmac.compare_digest(
+            certified_topology, current_topology
+        ):
+            raise EventContractError("Persistent SMB certification topology is stale")
+        return self._persistent_smb_projection_authority.commit_member(
+            certification,
+            timing_planner=self.source_timing_planner,
+        )
+
+    def recover_committed_persistent_smb_projection_member(
+        self,
+        group: PersistentSmbProjectionGroupToken,
+        *,
+        operation_id: str,
+        operation_binding_digest: str,
+    ) -> PersistentSmbProjectionCommittedMemberRecovery:
+        """Recover one exact committed-but-unacknowledged member receipt."""
+
+        recovery = self._persistent_smb_projection_authority.recover_committed_member(
+            group,
+            operation_id=operation_id,
+            operation_binding_digest=operation_binding_digest,
+            timing_planner=self.source_timing_planner,
+        )
+        receipt = recovery.commit_receipt
+        _targets, current_topology = self._persistent_smb_projection_target_intent(
+            group_id=receipt.group_id,
+            generation_id=receipt.generation_id,
+            target_formats=receipt.target_formats,
+        )
+        if not hmac.compare_digest(receipt.topology_generation_digest, current_topology):
+            raise EventContractError("Persistent SMB committed recovery topology is stale")
+        return recovery
+
+    def acknowledge_persistent_smb_projection_member(
+        self,
+        receipt: PersistentSmbProjectionMemberCommitReceipt,
+        *,
+        expected_generation_id: str,
+    ) -> bool:
+        """Generation-CAS acknowledge a future coordinator's durable handoff."""
+
+        from evidenceforge.generation.persistent_smb_projection import (
+            PersistentSmbProjectionMemberCommitReceipt,
+        )
+
+        if type(receipt) is not PersistentSmbProjectionMemberCommitReceipt:
+            return False
+        try:
+            group_id = object.__getattribute__(receipt, "group_id")
+            generation_id = object.__getattribute__(receipt, "generation_id")
+            target_formats = object.__getattribute__(receipt, "target_formats")
+            receipt_topology = object.__getattribute__(
+                receipt,
+                "topology_generation_digest",
+            )
+            _targets, current_topology = self._persistent_smb_projection_target_intent(
+                group_id=group_id,
+                generation_id=generation_id,
+                target_formats=target_formats,
+            )
+        except (AttributeError, EventContractError):
+            return False
+        if type(receipt_topology) is not str or not hmac.compare_digest(
+            receipt_topology, current_topology
+        ):
+            return False
+        return self._persistent_smb_projection_authority.acknowledge_member(
+            receipt,
+            expected_generation_id=expected_generation_id,
+            timing_planner=self.source_timing_planner,
         )
 
     def recover_inactive_persistent_smb_projection_member(
@@ -1837,8 +2203,15 @@ class EventDispatcher:
     ) -> None:
         """Cancel one empty group before canonical open ownership exists."""
 
+        try:
+            group_id = object.__getattribute__(group, "group_id")
+        except AttributeError as error:
+            raise EventContractError(
+                "Persistent SMB projection group is foreign, copied, or stale"
+            ) from error
         with self._persistent_smb_group_lock:
             self._persistent_smb_projection_authority.cancel_empty_group(group)
+            self._persistent_smb_retire_group_topology(group_id)
             if self._persistent_smb_projection_authority.census().retained_groups == 0:
                 self._persistent_smb_retire_projection_topology()
 
@@ -1855,7 +2228,10 @@ class EventDispatcher:
             with self._persistent_smb_topology_lock:
                 retained_target_generations = len(self._persistent_smb_target_generations)
                 target_semantic_bytes = (
-                    self._persistent_smb_target_generation_semantic_bytes if estimate_bytes else 0
+                    self._persistent_smb_target_generation_semantic_bytes
+                    + self._persistent_smb_group_topology_semantic_bytes
+                    if estimate_bytes
+                    else 0
                 )
                 target_table_backing_bytes = (
                     self._persistent_smb_target_generation_table_backing_bytes

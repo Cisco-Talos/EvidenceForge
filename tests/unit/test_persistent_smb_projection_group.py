@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Tests for inert bounded persistent-SMB detached projection groups."""
+"""Tests for bounded persistent-SMB detached projection groups."""
 
 from __future__ import annotations
 
@@ -267,7 +267,7 @@ def _prepared_member(
     return retained_authority, retained_planner, timing, group, token
 
 
-def test_public_api_has_no_self_activation_committed_recovery_or_ack_path() -> None:
+def test_public_api_exposes_only_explicit_member_lifecycle_operations() -> None:
     dispatcher = EventDispatcher(StateManager(), {})
     public_names = {
         name
@@ -276,25 +276,18 @@ def test_public_api_has_no_self_activation_committed_recovery_or_ack_path() -> N
     }
 
     assert public_names == {
+        "acknowledge_persistent_smb_projection_member",
         "cancel_empty_persistent_smb_projection_group",
         "cancel_persistent_smb_projection_member",
+        "certify_persistent_smb_projection_member",
+        "commit_persistent_smb_projection_member",
         "persistent_smb_projection_group_census",
         "prepare_persistent_smb_projection_member",
+        "recover_committed_persistent_smb_projection_member",
         "recover_inactive_persistent_smb_projection_member",
         "reserve_persistent_smb_projection_group",
     }
-    forbidden_fragments = ("activat", "certif", "receipt", "acknowledge", "release")
-    assert not any(
-        fragment in name.casefold()
-        for name in dir(PersistentSmbProjectionGroupAuthority)
-        for fragment in forbidden_fragments
-    )
-    assert not any(
-        fragment in name.casefold()
-        for name in dir(projection_module)
-        if not name.startswith("_")
-        for fragment in ("activation", "certification", "receipt")
-    )
+    assert not any("activate" in name.casefold() for name in public_names)
 
 
 def test_capsule_encoder_accepts_only_bounded_exact_bytes_without_callbacks() -> None:
@@ -675,7 +668,9 @@ def test_retained_member_graph_is_deeply_detached_and_has_no_forbidden_capabilit
     assert member.timing_owner_ref() is planner
     assert member.timing_owner_ref.__callback__ is None
     assert not hasattr(member, "receipt")
-    assert not hasattr(member, "certification")
+    assert member.certification is None
+    assert member.expected_timing_receipt is None
+    assert member.commit_receipt is None
 
 
 def test_inactive_same_operation_lost_return_recovers_exact_token_in_o1() -> None:
@@ -827,7 +822,7 @@ def test_foreign_timing_owner_and_cancelled_member_are_stale_without_leaks() -> 
 
     authority.cancel_member(token, timing_planner=planner)
     assert not authority.authenticates_member_token(token, timing_planner=planner)
-    with pytest.raises(EventContractError, match="tampered or stale"):
+    with pytest.raises(EventContractError, match="not an inactive member"):
         authority.recover_inactive_member(
             group,
             operation_id=token.operation_id,
@@ -1363,9 +1358,14 @@ def test_dispatcher_target_generation_census_and_stale_cleanup_are_bounded() -> 
     assert cleaned.target_generation_semantic_bytes == 0
     assert (
         cleaned.target_generation_table_backing_bytes
-        == baseline.target_generation_table_backing_bytes
+        > baseline.target_generation_table_backing_bytes
     )
     dispatcher.cancel_empty_persistent_smb_projection_group(cleanup_group)
+    reclaimed = dispatcher.persistent_smb_projection_group_census(estimate_bytes=True)
+    assert (
+        reclaimed.target_generation_table_backing_bytes
+        == baseline.target_generation_table_backing_bytes
+    )
 
 
 def test_dispatcher_target_registry_is_weak_and_retires_when_last_group_cancels() -> None:

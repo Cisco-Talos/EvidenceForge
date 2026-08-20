@@ -1,20 +1,19 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Inert bounded retention for persistent-SMB detached projection facts.
+"""Bounded retention and commit handoff for persistent-SMB projection facts.
 
-The authority in this module stops at an inactive, recoverable reservation. It
-retains one immutable primitive capsule and one exact detached source-timing
-binding per member, plus a non-owning exact timing-owner locator. It never
-retains a prepared dispatch, source-timing
+The authority retains one immutable primitive capsule and one exact detached
+source-timing binding per member, plus bounded authenticated certification and
+commit carriers. It never retains a prepared dispatch, source-timing
 preparation, canonical occurrence graph, manager, emitter, or callback.
 
-The opaque operation-binding digest is only a future coordinator boundary. This
-module does not authenticate an SMB manager result and deliberately exposes no
-activation, certification, committed receipt, acknowledgement, close, or
-publication API. Source capability allowlisting, including any future Syslog
-support, belongs to the separately reviewed terminal integration. This slice
-integrates no source allowlist, and Syslog is unsupported.
+Lifecycle, network, and traffic binding digests are coordinator-derived scalar
+facts. This layer cross-binds but deliberately does not authenticate those
+external owners. A member commit receipt proves only retained member, timing,
+owner-binding, topology-generation, and closed target-intent agreement. It is
+not evidence that source bytes were emitted; the future production coordinator
+must authenticate exact publication before acknowledging the durable handoff.
 """
 
 from __future__ import annotations
@@ -32,12 +31,16 @@ from evidenceforge.generation.source_timing import (
     SourceTimingDetachedPreparationBinding,
     SourceTimingPlanner,
     SourceTimingPreparation,
+    SourceTimingPreparationReceipt,
+    SourceTimingPreparationToken,
 )
 from evidenceforge.models.exceptions import EventContractError, StateError
 
 _MAX_OPERATION_ID_UTF8_BYTES = 512
 _MAX_PROJECTION_CAPSULE_BYTES = 4 * 1024 * 1024
 _MAX_CAPSULE_PARTS = 16_384
+_MAX_TARGET_FORMATS = 6
+_MAX_TARGET_FORMAT_UTF8_BYTES = 128
 _GROUP_RETAINED_BASE_BYTES = 768
 _MEMBER_RETAINED_BASE_BYTES = 1_024
 _MAX_SIGNED_63 = (1 << 63) - 1
@@ -97,6 +100,28 @@ def _positive_int(value: object, field_name: str) -> int:
     if value < 1 or value > _MAX_SIGNED_63:
         raise EventContractError(f"{field_name} must fit the positive signed 63-bit range")
     return value
+
+
+def _target_formats(value: object) -> tuple[str, ...]:
+    """Validate one bounded canonical exact target tuple without sorting callbacks."""
+
+    if type(value) is not tuple:
+        raise EventContractError("Persistent SMB target formats require an exact tuple")
+    if not value or len(value) > _MAX_TARGET_FORMATS:
+        raise EventContractError("Persistent SMB target formats must fit their non-empty bound")
+    checked: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        target = _bounded_text(
+            item,
+            "persistent SMB target format",
+            _MAX_TARGET_FORMAT_UTF8_BYTES,
+        )
+        if target in seen:
+            raise EventContractError("Persistent SMB target formats must be unique")
+        seen.add(target)
+        checked.append(target)
+    return tuple(checked)
 
 
 def _random_hex(octets: int, field_name: str) -> str:
@@ -184,11 +209,76 @@ class PersistentSmbProjectionMemberRecovery:
 
 
 @dataclass(frozen=True, slots=True)
+class PersistentSmbProjectionMemberCertification:
+    """Exact authority-issued claim over one inactive member and target intent."""
+
+    dispatcher_id: str
+    group_id: int
+    generation_id: str
+    member_id: int
+    member_ordinal: int
+    phase: PersistentSmbProjectionPhase
+    operation_id: str
+    operation_binding_digest: str
+    capsule_digest: str
+    timing_context_digest: str
+    timing_receipt_digest: str
+    topology_generation_digest: str
+    target_formats: tuple[str, ...]
+    lifecycle_binding_digest: str
+    lifecycle_binding_generation: int
+    network_binding_digest: str
+    network_binding_generation: int
+    traffic_binding_digest: str
+    traffic_binding_generation: int
+    expected_timing_receipt: SourceTimingPreparationReceipt = field(repr=False)
+    _integrity: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class PersistentSmbProjectionMemberCommitReceipt:
+    """Authenticated committed-but-unacknowledged member handoff receipt."""
+
+    dispatcher_id: str
+    group_id: int
+    generation_id: str
+    member_id: int
+    member_ordinal: int
+    phase: PersistentSmbProjectionPhase
+    operation_id: str
+    operation_binding_digest: str
+    capsule_digest: str
+    timing_context_digest: str
+    timing_receipt_digest: str
+    topology_generation_digest: str
+    target_formats: tuple[str, ...]
+    lifecycle_binding_digest: str
+    lifecycle_binding_generation: int
+    network_binding_digest: str
+    network_binding_generation: int
+    traffic_binding_digest: str
+    traffic_binding_generation: int
+    state: str
+    _integrity: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class PersistentSmbProjectionCommittedMemberRecovery:
+    """O(1) exact same-operation committed lost-return recovery result."""
+
+    commit_receipt: PersistentSmbProjectionMemberCommitReceipt
+    state: str
+
+
+@dataclass(frozen=True, slots=True)
 class PersistentSmbProjectionGroupCensus:
     """Constant-time live-retention and declared-reservation accounting."""
 
     retained_groups: int
     inactive_members: int
+    certified_members: int
+    committed_unacknowledged_members: int
+    retained_commit_receipts: int
     retained_bytes: int
     reserved_member_capacity: int
     reserved_receipt_capacity: int
@@ -199,6 +289,9 @@ class PersistentSmbProjectionGroupCensus:
     byte_capacity: int
     high_water_groups: int
     high_water_members: int
+    high_water_certified_members: int
+    high_water_committed_unacknowledged_members: int
+    high_water_commit_receipts: int
     high_water_bytes: int
     high_water_table_backing_bytes: int
     retained_target_generations: int
@@ -263,6 +356,56 @@ class _PersistentSmbMemberFacts:
     integrity: str
 
 
+@dataclass(frozen=True, slots=True)
+class _PersistentSmbCertificationFacts:
+    dispatcher_id: str
+    group_id: int
+    generation_id: str
+    member_id: int
+    member_ordinal: int
+    phase: PersistentSmbProjectionPhase
+    operation_id: str
+    operation_binding_digest: str
+    capsule_digest: str
+    timing_context_digest: str
+    timing_receipt_digest: str
+    topology_generation_digest: str
+    target_formats: tuple[str, ...]
+    lifecycle_binding_digest: str
+    lifecycle_binding_generation: int
+    network_binding_digest: str
+    network_binding_generation: int
+    traffic_binding_digest: str
+    traffic_binding_generation: int
+    expected_timing_receipt: SourceTimingPreparationReceipt
+    integrity: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PersistentSmbCommitReceiptFacts:
+    dispatcher_id: str
+    group_id: int
+    generation_id: str
+    member_id: int
+    member_ordinal: int
+    phase: PersistentSmbProjectionPhase
+    operation_id: str
+    operation_binding_digest: str
+    capsule_digest: str
+    timing_context_digest: str
+    timing_receipt_digest: str
+    topology_generation_digest: str
+    target_formats: tuple[str, ...]
+    lifecycle_binding_digest: str
+    lifecycle_binding_generation: int
+    network_binding_digest: str
+    network_binding_generation: int
+    traffic_binding_digest: str
+    traffic_binding_generation: int
+    state: str
+    integrity: str
+
+
 @dataclass(slots=True)
 class _PersistentSmbMemberRecord:
     token: PersistentSmbProjectionMemberToken | None
@@ -275,6 +418,9 @@ class _PersistentSmbMemberRecord:
     facts: _PersistentSmbMemberFacts | None = None
     timing_binding: SourceTimingDetachedPreparationBinding | None = None
     timing_owner_ref: ReferenceType[SourceTimingPlanner] | None = None
+    certification: PersistentSmbProjectionMemberCertification | None = None
+    expected_timing_receipt: SourceTimingPreparationReceipt | None = None
+    commit_receipt: PersistentSmbProjectionMemberCommitReceipt | None = None
     state: str = "preparing"
 
 
@@ -317,7 +463,12 @@ class PersistentSmbProjectionGroupAuthority:
         self._groups: dict[int, _PersistentSmbGroupRecord] = {}
         self._group_token_locators: dict[int, int] = {}
         self._member_token_locators: dict[int, tuple[int, int]] = {}
+        self._certification_locators: dict[int, tuple[int, int]] = {}
+        self._commit_receipt_locators: dict[int, tuple[int, int]] = {}
         self._inactive_members = 0
+        self._certified_members = 0
+        self._committed_unacknowledged_members = 0
+        self._retained_commit_receipts = 0
         self._retained_bytes = 0
         self._retained_group_bytes = 0
         self._reserved_member_capacity = 0
@@ -325,11 +476,16 @@ class PersistentSmbProjectionGroupAuthority:
         self._reserved_byte_capacity = 0
         self._high_water_groups = 0
         self._high_water_members = 0
+        self._high_water_certified_members = 0
+        self._high_water_committed_unacknowledged_members = 0
+        self._high_water_commit_receipts = 0
         self._high_water_bytes = 0
         self._table_backing_bytes = self._dict_backing_bytes(
             self._groups,
             self._group_token_locators,
             self._member_token_locators,
+            self._certification_locators,
+            self._commit_receipt_locators,
         )
         self._high_water_table_backing_bytes = self._table_backing_bytes
 
@@ -414,6 +570,151 @@ class PersistentSmbProjectionGroupAuthority:
             timing.overlay_digest.encode("ascii"),
             timing.integrity.encode("ascii"),
             reservation.retained_bytes.to_bytes(8, "big"),
+        )
+        return hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def _timing_receipt_digest(receipt: object) -> str:
+        """Snapshot one exact timing receipt shell into callback-free scalar material."""
+
+        if type(receipt) is not SourceTimingPreparationReceipt:
+            raise EventContractError("Persistent SMB timing receipt requires its exact type")
+        try:
+            token = object.__getattribute__(receipt, "binding_token")
+            overlay_value = object.__getattribute__(receipt, "overlay_digest")
+            committed_value = object.__getattribute__(receipt, "committed_state_digest")
+            receipt_integrity_value = object.__getattribute__(receipt, "_integrity")
+            if type(token) is not SourceTimingPreparationToken:
+                raise EventContractError("Persistent SMB timing receipt token is malformed")
+            preparation_id = object.__getattribute__(token, "preparation_id")
+            base_value = object.__getattribute__(token, "base_state_digest")
+            token_integrity_value = object.__getattribute__(token, "_integrity")
+            preparation = _positive_int(preparation_id, "timing receipt preparation id")
+            base = _sha256_hex(base_value, "timing receipt base-state digest")
+            token_integrity = _sha256_hex(
+                token_integrity_value,
+                "timing receipt token integrity",
+            )
+            overlay = _sha256_hex(overlay_value, "timing receipt overlay digest")
+            committed = _sha256_hex(
+                committed_value,
+                "timing receipt committed-state digest",
+            )
+            receipt_integrity = _sha256_hex(
+                receipt_integrity_value,
+                "timing receipt integrity",
+            )
+        except (AttributeError, TypeError, ValueError) as error:
+            if type(error) is EventContractError:
+                raise
+            raise EventContractError("Persistent SMB timing receipt is malformed") from error
+        return hashlib.sha256(
+            _frame(
+                b"persistent-smb-timing-receipt-v1",
+                preparation.to_bytes(8, "big"),
+                base.encode("ascii"),
+                token_integrity.encode("ascii"),
+                overlay.encode("ascii"),
+                committed.encode("ascii"),
+                receipt_integrity.encode("ascii"),
+            )
+        ).hexdigest()
+
+    @staticmethod
+    def _activation_payload(
+        *,
+        namespace: bytes,
+        member: _PersistentSmbMemberFacts,
+        timing_receipt_digest: str,
+        topology_generation_digest: str,
+        target_formats: tuple[str, ...],
+        lifecycle_binding_digest: str,
+        lifecycle_binding_generation: int,
+        network_binding_digest: str,
+        network_binding_generation: int,
+        traffic_binding_digest: str,
+        traffic_binding_generation: int,
+        state: str,
+    ) -> bytes:
+        values = [
+            namespace,
+            member.dispatcher_id.encode("ascii"),
+            member.group_id.to_bytes(8, "big"),
+            member.generation_id.encode("ascii"),
+            member.member_id.to_bytes(8, "big"),
+            member.member_ordinal.to_bytes(8, "big"),
+            member.phase.value.encode("ascii"),
+            member.operation_id.encode("utf-8"),
+            member.operation_binding_digest.encode("ascii"),
+            member.capsule_digest.encode("ascii"),
+            member.timing_context_digest.encode("ascii"),
+            timing_receipt_digest.encode("ascii"),
+            topology_generation_digest.encode("ascii"),
+            len(target_formats).to_bytes(8, "big"),
+        ]
+        values.extend(target.encode("ascii") for target in target_formats)
+        values.extend(
+            (
+                lifecycle_binding_digest.encode("ascii"),
+                lifecycle_binding_generation.to_bytes(8, "big"),
+                network_binding_digest.encode("ascii"),
+                network_binding_generation.to_bytes(8, "big"),
+                traffic_binding_digest.encode("ascii"),
+                traffic_binding_generation.to_bytes(8, "big"),
+                state.encode("ascii"),
+            )
+        )
+        return _frame(*values)
+
+    def _certification_integrity(
+        self,
+        *,
+        member: _PersistentSmbMemberFacts,
+        timing_receipt_digest: str,
+        topology_generation_digest: str,
+        target_formats: tuple[str, ...],
+        lifecycle_binding_digest: str,
+        lifecycle_binding_generation: int,
+        network_binding_digest: str,
+        network_binding_generation: int,
+        traffic_binding_digest: str,
+        traffic_binding_generation: int,
+    ) -> str:
+        payload = self._activation_payload(
+            namespace=b"persistent-smb-projection-certification-v1",
+            member=member,
+            timing_receipt_digest=timing_receipt_digest,
+            topology_generation_digest=topology_generation_digest,
+            target_formats=target_formats,
+            lifecycle_binding_digest=lifecycle_binding_digest,
+            lifecycle_binding_generation=lifecycle_binding_generation,
+            network_binding_digest=network_binding_digest,
+            network_binding_generation=network_binding_generation,
+            traffic_binding_digest=traffic_binding_digest,
+            traffic_binding_generation=traffic_binding_generation,
+            state="certified",
+        )
+        return hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
+
+    def _commit_receipt_integrity(
+        self,
+        *,
+        member: _PersistentSmbMemberFacts,
+        certification: _PersistentSmbCertificationFacts,
+    ) -> str:
+        payload = self._activation_payload(
+            namespace=b"persistent-smb-projection-member-commit-v1",
+            member=member,
+            timing_receipt_digest=certification.timing_receipt_digest,
+            topology_generation_digest=certification.topology_generation_digest,
+            target_formats=certification.target_formats,
+            lifecycle_binding_digest=certification.lifecycle_binding_digest,
+            lifecycle_binding_generation=certification.lifecycle_binding_generation,
+            network_binding_digest=certification.network_binding_digest,
+            network_binding_generation=certification.network_binding_generation,
+            traffic_binding_digest=certification.traffic_binding_digest,
+            traffic_binding_generation=certification.traffic_binding_generation,
+            state="committed_unacknowledged",
         )
         return hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
 
@@ -729,6 +1030,347 @@ class PersistentSmbProjectionGroupAuthority:
         except BaseException:
             return None
 
+    def _snapshot_certification(
+        self,
+        carrier: object,
+    ) -> _PersistentSmbCertificationFacts | None:
+        """Snapshot one exact certification without invoking caller behavior."""
+
+        if type(carrier) is not PersistentSmbProjectionMemberCertification:
+            return None
+        try:
+            values = tuple(
+                object.__getattribute__(carrier, name)
+                for name in (
+                    "dispatcher_id",
+                    "group_id",
+                    "generation_id",
+                    "member_id",
+                    "member_ordinal",
+                    "phase",
+                    "operation_id",
+                    "operation_binding_digest",
+                    "capsule_digest",
+                    "timing_context_digest",
+                    "timing_receipt_digest",
+                    "topology_generation_digest",
+                    "target_formats",
+                    "lifecycle_binding_digest",
+                    "lifecycle_binding_generation",
+                    "network_binding_digest",
+                    "network_binding_generation",
+                    "traffic_binding_digest",
+                    "traffic_binding_generation",
+                    "expected_timing_receipt",
+                    "_integrity",
+                )
+            )
+            (
+                dispatcher_id,
+                group_id,
+                generation_value,
+                member_id,
+                member_ordinal,
+                phase,
+                operation_value,
+                operation_binding_value,
+                capsule_value,
+                timing_context_value,
+                timing_receipt_value,
+                topology_value,
+                targets_value,
+                lifecycle_value,
+                lifecycle_generation,
+                network_value,
+                network_generation,
+                traffic_value,
+                traffic_generation,
+                expected_receipt,
+                integrity,
+            ) = values
+            if (
+                type(dispatcher_id) is not str
+                or dispatcher_id != self._dispatcher_id
+                or type(group_id) is not int
+                or group_id < 1
+                or type(member_id) is not int
+                or member_id < 1
+                or type(member_ordinal) is not int
+                or member_ordinal < 0
+                or type(phase) is not PersistentSmbProjectionPhase
+                or type(expected_receipt) is not SourceTimingPreparationReceipt
+                or type(integrity) is not str
+            ):
+                return None
+            generation = _sha256_hex(generation_value, "certification generation id")
+            operation = _bounded_text(
+                operation_value,
+                "certification operation id",
+                _MAX_OPERATION_ID_UTF8_BYTES,
+            )
+            operation_binding = _sha256_hex(
+                operation_binding_value,
+                "certification operation binding digest",
+            )
+            capsule = _sha256_hex(capsule_value, "certification capsule digest")
+            timing_context = _sha256_hex(
+                timing_context_value,
+                "certification timing context digest",
+            )
+            timing_receipt = _sha256_hex(
+                timing_receipt_value,
+                "certification timing receipt digest",
+            )
+            if timing_receipt != self._timing_receipt_digest(expected_receipt):
+                return None
+            topology = _sha256_hex(
+                topology_value,
+                "certification topology generation digest",
+            )
+            targets = _target_formats(targets_value)
+            lifecycle = _sha256_hex(
+                lifecycle_value,
+                "certification lifecycle binding digest",
+            )
+            lifecycle_gen = _positive_int(
+                lifecycle_generation,
+                "certification lifecycle binding generation",
+            )
+            network = _sha256_hex(network_value, "certification network binding digest")
+            network_gen = _positive_int(
+                network_generation,
+                "certification network binding generation",
+            )
+            traffic = _sha256_hex(traffic_value, "certification traffic binding digest")
+            traffic_gen = _positive_int(
+                traffic_generation,
+                "certification traffic binding generation",
+            )
+            integrity_digest = _sha256_hex(integrity, "certification integrity")
+            return _PersistentSmbCertificationFacts(
+                dispatcher_id=dispatcher_id,
+                group_id=group_id,
+                generation_id=generation,
+                member_id=member_id,
+                member_ordinal=member_ordinal,
+                phase=phase,
+                operation_id=operation,
+                operation_binding_digest=operation_binding,
+                capsule_digest=capsule,
+                timing_context_digest=timing_context,
+                timing_receipt_digest=timing_receipt,
+                topology_generation_digest=topology,
+                target_formats=targets,
+                lifecycle_binding_digest=lifecycle,
+                lifecycle_binding_generation=lifecycle_gen,
+                network_binding_digest=network,
+                network_binding_generation=network_gen,
+                traffic_binding_digest=traffic,
+                traffic_binding_generation=traffic_gen,
+                expected_timing_receipt=expected_receipt,
+                integrity=integrity_digest,
+            )
+        except BaseException:
+            return None
+
+    def _snapshot_commit_receipt(
+        self,
+        receipt: object,
+    ) -> _PersistentSmbCommitReceiptFacts | None:
+        """Snapshot one exact committed receipt without caller callbacks."""
+
+        if type(receipt) is not PersistentSmbProjectionMemberCommitReceipt:
+            return None
+        try:
+            values = tuple(
+                object.__getattribute__(receipt, name)
+                for name in (
+                    "dispatcher_id",
+                    "group_id",
+                    "generation_id",
+                    "member_id",
+                    "member_ordinal",
+                    "phase",
+                    "operation_id",
+                    "operation_binding_digest",
+                    "capsule_digest",
+                    "timing_context_digest",
+                    "timing_receipt_digest",
+                    "topology_generation_digest",
+                    "target_formats",
+                    "lifecycle_binding_digest",
+                    "lifecycle_binding_generation",
+                    "network_binding_digest",
+                    "network_binding_generation",
+                    "traffic_binding_digest",
+                    "traffic_binding_generation",
+                    "state",
+                    "_integrity",
+                )
+            )
+            (
+                dispatcher_id,
+                group_id,
+                generation_value,
+                member_id,
+                member_ordinal,
+                phase,
+                operation_value,
+                operation_binding_value,
+                capsule_value,
+                timing_context_value,
+                timing_receipt_value,
+                topology_value,
+                targets_value,
+                lifecycle_value,
+                lifecycle_generation,
+                network_value,
+                network_generation,
+                traffic_value,
+                traffic_generation,
+                state,
+                integrity,
+            ) = values
+            if (
+                type(dispatcher_id) is not str
+                or dispatcher_id != self._dispatcher_id
+                or type(group_id) is not int
+                or group_id < 1
+                or type(member_id) is not int
+                or member_id < 1
+                or type(member_ordinal) is not int
+                or member_ordinal < 0
+                or type(phase) is not PersistentSmbProjectionPhase
+                or type(state) is not str
+                or state != "committed_unacknowledged"
+                or type(integrity) is not str
+            ):
+                return None
+            return _PersistentSmbCommitReceiptFacts(
+                dispatcher_id=dispatcher_id,
+                group_id=group_id,
+                generation_id=_sha256_hex(generation_value, "commit generation id"),
+                member_id=member_id,
+                member_ordinal=member_ordinal,
+                phase=phase,
+                operation_id=_bounded_text(
+                    operation_value,
+                    "commit operation id",
+                    _MAX_OPERATION_ID_UTF8_BYTES,
+                ),
+                operation_binding_digest=_sha256_hex(
+                    operation_binding_value,
+                    "commit operation binding digest",
+                ),
+                capsule_digest=_sha256_hex(capsule_value, "commit capsule digest"),
+                timing_context_digest=_sha256_hex(
+                    timing_context_value,
+                    "commit timing context digest",
+                ),
+                timing_receipt_digest=_sha256_hex(
+                    timing_receipt_value,
+                    "commit timing receipt digest",
+                ),
+                topology_generation_digest=_sha256_hex(
+                    topology_value,
+                    "commit topology generation digest",
+                ),
+                target_formats=_target_formats(targets_value),
+                lifecycle_binding_digest=_sha256_hex(
+                    lifecycle_value,
+                    "commit lifecycle binding digest",
+                ),
+                lifecycle_binding_generation=_positive_int(
+                    lifecycle_generation,
+                    "commit lifecycle binding generation",
+                ),
+                network_binding_digest=_sha256_hex(
+                    network_value,
+                    "commit network binding digest",
+                ),
+                network_binding_generation=_positive_int(
+                    network_generation,
+                    "commit network binding generation",
+                ),
+                traffic_binding_digest=_sha256_hex(
+                    traffic_value,
+                    "commit traffic binding digest",
+                ),
+                traffic_binding_generation=_positive_int(
+                    traffic_generation,
+                    "commit traffic binding generation",
+                ),
+                state=state,
+                integrity=_sha256_hex(integrity, "commit receipt integrity"),
+            )
+        except BaseException:
+            return None
+
+    def _certification_facts_match(
+        self,
+        snapshot: _PersistentSmbCertificationFacts,
+        member: _PersistentSmbMemberFacts,
+    ) -> bool:
+        expected = self._certification_integrity(
+            member=member,
+            timing_receipt_digest=snapshot.timing_receipt_digest,
+            topology_generation_digest=snapshot.topology_generation_digest,
+            target_formats=snapshot.target_formats,
+            lifecycle_binding_digest=snapshot.lifecycle_binding_digest,
+            lifecycle_binding_generation=snapshot.lifecycle_binding_generation,
+            network_binding_digest=snapshot.network_binding_digest,
+            network_binding_generation=snapshot.network_binding_generation,
+            traffic_binding_digest=snapshot.traffic_binding_digest,
+            traffic_binding_generation=snapshot.traffic_binding_generation,
+        )
+        return bool(
+            snapshot.dispatcher_id == member.dispatcher_id
+            and snapshot.group_id == member.group_id
+            and snapshot.generation_id == member.generation_id
+            and snapshot.member_id == member.member_id
+            and snapshot.member_ordinal == member.member_ordinal
+            and snapshot.phase is member.phase
+            and snapshot.operation_id == member.operation_id
+            and snapshot.operation_binding_digest == member.operation_binding_digest
+            and snapshot.capsule_digest == member.capsule_digest
+            and snapshot.timing_context_digest == member.timing_context_digest
+            and hmac.compare_digest(snapshot.integrity, expected)
+        )
+
+    def _commit_receipt_facts_match(
+        self,
+        snapshot: _PersistentSmbCommitReceiptFacts,
+        member: _PersistentSmbMemberFacts,
+        certification: _PersistentSmbCertificationFacts,
+    ) -> bool:
+        expected = self._commit_receipt_integrity(
+            member=member,
+            certification=certification,
+        )
+        return bool(
+            snapshot.dispatcher_id == member.dispatcher_id
+            and snapshot.group_id == member.group_id
+            and snapshot.generation_id == member.generation_id
+            and snapshot.member_id == member.member_id
+            and snapshot.member_ordinal == member.member_ordinal
+            and snapshot.phase is member.phase
+            and snapshot.operation_id == member.operation_id
+            and snapshot.operation_binding_digest == member.operation_binding_digest
+            and snapshot.capsule_digest == member.capsule_digest
+            and snapshot.timing_context_digest == member.timing_context_digest
+            and snapshot.timing_receipt_digest == certification.timing_receipt_digest
+            and snapshot.topology_generation_digest == certification.topology_generation_digest
+            and snapshot.target_formats == certification.target_formats
+            and snapshot.lifecycle_binding_digest == certification.lifecycle_binding_digest
+            and snapshot.lifecycle_binding_generation == certification.lifecycle_binding_generation
+            and snapshot.network_binding_digest == certification.network_binding_digest
+            and snapshot.network_binding_generation == certification.network_binding_generation
+            and snapshot.traffic_binding_digest == certification.traffic_binding_digest
+            and snapshot.traffic_binding_generation == certification.traffic_binding_generation
+            and snapshot.state == "committed_unacknowledged"
+            and hmac.compare_digest(snapshot.integrity, expected)
+        )
+
     def _group_for_token_locked(
         self,
         token: PersistentSmbProjectionGroupToken,
@@ -762,6 +1404,42 @@ class PersistentSmbProjectionGroupAuthority:
             return None
         return group, member
 
+    def _member_for_certification_locked(
+        self,
+        carrier: PersistentSmbProjectionMemberCertification,
+    ) -> tuple[_PersistentSmbGroupRecord, _PersistentSmbMemberRecord] | None:
+        locator = self._certification_locators.get(id(carrier))
+        if locator is None:
+            return None
+        group = self._groups.get(locator[0])
+        member = group.members.get(locator[1]) if group is not None else None
+        if (
+            group is None
+            or group.owner_ref() is not self
+            or member is None
+            or member.certification is not carrier
+        ):
+            return None
+        return group, member
+
+    def _member_for_commit_receipt_locked(
+        self,
+        receipt: PersistentSmbProjectionMemberCommitReceipt,
+    ) -> tuple[_PersistentSmbGroupRecord, _PersistentSmbMemberRecord] | None:
+        locator = self._commit_receipt_locators.get(id(receipt))
+        if locator is None:
+            return None
+        group = self._groups.get(locator[0])
+        member = group.members.get(locator[1]) if group is not None else None
+        if (
+            group is None
+            or group.owner_ref() is not self
+            or member is None
+            or member.commit_receipt is not receipt
+        ):
+            return None
+        return group, member
+
     def _preflight_group_capacity_locked(
         self,
         *,
@@ -786,7 +1464,7 @@ class PersistentSmbProjectionGroupAuthority:
         group: _PersistentSmbGroupRecord,
         member: _PersistentSmbMemberRecord,
     ) -> None:
-        """Remove one trusted preparing/inactive member and all live charges."""
+        """Remove one trusted member and every locator and live charge."""
 
         member_id = member.reservation.member_id
         operation = member.reservation.operation_id
@@ -795,11 +1473,23 @@ class PersistentSmbProjectionGroupAuthority:
             group.members,
             group.member_by_operation,
             self._member_token_locators,
+            self._certification_locators,
+            self._commit_receipt_locators,
         )
         if token is not None:
             locator = self._member_token_locators.get(id(token))
             if locator == (group.facts.group_id, member_id):
                 self._member_token_locators.pop(id(token), None)
+        certification = member.certification
+        if certification is not None:
+            locator = self._certification_locators.get(id(certification))
+            if locator == (group.facts.group_id, member_id):
+                self._certification_locators.pop(id(certification), None)
+        commit_receipt = member.commit_receipt
+        if commit_receipt is not None:
+            locator = self._commit_receipt_locators.get(id(commit_receipt))
+            if locator == (group.facts.group_id, member_id):
+                self._commit_receipt_locators.pop(id(commit_receipt), None)
         group.members.pop(member_id, None)
         if group.member_by_operation.get(operation) == member_id:
             group.member_by_operation.pop(operation, None)
@@ -809,21 +1499,39 @@ class PersistentSmbProjectionGroupAuthority:
             group.member_by_operation.clear()
         if not self._member_token_locators:
             self._member_token_locators.clear()
+        if not self._certification_locators:
+            self._certification_locators.clear()
+        if not self._commit_receipt_locators:
+            self._commit_receipt_locators.clear()
         maps_after = self._dict_backing_bytes(
             group.members,
             group.member_by_operation,
             self._member_token_locators,
+            self._certification_locators,
+            self._commit_receipt_locators,
         )
         self._record_table_delta_locked(maps_before, maps_after)
         group.member_bytes -= member.retained_bytes
         group.retained_bytes -= member.retained_bytes
         self._retained_bytes -= member.retained_bytes
-        self._inactive_members -= 1
+        if member.state in {"preparing", "inactive", "cancelling_inactive", "cancelling"}:
+            self._inactive_members -= 1
+        elif member.state in {"certified", "cancelling_certified"}:
+            self._certified_members -= 1
+        elif member.state in {"committed_unacknowledged", "acknowledging"}:
+            self._committed_unacknowledged_members -= 1
+        else:
+            raise EventContractError("Persistent SMB member has an invalid retained state")
+        if commit_receipt is not None:
+            self._retained_commit_receipts -= 1
         member.token = None
         member.capsule = None
         member.facts = None
         member.timing_binding = None
         member.timing_owner_ref = None
+        member.certification = None
+        member.expected_timing_receipt = None
+        member.commit_receipt = None
         member.state = "cancelled"
 
     @staticmethod
@@ -1328,6 +2036,540 @@ class PersistentSmbProjectionGroupAuthority:
                 and self._member_facts_match(final_snapshot[0], trusted)
             )
 
+    def certify_member(
+        self,
+        token: PersistentSmbProjectionMemberToken,
+        *,
+        target_formats: tuple[str, ...],
+        lifecycle_binding_digest: str,
+        lifecycle_binding_generation: int,
+        network_binding_digest: str,
+        network_binding_generation: int,
+        traffic_binding_digest: str,
+        traffic_binding_generation: int,
+        topology_generation_digest: str,
+        timing_planner: SourceTimingPlanner,
+        expected_timing_receipt: SourceTimingPreparationReceipt,
+    ) -> PersistentSmbProjectionMemberCertification:
+        """Claim one inactive member for exact owner bindings and target intent."""
+
+        if type(timing_planner) is not SourceTimingPlanner:
+            raise EventContractError("Persistent SMB timing planner requires its exact owner type")
+        targets = _target_formats(target_formats)
+        lifecycle_digest = _sha256_hex(
+            lifecycle_binding_digest,
+            "persistent SMB lifecycle binding digest",
+        )
+        lifecycle_generation = _positive_int(
+            lifecycle_binding_generation,
+            "persistent SMB lifecycle binding generation",
+        )
+        network_digest = _sha256_hex(
+            network_binding_digest,
+            "persistent SMB network binding digest",
+        )
+        network_generation = _positive_int(
+            network_binding_generation,
+            "persistent SMB network binding generation",
+        )
+        traffic_digest = _sha256_hex(
+            traffic_binding_digest,
+            "persistent SMB traffic binding digest",
+        )
+        traffic_generation = _positive_int(
+            traffic_binding_generation,
+            "persistent SMB traffic binding generation",
+        )
+        topology_digest = _sha256_hex(
+            topology_generation_digest,
+            "persistent SMB topology generation digest",
+        )
+        timing_receipt_digest = self._timing_receipt_digest(expected_timing_receipt)
+        token_snapshot = self._snapshot_member_token(token)
+        if token_snapshot is None:
+            raise EventContractError("Persistent SMB member is foreign, copied, or stale")
+        snapshot_facts, snapshot_binding = token_snapshot
+
+        def request_matches(existing: _PersistentSmbCertificationFacts) -> bool:
+            return bool(
+                existing.target_formats == targets
+                and existing.lifecycle_binding_digest == lifecycle_digest
+                and existing.lifecycle_binding_generation == lifecycle_generation
+                and existing.network_binding_digest == network_digest
+                and existing.network_binding_generation == network_generation
+                and existing.traffic_binding_digest == traffic_digest
+                and existing.traffic_binding_generation == traffic_generation
+                and existing.topology_generation_digest == topology_digest
+                and existing.timing_receipt_digest == timing_receipt_digest
+                and existing.expected_timing_receipt is expected_timing_receipt
+            )
+
+        with self._lock:
+            located = self._member_for_token_locked(token)
+            if located is None:
+                raise EventContractError("Persistent SMB member is foreign, copied, or stale")
+            group, member = located
+            facts = member.facts
+            if facts is None or not self._member_facts_match(snapshot_facts, facts):
+                raise EventContractError("Persistent SMB member is foreign, copied, or stale")
+            if member.state in {"certified", "committed_unacknowledged"}:
+                existing = member.certification
+                existing_snapshot = self._snapshot_certification(existing)
+                if (
+                    existing is not None
+                    and existing_snapshot is not None
+                    and self._certification_facts_match(existing_snapshot, facts)
+                    and request_matches(existing_snapshot)
+                ):
+                    return existing
+                raise EventContractError(
+                    "Persistent SMB member already has different certified facts"
+                )
+            if member.state != "inactive":
+                raise EventContractError("Persistent SMB member is not inactive")
+            binding = member.timing_binding
+            timing_owner_ref = member.timing_owner_ref
+            if (
+                binding is None
+                or binding is not snapshot_binding
+                or timing_owner_ref is None
+                or timing_owner_ref() is not timing_planner
+            ):
+                raise EventContractError("Persistent SMB member has a stale timing binding")
+            group_id = group.facts.group_id
+            member_id = facts.member_id
+            context_digest = facts.timing_context_digest
+
+        if not timing_planner.authenticates_expected_detached_preparation_binding(
+            binding,
+            expected_timing_receipt,
+            context_digest=context_digest,
+        ):
+            raise EventContractError(
+                "Persistent SMB member expected source timing is foreign, committed, or stale"
+            )
+
+        integrity = self._certification_integrity(
+            member=facts,
+            timing_receipt_digest=timing_receipt_digest,
+            topology_generation_digest=topology_digest,
+            target_formats=targets,
+            lifecycle_binding_digest=lifecycle_digest,
+            lifecycle_binding_generation=lifecycle_generation,
+            network_binding_digest=network_digest,
+            network_binding_generation=network_generation,
+            traffic_binding_digest=traffic_digest,
+            traffic_binding_generation=traffic_generation,
+        )
+        certification = PersistentSmbProjectionMemberCertification(
+            dispatcher_id=facts.dispatcher_id,
+            group_id=facts.group_id,
+            generation_id=facts.generation_id,
+            member_id=facts.member_id,
+            member_ordinal=facts.member_ordinal,
+            phase=facts.phase,
+            operation_id=facts.operation_id,
+            operation_binding_digest=facts.operation_binding_digest,
+            capsule_digest=facts.capsule_digest,
+            timing_context_digest=facts.timing_context_digest,
+            timing_receipt_digest=timing_receipt_digest,
+            topology_generation_digest=topology_digest,
+            target_formats=targets,
+            lifecycle_binding_digest=lifecycle_digest,
+            lifecycle_binding_generation=lifecycle_generation,
+            network_binding_digest=network_digest,
+            network_binding_generation=network_generation,
+            traffic_binding_digest=traffic_digest,
+            traffic_binding_generation=traffic_generation,
+            expected_timing_receipt=expected_timing_receipt,
+            _integrity=integrity,
+        )
+        with self._lock:
+            retained_group = self._groups.get(group_id)
+            retained = retained_group.members.get(member_id) if retained_group is not None else None
+            if (
+                retained_group is not group
+                or retained is not member
+                or retained.state != "inactive"
+                or retained.facts is not facts
+                or retained.timing_binding is not binding
+                or retained.timing_owner_ref is not timing_owner_ref
+                or timing_owner_ref() is not timing_planner
+            ):
+                if retained is member and retained.state in {
+                    "certified",
+                    "committed_unacknowledged",
+                }:
+                    existing = retained.certification
+                    existing_snapshot = self._snapshot_certification(existing)
+                    if (
+                        existing is not None
+                        and existing_snapshot is not None
+                        and self._certification_facts_match(existing_snapshot, facts)
+                        and request_matches(existing_snapshot)
+                    ):
+                        return existing
+                raise EventContractError("Persistent SMB member changed during certification")
+            maps_before = self._dict_backing_bytes(self._certification_locators)
+            try:
+                self._certification_locators[id(certification)] = (group_id, member_id)
+            except BaseException:
+                self._certification_locators.pop(id(certification), None)
+                self._record_table_delta_locked(
+                    maps_before,
+                    self._dict_backing_bytes(self._certification_locators),
+                )
+                raise
+            self._record_table_delta_locked(
+                maps_before,
+                self._dict_backing_bytes(self._certification_locators),
+            )
+            member.certification = certification
+            member.expected_timing_receipt = expected_timing_receipt
+            member.state = "certified"
+            self._inactive_members -= 1
+            self._certified_members += 1
+            self._high_water_certified_members = max(
+                self._high_water_certified_members,
+                self._certified_members,
+            )
+            return certification
+
+    def commit_member(
+        self,
+        certification: PersistentSmbProjectionMemberCertification,
+        *,
+        timing_planner: SourceTimingPlanner,
+    ) -> PersistentSmbProjectionMemberCommitReceipt:
+        """Commit one certified member after its exact source timing commits."""
+
+        if type(timing_planner) is not SourceTimingPlanner:
+            raise EventContractError("Persistent SMB timing planner requires its exact owner type")
+        certification_snapshot = self._snapshot_certification(certification)
+        if certification_snapshot is None:
+            raise EventContractError(
+                "Persistent SMB certification is copied, foreign, tampered, or stale"
+            )
+        with self._lock:
+            located = self._member_for_certification_locked(certification)
+            if located is None:
+                raise EventContractError(
+                    "Persistent SMB certification is copied, foreign, tampered, or stale"
+                )
+            group, member = located
+            facts = member.facts
+            if (
+                facts is None
+                or member.state not in {"certified", "committed_unacknowledged"}
+                or member.expected_timing_receipt
+                is not certification_snapshot.expected_timing_receipt
+                or not self._certification_facts_match(certification_snapshot, facts)
+            ):
+                raise EventContractError(
+                    "Persistent SMB certification is copied, foreign, tampered, or stale"
+                )
+            binding = member.timing_binding
+            timing_owner_ref = member.timing_owner_ref
+            if (
+                binding is None
+                or timing_owner_ref is None
+                or timing_owner_ref() is not timing_planner
+            ):
+                raise EventContractError("Persistent SMB certification has stale source timing")
+            existing_receipt = member.commit_receipt
+            group_id = group.facts.group_id
+            member_id = facts.member_id
+
+        if not timing_planner.authenticates_committed_detached_preparation_binding(
+            binding,
+            certification_snapshot.expected_timing_receipt,
+            context_digest=facts.timing_context_digest,
+        ):
+            if timing_planner.authenticates_expected_detached_preparation_binding(
+                binding,
+                certification_snapshot.expected_timing_receipt,
+                context_digest=facts.timing_context_digest,
+            ):
+                raise EventContractError("Persistent SMB source timing is not committed")
+            raise EventContractError("Persistent SMB source timing is foreign, tampered, or stale")
+
+        if existing_receipt is not None:
+            receipt_snapshot = self._snapshot_commit_receipt(existing_receipt)
+            if receipt_snapshot is None or not self._commit_receipt_facts_match(
+                receipt_snapshot,
+                facts,
+                certification_snapshot,
+            ):
+                raise EventContractError("Persistent SMB committed receipt is tampered or stale")
+            with self._lock:
+                retained = self._member_for_certification_locked(certification)
+                if (
+                    retained is None
+                    or retained[0] is not group
+                    or retained[1] is not member
+                    or member.state != "committed_unacknowledged"
+                    or member.commit_receipt is not existing_receipt
+                ):
+                    raise EventContractError("Persistent SMB committed member changed or is stale")
+                return existing_receipt
+
+        integrity = self._commit_receipt_integrity(
+            member=facts,
+            certification=certification_snapshot,
+        )
+        receipt = PersistentSmbProjectionMemberCommitReceipt(
+            dispatcher_id=facts.dispatcher_id,
+            group_id=facts.group_id,
+            generation_id=facts.generation_id,
+            member_id=facts.member_id,
+            member_ordinal=facts.member_ordinal,
+            phase=facts.phase,
+            operation_id=facts.operation_id,
+            operation_binding_digest=facts.operation_binding_digest,
+            capsule_digest=facts.capsule_digest,
+            timing_context_digest=facts.timing_context_digest,
+            timing_receipt_digest=certification_snapshot.timing_receipt_digest,
+            topology_generation_digest=certification_snapshot.topology_generation_digest,
+            target_formats=certification_snapshot.target_formats,
+            lifecycle_binding_digest=certification_snapshot.lifecycle_binding_digest,
+            lifecycle_binding_generation=certification_snapshot.lifecycle_binding_generation,
+            network_binding_digest=certification_snapshot.network_binding_digest,
+            network_binding_generation=certification_snapshot.network_binding_generation,
+            traffic_binding_digest=certification_snapshot.traffic_binding_digest,
+            traffic_binding_generation=certification_snapshot.traffic_binding_generation,
+            state="committed_unacknowledged",
+            _integrity=integrity,
+        )
+        with self._lock:
+            retained_group = self._groups.get(group_id)
+            retained = retained_group.members.get(member_id) if retained_group is not None else None
+            if (
+                retained_group is not group
+                or retained is not member
+                or retained.state != "certified"
+                or retained.certification is not certification
+                or retained.commit_receipt is not None
+                or retained.timing_binding is not binding
+                or retained.timing_owner_ref is not timing_owner_ref
+                or timing_owner_ref() is not timing_planner
+            ):
+                if (
+                    retained is member
+                    and retained.state == "committed_unacknowledged"
+                    and retained.commit_receipt is not None
+                ):
+                    return retained.commit_receipt
+                raise EventContractError("Persistent SMB member changed during commit")
+            maps_before = self._dict_backing_bytes(self._commit_receipt_locators)
+            try:
+                self._commit_receipt_locators[id(receipt)] = (group_id, member_id)
+            except BaseException:
+                self._commit_receipt_locators.pop(id(receipt), None)
+                self._record_table_delta_locked(
+                    maps_before,
+                    self._dict_backing_bytes(self._commit_receipt_locators),
+                )
+                raise
+            self._record_table_delta_locked(
+                maps_before,
+                self._dict_backing_bytes(self._commit_receipt_locators),
+            )
+            member.commit_receipt = receipt
+            member.state = "committed_unacknowledged"
+            self._certified_members -= 1
+            self._committed_unacknowledged_members += 1
+            self._retained_commit_receipts += 1
+            self._high_water_committed_unacknowledged_members = max(
+                self._high_water_committed_unacknowledged_members,
+                self._committed_unacknowledged_members,
+            )
+            self._high_water_commit_receipts = max(
+                self._high_water_commit_receipts,
+                self._retained_commit_receipts,
+            )
+            return receipt
+
+    def recover_committed_member(
+        self,
+        group: PersistentSmbProjectionGroupToken,
+        *,
+        operation_id: str,
+        operation_binding_digest: str,
+        timing_planner: SourceTimingPlanner,
+    ) -> PersistentSmbProjectionCommittedMemberRecovery:
+        """Resolve one exact same-operation committed lost return in O(1)."""
+
+        if type(group) is not PersistentSmbProjectionGroupToken:
+            raise EventContractError("Persistent SMB projection group is foreign, copied, or stale")
+        operation = _bounded_text(
+            operation_id,
+            "persistent SMB operation id",
+            _MAX_OPERATION_ID_UTF8_BYTES,
+        )
+        owner_digest = _sha256_hex(
+            operation_binding_digest,
+            "persistent SMB operation binding digest",
+        )
+        if type(timing_planner) is not SourceTimingPlanner:
+            raise EventContractError("Persistent SMB timing planner requires its exact owner type")
+        with self._lock:
+            retained_group = self._group_for_token_locked(group)
+            if retained_group is None:
+                raise EventContractError(
+                    "Persistent SMB committed recovery is foreign, copied, or stale"
+                )
+            member_id = retained_group.member_by_operation.get(operation)
+            member = retained_group.members.get(member_id) if member_id is not None else None
+            if member is None or member.state != "committed_unacknowledged":
+                raise EventContractError("Persistent SMB operation is not committed")
+            facts = member.facts
+            certification = member.certification
+            receipt = member.commit_receipt
+            binding = member.timing_binding
+            timing_owner_ref = member.timing_owner_ref
+            if (
+                facts is None
+                or facts.operation_binding_digest != owner_digest
+                or certification is None
+                or receipt is None
+                or binding is None
+                or timing_owner_ref is None
+                or timing_owner_ref() is not timing_planner
+            ):
+                raise EventContractError("Persistent SMB committed recovery is tampered or stale")
+
+        certification_snapshot = self._snapshot_certification(certification)
+        receipt_snapshot = self._snapshot_commit_receipt(receipt)
+        if (
+            certification_snapshot is None
+            or receipt_snapshot is None
+            or not self._certification_facts_match(certification_snapshot, facts)
+            or not self._commit_receipt_facts_match(
+                receipt_snapshot,
+                facts,
+                certification_snapshot,
+            )
+            or not timing_planner.authenticates_committed_detached_preparation_binding(
+                binding,
+                certification_snapshot.expected_timing_receipt,
+                context_digest=facts.timing_context_digest,
+            )
+        ):
+            raise EventContractError("Persistent SMB committed recovery is tampered or stale")
+        with self._lock:
+            current_group = self._group_for_token_locked(group)
+            current = current_group.members.get(member_id) if current_group is not None else None
+            if (
+                current_group is not retained_group
+                or current is not member
+                or current.state != "committed_unacknowledged"
+                or current.commit_receipt is not receipt
+                or current.certification is not certification
+                or current.timing_binding is not binding
+            ):
+                raise EventContractError("Persistent SMB committed recovery changed or is stale")
+            return PersistentSmbProjectionCommittedMemberRecovery(
+                commit_receipt=receipt,
+                state="committed_unacknowledged",
+            )
+
+    def acknowledge_member(
+        self,
+        receipt: PersistentSmbProjectionMemberCommitReceipt,
+        *,
+        expected_generation_id: str,
+        timing_planner: SourceTimingPlanner,
+    ) -> bool:
+        """Generation-CAS acknowledge one exact durable member handoff."""
+
+        if type(timing_planner) is not SourceTimingPlanner:
+            return False
+        try:
+            generation = _sha256_hex(
+                expected_generation_id,
+                "persistent SMB expected generation id",
+            )
+        except EventContractError:
+            return False
+        receipt_snapshot = self._snapshot_commit_receipt(receipt)
+        if receipt_snapshot is None or receipt_snapshot.generation_id != generation:
+            return False
+        with self._lock:
+            located = self._member_for_commit_receipt_locked(receipt)
+            if located is None:
+                return False
+            group, member = located
+            if member.state != "committed_unacknowledged":
+                return False
+            facts = member.facts
+            certification = member.certification
+            binding = member.timing_binding
+            timing_owner_ref = member.timing_owner_ref
+            if (
+                facts is None
+                or certification is None
+                or binding is None
+                or timing_owner_ref is None
+                or timing_owner_ref() is not timing_planner
+                or facts.generation_id != generation
+            ):
+                return False
+            group_id = group.facts.group_id
+            member_id = facts.member_id
+        certification_snapshot = self._snapshot_certification(certification)
+        if (
+            certification_snapshot is None
+            or not self._certification_facts_match(certification_snapshot, facts)
+            or not self._commit_receipt_facts_match(
+                receipt_snapshot,
+                facts,
+                certification_snapshot,
+            )
+            or not timing_planner.authenticates_committed_detached_preparation_binding(
+                binding,
+                certification_snapshot.expected_timing_receipt,
+                context_digest=facts.timing_context_digest,
+            )
+        ):
+            return False
+        with self._lock:
+            current_group = self._groups.get(group_id)
+            current = current_group.members.get(member_id) if current_group is not None else None
+            if (
+                current_group is not group
+                or current is not member
+                or current.state != "committed_unacknowledged"
+                or current.commit_receipt is not receipt
+                or current.certification is not certification
+                or current.timing_binding is not binding
+                or current.timing_owner_ref is not timing_owner_ref
+                or timing_owner_ref() is not timing_planner
+            ):
+                return False
+            member.state = "acknowledging"
+        try:
+            timing_planner.discard_detached_preparation_binding(binding)
+        except BaseException:
+            with self._lock:
+                current_group = self._groups.get(group_id)
+                current = (
+                    current_group.members.get(member_id) if current_group is not None else None
+                )
+                if current is member and current.state == "acknowledging":
+                    current.state = "committed_unacknowledged"
+            raise
+        with self._lock:
+            current_group = self._groups.get(group_id)
+            current = current_group.members.get(member_id) if current_group is not None else None
+            if (
+                current_group is not group
+                or current is not member
+                or current.state != "acknowledging"
+            ):
+                raise EventContractError("Persistent SMB member changed during acknowledgement")
+            self._remove_member_locked(current_group, current)
+            return True
+
     def recover_inactive_member(
         self,
         group: PersistentSmbProjectionGroupToken,
@@ -1362,7 +2604,7 @@ class PersistentSmbProjectionGroupAuthority:
             member = retained_group.members.get(member_id) if member_id is not None else None
             facts = member.facts if member is not None else None
             if member is None or facts is None or member.state != "inactive":
-                raise EventContractError("Persistent SMB operation recovery is tampered or stale")
+                raise EventContractError("Persistent SMB operation is not an inactive member")
             if facts.operation_binding_digest != owner_digest:
                 raise EventContractError(
                     "Persistent SMB operation recovery has a foreign operation binding"
@@ -1450,15 +2692,16 @@ class PersistentSmbProjectionGroupAuthority:
         *,
         timing_planner: SourceTimingPlanner,
     ) -> None:
-        """Cancel one exact inactive member and reclaim every live charge."""
+        """Cancel one exact inactive or uncommitted certified member."""
 
         if type(token) is not PersistentSmbProjectionMemberToken:
             raise EventContractError("Persistent SMB member is foreign, copied, or stale")
         with self._lock:
             located = self._member_for_token_locked(token)
-            if located is None or located[1].state != "inactive":
+            if located is None or located[1].state not in {"inactive", "certified"}:
                 raise EventContractError("Persistent SMB member is foreign, copied, or stale")
             group, member = located
+            original_state = member.state
             binding = member.timing_binding
             if binding is None:
                 raise EventContractError("Inactive persistent SMB member lost its timing binding")
@@ -1482,7 +2725,7 @@ class PersistentSmbProjectionGroupAuthority:
             context_digest = member.facts.timing_context_digest if member.facts is not None else ""
             if not context_digest:
                 raise EventContractError("Inactive persistent SMB member lost its timing context")
-            member.state = "cancelling"
+            member.state = f"cancelling_{original_state}"
         try:
             timing_planner.discard_detached_preparation_binding(binding)
         except StateError:
@@ -1497,8 +2740,8 @@ class PersistentSmbProjectionGroupAuthority:
                         if retained_group is not None
                         else None
                     )
-                    if retained is member and retained.state == "cancelling":
-                        retained.state = "inactive"
+                    if retained is member and retained.state == f"cancelling_{original_state}":
+                        retained.state = original_state
                 raise
         except BaseException:
             with self._lock:
@@ -1506,8 +2749,8 @@ class PersistentSmbProjectionGroupAuthority:
                 retained = (
                     retained_group.members.get(member_id) if retained_group is not None else None
                 )
-                if retained is member and retained.state == "cancelling":
-                    retained.state = "inactive"
+                if retained is member and retained.state == f"cancelling_{original_state}":
+                    retained.state = original_state
             raise
         with self._lock:
             retained_group = self._groups.get(group_id)
@@ -1515,7 +2758,7 @@ class PersistentSmbProjectionGroupAuthority:
             if (
                 retained_group is not group
                 or retained is not member
-                or member.state != "cancelling"
+                or member.state != f"cancelling_{original_state}"
             ):
                 raise EventContractError("Persistent SMB member changed during cancellation")
             self._remove_member_locked(retained_group, retained)
@@ -1573,6 +2816,9 @@ class PersistentSmbProjectionGroupAuthority:
             return PersistentSmbProjectionGroupCensus(
                 retained_groups=len(self._groups),
                 inactive_members=self._inactive_members,
+                certified_members=self._certified_members,
+                committed_unacknowledged_members=(self._committed_unacknowledged_members),
+                retained_commit_receipts=self._retained_commit_receipts,
                 retained_bytes=self._retained_bytes,
                 reserved_member_capacity=self._reserved_member_capacity,
                 reserved_receipt_capacity=self._reserved_receipt_capacity,
@@ -1583,6 +2829,11 @@ class PersistentSmbProjectionGroupAuthority:
                 byte_capacity=self._byte_capacity,
                 high_water_groups=self._high_water_groups,
                 high_water_members=self._high_water_members,
+                high_water_certified_members=self._high_water_certified_members,
+                high_water_committed_unacknowledged_members=(
+                    self._high_water_committed_unacknowledged_members
+                ),
+                high_water_commit_receipts=self._high_water_commit_receipts,
                 high_water_bytes=self._high_water_bytes,
                 high_water_table_backing_bytes=self._high_water_table_backing_bytes,
                 retained_target_generations=0,
