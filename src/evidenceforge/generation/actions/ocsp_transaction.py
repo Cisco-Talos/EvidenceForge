@@ -29,8 +29,41 @@ from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent
 from evidenceforge.generation.activity.tls_realism import ocsp_config, pick_ocsp_responder
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanningRuntime,
+    active_source_timing_planning_runtime,
+)
+from evidenceforge.generation.timing import (
+    ConstantDistribution,
+    DistributionSpec,
+    MixtureDistribution,
+    TimingRuntime,
+    TimingScope,
+    TriangularDistribution,
+    WeightedDistribution,
+)
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed
+
+
+def _uniform_distribution(minimum: float, maximum: float) -> DistributionSpec:
+    """Return the exact continuous-uniform law using supported timing primitives."""
+
+    if minimum == maximum:
+        return ConstantDistribution(minimum)
+    return MixtureDistribution(
+        (
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=minimum, mode=minimum, maximum=maximum),
+            ),
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=minimum, mode=maximum, maximum=maximum),
+            ),
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +107,15 @@ class OcspTransactionPlanner:
     ) -> None:
         self._registry = registry
         self._tls_certificate_planner = tls_certificate_planner
+        timing_runtime = tls_certificate_planner.timing_runtime
+        if type(timing_runtime) is not TimingRuntime:
+            raise StateError("OCSP planner requires the exact TLS TimingRuntime owner")
+        self._timing_runtime = timing_runtime
+
+    def _planning_timing_runtime(self) -> TimingRuntime | SourceTimingPlanningRuntime:
+        """Return this exact owner's active staged view or its canonical runtime."""
+
+        return active_source_timing_planning_runtime(self._timing_runtime) or self._timing_runtime
 
     def plan(self, request: OcspTransactionRequest) -> OcspTransactionPlan:
         """Return a frozen request/response plan whose identifiers round-trip."""
@@ -156,19 +198,46 @@ class OcspTransactionPlanner:
             float(response_config.get("throughput_bytes_per_second_max", 400_000)),
         )
         source_ip = request.tls_event.network.src_ip if request.tls_event.network else ""
-        responder_rng = random.Random(
-            _stable_seed(f"ocsp_responder_transport:{responder}:{source_ip}")
+        timing_runtime = self._planning_timing_runtime()
+        responder_scope = TimingScope(
+            stable_id=responder,
+            host=source_ip,
+            source="ocsp",
+            lifecycle_id="responder_transport",
         )
         scoped_throughput = math.exp(
-            responder_rng.uniform(math.log(throughput_min), math.log(throughput_max))
+            timing_runtime.sampler.sample_value(
+                _uniform_distribution(math.log(throughput_min), math.log(throughput_max)),
+                relationship_key="ocsp.response.responder_throughput_log",
+                scope=responder_scope,
+                sample_key="throughput_log",
+            )
         )
-        effective_throughput = scoped_throughput * phase_rng.uniform(0.78, 1.22)
+        transaction_scope = TimingScope(
+            stable_id=request.stable_id,
+            host=source_ip,
+            source="ocsp",
+            lifecycle_id=f"{responder}|cache_bucket:{bucket_start}",
+        )
+        throughput_multiplier = timing_runtime.sampler.sample_value(
+            _uniform_distribution(0.78, 1.22),
+            relationship_key="ocsp.response.transaction_throughput_multiplier",
+            scope=transaction_scope,
+            sample_key="throughput_multiplier",
+        )
+        effective_throughput = scoped_throughput * throughput_multiplier
         duration_floor = max(
             0.0001,
             float(response_config.get("file_duration_floor_ms", 3.0)) / 1000.0,
         )
+        duration_floor_multiplier = timing_runtime.sampler.sample_value(
+            _uniform_distribution(0.85, 1.35),
+            relationship_key="ocsp.response.file_duration_floor_multiplier",
+            scope=transaction_scope,
+            sample_key="duration_floor_multiplier",
+        )
         response_file_duration = max(
-            duration_floor * phase_rng.uniform(0.85, 1.35),
+            duration_floor * duration_floor_multiplier,
             response_size / effective_throughput,
         )
         latency_min = max(0.001, float(response_config.get("latency_ms_min", 18.0)) / 1000.0)
@@ -176,7 +245,12 @@ class OcspTransactionPlanner:
             latency_min,
             float(response_config.get("latency_ms_max", 240.0)) / 1000.0,
         )
-        response_latency = phase_rng.uniform(latency_min, latency_max)
+        response_latency = timing_runtime.sampler.sample_value(
+            _uniform_distribution(latency_min, latency_max),
+            relationship_key="ocsp.response.latency_seconds",
+            scope=transaction_scope,
+            sample_key="response_latency",
+        )
         responded_at = requested_at + timedelta(seconds=response_latency + response_file_duration)
         file_id = generate_stable_zeek_uid(
             "F",
