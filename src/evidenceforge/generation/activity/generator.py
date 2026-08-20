@@ -1141,7 +1141,7 @@ def _attach_http_file_transfers(
     *,
     dst_ip: str,
     rng: random.Random,
-    timing_runtime: TimingRuntime | None = None,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
     timing_scope: TimingScope | None = None,
     deployment_registry: DeploymentContentRegistry | None = None,
 ) -> None:
@@ -1153,7 +1153,11 @@ def _attach_http_file_transfers(
         return
     http = event.http
     method = (http.method or "GET").upper()
-    runtime = timing_runtime or TimingRuntime.compatibility_default()
+    runtime = (
+        timing_runtime if timing_runtime is not None else TimingRuntime.compatibility_default()
+    )
+    if type(runtime) not in {TimingRuntime, SourceTimingPlanningRuntime}:
+        raise StateError("HTTP file-transfer timing requires an exact engine TimingRuntime")
     scope = timing_scope or TimingScope(
         stable_id=(
             f"http-files:{event.network.src_ip}:{event.network.src_port}:"
@@ -1243,6 +1247,7 @@ def _attach_http_file_transfers(
                 parent_duration=event.network.duration,
             ),
             rng,
+            timing_runtime=runtime,
         ).execute()
         event.file_transfers.extend(request_result.file_transfers)
         request_transfers = request_result.file_transfers
@@ -1302,6 +1307,7 @@ def _attach_http_file_transfers(
             parent_duration=event.network.duration,
         ),
         rng,
+        timing_runtime=runtime,
     ).execute()
     if file_result.file_transfers and event.file_transfer is None:
         event.file_transfer = file_result.file_transfers[0]

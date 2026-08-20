@@ -67,8 +67,21 @@ from evidenceforge.generation.actions.command_effects import (
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.generation.deployment_registry import LocalArtifactPublishToken
 from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanningRuntime,
+    active_source_timing_planning_runtime,
+)
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.generation.timing import TimingRuntime, TimingScope, TriangularDistribution
+from evidenceforge.generation.timing import (
+    ConstantDistribution,
+    DistributionSpec,
+    MixtureDistribution,
+    TimingRuntime,
+    TimingScope,
+    TriangularDistribution,
+    WeightedDistribution,
+)
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.ids import generate_zeek_uid_from_rng
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
@@ -127,23 +140,88 @@ def _http_transfer_throughput_range(response_body_len: int) -> tuple[int, int] |
     return (2 * 1024 * 1024, 35 * 1024 * 1024)
 
 
-def _http_transfer_throughput_floor(response_body_len: int, rng: random.Random) -> float:
+def _uniform_timing_distribution(minimum: float, maximum: float) -> DistributionSpec:
+    """Return the exact continuous-uniform law using supported timing primitives."""
+
+    if minimum == maximum:
+        return ConstantDistribution(minimum)
+    return MixtureDistribution(
+        (
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=minimum, mode=minimum, maximum=maximum),
+            ),
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=minimum, mode=maximum, maximum=maximum),
+            ),
+        )
+    )
+
+
+def _planning_http_transfer_runtime(
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None,
+) -> TimingRuntime | SourceTimingPlanningRuntime:
+    """Return an exact canonical or active staged HTTP-transfer timing owner."""
+
+    # Direct bundle fixtures retain the compatibility-only construction path.
+    # Production callers always inject the engine-owned runtime or its active
+    # SourceTiming planning view.
+    if timing_runtime is None:
+        return TimingRuntime.compatibility_default()
+    if type(timing_runtime) is SourceTimingPlanningRuntime:
+        return timing_runtime
+    if type(timing_runtime) is not TimingRuntime:
+        raise StateError("HTTP file-transfer timing requires an exact engine TimingRuntime")
+    return active_source_timing_planning_runtime(timing_runtime) or timing_runtime
+
+
+def _http_transfer_throughput_floor(
+    response_body_len: int,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime,
+    *,
+    scope: TimingScope,
+    sample_key: str,
+) -> float:
     """Return a source-native lower-bound duration for HTTP file payload analysis."""
 
     throughput_range = _http_transfer_throughput_range(response_body_len)
     if throughput_range is None:
         return 0.0
-    bytes_per_second = rng.uniform(*throughput_range)
+    bytes_per_second = timing_runtime.sampler.sample_value(
+        _uniform_timing_distribution(*throughput_range),
+        relationship_key="file_transfer.http.throughput_bytes_per_second",
+        scope=scope,
+        sample_key=f"{sample_key}:throughput",
+    )
     return max(0.012, response_body_len / bytes_per_second)
 
 
 def http_response_transfer_duration_floor(
     response_body_len: int,
     rng: random.Random,
+    *,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
+    stable_id: str = "",
 ) -> float:
     """Return the minimum plausible parent-connection duration for HTTP files.log."""
 
-    return _http_transfer_throughput_floor(response_body_len, rng)
+    # Retain the public content-RNG argument for source compatibility without
+    # consuming it for timing. Production file-transfer bundles inject their
+    # exact runtime and do not call this compatibility helper.
+    _ = rng
+    runtime = _planning_http_transfer_runtime(timing_runtime)
+    scope = TimingScope(
+        stable_id=stable_id or f"http-transfer-floor:{response_body_len}",
+        source="file_transfer",
+        lifecycle_id="http_response_transfer_floor",
+    )
+    return _http_transfer_throughput_floor(
+        response_body_len,
+        runtime,
+        scope=scope,
+        sample_key="response",
+    )
 
 
 def http_response_parent_duration_floor(response_body_len: int) -> float:
@@ -162,23 +240,45 @@ def http_response_parent_duration_floor(response_body_len: int) -> float:
 def _http_response_file_duration(
     response_body_len: int,
     parent_duration: float | None,
-    rng: random.Random,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime,
+    *,
+    scope: TimingScope,
+    sample_key: str,
 ) -> float:
     """Return a source-native files.log duration for an HTTP response body."""
 
     if response_body_len <= _HTTP_ANALYZER_SHORT_BODY_BYTES:
-        return rng.uniform(0.0, 0.01)
+        return timing_runtime.sampler.sample_value(
+            _uniform_timing_distribution(0.0, 0.01),
+            relationship_key="file_transfer.http.short_duration_seconds",
+            scope=scope,
+            sample_key=f"{sample_key}:short_duration",
+        )
 
-    duration_floor = _http_transfer_throughput_floor(response_body_len, rng)
+    duration_floor = _http_transfer_throughput_floor(
+        response_body_len,
+        timing_runtime,
+        scope=scope,
+        sample_key=sample_key,
+    )
     if parent_duration is None or parent_duration <= 0:
         return duration_floor
 
     if response_body_len >= 10 * 1024 * 1024:
-        parent_fraction = rng.uniform(0.55, 0.92)
+        fraction_bounds = (0.55, 0.92)
+        relationship_key = "file_transfer.http.large_parent_fraction"
     elif response_body_len >= _HTTP_BULK_BODY_BYTES:
-        parent_fraction = rng.uniform(0.35, 0.85)
+        fraction_bounds = (0.35, 0.85)
+        relationship_key = "file_transfer.http.bulk_parent_fraction"
     else:
-        parent_fraction = rng.uniform(0.08, 0.35)
+        fraction_bounds = (0.08, 0.35)
+        relationship_key = "file_transfer.http.analyzed_parent_fraction"
+    parent_fraction = timing_runtime.sampler.sample_value(
+        _uniform_timing_distribution(*fraction_bounds),
+        relationship_key=relationship_key,
+        scope=scope,
+        sample_key=f"{sample_key}:parent_fraction",
+    )
     candidate = max(duration_floor, parent_duration * parent_fraction)
     if parent_duration > duration_floor + 0.002:
         return min(candidate, parent_duration - 0.002)
@@ -394,9 +494,12 @@ class HttpFileTransferActionBundle:
         self,
         request: HttpFileTransferRequest,
         rng: random.Random,
+        *,
+        timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
     ) -> None:
         self._request = request
         self._rng = rng
+        self._timing_runtime = _planning_http_transfer_runtime(timing_runtime)
 
     @property
     def anchor(self) -> ActionAnchor:
@@ -478,6 +581,25 @@ class HttpFileTransferActionBundle:
     ) -> tuple[FileTransferContext, PeContext | None]:
         """Build one decoded HTTP leaf and its optional analyzer result."""
 
+        part_key = (
+            ".".join(str(component) for component in multipart_part_path)
+            if multipart_part_path
+            else "entity"
+        )
+        timing_scope = TimingScope(
+            stable_id=self._request.stable_id,
+            host=self._request.host,
+            source="file_transfer",
+            lifecycle_id=self._request.content_identity or self._request.uri,
+        )
+        timing_sample_key = f"{'orig' if self._request.is_orig else 'resp'}:{part_key}"
+        duration = _http_response_file_duration(
+            body_len,
+            self._request.parent_duration,
+            self._timing_runtime,
+            scope=timing_scope,
+            sample_key=timing_sample_key,
+        )
         fuid = generate_zeek_uid_from_rng(self._rng, "F")
         analyzers = ["SHA1"] if file_mime_type in _HTTP_HASH_ANALYZER_MIME_TYPES else []
         file_hashes = file_transfer_hashes(content_seed_material, analyzers)
@@ -488,11 +610,7 @@ class HttpFileTransferActionBundle:
             filename=filename,
             analyzers=analyzers,
             mime_type=file_mime_type,
-            duration=_http_response_file_duration(
-                body_len,
-                self._request.parent_duration,
-                self._rng,
-            ),
+            duration=duration,
             local_orig=_is_private_ip(self._request.dst_ip),
             is_orig=self._request.is_orig,
             seen_bytes=body_len,
@@ -576,7 +694,13 @@ HttpResponseFileTransferResult = HttpFileTransferResult
 class HttpResponseFileTransferActionBundle:
     """Compatibility wrapper for callers constructing response transfers."""
 
-    def __init__(self, request: HttpResponseFileTransferRequest, rng: random.Random) -> None:
+    def __init__(
+        self,
+        request: HttpResponseFileTransferRequest,
+        rng: random.Random,
+        *,
+        timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
+    ) -> None:
         self._bundle = HttpFileTransferActionBundle(
             HttpFileTransferRequest(
                 host=request.host,
@@ -592,6 +716,7 @@ class HttpResponseFileTransferActionBundle:
                 source=request.source,
             ),
             rng,
+            timing_runtime=timing_runtime,
         )
 
     @property

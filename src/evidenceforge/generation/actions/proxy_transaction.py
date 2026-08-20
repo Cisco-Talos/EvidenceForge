@@ -1328,6 +1328,7 @@ class ProxyTransactionActionBundle:
                     f"{egress_http.response_body_len}:{egress_time.isoformat()}"
                 )
             ),
+            timing_runtime=self.executor.timing_runtime,
         ).execute()
         client_result = HttpResponseFileTransferActionBundle(
             HttpResponseFileTransferRequest(
@@ -1349,6 +1350,7 @@ class ProxyTransactionActionBundle:
                     f"{client_http.response_body_len}:{client_time.isoformat()}"
                 )
             ),
+            timing_runtime=self.executor.timing_runtime,
         ).execute()
 
         phase_plan = proxy_context.transaction
