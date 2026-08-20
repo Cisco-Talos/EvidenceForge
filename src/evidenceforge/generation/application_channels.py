@@ -55,6 +55,7 @@ _ROUTE_PARTITION_RECLAIM_PER_WATERMARK = 64
 _EXPIRY_COMPACTION_WORK_PER_WATERMARK = 4_096
 _EXPIRY_PAGE_SIZE = 4_096
 _DECODED_CACHE_PER_SHARD = 256
+_MAX_RECOVERABLE_ADMISSION_RESULTS = 4_096
 _EMPTY_PRIMARY_MAP_BYTES = sys.getsizeof({})
 _EMPTY_PACKED_ROUTE_MAP_BYTES = 2 * sys.getsizeof(array("Q", [0]) * 8)
 _ESTIMATED_ROUTE_HASH_ENTRY_BYTES = 40
@@ -479,6 +480,8 @@ class _PackedChannelStore:
         snapshot = self._decoded_cache.pop(handle, None)
         if snapshot is not None:
             self._decoded_cache_value_bytes -= _decoded_snapshot_estimated_bytes(snapshot)
+        if not self._decoded_cache:
+            self._decoded_cache.clear()
 
     def _retain_decoded(self, handle: int, snapshot: ApplicationChannelSnapshot) -> None:
         prior = self._decoded_cache.pop(handle, None)
@@ -890,6 +893,16 @@ class _PackedChannelStore:
 
         return self._materialize(handle)
 
+    def detached_by_handle(self, handle: int) -> ApplicationChannelSnapshot:
+        """Return a frozen snapshot without warming an otherwise-cold decoded cache."""
+
+        retained = self._decoded_cache.get(handle)
+        if retained is not None:
+            return retained
+        snapshot = self._materialize(handle)
+        self._discard_decoded(handle)
+        return snapshot
+
     def generation(self, handle: int) -> int:
         """Return the current ABA generation for one live compact handle."""
 
@@ -1050,6 +1063,35 @@ class _PackedChannelStore:
             after_handle=after_handle,
             limit=limit,
         )
+
+    def handle_for_channel(self, owner_id: str, channel_id: str) -> int | None:
+        """Return one exact owner-local handle even if its route was not installed."""
+
+        for handle in self._owner_index.iter_handles(self._owner_key(owner_id)):
+            if self._channel_id_value(handle) == channel_id:
+                return handle
+        return None
+
+    def recovery_handle_for_channel(self, owner_id: str, channel_id: str) -> int | None:
+        """Find an ambiguously inserted row, including an already-closed row.
+
+        This exceptional recovery scan is intentionally not used on the normal
+        open path. Closed rows do not belong to the reusable owner index, so a
+        lost return from an insertion needs the dense-row fallback.
+        """
+
+        indexed = self.handle_for_channel(owner_id, channel_id)
+        if indexed is not None:
+            return indexed
+        for handle, length in enumerate(self._identity_lengths):
+            if length == self._EMPTY_IDENTITY:
+                continue
+            retained_channel, _protocol, retained_owner, _affinity, _transport = (
+                self._identity_values(handle)
+            )
+            if retained_owner == owner_id and retained_channel == channel_id:
+                return handle
+        return None
 
     def count(self, index_name: str, indexed_value: object) -> int:
         """Return one exact owner or owner-affinity cardinality."""
@@ -1397,6 +1439,7 @@ class ApplicationChannelAdmissionToken:
     _prepared_snapshot: ApplicationChannelSnapshot | None = field(repr=False, default=None)
     _reserved_channel_ids: tuple[str, ...] = field(repr=False, default=())
     _reserved_transport_ids: tuple[str, ...] = field(repr=False, default=())
+    _retain_result_for_recovery: bool = field(repr=False, default=False)
     _integrity_token: str = field(repr=False, default="")
 
     @property
@@ -1445,6 +1488,7 @@ def _application_channel_admission_integrity_token(
             token._prepared_snapshot,
             token._reserved_channel_ids,
             token._reserved_transport_ids,
+            token._retain_result_for_recovery,
         )
     ).encode()
     return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
@@ -1463,6 +1507,7 @@ class _ApplicationChannelAdmissionCapability:
     operation_id: str
     affinity_key: tuple[str, str] | None
     linearization_time: datetime
+    retain_result_for_recovery: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1481,6 +1526,7 @@ class ApplicationChannelAdmissionReceipt:
     snapshot: ApplicationChannelSnapshot
     close_token: ApplicationChannelCloseToken | None = None
     _registry_token: int = field(repr=False, default=0)
+    _recoverable: bool = field(repr=False, default=False)
     _integrity_token: str = field(repr=False, default="")
 
     @property
@@ -1506,6 +1552,7 @@ def _application_channel_admission_receipt_integrity_token(
             receipt.snapshot,
             receipt.close_token,
             receipt._registry_token,
+            receipt._recoverable,
         )
     ).encode()
     return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
@@ -1520,10 +1567,166 @@ class ApplicationChannelAdmissionResult:
     receipt: ApplicationChannelAdmissionReceipt | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _RecoverableApplicationAdmissionResult:
+    """Exact retained result for one acknowledged-or-retried outer transaction."""
+
+    token: ApplicationChannelAdmissionToken
+    result: ApplicationChannelAdmissionResult
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicationChannelCommitRecovery:
+    """Authenticated reconciliation of an exception during a common commit."""
+
+    status: Literal["committed", "not_committed", "indeterminate"]
+    result: ApplicationChannelAdmissionResult | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicationChannelPreparedCloseToken:
+    """Opaque exact reservation for a close-only channel mutation."""
+
+    channel_id: str
+    closed_at: datetime
+    reason: str
+    _registry_token: int = field(repr=False, default=0)
+    _reservation_id: int = field(repr=False, default=0)
+    _owner_shard_id: int = field(repr=False, default=0)
+    _channel_handle: int = field(repr=False, default=0)
+    _channel_generation: int = field(repr=False, default=0)
+    _expected_snapshot: ApplicationChannelSnapshot | None = field(repr=False, default=None)
+    _prepared_snapshot: ApplicationChannelSnapshot | None = field(repr=False, default=None)
+    _integrity_token: str = field(repr=False, default="")
+
+    @property
+    def publication_token(self) -> str:
+        """Return the keyed binding consumed by an outer close coordinator."""
+
+        return self._integrity_token
+
+
+def _application_channel_prepared_close_integrity_token(
+    authority_secret: bytes,
+    token: ApplicationChannelPreparedCloseToken,
+) -> str:
+    """Authenticate every public and routing field of one close reservation."""
+
+    canonical = repr(
+        (
+            "application-channel-prepared-close-v1",
+            token.channel_id,
+            token.closed_at,
+            token.reason,
+            token._registry_token,
+            token._reservation_id,
+            token._owner_shard_id,
+            token._channel_handle,
+            token._channel_generation,
+            token._expected_snapshot,
+            token._prepared_snapshot,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class _ApplicationChannelPreparedCloseCapability:
+    """Registry-owned trusted preimage for one exact close reservation."""
+
+    token_id: int
+    reservation_id: int
+    integrity_token: str
+    trusted_token: ApplicationChannelPreparedCloseToken
+
+
+@dataclass(slots=True)
+class _ApplicationChannelCommitJournal:
+    """Private retry state for one recoverable open or completed operation."""
+
+    reservation_id: int
+    insert_attempted: bool = False
+    channel_handle: int | None = None
+    channel_generation: int | None = None
+    initial_affinity_size: int | None = None
+    accounting_applied: bool = False
+
+
+@dataclass(slots=True)
+class _ApplicationChannelCloseCommitJournal:
+    """Private retry state for one recoverable close-only mutation."""
+
+    reservation_id: int
+    accounting_applied: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicationChannelCloseAdmissionReceipt:
+    """Exact authenticated proof of one committed close-only mutation."""
+
+    publication_token: str
+    channel_id: str
+    snapshot: ApplicationChannelSnapshot
+    close: ApplicationChannelCloseResult
+    _registry_token: int = field(repr=False, default=0)
+    _integrity_token: str = field(repr=False, default="")
+
+
+def _application_channel_close_receipt_integrity_token(
+    authority_secret: bytes,
+    receipt: ApplicationChannelCloseAdmissionReceipt,
+) -> str:
+    """Authenticate one close receipt and its exact committed snapshot."""
+
+    canonical = repr(
+        (
+            "application-channel-close-receipt-v1",
+            receipt.publication_token,
+            receipt.channel_id,
+            receipt.snapshot,
+            receipt.close,
+            receipt._registry_token,
+        )
+    ).encode()
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicationChannelCloseAdmissionResult:
+    """Frozen result of one prepared close-only admission."""
+
+    snapshot: ApplicationChannelSnapshot
+    close: ApplicationChannelCloseResult
+    receipt: ApplicationChannelCloseAdmissionReceipt
+
+
+@dataclass(frozen=True, slots=True)
+class _RecoverableApplicationCloseResult:
+    """Exact retained close result awaiting outer acknowledgement."""
+
+    token: ApplicationChannelPreparedCloseToken
+    result: ApplicationChannelCloseAdmissionResult
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicationChannelCloseCommitRecovery:
+    """Reconciliation of an exception during one close-only commit."""
+
+    status: Literal["committed", "not_committed", "indeterminate"]
+    result: ApplicationChannelCloseAdmissionResult | None = None
+
+
 class ApplicationChannelPreparedCommit:
     """No-fail channel commit capability valid inside its claim context."""
 
-    __slots__ = ("_active", "_committed", "_registry", "_result", "_token")
+    __slots__ = (
+        "_active",
+        "_committed",
+        "_recovery_status",
+        "_registry",
+        "_result",
+        "_token",
+    )
 
     def __init__(
         self,
@@ -1534,6 +1737,9 @@ class ApplicationChannelPreparedCommit:
         self._token = token
         self._active = True
         self._committed = False
+        self._recovery_status: Literal["none", "committed", "not_committed", "indeterminate"] = (
+            "none"
+        )
         self._result: ApplicationChannelAdmissionResult | None = None
 
     @property
@@ -1548,6 +1754,14 @@ class ApplicationChannelPreparedCommit:
 
         return self._result
 
+    @property
+    def recovery_status(
+        self,
+    ) -> Literal["none", "committed", "not_committed", "indeterminate"]:
+        """Return the certified outcome after an exceptional commit attempt."""
+
+        return self._recovery_status
+
     def commit_no_fail(self) -> ApplicationChannelAdmissionResult:
         """Publish the already-validated mutation as the final transaction step."""
 
@@ -1555,11 +1769,111 @@ class ApplicationChannelPreparedCommit:
             raise StateError("application channel prepared commit is no longer active")
         if self._committed:
             raise StateError("application channel prepared admission was already committed")
-        self._result = self._registry._commit_claimed_admission(self._token)
+        try:
+            self._result = self._registry._commit_claimed_admission(self._token)
+        except BaseException as primary_error:
+            self._recovery_status = "indeterminate"
+            try:
+                recovery = self._registry._reconcile_claimed_admission(self._token)
+            except BaseException as recovery_error:
+                primary_error.add_note(
+                    f"application admission recovery also failed: {recovery_error!r}"
+                )
+            else:
+                self._recovery_status = recovery.status
+                if recovery.status == "committed":
+                    assert recovery.result is not None
+                    self._result = recovery.result
+                    self._committed = True
+                    return self._result
+            raise
         self._committed = True
         return self._result
 
     def commit(self) -> ApplicationChannelAdmissionResult:
+        """Compatibility alias for :meth:`commit_no_fail`."""
+
+        return self.commit_no_fail()
+
+    def _close(self) -> None:
+        self._active = False
+
+
+class ApplicationChannelPreparedCloseCommit:
+    """No-fail close commit capability valid only inside its exact claim."""
+
+    __slots__ = (
+        "_active",
+        "_committed",
+        "_recovery_status",
+        "_registry",
+        "_result",
+        "_token",
+    )
+
+    def __init__(
+        self,
+        registry: ApplicationChannelRegistry,
+        token: ApplicationChannelPreparedCloseToken,
+    ) -> None:
+        self._registry = registry
+        self._token = token
+        self._active = True
+        self._committed = False
+        self._recovery_status: Literal["none", "committed", "not_committed", "indeterminate"] = (
+            "none"
+        )
+        self._result: ApplicationChannelCloseAdmissionResult | None = None
+
+    @property
+    def committed(self) -> bool:
+        """Return whether canonical close truth committed despite any lost return."""
+
+        return self._committed
+
+    @property
+    def result(self) -> ApplicationChannelCloseAdmissionResult | None:
+        """Return the exact committed result when known."""
+
+        return self._result
+
+    @property
+    def recovery_status(
+        self,
+    ) -> Literal["none", "committed", "not_committed", "indeterminate"]:
+        """Return the certified outcome after an exceptional close attempt."""
+
+        return self._recovery_status
+
+    def commit_no_fail(self) -> ApplicationChannelCloseAdmissionResult:
+        """Publish the prevalidated close mutation exactly once."""
+
+        if not self._active:
+            raise StateError("application channel prepared close is no longer active")
+        if self._committed:
+            raise StateError("application channel prepared close was already committed")
+        try:
+            self._result = self._registry._commit_claimed_close(self._token)
+        except BaseException as primary_error:
+            self._recovery_status = "indeterminate"
+            try:
+                recovery = self._registry._reconcile_claimed_close(self._token)
+            except BaseException as recovery_error:
+                primary_error.add_note(
+                    f"application close recovery also failed: {recovery_error!r}"
+                )
+            else:
+                self._recovery_status = recovery.status
+                if recovery.status == "committed":
+                    assert recovery.result is not None
+                    self._result = recovery.result
+                    self._committed = True
+                    return self._result
+            raise
+        self._committed = True
+        return self._result
+
+    def commit(self) -> ApplicationChannelCloseAdmissionResult:
         """Compatibility alias for :meth:`commit_no_fail`."""
 
         return self.commit_no_fail()
@@ -1650,6 +1964,18 @@ class _MutationGate:
                 self._condition.notify_all()
 
 
+@dataclass(frozen=True, slots=True)
+class _ApplicationChannelShardAccounting:
+    """Atomically replaceable shard counters plus prepared-commit markers."""
+
+    open_channels: int = 0
+    maximum_affinity_bucket: int = 0
+    high_water_mark: int = 0
+    mutation_version: int = 0
+    estimated_value_bytes: int = 0
+    prepared_commit_ids: frozenset[int] = frozenset()
+
+
 @dataclass(slots=True)
 class _ApplicationChannelShard:
     """All current state owned by one stable owner partition."""
@@ -1669,16 +1995,54 @@ class _ApplicationChannelShard:
     operation_blocker_expiry: PackedHandleExpiryIndex = field(
         default_factory=PackedHandleExpiryIndex
     )
-    open_channels: int = 0
-    maximum_affinity_bucket: int = 0
+    _accounting: _ApplicationChannelShardAccounting = field(
+        default_factory=_ApplicationChannelShardAccounting
+    )
     lookup_candidates_inspected: int = 0
-    high_water_mark: int = 0
-    mutation_version: int = 0
-    estimated_value_bytes: int = 0
     operation_deletions: int = 0
     used_id_deletions: int = 0
     compaction_cursor: int = 0
     expiry_compaction_cursor: int = 0
+
+    @property
+    def open_channels(self) -> int:
+        return self._accounting.open_channels
+
+    @open_channels.setter
+    def open_channels(self, value: int) -> None:
+        self._accounting = replace(self._accounting, open_channels=value)
+
+    @property
+    def maximum_affinity_bucket(self) -> int:
+        return self._accounting.maximum_affinity_bucket
+
+    @maximum_affinity_bucket.setter
+    def maximum_affinity_bucket(self, value: int) -> None:
+        self._accounting = replace(self._accounting, maximum_affinity_bucket=value)
+
+    @property
+    def high_water_mark(self) -> int:
+        return self._accounting.high_water_mark
+
+    @high_water_mark.setter
+    def high_water_mark(self, value: int) -> None:
+        self._accounting = replace(self._accounting, high_water_mark=value)
+
+    @property
+    def mutation_version(self) -> int:
+        return self._accounting.mutation_version
+
+    @mutation_version.setter
+    def mutation_version(self, value: int) -> None:
+        self._accounting = replace(self._accounting, mutation_version=value)
+
+    @property
+    def estimated_value_bytes(self) -> int:
+        return self._accounting.estimated_value_bytes
+
+    @estimated_value_bytes.setter
+    def estimated_value_bytes(self, value: int) -> None:
+        self._accounting = replace(self._accounting, estimated_value_bytes=value)
 
 
 @dataclass(slots=True)
@@ -1963,7 +2327,44 @@ class ApplicationChannelRegistry:
         self._prepared_channel_ids: dict[str, int] = {}
         self._prepared_transport_ids: dict[str, int] = {}
         self._prepared_operation_ids: dict[str, int] = {}
-        self._prepared_affinity_counts: dict[tuple[str, str], int] = {}
+        # Keep exact reservation membership rather than only aggregate counts.
+        # Release is deliberately retryable after an injected tail failure, so
+        # decrementing an anonymous count could otherwise double-release a
+        # sibling preparation that shares this affinity.
+        self._prepared_affinity_reservations: dict[tuple[str, str], set[int]] = {}
+        self._prepared_close_tokens: dict[int, ApplicationChannelPreparedCloseToken] = {}
+        self._prepared_close_capabilities: dict[
+            int,
+            _ApplicationChannelPreparedCloseCapability,
+        ] = {}
+        self._recoverable_admission_results: dict[
+            int,
+            _RecoverableApplicationAdmissionResult,
+        ] = {}
+        self._recoverable_admission_receipts: dict[
+            int,
+            ApplicationChannelAdmissionReceipt,
+        ] = {}
+        self._recoverable_admission_slots: set[int] = set()
+        self._recoverable_close_results: dict[int, _RecoverableApplicationCloseResult] = {}
+        self._recoverable_close_receipts: dict[
+            int,
+            ApplicationChannelCloseAdmissionReceipt,
+        ] = {}
+        self._acknowledging_admission_results: dict[
+            int,
+            _RecoverableApplicationAdmissionResult,
+        ] = {}
+        self._acknowledging_close_results: dict[
+            int,
+            _RecoverableApplicationCloseResult,
+        ] = {}
+        self._prepared_commit_journals: dict[int, _ApplicationChannelCommitJournal] = {}
+        self._prepared_close_commit_journals: dict[
+            int,
+            _ApplicationChannelCloseCommitJournal,
+        ] = {}
+        self._releasing_reservations: set[int] = set()
         # Ordinary public mutations publish only short-lived exact-key claims
         # while they run.  The claims let preparation detect an in-flight
         # conflicting mutation without retaining this registry-wide metadata
@@ -2027,7 +2428,15 @@ class ApplicationChannelRegistry:
             self._admission_secret,
             receipt,
         )
-        return hmac.compare_digest(receipt._integrity_token, expected)
+        if not hmac.compare_digest(receipt._integrity_token, expected):
+            return False
+        if receipt._recoverable:
+            with self._prepared_lock:
+                return self._recoverable_admission_receipts.get(id(receipt)) is receipt or any(
+                    retained.result.receipt is receipt
+                    for retained in self._acknowledging_admission_results.values()
+                )
+        return True
 
     def _route_partition_id(self, namespace: str, semantic_id: str) -> int:
         canonical_digest = _canonical_route_digest(semantic_id)
@@ -2139,6 +2548,15 @@ class ApplicationChannelRegistry:
             raise StateError("application channel admission token integrity validation failed")
         return capability
 
+    def _has_incomplete_prepared_release_locked(self) -> bool:
+        """Return whether an exact release/acknowledgement still owns the global fence."""
+
+        return bool(
+            self._releasing_reservations
+            or self._acknowledging_admission_results
+            or self._acknowledging_close_results
+        )
+
     def _reject_prepared_conflict_locked(
         self,
         *,
@@ -2149,6 +2567,11 @@ class ApplicationChannelRegistry:
         include_mutating: bool = True,
     ) -> None:
         """Reject a mutation that would cross one reserved semantic identity."""
+
+        if self._has_incomplete_prepared_release_locked():
+            raise StateError(
+                "Application channel mutation is fenced by an incomplete prepared release"
+            )
 
         for label, values, retained in (
             ("channel", channel_ids, self._prepared_channel_ids),
@@ -2306,6 +2729,9 @@ class ApplicationChannelRegistry:
     ) -> None:
         """Publish only bounded reservation metadata, never channel state."""
 
+        if self._has_incomplete_prepared_release_locked():
+            raise StateError("Application channel preparation is fenced by an incomplete release")
+
         expected = _application_channel_admission_integrity_token(
             self._admission_secret,
             token,
@@ -2313,6 +2739,12 @@ class ApplicationChannelRegistry:
         if not hmac.compare_digest(token._integrity_token, expected):
             raise StateError("application channel admission token integrity validation failed")
         reservation_id = token._reservation_id
+        if token._retain_result_for_recovery:
+            if len(self._recoverable_admission_slots) >= _MAX_RECOVERABLE_ADMISSION_RESULTS:
+                raise StateError(
+                    "Application admission recovery capacity is exhausted; acknowledge "
+                    "a committed result before preparing another recoverable admission"
+                )
         self._reject_prepared_conflict_locked(
             channel_ids=token._reserved_channel_ids,
             transport_ids=token._reserved_transport_ids,
@@ -2333,29 +2765,35 @@ class ApplicationChannelRegistry:
             operation_id=token.reservation.operation_id,
             affinity_key=affinity_key,
             linearization_time=token.linearization_time,
+            retain_result_for_recovery=token._retain_result_for_recovery,
         )
         self._prepared_reservations[reservation_id] = token
         self._prepared_capabilities[capability.token_id] = capability
+        if capability.retain_result_for_recovery:
+            self._recoverable_admission_slots.add(reservation_id)
         for channel_id in capability.reserved_channel_ids:
             self._prepared_channel_ids[channel_id] = reservation_id
         for transport_id in capability.reserved_transport_ids:
             self._prepared_transport_ids[transport_id] = reservation_id
         self._prepared_operation_ids[capability.operation_id] = reservation_id
         if affinity_key is not None:
-            self._prepared_affinity_counts[affinity_key] = (
-                self._prepared_affinity_counts.get(affinity_key, 0) + 1
-            )
+            self._prepared_affinity_reservations.setdefault(affinity_key, set()).add(reservation_id)
 
     def _release_prepared_capability_locked(
         self,
         capability: _ApplicationChannelAdmissionCapability,
+        *,
+        keep_recovery_slot: bool = False,
+        keep_release_marker: bool = False,
     ) -> None:
         """Release reservations using only the registry-owned immutable locator."""
 
-        active = self._prepared_reservations.pop(capability.reservation_id, None)
-        retained = self._prepared_capabilities.pop(capability.token_id, None)
-        if active is None or retained is not capability:
+        retained = self._prepared_capabilities.get(capability.token_id)
+        if retained is not capability:
             return
+        self._releasing_reservations.add(capability.reservation_id)
+        if capability.retain_result_for_recovery and not keep_recovery_slot:
+            self._recoverable_admission_slots.discard(capability.reservation_id)
         self._claimed_reservations.discard(capability.reservation_id)
         for channel_id in capability.reserved_channel_ids:
             if self._prepared_channel_ids.get(channel_id) == capability.reservation_id:
@@ -2365,14 +2803,31 @@ class ApplicationChannelRegistry:
                 self._prepared_transport_ids.pop(transport_id)
         if self._prepared_operation_ids.get(capability.operation_id) == capability.reservation_id:
             self._prepared_operation_ids.pop(capability.operation_id)
-        affinity_key = capability.affinity_key
-        if affinity_key is not None:
-            remaining = self._prepared_affinity_counts[affinity_key] - 1
-            if remaining:
-                self._prepared_affinity_counts[affinity_key] = remaining
-            else:
-                self._prepared_affinity_counts.pop(affinity_key)
-        if not self._prepared_reservations:
+        self._release_prepared_affinity_reservation_locked(capability)
+        self._prepared_release_fault("admission-secondary-indexes")
+        journal = self._prepared_commit_journals.get(capability.reservation_id)
+        if journal is not None:
+            shard = self._owner_shard(
+                capability.trusted_token._owner_shard_id,
+                create=False,
+            )
+            if shard is not None:
+                with shard.lock:
+                    self._release_prepared_accounting_marker(
+                        shard,
+                        capability.reservation_id,
+                    )
+        self._prepared_release_fault("admission-accounting-marker")
+        self._prepared_commit_journals.pop(capability.reservation_id, None)
+        self._prepared_reservations.pop(capability.reservation_id, None)
+        self._prepared_release_fault("admission-primary-token")
+        if keep_release_marker:
+            self._prepared_capabilities.pop(capability.token_id, None)
+            self._prepared_release_fault("admission-capability")
+        else:
+            self._releasing_reservations.discard(capability.reservation_id)
+            self._prepared_capabilities.pop(capability.token_id, None)
+        if not self._prepared_reservations and not self._prepared_close_tokens:
             # CPython dictionaries retain peak-sized tables after individual
             # pops.  Emptying them explicitly keeps prepare/cancel churn from
             # becoming duration-retained state and restores exact census size.
@@ -2382,7 +2837,23 @@ class ApplicationChannelRegistry:
             self._prepared_channel_ids.clear()
             self._prepared_transport_ids.clear()
             self._prepared_operation_ids.clear()
-            self._prepared_affinity_counts.clear()
+            self._prepared_affinity_reservations.clear()
+
+    def _release_prepared_affinity_reservation_locked(
+        self,
+        capability: _ApplicationChannelAdmissionCapability,
+    ) -> None:
+        """Release exact affinity capacity idempotently for one preparation."""
+
+        affinity_key = capability.affinity_key
+        if affinity_key is None:
+            return
+        reservations = self._prepared_affinity_reservations.get(affinity_key)
+        if reservations is None:
+            return
+        reservations.discard(capability.reservation_id)
+        if not reservations:
+            self._prepared_affinity_reservations.pop(affinity_key, None)
 
     @staticmethod
     def _effective_deadline(snapshot: ApplicationChannelSnapshot) -> datetime:
@@ -2420,6 +2891,113 @@ class ApplicationChannelRegistry:
         deadline = ApplicationChannelRegistry._effective_deadline(snapshot).timestamp()
         shard.active_expiry.set(handle, deadline)
 
+    @staticmethod
+    def _ensure_expiry_value(
+        index: PackedHandleExpiryIndex,
+        handle: int,
+        expected: float | None,
+    ) -> None:
+        """Converge one exact expiry owner without duplicating heap records."""
+
+        current = index.get(handle)
+        if expected is None:
+            if current is not None:
+                index.pop(handle, None)
+            return
+        if current != expected:
+            index.set(handle, expected)
+
+    def _ensure_route_value(
+        self,
+        route: PackedUniqueDigestMap,
+        semantic_id: str,
+        locator: int,
+    ) -> None:
+        """Install one deterministic packed route or validate its exact replay."""
+
+        digest = self._route_digest(route, semantic_id)
+        current = route.get_digest(digest)
+        if current is None:
+            route.set_digest(digest, locator)
+        elif current != locator:
+            raise StateError(
+                f"Application route for {semantic_id!r} changed during prepared commit"
+            )
+
+    def _prepared_commit_fault(self, stage: str) -> None:
+        """Fault-injection seam between retryable prepared-commit primitives."""
+
+        del stage
+
+    def _prepared_retention_fault(self, stage: str) -> None:
+        """Fault-injection seam around exact terminal-result retention."""
+
+        del stage
+
+    def _prepared_release_fault(self, stage: str) -> None:
+        """Fault-injection seam inside idempotent prepared-owner release."""
+
+        del stage
+
+    def _apply_prepared_accounting(
+        self,
+        shard: _ApplicationChannelShard,
+        journal: _ApplicationChannelCommitJournal | _ApplicationChannelCloseCommitJournal,
+        *,
+        estimated_delta: int,
+        mutation_delta: int,
+        open_delta: int = 0,
+        minimum_affinity_bucket: int | None = None,
+        minimum_high_water_mark: int | None = None,
+        stage: str,
+    ) -> None:
+        """Apply all prepared counters through one atomic accounting-object swap."""
+
+        accounting = shard._accounting
+        if journal.reservation_id in accounting.prepared_commit_ids:
+            journal.accounting_applied = True
+            return
+        open_channels = accounting.open_channels + open_delta
+        if open_channels < 0:
+            raise StateError("Application open-channel count would underflow")
+        updated = replace(
+            accounting,
+            estimated_value_bytes=accounting.estimated_value_bytes + estimated_delta,
+            mutation_version=accounting.mutation_version + mutation_delta,
+            open_channels=open_channels,
+            maximum_affinity_bucket=(
+                accounting.maximum_affinity_bucket
+                if minimum_affinity_bucket is None
+                else max(accounting.maximum_affinity_bucket, minimum_affinity_bucket)
+            ),
+            high_water_mark=(
+                accounting.high_water_mark
+                if minimum_high_water_mark is None
+                else max(accounting.high_water_mark, minimum_high_water_mark)
+            ),
+            prepared_commit_ids=accounting.prepared_commit_ids | {journal.reservation_id},
+        )
+        shard._accounting = updated
+        # The durable marker lives inside the same immutable object as every
+        # counter. A fault here therefore replays as an exact no-op.
+        self._prepared_commit_fault(f"{stage}-installed")
+        journal.accounting_applied = True
+
+    @staticmethod
+    def _release_prepared_accounting_marker(
+        shard: _ApplicationChannelShard,
+        reservation_id: int,
+    ) -> None:
+        """Remove one acknowledged accounting marker without changing counters."""
+
+        accounting = shard._accounting
+        if reservation_id not in accounting.prepared_commit_ids:
+            return
+        shard._accounting = replace(
+            accounting,
+            prepared_commit_ids=accounting.prepared_commit_ids - {reservation_id},
+        )
+
     def _channel_route(self, channel_id: str) -> tuple[_RoutePartition, int, int] | None:
         partition = self._route_partition("channel", channel_id, create=False)
         if partition is None:
@@ -2450,6 +3028,7 @@ class ApplicationChannelRegistry:
         replacement_channel_id: str = "",
         replacement_closed_at: datetime | None = None,
         replacement_reason: str = "",
+        retain_result_for_recovery: bool = False,
     ) -> ApplicationChannelAdmissionToken:
         """Reserve a fresh channel and first completed operation without publishing them."""
 
@@ -2459,6 +3038,7 @@ class ApplicationChannelRegistry:
             replacement_channel_id=replacement_channel_id,
             replacement_closed_at=replacement_closed_at,
             replacement_reason=replacement_reason,
+            retain_result_for_recovery=retain_result_for_recovery,
         )
 
     def prepare_open_channel_with_completed_operation_and_close(
@@ -2471,6 +3051,7 @@ class ApplicationChannelRegistry:
         replacement_channel_id: str = "",
         replacement_closed_at: datetime | None = None,
         replacement_reason: str = "",
+        retain_result_for_recovery: bool = False,
     ) -> ApplicationChannelAdmissionToken:
         """Reserve one fresh channel, completed operation, and exact atomic close."""
 
@@ -2482,6 +3063,7 @@ class ApplicationChannelRegistry:
             replacement_channel_id=replacement_channel_id,
             replacement_closed_at=replacement_closed_at,
             replacement_reason=replacement_reason,
+            retain_result_for_recovery=retain_result_for_recovery,
         )
 
     def _prepare_open_channel_with_completed_operation(
@@ -2494,6 +3076,7 @@ class ApplicationChannelRegistry:
         replacement_channel_id: str = "",
         replacement_closed_at: datetime | None = None,
         replacement_reason: str = "",
+        retain_result_for_recovery: bool = False,
     ) -> ApplicationChannelAdmissionToken:
         """Reserve a fresh channel and first completed operation without publishing them.
 
@@ -2518,6 +3101,11 @@ class ApplicationChannelRegistry:
         close_reason = channel_close_reason.strip()
         if (channel_closed_at is None) != (not close_reason):
             raise ValueError("channel closed_at and close reason must be supplied together")
+        if retain_result_for_recovery and (replacement_id or channel_closed_at is not None):
+            raise StateError(
+                "Recoverable application opens cannot replace or close a channel; use the "
+                "prepared close-only admission"
+            )
         prepared_identity = _PackedChannelStore.prepare_identity(identity)
 
         with self._gate.mutation(), self._prepared_lock:
@@ -2622,7 +3210,7 @@ class ApplicationChannelRegistry:
                 affinity_size -= 1
 
             affinity_key = (identity.owner_id, identity.affinity_digest)
-            affinity_size += self._prepared_affinity_counts.get(affinity_key, 0)
+            affinity_size += len(self._prepared_affinity_reservations.get(affinity_key, ()))
             affinity_size += self._mutating_affinity_counts.get(affinity_key, 0)
             if affinity_size >= self._max_reusable_per_affinity:
                 raise StateError(
@@ -2684,6 +3272,7 @@ class ApplicationChannelRegistry:
                     candidate for candidate in (identity.channel_id, replacement_id) if candidate
                 ),
                 _reserved_transport_ids=(identity.binding.transport_id,),
+                _retain_result_for_recovery=retain_result_for_recovery,
             )
             token = replace(
                 token,
@@ -2698,10 +3287,15 @@ class ApplicationChannelRegistry:
     def prepare_completed_operation(
         self,
         reservation: ApplicationOperationReservation,
+        *,
+        retain_result_for_recovery: bool = False,
     ) -> ApplicationChannelAdmissionToken:
         """Reserve one immediate operation without consuming channel budget."""
 
-        return self._prepare_completed_operation(reservation)
+        return self._prepare_completed_operation(
+            reservation,
+            retain_result_for_recovery=retain_result_for_recovery,
+        )
 
     def prepare_completed_operation_and_close(
         self,
@@ -2709,6 +3303,7 @@ class ApplicationChannelRegistry:
         *,
         closed_at: datetime,
         reason: str,
+        retain_result_for_recovery: bool = False,
     ) -> ApplicationChannelAdmissionToken:
         """Reserve one immediate operation and its exact atomic channel close."""
 
@@ -2716,6 +3311,7 @@ class ApplicationChannelRegistry:
             reservation,
             closed_at=closed_at,
             close_reason=reason,
+            retain_result_for_recovery=retain_result_for_recovery,
         )
 
     def _prepare_completed_operation(
@@ -2724,12 +3320,18 @@ class ApplicationChannelRegistry:
         *,
         closed_at: datetime | None = None,
         close_reason: str = "",
+        retain_result_for_recovery: bool = False,
     ) -> ApplicationChannelAdmissionToken:
         """Build one sealed immediate-operation token with an optional close."""
 
         reason = close_reason.strip()
         if (closed_at is None) != (not reason):
             raise ValueError("closed_at and close reason must be supplied together")
+        if retain_result_for_recovery and closed_at is not None:
+            raise StateError(
+                "Recoverable completed operations cannot close the channel; use the "
+                "prepared close-only admission"
+            )
 
         with self._gate.mutation(), self._prepared_lock:
             canonical_close: datetime | None = None
@@ -2845,6 +3447,7 @@ class ApplicationChannelRegistry:
                 _expected_snapshot=snapshot,
                 _prepared_snapshot=updated,
                 _reserved_channel_ids=(reservation.channel_id,),
+                _retain_result_for_recovery=retain_result_for_recovery,
             )
             token = replace(
                 token,
@@ -2855,6 +3458,601 @@ class ApplicationChannelRegistry:
             )
             self._register_prepared_admission_locked(token)
             return token
+
+    def _active_prepared_close_locked(
+        self,
+        token: ApplicationChannelPreparedCloseToken,
+    ) -> _ApplicationChannelPreparedCloseCapability:
+        """Return one exact intact close capability retained by this registry."""
+
+        if type(token) is not ApplicationChannelPreparedCloseToken:
+            raise StateError("application channel prepared close token is copied or stale")
+        if token._registry_token != id(self):
+            raise StateError("application channel prepared close token is foreign")
+        capability = self._prepared_close_capabilities.get(id(token))
+        if capability is None or capability.token_id != id(token):
+            raise StateError("application channel prepared close token is copied or stale")
+        active = self._prepared_close_tokens.get(capability.reservation_id)
+        if active is not token:
+            raise StateError("application channel prepared close token is copied or stale")
+        expected = _application_channel_prepared_close_integrity_token(
+            self._admission_secret,
+            token,
+        )
+        if not hmac.compare_digest(
+            token._integrity_token, capability.integrity_token
+        ) or not hmac.compare_digest(expected, capability.integrity_token):
+            raise StateError("application channel prepared close token integrity validation failed")
+        return capability
+
+    def _release_prepared_close_locked(
+        self,
+        capability: _ApplicationChannelPreparedCloseCapability,
+        *,
+        keep_recovery_slot: bool = False,
+        keep_release_marker: bool = False,
+    ) -> None:
+        """Release one close claim using only its trusted registry locator."""
+
+        retained = self._prepared_close_capabilities.get(capability.token_id)
+        if retained is not capability:
+            return
+        self._releasing_reservations.add(capability.reservation_id)
+        token = capability.trusted_token
+        self._claimed_reservations.discard(capability.reservation_id)
+        if self._prepared_channel_ids.get(token.channel_id) == capability.reservation_id:
+            self._prepared_channel_ids.pop(token.channel_id)
+        if not keep_recovery_slot:
+            self._recoverable_admission_slots.discard(capability.reservation_id)
+            if not self._recoverable_admission_slots:
+                self._recoverable_admission_slots.clear()
+        self._prepared_release_fault("close-secondary-indexes")
+        journal = self._prepared_close_commit_journals.get(capability.reservation_id)
+        if journal is not None:
+            shard = self._owner_shard(
+                capability.trusted_token._owner_shard_id,
+                create=False,
+            )
+            if shard is not None:
+                with shard.lock:
+                    self._release_prepared_accounting_marker(
+                        shard,
+                        capability.reservation_id,
+                    )
+        self._prepared_release_fault("close-accounting-marker")
+        self._prepared_close_commit_journals.pop(capability.reservation_id, None)
+        self._prepared_close_tokens.pop(capability.reservation_id, None)
+        self._prepared_release_fault("close-primary-token")
+        if keep_release_marker:
+            self._prepared_close_capabilities.pop(capability.token_id, None)
+            self._prepared_release_fault("close-capability")
+        else:
+            self._releasing_reservations.discard(capability.reservation_id)
+            self._prepared_close_capabilities.pop(capability.token_id, None)
+        if not self._prepared_close_tokens:
+            self._prepared_close_tokens.clear()
+            self._prepared_close_capabilities.clear()
+        if not self._prepared_reservations and not self._prepared_close_tokens:
+            self._claimed_reservations.clear()
+            self._prepared_channel_ids.clear()
+            self._prepared_transport_ids.clear()
+            self._prepared_operation_ids.clear()
+            self._prepared_affinity_reservations.clear()
+
+    def prepare_close_channel(
+        self,
+        channel_id: str,
+        *,
+        closed_at: datetime,
+        reason: str,
+    ) -> ApplicationChannelPreparedCloseToken:
+        """Reserve one close-only mutation without publishing canonical state."""
+
+        canonical_channel = channel_id.strip()
+        canonical_reason = reason.strip()
+        if not canonical_channel:
+            raise ValueError("Application prepared close requires a channel_id")
+        if not canonical_reason:
+            raise ValueError("Application prepared close requires a reason")
+        with self._gate.mutation(), self._prepared_lock:
+            canonical_close = self._require_window_time(
+                closed_at,
+                "channel closed_at",
+                allow_end_boundary=True,
+            )
+            if canonical_close < self._watermark:
+                raise StateError("Application channels cannot close before the current watermark")
+            if len(self._recoverable_admission_slots) >= _MAX_RECOVERABLE_ADMISSION_RESULTS:
+                raise StateError(
+                    "Application admission recovery capacity is exhausted; acknowledge "
+                    "a committed result before preparing another recoverable admission"
+                )
+            self._reject_prepared_conflict_locked(channel_ids=(canonical_channel,))
+            routed = self._channel_route(canonical_channel)
+            if routed is None:
+                raise StateError(f"Unknown application channel {canonical_channel!r}")
+            _channel_route, shard_id, channel_handle = routed
+            shard = self._owner_shard(shard_id, create=False)
+            if shard is None:
+                raise StateError(f"Unknown application channel {canonical_channel!r}")
+            with shard.lock:
+                snapshot = shard.channels.detached_by_handle(channel_handle)
+                generation = shard.channels.generation(channel_handle)
+                if snapshot.channel_id != canonical_channel:
+                    raise StateError(f"Unknown application channel {canonical_channel!r}")
+                if not snapshot.is_open:
+                    raise StateError("Application prepared close requires an open channel")
+                if canonical_close < snapshot.last_activity_at:
+                    raise StateError("Application channel cannot close before its last activity")
+                if canonical_close > self._effective_deadline(snapshot):
+                    raise StateError(
+                        "Application channel cannot close after its idle, hard, or "
+                        "transport deadline"
+                    )
+                active_count = shard.operations.count("channel", canonical_channel)
+                if active_count:
+                    raise StateError(
+                        f"Application channel {canonical_channel!r} cannot close with "
+                        f"{active_count} active operations"
+                    )
+                prepared_snapshot = replace(
+                    snapshot,
+                    closed_at=canonical_close,
+                    close_reason=canonical_reason,
+                )
+            reservation_id = self._next_prepared_reservation_id
+            self._next_prepared_reservation_id += 1
+            token = ApplicationChannelPreparedCloseToken(
+                channel_id=canonical_channel,
+                closed_at=canonical_close,
+                reason=canonical_reason,
+                _registry_token=id(self),
+                _reservation_id=reservation_id,
+                _owner_shard_id=shard_id,
+                _channel_handle=channel_handle,
+                _channel_generation=generation,
+                _expected_snapshot=snapshot,
+                _prepared_snapshot=prepared_snapshot,
+            )
+            token = replace(
+                token,
+                _integrity_token=_application_channel_prepared_close_integrity_token(
+                    self._admission_secret,
+                    token,
+                ),
+            )
+            capability = _ApplicationChannelPreparedCloseCapability(
+                token_id=id(token),
+                reservation_id=reservation_id,
+                integrity_token=token._integrity_token,
+                trusted_token=deepcopy(token),
+            )
+            self._prepared_close_tokens[reservation_id] = token
+            self._prepared_close_capabilities[id(token)] = capability
+            self._prepared_channel_ids[canonical_channel] = reservation_id
+            self._recoverable_admission_slots.add(reservation_id)
+            return token
+
+    def cancel_prepared_close(self, token: ApplicationChannelPreparedCloseToken) -> bool:
+        """Cancel one unclaimed close-only reservation without mutation."""
+
+        with self._gate.mutation(), self._prepared_lock:
+            capability = self._prepared_close_capabilities.get(id(token))
+            if capability is None:
+                return False
+            try:
+                capability = self._active_prepared_close_locked(token)
+            except StateError:
+                self._release_prepared_close_locked(capability)
+                raise
+            if capability.reservation_id in self._claimed_reservations:
+                return False
+            self._release_prepared_close_locked(capability)
+            return True
+
+    def _validate_prepared_close_locked(
+        self,
+        capability: _ApplicationChannelPreparedCloseCapability,
+    ) -> None:
+        """Verify exact handle/generation/snapshot state before a close claim commits."""
+
+        token = capability.trusted_token
+        shard = self._owner_shard(token._owner_shard_id, create=False)
+        if shard is None:
+            raise StateError("prepared application close channel disappeared")
+        with shard.lock:
+            if not shard.channels.matches(
+                token._channel_handle,
+                token._channel_generation,
+                token.channel_id,
+            ):
+                raise StateError("prepared application close channel was invalidated")
+            if shard.channels.detached_by_handle(token._channel_handle) != token._expected_snapshot:
+                raise StateError("prepared application close channel changed")
+
+    def _claim_prepared_close(self, token: ApplicationChannelPreparedCloseToken) -> None:
+        """Revalidate and claim one close reservation in a short common section."""
+
+        with self._gate.mutation(), self._prepared_lock:
+            if self._has_incomplete_prepared_release_locked():
+                raise StateError(
+                    "Application close claim is fenced by an incomplete prepared release"
+                )
+            capability = self._prepared_close_capabilities.get(id(token))
+            try:
+                capability = self._active_prepared_close_locked(token)
+            except StateError:
+                if capability is not None:
+                    self._release_prepared_close_locked(capability)
+                raise
+            if capability.reservation_id in self._claimed_reservations:
+                raise StateError("application channel prepared close is already claimed")
+            if capability.trusted_token.closed_at < self._watermark:
+                self._release_prepared_close_locked(capability)
+                raise StateError("application prepared close starts behind the canonical watermark")
+            try:
+                self._validate_prepared_close_locked(capability)
+                self._active_prepared_close_locked(token)
+            except StateError:
+                self._release_prepared_close_locked(capability)
+                raise
+            self._claimed_reservations.add(capability.reservation_id)
+
+    def _cancel_claimed_close(self, token: ApplicationChannelPreparedCloseToken) -> None:
+        """Release one claimed close after its outer transaction aborts."""
+
+        with self._gate.mutation(), self._prepared_lock:
+            capability = self._prepared_close_capabilities.get(id(token))
+            if capability is None:
+                return
+            try:
+                capability = self._active_prepared_close_locked(token)
+            except StateError:
+                self._release_prepared_close_locked(capability)
+                return
+            if capability.reservation_id not in self._claimed_reservations:
+                raise StateError("application channel prepared close is not claimed")
+            self._release_prepared_close_locked(capability)
+
+    @contextmanager
+    def prepared_close(
+        self,
+        token: ApplicationChannelPreparedCloseToken,
+    ) -> Iterator[ApplicationChannelPreparedCloseCommit]:
+        """Claim one close-only admission without retaining locks externally."""
+
+        self._claim_prepared_close(token)
+        transaction = ApplicationChannelPreparedCloseCommit(self, token)
+        try:
+            yield transaction
+        finally:
+            if not transaction.committed and transaction.recovery_status != "indeterminate":
+                self._cancel_claimed_close(token)
+            transaction._close()
+
+    def _commit_prepared_close_locked(
+        self,
+        token: ApplicationChannelPreparedCloseToken,
+    ) -> ApplicationChannelCloseAdmissionResult:
+        """Converge the exact close mutation after any primitive lost return."""
+
+        journal = self._prepared_close_commit_journals.get(token._reservation_id)
+        if journal is None:
+            journal = _ApplicationChannelCloseCommitJournal(token._reservation_id)
+            self._prepared_close_commit_journals[token._reservation_id] = journal
+        channel_route = self._route_partition("channel", token.channel_id, create=False)
+        shard = self._owner_shard(token._owner_shard_id, create=False)
+        if channel_route is None or shard is None:
+            raise StateError("prepared application close channel disappeared")
+        with _acquire_stable_locks(
+            [self._route_lock_entry(channel_route), self._owner_lock_entry(shard)]
+        ):
+            locator = self._pack_channel_locator(
+                token._owner_shard_id,
+                token._channel_handle,
+            )
+            if self._route_locator(channel_route.channels, token.channel_id) != locator:
+                raise StateError("prepared application close route changed")
+            if not shard.channels.matches(
+                token._channel_handle,
+                token._channel_generation,
+                token.channel_id,
+            ):
+                raise StateError("prepared application close generation changed")
+            expected = token._expected_snapshot
+            updated = token._prepared_snapshot
+            assert expected is not None and updated is not None
+            snapshot = shard.channels.detached_by_handle(token._channel_handle)
+            if snapshot == expected:
+                if shard.operations.count("channel", token.channel_id):
+                    raise StateError(
+                        f"Application channel {token.channel_id!r} cannot close with "
+                        "active operations"
+                    )
+                shard.channels.replace(
+                    token._channel_handle,
+                    updated,
+                    known_prior=expected,
+                )
+            elif snapshot != updated:
+                raise StateError("prepared application close snapshot is indeterminate")
+            self._prepared_commit_fault("close-row")
+
+            closed_deadline = (token.closed_at + self._closed_grace).timestamp()
+            self._ensure_expiry_value(shard.active_expiry, token._channel_handle, None)
+            self._ensure_expiry_value(
+                shard.operation_blocker_expiry,
+                token._channel_handle,
+                None,
+            )
+            self._ensure_expiry_value(
+                shard.closed_expiry,
+                token._channel_handle,
+                closed_deadline,
+            )
+            self._prepared_commit_fault("close-expiry")
+
+            self._apply_prepared_accounting(
+                shard,
+                journal,
+                estimated_delta=(
+                    _snapshot_estimated_bytes(updated) - _snapshot_estimated_bytes(expected)
+                ),
+                mutation_delta=1,
+                open_delta=-1,
+                stage="close-accounting",
+            )
+            self._prepared_commit_fault("close-accounting")
+
+            if (
+                shard.channels.detached_by_handle(token._channel_handle) != updated
+                or shard.active_expiry.get(token._channel_handle) is not None
+                or shard.operation_blocker_expiry.get(token._channel_handle) is not None
+                or shard.closed_expiry.get(token._channel_handle) != closed_deadline
+            ):
+                raise StateError("Prepared application close poststate is incomplete")
+        close = ApplicationChannelCloseResult(
+            channel_id=token.channel_id,
+            closed_at=token.closed_at,
+            newly_closed=True,
+        )
+        placeholder = ApplicationChannelCloseAdmissionReceipt(
+            publication_token=token.publication_token,
+            channel_id=token.channel_id,
+            snapshot=updated,
+            close=close,
+            _registry_token=id(self),
+        )
+        receipt = replace(
+            placeholder,
+            _integrity_token=_application_channel_close_receipt_integrity_token(
+                self._admission_secret,
+                placeholder,
+            ),
+        )
+        return ApplicationChannelCloseAdmissionResult(updated, close, receipt)
+
+    def _retain_recoverable_close_locked(
+        self,
+        capability: _ApplicationChannelPreparedCloseCapability,
+        result: ApplicationChannelCloseAdmissionResult,
+    ) -> None:
+        """Retain one exact close result in its preparation-reserved slot."""
+
+        if capability.reservation_id not in self._recoverable_admission_slots:
+            raise StateError("Application close lost its reserved recovery capacity")
+        token = self._prepared_close_tokens.get(capability.reservation_id)
+        if token is None or id(token) != capability.token_id:
+            raise StateError("Application close lost its exact recovery token")
+        self._recoverable_close_receipts[id(result.receipt)] = result.receipt
+        try:
+            self._prepared_retention_fault("close-receipt")
+            self._recoverable_close_results[capability.reservation_id] = (
+                _RecoverableApplicationCloseResult(token, result)
+            )
+        except BaseException:
+            if capability.reservation_id not in self._recoverable_close_results:
+                self._recoverable_close_receipts.pop(id(result.receipt), None)
+            raise
+        self._prepared_retention_fault("close-result")
+
+    def _commit_claimed_close(
+        self,
+        token: ApplicationChannelPreparedCloseToken,
+    ) -> ApplicationChannelCloseAdmissionResult:
+        """Commit and retain one exact claimed close result."""
+
+        with self._gate.mutation(), self._prepared_lock:
+            capability = self._active_prepared_close_locked(token)
+            if capability.reservation_id not in self._claimed_reservations:
+                raise StateError("application channel prepared close is not claimed")
+            self._validate_prepared_close_locked(capability)
+            self._active_prepared_close_locked(token)
+            result = self._commit_prepared_close_locked(capability.trusted_token)
+            self._retain_recoverable_close_locked(capability, result)
+            return result
+
+    def _reconcile_claimed_close(
+        self,
+        token: ApplicationChannelPreparedCloseToken,
+    ) -> ApplicationChannelCloseCommitRecovery:
+        """Return exact committed, certified-prestate, or indeterminate close truth."""
+
+        if type(token) is not ApplicationChannelPreparedCloseToken:
+            return ApplicationChannelCloseCommitRecovery("indeterminate")
+        with self._gate.mutation(), self._prepared_lock:
+            retained = self._recoverable_close_results.get(token._reservation_id)
+            if retained is None:
+                retained = self._acknowledging_close_results.get(token._reservation_id)
+            if retained is not None:
+                if retained.token is token:
+                    if (
+                        self._recoverable_close_receipts.get(id(retained.result.receipt))
+                        is not retained.result.receipt
+                        and self._acknowledging_close_results.get(token._reservation_id)
+                        is not retained
+                    ):
+                        return ApplicationChannelCloseCommitRecovery("indeterminate")
+                    return ApplicationChannelCloseCommitRecovery(
+                        "committed",
+                        retained.result,
+                    )
+                return ApplicationChannelCloseCommitRecovery("indeterminate")
+            capability = self._prepared_close_capabilities.get(id(token))
+            if capability is None:
+                return ApplicationChannelCloseCommitRecovery("indeterminate")
+            try:
+                capability = self._active_prepared_close_locked(token)
+            except StateError:
+                return ApplicationChannelCloseCommitRecovery("indeterminate")
+            if capability.reservation_id not in self._claimed_reservations:
+                return ApplicationChannelCloseCommitRecovery("indeterminate")
+            trusted = capability.trusted_token
+            if capability.reservation_id in self._prepared_close_commit_journals:
+                result = self._commit_prepared_close_locked(trusted)
+                self._retain_recoverable_close_locked(capability, result)
+                return ApplicationChannelCloseCommitRecovery("committed", result)
+            channel_route = self._route_partition(
+                "channel",
+                trusted.channel_id,
+                create=False,
+            )
+            shard = self._owner_shard(trusted._owner_shard_id, create=False)
+            if shard is None or channel_route is None:
+                return ApplicationChannelCloseCommitRecovery("indeterminate")
+            with _acquire_stable_locks(
+                [self._route_lock_entry(channel_route), self._owner_lock_entry(shard)]
+            ):
+                locator = self._pack_channel_locator(
+                    trusted._owner_shard_id,
+                    trusted._channel_handle,
+                )
+                if self._route_locator(channel_route.channels, trusted.channel_id) != locator:
+                    return ApplicationChannelCloseCommitRecovery("indeterminate")
+                if not shard.channels.matches(
+                    trusted._channel_handle,
+                    trusted._channel_generation,
+                    trusted.channel_id,
+                ):
+                    return ApplicationChannelCloseCommitRecovery("indeterminate")
+                snapshot = shard.channels.detached_by_handle(trusted._channel_handle)
+                if snapshot == trusted._expected_snapshot:
+                    return ApplicationChannelCloseCommitRecovery("not_committed")
+                return ApplicationChannelCloseCommitRecovery("indeterminate")
+
+    def recover_committed_close(
+        self,
+        token: ApplicationChannelPreparedCloseToken,
+    ) -> ApplicationChannelCloseAdmissionResult | None:
+        """Return one exact retained close result after a lost outer return."""
+
+        if type(token) is not ApplicationChannelPreparedCloseToken:
+            return None
+        expected = _application_channel_prepared_close_integrity_token(
+            self._admission_secret,
+            token,
+        )
+        if not hmac.compare_digest(token._integrity_token, expected):
+            return None
+        with self._prepared_lock:
+            retained = self._recoverable_close_results.get(token._reservation_id)
+            if retained is None:
+                retained = self._acknowledging_close_results.get(token._reservation_id)
+            if retained is None or retained.token is not token:
+                return None
+            return retained.result
+
+    def reconcile_committed_close(
+        self,
+        token: ApplicationChannelPreparedCloseToken,
+    ) -> ApplicationChannelCloseCommitRecovery:
+        """Reconcile one exact retained indeterminate close after context exit."""
+
+        if type(token) is not ApplicationChannelPreparedCloseToken:
+            return ApplicationChannelCloseCommitRecovery("indeterminate")
+        expected = _application_channel_prepared_close_integrity_token(
+            self._admission_secret,
+            token,
+        )
+        if not hmac.compare_digest(token._integrity_token, expected):
+            return ApplicationChannelCloseCommitRecovery("indeterminate")
+        recovery = self._reconcile_claimed_close(token)
+        if recovery.status == "not_committed":
+            with self._gate.mutation(), self._prepared_lock:
+                capability = self._prepared_close_capabilities.get(id(token))
+                if capability is not None:
+                    capability = self._active_prepared_close_locked(token)
+                    self._claimed_reservations.discard(capability.reservation_id)
+        return recovery
+
+    def acknowledge_committed_close(
+        self,
+        token: ApplicationChannelPreparedCloseToken,
+        result: ApplicationChannelCloseAdmissionResult,
+    ) -> bool:
+        """Consume one exact close recovery result after outer commit."""
+
+        if type(token) is not ApplicationChannelPreparedCloseToken:
+            return False
+        with self._gate.mutation(), self._prepared_lock:
+            acknowledging = self._acknowledging_close_results.get(token._reservation_id)
+            retained = self._recoverable_close_results.get(token._reservation_id)
+            if retained is None:
+                retained = acknowledging
+            if retained is None or retained.token is not token or retained.result is not result:
+                return False
+            self._acknowledging_close_results[token._reservation_id] = retained
+            self._prepared_retention_fault("close-ack-record")
+            capability = self._prepared_close_capabilities.get(id(token))
+            if capability is not None:
+                self._release_prepared_close_locked(
+                    capability,
+                    keep_recovery_slot=True,
+                    keep_release_marker=True,
+                )
+            elif (
+                token._reservation_id not in self._releasing_reservations and acknowledging is None
+            ):
+                return False
+            self._recoverable_admission_slots.discard(token._reservation_id)
+            self._prepared_release_fault("close-ack-slot")
+            self._recoverable_close_results.pop(token._reservation_id, None)
+            self._prepared_release_fault("close-ack-result")
+            self._recoverable_close_receipts.pop(id(result.receipt), None)
+            self._prepared_release_fault("close-ack-receipt")
+            if not self._recoverable_close_results:
+                self._recoverable_close_results.clear()
+                self._recoverable_close_receipts.clear()
+            if not self._recoverable_admission_slots:
+                self._recoverable_admission_slots.clear()
+            self._releasing_reservations.discard(token._reservation_id)
+            self._prepared_release_fault("close-ack-release-marker")
+            self._acknowledging_close_results.pop(token._reservation_id, None)
+            if not self._acknowledging_close_results:
+                self._acknowledging_close_results.clear()
+            return True
+
+    def authenticates_close_admission_receipt(
+        self,
+        receipt: ApplicationChannelCloseAdmissionReceipt,
+    ) -> bool:
+        """Return whether one exact unacknowledged close receipt is authentic."""
+
+        if type(
+            receipt
+        ) is not ApplicationChannelCloseAdmissionReceipt or receipt._registry_token != id(self):
+            return False
+        expected = _application_channel_close_receipt_integrity_token(
+            self._admission_secret,
+            receipt,
+        )
+        if not hmac.compare_digest(receipt._integrity_token, expected):
+            return False
+        with self._prepared_lock:
+            return self._recoverable_close_receipts.get(id(receipt)) is receipt or any(
+                retained.result.receipt is receipt
+                for retained in self._acknowledging_close_results.values()
+            )
 
     def cancel_prepared_admission(self, token: ApplicationChannelAdmissionToken) -> bool:
         """Cancel one unclaimed channel reservation without publishing state."""
@@ -2885,7 +4083,7 @@ class ApplicationChannelRegistry:
         try:
             yield transaction
         finally:
-            if not transaction.committed:
+            if not transaction.committed and transaction.recovery_status != "indeterminate":
                 self._cancel_claimed_admission(token)
             transaction._close()
 
@@ -2893,6 +4091,10 @@ class ApplicationChannelRegistry:
         """Revalidate and claim one token in a short registry-only section."""
 
         with self._gate.mutation(), self._prepared_lock:
+            if self._has_incomplete_prepared_release_locked():
+                raise StateError(
+                    "Application admission claim is fenced by an incomplete prepared release"
+                )
             capability = self._prepared_capabilities.get(id(token))
             try:
                 capability = self._active_prepared_admission_locked(token)
@@ -2989,6 +4191,363 @@ class ApplicationChannelRegistry:
                 raise StateError("application channel admission token is not claimed")
             self._release_prepared_capability_locked(capability)
 
+    def _issue_admission_result_locked(
+        self,
+        capability: _ApplicationChannelAdmissionCapability,
+        result: ApplicationChannelAdmissionResult,
+    ) -> ApplicationChannelAdmissionResult:
+        """Seal one committed common result against its exact trusted reservation."""
+
+        trusted_token = capability.trusted_token
+        receipt = ApplicationChannelAdmissionReceipt(
+            kind=trusted_token.kind,
+            publication_token=capability.integrity_token,
+            channel_id=result.snapshot.channel_id,
+            operation_id=trusted_token.reservation.operation_id,
+            snapshot=result.snapshot,
+            close_token=result.close_token,
+            _registry_token=id(self),
+            _recoverable=capability.retain_result_for_recovery,
+        )
+        receipt = replace(
+            receipt,
+            _integrity_token=_application_channel_admission_receipt_integrity_token(
+                self._admission_secret,
+                receipt,
+            ),
+        )
+        return replace(result, receipt=receipt)
+
+    def _retain_recoverable_admission_result_locked(
+        self,
+        capability: _ApplicationChannelAdmissionCapability,
+        result: ApplicationChannelAdmissionResult,
+    ) -> None:
+        """Retain one exact result in the capacity reserved by its preparation."""
+
+        if not capability.retain_result_for_recovery:
+            return
+        if capability.reservation_id not in self._recoverable_admission_slots:
+            raise StateError("Application admission lost its reserved recovery capacity")
+        receipt = result.receipt
+        if receipt is None or not receipt._recoverable:
+            raise StateError("Recoverable application admission returned no exact receipt")
+        active_token = self._prepared_reservations.get(capability.reservation_id)
+        if active_token is None or id(active_token) != capability.token_id:
+            raise StateError("Recoverable application admission lost its exact token")
+        retained = _RecoverableApplicationAdmissionResult(
+            token=active_token,
+            result=result,
+        )
+        self._recoverable_admission_receipts[id(receipt)] = receipt
+        try:
+            self._prepared_retention_fault("admission-receipt")
+            self._recoverable_admission_results[capability.reservation_id] = retained
+        except BaseException:
+            if capability.reservation_id not in self._recoverable_admission_results:
+                self._recoverable_admission_receipts.pop(id(receipt), None)
+            raise
+        self._prepared_retention_fault("admission-result")
+
+    def _recover_committed_result_from_state_locked(
+        self,
+        capability: _ApplicationChannelAdmissionCapability,
+    ) -> ApplicationChannelAdmissionResult | None:
+        """Certify a fully committed result after the common return became ambiguous."""
+
+        token = capability.trusted_token
+        expected = token._prepared_snapshot
+        if expected is None:
+            return None
+        channel_id = expected.channel_id
+        routed = self._channel_route(channel_id)
+        if routed is None:
+            return None
+        _channel_route, shard_id, channel_handle = routed
+        if shard_id != token._owner_shard_id:
+            return None
+        shard = self._owner_shard(shard_id, create=False)
+        if shard is None:
+            return None
+        with shard.lock:
+            try:
+                snapshot = shard.channels.get_by_handle(channel_handle)
+            except KeyError:
+                return None
+            if snapshot != expected:
+                return None
+            if (channel_handle, token.reservation.operation_id) not in shard.used_operation_ids:
+                return None
+            if token.kind in {"completed_operation", "completed_operation_close"} and (
+                token._channel_handle != channel_handle
+                or not shard.channels.matches(
+                    channel_handle,
+                    token._channel_generation or 0,
+                    channel_id,
+                )
+            ):
+                return None
+            close_token = (
+                ApplicationChannelCloseToken(
+                    locator=self._pack_channel_locator(shard_id, channel_handle),
+                    generation=shard.channels.generation(channel_handle),
+                )
+                if token.kind == "open_completed"
+                else None
+            )
+        if token.identity is not None:
+            transport_route = self._route_partition(
+                "transport",
+                token.identity.binding.transport_id,
+                create=False,
+            )
+            if transport_route is None:
+                return None
+            with transport_route.lock:
+                if self._route_locator(
+                    transport_route.transports,
+                    token.identity.binding.transport_id,
+                ) != self._pack_channel_locator(shard_id, channel_handle):
+                    return None
+        if token.replacement_channel_id:
+            replacement = self.get(token.replacement_channel_id)
+            if (
+                replacement is None
+                or replacement.closed_at != token.replacement_closed_at
+                or replacement.close_reason != token.replacement_reason
+            ):
+                return None
+        return ApplicationChannelAdmissionResult(snapshot=snapshot, close_token=close_token)
+
+    def _prepared_admission_prestate_is_intact_locked(
+        self,
+        capability: _ApplicationChannelAdmissionCapability,
+    ) -> bool:
+        """Return whether every canonical owner still equals the trusted prestate."""
+
+        token = capability.trusted_token
+        if token.kind in {"open_completed", "open_completed_close"}:
+            assert token.identity is not None
+            shard = self._owner_shard(token._owner_shard_id, create=False)
+            if shard is not None:
+                with shard.lock:
+                    if (
+                        shard.channels.recovery_handle_for_channel(
+                            token.identity.owner_id,
+                            token.identity.channel_id,
+                        )
+                        is not None
+                    ):
+                        return False
+            channel_route = self._route_partition(
+                "channel",
+                token.identity.channel_id,
+                create=False,
+            )
+            if channel_route is not None:
+                with channel_route.lock:
+                    if (
+                        self._route_locator(
+                            channel_route.channels,
+                            token.identity.channel_id,
+                        )
+                        is not None
+                    ):
+                        return False
+            transport_route = self._route_partition(
+                "transport",
+                token.identity.binding.transport_id,
+                create=False,
+            )
+            if transport_route is not None:
+                with transport_route.lock:
+                    if (
+                        self._route_locator(
+                            transport_route.transports,
+                            token.identity.binding.transport_id,
+                        )
+                        is not None
+                    ):
+                        return False
+            if token.replacement_channel_id:
+                replacement = self.get(token.replacement_channel_id)
+                return replacement == token._expected_snapshot
+            return True
+
+        shard = self._owner_shard(token._owner_shard_id, create=False)
+        if shard is None or token._channel_handle is None:
+            return False
+        with shard.lock:
+            if not shard.channels.matches(
+                token._channel_handle,
+                token._channel_generation or 0,
+                token.reservation.channel_id,
+            ):
+                return False
+            if shard.channels.detached_by_handle(token._channel_handle) != token._expected_snapshot:
+                return False
+            return (
+                token._channel_handle,
+                token.reservation.operation_id,
+            ) not in shard.used_operation_ids
+
+    def _reconcile_claimed_admission(
+        self,
+        token: ApplicationChannelAdmissionToken,
+    ) -> ApplicationChannelCommitRecovery:
+        """Return exact committed, certified-prestate, or indeterminate truth."""
+
+        if type(token) is not ApplicationChannelAdmissionToken:
+            return ApplicationChannelCommitRecovery("indeterminate")
+        with self._gate.mutation(), self._prepared_lock:
+            retained_result = self._recoverable_admission_results.get(token._reservation_id)
+            if retained_result is None:
+                retained_result = self._acknowledging_admission_results.get(token._reservation_id)
+            if retained_result is not None:
+                if retained_result.token is token:
+                    receipt = retained_result.result.receipt
+                    if receipt is None or (
+                        self._recoverable_admission_receipts.get(id(receipt)) is not receipt
+                        and self._acknowledging_admission_results.get(token._reservation_id)
+                        is not retained_result
+                    ):
+                        return ApplicationChannelCommitRecovery("indeterminate")
+                    return ApplicationChannelCommitRecovery(
+                        "committed",
+                        retained_result.result,
+                    )
+                return ApplicationChannelCommitRecovery("indeterminate")
+            capability = self._prepared_capabilities.get(id(token))
+            if capability is None:
+                return ApplicationChannelCommitRecovery("indeterminate")
+            if not capability.retain_result_for_recovery:
+                if self._prepared_admission_prestate_is_intact_locked(capability):
+                    self._release_prepared_capability_locked(capability)
+                    return ApplicationChannelCommitRecovery("not_committed")
+                return ApplicationChannelCommitRecovery("indeterminate")
+            try:
+                capability = self._active_prepared_admission_locked(token)
+            except StateError:
+                if self._prepared_admission_prestate_is_intact_locked(capability):
+                    self._release_prepared_capability_locked(capability)
+                    return ApplicationChannelCommitRecovery("not_committed")
+                return ApplicationChannelCommitRecovery("indeterminate")
+            if capability.reservation_id not in self._claimed_reservations:
+                return ApplicationChannelCommitRecovery("indeterminate")
+            if capability.reservation_id in self._prepared_commit_journals:
+                trusted_token = capability.trusted_token
+                if trusted_token.kind in {"open_completed", "open_completed_close"}:
+                    result = self._commit_prepared_open_locked(trusted_token)
+                else:
+                    result = self._commit_prepared_operation_locked(trusted_token)
+                result = self._issue_admission_result_locked(capability, result)
+                self._retain_recoverable_admission_result_locked(capability, result)
+                self._release_prepared_affinity_reservation_locked(capability)
+                return ApplicationChannelCommitRecovery("committed", result)
+            result = self._recover_committed_result_from_state_locked(capability)
+            if result is not None:
+                result = self._issue_admission_result_locked(capability, result)
+                self._retain_recoverable_admission_result_locked(capability, result)
+                self._release_prepared_affinity_reservation_locked(capability)
+                return ApplicationChannelCommitRecovery("committed", result)
+            if self._prepared_admission_prestate_is_intact_locked(capability):
+                return ApplicationChannelCommitRecovery("not_committed")
+            return ApplicationChannelCommitRecovery("indeterminate")
+
+    def recover_committed_admission(
+        self,
+        token: ApplicationChannelAdmissionToken,
+    ) -> ApplicationChannelAdmissionResult | None:
+        """Return one exact retained common result after a lost outer return."""
+
+        if type(token) is not ApplicationChannelAdmissionToken:
+            return None
+        expected = _application_channel_admission_integrity_token(
+            self._admission_secret,
+            token,
+        )
+        if not hmac.compare_digest(token._integrity_token, expected):
+            return None
+        with self._prepared_lock:
+            retained = self._recoverable_admission_results.get(token._reservation_id)
+            if retained is None:
+                retained = self._acknowledging_admission_results.get(token._reservation_id)
+            if retained is None or retained.token is not token:
+                return None
+            return retained.result
+
+    def reconcile_committed_admission(
+        self,
+        token: ApplicationChannelAdmissionToken,
+    ) -> ApplicationChannelCommitRecovery:
+        """Reconcile one exact retained indeterminate claim after context exit."""
+
+        if type(token) is not ApplicationChannelAdmissionToken:
+            return ApplicationChannelCommitRecovery("indeterminate")
+        expected = _application_channel_admission_integrity_token(
+            self._admission_secret,
+            token,
+        )
+        if not hmac.compare_digest(token._integrity_token, expected):
+            return ApplicationChannelCommitRecovery("indeterminate")
+        recovery = self._reconcile_claimed_admission(token)
+        if recovery.status == "not_committed":
+            with self._gate.mutation(), self._prepared_lock:
+                capability = self._prepared_capabilities.get(id(token))
+                if capability is not None:
+                    capability = self._active_prepared_admission_locked(token)
+                    self._claimed_reservations.discard(capability.reservation_id)
+        return recovery
+
+    def acknowledge_committed_admission(
+        self,
+        token: ApplicationChannelAdmissionToken,
+        result: ApplicationChannelAdmissionResult,
+    ) -> bool:
+        """Consume the exact retained recovery result after its outer owner commits."""
+
+        if type(token) is not ApplicationChannelAdmissionToken:
+            return False
+        with self._gate.mutation(), self._prepared_lock:
+            acknowledging = self._acknowledging_admission_results.get(token._reservation_id)
+            retained = self._recoverable_admission_results.get(token._reservation_id)
+            if retained is None:
+                retained = acknowledging
+            if retained is None or retained.token is not token or retained.result is not result:
+                return False
+            self._acknowledging_admission_results[token._reservation_id] = retained
+            self._prepared_retention_fault("admission-ack-record")
+            capability = self._prepared_capabilities.get(id(token))
+            if capability is not None:
+                self._release_prepared_capability_locked(
+                    capability,
+                    keep_recovery_slot=True,
+                    keep_release_marker=True,
+                )
+            elif (
+                token._reservation_id not in self._releasing_reservations and acknowledging is None
+            ):
+                return False
+            receipt = result.receipt
+            self._recoverable_admission_slots.discard(token._reservation_id)
+            self._prepared_release_fault("admission-ack-slot")
+            self._recoverable_admission_results.pop(token._reservation_id, None)
+            self._prepared_release_fault("admission-ack-result")
+            if receipt is not None:
+                self._recoverable_admission_receipts.pop(id(receipt), None)
+            self._prepared_release_fault("admission-ack-receipt")
+            if not self._recoverable_admission_results:
+                self._recoverable_admission_results.clear()
+                self._recoverable_admission_receipts.clear()
+            if not self._recoverable_admission_slots:
+                self._recoverable_admission_slots.clear()
+            self._releasing_reservations.discard(token._reservation_id)
+            self._prepared_release_fault("admission-ack-release-marker")
+            self._acknowledging_admission_results.pop(token._reservation_id, None)
+            if not self._acknowledging_admission_results:
+                self._acknowledging_admission_results.clear()
+            return True
+
     def _commit_claimed_admission(
         self,
         token: ApplicationChannelAdmissionToken,
@@ -3006,24 +4565,12 @@ class ApplicationChannelRegistry:
                 result = self._commit_prepared_open_locked(trusted_token)
             else:
                 result = self._commit_prepared_operation_locked(trusted_token)
-            receipt = ApplicationChannelAdmissionReceipt(
-                kind=trusted_token.kind,
-                publication_token=capability.integrity_token,
-                channel_id=result.snapshot.channel_id,
-                operation_id=trusted_token.reservation.operation_id,
-                snapshot=result.snapshot,
-                close_token=result.close_token,
-                _registry_token=id(self),
-            )
-            receipt = replace(
-                receipt,
-                _integrity_token=_application_channel_admission_receipt_integrity_token(
-                    self._admission_secret,
-                    receipt,
-                ),
-            )
-            result = replace(result, receipt=receipt)
-            self._release_prepared_capability_locked(capability)
+            result = self._issue_admission_result_locked(capability, result)
+            self._retain_recoverable_admission_result_locked(capability, result)
+            if capability.retain_result_for_recovery:
+                self._release_prepared_affinity_reservation_locked(capability)
+            else:
+                self._release_prepared_capability_locked(capability)
             return result
 
     def _commit_prepared_open_locked(
@@ -3031,6 +4578,9 @@ class ApplicationChannelRegistry:
         token: ApplicationChannelAdmissionToken,
     ) -> ApplicationChannelAdmissionResult:
         """Perform primitive replacement/open writes after claim validation."""
+
+        if token._retain_result_for_recovery:
+            return self._commit_recoverable_open_locked(token)
 
         identity = token.identity
         completed = token._prepared_snapshot
@@ -3124,11 +4674,140 @@ class ApplicationChannelRegistry:
             )
             return ApplicationChannelAdmissionResult(completed, close_token)
 
+    def _commit_recoverable_open_locked(
+        self,
+        token: ApplicationChannelAdmissionToken,
+    ) -> ApplicationChannelAdmissionResult:
+        """Converge one fresh recoverable open after any primitive lost return."""
+
+        identity = token.identity
+        completed = token._prepared_snapshot
+        if (
+            identity is None
+            or completed is None
+            or token.kind != "open_completed"
+            or token.replacement_channel_id
+            or token.channel_closed_at is not None
+        ):
+            raise StateError("Recoverable application open has an unsupported mutation shape")
+        journal = self._prepared_commit_journals.get(token._reservation_id)
+        if journal is None:
+            journal = _ApplicationChannelCommitJournal(token._reservation_id)
+            self._prepared_commit_journals[token._reservation_id] = journal
+        prepared_identity = _PackedChannelStore.prepare_identity(identity)
+        shard = self._owner_shard(token._owner_shard_id, create=True)
+        channel_route = self._route_partition("channel", identity.channel_id, create=True)
+        transport_route = self._route_partition(
+            "transport",
+            identity.binding.transport_id,
+            create=True,
+        )
+        operation_route = self._route_partition(
+            "operation",
+            token.reservation.operation_id,
+            create=True,
+        )
+        assert shard is not None and channel_route is not None
+        assert transport_route is not None and operation_route is not None
+        with _acquire_stable_locks(
+            [
+                self._route_lock_entry(channel_route),
+                self._route_lock_entry(transport_route),
+                self._route_lock_entry(operation_route),
+                self._owner_lock_entry(shard),
+            ]
+        ):
+            if journal.initial_affinity_size is None:
+                journal.initial_affinity_size = shard.channels.count_prepared_affinity(
+                    prepared_identity
+                )
+            channel_handle = journal.channel_handle
+            if channel_handle is None and journal.insert_attempted:
+                channel_handle = shard.channels.recovery_handle_for_channel(
+                    identity.owner_id,
+                    identity.channel_id,
+                )
+            if channel_handle is None:
+                journal.insert_attempted = True
+                channel_handle = shard.channels.insert(
+                    completed,
+                    prepared_identity=prepared_identity,
+                )
+            journal.channel_handle = channel_handle
+            journal.channel_generation = shard.channels.generation(channel_handle)
+            if shard.channels.detached_by_handle(channel_handle) != completed:
+                raise StateError("Recoverable application open row is not its exact poststate")
+            self._prepared_commit_fault("open-row")
+
+            used_id_key = (channel_handle, token.reservation.operation_id)
+            if used_id_key not in shard.used_operation_ids:
+                shard.used_operation_ids[used_id_key] = channel_handle
+            self._prepared_commit_fault("open-operation-marker")
+
+            locator = self._pack_channel_locator(token._owner_shard_id, channel_handle)
+            self._ensure_route_value(
+                channel_route.channels,
+                identity.channel_id,
+                locator,
+            )
+            self._prepared_commit_fault("open-channel-route")
+            self._ensure_route_value(
+                transport_route.transports,
+                identity.binding.transport_id,
+                locator,
+            )
+            self._prepared_commit_fault("open-transport-route")
+
+            active_deadline = self._effective_deadline(completed).timestamp()
+            self._ensure_expiry_value(shard.active_expiry, channel_handle, active_deadline)
+            self._ensure_expiry_value(shard.operation_blocker_expiry, channel_handle, None)
+            self._ensure_expiry_value(shard.closed_expiry, channel_handle, None)
+            self._prepared_commit_fault("open-expiry")
+
+            self._apply_prepared_accounting(
+                shard,
+                journal,
+                estimated_delta=(
+                    shard.channels.estimated_row_bytes(channel_handle)
+                    + _used_id_estimated_bytes(used_id_key)
+                ),
+                mutation_delta=1,
+                open_delta=1,
+                minimum_affinity_bucket=(journal.initial_affinity_size or 0) + 1,
+                minimum_high_water_mark=len(shard.channels),
+                stage="open-accounting",
+            )
+            self._prepared_commit_fault("open-accounting")
+
+            if (
+                self._route_locator(channel_route.channels, identity.channel_id) != locator
+                or self._route_locator(
+                    transport_route.transports,
+                    identity.binding.transport_id,
+                )
+                != locator
+                or used_id_key not in shard.used_operation_ids
+                or shard.active_expiry.get(channel_handle) != active_deadline
+                or shard.closed_expiry.get(channel_handle) is not None
+            ):
+                raise StateError("Recoverable application open poststate is incomplete")
+            generation = journal.channel_generation
+            if generation is None:
+                raise StateError("Recoverable application open lost its handle generation")
+            close_token = ApplicationChannelCloseToken(
+                locator=locator,
+                generation=generation,
+            )
+            return ApplicationChannelAdmissionResult(completed, close_token)
+
     def _commit_prepared_operation_locked(
         self,
         token: ApplicationChannelAdmissionToken,
     ) -> ApplicationChannelAdmissionResult:
         """Perform primitive immediate-operation writes after claim validation."""
+
+        if token._retain_result_for_recovery:
+            return self._commit_recoverable_operation_locked(token)
 
         channel_handle = token._channel_handle
         updated = token._prepared_snapshot
@@ -3181,6 +4860,106 @@ class ApplicationChannelRegistry:
                     )
                 else:
                     shard.operation_blocker_expiry.pop(channel_handle, None)
+            return ApplicationChannelAdmissionResult(updated)
+
+    def _commit_recoverable_operation_locked(
+        self,
+        token: ApplicationChannelAdmissionToken,
+    ) -> ApplicationChannelAdmissionResult:
+        """Converge one completed operation without double-applying accounting."""
+
+        channel_handle = token._channel_handle
+        updated = token._prepared_snapshot
+        snapshot = token._expected_snapshot
+        if (
+            channel_handle is None
+            or updated is None
+            or snapshot is None
+            or token.kind != "completed_operation"
+            or token.channel_closed_at is not None
+        ):
+            raise StateError("Recoverable application operation has an unsupported shape")
+        journal = self._prepared_commit_journals.get(token._reservation_id)
+        if journal is None:
+            journal = _ApplicationChannelCommitJournal(
+                token._reservation_id,
+                channel_handle=channel_handle,
+                channel_generation=token._channel_generation,
+            )
+            self._prepared_commit_journals[token._reservation_id] = journal
+        shard = self._owner_shard(token._owner_shard_id, create=False)
+        channel_route = self._route_partition(
+            "channel",
+            token.reservation.channel_id,
+            create=False,
+        )
+        operation_route = self._route_partition(
+            "operation",
+            token.reservation.operation_id,
+            create=True,
+        )
+        if shard is None or channel_route is None or operation_route is None:
+            raise StateError("Recoverable application operation owner disappeared")
+        with _acquire_stable_locks(
+            [
+                self._route_lock_entry(channel_route),
+                self._route_lock_entry(operation_route),
+                self._owner_lock_entry(shard),
+            ]
+        ):
+            locator = self._pack_channel_locator(token._owner_shard_id, channel_handle)
+            if self._route_locator(
+                channel_route.channels,
+                token.reservation.channel_id,
+            ) != locator or not shard.channels.matches(
+                channel_handle,
+                token._channel_generation or 0,
+                token.reservation.channel_id,
+            ):
+                raise StateError("Recoverable application operation channel changed")
+
+            used_id_key = (channel_handle, token.reservation.operation_id)
+            if used_id_key not in shard.used_operation_ids:
+                shard.used_operation_ids[used_id_key] = channel_handle
+            self._prepared_commit_fault("operation-marker")
+
+            current = shard.channels.detached_by_handle(channel_handle)
+            if current == snapshot:
+                shard.channels.replace(channel_handle, updated, known_prior=snapshot)
+            elif current != updated:
+                raise StateError("Recoverable application operation row is indeterminate")
+            self._prepared_commit_fault("operation-row")
+
+            active_deadline = self._effective_deadline(updated).timestamp()
+            self._ensure_expiry_value(shard.active_expiry, channel_handle, active_deadline)
+            self._ensure_expiry_value(
+                shard.operation_blocker_expiry,
+                channel_handle,
+                active_deadline if updated.active_operations else None,
+            )
+            self._ensure_expiry_value(shard.closed_expiry, channel_handle, None)
+            self._prepared_commit_fault("operation-expiry")
+
+            self._apply_prepared_accounting(
+                shard,
+                journal,
+                estimated_delta=(
+                    _snapshot_estimated_bytes(updated)
+                    - _snapshot_estimated_bytes(snapshot)
+                    + _used_id_estimated_bytes(used_id_key)
+                ),
+                mutation_delta=1,
+                stage="operation-accounting",
+            )
+            self._prepared_commit_fault("operation-accounting")
+
+            if (
+                shard.channels.detached_by_handle(channel_handle) != updated
+                or used_id_key not in shard.used_operation_ids
+                or shard.active_expiry.get(channel_handle) != active_deadline
+                or shard.closed_expiry.get(channel_handle) is not None
+            ):
+                raise StateError("Recoverable application operation poststate is incomplete")
             return ApplicationChannelAdmissionResult(updated)
 
     def open_channel(self, identity: ApplicationChannelIdentity) -> ApplicationChannelSnapshot:
@@ -3256,9 +5035,9 @@ class ApplicationChannelRegistry:
                 )
 
             affinity_key = (identity.owner_id, identity.affinity_digest)
-            affinity_size = shard.channels.count_prepared_affinity(
-                prepared_identity
-            ) + self._prepared_affinity_counts.get(affinity_key, 0)
+            affinity_size = shard.channels.count_prepared_affinity(prepared_identity) + len(
+                self._prepared_affinity_reservations.get(affinity_key, ())
+            )
             if affinity_size >= self._max_reusable_per_affinity:
                 raise StateError(
                     f"Application affinity {identity.affinity_digest!r} already retains "
@@ -3386,9 +5165,9 @@ class ApplicationChannelRegistry:
                 ):
                     raise StateError(f"Duplicate active operation_id {reservation.operation_id!r}")
                 affinity_key = (identity.owner_id, identity.affinity_digest)
-                affinity_size = shard.channels.count_prepared_affinity(
-                    prepared_identity
-                ) + self._prepared_affinity_counts.get(affinity_key, 0)
+                affinity_size = shard.channels.count_prepared_affinity(prepared_identity) + len(
+                    self._prepared_affinity_reservations.get(affinity_key, ())
+                )
                 if affinity_size >= self._max_reusable_per_affinity:
                     raise StateError(
                         f"Application affinity {identity.affinity_digest!r} already retains "
@@ -4239,8 +6018,8 @@ class ApplicationChannelRegistry:
             return snapshot
         if not reason.strip():
             raise StateError("Application channel closure requires a reason")
-        if closed_at < snapshot.identity.opened_at:
-            raise StateError("Application channel cannot close before it opens")
+        if closed_at < snapshot.last_activity_at:
+            raise StateError("Application channel cannot close before its last activity")
         if closed_at > self._effective_deadline(snapshot):
             raise StateError(
                 "Application channel cannot close after its idle, hard, or transport deadline"
@@ -4566,11 +6345,22 @@ class ApplicationChannelRegistry:
                 if canonical_time < self._watermark:
                     raise StateError("Application channel watermarks must be monotonic")
                 with self._prepared_lock:
+                    if self._has_incomplete_prepared_release_locked():
+                        raise StateError(
+                            "Application watermark is fenced by an incomplete prepared release"
+                        )
                     claimed_frontier = min(
                         (
-                            capability.linearization_time
-                            for capability in self._prepared_capabilities.values()
-                            if capability.reservation_id in self._claimed_reservations
+                            *(
+                                capability.linearization_time
+                                for capability in self._prepared_capabilities.values()
+                                if capability.reservation_id in self._claimed_reservations
+                            ),
+                            *(
+                                capability.trusted_token.closed_at
+                                for capability in self._prepared_close_capabilities.values()
+                                if capability.reservation_id in self._claimed_reservations
+                            ),
                         ),
                         default=None,
                     )
@@ -4683,11 +6473,49 @@ class ApplicationChannelRegistry:
         """Return a bounded structural census across lazy fixed-count shards."""
 
         with self._prepared_lock:
-            prepared_admissions = len(self._prepared_reservations)
+            prepared_admission_tokens = len(self._prepared_reservations)
+            prepared_admission_capabilities = len(self._prepared_capabilities)
+            prepared_close_tokens = len(self._prepared_close_tokens)
+            prepared_close_capabilities = len(self._prepared_close_capabilities)
+            prepared_commit_journals = len(self._prepared_commit_journals)
+            prepared_close_commit_journals = len(self._prepared_close_commit_journals)
+            releasing_admissions = len(self._releasing_reservations)
+            acknowledging_admission_results = len(self._acknowledging_admission_results)
+            acknowledging_close_results = len(self._acknowledging_close_results)
+            prepared_admissions = prepared_admission_tokens + prepared_close_tokens
             claimed_admissions = len(self._claimed_reservations)
             reserved_channel_ids = len(self._prepared_channel_ids)
             reserved_transport_ids = len(self._prepared_transport_ids)
             reserved_operation_ids = len(self._prepared_operation_ids)
+            recoverable_admission_slots = len(self._recoverable_admission_slots)
+            recoverable_admission_results = len(
+                set(self._recoverable_admission_results)
+                | set(self._acknowledging_admission_results)
+                | set(self._recoverable_close_results)
+                | set(self._acknowledging_close_results)
+            )
+            recoverable_admission_receipts = len(
+                {
+                    id(retained.result.receipt)
+                    for retained in (
+                        *self._recoverable_admission_results.values(),
+                        *self._acknowledging_admission_results.values(),
+                    )
+                    if retained.result.receipt is not None
+                }
+            )
+            recoverable_close_results = len(
+                set(self._recoverable_close_results) | set(self._acknowledging_close_results)
+            )
+            recoverable_close_receipts = len(
+                {
+                    id(retained.result.receipt)
+                    for retained in (
+                        *self._recoverable_close_results.values(),
+                        *self._acknowledging_close_results.values(),
+                    )
+                }
+            )
             estimated_prepared_bytes = (
                 sys.getsizeof(self._prepared_reservations)
                 + sys.getsizeof(self._prepared_capabilities)
@@ -4695,7 +6523,23 @@ class ApplicationChannelRegistry:
                 + sys.getsizeof(self._prepared_channel_ids)
                 + sys.getsizeof(self._prepared_transport_ids)
                 + sys.getsizeof(self._prepared_operation_ids)
-                + sys.getsizeof(self._prepared_affinity_counts)
+                + sys.getsizeof(self._prepared_affinity_reservations)
+                + sum(
+                    sys.getsizeof(reservations)
+                    for reservations in self._prepared_affinity_reservations.values()
+                )
+                + sys.getsizeof(self._prepared_close_tokens)
+                + sys.getsizeof(self._prepared_close_capabilities)
+                + sys.getsizeof(self._recoverable_admission_slots)
+                + sys.getsizeof(self._recoverable_admission_results)
+                + sys.getsizeof(self._recoverable_admission_receipts)
+                + sys.getsizeof(self._recoverable_close_results)
+                + sys.getsizeof(self._recoverable_close_receipts)
+                + sys.getsizeof(self._prepared_commit_journals)
+                + sys.getsizeof(self._prepared_close_commit_journals)
+                + sys.getsizeof(self._releasing_reservations)
+                + sys.getsizeof(self._acknowledging_admission_results)
+                + sys.getsizeof(self._acknowledging_close_results)
                 + sys.getsizeof(self._mutating_channel_ids)
                 + sys.getsizeof(self._mutating_transport_ids)
                 + sys.getsizeof(self._mutating_operation_ids)
@@ -4707,6 +6551,43 @@ class ApplicationChannelRegistry:
                 + sum(
                     sys.getsizeof(token_id) + sys.getsizeof(capability)
                     for token_id, capability in self._prepared_capabilities.items()
+                )
+                + sum(
+                    sys.getsizeof(reservation_id)
+                    + sys.getsizeof(retained)
+                    + sys.getsizeof(retained.token)
+                    + sys.getsizeof(retained.result)
+                    for reservation_id, retained in self._recoverable_admission_results.items()
+                )
+                + sum(
+                    sys.getsizeof(reservation_id)
+                    + sys.getsizeof(retained)
+                    + sys.getsizeof(retained.token)
+                    + sys.getsizeof(retained.result)
+                    for reservation_id, retained in self._recoverable_close_results.items()
+                )
+                + sum(
+                    sys.getsizeof(reservation_id) + sys.getsizeof(journal)
+                    for reservation_id, journal in self._prepared_commit_journals.items()
+                )
+                + sum(
+                    sys.getsizeof(reservation_id) + sys.getsizeof(journal)
+                    for reservation_id, journal in self._prepared_close_commit_journals.items()
+                )
+                + sum(sys.getsizeof(value) for value in self._releasing_reservations)
+                + sum(
+                    sys.getsizeof(reservation_id)
+                    + sys.getsizeof(retained)
+                    + sys.getsizeof(retained.token)
+                    + sys.getsizeof(retained.result)
+                    for reservation_id, retained in self._acknowledging_admission_results.items()
+                )
+                + sum(
+                    sys.getsizeof(reservation_id)
+                    + sys.getsizeof(retained)
+                    + sys.getsizeof(retained.token)
+                    + sys.getsizeof(retained.result)
+                    for reservation_id, retained in self._acknowledging_close_results.items()
                 )
             )
         with self._directory_lock:
@@ -4778,7 +6659,13 @@ class ApplicationChannelRegistry:
                 + sys.getsizeof(self.__dict__)
                 + sys.getsizeof(self._shards)
                 + sys.getsizeof(self._route_partitions)
-                + sum(sys.getsizeof(shard) + shard.estimated_value_bytes for shard in shards)
+                + sum(
+                    sys.getsizeof(shard)
+                    + sys.getsizeof(shard._accounting)
+                    + sys.getsizeof(shard._accounting.prepared_commit_ids)
+                    + shard.estimated_value_bytes
+                    for shard in shards
+                )
                 + decoded_cache_estimated_bytes
                 + sum(sys.getsizeof(route) for route in route_partitions)
                 + estimated_index_bytes
@@ -4857,4 +6744,19 @@ class ApplicationChannelRegistry:
                     metric.primary_compaction_seconds for metric in shard_store_metrics
                 ),
                 watermark=self._watermark,
+                recoverable_admission_slots=recoverable_admission_slots,
+                recoverable_admission_results=recoverable_admission_results,
+                recoverable_admission_capacity=_MAX_RECOVERABLE_ADMISSION_RESULTS,
+                prepared_admission_tokens=prepared_admission_tokens,
+                prepared_admission_capabilities=prepared_admission_capabilities,
+                prepared_close_tokens=prepared_close_tokens,
+                prepared_close_capabilities=prepared_close_capabilities,
+                prepared_commit_journals=prepared_commit_journals,
+                prepared_close_commit_journals=prepared_close_commit_journals,
+                releasing_admissions=releasing_admissions,
+                acknowledging_admission_results=acknowledging_admission_results,
+                acknowledging_close_results=acknowledging_close_results,
+                recoverable_admission_receipts=recoverable_admission_receipts,
+                recoverable_close_results=recoverable_close_results,
+                recoverable_close_receipts=recoverable_close_receipts,
             )

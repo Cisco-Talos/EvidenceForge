@@ -245,3 +245,18 @@ class ApplicationChannelCensus:
     store_primary_compaction_work: int
     store_primary_compaction_seconds: float
     watermark: datetime
+    recoverable_admission_slots: int
+    recoverable_admission_results: int
+    recoverable_admission_capacity: int
+    prepared_admission_tokens: int
+    prepared_admission_capabilities: int
+    prepared_close_tokens: int
+    prepared_close_capabilities: int
+    prepared_commit_journals: int
+    prepared_close_commit_journals: int
+    releasing_admissions: int
+    acknowledging_admission_results: int
+    acknowledging_close_results: int
+    recoverable_admission_receipts: int
+    recoverable_close_results: int
+    recoverable_close_receipts: int

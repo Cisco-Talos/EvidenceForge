@@ -20,8 +20,11 @@ from evidenceforge.events.application import (
     ApplicationTransportBinding,
 )
 from evidenceforge.generation.application_channels import (
+    ApplicationChannelAdmissionToken,
     ApplicationChannelCloseRequest,
+    ApplicationChannelPreparedCloseToken,
     ApplicationChannelRegistry,
+    _ApplicationChannelAdmissionCapability,
     _RoutePartition,
 )
 from evidenceforge.generation.indexes import PackedHandleExpiryIndex
@@ -1572,6 +1575,853 @@ def test_prepared_publication_token_and_commit_receipt_are_registry_authenticate
     assert not registry.authenticates_admission_receipt(
         replace(receipt, channel_id="tampered-channel")
     )
+
+
+def test_recoverable_prepared_commit_adopts_ambiguous_common_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A post-mutation exception retains one exact result instead of splitting owners."""
+
+    registry = _registry()
+    identity = _identity()
+    reservation = _operation("recoverable-operation", ordinal=0)
+    token = registry.prepare_open_channel_with_completed_operation(
+        identity,
+        reservation,
+        retain_result_for_recovery=True,
+    )
+    original = registry._commit_prepared_open_locked
+    primary = RuntimeError("lost common commit return")
+    failed = False
+
+    def commit_then_fail(prepared_token: ApplicationChannelAdmissionToken) -> object:
+        nonlocal failed
+        result = original(prepared_token)
+        if not failed:
+            failed = True
+            raise primary
+        return result
+
+    monkeypatch.setattr(registry, "_commit_prepared_open_locked", commit_then_fail)
+    with registry.prepared_admission(token) as prepared:
+        recovered = prepared.commit_no_fail()
+        assert prepared.committed
+        assert prepared.recovery_status == "committed"
+        assert prepared.result is recovered
+
+    assert recovered is not None
+    assert registry.get(identity.channel_id) == recovered.snapshot
+    assert registry.recover_committed_admission(token) is recovered
+    assert registry.recover_committed_admission(replace(token)) is None
+    assert recovered.receipt is not None
+    assert registry.authenticates_admission_receipt(recovered.receipt)
+    assert not registry.authenticates_admission_receipt(replace(recovered.receipt))
+    assert not _registry().authenticates_admission_receipt(recovered.receipt)
+    census = registry.census()
+    assert census.prepared_admissions == 1
+    assert census.claimed_admissions == 1
+    assert census.recoverable_admission_results == 1
+    assert registry.acknowledge_committed_admission(token, recovered)
+    assert not registry.authenticates_admission_receipt(recovered.receipt)
+    assert registry.recover_committed_admission(token) is None
+    assert registry.census().recoverable_admission_results == 0
+
+
+def test_recoverable_admission_capacity_is_reserved_and_never_silently_evicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unacknowledged exact results consume bounded capacity until explicit acknowledgement."""
+
+    monkeypatch.setattr(application_channels_module, "_MAX_RECOVERABLE_ADMISSION_RESULTS", 1)
+    registry = _registry()
+    first_token = registry.prepare_open_channel_with_completed_operation(
+        _identity(),
+        _operation("recoverable-operation", ordinal=0),
+        retain_result_for_recovery=True,
+    )
+    with registry.prepared_admission(first_token) as prepared:
+        first_result = prepared.commit_no_fail()
+
+    with pytest.raises(StateError, match="recovery capacity"):
+        registry.prepare_open_channel_with_completed_operation(
+            _identity(
+                channel_id="channel-2",
+                owner_id="owner-2",
+                affinity_digest="affinity-b",
+                transport_id="transport-2",
+            ),
+            _operation(
+                "recoverable-operation-2",
+                ordinal=0,
+                channel_id="channel-2",
+            ),
+            retain_result_for_recovery=True,
+        )
+
+    assert registry.recover_committed_admission(first_token) is first_result
+    assert registry.acknowledge_committed_admission(first_token, first_result)
+    replacement = registry.prepare_open_channel_with_completed_operation(
+        _identity(
+            channel_id="channel-2",
+            owner_id="owner-2",
+            affinity_digest="affinity-b",
+            transport_id="transport-2",
+        ),
+        _operation(
+            "recoverable-operation-2",
+            ordinal=0,
+            channel_id="channel-2",
+        ),
+        retain_result_for_recovery=True,
+    )
+    assert registry.cancel_prepared_admission(replacement)
+
+
+def test_prepared_close_only_cancel_copy_foreign_tamper_and_commit_recovery() -> None:
+    """Close-only ownership is exact, authenticated, cancel-neutral, and recoverable."""
+
+    registry = _registry()
+    foreign = _registry()
+    opened = registry.open_channel(_identity())
+    before = registry.census()
+    closed_at = _START + timedelta(minutes=3)
+    token = registry.prepare_close_channel(
+        opened.channel_id,
+        closed_at=closed_at,
+        reason="persistent transport finalized",
+    )
+    copied = replace(token)
+
+    assert registry.recover_committed_close(token) is None
+    with pytest.raises(StateError, match="copied|stale"):
+        with registry.prepared_close(copied):
+            pytest.fail("copied close token unexpectedly claimed")
+    with pytest.raises(StateError, match="foreign"):
+        with foreign.prepared_close(token):
+            pytest.fail("foreign close token unexpectedly claimed")
+    assert registry.cancel_prepared_close(token)
+    assert registry.census() == before
+
+    tampered = registry.prepare_close_channel(
+        opened.channel_id,
+        closed_at=closed_at,
+        reason="persistent transport finalized",
+    )
+    object.__setattr__(tampered, "reason", "retargeted")
+    with pytest.raises(StateError, match="integrity"):
+        with registry.prepared_close(tampered):
+            pytest.fail("tampered close token unexpectedly claimed")
+    assert registry.census() == before
+
+    committed_token = registry.prepare_close_channel(
+        opened.channel_id,
+        closed_at=closed_at,
+        reason="persistent transport finalized",
+    )
+    with registry.prepared_close(committed_token) as prepared:
+        result = prepared.commit_no_fail()
+
+    assert result.snapshot.closed_at == closed_at
+    assert result.close.newly_closed
+    assert registry.authenticates_close_admission_receipt(result.receipt)
+    assert not registry.authenticates_close_admission_receipt(replace(result.receipt))
+    assert registry.recover_committed_close(committed_token) is result
+    assert registry.acknowledge_committed_close(committed_token, result)
+    assert not registry.authenticates_close_admission_receipt(result.receipt)
+    assert registry.recover_committed_close(committed_token) is None
+
+
+def test_prepared_close_only_recovers_exact_result_after_mutation_fault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exception after the close mutation preserves primary error and exact recovery."""
+
+    registry = _registry()
+    opened = registry.open_channel(_identity())
+    token = registry.prepare_close_channel(
+        opened.channel_id,
+        closed_at=_START + timedelta(minutes=3),
+        reason="persistent transport finalized",
+    )
+    original = registry._commit_prepared_close_locked
+    primary = RuntimeError("lost close return")
+    failed = False
+
+    def close_then_fail(trusted: ApplicationChannelPreparedCloseToken) -> object:
+        nonlocal failed
+        result = original(trusted)
+        if not failed:
+            failed = True
+            raise primary
+        return result
+
+    monkeypatch.setattr(registry, "_commit_prepared_close_locked", close_then_fail)
+    with registry.prepared_close(token) as prepared:
+        recovered = prepared.commit_no_fail()
+        assert prepared.committed
+        assert prepared.recovery_status == "committed"
+        assert prepared.result is recovered
+
+    assert recovered is not None
+    assert registry.get(opened.channel_id) == recovered.snapshot
+    assert registry.recover_committed_close(token) is recovered
+    assert registry.acknowledge_committed_close(token, recovered)
+
+
+def test_prepared_close_only_rejects_time_before_last_completed_operation() -> None:
+    """A close cannot truncate the canonical activity interval it finalizes."""
+
+    registry = _registry()
+    opened = registry.open_channel(_identity())
+    operation = _operation("completed-before-close", ordinal=0)
+    updated = registry.reserve_completed_operation(operation)
+    assert updated.last_activity_at == operation.ended_at
+
+    with pytest.raises(StateError, match="before its last activity"):
+        registry.prepare_close_channel(
+            opened.channel_id,
+            closed_at=operation.ended_at - timedelta(microseconds=1),
+            reason="too early",
+        )
+
+
+def test_public_reconcile_resolves_indeterminate_commit_to_exact_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retained ambiguous claim can later certify success and release its fences."""
+
+    registry = _registry()
+    token = registry.prepare_open_channel_with_completed_operation(
+        _identity(),
+        _operation("indeterminate-success", ordinal=0),
+        retain_result_for_recovery=True,
+    )
+    primary = RuntimeError("ambiguous common tail")
+
+    def block_recovery(stage: str) -> None:
+        if stage == "open-row":
+            raise primary
+
+    monkeypatch.setattr(registry, "_prepared_commit_fault", block_recovery)
+    with pytest.raises(RuntimeError, match="ambiguous common tail"):
+        with registry.prepared_admission(token) as prepared:
+            prepared.commit_no_fail()
+    held = registry.census()
+    assert held.prepared_admissions == 1
+    assert held.claimed_admissions == 1
+    assert held.recoverable_admission_slots == 1
+
+    monkeypatch.setattr(registry, "_prepared_commit_fault", lambda _stage: None)
+    recovery = registry.reconcile_committed_admission(token)
+    assert recovery.status == "committed"
+    assert recovery.result is not None
+    assert registry.census().prepared_admissions == 1
+    assert registry.recover_committed_admission(token) is recovery.result
+    assert registry.acknowledge_committed_admission(token, recovery.result)
+
+
+def test_public_reconcile_resolves_indeterminate_commit_to_certified_prestate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later-certified prestate unclaims but preserves exact cancellation ownership."""
+
+    registry = _registry()
+    before = registry.census()
+    token = registry.prepare_open_channel_with_completed_operation(
+        _identity(),
+        _operation("indeterminate-prestate", ordinal=0),
+        retain_result_for_recovery=True,
+    )
+    primary = RuntimeError("failed before common mutation")
+    original_prestate = registry._prepared_admission_prestate_is_intact_locked
+    suppress_once = True
+
+    def fail_before_mutation(_prepared_token: object) -> object:
+        raise primary
+
+    def delay_prestate(capability: _ApplicationChannelAdmissionCapability) -> bool:
+        nonlocal suppress_once
+        if suppress_once:
+            suppress_once = False
+            return False
+        return original_prestate(capability)
+
+    monkeypatch.setattr(registry, "_commit_prepared_open_locked", fail_before_mutation)
+    monkeypatch.setattr(registry, "_prepared_admission_prestate_is_intact_locked", delay_prestate)
+    with pytest.raises(RuntimeError, match="failed before common mutation"):
+        with registry.prepared_admission(token) as prepared:
+            prepared.commit_no_fail()
+    assert registry.census().claimed_admissions == 1
+
+    recovery = registry.reconcile_committed_admission(token)
+    assert recovery.status == "not_committed"
+    assert registry.census().claimed_admissions == 0
+    assert registry.cancel_prepared_admission(token)
+    assert registry.census() == before
+
+
+def test_prepared_close_claim_fences_competing_mutation_and_watermark() -> None:
+    """A close claim owns its channel until exact commit, cancel, or reconciliation."""
+
+    registry = _registry()
+    opened = registry.open_channel(_identity())
+    closed_at = _START + timedelta(minutes=3)
+    token = registry.prepare_close_channel(
+        opened.channel_id,
+        closed_at=closed_at,
+        reason="prepared close",
+    )
+    with pytest.raises(StateError, match="prepared admission"):
+        registry.close_channel(
+            opened.channel_id,
+            closed_at=closed_at,
+            reason="competing close",
+        )
+
+    with registry.prepared_close(token):
+        with pytest.raises(StateError, match="claimed admission"):
+            registry.watermark(closed_at + timedelta(microseconds=1))
+
+    assert registry.census().prepared_close_tokens == 0
+    assert registry.census().prepared_close_capabilities == 0
+    assert registry.census().recoverable_admission_slots == 0
+
+
+@pytest.mark.parametrize(
+    "fault_stage",
+    (
+        "open-row",
+        "open-operation-marker",
+        "open-channel-route",
+        "open-transport-route",
+        "open-expiry",
+        "open-accounting-installed",
+        "open-accounting",
+    ),
+)
+def test_recoverable_open_converges_at_every_primitive_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    fault_stage: str,
+) -> None:
+    """Every fresh-open primitive fault converges once with an adoption fence."""
+
+    registry = _registry()
+    identity = _identity()
+    operation = _operation("faulted-open", ordinal=0)
+    token = registry.prepare_open_channel_with_completed_operation(
+        identity,
+        operation,
+        retain_result_for_recovery=True,
+    )
+    faulted = False
+
+    def fail_once(stage: str) -> None:
+        nonlocal faulted
+        if stage == fault_stage and not faulted:
+            faulted = True
+            raise RuntimeError(f"injected {stage}")
+
+    monkeypatch.setattr(registry, "_prepared_commit_fault", fail_once)
+    with registry.prepared_admission(token) as prepared:
+        result = prepared.commit_no_fail()
+
+    assert faulted
+    assert prepared.committed
+    assert prepared.recovery_status == "committed"
+    assert registry.get(identity.channel_id) == result.snapshot
+    assert result.snapshot.completed_operations == 1
+    assert result.snapshot.reserved_initiator_bytes == operation.initiator_bytes
+    assert result.snapshot.reserved_responder_bytes == operation.responder_bytes
+    assert result.receipt is not None
+    assert registry.authenticates_admission_receipt(result.receipt)
+    census = registry.census()
+    assert census.retained_channels == 1
+    assert census.open_channels == 1
+    assert census.used_operation_ids == 1
+    assert census.route_entries == 2
+    assert census.prepared_admissions == 1
+    assert census.claimed_admissions == 1
+    assert census.prepared_commit_journals == 1
+    assert census.recoverable_admission_results == 1
+    assert census.recoverable_admission_receipts == 1
+
+    shard = registry._owner_shard(registry.owner_partition_id(identity.owner_id), create=False)
+    assert shard is not None
+    with shard.lock:
+        assert shard.mutation_version == 1
+        assert shard.open_channels == 1
+        assert shard._accounting.prepared_commit_ids == frozenset({token._reservation_id})
+        assert result.close_token is not None
+        _shard_id, handle = registry._unpack_channel_locator(result.close_token.locator)
+        assert (
+            shard.active_expiry.get(handle)
+            == registry._effective_deadline(result.snapshot).timestamp()
+        )
+        assert shard.closed_expiry.get(handle) is None
+
+    with pytest.raises(StateError, match="prepared admission"):
+        registry.reserve_completed_operation(_operation("blocked-before-ack", ordinal=1))
+    with pytest.raises(StateError, match="claimed admission"):
+        registry.watermark(operation.started_at + timedelta(microseconds=1))
+
+    assert registry.acknowledge_committed_admission(token, result)
+    terminal = registry.census()
+    assert terminal.prepared_admissions == 0
+    assert terminal.claimed_admissions == 0
+    assert terminal.prepared_commit_journals == 0
+    assert terminal.recoverable_admission_results == 0
+    assert terminal.recoverable_admission_receipts == 0
+    with shard.lock:
+        assert not shard._accounting.prepared_commit_ids
+
+
+@pytest.mark.parametrize(
+    "fault_stage",
+    (
+        "operation-marker",
+        "operation-row",
+        "operation-expiry",
+        "operation-accounting-installed",
+        "operation-accounting",
+    ),
+)
+def test_recoverable_operation_converges_at_every_primitive_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    fault_stage: str,
+) -> None:
+    """Every reuse-operation primitive fault applies bytes and counters exactly once."""
+
+    registry = _registry()
+    identity = _identity()
+    registry.open_channel(identity)
+    operation = _operation("faulted-reuse", ordinal=0)
+    token = registry.prepare_completed_operation(
+        operation,
+        retain_result_for_recovery=True,
+    )
+    faulted = False
+
+    def fail_once(stage: str) -> None:
+        nonlocal faulted
+        if stage == fault_stage and not faulted:
+            faulted = True
+            raise RuntimeError(f"injected {stage}")
+
+    monkeypatch.setattr(registry, "_prepared_commit_fault", fail_once)
+    with registry.prepared_admission(token) as prepared:
+        result = prepared.commit_no_fail()
+
+    assert faulted
+    assert prepared.committed
+    assert prepared.recovery_status == "committed"
+    assert result.snapshot.completed_operations == 1
+    assert result.snapshot.reserved_initiator_bytes == operation.initiator_bytes
+    assert result.snapshot.reserved_responder_bytes == operation.responder_bytes
+    assert registry.get(identity.channel_id) == result.snapshot
+    census = registry.census()
+    assert census.retained_channels == 1
+    assert census.open_channels == 1
+    assert census.used_operation_ids == 1
+    assert census.prepared_commit_journals == 1
+    assert census.recoverable_admission_results == 1
+
+    shard = registry._owner_shard(registry.owner_partition_id(identity.owner_id), create=False)
+    assert shard is not None
+    with shard.lock:
+        assert shard.mutation_version == 2
+        assert shard._accounting.prepared_commit_ids == frozenset({token._reservation_id})
+        handle = token._channel_handle
+        assert handle is not None
+        assert (
+            shard.active_expiry.get(handle)
+            == registry._effective_deadline(result.snapshot).timestamp()
+        )
+        assert shard.closed_expiry.get(handle) is None
+
+    with pytest.raises(StateError, match="prepared admission"):
+        registry.close_channel(
+            identity.channel_id,
+            closed_at=_START + timedelta(minutes=3),
+            reason="blocked before adoption",
+        )
+    assert registry.acknowledge_committed_admission(token, result)
+    terminal = registry.census()
+    assert terminal.prepared_admissions == 0
+    assert terminal.prepared_commit_journals == 0
+    assert terminal.recoverable_admission_results == 0
+    with shard.lock:
+        assert not shard._accounting.prepared_commit_ids
+
+
+@pytest.mark.parametrize(
+    "fault_stage",
+    (
+        "close-row",
+        "close-expiry",
+        "close-accounting-installed",
+        "close-accounting",
+    ),
+)
+def test_recoverable_close_converges_at_every_primitive_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    fault_stage: str,
+) -> None:
+    """Every close primitive fault converges before the channel can be evicted."""
+
+    registry = _registry()
+    identity = _identity()
+    opened = registry.open_channel(identity)
+    closed_at = _START + timedelta(minutes=3)
+    token = registry.prepare_close_channel(
+        opened.channel_id,
+        closed_at=closed_at,
+        reason="persistent transport finalized",
+    )
+    faulted = False
+
+    def fail_once(stage: str) -> None:
+        nonlocal faulted
+        if stage == fault_stage and not faulted:
+            faulted = True
+            raise RuntimeError(f"injected {stage}")
+
+    monkeypatch.setattr(registry, "_prepared_commit_fault", fail_once)
+    with registry.prepared_close(token) as prepared:
+        result = prepared.commit_no_fail()
+
+    assert faulted
+    assert prepared.committed
+    assert prepared.recovery_status == "committed"
+    assert result.snapshot.closed_at == closed_at
+    assert registry.get(identity.channel_id) == result.snapshot
+    assert registry.authenticates_close_admission_receipt(result.receipt)
+    census = registry.census()
+    assert census.retained_channels == 1
+    assert census.open_channels == 0
+    assert census.prepared_admissions == 1
+    assert census.claimed_admissions == 1
+    assert census.prepared_close_commit_journals == 1
+    assert census.recoverable_close_results == 1
+    assert census.recoverable_close_receipts == 1
+
+    shard = registry._owner_shard(registry.owner_partition_id(identity.owner_id), create=False)
+    assert shard is not None
+    with shard.lock:
+        assert shard.mutation_version == 2
+        assert shard.open_channels == 0
+        assert shard._accounting.prepared_commit_ids == frozenset({token._reservation_id})
+        assert shard.active_expiry.get(token._channel_handle) is None
+        assert shard.operation_blocker_expiry.get(token._channel_handle) is None
+        assert (
+            shard.closed_expiry.get(token._channel_handle)
+            == (closed_at + registry._closed_grace).timestamp()
+        )
+
+    with pytest.raises(StateError, match="claimed admission"):
+        registry.watermark(closed_at + registry._closed_grace)
+    assert registry.acknowledge_committed_close(token, result)
+    terminal = registry.census()
+    assert terminal.prepared_admissions == 0
+    assert terminal.prepared_close_commit_journals == 0
+    assert terminal.recoverable_close_results == 0
+    assert terminal.recoverable_close_receipts == 0
+    with shard.lock:
+        assert not shard._accounting.prepared_commit_ids
+    registry.watermark(closed_at + registry._closed_grace)
+    assert registry.get(identity.channel_id) is None
+
+
+@pytest.mark.parametrize("fault_stage", ("admission-receipt", "admission-result"))
+def test_recoverable_admission_converges_at_every_retention_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    fault_stage: str,
+) -> None:
+    """Receipt-first retention recovers before or after its terminal result marker."""
+
+    registry = _registry()
+    token = registry.prepare_open_channel_with_completed_operation(
+        _identity(),
+        _operation("retention-fault", ordinal=0),
+        retain_result_for_recovery=True,
+    )
+    faulted = False
+
+    def fail_once(stage: str) -> None:
+        nonlocal faulted
+        if stage == fault_stage and not faulted:
+            faulted = True
+            raise RuntimeError(f"injected {stage}")
+
+    monkeypatch.setattr(registry, "_prepared_retention_fault", fail_once)
+    with registry.prepared_admission(token) as prepared:
+        result = prepared.commit_no_fail()
+
+    assert faulted
+    assert prepared.committed
+    assert prepared.recovery_status == "committed"
+    assert registry.recover_committed_admission(token) is result
+    assert result.receipt is not None
+    assert registry.authenticates_admission_receipt(result.receipt)
+    census = registry.census()
+    assert census.recoverable_admission_results == 1
+    assert census.recoverable_admission_receipts == 1
+    assert registry.acknowledge_committed_admission(token, result)
+
+
+@pytest.mark.parametrize("fault_stage", ("close-receipt", "close-result"))
+def test_recoverable_close_converges_at_every_retention_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    fault_stage: str,
+) -> None:
+    """Close receipt retention recovers on either side of its terminal marker."""
+
+    registry = _registry()
+    opened = registry.open_channel(_identity())
+    token = registry.prepare_close_channel(
+        opened.channel_id,
+        closed_at=_START + timedelta(minutes=3),
+        reason="retention fault",
+    )
+    faulted = False
+
+    def fail_once(stage: str) -> None:
+        nonlocal faulted
+        if stage == fault_stage and not faulted:
+            faulted = True
+            raise RuntimeError(f"injected {stage}")
+
+    monkeypatch.setattr(registry, "_prepared_retention_fault", fail_once)
+    with registry.prepared_close(token) as prepared:
+        result = prepared.commit_no_fail()
+
+    assert faulted
+    assert prepared.committed
+    assert prepared.recovery_status == "committed"
+    assert registry.recover_committed_close(token) is result
+    assert registry.authenticates_close_admission_receipt(result.receipt)
+    assert registry.census().recoverable_close_results == 1
+    assert registry.acknowledge_committed_close(token, result)
+
+
+@pytest.mark.parametrize(
+    "fault_stage",
+    (
+        "admission-ack-record",
+        "admission-secondary-indexes",
+        "admission-accounting-marker",
+        "admission-primary-token",
+        "admission-capability",
+        "admission-ack-slot",
+        "admission-ack-result",
+        "admission-ack-receipt",
+        "admission-ack-release-marker",
+    ),
+)
+def test_recoverable_admission_ack_retries_every_release_tail_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    fault_stage: str,
+) -> None:
+    """An interrupted ack retains exact recovery and a global adoption fence."""
+
+    registry = _registry()
+    token = registry.prepare_open_channel_with_completed_operation(
+        _identity(),
+        _operation("ack-fault", ordinal=0),
+        retain_result_for_recovery=True,
+    )
+    with registry.prepared_admission(token) as prepared:
+        result = prepared.commit_no_fail()
+    assert result.receipt is not None
+    faulted = False
+
+    def fail_once(stage: str) -> None:
+        nonlocal faulted
+        if stage == fault_stage and not faulted:
+            faulted = True
+            raise RuntimeError(f"injected {stage}")
+
+    if fault_stage == "admission-ack-record":
+        monkeypatch.setattr(registry, "_prepared_retention_fault", fail_once)
+    else:
+        monkeypatch.setattr(registry, "_prepared_release_fault", fail_once)
+    with pytest.raises(RuntimeError, match="injected"):
+        registry.acknowledge_committed_admission(token, result)
+
+    assert faulted
+    assert registry.recover_committed_admission(token) is result
+    assert registry.authenticates_admission_receipt(result.receipt)
+    held = registry.census()
+    assert held.acknowledging_admission_results == 1
+    assert held.recoverable_admission_results == 1
+    with pytest.raises(StateError, match="incomplete prepared release"):
+        registry.reserve_completed_operation(_operation("blocked-by-ack", ordinal=1))
+    with pytest.raises(StateError, match="incomplete prepared release"):
+        registry.watermark(_START + timedelta(minutes=1))
+
+    monkeypatch.setattr(registry, "_prepared_retention_fault", lambda _stage: None)
+    monkeypatch.setattr(registry, "_prepared_release_fault", lambda _stage: None)
+    assert registry.acknowledge_committed_admission(token, result)
+    terminal = registry.census()
+    assert terminal.releasing_admissions == 0
+    assert terminal.acknowledging_admission_results == 0
+    assert terminal.recoverable_admission_results == 0
+    assert terminal.recoverable_admission_receipts == 0
+
+
+@pytest.mark.parametrize(
+    "fault_stage",
+    (
+        "close-ack-record",
+        "close-secondary-indexes",
+        "close-accounting-marker",
+        "close-primary-token",
+        "close-capability",
+        "close-ack-slot",
+        "close-ack-result",
+        "close-ack-receipt",
+        "close-ack-release-marker",
+    ),
+)
+def test_recoverable_close_ack_retries_every_release_tail_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    fault_stage: str,
+) -> None:
+    """An interrupted close ack stays exact, authenticated, and globally fenced."""
+
+    registry = _registry()
+    opened = registry.open_channel(_identity())
+    token = registry.prepare_close_channel(
+        opened.channel_id,
+        closed_at=_START + timedelta(minutes=3),
+        reason="ack fault",
+    )
+    with registry.prepared_close(token) as prepared:
+        result = prepared.commit_no_fail()
+    faulted = False
+
+    def fail_once(stage: str) -> None:
+        nonlocal faulted
+        if stage == fault_stage and not faulted:
+            faulted = True
+            raise RuntimeError(f"injected {stage}")
+
+    if fault_stage == "close-ack-record":
+        monkeypatch.setattr(registry, "_prepared_retention_fault", fail_once)
+    else:
+        monkeypatch.setattr(registry, "_prepared_release_fault", fail_once)
+    with pytest.raises(RuntimeError, match="injected"):
+        registry.acknowledge_committed_close(token, result)
+
+    assert faulted
+    assert registry.recover_committed_close(token) is result
+    assert registry.authenticates_close_admission_receipt(result.receipt)
+    held = registry.census()
+    assert held.acknowledging_close_results == 1
+    assert held.recoverable_close_results == 1
+    with pytest.raises(StateError, match="incomplete prepared release"):
+        registry.watermark(_START + timedelta(minutes=4))
+
+    monkeypatch.setattr(registry, "_prepared_retention_fault", lambda _stage: None)
+    monkeypatch.setattr(registry, "_prepared_release_fault", lambda _stage: None)
+    assert registry.acknowledge_committed_close(token, result)
+    terminal = registry.census()
+    assert terminal.releasing_admissions == 0
+    assert terminal.acknowledging_close_results == 0
+    assert terminal.recoverable_close_results == 0
+    assert terminal.recoverable_close_receipts == 0
+
+
+def test_affinity_release_retry_does_not_decrement_a_sibling_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retrying a partial release preserves another same-affinity preparation."""
+
+    registry = _registry(max_reusable_per_affinity=3)
+    first = registry.prepare_open_channel_with_completed_operation(
+        _identity(),
+        _operation("first-affinity", ordinal=0),
+        retain_result_for_recovery=True,
+    )
+    second = registry.prepare_open_channel_with_completed_operation(
+        _identity(channel_id="channel-2", transport_id="transport-2"),
+        _operation("second-affinity", ordinal=0, channel_id="channel-2"),
+        retain_result_for_recovery=True,
+    )
+    faulted = False
+
+    def fail_once(stage: str) -> None:
+        nonlocal faulted
+        if stage == "admission-secondary-indexes" and not faulted:
+            faulted = True
+            raise RuntimeError("injected affinity release")
+
+    monkeypatch.setattr(registry, "_prepared_release_fault", fail_once)
+    with pytest.raises(RuntimeError, match="affinity release"):
+        registry.cancel_prepared_admission(first)
+    affinity_key = ("owner-1", "affinity-a")
+    assert registry._prepared_affinity_reservations[affinity_key] == {second._reservation_id}
+    assert registry.census().releasing_admissions == 1
+    with pytest.raises(StateError, match="incomplete prepared release"):
+        registry.prepare_open_channel_with_completed_operation(
+            _identity(channel_id="channel-3", transport_id="transport-3"),
+            _operation("blocked-affinity", ordinal=0, channel_id="channel-3"),
+            retain_result_for_recovery=True,
+        )
+
+    assert registry.cancel_prepared_admission(first)
+    assert registry._prepared_affinity_reservations[affinity_key] == {second._reservation_id}
+    assert registry.cancel_prepared_admission(second)
+    terminal = registry.census()
+    assert terminal.releasing_admissions == 0
+    assert terminal.prepared_admissions == 0
+
+
+def test_recoverable_admission_churn_releases_every_transient_owner() -> None:
+    """Long-running prepare/cancel and commit/ack churn has no transient plateau growth."""
+
+    registry = _registry()
+    identity = _identity(budget=ApplicationChannelBudget(1_000_000, 1_000_000, 3_000))
+    before = registry.census()
+    for _index in range(2_000):
+        token = registry.prepare_open_channel_with_completed_operation(
+            identity,
+            _operation("cancelled-recovery", ordinal=0),
+            retain_result_for_recovery=True,
+        )
+        assert registry.cancel_prepared_admission(token)
+    assert registry.census() == before
+
+    registry.open_channel(identity)
+    for index in range(1_000):
+        reservation = _operation(
+            f"recoverable-churn-{index}",
+            ordinal=index,
+            initiator_bytes=1,
+            responder_bytes=1,
+        )
+        token = registry.prepare_completed_operation(
+            reservation,
+            retain_result_for_recovery=True,
+        )
+        with registry.prepared_admission(token) as prepared:
+            result = prepared.commit_no_fail()
+        assert registry.acknowledge_committed_admission(token, result)
+
+    terminal = registry.census()
+    assert terminal.prepared_admission_tokens == 0
+    assert terminal.prepared_admission_capabilities == 0
+    assert terminal.prepared_close_tokens == 0
+    assert terminal.prepared_close_capabilities == 0
+    assert terminal.prepared_commit_journals == 0
+    assert terminal.prepared_close_commit_journals == 0
+    assert terminal.releasing_admissions == 0
+    assert terminal.acknowledging_admission_results == 0
+    assert terminal.acknowledging_close_results == 0
+    assert terminal.recoverable_admission_slots == 0
+    assert terminal.recoverable_admission_results == 0
+    assert terminal.recoverable_admission_receipts == 0
+    assert terminal.recoverable_close_results == 0
+    assert terminal.recoverable_close_receipts == 0
 
 
 def test_consumed_token_cannot_alias_a_reprepared_capability() -> None:
