@@ -3723,23 +3723,25 @@ class EventDispatcher:
 
         from evidenceforge.events.identity import EventIdentityPlan
         from evidenceforge.generation.state_manager import (
+            ConnectionExistingSessionPatch,
             ProcessMaterializationPlan,
             SessionMaterializationPlan,
         )
 
         if type(lifecycle_ticket) not in {
+            ConnectionExistingSessionPatch,
             SessionMaterializationPlan,
             ProcessMaterializationPlan,
         }:
             return event
-        plan = cast(
-            "SessionMaterializationPlan | ProcessMaterializationPlan",
-            lifecycle_ticket,
+        exact_identity = (
+            lifecycle_ticket.after.identity
+            if type(lifecycle_ticket) is ConnectionExistingSessionPatch
+            else lifecycle_ticket.identity
         )
         identity_plan = event.identity_plan
         if type(identity_plan) is not EventIdentityPlan:
             return event
-        exact_identity = plan.identity
 
         def rebind(candidate: object | None) -> object | None:
             if type(candidate) is type(exact_identity) and candidate == exact_identity:
@@ -3764,20 +3766,23 @@ class EventDispatcher:
         """Bind one State-neutral dependent to an exact staged session/process plan."""
 
         from evidenceforge.generation.state_manager import (
+            ConnectionExistingSessionPatch,
             ProcessMaterializationPlan,
             SessionMaterializationPlan,
         )
 
         if type(lifecycle_ticket) not in {
+            ConnectionExistingSessionPatch,
             SessionMaterializationPlan,
             ProcessMaterializationPlan,
         }:
             raise EventContractError(
                 "Prepared deferred-session dependent requires an exact State start plan"
             )
-        plan = cast(
-            "SessionMaterializationPlan | ProcessMaterializationPlan",
-            lifecycle_ticket,
+        exact_identity = (
+            lifecycle_ticket.after.identity
+            if type(lifecycle_ticket) is ConnectionExistingSessionPatch
+            else lifecycle_ticket.identity
         )
         identity_plan = event.identity_plan
         if identity_plan is None:
@@ -3790,11 +3795,11 @@ class EventDispatcher:
             identity_plan.target,
             identity_plan.session,
         )
-        if not any(candidate is plan.identity for candidate in bound_identities):
+        if not any(candidate is exact_identity for candidate in bound_identities):
             raise EventContractError(
                 "Prepared deferred-session dependent lost its exact State identity object"
             )
-        if type(plan) is SessionMaterializationPlan:
+        if type(lifecycle_ticket) is SessionMaterializationPlan:
             if event.event_type not in {
                 EventKind.LOGON,
                 EventKind.SSH_SESSION,
@@ -3803,23 +3808,39 @@ class EventDispatcher:
                 raise EventContractError(
                     "Prepared deferred-session session dependent has an unsupported event kind"
                 )
-            if identity_plan.session is not plan.identity:
+            if identity_plan.session is not exact_identity:
                 raise EventContractError(
                     "Prepared deferred-session session dependent lost its session identity"
                 )
-        elif event.event_type not in {
+        elif type(lifecycle_ticket) is ProcessMaterializationPlan and event.event_type not in {
             EventKind.PROCESS_CREATE,
             EventKind.SYSTEM_PROCESS_CREATE,
         }:
             raise EventContractError(
                 "Prepared deferred-session process dependent has an unsupported event kind"
             )
-        version = plan.expected_version
+        elif type(lifecycle_ticket) is ConnectionExistingSessionPatch and (
+            event.event_type is not EventKind.RDP_RECONNECT
+            or identity_plan.session is not exact_identity
+        ):
+            raise EventContractError(
+                "Prepared deferred-session live dependent is not an exact RDP reconnect"
+            )
+        version = (
+            lifecycle_ticket._expected_version
+            if type(lifecycle_ticket) is ConnectionExistingSessionPatch
+            else lifecycle_ticket.expected_version
+        )
+        publication_token = (
+            lifecycle_ticket._integrity_token
+            if type(lifecycle_ticket) is ConnectionExistingSessionPatch
+            else lifecycle_ticket.publication_token
+        )
         if (
             type(version) is not int
             or version < 0
-            or type(plan.publication_token) is not str
-            or not plan.publication_token
+            or type(publication_token) is not str
+            or not publication_token
         ):
             raise EventContractError(
                 "Prepared deferred-session dependent requires an authenticated State plan"
@@ -6329,8 +6350,142 @@ class EventDispatcher:
         try:
             self._require_type_five_projection(projection)
         except EventContractError:
-            return self._require_ssh_terminal_projection(record)
+            try:
+                return self._require_ssh_terminal_projection(record)
+            except EventContractError:
+                return self._require_rdp_terminal_projection(record)
         return "type5"
+
+    @staticmethod
+    def _require_rdp_terminal_projection(
+        record: _PreparedActionCohortBatchRecord,
+    ) -> str:
+        """Authenticate one narrow Windows RDP process/session terminal cohort."""
+
+        from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+        from evidenceforge.events.identity import (
+            EventIdentityPlan,
+            ProcessIdentity,
+            SessionIdentity,
+        )
+        from evidenceforge.events.lifecycle import ActionLifecycleContext
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact RDP terminal projection requires one member")
+        event = record.trusted_projections[0].occurrence
+        plan = record.state_plan
+        identity_plan = event.identity_plan
+        lifecycle = event.lifecycle
+        empty_common_state = not any(
+            (
+                plan.sessions,
+                plan.processes,
+                plan.live_session_process_role_patches,
+                plan.session_metadata_patches,
+                plan.process_activity_patches,
+            )
+        )
+        if (
+            not record.root_action_id.startswith("rdp-close:")
+            or not empty_common_state
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+            or type(identity_plan) is not EventIdentityPlan
+            or type(lifecycle) is not ActionLifecycleContext
+            or lifecycle.phase != "closure"
+        ):
+            raise EventContractError("Exact RDP terminal projection changed its closed owner")
+
+        if event.event_type is EventKind.PROCESS_TERMINATE:
+            if (
+                not record.root_action_id.endswith(":process-terminate")
+                or len(plan.process_terminations) != 1
+                or plan.session_terminalizations
+                or len(plan.session_activity_patches) > 1
+                or type(identity_plan.subject) is not ProcessIdentity
+                or identity_plan.actor is not None
+                or identity_plan.target is not None
+                or (
+                    identity_plan.session is not None
+                    and type(identity_plan.session) is not SessionIdentity
+                )
+                or type(event.src_host) is not HostContext
+                or event.src_host.os_category != "windows"
+                or event.dst_host is not None
+                or type(event.process) is not ProcessContext
+                or type(event.auth) is not AuthContext
+            ):
+                raise EventContractError("Exact RDP process close changed its singleton shape")
+            identity = identity_plan.subject
+            termination = plan.process_terminations[0]
+            executable = identity.image.replace("/", "\\").rsplit("\\", 1)[-1].casefold()
+            if (
+                executable not in {"mstsc.exe", "explorer.exe", "userinit.exe", "winlogon.exe"}
+                or termination.identity != identity
+                or termination.end_time != event.timestamp
+                or event.src_host.hostname != identity.hostname
+                or event.process.pid != identity.pid
+                or event.process.image != identity.image
+                or event.process.username != identity.principal
+                or event.process.logon_id != identity.logon_id
+                or event.process.start_time != identity.started_at
+                or event.auth.username != identity.principal
+                or event.auth.logon_id != identity.logon_id
+                or (
+                    identity_plan.session is not None
+                    and (
+                        identity_plan.session.hostname != identity.hostname
+                        or identity_plan.session.logon_id != identity.logon_id
+                    )
+                )
+                or lifecycle.group_id != identity.lifecycle_group_id
+                or lifecycle.canonical_start != identity.started_at
+                or lifecycle.parent_group_id != (identity.parent_lifecycle_group_id or None)
+            ):
+                raise EventContractError(
+                    "Exact RDP process close disagrees with its live process identity"
+                )
+            return "rdp_process_terminate"
+
+        if event.event_type is EventKind.LOGOFF:
+            if (
+                not record.root_action_id.endswith(":logout")
+                or plan.process_terminations
+                or len(plan.session_terminalizations) != 1
+                or plan.session_activity_patches
+                or type(identity_plan.subject) is not SessionIdentity
+                or identity_plan.actor is not None
+                or identity_plan.target is not None
+                or identity_plan.session != identity_plan.subject
+                or event.src_host is not None
+                or type(event.dst_host) is not HostContext
+                or event.dst_host.os_category != "windows"
+                or type(event.auth) is not AuthContext
+            ):
+                raise EventContractError("Exact RDP logout changed its singleton shape")
+            identity = identity_plan.subject
+            terminalization = plan.session_terminalizations[0]
+            if (
+                identity.session_kind != "rdp"
+                or terminalization.identity != identity
+                or terminalization.end_time != event.timestamp
+                or event.dst_host.hostname != identity.hostname
+                or event.auth.username != identity.principal
+                or event.auth.logon_id != identity.logon_id
+                or event.auth.session_id != identity.session_id
+                or event.auth.logon_type != 10
+                or event.auth.source_ip in {"", "-"}
+                or type(event.auth.source_port) is not int
+                or not 1 <= event.auth.source_port <= 65_535
+                or lifecycle.group_id != identity.lifecycle_group_id
+                or lifecycle.canonical_start != identity.started_at
+            ):
+                raise EventContractError(
+                    "Exact RDP logout disagrees with its live session identity"
+                )
+            return "rdp_logout"
+
+        raise EventContractError("Exact RDP terminal projection event kind is unsupported")
 
     def _ssh_terminal_exact_projection_participants(
         self,
@@ -6391,8 +6546,10 @@ class EventDispatcher:
             if record.member_binary_identity_kinds != ("",):
                 raise EventContractError("Exact Type-5 projection cannot carry binary owners")
             self._exact_projection_participants(projection)
-        else:
+        elif exact_kind.startswith("ssh_"):
             self._ssh_terminal_exact_projection_participants(projection)
+        else:
+            self._exact_projection_participants(projection)
         cleanup_record.exact_publication_batch = self._exact_publication_authority.issue_batch()
         record.exact_publication_batch = cleanup_record.exact_publication_batch
 
@@ -6411,6 +6568,8 @@ class EventDispatcher:
             self._exact_projection_participants(projection)
             if exact_kind == "type5"
             else self._ssh_terminal_exact_projection_participants(projection)
+            if exact_kind.startswith("ssh_")
+            else self._exact_projection_participants(projection)
         )
         batch.reserve_participants(cast(tuple[object, ...], participants))
         prepared_result = batch.prepare(
@@ -6424,19 +6583,56 @@ class EventDispatcher:
     def _require_state_neutral_type_five_projection(
         record: _PreparedActionCohortProjectionRecord,
     ) -> None:
-        """Require the exact successful built-in Type-5 shape with no State owner."""
+        """Require one narrow exact no-State authentication/transition shape."""
 
         from evidenceforge.events.contexts import AuthContext, HostContext
-        from evidenceforge.events.identity import EntityIdentity, EventIdentityPlan
+        from evidenceforge.events.identity import (
+            EntityIdentity,
+            EventIdentityPlan,
+            SessionIdentity,
+        )
         from evidenceforge.events.lifecycle import ActionLifecycleContext
 
         event = record.occurrence
-        EventDispatcher._require_type_five_projection(record.projection)
         auth = event.auth
         host = event.dst_host
         identity_plan = event.identity_plan
         lifecycle = event.lifecycle
         seal_occurrence = event.contract_seal.occurrence
+        if event.event_type is EventKind.RDP_DISCONNECT:
+            identity = identity_plan.subject if type(identity_plan) is EventIdentityPlan else None
+            if (
+                type(auth) is not AuthContext
+                or type(host) is not HostContext
+                or host.os_category != "windows"
+                or type(identity_plan) is not EventIdentityPlan
+                or type(identity) is not SessionIdentity
+                or identity_plan.session != identity
+                or identity_plan.actor is not None
+                or identity_plan.target is not None
+                or identity.session_kind != "rdp"
+                or type(lifecycle) is not ActionLifecycleContext
+                or lifecycle.phase != "dependent"
+                or lifecycle.group_id != identity.lifecycle_group_id
+                or lifecycle.canonical_start != identity.started_at
+                or lifecycle.parent_group_id != (identity.parent_lifecycle_group_id or None)
+                or seal_occurrence is None
+                or record.binary_identity_kind != ""
+                or event.src_host is not None
+                or host.hostname != identity.hostname
+                or auth.username != identity.principal
+                or auth.logon_id != identity.logon_id
+                or auth.session_id != identity.session_id
+                or auth.logon_type != 10
+                or auth.source_ip in {"", "-"}
+                or type(auth.source_port) is not int
+                or not 1 <= auth.source_port <= 65_535
+            ):
+                raise EventContractError(
+                    "State-neutral exact RDP disconnect disagrees with its live session"
+                )
+            return
+        EventDispatcher._require_type_five_projection(record.projection)
         expected_accounts = {
             "SYSTEM": ("S-1-5-18", "0x3e7"),
             "LOCAL SERVICE": ("S-1-5-19", "0x3e5"),
@@ -9915,21 +10111,40 @@ class EventDispatcher:
                     )
                 event = dispatches[proof.member_ordinal]._occurrence
                 auth = event.auth
-                if (
-                    event.event_type is not EventKind.LOGON
-                    or auth is None
-                    or type(auth.logon_type) is not int
-                    or auth.logon_type != 10
-                    or auth.result != "success"
-                    or type(auth.elevated) is not bool
-                    or type(auth.emit_special_privileges) is not bool
-                ):
-                    raise EventContractError(
-                        "Deferred-session Windows exact target is not an RDP logon"
+                if event.event_type is EventKind.LOGON:
+                    if (
+                        auth is None
+                        or type(auth.logon_type) is not int
+                        or auth.logon_type != 10
+                        or auth.result != "success"
+                        or type(auth.elevated) is not bool
+                        or type(auth.emit_special_privileges) is not bool
+                    ):
+                        raise EventContractError(
+                            "Deferred-session Windows exact target is not an RDP logon"
+                        )
+                    expected_event_ids = (
+                        (4624, 4672) if auth.elevated and auth.emit_special_privileges else (4624,)
                     )
-                expected_event_ids = (
-                    (4624, 4672) if auth.elevated and auth.emit_special_privileges else (4624,)
-                )
+                elif event.event_type in {
+                    EventKind.PROCESS_CREATE,
+                    EventKind.SYSTEM_PROCESS_CREATE,
+                }:
+                    if event.process is None or auth is None:
+                        raise EventContractError(
+                            "Deferred-session Windows process target lost canonical context"
+                        )
+                    expected_event_ids = (4688,)
+                elif event.event_type is EventKind.RDP_RECONNECT:
+                    expected_event_ids = (4778,)
+                elif event.event_type is EventKind.RDP_DISCONNECT:
+                    expected_event_ids = (4779,)
+                elif event.event_type is EventKind.LOGOFF:
+                    expected_event_ids = (4634,)
+                else:
+                    raise EventContractError(
+                        "Deferred-session Windows exact target has an unsupported event kind"
+                    )
                 if tuple(fact[0] for fact in proof.windows_ordering_facts) != expected_event_ids:
                     raise EventContractError(
                         "Deferred-session Windows exact target changed its EventID sequence"
@@ -10036,19 +10251,25 @@ class EventDispatcher:
             ):
                 raise EventContractError(
                     "Deferred-session Windows source-native ordering does not place transport "
-                    "before EventID 4624"
+                    "before its dependent"
                 )
 
     @staticmethod
     def _deferred_session_allowed_state_members(root: object) -> tuple[object, ...]:
-        """Return exact session/process plans carried by one deferred root batch."""
+        """Return exact session/process/active-session members of one root."""
 
-        batch = getattr(getattr(root, "state_plan", None), "batch", None)
+        state_plan = getattr(root, "state_plan", None)
+        batch = getattr(state_plan, "batch", None)
         if batch is None:
             return ()
         return (
             *((batch.session,) if batch.session is not None else ()),
             *batch.processes,
+            *(
+                (state_plan.existing_session_patch,)
+                if state_plan.existing_session_patch is not None
+                else ()
+            ),
         )
 
     def _deferred_session_intent_request(
@@ -10151,6 +10372,7 @@ class EventDispatcher:
             DeferredSessionKind,
         )
         from evidenceforge.generation.state_manager import (
+            ConnectionExistingSessionPatch,
             ProcessMaterializationPlan,
             SessionMaterializationPlan,
         )
@@ -10316,6 +10538,34 @@ class EventDispatcher:
                             "Deferred-session process dependent does not match its exact "
                             "root-owned process"
                         )
+                elif type(dependent_plan) is ConnectionExistingSessionPatch:
+                    session_identity = dependent_plan.after.identity
+                    auth = dependent_event.auth
+                    target_host = dependent_event.dst_host
+                    if (
+                        composition.kind is not DeferredSessionKind.RDP
+                        or dependent_plan.lifecycle_disposition.value != "existing"
+                        or dependent_event.event_type is not EventKind.RDP_RECONNECT
+                        or target_host is None
+                        or target_host.ip != root.transaction.dst_ip
+                        or target_host.hostname != session_identity.hostname
+                        or auth is None
+                        or auth.result != "success"
+                        or auth.username != session_identity.principal
+                        or auth.logon_id != session_identity.logon_id
+                        or auth.session_id != session_identity.session_id
+                        or auth.logon_type != 10
+                        or auth.source_ip != root.transaction.src_ip
+                        or auth.source_port != root.transaction.src_port
+                        or session_identity.session_kind != "rdp"
+                    ):
+                        raise EventContractError(
+                            "Deferred RDP reconnect does not match its exact active session"
+                        )
+                else:
+                    raise EventContractError(
+                        "Deferred-session dependent has an unsupported State owner"
+                    )
             if prepared._binary_identity_kind and prepared._lifecycle_ticket not in (
                 *getattr(getattr(root.state_plan, "batch", None), "processes", ()),
             ):

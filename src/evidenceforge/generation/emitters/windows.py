@@ -1086,6 +1086,8 @@ class WindowsEventEmitter(LogEmitter):
         "failed_logon",
         "process_create",
         "process_terminate",
+        "rdp_disconnect",
+        "rdp_reconnect",
         "system_process_create",
         "machine_logon",
         "kerberos_tgt",
@@ -1299,6 +1301,8 @@ class WindowsEventEmitter(LogEmitter):
             "failed_logon": self._render_failed_logon,
             "process_create": self._render_process_create,
             "process_terminate": self._render_process_terminate,
+            "rdp_disconnect": self._render_rdp_transition,
+            "rdp_reconnect": self._render_rdp_transition,
             "system_process_create": self._render_system_process_create,
             "machine_logon": self._render_machine_logon,
             "kerberos_tgt": self._render_kerberos_tgt,
@@ -1504,6 +1508,31 @@ class WindowsEventEmitter(LogEmitter):
         }
         if event.storyline_origin:
             event_data["_storyline_origin"] = True
+        self.emit_event(event_data)
+
+    def _render_rdp_transition(self, event: CanonicalOccurrence) -> None:
+        """Render Windows 4778/4779 for a reconnectable RDP session."""
+
+        rng = self._event_rng(event)
+        auth = event.auth
+        host = self._get_host(event)
+        session_id = auth.session_id or self._session_id_for_logon(auth.logon_id)
+        event_data = {
+            "EventID": 4778 if event.event_type == "rdp_reconnect" else 4779,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": self._security_provider_pid(host, auth.reporting_pid),
+            "ExecutionThreadID": rng.randint(100, 500),
+            "AccountName": auth.username,
+            "AccountDomain": _subject_domain(auth.username, host.netbios_domain),
+            "LogonID": auth.logon_id,
+            "SessionName": f"RDP-Tcp#{session_id}",
+            "ClientName": auth.workstation_name or "-",
+            "ClientAddress": auth.source_ip or "-",
+            "ClientPort": auth.source_port or 0,
+        }
         self.emit_event(event_data)
 
     def _render_failed_logon(self, event: CanonicalOccurrence) -> None:

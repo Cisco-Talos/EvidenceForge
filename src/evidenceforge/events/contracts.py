@@ -55,6 +55,8 @@ class EventKind(StrEnum):
     PROCESS_ACCESS = "process_access"
     PROCESS_CREATE = "process_create"
     PROCESS_TERMINATE = "process_terminate"
+    RDP_DISCONNECT = "rdp_disconnect"
+    RDP_RECONNECT = "rdp_reconnect"
     REGISTRY_MODIFY = "registry_modify"
     SCHEDULED_TASK_CREATED = "scheduled_task_created"
     SCHEDULED_TASK_DELETED = "scheduled_task_deleted"
@@ -807,6 +809,24 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         lifecycle=LifecycleRole.START,
         state=StateEffect.WRITE,
         emitters=_formats(FormatKind.ECAR, FormatKind.WINDOWS_EVENT_SECURITY),
+    ),
+    EventKind.RDP_DISCONNECT: _contract(
+        EventKind.RDP_DISCONNECT,
+        required=_contexts(ContextKind.AUTH, ContextKind.DST_HOST),
+        dst=HostSemantic.TARGET,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.WRITE,
+        emitters=_WINDOWS_SECURITY,
+    ),
+    EventKind.RDP_RECONNECT: _contract(
+        EventKind.RDP_RECONNECT,
+        required=_contexts(ContextKind.AUTH, ContextKind.DST_HOST),
+        dst=HostSemantic.TARGET,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.WRITE,
+        emitters=_WINDOWS_SECURITY,
     ),
     EventKind.MACHINE_LOGON: _contract(
         EventKind.MACHINE_LOGON,

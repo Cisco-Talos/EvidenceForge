@@ -1,0 +1,999 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+# SPDX-License-Identifier: MIT
+
+"""Public-boundary coverage for exact deferred RDP production ownership."""
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import AuthContext, HostContext
+from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.rdp import RdpSessionState
+from evidenceforge.formats import load_format
+from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle
+from evidenceforge.generation.activity.generator import ActivityGenerator
+from evidenceforge.generation.application_channels import ApplicationChannelRegistry
+from evidenceforge.generation.emitters.base import ExactPublicationAuthority
+from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.emitters.windows import WindowsEventEmitter
+from evidenceforge.generation.emitters.zeek import ZeekEmitter
+from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
+from evidenceforge.generation.source_finalization import SourceFinalizationCoordinator
+from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.scenario import System, User
+from evidenceforge.utils.rng import reset_thread_rng
+
+_START = datetime(2026, 1, 5, 9, tzinfo=UTC)
+_END = _START + timedelta(days=1)
+
+
+@dataclass(slots=True)
+class _RdpTerminalHarness:
+    """Live exact RDP session plus its source sinks and immutable terminal identities."""
+
+    state: StateManager
+    dispatcher: EventDispatcher
+    generator: ActivityGenerator
+    ecar: EcarEmitter
+    windows: WindowsEventEmitter
+    zeek: ZeekEmitter
+    source_hostname: str
+    target_hostname: str
+    logon_id: str
+    session_object_id: str
+    terminal_process_object_ids: tuple[str, ...]
+    disconnect_at: datetime
+    output_root: Path
+
+
+def _open_rdp_terminal_harness(
+    tmp_path: Path,
+    *,
+    clock_profile_name: str = "complete",
+) -> _RdpTerminalHarness:
+    """Open one exact initial RDP generation whose full terminal graph is still pending."""
+
+    reset_thread_rng(42)
+    state = StateManager()
+    state.set_current_time(_START - timedelta(minutes=5))
+    ecar = EcarEmitter(load_format("ecar"), tmp_path / "ecar", threaded=False)
+    zeek = ZeekEmitter(load_format("zeek_conn"), tmp_path / "zeek.json", threaded=False)
+    windows = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "windows",
+        threaded=False,
+        source_finalization=True,
+    )
+    emitters = {
+        "ecar": ecar,
+        "windows_event_security": windows,
+        "zeek_conn": zeek,
+    }
+    dispatcher = EventDispatcher(
+        state,
+        emitters,
+        source_timing_planner=SourceTimingPlanner(clock_profile_name=clock_profile_name),
+    )
+    generator = ActivityGenerator(
+        state,
+        emitters,
+        dispatcher=dispatcher,
+        generation_window_start=_START - timedelta(days=1),
+        generation_window_end=_END,
+    )
+    source = System(
+        hostname="WS-01",
+        ip="10.10.0.25",
+        os="Windows 11",
+        type="workstation",
+    )
+    target = System(
+        hostname="RDS-01",
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    generator._ip_to_system = {source.ip: source, target.ip: target}
+    source_logon = generator.generate_logon(
+        user,
+        source,
+        _START - timedelta(seconds=30),
+        logon_type=2,
+    )
+    source_pid = generator.generate_process(
+        user,
+        source,
+        _START - timedelta(seconds=3),
+        source_logon,
+        r"C:\Windows\System32\mstsc.exe",
+        f"mstsc.exe /v:{target.hostname}",
+        parent_pid=4,
+    )
+    source_identity = state.get_process_identity(source.hostname, source_pid)
+    assert source_identity is not None
+    _uid, logon_id = generator._execute_rdp_session_bundle(
+        user=user,
+        target_system=target,
+        time=_START,
+        source_ip=source.ip,
+        source_system=source,
+        source_pid=source_pid,
+        source_port=50_001,
+    )
+    session = state.get_session(logon_id)
+    session_identity = state.get_session_identity(logon_id)
+    assert session is not None and session_identity is not None
+    assert session.network_close_time is not None
+    target_pids = (
+        session.session_winlogon_pid,
+        session.session_user_manager_pid,
+        session.explorer_pid,
+    )
+    assert all(pid is not None for pid in target_pids)
+    target_identities = tuple(
+        state.get_process_identity(target.hostname, pid) for pid in target_pids if pid is not None
+    )
+    assert len(target_identities) == 3 and all(
+        identity is not None for identity in target_identities
+    )
+    return _RdpTerminalHarness(
+        state=state,
+        dispatcher=dispatcher,
+        generator=generator,
+        ecar=ecar,
+        windows=windows,
+        zeek=zeek,
+        source_hostname=source.hostname,
+        target_hostname=target.hostname,
+        logon_id=logon_id,
+        session_object_id=session_identity.object_id,
+        terminal_process_object_ids=(
+            source_identity.object_id,
+            *(identity.object_id for identity in target_identities if identity is not None),
+        ),
+        disconnect_at=session.network_close_time,
+        output_root=tmp_path,
+    )
+
+
+def _close_rdp_terminal_harness(harness: _RdpTerminalHarness) -> None:
+    """Finish exact source recovery and close the three harness sinks in owner order."""
+
+    harness.dispatcher.drain_exact_projection_recoveries()
+    harness.dispatcher.assert_exact_projection_recoveries_drained()
+    coordinator = SourceFinalizationCoordinator(
+        (harness.windows,),
+        ExactPublicationAuthority(
+            capacity=1,
+            row_capacity=256,
+            byte_capacity=8 * 1024 * 1024,
+        ),
+    )
+    coordinator.finalize()
+    harness.windows.close()
+    coordinator.mark_closed()
+    harness.ecar.close()
+    harness.zeek.close()
+
+
+def _read_json_lines(root: Path, filename: str) -> list[dict[str, object]]:
+    """Read every non-empty JSON line under one deterministic test sink."""
+
+    return [
+        json.loads(line)
+        for output in root.rglob(filename)
+        for line in output.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+
+
+def _windows_security_time(
+    rendered: str,
+    event_id: int,
+    *,
+    process_name: str = "",
+) -> datetime:
+    """Return the one matching rendered Windows Security timestamp."""
+
+    matches: list[datetime] = []
+    for event in re.findall(r"<Event\b.*?</Event>", rendered, flags=re.DOTALL):
+        if f"<EventID>{event_id}</EventID>" not in event:
+            continue
+        if process_name and process_name.casefold() not in event.casefold():
+            continue
+        timestamp = re.search(r'<TimeCreated\s+SystemTime="([^"]+)"', event)
+        assert timestamp is not None
+        matches.append(datetime.fromisoformat(timestamp.group(1).replace("Z", "+00:00")))
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_activity_generator_uses_injected_shared_rdp_owner() -> None:
+    """Production may inject exactly one RDP manager over the shared registry."""
+
+    state = StateManager()
+    registry = ApplicationChannelRegistry(window_start=_START, window_end=_END)
+    manager = RdpReconnectStateManager(
+        application_registry=registry,
+        window_start=_START,
+        window_end=_END,
+    )
+
+    generator = ActivityGenerator(
+        state,
+        {},
+        application_channel_registry=registry,
+        rdp_session_manager=manager,
+        generation_window_start=_START,
+        generation_window_end=_END,
+    )
+
+    assert generator.rdp_session_manager is manager
+    assert generator.rdp_session_manager.application_registry is registry
+
+
+def test_windows_security_renders_exact_rdp_reconnect_and_disconnect(tmp_path) -> None:
+    """Typed RDP transitions render Security 4778/4779 with one preserved tuple."""
+
+    output = tmp_path / "windows.xml"
+    emitter = WindowsEventEmitter(load_format("windows_event_security"), output, buffer_size=1)
+    host = HostContext(
+        hostname="RDS-01",
+        ip="10.20.0.10",
+        fqdn="RDS-01.example.test",
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="server",
+        netbios_domain="EXAMPLE",
+    )
+    auth = AuthContext(
+        username="analyst",
+        user_sid="S-1-5-21-1000-1000-1000-1105",
+        logon_id="0x1234",
+        session_id=7,
+        logon_type=10,
+        source_ip="10.10.0.25",
+        source_port=50_001,
+        session_kind="rdp",
+        auth_protocol="rdp",
+    )
+
+    emitter.emit(
+        OccurrenceBuilder(
+            timestamp=_START,
+            event_type="rdp_reconnect",
+            dst_host=host,
+            auth=auth,
+        )
+    )
+    emitter.emit(
+        OccurrenceBuilder(
+            timestamp=_START + timedelta(minutes=10),
+            event_type="rdp_disconnect",
+            dst_host=host,
+            auth=auth,
+        )
+    )
+    emitter.close()
+
+    rendered = output.read_text(encoding="utf-8")
+    assert rendered.count("<EventID>4778</EventID>") == 1
+    assert rendered.count("<EventID>4779</EventID>") == 1
+    assert rendered.count('<Data Name="SessionName">RDP-Tcp#7</Data>') == 2
+    assert rendered.count('<Data Name="ClientAddress">10.10.0.25</Data>') == 2
+    assert rendered.count('<Data Name="ClientPort">50001</Data>') == 2
+
+
+def test_initial_rdp_session_publishes_one_exact_transport_and_windows_cohort(tmp_path) -> None:
+    """The production RDP caller commits transport, State, application, and source rows once."""
+
+    reset_thread_rng(42)
+    state = StateManager()
+    state.set_current_time(_START - timedelta(minutes=5))
+    ecar = EcarEmitter(load_format("ecar"), tmp_path / "ecar", threaded=False)
+    zeek = ZeekEmitter(load_format("zeek_conn"), tmp_path / "zeek.json", threaded=False)
+    emitters = {
+        "ecar": ecar,
+        "zeek_conn": zeek,
+    }
+    dispatcher = EventDispatcher(state, emitters)
+    generator = ActivityGenerator(
+        state,
+        emitters,
+        dispatcher=dispatcher,
+        generation_window_start=_START - timedelta(days=1),
+        generation_window_end=_END,
+    )
+    source = System(
+        hostname="WS-01",
+        ip="10.10.0.25",
+        os="Windows 11",
+        type="workstation",
+    )
+    target = System(
+        hostname="RDS-01",
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    generator._ip_to_system = {source.ip: source, target.ip: target}
+    source_logon = generator.generate_logon(
+        user,
+        source,
+        _START - timedelta(seconds=30),
+        logon_type=2,
+    )
+    source_pid = generator.generate_process(
+        user,
+        source,
+        _START - timedelta(seconds=3),
+        source_logon,
+        r"C:\Windows\System32\mstsc.exe",
+        f"mstsc.exe /v:{target.hostname}",
+        parent_pid=4,
+    )
+
+    uid, logon_id = generator._execute_rdp_session_bundle(
+        user=user,
+        target_system=target,
+        time=_START,
+        source_ip=source.ip,
+        source_system=source,
+        source_pid=source_pid,
+        source_port=50_001,
+    )
+
+    session = state.get_session(logon_id)
+    assert uid
+    assert session is not None
+    assert session.session_kind == "rdp"
+    assert session.source_port == 50_001
+    assert session.session_winlogon_pid is not None
+    assert session.session_user_manager_pid is not None
+    assert session.explorer_pid is not None
+    snapshot = generator.rdp_session_manager.get(session.ecar_object_id)
+    assert snapshot is not None
+    assert snapshot.generation.binding.transport_id
+    assert snapshot.identity.affinity.logon_id == logon_id.casefold()
+    source_process = state.get_process(source.hostname, source_pid)
+    assert source_process is not None
+    assert source_process.last_activity_time == session.network_close_time
+
+    ecar.close()
+    zeek.close()
+    ecar_rows = [
+        line
+        for output in (tmp_path / "ecar").rglob("ecar.json")
+        for line in output.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(ecar_rows) >= 6
+    assert dispatcher.deferred_session_publication_census().prepared_batches == 0
+
+
+def test_rdp_journal_capacity_rejects_before_transport_or_state_publication(tmp_path) -> None:
+    """A full terminal journal rejects the initial exact graph before any owner mutates."""
+
+    reset_thread_rng(42)
+    state = StateManager()
+    state.set_current_time(_START - timedelta(minutes=5))
+    ecar = EcarEmitter(load_format("ecar"), tmp_path / "ecar", threaded=False)
+    zeek = ZeekEmitter(load_format("zeek_conn"), tmp_path / "zeek.json", threaded=False)
+    emitters = {"ecar": ecar, "zeek_conn": zeek}
+    dispatcher = EventDispatcher(state, emitters)
+    generator = ActivityGenerator(
+        state,
+        emitters,
+        dispatcher=dispatcher,
+        generation_window_start=_START - timedelta(days=1),
+        generation_window_end=_END,
+    )
+    source = System(
+        hostname="WS-01",
+        ip="10.10.0.25",
+        os="Windows 11",
+        type="workstation",
+    )
+    target = System(
+        hostname="RDS-01",
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    generator._ip_to_system = {source.ip: source, target.ip: target}
+    source_logon = generator.generate_logon(
+        user,
+        source,
+        _START - timedelta(seconds=30),
+        logon_type=2,
+    )
+    source_pid = generator.generate_process(
+        user,
+        source,
+        _START - timedelta(seconds=3),
+        source_logon,
+        r"C:\Windows\System32\mstsc.exe",
+        f"mstsc.exe /v:{target.hostname}",
+        parent_pid=4,
+    )
+    generator._rdp_lifecycle_journal_capacity = 0
+
+    with pytest.raises(StateError, match="journal capacity is exhausted"):
+        generator._execute_rdp_session_bundle(
+            user=user,
+            target_system=target,
+            time=_START,
+            source_ip=source.ip,
+            source_system=source,
+            source_pid=source_pid,
+            source_port=50_001,
+        )
+
+    assert generator.rdp_session_manager.census().retained_sessions == 0
+    assert generator.rdp_lifecycle_journal_census().prepared_reservations == 0
+    assert not [
+        connection for connection in state.list_open_connections() if connection.dst_port == 3389
+    ]
+    assert not [
+        session
+        for session in state.get_sessions_on_system(target.hostname)
+        if session.session_kind == "rdp"
+    ]
+    ecar.close()
+    zeek.close()
+
+
+@pytest.mark.parametrize("lose_terminal_return", (False, True), ids=("success", "lost-return"))
+def test_disconnected_rdp_session_reconnects_through_same_exact_owner(
+    lose_terminal_return: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One later transport preserves the logical State identity and emits Security 4778."""
+
+    reset_thread_rng(42)
+    state = StateManager()
+    state.set_current_time(_START - timedelta(minutes=5))
+    ecar = EcarEmitter(load_format("ecar"), tmp_path / "ecar", threaded=False)
+    zeek = ZeekEmitter(load_format("zeek_conn"), tmp_path / "zeek.json", threaded=False)
+    windows = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "windows",
+        threaded=False,
+        source_finalization=True,
+    )
+    emitters = {
+        "ecar": ecar,
+        "windows_event_security": windows,
+        "zeek_conn": zeek,
+    }
+    dispatcher = EventDispatcher(state, emitters)
+    generator = ActivityGenerator(
+        state,
+        emitters,
+        dispatcher=dispatcher,
+        generation_window_start=_START - timedelta(days=1),
+        generation_window_end=_END,
+    )
+    source = System(
+        hostname="WS-01",
+        ip="10.10.0.25",
+        os="Windows 11",
+        type="workstation",
+    )
+    target = System(
+        hostname="RDS-01",
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    generator._ip_to_system = {source.ip: source, target.ip: target}
+    source_logon = generator.generate_logon(
+        user,
+        source,
+        _START - timedelta(seconds=30),
+        logon_type=2,
+    )
+    source_pid = generator.generate_process(
+        user,
+        source,
+        _START - timedelta(seconds=3),
+        source_logon,
+        r"C:\Windows\System32\mstsc.exe",
+        f"mstsc.exe /v:{target.hostname}",
+        parent_pid=4,
+    )
+    _uid, logon_id = generator._execute_rdp_session_bundle(
+        user=user,
+        target_system=target,
+        time=_START,
+        source_ip=source.ip,
+        source_system=source,
+        source_pid=source_pid,
+        source_port=50_001,
+    )
+    session = state.get_session(logon_id)
+    assert session is not None and session.network_close_time is not None
+    logical_id = session.ecar_object_id
+    initial = generator.rdp_session_manager.get(logical_id)
+    assert initial is not None
+    generator.advance_rdp_session_lifecycle_watermark(session.network_close_time)
+    disconnected = generator.rdp_session_manager.get(logical_id)
+    assert disconnected is not None
+    assert disconnected.state is RdpSessionState.DISCONNECTED
+    assert generator.rdp_lifecycle_journal_census().disconnected_generations == 1
+    reconnect_at = session.network_close_time + timedelta(seconds=1)
+
+    reconnect_uid, reconnect_logon_id = generator._execute_rdp_session_bundle(
+        user=user,
+        target_system=target,
+        time=reconnect_at,
+        source_ip=source.ip,
+        source_system=source,
+        source_port=50_002,
+        logon_id=logon_id,
+    )
+
+    reconnected = generator.rdp_session_manager.get(logical_id)
+    assert reconnect_uid
+    assert reconnect_logon_id == logon_id
+    assert reconnected is not None
+    assert reconnected.generation.ordinal == disconnected.generation.ordinal + 1
+    updated_session = state.get_session(logon_id)
+    assert updated_session is not None
+    assert updated_session.source_port == 50_002
+    reconnect_clients = [
+        process
+        for process in state.get_processes_on_system(source.hostname)
+        if process.image.casefold().endswith("mstsc.exe")
+        and reconnect_at < process.start_time < reconnect_at + timedelta(seconds=2)
+    ]
+    assert len(reconnect_clients) == 1
+    assert reconnect_clients[0].last_activity_time == updated_session.network_close_time
+    assert dispatcher.deferred_session_publication_census().prepared_batches == 0
+
+    assert updated_session.network_close_time is not None
+    if lose_terminal_return:
+        original_claim = EventDispatcher.claimed_action_cohort
+        injected = False
+
+        @contextmanager
+        def lose_process_close_return(
+            owner: EventDispatcher,
+            batch: object,
+        ) -> Iterator[object]:
+            nonlocal injected
+            with original_claim(owner, batch) as capability:
+                yield capability
+            result = capability.result
+            if (
+                not injected
+                and result is not None
+                and result.receipt.root_action_id.endswith(":process-terminate")
+            ):
+                injected = True
+                raise OSError("injected RDP terminal claim lost-return")
+
+        monkeypatch.setattr(EventDispatcher, "claimed_action_cohort", lose_process_close_return)
+        with pytest.raises(OSError, match="RDP terminal claim lost-return") as caught:
+            generator.advance_rdp_session_lifecycle_watermark(updated_session.network_close_time)
+        assert caught.value.action_cohort_receipt is not None
+        assert generator.rdp_lifecycle_journal_census().pending_generations == 1
+    generator.advance_rdp_session_lifecycle_watermark(updated_session.network_close_time)
+    second_disconnect = generator.rdp_session_manager.get(logical_id)
+    assert second_disconnect is not None
+    assert second_disconnect.state is RdpSessionState.DISCONNECTED
+    generator.finalize_rdp_session_lifecycles(_END)
+    assert state.get_session(logon_id) is None
+    assert generator.rdp_lifecycle_journal_census().pending_generations == 0
+
+    dispatcher.drain_exact_projection_recoveries()
+    coordinator = SourceFinalizationCoordinator(
+        (windows,),
+        ExactPublicationAuthority(
+            capacity=1,
+            row_capacity=256,
+            byte_capacity=8 * 1024 * 1024,
+        ),
+    )
+    coordinator.finalize()
+    windows.close()
+    coordinator.mark_closed()
+    ecar.close()
+    zeek.close()
+    rendered = "\n".join(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "windows").rglob("*.xml")
+    )
+    assert rendered.count("<EventID>4778</EventID>") == 1
+    assert rendered.count("<EventID>4779</EventID>") == 2
+    assert rendered.count("<EventID>4634</EventID>") == 1
+    assert '<Data Name="ClientPort">50002</Data>' in rendered
+
+
+@pytest.mark.parametrize(
+    ("terminal_owner", "clock_profile_name"),
+    (
+        ("source-process-terminate", "complete"),
+        ("4779-disconnect", "enterprise_standard"),
+        ("target-logout-4634", "messy_collection"),
+    ),
+)
+@pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))
+def test_rdp_terminal_owner_failure_retries_without_duplicate_rows(
+    terminal_owner: str,
+    clock_profile_name: str,
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every first/middle/last terminal owner retains one exact retryable journal entry."""
+
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        clock_profile_name=clock_profile_name,
+    )
+    injected = False
+    selected_calls = 0
+    owner_calls: list[str] = []
+    canonical_times: dict[str, datetime] = {}
+    original_terminate = RdpSessionActionBundle.terminate_exact_rdp_process
+    original_disconnect = EventDispatcher.publish_state_neutral_exact_projection
+    original_logout = RdpSessionActionBundle.logout_exact_rdp_session
+
+    def faulting_source_terminate(
+        owner: RdpSessionActionBundle,
+        continuation: object,
+        identity: ProcessIdentity,
+        terminate_time: datetime,
+    ) -> object:
+        nonlocal injected, selected_calls
+        source_owner = identity.hostname == harness.source_hostname
+        selected = source_owner and terminal_owner == "source-process-terminate"
+        if selected:
+            selected_calls += 1
+        if selected and not injected:
+            injected = True
+            if failure_mode == "fail-before":
+                raise OSError("injected source process terminate fail-before")
+            result = original_terminate(owner, continuation, identity, terminate_time)
+            owner_calls.append("source-process-terminate")
+            canonical_times.setdefault("source-process-terminate", terminate_time)
+            raise OSError("injected source process terminate lost-return")
+        result = original_terminate(owner, continuation, identity, terminate_time)
+        if source_owner:
+            owner_calls.append("source-process-terminate")
+            canonical_times.setdefault("source-process-terminate", terminate_time)
+        return result
+
+    def faulting_disconnect(owner: EventDispatcher, carrier: object) -> object:
+        nonlocal injected, selected_calls
+        canonical_time = owner.action_cohort_projection_occurrence(carrier).timestamp
+        selected = terminal_owner == "4779-disconnect"
+        if selected:
+            selected_calls += 1
+        if selected and not injected:
+            injected = True
+            if failure_mode == "fail-before":
+                raise OSError("injected 4779 disconnect fail-before")
+            result = original_disconnect(owner, carrier)
+            owner_calls.append("4779-disconnect")
+            canonical_times.setdefault("4779-disconnect", canonical_time)
+            error = OSError("injected 4779 disconnect lost-return")
+            error.state_neutral_projection_receipt = result.receipt
+            error.state_neutral_projection_result = result
+            raise error
+        result = original_disconnect(owner, carrier)
+        owner_calls.append("4779-disconnect")
+        canonical_times.setdefault("4779-disconnect", canonical_time)
+        return result
+
+    def faulting_logout(
+        owner: RdpSessionActionBundle,
+        continuation: object,
+        logout_time: datetime,
+    ) -> None:
+        nonlocal injected, selected_calls
+        selected = terminal_owner == "target-logout-4634"
+        if selected:
+            selected_calls += 1
+        if selected and not injected:
+            injected = True
+            if failure_mode == "fail-before":
+                raise OSError("injected target logout 4634 fail-before")
+            original_logout(owner, continuation, logout_time)
+            owner_calls.append("target-logout-4634")
+            canonical_times.setdefault("target-logout-4634", logout_time)
+            raise OSError("injected target logout 4634 lost-return")
+        original_logout(owner, continuation, logout_time)
+        owner_calls.append("target-logout-4634")
+        canonical_times.setdefault("target-logout-4634", logout_time)
+
+    monkeypatch.setattr(
+        RdpSessionActionBundle,
+        "terminate_exact_rdp_process",
+        faulting_source_terminate,
+    )
+    monkeypatch.setattr(
+        EventDispatcher,
+        "publish_state_neutral_exact_projection",
+        faulting_disconnect,
+    )
+    monkeypatch.setattr(
+        RdpSessionActionBundle,
+        "logout_exact_rdp_session",
+        faulting_logout,
+    )
+
+    expected_error = f"injected {terminal_owner.replace('-', ' ')} {failure_mode}"
+    with pytest.raises(OSError, match=expected_error):
+        if terminal_owner == "target-logout-4634":
+            harness.generator.finalize_rdp_session_lifecycles(_END)
+        else:
+            harness.generator.advance_rdp_session_lifecycle_watermark(harness.disconnect_at)
+
+    retained = harness.generator.rdp_lifecycle_journal_census()
+    assert injected
+    assert retained.prepared_reservations == 0
+    assert retained.pending_generations == 1
+
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+
+    terminal = harness.generator.rdp_lifecycle_journal_census()
+    expected_calls = (
+        1 if terminal_owner == "4779-disconnect" and failure_mode == "lost-return" else 2
+    )
+    assert selected_calls == expected_calls
+    assert terminal.prepared_reservations == 0
+    assert terminal.pending_generations == 0
+    assert terminal.disconnected_generations == 0
+    manager_census = harness.generator.rdp_session_manager.census()
+    assert manager_census.connected_sessions == 0
+    assert manager_census.disconnected_sessions == 0
+    assert manager_census.logged_out_sessions == 1
+    assert manager_census.active_operations == 0
+    assert manager_census.active_leases == 0
+    assert manager_census.application.open_channels == 0
+    assert manager_census.application.active_operations == 0
+    assert manager_census.application.prepared_admissions == 0
+    assert manager_census.application.claimed_admissions == 0
+    assert harness.state.get_session(harness.logon_id) is None
+    harness.generator.assert_rdp_session_lifecycles_drained()
+
+    _close_rdp_terminal_harness(harness)
+    rendered_windows = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "windows").rglob("*.xml")
+    )
+    assert rendered_windows.count("<EventID>4779</EventID>") == 1
+    assert rendered_windows.count("<EventID>4634</EventID>") == 1
+    _windows_security_time(
+        rendered_windows,
+        4689,
+        process_name="mstsc.exe",
+    )
+    disconnect_at = _windows_security_time(rendered_windows, 4779)
+    logout_at = _windows_security_time(rendered_windows, 4634)
+    assert (
+        owner_calls.index("source-process-terminate")
+        < owner_calls.index("4779-disconnect")
+        < owner_calls.index("target-logout-4634")
+    ), owner_calls
+    assert canonical_times["source-process-terminate"] == harness.disconnect_at
+    assert canonical_times["4779-disconnect"] == (
+        canonical_times["source-process-terminate"] + timedelta(microseconds=1)
+    )
+    assert canonical_times["4779-disconnect"] < canonical_times["target-logout-4634"]
+    assert disconnect_at < logout_at, (
+        clock_profile_name,
+        disconnect_at,
+        logout_at,
+    )
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    for object_id in harness.terminal_process_object_ids:
+        assert (
+            sum(
+                row.get("object") == "PROCESS"
+                and row.get("action") == "TERMINATE"
+                and row.get("objectID") == object_id
+                for row in ecar_rows
+            )
+            == 1
+        )
+    assert (
+        sum(
+            row.get("object") == "USER_SESSION"
+            and row.get("action") == "LOGIN"
+            and row.get("objectID") == harness.session_object_id
+            for row in ecar_rows
+        )
+        == 1
+    )
+    assert (
+        sum(
+            row.get("object") == "USER_SESSION"
+            and row.get("action") == "LOGOUT"
+            and row.get("objectID") == harness.session_object_id
+            for row in ecar_rows
+        )
+        == 1
+    )
+
+
+class _OrderedEngineLifecycleOwner:
+    """Minimal lifecycle owner that loses the first RDP terminal return exactly once."""
+
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+        self.rdp_attempts = 0
+        self.rdp_drained = False
+
+    def finalize_ssh_session_lifecycles(self, _end_time: datetime) -> None:
+        """Record the protocol owner that must run first."""
+
+        self.calls.append("ssh-finalize")
+
+    def assert_ssh_session_lifecycles_drained(self) -> None:
+        """Record the SSH terminal assertion."""
+
+        self.calls.append("ssh-assert-drained")
+
+    def finalize_rdp_session_lifecycles(self, _end_time: datetime) -> None:
+        """Lose one return, then drain the retained RDP journal on exact retry."""
+
+        self.rdp_attempts += 1
+        self.calls.append(f"rdp-finalize-{self.rdp_attempts}")
+        if self.rdp_attempts == 1:
+            raise OSError("injected engine RDP lost-return")
+        self.rdp_drained = True
+
+    def assert_rdp_session_lifecycles_drained(self) -> None:
+        """Reject downstream shutdown until the RDP retry has drained."""
+
+        self.calls.append("rdp-assert-drained")
+        if not self.rdp_drained:
+            raise AssertionError("RDP lifecycle journal remains pending")
+
+    def write_artifacts_manifest(self) -> None:
+        """Record successful completion after source close."""
+
+        self.calls.append("manifest")
+
+
+class _OrderedEngineRecoveryDispatcher:
+    """Record the exact dispatcher drain interleaved with protocol journals."""
+
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    def drain_exact_projection_recoveries(self) -> tuple[object, ...]:
+        """Record one recovery drain."""
+
+        self.calls.append("projection-drain")
+        return ()
+
+    def assert_exact_projection_recoveries_drained(self) -> None:
+        """Record the matching terminal assertion."""
+
+        self.calls.append("projection-assert-drained")
+
+
+class _OrderedSourceSink:
+    """Combined source-finalization and emitter-close double with a live RDP guard."""
+
+    def __init__(self, calls: list[str], owner: _OrderedEngineLifecycleOwner) -> None:
+        self.calls = calls
+        self.owner = owner
+
+    def _require_rdp_drained(self) -> None:
+        if not self.owner.rdp_drained:
+            raise AssertionError("source sink reached before RDP journal drain")
+
+    def finalize(self) -> None:
+        """Record source finalization after the protocol journals."""
+
+        self._require_rdp_drained()
+        self.calls.append("source-finalize")
+
+    def close(self) -> None:
+        """Record emitter close after source finalization."""
+
+        self._require_rdp_drained()
+        self.calls.append("emitter-close")
+
+    def mark_closed(self) -> None:
+        """Record source-finalization acknowledgement."""
+
+        self.calls.append("source-closed")
+
+
+def test_engine_orders_ssh_before_rdp_and_blocks_source_close_during_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real engine preserves SSH -> RDP -> source-finalization shutdown order."""
+
+    calls: list[str] = []
+    owner = _OrderedEngineLifecycleOwner(calls)
+    dispatcher = _OrderedEngineRecoveryDispatcher(calls)
+    sink = _OrderedSourceSink(calls, owner)
+    engine = GenerationEngine.__new__(GenerationEngine)
+    engine.activity_generator = owner
+    engine.dispatcher = dispatcher
+    engine.emitters = {"ordered": sink}
+    engine.end_time = _END
+    engine._source_finalization_coordinator = sink
+    engine._ssh_lifecycles_finalized = False
+    engine._rdp_lifecycles_finalized = False
+    engine._foreground_lifecycles_finalized = True
+    engine._finalization_complete = False
+    engine._finalization_aborted = False
+    engine._source_coordinator_closed = False
+    engine._ids_alert_summary_applied = True
+    engine._expected_close_emitters = None
+    engine._closed_emitter_names = set()
+    engine._exact_projection_recovery_dispatcher = None
+    engine.ground_truth_dir = tmp_path
+    engine.scenario = object()
+    engine.output_target = object()
+    engine.workload_estimate = object()
+    monkeypatch.setattr(
+        "evidenceforge.events.collection_profile.write_collection_profile",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(OSError, match="engine RDP lost-return"):
+        engine._finalize(generation_succeeded=True)
+
+    assert calls.index("ssh-finalize") < calls.index("rdp-finalize-1")
+    assert calls.count("rdp-finalize-1") == 1
+    assert calls.count("rdp-finalize-2") == 1
+    assert "source-finalize" not in calls
+    assert "emitter-close" not in calls
+    assert owner.rdp_drained
+    assert engine._rdp_lifecycles_finalized
+    assert not engine._finalization_complete
+
+    engine._finalize(generation_succeeded=True)
+
+    assert calls.index("rdp-finalize-2") < calls.index("source-finalize")
+    assert calls.index("source-finalize") < calls.index("emitter-close")
+    assert calls.index("emitter-close") < calls.index("source-closed")
+    assert engine._finalization_complete

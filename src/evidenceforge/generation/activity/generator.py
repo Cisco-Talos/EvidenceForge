@@ -321,6 +321,7 @@ from evidenceforge.generation.network_runtime import (
 )
 from evidenceforge.generation.process_runtime_cache import BoundedRuntimeCache, deadline_seconds
 from evidenceforge.generation.proxy_channels import ExplicitProxyChannelManager
+from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.runtime_content import (
     RuntimeArtifactOwnerKind,
     RuntimeContentIdentityManager,
@@ -4639,6 +4640,30 @@ class SshCloseJournalCensus:
         return self.exact_pending + self.legacy_pending
 
 
+@dataclass(frozen=True, slots=True)
+class RdpLifecycleJournalCensus:
+    """Bounded count-only view of action-owned RDP terminal work."""
+
+    prepared_reservations: int
+    pending_generations: int
+    disconnected_generations: int
+    capacity: int
+
+
+@dataclass(slots=True)
+class _RdpLifecycleJournalEntry:
+    """Mutable progress for one immutable committed RDP continuation."""
+
+    continuation: Any
+    disconnect_published: bool = False
+    source_terminated: bool = False
+    source_termination_at: datetime | None = None
+    source_projection_frontiers: tuple[tuple[str, int, datetime], ...] = ()
+    manager_logged_out: bool = False
+    target_terminations: tuple[tuple[ProcessIdentity, datetime], ...] | None = None
+    logout_published: bool = False
+
+
 _FailedLogonAttemptKey = tuple[str, str, int, str]
 
 
@@ -5045,6 +5070,7 @@ class ActivityGenerator:
         lifecycle_shadow: LifecycleShadow | None = None,
         lifecycle_authority: GeneratorLifecycleAuthority | None = None,
         application_channel_registry: ApplicationChannelRegistry | None = None,
+        rdp_session_manager: RdpReconnectStateManager | None = None,
         generation_window_start: datetime | None = None,
         generation_window_end: datetime | None = None,
         runtime_content_manager: RuntimeContentIdentityManager | None = None,
@@ -5072,6 +5098,7 @@ class ActivityGenerator:
                 authority.
             application_channel_registry: Optional engine-owned common application
                 registry.
+            rdp_session_manager: Optional engine-owned reconnectable RDP owner.
             generation_window_start: Earliest canonical generation time admitted by
                 bounded application registries.
             generation_window_end: Exclusive canonical generation boundary for
@@ -5254,6 +5281,23 @@ class ActivityGenerator:
             window_start=proxy_window_start,
             window_end=proxy_window_end,
         )
+        rdp_manager_requires_eager_binding = (
+            rdp_session_manager is not None or not lifecycle_compatibility_fixture_mode
+        )
+        if rdp_session_manager is None:
+            rdp_session_manager = RdpReconnectStateManager(
+                application_registry=application_channel_registry,
+                window_start=proxy_window_start,
+                window_end=proxy_window_end,
+            )
+        elif (
+            type(rdp_session_manager) is not RdpReconnectStateManager
+            or rdp_session_manager.application_registry is not application_channel_registry
+        ):
+            raise ValueError(
+                "ActivityGenerator and RDP manager must share one exact application registry"
+            )
+        self._rdp_session_manager = rdp_session_manager
         self._proxy_channel_window_start = proxy_window_start
         self._proxy_channel_watermark = proxy_window_start
         self._http_persistent_connections: dict[
@@ -5322,6 +5366,8 @@ class ActivityGenerator:
         self._lifecycle_authority.bind_http_channel_manager(self._http_channel_manager)
         self._lifecycle_authority.bind_explicit_proxy_manager(self._proxy_channel_manager)
         self._lifecycle_authority.bind_ssh_channel_manager(self._ssh_channel_manager)
+        if rdp_manager_requires_eager_binding:
+            self._lifecycle_authority.bind_rdp_session_manager(self._rdp_session_manager)
         self._tls_certificate_planner = TlsCertificatePlanner(
             self._cryptographic_material_registry,
             timing_runtime=self.timing_runtime,
@@ -5355,6 +5401,14 @@ class ActivityGenerator:
         self._ssh_close_journal_capacity = 65_536
         self._prepared_ssh_close_continuations: dict[str, Any] = {}
         self._pending_ssh_session_closures: list[Any] = []
+        self._rdp_lifecycle_journal_lock = Lock()
+        self._rdp_lifecycle_journal_capacity = 65_536
+        self._rdp_lifecycle_watermark = proxy_window_start
+        self._prepared_rdp_lifecycle_continuations: dict[str, Any] = {}
+        self._pending_rdp_lifecycle_continuations: dict[
+            str,
+            _RdpLifecycleJournalEntry,
+        ] = {}
         self._foreground_shell_next_time: dict[tuple[str, str, str, int], datetime] = {}
         self._foreground_shell_release_groups: dict[tuple[str, str, str, int], str] = {}
         self._foreground_process_finalizers: ExpiringIndex[
@@ -5388,6 +5442,12 @@ class ActivityGenerator:
         self._last_connection_http_context: HttpContext | None = None
         self._last_connection_file_transfers: tuple[FileTransferContext, ...] = ()
 
+    @property
+    def rdp_session_manager(self) -> RdpReconnectStateManager:
+        """Return the engine-owned reconnectable RDP session manager."""
+
+        return self._rdp_session_manager
+
     def execution_effect_audit_snapshot(self) -> ExecutionEffectAuditSnapshot:
         """Return bounded count-only command-effect audit totals."""
 
@@ -5402,6 +5462,8 @@ class ActivityGenerator:
                 "Application-channel watermark cannot move backward: "
                 f"{canonical_cutoff.isoformat()} < {self._proxy_channel_watermark.isoformat()}"
             )
+        self.advance_rdp_session_lifecycle_watermark(canonical_cutoff)
+        self._advance_rdp_manager_watermark(canonical_cutoff)
         self._proxy_channel_manager.watermark(canonical_cutoff)
         self._http_channel_manager.watermark(canonical_cutoff)
         while True:
@@ -5826,6 +5888,581 @@ class ActivityGenerator:
                     auth_state,
                 )
             )
+
+    def _reserve_exact_rdp_lifecycle_continuation(self, prepared: Any) -> None:
+        """Reserve bounded RDP terminal capacity before canonical publication."""
+
+        from evidenceforge.generation.actions.rdp_session import (
+            _PreparedRdpLifecycleContinuation,
+        )
+
+        if type(prepared) is not _PreparedRdpLifecycleContinuation:
+            raise TypeError("Exact RDP lifecycle reservation requires its built-in payload")
+        with self._rdp_lifecycle_journal_lock:
+            retained = self._prepared_rdp_lifecycle_continuations.get(prepared.continuation_id)
+            if retained is not None:
+                if retained is not prepared:
+                    raise StateError("Exact RDP lifecycle reservation identity was reused")
+                return
+            if prepared.continuation_id in self._pending_rdp_lifecycle_continuations:
+                raise StateError("Exact RDP lifecycle continuation is already installed")
+            if (
+                len(self._prepared_rdp_lifecycle_continuations)
+                + len(self._pending_rdp_lifecycle_continuations)
+                >= self._rdp_lifecycle_journal_capacity
+            ):
+                raise StateError(
+                    "Exact RDP lifecycle journal capacity is exhausted before publication"
+                )
+            self._prepared_rdp_lifecycle_continuations[prepared.continuation_id] = prepared
+
+    def _cancel_exact_rdp_lifecycle_continuation_reservation(self, prepared: Any) -> None:
+        """Idempotently release one uncommitted RDP terminal reservation."""
+
+        from evidenceforge.generation.actions.rdp_session import (
+            _PreparedRdpLifecycleContinuation,
+        )
+
+        if type(prepared) is not _PreparedRdpLifecycleContinuation:
+            raise TypeError("Exact RDP lifecycle cancellation requires its built-in payload")
+        with self._rdp_lifecycle_journal_lock:
+            retained = self._prepared_rdp_lifecycle_continuations.get(prepared.continuation_id)
+            if retained is None:
+                return
+            if retained is not prepared:
+                raise StateError("Exact RDP lifecycle cancellation crossed its reservation")
+            self._prepared_rdp_lifecycle_continuations.pop(prepared.continuation_id)
+
+    def _recover_exact_rdp_lifecycle_continuation_no_fail(self, continuation: Any) -> None:
+        """Idempotently install one committed RDP generation in the bounded journal."""
+
+        from evidenceforge.generation.actions.rdp_session import (
+            _RdpLifecycleContinuation,
+        )
+
+        if type(continuation) is not _RdpLifecycleContinuation:
+            raise TypeError("Exact RDP lifecycle journal requires its built-in continuation")
+        canonical = continuation.prepared.bind()
+        if (
+            canonical.prepared is not continuation.prepared
+            or canonical.transaction is not continuation.transaction
+            or canonical.session != continuation.session
+        ):
+            raise StateError("Exact RDP lifecycle continuation is copied or unauthenticated")
+        with self._rdp_lifecycle_journal_lock:
+            existing = self._pending_rdp_lifecycle_continuations.get(continuation.continuation_id)
+            if existing is not None:
+                if (
+                    existing.continuation.prepared is not continuation.prepared
+                    or existing.continuation.transaction is not continuation.transaction
+                ):
+                    raise StateError("Exact RDP lifecycle continuation identity was reused")
+                return
+            prepared = self._prepared_rdp_lifecycle_continuations.get(continuation.continuation_id)
+            if prepared is not continuation.prepared:
+                raise StateError("Exact RDP lifecycle continuation has no reserved owner")
+            logical_id = continuation.session.identity.logical_session_id
+            prior_entries = tuple(self._pending_rdp_lifecycle_continuations.items())
+            for prior_id, prior_entry in prior_entries:
+                prior = prior_entry.continuation
+                if (
+                    prior.session.identity.logical_session_id != logical_id
+                    or prior.session.generation.ordinal >= continuation.session.generation.ordinal
+                ):
+                    continue
+                if not (prior_entry.disconnect_published and prior_entry.source_terminated):
+                    raise StateError(
+                        "Exact RDP reconnect cannot supersede unfinished disconnect work"
+                    )
+                self._pending_rdp_lifecycle_continuations.pop(prior_id)
+            self._pending_rdp_lifecycle_continuations[continuation.continuation_id] = (
+                _RdpLifecycleJournalEntry(continuation)
+            )
+            self._prepared_rdp_lifecycle_continuations.pop(continuation.continuation_id)
+
+    def _rdp_bundle_for_continuation(self, continuation: Any) -> RdpSessionActionBundle:
+        """Materialize the exact RDP terminal publisher from frozen journal facts."""
+
+        prepared = continuation.prepared
+        return RdpSessionActionBundle(
+            self,
+            RdpSessionRequest(
+                user=prepared.user,
+                target_system=prepared.target_system,
+                time=continuation.transaction.started_at,
+                source_ip=continuation.transaction.src_ip,
+                source_system=prepared.source_system,
+                source_pid=(prepared.source_identity.pid if prepared.source_identity else -1),
+                source_port=continuation.transaction.src_port,
+                logon_id=prepared.session_identity.logon_id,
+                preserve_explicit_source=True,
+                source=prepared.source_tag,
+            ),
+        )
+
+    def _publish_exact_rdp_disconnect(
+        self,
+        continuation: Any,
+        source_termination_at: datetime,
+    ) -> None:
+        """Publish one exact state-neutral Security 4779/eCAR transition."""
+
+        from evidenceforge.events.contracts import EventKind
+
+        phase = "disconnect"
+        prepared = continuation.prepared
+        if prepared.recover_terminal_projection(phase, self.dispatcher):
+            return
+        identity = prepared.session_identity
+        transaction = continuation.transaction
+        canonical_source_termination = ensure_utc(source_termination_at)
+        if canonical_source_termination != continuation.disconnect_at:
+            raise StateError("Exact RDP source termination changed its transport-close anchor")
+        disconnect_event_at = canonical_source_termination + timedelta(microseconds=1)
+        event = OccurrenceBuilder(
+            timestamp=disconnect_event_at,
+            event_type=EventKind.RDP_DISCONNECT,
+            dst_host=self._build_host_context(prepared.target_system),
+            auth=AuthContext(
+                username=identity.principal,
+                user_sid=self._get_sid(identity.principal),
+                logon_id=identity.logon_id,
+                session_id=identity.session_id,
+                logon_type=10,
+                source_ip=transaction.src_ip,
+                source_port=transaction.src_port,
+                session_kind="rdp",
+                auth_protocol="rdp",
+            ),
+            identity_plan=EventIdentityPlan(subject=identity, session=identity),
+            lifecycle=ActionLifecycleContext(
+                group_id=identity.lifecycle_group_id,
+                canonical_start=identity.started_at,
+                phase="dependent",
+                parent_group_id=identity.parent_lifecycle_group_id or None,
+            ),
+        )
+        carrier = None
+        timing_preparation = None
+        try:
+            with self.dispatcher.source_timing_planner.prepared_planning() as timing_preparation:
+                carrier = self.dispatcher.prepare_action_cohort_projection(
+                    event,
+                    source_timing_preparation=timing_preparation,
+                )
+            occurrence_id = self.dispatcher.action_cohort_projection_occurrence(
+                carrier
+            ).occurrence_id
+        except BaseException as primary:
+            if carrier is not None:
+                self._reconcile_generator_cleanup(
+                    primary,
+                    "RDP disconnect projection",
+                    lambda: self.dispatcher.cancel_prepared_action_cohort_projection(carrier),
+                )
+            self._reconcile_generator_cleanup(
+                primary,
+                "RDP disconnect orphan projection",
+                self.dispatcher.prune_prepared_action_cohort_projections,
+            )
+            if timing_preparation is not None:
+                self._reconcile_generator_cleanup(
+                    primary,
+                    "RDP disconnect source timing",
+                    timing_preparation.cancel,
+                )
+            raise
+
+        try:
+            result = self.dispatcher.publish_state_neutral_exact_projection(carrier)
+        except BaseException as error:
+            attributes = object.__getattribute__(error, "__dict__")
+            receipt = (
+                attributes.get("state_neutral_projection_receipt")
+                if type(attributes) is dict
+                else None
+            )
+            attached_result = (
+                attributes.get("state_neutral_projection_result")
+                if type(attributes) is dict
+                else None
+            )
+            result_type = getattr(
+                dispatcher_types,
+                "StateNeutralProjectionPublicationResult",
+                None,
+            )
+            authentic = bool(
+                receipt is not None
+                and result_type is not None
+                and type(attached_result) is result_type
+                and attached_result.receipt is receipt
+                and self.dispatcher.authenticates_state_neutral_projection_publication_receipt(
+                    receipt
+                )
+                and receipt.occurrence_ids == (occurrence_id,)
+            )
+            if not authentic:
+                self._reconcile_generator_cleanup(
+                    error,
+                    "RDP disconnect projection",
+                    lambda: self.dispatcher.cancel_prepared_action_cohort_projection(carrier),
+                )
+                self._reconcile_generator_cleanup(
+                    error,
+                    "RDP disconnect orphan projection",
+                    self.dispatcher.prune_prepared_action_cohort_projections,
+                )
+                raise
+            prepared.projection_ledger.retain_state_neutral(
+                phase,
+                receipt=receipt,
+                result=attached_result,
+                occurrence_id=occurrence_id,
+            )
+            raise
+
+        projection = result.projection
+        if (
+            not self.dispatcher.authenticates_state_neutral_projection_publication_receipt(
+                result.receipt
+            )
+            or result.receipt.occurrence_ids != (occurrence_id,)
+            or type(projection) is not ActionCohortProjectionOutcome
+            or projection.occurrence_id != occurrence_id
+            or projection.status != "succeeded"
+            or projection.error is not None
+        ):
+            raise StateError("Exact RDP disconnect returned invalid terminal proof")
+        prepared.mark_terminal_projection_complete(phase)
+
+    @staticmethod
+    def _rdp_snapshot_matches_generation(continuation: Any, snapshot: Any) -> bool:
+        """Return whether a public manager snapshot is the journal's exact generation."""
+
+        expected = continuation.session
+        return bool(
+            snapshot is not None
+            and snapshot.identity == expected.identity
+            and snapshot.generation.ordinal == expected.generation.ordinal
+            and snapshot.generation.channel_id == expected.generation.channel_id
+            and snapshot.generation.binding.transport_id == expected.generation.binding.transport_id
+        )
+
+    def _disconnect_exact_rdp_entry(self, entry: _RdpLifecycleJournalEntry) -> None:
+        """Disconnect one exact generation, project 4779, and close its mstsc owner."""
+
+        from evidenceforge.events.rdp import RdpSessionState
+
+        continuation = entry.continuation
+        logical_id = continuation.session.identity.logical_session_id
+        snapshot = self._rdp_session_manager.get(logical_id)
+        if not self._rdp_snapshot_matches_generation(continuation, snapshot):
+            raise StateError("Exact RDP disconnect journal lost its current generation")
+        if snapshot.state is RdpSessionState.CONNECTED:
+            try:
+                snapshot = self._rdp_session_manager.disconnect(
+                    logical_id,
+                    channel_id=continuation.session.generation.channel_id,
+                    disconnected_at=continuation.disconnect_at,
+                )
+            except BaseException:
+                recovered = self._rdp_session_manager.get(logical_id)
+                if (
+                    not self._rdp_snapshot_matches_generation(continuation, recovered)
+                    or recovered.state is not RdpSessionState.DISCONNECTED
+                    or recovered.generation.disconnected_at != continuation.disconnect_at
+                ):
+                    raise
+                snapshot = recovered
+        if snapshot.state is RdpSessionState.LOGGED_OUT:
+            if (
+                not entry.manager_logged_out
+                or not entry.disconnect_published
+                or not entry.source_terminated
+                or entry.source_termination_at is None
+                or (
+                    continuation.prepared.source_identity is not None
+                    and not entry.source_projection_frontiers
+                )
+                or snapshot.generation.disconnected_at != continuation.disconnect_at
+            ):
+                raise StateError("Exact RDP disconnect retry crossed its terminal journal state")
+            return
+        if (
+            snapshot.state is not RdpSessionState.DISCONNECTED
+            or snapshot.generation.disconnected_at != continuation.disconnect_at
+        ):
+            raise StateError("Exact RDP manager returned a different disconnect transition")
+        if not entry.source_terminated:
+            source_identity = continuation.prepared.source_identity
+            source_termination_at = continuation.disconnect_at
+            source_projection_frontiers: tuple[tuple[str, int, datetime], ...] = ()
+            if source_identity is not None:
+                timing_proof = self._rdp_bundle_for_continuation(
+                    continuation
+                ).terminate_exact_rdp_process(
+                    continuation,
+                    source_identity,
+                    continuation.disconnect_at,
+                )
+                source_termination_at = timing_proof.canonical_time
+                source_projection_frontiers = timing_proof.source_frontiers
+            if ensure_utc(source_termination_at) != continuation.disconnect_at:
+                raise StateError("Exact RDP source termination does not match transport close")
+            if source_identity is not None and not source_projection_frontiers:
+                raise StateError("Exact RDP source termination lost its projection frontiers")
+            entry.source_termination_at = ensure_utc(source_termination_at)
+            entry.source_projection_frontiers = source_projection_frontiers
+            entry.source_terminated = True
+        if entry.source_termination_at is None:
+            raise StateError("Exact RDP disconnect lost its canonical source termination")
+        if entry.source_termination_at != continuation.disconnect_at:
+            raise StateError("Exact RDP disconnect changed its canonical source termination")
+        if (
+            continuation.prepared.source_identity is not None
+            and not entry.source_projection_frontiers
+        ):
+            raise StateError("Exact RDP disconnect lost its source projection proof")
+        if not entry.disconnect_published:
+            self._publish_exact_rdp_disconnect(
+                continuation,
+                entry.source_termination_at,
+            )
+            entry.disconnect_published = True
+
+    def _plan_exact_rdp_target_terminations(
+        self,
+        entry: _RdpLifecycleJournalEntry,
+        logout_time: datetime,
+    ) -> tuple[tuple[ProcessIdentity, datetime], ...]:
+        """Freeze children-first target process closes inside the logout window."""
+
+        continuation = entry.continuation
+        identity = continuation.prepared.session_identity
+        active_session = self.state_manager.get_session(identity.logon_id)
+        if active_session is None:
+            raise StateError("Exact RDP logout lost its live State session")
+        processes = self.state_manager.get_processes_for_session(
+            identity.logon_id,
+            identity.hostname,
+        )
+        if active_session.session_winlogon_pid is not None:
+            winlogon = self.state_manager.get_process(
+                identity.hostname,
+                active_session.session_winlogon_pid,
+            )
+            if winlogon is not None and all(item.pid != winlogon.pid for item in processes):
+                processes.append(winlogon)
+        by_pid = {process.pid: process for process in processes}
+
+        def process_depth(pid: int) -> int:
+            depth = 0
+            seen: set[int] = set()
+            current = by_pid.get(pid)
+            while current is not None and current.pid not in seen:
+                seen.add(current.pid)
+                parent = by_pid.get(current.parent_pid)
+                if parent is None:
+                    break
+                depth += 1
+                current = parent
+            return depth
+
+        processes.sort(
+            key=lambda process: (process_depth(process.pid), process.start_time, process.pid),
+            reverse=True,
+        )
+        disconnect_at = continuation.disconnect_at
+        available = logout_time - disconnect_at
+        if available <= timedelta(0):
+            raise StateError("Exact RDP logout has no terminal process interval")
+        step = available / max(2, len(processes) + 1)
+        planned: list[tuple[ProcessIdentity, datetime]] = []
+        prior = disconnect_at
+        for ordinal, process in enumerate(processes, start=1):
+            process_identity = self.state_manager.get_process_identity(
+                identity.hostname,
+                process.pid,
+            )
+            if process_identity is None or process_identity.object_id != process.ecar_object_id:
+                raise StateError("Exact RDP logout lost a target process identity")
+            minimum = max(
+                disconnect_at,
+                ensure_utc(process.start_time),
+                ensure_utc(process.last_activity_time or process.start_time),
+                prior,
+            )
+            terminate_at = max(disconnect_at + step * ordinal, minimum)
+            if terminate_at >= logout_time:
+                raise StateError("Exact RDP target process cannot terminate before logout")
+            planned.append((process_identity, terminate_at))
+            prior = terminate_at + timedelta(microseconds=1)
+        return tuple(planned)
+
+    def _logout_exact_rdp_entry(
+        self,
+        entry: _RdpLifecycleJournalEntry,
+        logout_time: datetime,
+    ) -> None:
+        """Terminalize one disconnected RDP logical session and acknowledge its journal."""
+
+        from evidenceforge.events.rdp import RdpSessionState
+
+        continuation = entry.continuation
+        logical_id = continuation.session.identity.logical_session_id
+        snapshot = self._rdp_session_manager.get(logical_id)
+        if not self._rdp_snapshot_matches_generation(continuation, snapshot):
+            raise StateError("Exact RDP logout journal lost its disconnected generation")
+        if entry.target_terminations is None:
+            entry.target_terminations = self._plan_exact_rdp_target_terminations(
+                entry,
+                logout_time,
+            )
+        if not entry.manager_logged_out:
+            try:
+                snapshot = self._rdp_session_manager.logout(
+                    logical_id,
+                    logged_out_at=logout_time,
+                )
+            except BaseException:
+                recovered = self._rdp_session_manager.get(logical_id)
+                if (
+                    not self._rdp_snapshot_matches_generation(continuation, recovered)
+                    or recovered.state is not RdpSessionState.LOGGED_OUT
+                    or recovered.logged_out_at != logout_time
+                ):
+                    raise
+                snapshot = recovered
+            if (
+                snapshot.state is not RdpSessionState.LOGGED_OUT
+                or snapshot.logged_out_at != logout_time
+            ):
+                raise StateError("Exact RDP manager returned a different logout transition")
+            entry.manager_logged_out = True
+        bundle = self._rdp_bundle_for_continuation(continuation)
+        for process_identity, terminate_at in entry.target_terminations:
+            bundle.terminate_exact_rdp_process(
+                continuation,
+                process_identity,
+                terminate_at,
+            )
+        if not entry.logout_published:
+            bundle.logout_exact_rdp_session(continuation, logout_time)
+            entry.logout_published = True
+        if (
+            self.state_manager.get_session(continuation.prepared.session_identity.logon_id)
+            is not None
+        ):
+            raise StateError("Exact RDP logout returned before State terminalization")
+
+    def advance_rdp_session_lifecycle_watermark(self, cutoff: datetime) -> None:
+        """Drain due RDP disconnect/logout work before advancing shared application state."""
+
+        canonical_cutoff = ensure_utc(cutoff)
+        if canonical_cutoff < self._rdp_lifecycle_watermark:
+            raise StateError("RDP lifecycle watermark cannot move backward")
+        with self._rdp_lifecycle_journal_lock:
+            pending = sorted(
+                tuple(self._pending_rdp_lifecycle_continuations.values()),
+                key=lambda entry: (
+                    entry.continuation.disconnect_at,
+                    entry.continuation.continuation_id,
+                ),
+            )
+        for entry in pending:
+            continuation = entry.continuation
+            if continuation.disconnect_at > canonical_cutoff:
+                continue
+            self._disconnect_exact_rdp_entry(entry)
+            snapshot = self._rdp_session_manager.get(
+                continuation.session.identity.logical_session_id
+            )
+            reconnect_deadline = snapshot.reconnect_deadline if snapshot is not None else None
+            logout_time = min(
+                reconnect_deadline or continuation.prepared.hard_deadline,
+                continuation.prepared.hard_deadline,
+            )
+            if logout_time > canonical_cutoff:
+                continue
+            self._logout_exact_rdp_entry(entry, logout_time)
+            with self._rdp_lifecycle_journal_lock:
+                installed = self._pending_rdp_lifecycle_continuations.get(
+                    continuation.continuation_id
+                )
+                if installed is not entry:
+                    raise StateError("Exact RDP lifecycle entry changed before acknowledgement")
+                self._pending_rdp_lifecycle_continuations.pop(continuation.continuation_id)
+        self._rdp_lifecycle_watermark = canonical_cutoff
+
+    def rdp_lifecycle_journal_census(self) -> RdpLifecycleJournalCensus:
+        """Return bounded counts for prepared and installed RDP lifecycle work."""
+
+        with self._rdp_lifecycle_journal_lock:
+            pending = tuple(self._pending_rdp_lifecycle_continuations.values())
+            return RdpLifecycleJournalCensus(
+                prepared_reservations=len(self._prepared_rdp_lifecycle_continuations),
+                pending_generations=len(pending),
+                disconnected_generations=sum(
+                    entry.disconnect_published and entry.source_terminated for entry in pending
+                ),
+                capacity=self._rdp_lifecycle_journal_capacity,
+            )
+
+    def _rdp_reconnect_source_frontier(self, logon_id: str) -> datetime | None:
+        """Return the prior committed mstsc source-close observation for reconnect timing."""
+
+        session_identity = self.state_manager.get_session_identity(logon_id)
+        if session_identity is None:
+            return None
+        with self._rdp_lifecycle_journal_lock:
+            entries = tuple(self._pending_rdp_lifecycle_continuations.values())
+        frontiers = [
+            frontier
+            for entry in entries
+            if entry.continuation.session.identity.logical_session_id == session_identity.object_id
+            and entry.continuation.prepared.source_identity is not None
+            for frontier in (
+                self.process_source_terminate_time(
+                    entry.continuation.prepared.source_identity.hostname,
+                    entry.continuation.prepared.source_identity.pid,
+                ),
+            )
+            if frontier is not None
+        ]
+        return max(frontiers) if frontiers else None
+
+    def assert_rdp_session_lifecycles_drained(self) -> None:
+        """Reject sink shutdown while exact RDP terminal work remains."""
+
+        census = self.rdp_lifecycle_journal_census()
+        if census.prepared_reservations or census.pending_generations:
+            raise StateError(
+                "RDP lifecycle journal is not drained: "
+                f"prepared={census.prepared_reservations}, "
+                f"pending={census.pending_generations}, "
+                f"disconnected={census.disconnected_generations}"
+            )
+
+    def _advance_rdp_manager_watermark(self, cutoff: datetime) -> None:
+        """Advance the RDP sidecar only after its exact projection journal."""
+
+        while True:
+            page = self._rdp_session_manager.watermark(cutoff)
+            if page.closures:
+                raise StateError(
+                    "RDP manager produced unprojected lifecycle closures after journal drain"
+                )
+            if not page.has_more:
+                return
+
+    def finalize_rdp_session_lifecycles(self, end_time: datetime) -> None:
+        """Drain every due exact RDP generation while source sinks remain open."""
+
+        window_end = ensure_utc(end_time)
+        self.advance_rdp_session_lifecycle_watermark(window_end)
+        self._advance_rdp_manager_watermark(window_end)
+        self.assert_rdp_session_lifecycles_drained()
 
     def _reserve_exact_ssh_close_continuation(self, prepared: Any) -> None:
         """Reserve bounded terminal-journal capacity before canonical mutation."""

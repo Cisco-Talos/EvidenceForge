@@ -40,6 +40,7 @@ from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.emitters.base import ExactPublicationAuthority
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
@@ -50,6 +51,7 @@ from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAutho
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.network_identities import ScenarioNetworkResolver
+from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
 from evidenceforge.generation.source_finalization import (
     SourceFinalizationCoordinator,
@@ -188,6 +190,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._source_finalization_authority: ExactPublicationAuthority | None = None
         self._source_finalization_coordinator: SourceFinalizationCoordinator | None = None
         self._ssh_lifecycles_finalized = False
+        self._rdp_lifecycles_finalized = False
         self._foreground_lifecycles_finalized = False
         self._finalization_complete = False
         self._finalization_aborted = False
@@ -569,6 +572,15 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self.state_manager,
             self.lifecycle_shadow,
         )
+        self.application_channel_registry = ApplicationChannelRegistry(
+            window_start=self.warmup_start_time,
+            window_end=self.end_time,
+        )
+        self.rdp_session_manager = RdpReconnectStateManager(
+            application_registry=self.application_channel_registry,
+            window_start=self.warmup_start_time,
+            window_end=self.end_time,
+        )
 
         # Initialize event dispatcher and activity generator
         from evidenceforge.events.observation import ObservationPolicy
@@ -598,6 +610,10 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             source_timing_planner=self.source_timing_planner,
             lifecycle_shadow=self.lifecycle_shadow,
             lifecycle_authority=self.lifecycle_authority,
+            application_channel_registry=self.application_channel_registry,
+            rdp_session_manager=self.rdp_session_manager,
+            generation_window_start=self.warmup_start_time,
+            generation_window_end=self.end_time,
         )
         self.activity_generator._network_resolver = self.network_resolver
         self.activity_generator._scenario_environment = self.scenario.environment
@@ -840,6 +856,82 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             return
         assert_drained()
 
+    def _assert_rdp_session_lifecycles_drained_before_close(self) -> None:
+        """Require the RDP lifecycle journal to be terminal before sink close."""
+
+        activity_generator = self.activity_generator
+        if activity_generator is None:
+            return
+        assert_drained = getattr(
+            activity_generator,
+            "assert_rdp_session_lifecycles_drained",
+            None,
+        )
+        if not callable(assert_drained):
+            owner_state = vars(activity_generator)
+            if (
+                "_pending_rdp_lifecycle_continuations" in owner_state
+                or "_prepared_rdp_lifecycle_continuations" in owner_state
+            ):
+                raise RuntimeError("Activity generator has no RDP lifecycle terminal assertion")
+            return
+        assert_drained()
+
+    def _finalize_rdp_session_lifecycles_before_close(self) -> None:
+        """Drain RDP terminal work with one exact-projection recovery retry."""
+
+        if self._rdp_lifecycles_finalized:
+            return
+        activity_generator = self.activity_generator
+        if activity_generator is None:
+            self._rdp_lifecycles_finalized = True
+            return
+        finalizer = getattr(activity_generator, "finalize_rdp_session_lifecycles", None)
+        if not callable(finalizer):
+            owner_state = vars(activity_generator)
+            if (
+                "_pending_rdp_lifecycle_continuations" in owner_state
+                or "_prepared_rdp_lifecycle_continuations" in owner_state
+            ):
+                raise RuntimeError("Activity generator has no RDP lifecycle-journal finalizer")
+            self._rdp_lifecycles_finalized = True
+            return
+
+        primary: BaseException | None = None
+        for attempt in range(2):
+            try:
+                if self.end_time is not None:
+                    finalizer(self.end_time)
+                self._assert_rdp_session_lifecycles_drained_before_close()
+            except BaseException as error:
+                if primary is None:
+                    primary = error
+                else:
+                    primary.add_note(f"RDP lifecycle-journal retry also failed: {error!r}")
+                try:
+                    self._drain_exact_projection_recoveries_before_close()
+                except BaseException as recovery_error:
+                    primary.add_note(
+                        "Exact projection recovery after RDP lifecycle failure also failed: "
+                        f"{recovery_error!r}"
+                    )
+                    raise primary from recovery_error
+                if attempt == 1:
+                    raise primary from None
+                continue
+
+            self._rdp_lifecycles_finalized = True
+            if primary is None:
+                return
+            try:
+                self._drain_exact_projection_recoveries_before_close()
+                self._assert_rdp_session_lifecycles_drained_before_close()
+            except BaseException as recovery_error:
+                primary.add_note(
+                    f"Terminal recovery after RDP lifecycle retry also failed: {recovery_error!r}"
+                )
+            raise primary
+
     def _finalize_ssh_session_lifecycles_before_close(self) -> None:
         """Drain SSH close work with one recovery retry, preserving its first failure."""
 
@@ -952,9 +1044,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if not generation_succeeded:
             self._finalization_aborted = True
             self._finalize_ssh_session_lifecycles_before_close()
+            self._finalize_rdp_session_lifecycles_before_close()
             if self.activity_generator is not None:
                 self._drain_exact_projection_recoveries_before_close()
                 self._assert_ssh_session_lifecycles_drained_before_close()
+                self._assert_rdp_session_lifecycles_drained_before_close()
             else:
                 self._drain_exact_projection_recoveries_before_close()
             self._close_emitters()
@@ -964,6 +1058,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             raise RuntimeError("Aborted generation cannot resume exact source finalization")
 
         self._finalize_ssh_session_lifecycles_before_close()
+        self._finalize_rdp_session_lifecycles_before_close()
         if not self._foreground_lifecycles_finalized:
             try:
                 if self.activity_generator is not None and self.end_time is not None:
@@ -985,6 +1080,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             raise RuntimeError("Generation engine lost its source-finalization coordinator")
         self._drain_exact_projection_recoveries_before_close()
         self._assert_ssh_session_lifecycles_drained_before_close()
+        self._assert_rdp_session_lifecycles_drained_before_close()
         coordinator.finalize()
         self._close_emitters()
         if not self._source_coordinator_closed:

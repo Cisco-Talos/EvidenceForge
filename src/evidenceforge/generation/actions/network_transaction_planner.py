@@ -622,8 +622,8 @@ class NetworkTransactionPlanner:
     def __init__(self, executor: ActivityGenerator) -> None:
         self._executor = executor
 
-    @staticmethod
     def _deferred_session_dependent_builders(
+        self,
         authority: Any,
         event: OccurrenceBuilder,
         root: Any,
@@ -638,73 +638,121 @@ class NetworkTransactionPlanner:
 
         from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, ProcessContext
-        from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
+        from evidenceforge.events.contracts import (
+            EventKind,
+            OccurrenceRole,
+            SemanticOccurrenceKey,
+        )
         from evidenceforge.events.identity import EventIdentityPlan
         from evidenceforge.events.lifecycle import ActionLifecycleContext
         from evidenceforge.generation.actions.network_connection import (
+            DeferredRdpApplicationIntent,
             DeferredSessionNetworkAuthority,
         )
+        from evidenceforge.generation.deferred_session_composition import DeferredSessionKind
         from evidenceforge.generation.deferred_session_preseal import (
             DeferredSessionDependentOccurrenceSpec,
         )
         from evidenceforge.generation.state_manager import (
+            ConnectionExistingSessionPatch,
             ProcessMaterializationPlan,
             SessionMaterializationPlan,
         )
 
         if type(authority) is not DeferredSessionNetworkAuthority:
-            raise TypeError("Deferred SSH dependent authority changed exact type")
+            raise TypeError("Deferred session dependent authority changed exact type")
         specs = DeferredSessionNetworkAuthority.validate_dependent_occurrences(authority)
         if not specs:
             return ()
         batch = root.state_plan.batch
         if batch is None:
-            raise StateError("Deferred SSH dependent specifications lost their State batch")
+            raise StateError("Deferred session dependent specifications lost their State batch")
         if batch is not authority.state_batch:
-            raise StateError("Deferred SSH dependent specifications changed their State owner")
+            raise StateError("Deferred session dependent specifications changed their State owner")
         members = (
             *((batch.session,) if batch.session is not None else ()),
             *batch.processes,
+            *(
+                (root.state_plan.existing_session_patch,)
+                if root.state_plan.existing_session_patch is not None
+                else ()
+            ),
         )
-        members_by_object_id = {member.identity.object_id: member for member in members}
+        members_by_object_id = {
+            (
+                member.after.identity.object_id
+                if type(member) is ConnectionExistingSessionPatch
+                else member.identity.object_id
+            ): member
+            for member in members
+        }
         transaction = root.transaction
         resolved: list[tuple[OccurrenceBuilder, Any]] = []
         for spec in specs:
             if type(spec) is not DeferredSessionDependentOccurrenceSpec:
-                raise TypeError("Deferred SSH dependent specification changed type")
+                raise TypeError("Deferred session dependent specification changed type")
             member = members_by_object_id.get(spec.member_references[0])
             if member is None:
-                raise StateError("Deferred SSH dependent specification names no State member")
-            identity = member.identity
+                raise StateError("Deferred session dependent specification names no State member")
+            identity = (
+                member.after.identity
+                if type(member) is ConnectionExistingSessionPatch
+                else member.identity
+            )
             occurrence_key = SemanticOccurrenceKey(
                 action_id=transaction.stable_id,
                 role=OccurrenceRole.DEPENDENT,
                 instance_key=spec.occurrence_id,
             )
-            if type(member) is SessionMaterializationPlan:
+            if type(member) in {SessionMaterializationPlan, ConnectionExistingSessionPatch}:
                 if event.dst_host is None:
-                    raise StateError("Deferred SSH login projection requires its target host")
+                    raise StateError("Deferred session login projection requires its target host")
+                rdp_intent = (
+                    authority.application_intent
+                    if type(authority.application_intent) is DeferredRdpApplicationIntent
+                    else None
+                )
+                is_rdp = authority.kind is DeferredSessionKind.RDP
+                is_reconnect = type(member) is ConnectionExistingSessionPatch
+                if is_reconnect and (not is_rdp or spec.event_type is not EventKind.RDP_RECONNECT):
+                    raise StateError("Deferred live-session dependent is not an RDP reconnect")
                 builder = OccurrenceBuilder(
                     timestamp=spec.canonical_time,
                     event_type=spec.event_type.value,
+                    src_host=event.src_host if is_rdp and not is_reconnect else None,
                     dst_host=event.dst_host,
                     auth=AuthContext(
                         username=identity.principal,
+                        user_sid=rdp_intent.user_sid if rdp_intent is not None else "",
                         logon_id=identity.logon_id,
                         session_id=identity.session_id,
                         logon_type=10,
-                        auth_package="SSH",
+                        auth_package="Negotiate" if is_rdp else "SSH",
                         source_ip=transaction.src_ip,
                         source_port=transaction.src_port,
-                        session_kind="ssh",
-                        auth_protocol="ssh",
+                        elevated=rdp_intent.elevated if rdp_intent is not None else False,
+                        emit_special_privileges=(
+                            rdp_intent.elevated if rdp_intent is not None else False
+                        ),
+                        logon_process="User32" if is_rdp else "",
+                        lm_package="-" if is_rdp else "",
+                        logon_guid=identity.logon_guid,
+                        subject_sid="S-1-5-18" if is_rdp else "",
+                        subject_username="SYSTEM" if is_rdp else "",
+                        subject_domain="NT AUTHORITY" if is_rdp else "",
+                        subject_logon_id="0x3e7" if is_rdp else "",
+                        privilege_list=(
+                            rdp_intent.privilege_list if rdp_intent is not None else ""
+                        ),
+                        session_kind=authority.kind.value,
+                        auth_protocol="rdp" if is_rdp else "ssh",
                     ),
                     occurrence_key=occurrence_key,
                     identity_plan=EventIdentityPlan(subject=identity, session=identity),
                     lifecycle=ActionLifecycleContext(
                         group_id=identity.lifecycle_group_id,
                         canonical_start=identity.started_at,
-                        phase="start",
+                        phase="dependent" if is_reconnect else "start",
                         parent_group_id=(identity.parent_lifecycle_group_id or None),
                     ),
                 )
@@ -716,8 +764,18 @@ class NetworkTransactionPlanner:
                 )
                 if len(candidate_hosts) != 1:
                     raise StateError(
-                        "Deferred SSH process projection has no unique transport endpoint"
+                        "Deferred session process projection has no unique transport endpoint"
                     )
+                is_rdp = authority.kind is DeferredSessionKind.RDP
+                user_sid = (
+                    (
+                        "S-1-5-18"
+                        if identity.principal.casefold() == "system"
+                        else self._executor._preview_sid(identity.principal)
+                    )
+                    if is_rdp
+                    else ""
+                )
                 builder = OccurrenceBuilder(
                     timestamp=spec.canonical_time,
                     event_type=spec.event_type.value,
@@ -732,6 +790,19 @@ class NetworkTransactionPlanner:
                         logon_id=identity.logon_id,
                         start_time=identity.started_at,
                     ),
+                    auth=(
+                        AuthContext(
+                            username=identity.principal,
+                            user_sid=user_sid,
+                            logon_id=identity.logon_id,
+                            session_id=member.auth_session_id or 0,
+                            logon_type=member.auth_logon_type or 0,
+                            session_kind="rdp",
+                            auth_protocol="rdp",
+                        )
+                        if is_rdp
+                        else None
+                    ),
                     occurrence_key=occurrence_key,
                     identity_plan=EventIdentityPlan(subject=identity),
                     lifecycle=ActionLifecycleContext(
@@ -742,7 +813,7 @@ class NetworkTransactionPlanner:
                     ),
                 )
             else:
-                raise TypeError("Deferred SSH State-start member changed exact type")
+                raise TypeError("Deferred session State-start member changed exact type")
             resolved.append((builder, member))
         return tuple(resolved)
 

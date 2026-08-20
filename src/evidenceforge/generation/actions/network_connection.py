@@ -627,6 +627,16 @@ class DeferredRdpApplicationIntent:
     target_host: str
     principal: str
     hard_deadline: datetime
+    user_sid: str = "S-1-0-0"
+    elevated: bool = False
+    privilege_list: str = ""
+    allow_omitted_transport_actor: bool = False
+    source_identity: ProcessIdentity | None = field(default=None, compare=False, repr=False)
+    source_session_identity: SessionIdentity | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
     prior_session: RdpSessionSnapshot | None = field(default=None, compare=False, repr=False)
     expected_generation: int = 0
     max_logical_generations: int = 8
@@ -638,11 +648,41 @@ class DeferredRdpApplicationIntent:
             raise TypeError("Deferred RDP application intent requires its exact manager")
         if not all(value.strip() for value in (self.source_host, self.target_host, self.principal)):
             raise ValueError("Deferred RDP application intent requires complete affinity")
+        if type(self.user_sid) is not str or not self.user_sid.startswith("S-"):
+            raise ValueError("Deferred RDP application intent requires a Windows SID")
+        if type(self.elevated) is not bool or type(self.privilege_list) is not str:
+            raise TypeError("Deferred RDP privilege facts changed exact type")
+        if type(self.allow_omitted_transport_actor) is not bool:
+            raise TypeError("Deferred RDP transport-actor policy changed exact type")
+        if self.elevated != bool(self.privilege_list):
+            raise ValueError("Deferred RDP elevated sessions require an exact privilege list")
         object.__setattr__(self, "hard_deadline", ensure_utc(self.hard_deadline))
         if self.expected_generation < 0:
             raise ValueError("Deferred RDP generation must be non-negative")
         if self.max_logical_generations <= 0:
             raise ValueError("Deferred RDP logical generation budget must be positive")
+        source_identity = self.source_identity
+        source_session = self.source_session_identity
+        if (source_identity is None) != (source_session is None):
+            raise ValueError("Deferred RDP source process and session must be supplied together")
+        if source_identity is not None:
+            if (
+                type(source_identity) is not ProcessIdentity
+                or type(source_session) is not SessionIdentity
+            ):
+                raise TypeError("Deferred RDP source ownership requires exact State identities")
+            assert source_session is not None
+            executable = source_identity.image.replace("/", "\\").rsplit("\\", 1)[-1]
+            if (
+                executable.casefold() != "mstsc.exe"
+                or source_identity.hostname.casefold().rstrip(".")
+                != self.source_host.casefold().rstrip(".")
+                or source_identity.logon_id != source_session.logon_id
+                or source_identity.hostname != source_session.hostname
+            ):
+                raise ValueError(
+                    "Deferred RDP source ownership requires exact mstsc/session affinity"
+                )
         prior = self.prior_session
         if prior is None:
             if self.expected_generation != 0:
@@ -676,6 +716,14 @@ class DeferredRdpApplicationIntent:
             raise StateError("Deferred RDP application intent targets another State session")
         if self.hard_deadline <= transaction.closed_at:
             raise StateError("Deferred RDP transport must close before its logical deadline")
+        source_identity = self.source_identity
+        source_session = self.source_session_identity
+        if source_identity is not None and (
+            source_session is None
+            or transaction.initiating_pid != source_identity.pid
+            and not (self.allow_omitted_transport_actor and transaction.initiating_pid <= 0)
+        ):
+            raise StateError("Deferred RDP transport changed its exact source process owner")
 
         channel_seed = _stable_seed(
             "rdp_transport_generation:"
@@ -739,7 +787,29 @@ class DeferredRdpApplicationIntent:
                 ),
             )
             token = self.manager.prepare_open_session(identity, transport)
-        return token, (), (), ()
+        if source_identity is None or source_session is None:
+            return token, (), (), ()
+        process_activity = (ProcessActivityPatch(source_identity, transaction.closed_at),)
+        session_activity = (SessionActivityPatch(source_session, transaction.closed_at),)
+        process_holds = (
+            LifecycleHold(
+                hold_id=stable_uuid(
+                    "deferred-rdp-process-hold",
+                    transaction.stable_id,
+                    source_identity.object_id,
+                ),
+                subject=LifecycleEntityRef("process", source_identity.object_id),
+                acquired_at=source_identity.started_at,
+                hold_until=transaction.closed_at,
+                action_id=stable_uuid(
+                    "deferred-rdp-process-hold-action",
+                    transaction.stable_id,
+                    source_identity.object_id,
+                ),
+                reason="rdp_transport_close",
+            ),
+        )
+        return token, process_activity, session_activity, process_holds
 
 
 @dataclass(frozen=True, slots=True)
@@ -1072,6 +1142,8 @@ class DeferredSessionNetworkAuthority:
             )
         if not specs:
             return ()
+        if self.kind is DeferredSessionKind.RDP:
+            return self._validate_rdp_dependent_occurrences(specs)
         if self.kind is not DeferredSessionKind.SSH:
             raise ValueError("Deferred dependent occurrence migration is currently scoped to SSH")
         if type(self.bound_at) is not datetime:
@@ -1136,6 +1208,124 @@ class DeferredSessionNetworkAuthority:
                 identity.object_id,
             ):
                 raise ValueError("Deferred SSH process dependent changed semantic identity")
+        return specs
+
+    def _validate_rdp_dependent_occurrences(
+        self,
+        specs: tuple[DeferredSessionDependentOccurrenceSpec, ...],
+    ) -> tuple[DeferredSessionDependentOccurrenceSpec, ...]:
+        """Require the bounded initial or ACTIVE RDP dependent cohort."""
+
+        if type(self.bound_at) is not datetime:
+            raise TypeError("Deferred RDP dependent authority changed its binding-time type")
+        if self.strict_state_authority is None or self.state_batch is None:
+            raise ValueError("Deferred RDP dependent occurrences require strict State authority")
+        session = self.state_batch.session
+        processes = self.state_batch.processes
+        if self.binding_disposition is DeferredSessionBindingDisposition.ACTIVE_SESSION:
+            patch = self.existing_state_patch
+            if session is not None or patch is None or len(processes) != 1 or len(specs) != 2:
+                raise ValueError(
+                    "ACTIVE deferred RDP cohort requires one source process and live session"
+                )
+            source_plan = processes[0]
+            session_identity = patch.after.identity
+            source_identity = source_plan.identity
+            process_spec, reconnect_spec = specs
+            expected_generation = (
+                self.application_intent.expected_generation
+                if type(self.application_intent) is DeferredRdpApplicationIntent
+                else self.application_token.expected_generation
+                if type(self.application_token) is RdpSessionAdmissionToken
+                else 0
+            )
+            if any(
+                type(spec.occurrence_id) is not str
+                or not spec.occurrence_id.strip()
+                or type(spec.event_type) is not EventKind
+                or type(spec.canonical_time) is not datetime
+                or type(spec.member_references) is not tuple
+                or len(spec.member_references) != 1
+                or type(spec.member_references[0]) is not str
+                or not spec.member_references[0]
+                or type(spec.publication_ordinal) is not int
+                for spec in specs
+            ):
+                raise TypeError("ACTIVE deferred RDP dependent fields changed exact type")
+            if (
+                process_spec.publication_ordinal != 1
+                or process_spec.event_type is not EventKind.PROCESS_CREATE
+                or process_spec.canonical_time != source_identity.started_at
+                or process_spec.member_references != (source_identity.object_id,)
+                or process_spec.occurrence_id
+                != stable_uuid("rdp-deferred-process-occurrence", source_identity.object_id)
+                or reconnect_spec.publication_ordinal != 2
+                or reconnect_spec.event_type is not EventKind.RDP_RECONNECT
+                or reconnect_spec.canonical_time != ensure_utc(self.bound_at)
+                or reconnect_spec.member_references != (session_identity.object_id,)
+                or reconnect_spec.occurrence_id
+                != stable_uuid(
+                    "rdp-deferred-reconnect-occurrence",
+                    session_identity.object_id,
+                    str(expected_generation),
+                )
+            ):
+                raise ValueError("ACTIVE deferred RDP dependents changed exact semantics")
+            return specs
+        if session is None or len(processes) != 3:
+            raise ValueError(
+                "Initial deferred RDP source cohort requires one session and three processes"
+            )
+        state_members = (session, *processes)
+        if len(specs) != len(state_members):
+            raise ValueError("Deferred RDP dependent occurrences must cover every State member")
+        if any(
+            type(spec.occurrence_id) is not str
+            or not spec.occurrence_id.strip()
+            or type(spec.event_type) is not EventKind
+            or type(spec.canonical_time) is not datetime
+            or type(spec.member_references) is not tuple
+            or len(spec.member_references) != 1
+            or type(spec.member_references[0]) is not str
+            or not spec.member_references[0]
+            or type(spec.publication_ordinal) is not int
+            for spec in specs
+        ):
+            raise TypeError("Deferred RDP dependent occurrence fields changed exact type")
+        if len({spec.occurrence_id for spec in specs}) != len(specs):
+            raise ValueError("Deferred RDP dependent occurrence IDs must be unique")
+        if tuple(spec.publication_ordinal for spec in specs) != tuple(
+            range(1, len(state_members) + 1)
+        ):
+            raise ValueError("Deferred RDP dependent occurrence ordinals must be contiguous")
+        members_by_object_id = {member.identity.object_id: member for member in state_members}
+        if {spec.member_references[0] for spec in specs} != set(members_by_object_id):
+            raise ValueError("Deferred RDP dependent occurrences changed State membership")
+        for spec in specs:
+            member = members_by_object_id[spec.member_references[0]]
+            identity = member.identity
+            if member is session:
+                if (
+                    spec.publication_ordinal != 2
+                    or spec.event_type is not EventKind.LOGON
+                    or spec.canonical_time != ensure_utc(self.bound_at)
+                    or spec.occurrence_id
+                    != stable_uuid("rdp-deferred-login-occurrence", identity.object_id)
+                ):
+                    raise ValueError("Deferred RDP logon dependent changed exact semantics")
+                continue
+            expected_kind = (
+                EventKind.SYSTEM_PROCESS_CREATE
+                if identity.principal.casefold() == "system"
+                else EventKind.PROCESS_CREATE
+            )
+            if (
+                spec.event_type is not expected_kind
+                or spec.canonical_time != identity.started_at
+                or spec.occurrence_id
+                != stable_uuid("rdp-deferred-process-occurrence", identity.object_id)
+            ):
+                raise ValueError("Deferred RDP process dependent changed exact semantics")
         return specs
 
     @property
