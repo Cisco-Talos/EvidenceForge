@@ -30993,10 +30993,8 @@ class ActivityGenerator:
             )
             scenario_start = getattr(self, "_scenario_start_time", None)
             scenario_start = ensure_utc(scenario_start) if scenario_start is not None else None
-            logon_id = self.state_manager.allocate_logon_id(system.hostname, session_time)
             if scenario_start is not None and session_time < scenario_start:
-                self.state_manager.register_session(
-                    logon_id=logon_id,
+                logon_id = self.state_manager.create_session(
                     username=user.username,
                     system=system.hostname,
                     logon_type=2,
@@ -31015,7 +31013,6 @@ class ActivityGenerator:
                     logon_type=2,
                     source_ip=None,
                     emit_network_evidence=False,
-                    logon_id=logon_id,
                     reuse_required_at=child_time,
                     lifecycle_group_id=lifecycle_group_id,
                 )
