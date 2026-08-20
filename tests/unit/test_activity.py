@@ -150,6 +150,7 @@ from evidenceforge.generation.source_timing import (
     ecar_flow_render_key,
 )
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models import NetworkConfig, NetworkSegment, System, User
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import reset_thread_rng
@@ -14554,17 +14555,20 @@ class TestActivityGenerator:
     def test_linux_pipeline_stage_planner_is_deterministic_varied_and_load_sensitive(self):
         """Pipeline stages use scoped continuous texture instead of one fixed gap."""
         base = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        runtime = TimingRuntime(reference_time=base, namespace="activity-linux-pipeline")
         first = plan_linux_pipeline_stage_times(
             base,
             stage_count=4,
             scope_parts=("LNX-01", "alice", "0xabc", "pipeline-a"),
             active_process_count=8,
+            timing_runtime=runtime,
         )
         repeated = plan_linux_pipeline_stage_times(
             base,
             stage_count=4,
             scope_parts=("LNX-01", "alice", "0xabc", "pipeline-a"),
             active_process_count=8,
+            timing_runtime=runtime,
         )
 
         assert first == repeated
@@ -14578,6 +14582,7 @@ class TestActivityGenerator:
                 stage_count=2,
                 scope_parts=(f"LNX-{index:03d}", "alice", "0xabc", f"pipeline-{index}"),
                 active_process_count=index % 32,
+                timing_runtime=runtime,
             )
             gaps.append(stage_times[1] - stage_times[0])
 
@@ -14592,12 +14597,14 @@ class TestActivityGenerator:
             stage_count=2,
             scope_parts=("LNX-LOAD", "alice", "0xabc", "pipeline-load"),
             active_process_count=0,
+            timing_runtime=runtime,
         )
         busy = plan_linux_pipeline_stage_times(
             base,
             stage_count=2,
             scope_parts=("LNX-LOAD", "alice", "0xabc", "pipeline-load"),
             active_process_count=96,
+            timing_runtime=runtime,
         )
         assert busy[1] - busy[0] > idle[1] - idle[0]
 

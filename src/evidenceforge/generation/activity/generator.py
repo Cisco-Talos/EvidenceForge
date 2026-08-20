@@ -25485,6 +25485,7 @@ class ActivityGenerator:
                 active_process_count=len(
                     self.state_manager.get_processes_on_system(system.hostname)
                 ),
+                timing_runtime=self.timing_runtime,
             )
             for (image, process_command_line), process_time in zip(
                 process_group, stage_times, strict=True
@@ -28062,6 +28063,7 @@ class ActivityGenerator:
                             active_process_count=len(
                                 self.state_manager.get_processes_on_system(system.hostname)
                             ),
+                            timing_runtime=self.timing_runtime,
                         )
                         for (
                             source_process_name,
