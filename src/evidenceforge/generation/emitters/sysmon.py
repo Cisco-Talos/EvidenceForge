@@ -40,6 +40,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty, Full
@@ -51,7 +52,15 @@ from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.formats.format_def import FormatDefinition
-from evidenceforge.generation.emitters.base import ExactPublicationError, LogEmitter
+from evidenceforge.generation.emitters.base import (
+    ExactPublicationError,
+    ExactPublicationKey,
+    ExactPublicationParticipantKey,
+    LogEmitter,
+    exact_publication_attempt_active,
+    register_exact_publication_participant,
+    stage_exact_publication_row,
+)
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.generation.emitters.syslog_family import (
     make_syslog_family_route_key,
@@ -150,6 +159,8 @@ _PROCESS_GUID_FIELDS: tuple[str, ...] = (
 _FROZEN_TIMING_MARKER = object()
 logger = logging.getLogger(__name__)
 
+_EXACT_CANDIDATE_MARKER = "exact-candidate-v1"
+
 _DEFAULT_FINALIZATION_ROW_CAPACITY = 2_000_000
 _DEFAULT_FINALIZATION_BYTE_CAPACITY = 2 * 1024 * 1024 * 1024
 _DEFAULT_FINALIZATION_ROUTE_CAPACITY = 100_000
@@ -241,6 +252,138 @@ class SysmonSourceFinalizationCensus:
     high_water_routes: int
 
 
+@dataclass(frozen=True, slots=True)
+class SysmonExactCandidateCensus:
+    """Constant-time exact candidate receipt and reservation ownership counts."""
+
+    current_rows: int
+    current_bytes: int
+    current_participants: int
+    released_rows: int
+    released_bytes: int
+    completed_participants: int
+    high_water_rows: int
+    high_water_bytes: int
+    high_water_participants: int
+
+
+@dataclass(slots=True)
+class _SysmonExactCandidateReservation:
+    """Owner-private same-process reservation for one exact raw candidate."""
+
+    digest: str
+    retained_bytes: int
+    charged_bytes: int
+    sequence: int
+    capacity_charged: bool = False
+    admitted: bool = False
+    released: bool = False
+
+
+@dataclass(slots=True)
+class _SysmonExactCandidateParticipant:
+    """Bounded scalar ownership for one exact candidate participant."""
+
+    next_sequence: int
+    reservation_keys: list[ExactPublicationKey] = dataclass_field(default_factory=list)
+    reserved_rows: int = 0
+    reserved_bytes: int = 0
+    admitted_rows: int = 0
+    released_rows: int = 0
+    released_bytes: int = 0
+    render_state_authenticated: bool = False
+    render_state_finalized: bool = False
+    completed: bool = False
+    thread_pools_existed: bool = False
+    thread_counters_existed: bool = False
+    thread_last_threads_existed: bool = False
+    call_trace_counters_existed: bool = False
+    sysmon_pids_existed: bool = False
+    dns_client_pids_existed: bool = False
+    filters_existed: bool = False
+    thread_allocation_receipts: dict[str, "_SysmonThreadAllocationReceipt"] = dataclass_field(
+        default_factory=dict
+    )
+    terminal_session_receipts: dict[
+        tuple[str, str],
+        "_SysmonIntMutationReceipt",
+    ] = dataclass_field(default_factory=dict)
+    call_trace_receipts: dict[str, "_SysmonCallTraceMutationReceipt"] = dataclass_field(
+        default_factory=dict
+    )
+    sysmon_pid_receipts: dict[str, "_SysmonIntMutationReceipt"] = dataclass_field(
+        default_factory=dict
+    )
+    dns_client_pid_receipts: dict[str, "_SysmonIntMutationReceipt"] = dataclass_field(
+        default_factory=dict
+    )
+    created_filters: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _SysmonThreadHostState:
+    """One immutable per-host view of the sequential Sysmon thread allocator."""
+
+    pool_present: bool
+    pool: tuple[int, ...]
+    counter_present: bool
+    counter: int
+    last_thread_present: bool
+    last_thread: int
+
+
+@dataclass(slots=True)
+class _SysmonThreadAllocationReceipt:
+    """Authenticated before/expected states for one exact-rendered host."""
+
+    original: _SysmonThreadHostState
+    expected: _SysmonThreadHostState
+
+
+@dataclass(frozen=True, slots=True)
+class _SysmonIntEntryState:
+    """One immutable optional integer mapping entry."""
+
+    present: bool
+    value: int
+
+
+@dataclass(slots=True)
+class _SysmonIntMutationReceipt:
+    """Authenticated before/expected states for one integer mapping mutation."""
+
+    original: _SysmonIntEntryState
+    expected: _SysmonIntEntryState
+
+
+@dataclass(frozen=True, slots=True)
+class _SysmonCallTraceHostState:
+    """One immutable per-host call-trace cache and sequence view."""
+
+    cache_present: bool
+    cache_digest: str
+    counter_present: bool
+    counter: int
+
+
+@dataclass(slots=True)
+class _SysmonCallTraceMutationReceipt:
+    """Authenticated before/expected states for one call-trace allocation."""
+
+    original: _SysmonCallTraceHostState
+    expected: _SysmonCallTraceHostState
+
+
+@dataclass(frozen=True, slots=True)
+class _SysmonAbortExactPendingRow:
+    """One bounded final-writer row retained across abort-publication retry."""
+
+    ordinal: int
+    key: ExactPublicationKey
+    writer: _SingleHostWriter
+    digest: str
+
+
 class _SysmonSourceFinalizationEpoch(SourceFinalizationEpoch):
     """Emitter-owned opaque reference to one sealed Sysmon cohort."""
 
@@ -307,11 +450,6 @@ class SysmonEventEmitter(LogEmitter):
     # Per-host boot datetimes for realistic parent ProcessGUID timestamps.
     # Set by emitter_setup after initialization.
     _host_boot_times: dict[str, datetime] = {}
-
-    # Per-host cached CallTrace patterns. Real ASLR randomizes DLL base
-    # addresses per boot, but intra-module offsets (function entry points)
-    # are fixed. All Event 10 events on the same host share the same offsets.
-    _call_trace_cache: dict[str, list[str]] = {}
 
     def _event_rng(self, event: CanonicalOccurrence, salt: str = "") -> random.Random:
         """Return a deterministic renderer-local RNG for incidental Sysmon fields."""
@@ -856,11 +994,174 @@ class SysmonEventEmitter(LogEmitter):
             return "10.0.20348.1"
         return "10.0.19041.1"
 
-    def _get_sysmon_thread_id(self, hostname: str) -> int:
-        """Return a ThreadID from a small reused pool for this host.
+    @contextmanager
+    def _sysmon_render_state_mutation(
+        self,
+    ) -> Iterator[_SysmonExactCandidateParticipant | None]:
+        """Serialize one mutable renderer helper against exact rollback ownership."""
 
-        Real Sysmon reuses a small thread pool (3-5 threads), not random IDs.
-        """
+        exact_attempt = exact_publication_attempt_active()
+        if exact_attempt and not register_exact_publication_participant(self):
+            raise ExactPublicationError(
+                "Sysmon renderer state lost its active exact publication attempt"
+            )
+
+        with self._close_condition:
+            participant: _SysmonExactCandidateParticipant | None = None
+            if exact_attempt:
+                if len(self._active_exact_publication_keys) != 1:
+                    raise ExactPublicationError(
+                        "Sysmon exact renderer state lost its participant fence"
+                    )
+                participant_key = next(iter(self._active_exact_publication_keys))
+                participant = self._exact_candidate_participants.get(participant_key)
+                if participant is None or participant.completed:
+                    raise ExactPublicationError(
+                        "Sysmon exact renderer state lost its participant owner"
+                    )
+            else:
+                while self._active_exact_publication_keys:
+                    self._close_condition.wait()
+                self._require_accepting_events_locked()
+
+            with self._sysmon_render_state_lock:
+                yield participant
+
+    def _sysmon_thread_host_state_unlocked(self, hostname: str) -> _SysmonThreadHostState:
+        """Authenticate one host's sequential thread-allocation state."""
+
+        pools = getattr(self, "_sysmon_thread_pools", None)
+        counters = getattr(self, "_sysmon_thread_counters", None)
+        last_threads = getattr(self, "_sysmon_last_thread_by_host", None)
+        for name, mapping in (
+            ("pool", pools),
+            ("counter", counters),
+            ("last-thread", last_threads),
+        ):
+            if mapping is not None and type(mapping) is not dict:
+                raise ExactPublicationError(f"Sysmon thread {name} state is malformed")
+
+        pool_present = pools is not None and hostname in pools
+        counter_present = counters is not None and hostname in counters
+        last_thread_present = last_threads is not None and hostname in last_threads
+        if pool_present != counter_present or (last_thread_present and not pool_present):
+            raise ExactPublicationError("Sysmon thread host state is incomplete")
+
+        pool: tuple[int, ...] = ()
+        counter = 0
+        last_thread = 0
+        if pool_present:
+            retained_pool = pools[hostname]
+            retained_counter = counters[hostname]
+            if (
+                type(retained_pool) is not list
+                or not retained_pool
+                or any(type(thread_id) is not int or thread_id <= 0 for thread_id in retained_pool)
+                or type(retained_counter) is not int
+                or retained_counter < 0
+            ):
+                raise ExactPublicationError("Sysmon thread host state is malformed")
+            pool = tuple(retained_pool)
+            counter = retained_counter
+        if last_thread_present:
+            retained_last_thread = last_threads[hostname]
+            if type(retained_last_thread) is not int or retained_last_thread not in pool:
+                raise ExactPublicationError("Sysmon thread last-thread state is malformed")
+            last_thread = retained_last_thread
+        return _SysmonThreadHostState(
+            pool_present=pool_present,
+            pool=pool,
+            counter_present=counter_present,
+            counter=counter,
+            last_thread_present=last_thread_present,
+            last_thread=last_thread,
+        )
+
+    def _sysmon_int_entry_state_unlocked(
+        self,
+        mapping: object,
+        key: object,
+        *,
+        label: str,
+    ) -> _SysmonIntEntryState:
+        """Authenticate one optional non-negative integer cache entry."""
+
+        retained_mapping = self._validate_sysmon_render_mapping(mapping, label=label)
+        if retained_mapping is None or key not in retained_mapping:
+            return _SysmonIntEntryState(present=False, value=0)
+        value = retained_mapping[key]
+        if type(value) is not int or value < 0:
+            raise ExactPublicationError(f"Sysmon {label} entry is malformed")
+        return _SysmonIntEntryState(present=True, value=value)
+
+    def _sysmon_call_trace_host_state_unlocked(
+        self,
+        hostname: str,
+    ) -> _SysmonCallTraceHostState:
+        """Authenticate one host's cached call traces and selection counter."""
+
+        cache = self._validate_sysmon_render_mapping(
+            getattr(self, "_call_trace_cache", None),
+            label="call-trace cache",
+        )
+        counters = self._validate_sysmon_render_mapping(
+            getattr(self, "_call_trace_counters", None),
+            label="call-trace counter",
+        )
+        cache_present = cache is not None and hostname in cache
+        counter_present = counters is not None and hostname in counters
+        cache_digest = ""
+        retained_counter = 0
+        if cache_present:
+            value = cache[hostname]
+            if (
+                type(value) is not list
+                or not value
+                or any(type(entry) is not str for entry in value)
+            ):
+                raise ExactPublicationError("Sysmon call-trace cache entry is malformed")
+            encoded = json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            cache_digest = hashlib.sha256(encoded).hexdigest()
+        if counter_present:
+            value = counters[hostname]
+            if type(value) is not int or value < 0:
+                raise ExactPublicationError("Sysmon call-trace counter entry is malformed")
+            retained_counter = value
+        return _SysmonCallTraceHostState(
+            cache_present=cache_present,
+            cache_digest=cache_digest,
+            counter_present=counter_present,
+            counter=retained_counter,
+        )
+
+    def _exact_int_mutation_receipt_unlocked(
+        self,
+        receipts: (
+            dict[str, _SysmonIntMutationReceipt] | dict[tuple[str, str], _SysmonIntMutationReceipt]
+        ),
+        mapping: object,
+        key: str | tuple[str, str],
+        *,
+        label: str,
+    ) -> _SysmonIntMutationReceipt:
+        """Create or reauthenticate one lazy exact integer-mutation receipt."""
+
+        current = self._sysmon_int_entry_state_unlocked(mapping, key, label=label)
+        receipt = receipts.get(key)
+        if receipt is None:
+            receipt = _SysmonIntMutationReceipt(original=current, expected=current)
+            receipts[key] = receipt
+        elif current != receipt.expected:
+            raise ExactPublicationError(f"Sysmon exact {label} state changed unexpectedly")
+        return receipt
+
+    def _allocate_sysmon_thread_id_unlocked(self, hostname: str) -> int:
+        """Advance one host's allocator while the renderer-state lock is held."""
+
         cache = getattr(self, "_sysmon_thread_pools", None)
         if cache is None:
             cache = self._sysmon_thread_pools = {}
@@ -888,21 +1189,73 @@ class SysmonEventEmitter(LogEmitter):
         last_threads[hostname] = thread_id
         return thread_id
 
+    def _get_sysmon_thread_id(self, hostname: str) -> int:
+        """Return a reused ThreadID without leaking failed exact-render state.
+
+        Real Sysmon reuses a small thread pool (3-5 threads), not random IDs.
+        Exact rendering advances the same sequential allocator as ordinary
+        rendering, but retains an authenticated before/expected receipt until
+        the exact batch either commits or aborts.
+        """
+
+        with self._sysmon_render_state_mutation() as participant:
+            receipt: _SysmonThreadAllocationReceipt | None = None
+            if participant is not None:
+                current = self._sysmon_thread_host_state_unlocked(hostname)
+                receipt = participant.thread_allocation_receipts.get(hostname)
+                if receipt is None:
+                    receipt = _SysmonThreadAllocationReceipt(
+                        original=current,
+                        expected=current,
+                    )
+                    participant.thread_allocation_receipts[hostname] = receipt
+                elif current != receipt.expected:
+                    raise ExactPublicationError(
+                        "Sysmon exact thread allocation state changed unexpectedly"
+                    )
+
+            try:
+                return self._allocate_sysmon_thread_id_unlocked(hostname)
+            finally:
+                if receipt is not None:
+                    receipt.expected = self._sysmon_thread_host_state_unlocked(hostname)
+
     def _get_sysmon_pid(self, hostname: str) -> int:
         """Return stable Sysmon service PID for a given host.
 
         The Sysmon driver runs as a single persistent process; its PID
         must be the same across all events from that host.
         """
-        cache = getattr(self, "_sysmon_pids", None)
-        if cache is None:
-            cache = self._sysmon_pids = {}
-        if hostname not in cache:
-            h = int(
-                hashlib.md5(f"sysmon:{hostname}".encode(), usedforsecurity=False).hexdigest(), 16
-            )
-            cache[hostname] = align_windows_id(1800 + (h % 1200))  # range 1800-3000
-        return cache[hostname]
+        with self._sysmon_render_state_mutation() as participant:
+            cache = getattr(self, "_sysmon_pids", None)
+            if cache is None:
+                cache = self._sysmon_pids = {}
+            receipt: _SysmonIntMutationReceipt | None = None
+            if participant is not None:
+                receipt = self._exact_int_mutation_receipt_unlocked(
+                    participant.sysmon_pid_receipts,
+                    cache,
+                    hostname,
+                    label="service PID",
+                )
+            try:
+                if hostname not in cache:
+                    h = int(
+                        hashlib.md5(
+                            f"sysmon:{hostname}".encode(),
+                            usedforsecurity=False,
+                        ).hexdigest(),
+                        16,
+                    )
+                    cache[hostname] = align_windows_id(1800 + (h % 1200))
+                return cache[hostname]
+            finally:
+                if receipt is not None:
+                    receipt.expected = self._sysmon_int_entry_state_unlocked(
+                        cache,
+                        hostname,
+                        label="service PID",
+                    )
 
     def _get_call_trace(self, hostname: str) -> str:
         """Return a CallTrace string with per-host stable offsets.
@@ -911,31 +1264,50 @@ class SysmonEventEmitter(LogEmitter):
         concrete offsets per-host using a hostname-seeded RNG. Offsets are fixed
         within a boot session (matching real ASLR behavior) but vary across hosts.
         """
-        if hostname not in self._call_trace_cache:
-            from evidenceforge.generation.activity.calltrace_patterns import (
-                load_calltrace_patterns,
-            )
+        with self._sysmon_render_state_mutation() as participant:
+            receipt: _SysmonCallTraceMutationReceipt | None = None
+            if participant is not None:
+                current = self._sysmon_call_trace_host_state_unlocked(hostname)
+                receipt = participant.call_trace_receipts.get(hostname)
+                if receipt is None:
+                    receipt = _SysmonCallTraceMutationReceipt(
+                        original=current,
+                        expected=current,
+                    )
+                    participant.call_trace_receipts[hostname] = receipt
+                elif current != receipt.expected:
+                    raise ExactPublicationError(
+                        "Sysmon exact call-trace state changed unexpectedly"
+                    )
+            try:
+                if hostname not in self._call_trace_cache:
+                    from evidenceforge.generation.activity.calltrace_patterns import (
+                        load_calltrace_patterns,
+                    )
 
-            patterns = load_calltrace_patterns()
-            rng = random.Random(_stable_seed(f"calltrace_{hostname}"))
-            rendered = []
-            for pat in patterns:
-                modules = pat["modules"]
-                ranges = pat["offset_ranges"]
-                parts = []
-                for mod in modules:
-                    lo, hi = ranges[mod]
-                    off = rng.randint(lo, hi)
-                    parts.append(f"C:\\Windows\\SYSTEM32\\{mod}+{off:X}")
-                rendered.append("|".join(parts))
-            self._call_trace_cache[hostname] = rendered
-        counters = getattr(self, "_call_trace_counters", None)
-        if counters is None:
-            counters = self._call_trace_counters = {}
-        counter = counters.get(hostname, 0)
-        counters[hostname] = counter + 1
-        rng = random.Random(_stable_seed(f"calltrace_choice:{hostname}:{counter}"))
-        return rng.choice(self._call_trace_cache[hostname])
+                    patterns = load_calltrace_patterns()
+                    rng = random.Random(_stable_seed(f"calltrace_{hostname}"))
+                    rendered = []
+                    for pat in patterns:
+                        modules = pat["modules"]
+                        ranges = pat["offset_ranges"]
+                        parts = []
+                        for mod in modules:
+                            lo, hi = ranges[mod]
+                            off = rng.randint(lo, hi)
+                            parts.append(f"C:\\Windows\\SYSTEM32\\{mod}+{off:X}")
+                        rendered.append("|".join(parts))
+                    self._call_trace_cache[hostname] = rendered
+                counters = getattr(self, "_call_trace_counters", None)
+                if counters is None:
+                    counters = self._call_trace_counters = {}
+                counter = counters.get(hostname, 0)
+                counters[hostname] = counter + 1
+                rng = random.Random(_stable_seed(f"calltrace_choice:{hostname}:{counter}"))
+                return rng.choice(self._call_trace_cache[hostname])
+            finally:
+                if receipt is not None:
+                    receipt.expected = self._sysmon_call_trace_host_state_unlocked(hostname)
 
     def _resolve_process_from_pid(self, hostname: str, pid: int) -> tuple[int, str]:
         """Look up process image from StateManager by PID.
@@ -1402,7 +1774,7 @@ class SysmonEventEmitter(LogEmitter):
             return resolve_image_path(image, "windows", username=username)
         return image
 
-    def _terminal_session_id(self, hostname: str, auth, logon_id: str) -> int:
+    def _terminal_session_id(self, hostname: str, auth: Any | None, logon_id: str) -> int:
         """Return the canonical TerminalSessionId for Sysmon process creates."""
         if auth is None:
             return 0
@@ -1410,10 +1782,36 @@ class SysmonEventEmitter(LogEmitter):
         if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "ANONYMOUS LOGON"}:
             return 0
         key = (hostname, logon_id or username)
-        if auth.session_id > 0:
-            self._terminal_session_ids_by_logon[key] = auth.session_id
-            return auth.session_id
-        return self._terminal_session_ids_by_logon.get(key, 0)
+        with self._sysmon_render_state_mutation() as participant:
+            sessions = self._validate_sysmon_render_mapping(
+                getattr(self, "_terminal_session_ids_by_logon", None),
+                label="terminal-session",
+            )
+            if sessions is None:
+                raise ExactPublicationError("Sysmon terminal-session mapping disappeared")
+            receipt: _SysmonIntMutationReceipt | None = None
+            if participant is not None and auth.session_id > 0:
+                receipt = self._exact_int_mutation_receipt_unlocked(
+                    participant.terminal_session_receipts,
+                    sessions,
+                    key,
+                    label="terminal-session",
+                )
+            try:
+                if auth.session_id > 0:
+                    sessions[key] = auth.session_id
+                    return auth.session_id
+                retained = sessions.get(key, 0)
+                if type(retained) is not int or retained < 0:
+                    raise ExactPublicationError("Sysmon terminal-session entry is malformed")
+                return retained
+            finally:
+                if receipt is not None:
+                    receipt.expected = self._sysmon_int_entry_state_unlocked(
+                        sessions,
+                        key,
+                        label="terminal-session",
+                    )
 
     def _render_sysmon_create_remote_thread(self, event: CanonicalOccurrence) -> None:
         """Render Sysmon Event 8 (CreateRemoteThread)."""
@@ -1550,9 +1948,31 @@ class SysmonEventEmitter(LogEmitter):
 
     def _get_filters(self) -> dict:
         """Return the loaded Sysmon filter config (cached)."""
-        if not hasattr(self, "_filters"):
-            self._filters = load_sysmon_filters()
-        return self._filters
+        if exact_publication_attempt_active():
+            filters = self.__dict__.get("_filters")
+            if filters is None:
+                filters = load_sysmon_filters()
+            retained = self._validate_sysmon_render_mapping(
+                filters,
+                label="filter cache",
+            )
+            if retained is None:
+                raise ExactPublicationError("Sysmon filter cache disappeared")
+            return retained
+
+        with self._sysmon_render_state_mutation():
+            if "_filters" not in self.__dict__:
+                loaded = load_sysmon_filters()
+                if type(loaded) is not dict:
+                    raise ExactPublicationError("Sysmon filter cache is malformed")
+                self._filters = loaded
+            filters = self._validate_sysmon_render_mapping(
+                getattr(self, "_filters", None),
+                label="filter cache",
+            )
+            if filters is None:
+                raise ExactPublicationError("Sysmon filter cache disappeared")
+            return filters
 
     def _passes_event3_filter(self, event: CanonicalOccurrence) -> bool:
         """Check if a connection event passes the Event 3 (NetworkConnect) filter."""
@@ -2071,16 +2491,36 @@ class SysmonEventEmitter(LogEmitter):
 
     def _get_dns_client_pid(self, hostname: str) -> int:
         """Return stable DNS Client svchost.exe PID for a given host."""
-        cache = getattr(self, "_dns_client_pids", None)
-        if cache is None:
-            cache = self._dns_client_pids = {}
-        if hostname not in cache:
-            h = int(
-                hashlib.md5(f"dns_client:{hostname}".encode(), usedforsecurity=False).hexdigest(),
-                16,
-            )
-            cache[hostname] = 900 + (h % 400)  # range 900-1299
-        return cache[hostname]
+        with self._sysmon_render_state_mutation() as participant:
+            cache = getattr(self, "_dns_client_pids", None)
+            if cache is None:
+                cache = self._dns_client_pids = {}
+            receipt: _SysmonIntMutationReceipt | None = None
+            if participant is not None:
+                receipt = self._exact_int_mutation_receipt_unlocked(
+                    participant.dns_client_pid_receipts,
+                    cache,
+                    hostname,
+                    label="DNS client PID",
+                )
+            try:
+                if hostname not in cache:
+                    h = int(
+                        hashlib.md5(
+                            f"dns_client:{hostname}".encode(),
+                            usedforsecurity=False,
+                        ).hexdigest(),
+                        16,
+                    )
+                    cache[hostname] = 900 + (h % 400)
+                return cache[hostname]
+            finally:
+                if receipt is not None:
+                    receipt.expected = self._sysmon_int_entry_state_unlocked(
+                        cache,
+                        hostname,
+                        label="DNS client PID",
+                    )
 
     # --- Infrastructure (same pattern as WindowsEventEmitter) ---
 
@@ -2126,6 +2566,7 @@ class SysmonEventEmitter(LogEmitter):
         self._time_collision_count_by_computer: dict[str, int] = {}
         self._final_process_guids: dict[tuple[str, int, str], str] = {}
         self._terminal_session_ids_by_logon: dict[tuple[str, str], int] = {}
+        self._call_trace_cache: dict[str, list[str]] = {}
         self._spool_dir: Path | None = None
         self._owns_spool_dir = False
         self._spool_path: Path | None = None
@@ -2148,6 +2589,30 @@ class SysmonEventEmitter(LogEmitter):
         self._source_high_water_rows = 0
         self._source_high_water_bytes = 0
         self._source_high_water_routes = 0
+        self._exact_candidate_reservations: dict[
+            ExactPublicationKey,
+            _SysmonExactCandidateReservation,
+        ] = {}
+        self._exact_candidate_participants: dict[
+            ExactPublicationParticipantKey,
+            _SysmonExactCandidateParticipant,
+        ] = {}
+        self._exact_candidate_current_rows = 0
+        self._exact_candidate_current_bytes = 0
+        self._exact_candidate_current_participants = 0
+        self._exact_candidate_released_rows = 0
+        self._exact_candidate_released_bytes = 0
+        self._exact_candidate_completed_participants = 0
+        self._exact_candidate_high_water_rows = 0
+        self._exact_candidate_high_water_bytes = 0
+        self._exact_candidate_high_water_participants = 0
+        self._exact_candidate_abort_close_rendering = False
+        self._exact_candidate_abort_close_rows_rendered = False
+        self._exact_candidate_abort_close_render_complete = False
+        self._exact_candidate_abort_participant_key: ExactPublicationParticipantKey | None = None
+        self._exact_candidate_abort_registered_writers: dict[int, _SingleHostWriter] = {}
+        self._exact_candidate_abort_pending_row: _SysmonAbortExactPendingRow | None = None
+        self._sysmon_render_state_lock = Lock()
         self._candidate_admission_lock = Lock()
         self._finalization_row_capacity = finalization_row_capacity
         self._finalization_byte_capacity = finalization_byte_capacity
@@ -2828,6 +3293,13 @@ class SysmonEventEmitter(LogEmitter):
     def _cleanup_spool_unlocked(self) -> None:
         """Remove the owner-private journal after terminal close or abort."""
 
+        if (
+            self._exact_candidate_abort_close_rendering
+            and not self._exact_candidate_abort_close_rows_rendered
+        ):
+            raise ExactPublicationError(
+                "Sysmon abort close cannot clear its journal before exact rows render"
+            )
         if self._spool_conn is not None:
             self._spool_conn.close()
             self._spool_conn = None
@@ -2896,16 +3368,22 @@ class SysmonEventEmitter(LogEmitter):
         self._spooled_count = 0
         self._candidate_admitted_rows = 0
         self._candidate_admitted_bytes = 0
+        if self._exact_candidate_abort_close_rendering:
+            self._exact_candidate_abort_close_render_complete = True
 
     def configure_output_target(self, target: str | OutputTarget | None) -> None:
         """Reject target mutation after the terminal cohort starts quiescing."""
 
-        state, _ = self._source_lifecycle_snapshot()
-        if self._source_finalization_bound and state != "open":
-            raise SourceFinalizationError(
-                "Sysmon output target cannot change after source quiescence"
-            )
-        super().configure_output_target(target)
+        with self._close_condition:
+            if self._source_finalization_bound and (
+                self._source_finalization_state != "open"
+                or self._close_state != "open"
+                or self._exact_candidate_abort_close_rendering
+            ):
+                raise SourceFinalizationError(
+                    "Sysmon output target cannot change during terminal source ownership"
+                )
+            super().configure_output_target(target)
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host = sanitize_path_component(host_fqdn)
@@ -2978,6 +3456,544 @@ class SysmonEventEmitter(LogEmitter):
             return
         self._get_host_writer("").write(rendered)
 
+    def _begin_sysmon_candidate_admission(self) -> None:
+        """Serialize ordinary candidate handoff against exact participant ownership."""
+
+        with self._close_condition:
+            while self._active_exact_publication_keys:
+                self._close_condition.wait()
+            self._require_accepting_events_locked()
+            if self._exact_candidate_abort_close_rendering:
+                raise ExactPublicationError(
+                    "Sysmon abort close retry owner rejects new candidate admission"
+                )
+            self._queue_admissions += 1
+
+    @property
+    def supports_exact_candidate_publication(self) -> bool:
+        """Return whether this emitter owns the journal required for exact candidates."""
+
+        return self._source_finalization_bound
+
+    @property
+    def supports_exact_projection_publication(self) -> bool:
+        """Advertise exact projection admission to dispatcher preflight."""
+
+        return self._source_finalization_bound
+
+    @staticmethod
+    def _validate_sysmon_render_mapping(
+        mapping: object,
+        *,
+        label: str,
+    ) -> dict[object, object] | None:
+        """Return one exact allocator mapping after strict shape validation."""
+
+        if mapping is None:
+            return None
+        if type(mapping) is not dict:
+            raise ExactPublicationError(f"Sysmon thread {label} state is malformed")
+        return mapping
+
+    def _validate_exact_thread_allocation_receipts_unlocked(
+        self,
+        participant: _SysmonExactCandidateParticipant,
+    ) -> None:
+        """Authenticate every exact allocator mutation before commit or rollback."""
+
+        expected_pool_hosts: set[str] = set()
+        expected_counter_hosts: set[str] = set()
+        expected_last_thread_hosts: set[str] = set()
+        for hostname, receipt in participant.thread_allocation_receipts.items():
+            if type(hostname) is not str or not hostname:
+                raise ExactPublicationError("Sysmon exact thread receipt host is malformed")
+            if self._sysmon_thread_host_state_unlocked(hostname) != receipt.expected:
+                raise ExactPublicationError(
+                    "Sysmon exact thread allocation receipt found conflicting state"
+                )
+            if receipt.expected.pool_present:
+                expected_pool_hosts.add(hostname)
+            if receipt.expected.counter_present:
+                expected_counter_hosts.add(hostname)
+            if receipt.expected.last_thread_present:
+                expected_last_thread_hosts.add(hostname)
+
+        mapping_contracts = (
+            (
+                "pool",
+                getattr(self, "_sysmon_thread_pools", None),
+                participant.thread_pools_existed,
+                expected_pool_hosts,
+            ),
+            (
+                "counter",
+                getattr(self, "_sysmon_thread_counters", None),
+                participant.thread_counters_existed,
+                expected_counter_hosts,
+            ),
+            (
+                "last-thread",
+                getattr(self, "_sysmon_last_thread_by_host", None),
+                participant.thread_last_threads_existed,
+                expected_last_thread_hosts,
+            ),
+        )
+        for label, retained, existed, expected_hosts in mapping_contracts:
+            mapping = self._validate_sysmon_render_mapping(retained, label=label)
+            if existed:
+                if mapping is None:
+                    raise ExactPublicationError(f"Sysmon exact thread {label} mapping disappeared")
+            elif expected_hosts:
+                if mapping is None or set(mapping) != expected_hosts:
+                    raise ExactPublicationError(
+                        f"Sysmon exact thread {label} mapping gained foreign state"
+                    )
+            elif mapping is not None:
+                raise ExactPublicationError(
+                    f"Sysmon exact thread {label} mapping changed unexpectedly"
+                )
+
+    def _restore_exact_thread_allocation_receipts_unlocked(
+        self,
+        participant: _SysmonExactCandidateParticipant,
+    ) -> None:
+        """Restore authenticated allocator state for a precanonical exact abort."""
+
+        self._validate_exact_thread_allocation_receipts_unlocked(participant)
+        pools = self._validate_sysmon_render_mapping(
+            getattr(self, "_sysmon_thread_pools", None),
+            label="pool",
+        )
+        counters = self._validate_sysmon_render_mapping(
+            getattr(self, "_sysmon_thread_counters", None),
+            label="counter",
+        )
+        last_threads = self._validate_sysmon_render_mapping(
+            getattr(self, "_sysmon_last_thread_by_host", None),
+            label="last-thread",
+        )
+        for hostname, receipt in participant.thread_allocation_receipts.items():
+            original = receipt.original
+            if pools is not None:
+                if original.pool_present:
+                    pools[hostname] = list(original.pool)
+                else:
+                    pools.pop(hostname, None)
+            if counters is not None:
+                if original.counter_present:
+                    counters[hostname] = original.counter
+                else:
+                    counters.pop(hostname, None)
+            if last_threads is not None:
+                if original.last_thread_present:
+                    last_threads[hostname] = original.last_thread
+                else:
+                    last_threads.pop(hostname, None)
+
+        for attribute, mapping, existed in (
+            ("_sysmon_thread_pools", pools, participant.thread_pools_existed),
+            ("_sysmon_thread_counters", counters, participant.thread_counters_existed),
+            (
+                "_sysmon_last_thread_by_host",
+                last_threads,
+                participant.thread_last_threads_existed,
+            ),
+        ):
+            if not existed and mapping is not None:
+                if mapping:
+                    raise ExactPublicationError(
+                        "Sysmon exact thread rollback retained unexpected allocator state"
+                    )
+                delattr(self, attribute)
+        participant.thread_allocation_receipts.clear()
+
+    def _validate_exact_int_receipts_unlocked(
+        self,
+        receipts: (
+            dict[str, _SysmonIntMutationReceipt] | dict[tuple[str, str], _SysmonIntMutationReceipt]
+        ),
+        mapping: object,
+        *,
+        label: str,
+    ) -> set[object]:
+        """Authenticate lazy integer receipts and return their expected keys."""
+
+        expected_keys: set[object] = set()
+        for key, receipt in receipts.items():
+            if self._sysmon_int_entry_state_unlocked(mapping, key, label=label) != receipt.expected:
+                raise ExactPublicationError(f"Sysmon exact {label} receipt found conflicting state")
+            if receipt.expected.present:
+                expected_keys.add(key)
+        return expected_keys
+
+    def _validate_exact_optional_mapping_unlocked(
+        self,
+        mapping: object,
+        *,
+        existed: bool,
+        expected_keys: set[object],
+        label: str,
+    ) -> dict[object, object] | None:
+        """Authenticate a lazily created renderer mapping without a full snapshot."""
+
+        retained = self._validate_sysmon_render_mapping(mapping, label=label)
+        if existed:
+            if retained is None:
+                raise ExactPublicationError(f"Sysmon exact {label} mapping disappeared")
+        elif expected_keys:
+            if retained is None or set(retained) != expected_keys:
+                raise ExactPublicationError(f"Sysmon exact {label} mapping gained foreign state")
+        elif retained:
+            raise ExactPublicationError(f"Sysmon exact {label} mapping changed unexpectedly")
+        return retained
+
+    def _validate_exact_render_state_receipts_unlocked(
+        self,
+        participant: _SysmonExactCandidateParticipant,
+    ) -> None:
+        """Authenticate every mutable canonical-render receipt as one transaction."""
+
+        self._validate_exact_thread_allocation_receipts_unlocked(participant)
+
+        sessions = self._validate_sysmon_render_mapping(
+            getattr(self, "_terminal_session_ids_by_logon", None),
+            label="terminal-session",
+        )
+        if sessions is None:
+            raise ExactPublicationError("Sysmon exact terminal-session mapping disappeared")
+        self._validate_exact_int_receipts_unlocked(
+            participant.terminal_session_receipts,
+            sessions,
+            label="terminal-session",
+        )
+
+        call_trace_cache = self._validate_sysmon_render_mapping(
+            getattr(self, "_call_trace_cache", None),
+            label="call-trace cache",
+        )
+        if call_trace_cache is None:
+            raise ExactPublicationError("Sysmon exact call-trace cache disappeared")
+        expected_call_trace_counters: set[object] = set()
+        for hostname, receipt in participant.call_trace_receipts.items():
+            if self._sysmon_call_trace_host_state_unlocked(hostname) != receipt.expected:
+                raise ExactPublicationError(
+                    "Sysmon exact call-trace receipt found conflicting state"
+                )
+            if receipt.expected.counter_present:
+                expected_call_trace_counters.add(hostname)
+        self._validate_exact_optional_mapping_unlocked(
+            getattr(self, "_call_trace_counters", None),
+            existed=participant.call_trace_counters_existed,
+            expected_keys=expected_call_trace_counters,
+            label="call-trace counter",
+        )
+
+        for attribute, existed, receipts, label in (
+            (
+                "_sysmon_pids",
+                participant.sysmon_pids_existed,
+                participant.sysmon_pid_receipts,
+                "service PID",
+            ),
+            (
+                "_dns_client_pids",
+                participant.dns_client_pids_existed,
+                participant.dns_client_pid_receipts,
+                "DNS client PID",
+            ),
+        ):
+            mapping = getattr(self, attribute, None)
+            expected_keys = self._validate_exact_int_receipts_unlocked(
+                receipts,
+                mapping,
+                label=label,
+            )
+            self._validate_exact_optional_mapping_unlocked(
+                mapping,
+                existed=existed,
+                expected_keys=expected_keys,
+                label=label,
+            )
+
+        filters = self.__dict__.get("_filters")
+        if participant.filters_existed:
+            if self._validate_sysmon_render_mapping(filters, label="filter cache") is None:
+                raise ExactPublicationError("Sysmon exact filter cache disappeared")
+            if participant.created_filters is not None:
+                raise ExactPublicationError("Sysmon exact filter receipt is malformed")
+        elif participant.created_filters is None:
+            if "_filters" in self.__dict__:
+                raise ExactPublicationError("Sysmon exact filter cache changed unexpectedly")
+        elif filters is not participant.created_filters:
+            raise ExactPublicationError("Sysmon exact filter cache changed unexpectedly")
+
+    @staticmethod
+    def _restore_exact_int_receipts_unlocked(
+        mapping: dict[object, object] | None,
+        receipts: (
+            dict[str, _SysmonIntMutationReceipt] | dict[tuple[str, str], _SysmonIntMutationReceipt]
+        ),
+    ) -> None:
+        """Restore already-authenticated integer mapping entries."""
+
+        if mapping is None:
+            if receipts:
+                raise ExactPublicationError("Sysmon exact integer receipt lost its mapping")
+            return
+        for key, receipt in receipts.items():
+            if receipt.original.present:
+                mapping[key] = receipt.original.value
+            else:
+                mapping.pop(key, None)
+
+    def _restore_exact_render_state_receipts_unlocked(
+        self,
+        participant: _SysmonExactCandidateParticipant,
+    ) -> None:
+        """Restore all authenticated mutable renderer state after exact abort."""
+
+        self._validate_exact_render_state_receipts_unlocked(participant)
+        self._restore_exact_thread_allocation_receipts_unlocked(participant)
+
+        sessions = self._validate_sysmon_render_mapping(
+            getattr(self, "_terminal_session_ids_by_logon", None),
+            label="terminal-session",
+        )
+        self._restore_exact_int_receipts_unlocked(
+            sessions,
+            participant.terminal_session_receipts,
+        )
+
+        call_trace_cache = self._validate_sysmon_render_mapping(
+            getattr(self, "_call_trace_cache", None),
+            label="call-trace cache",
+        )
+        call_trace_counters = self._validate_sysmon_render_mapping(
+            getattr(self, "_call_trace_counters", None),
+            label="call-trace counter",
+        )
+        if call_trace_cache is None:
+            raise ExactPublicationError("Sysmon exact call-trace cache disappeared")
+        for hostname, receipt in participant.call_trace_receipts.items():
+            original = receipt.original
+            if not original.cache_present:
+                call_trace_cache.pop(hostname, None)
+            if call_trace_counters is not None:
+                if original.counter_present:
+                    call_trace_counters[hostname] = original.counter
+                else:
+                    call_trace_counters.pop(hostname, None)
+
+        for attribute, mapping, existed, receipts in (
+            (
+                "_sysmon_pids",
+                self._validate_sysmon_render_mapping(
+                    getattr(self, "_sysmon_pids", None),
+                    label="service PID",
+                ),
+                participant.sysmon_pids_existed,
+                participant.sysmon_pid_receipts,
+            ),
+            (
+                "_dns_client_pids",
+                self._validate_sysmon_render_mapping(
+                    getattr(self, "_dns_client_pids", None),
+                    label="DNS client PID",
+                ),
+                participant.dns_client_pids_existed,
+                participant.dns_client_pid_receipts,
+            ),
+        ):
+            self._restore_exact_int_receipts_unlocked(mapping, receipts)
+            if not existed and mapping is not None:
+                if mapping:
+                    raise ExactPublicationError(
+                        "Sysmon exact renderer rollback retained unexpected cache state"
+                    )
+                delattr(self, attribute)
+
+        if not participant.call_trace_counters_existed and call_trace_counters is not None:
+            if call_trace_counters:
+                raise ExactPublicationError(
+                    "Sysmon exact call-trace rollback retained unexpected counter state"
+                )
+            delattr(self, "_call_trace_counters")
+        if not participant.filters_existed and participant.created_filters is not None:
+            delattr(self, "_filters")
+
+        participant.terminal_session_receipts.clear()
+        participant.call_trace_receipts.clear()
+        participant.sysmon_pid_receipts.clear()
+        participant.dns_client_pid_receipts.clear()
+        participant.created_filters = None
+
+    def _finalize_exact_render_state_receipts_unlocked(
+        self,
+        participant: _SysmonExactCandidateParticipant,
+    ) -> None:
+        """Authenticate and retain every renderer mutation owned by a committed batch."""
+
+        if participant.render_state_finalized:
+            return
+        self._validate_exact_render_state_receipts_unlocked(participant)
+        self._retire_exact_render_state_receipts_unlocked(participant)
+        participant.render_state_finalized = True
+
+    @staticmethod
+    def _retire_exact_render_state_receipts_unlocked(
+        participant: _SysmonExactCandidateParticipant,
+    ) -> None:
+        """Drop authenticated rollback receipts after their mutations are adopted."""
+
+        participant.thread_allocation_receipts.clear()
+        participant.terminal_session_receipts.clear()
+        participant.call_trace_receipts.clear()
+        participant.sysmon_pid_receipts.clear()
+        participant.dns_client_pid_receipts.clear()
+        participant.created_filters = None
+
+    def _mark_exact_participant_completed_unlocked(
+        self,
+        participant: _SysmonExactCandidateParticipant,
+    ) -> None:
+        """Apply the idempotent scalar completion transition under the owner condition."""
+
+        if participant.completed:
+            return
+        participant.completed = True
+        self._exact_candidate_completed_participants += 1
+
+    def _register_exact_publication_batch(
+        self,
+        key: ExactPublicationParticipantKey,
+    ) -> None:
+        """Fence new candidates, then drain every prior threaded FIFO admission."""
+
+        self._validate_exact_candidate_participant_key(key)
+        worker_thread = self._thread.ident if self._thread is not None else None
+        if worker_thread == get_ident():
+            raise ExactPublicationError(
+                "Sysmon exact publication cannot register from its emitter worker"
+            )
+        if not self._source_finalization_bound:
+            raise ExactPublicationError(
+                "Sysmon exact candidate publication requires source finalization"
+            )
+        with self._exact_publication_condition:
+            if self._exact_candidate_abort_close_rendering:
+                raise ExactPublicationError(
+                    "Sysmon abort close retry owner rejects exact candidate admission"
+                )
+            retained_participant = self._exact_candidate_participants.get(key)
+            if retained_participant is not None:
+                if key not in self._active_exact_publication_keys:
+                    raise ExactPublicationError(
+                        "Sysmon exact participant receipt is already terminal"
+                    )
+                return
+            foreign = self._active_exact_publication_keys - {key}
+            if foreign:
+                raise ExactPublicationError(
+                    "Sysmon emitter already has an unresolved exact publication"
+                )
+            if self._close_state != "open" and key not in self._active_exact_publication_keys:
+                raise ExactPublicationError(
+                    "Sysmon emitter is closing or closed during exact publication"
+                )
+            while self._queue_admissions:
+                self._exact_publication_condition.wait()
+            self._active_exact_publication_keys.add(key)
+
+        queue = self._event_queue
+        try:
+            if queue is not None:
+                queue.join()
+                self._raise_if_thread_failed()
+            with self._file_lock:
+                self._spool_event_dicts_unlocked()
+            with self._exact_publication_condition:
+                if key not in self._active_exact_publication_keys:
+                    raise ExactPublicationError("Sysmon exact participant lost its admission fence")
+                if key in self._exact_candidate_participants:
+                    raise ExactPublicationError(
+                        "Sysmon exact participant was registered concurrently"
+                    )
+                with self._sysmon_render_state_lock:
+                    pools = self._validate_sysmon_render_mapping(
+                        getattr(self, "_sysmon_thread_pools", None),
+                        label="pool",
+                    )
+                    counters = self._validate_sysmon_render_mapping(
+                        getattr(self, "_sysmon_thread_counters", None),
+                        label="counter",
+                    )
+                    last_threads = self._validate_sysmon_render_mapping(
+                        getattr(self, "_sysmon_last_thread_by_host", None),
+                        label="last-thread",
+                    )
+                    call_trace_counters = self._validate_sysmon_render_mapping(
+                        getattr(self, "_call_trace_counters", None),
+                        label="call-trace counter",
+                    )
+                    sysmon_pids = self._validate_sysmon_render_mapping(
+                        getattr(self, "_sysmon_pids", None),
+                        label="service PID",
+                    )
+                    dns_client_pids = self._validate_sysmon_render_mapping(
+                        getattr(self, "_dns_client_pids", None),
+                        label="DNS client PID",
+                    )
+                    if (
+                        self._validate_sysmon_render_mapping(
+                            getattr(self, "_terminal_session_ids_by_logon", None),
+                            label="terminal-session",
+                        )
+                        is None
+                    ):
+                        raise ExactPublicationError("Sysmon terminal-session mapping disappeared")
+                    if (
+                        self._validate_sysmon_render_mapping(
+                            getattr(self, "_call_trace_cache", None),
+                            label="call-trace cache",
+                        )
+                        is None
+                    ):
+                        raise ExactPublicationError("Sysmon call-trace cache disappeared")
+                    filters_existed = "_filters" in self.__dict__
+                    if (
+                        filters_existed
+                        and self._validate_sysmon_render_mapping(
+                            self.__dict__["_filters"],
+                            label="filter cache",
+                        )
+                        is None
+                    ):
+                        raise ExactPublicationError("Sysmon filter cache disappeared")
+                    participant = _SysmonExactCandidateParticipant(
+                        next_sequence=self._spool_sequence,
+                        thread_pools_existed=pools is not None,
+                        thread_counters_existed=counters is not None,
+                        thread_last_threads_existed=last_threads is not None,
+                        call_trace_counters_existed=call_trace_counters is not None,
+                        sysmon_pids_existed=sysmon_pids is not None,
+                        dns_client_pids_existed=dns_client_pids is not None,
+                        filters_existed=filters_existed,
+                    )
+                self._exact_candidate_participants[key] = participant
+                self._exact_candidate_current_participants += 1
+                self._exact_candidate_high_water_participants = max(
+                    self._exact_candidate_high_water_participants,
+                    self._exact_candidate_current_participants,
+                )
+        except BaseException:
+            with self._exact_publication_condition:
+                participant = self._exact_candidate_participants.pop(key, None)
+                if participant is not None:
+                    self._exact_candidate_current_participants -= 1
+                self._active_exact_publication_keys.discard(key)
+                self._exact_publication_condition.notify_all()
+            raise
+
     def emit_event(self, event_data: dict[str, Any]) -> None:
         event_data = dict(event_data)
         for field in ("ExecutionProcessID", "ExecutionThreadID"):
@@ -3019,7 +4035,20 @@ class SysmonEventEmitter(LogEmitter):
         host_type = getattr(self._emission_context, "host_type", "")
         if host_type:
             event_data["_host_type"] = host_type
-        self._begin_queue_admission()
+        if exact_publication_attempt_active():
+            payload = _sysmon_spool_encode(event_data)
+            staged = stage_exact_publication_row(
+                self,
+                payload,
+                publish=self._commit_exact_candidate_row,
+                release=self._release_exact_candidate_row,
+            )
+            if not staged:
+                raise ExactPublicationError(
+                    "Sysmon exact candidate lost its active publication attempt"
+                )
+            return
+        self._begin_sysmon_candidate_admission()
         handed_off = False
         reserved_bytes = 0
         try:
@@ -3080,6 +4109,20 @@ class SysmonEventEmitter(LogEmitter):
             return event_data, 0
         payload = _sysmon_spool_encode(event_data)
         payload_bytes = len(payload.encode("utf-8"))
+        self._reserve_candidate_payload_unlocked(payload_bytes)
+        return _sysmon_spool_decode(payload), payload_bytes
+
+    def _reserve_candidate_payload_unlocked(self, payload_bytes: int) -> None:
+        """Charge one already-frozen candidate payload against terminal capacity."""
+
+        if type(payload_bytes) is not int or payload_bytes < 0:
+            raise SourceFinalizationError("Sysmon candidate byte reservation is malformed")
+        if not self._source_finalization_bound:
+            if payload_bytes != 0:
+                raise SourceFinalizationError(
+                    "Legacy Sysmon candidate cannot retain finalization capacity"
+                )
+            return
         if payload_bytes > _FINALIZATION_CHUNK_BYTES:
             raise SourceFinalizationError(
                 "Sysmon candidate row exceeds the finalization chunk byte capacity"
@@ -3096,16 +4139,467 @@ class SysmonEventEmitter(LogEmitter):
         self._candidate_high_water_bytes = max(self._candidate_high_water_bytes, candidate_bytes)
         self._source_high_water_rows = max(self._source_high_water_rows, candidate_rows)
         self._source_high_water_bytes = max(self._source_high_water_bytes, candidate_bytes)
-        return _sysmon_spool_decode(payload), payload_bytes
+
+    @staticmethod
+    def _validate_exact_candidate_participant_key(
+        key: ExactPublicationParticipantKey,
+    ) -> None:
+        """Reject hostile or malformed exact participant keys before owner lookup."""
+
+        if (
+            type(key) is not tuple
+            or len(key) != 2
+            or type(key[0]) is not str
+            or len(key[0]) != 32
+            or any(character not in "0123456789abcdef" for character in key[0])
+            or type(key[1]) is not int
+            or key[1] <= 0
+            or key[1] > (2**63 - 1)
+        ):
+            raise ExactPublicationError("Sysmon exact participant key is malformed")
+
+    @classmethod
+    def _validate_exact_candidate_key(cls, key: ExactPublicationKey) -> None:
+        """Reject hostile or malformed exact candidate keys before owner lookup."""
+
+        if type(key) is not tuple or len(key) != 3:
+            raise ExactPublicationError("Sysmon exact candidate key is malformed")
+        cls._validate_exact_candidate_participant_key(key[:2])
+        if type(key[2]) is not int or key[2] < 0 or key[2] > (2**63 - 1):
+            raise ExactPublicationError("Sysmon exact candidate key is malformed")
+
+    def _reserve_exact_publication_row(
+        self,
+        key: ExactPublicationKey,
+        digest: str,
+        retained_bytes: int,
+    ) -> None:
+        """Reserve one exact raw candidate before canonical State may mutate."""
+
+        self._validate_exact_candidate_key(key)
+        if (
+            type(digest) is not str
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            or type(retained_bytes) is not int
+            or retained_bytes <= 0
+        ):
+            raise ExactPublicationError("Sysmon exact candidate reservation is malformed")
+        participant_key = key[:2]
+        with self._exact_publication_condition:
+            if participant_key not in self._active_exact_publication_keys:
+                raise ExactPublicationError(
+                    "Sysmon exact candidate reservation lost its participant fence"
+                )
+            retained = self._exact_candidate_reservations.get(key)
+            if retained is not None:
+                if retained.digest != digest or retained.retained_bytes != retained_bytes:
+                    raise ExactPublicationError(
+                        "Sysmon exact candidate reservation changed on retry"
+                    )
+                return
+            if not self._source_finalization_bound:
+                raise ExactPublicationError(
+                    "Sysmon exact candidate reservation requires source finalization"
+                )
+            participant = self._exact_candidate_participants.get(participant_key)
+            if participant is None or participant.completed:
+                raise ExactPublicationError(
+                    "Sysmon exact candidate reservation lost its participant owner"
+                )
+            sequence = participant.next_sequence
+            if sequence < self._spool_sequence or sequence > (2**63 - 1):
+                raise ExactPublicationError(
+                    "Sysmon exact candidate sequence exceeds its journal ownership"
+                )
+            charged_bytes = retained_bytes
+            with self._candidate_admission_lock:
+                self._reserve_candidate_payload_unlocked(charged_bytes)
+            prior_participant = (
+                participant.next_sequence,
+                participant.reserved_rows,
+                participant.reserved_bytes,
+            )
+            prior_global = (
+                self._exact_candidate_current_rows,
+                self._exact_candidate_current_bytes,
+                self._exact_candidate_high_water_rows,
+                self._exact_candidate_high_water_bytes,
+            )
+            try:
+                self._exact_candidate_reservations[key] = _SysmonExactCandidateReservation(
+                    digest=digest,
+                    retained_bytes=retained_bytes,
+                    charged_bytes=charged_bytes,
+                    sequence=sequence,
+                    capacity_charged=True,
+                )
+                participant.reservation_keys.append(key)
+                participant.next_sequence = sequence + 1
+                participant.reserved_rows += 1
+                participant.reserved_bytes += retained_bytes
+                self._exact_candidate_current_rows += 1
+                self._exact_candidate_current_bytes += retained_bytes
+                self._exact_candidate_high_water_rows = max(
+                    self._exact_candidate_high_water_rows,
+                    self._exact_candidate_current_rows,
+                )
+                self._exact_candidate_high_water_bytes = max(
+                    self._exact_candidate_high_water_bytes,
+                    self._exact_candidate_current_bytes,
+                )
+            except BaseException:
+                self._exact_candidate_reservations.pop(key, None)
+                if participant.reservation_keys and participant.reservation_keys[-1] == key:
+                    participant.reservation_keys.pop()
+                (
+                    participant.next_sequence,
+                    participant.reserved_rows,
+                    participant.reserved_bytes,
+                ) = prior_participant
+                (
+                    self._exact_candidate_current_rows,
+                    self._exact_candidate_current_bytes,
+                    self._exact_candidate_high_water_rows,
+                    self._exact_candidate_high_water_bytes,
+                ) = prior_global
+                with self._candidate_admission_lock:
+                    self._release_candidate_admission_unlocked(charged_bytes)
+                raise
+
+    def _commit_exact_candidate_row(
+        self,
+        key: ExactPublicationKey,
+        digest: str,
+        frozen: object,
+    ) -> None:
+        """Insert or reconcile one durable candidate before its batch cursor advances."""
+
+        self._validate_exact_candidate_key(key)
+        if type(frozen) is not str:
+            raise ExactPublicationError("Sysmon exact candidate must retain one inert string")
+        if type(digest) is not str or len(digest) != 64:
+            raise ExactPublicationError("Sysmon exact candidate digest is malformed")
+        encoded = frozen.encode("utf-8")
+        retained_bytes = len(encoded)
+        if hashlib.sha256(encoded).hexdigest() != digest:
+            raise ExactPublicationError("Sysmon exact candidate content digest changed")
+        event_data = _sysmon_spool_decode(frozen)
+        sort_key = self._event_sort_key(event_data)
+        participant_key = key[:2]
+        route_key = f"{key[0]}:{key[1]}:{key[2]}"
+        if len(route_key) > 96:
+            raise ExactPublicationError("Sysmon exact candidate route key is oversized")
+        with self._exact_publication_condition:
+            if participant_key not in self._active_exact_publication_keys:
+                raise ExactPublicationError("Sysmon exact candidate lost its emitter fence")
+            participant = self._exact_candidate_participants.get(participant_key)
+            reservation = self._exact_candidate_reservations.get(key)
+            if (
+                participant is None
+                or participant.completed
+                or reservation is None
+                or reservation.digest != digest
+                or reservation.retained_bytes != retained_bytes
+                or not reservation.capacity_charged
+                or reservation.released
+            ):
+                raise ExactPublicationError(
+                    "Sysmon exact candidate has no authentic prepared reservation"
+                )
+            with self._sysmon_render_state_lock:
+                self._validate_exact_render_state_receipts_unlocked(participant)
+                participant.render_state_authenticated = True
+            with self._candidate_admission_lock:
+                high_water_rows = self._candidate_high_water_rows
+                high_water_bytes = self._candidate_high_water_bytes
+            with self._file_lock:
+                connection = self._spool_conn
+                if connection is None:
+                    connection = self._get_spool_conn_unlocked()
+                self._validate_spool_file_unlocked()
+                expected_row = (
+                    reservation.sequence,
+                    sort_key,
+                    "candidate",
+                    frozen,
+                    reservation.retained_bytes,
+                    None,
+                    _EXACT_CANDIDATE_MARKER,
+                    route_key,
+                    digest,
+                )
+                retained = connection.execute(
+                    """SELECT sequence, sort_key, phase, payload, payload_bytes, ordinal,
+                              route_kind, route_key, payload_digest
+                       FROM events WHERE sequence = ?""",
+                    (reservation.sequence,),
+                ).fetchone()
+                if retained == expected_row:
+                    if not reservation.admitted:
+                        participant.admitted_rows += 1
+                        reservation.admitted = True
+                    return
+                if retained is not None:
+                    raise ExactPublicationError("Sysmon exact candidate sequence is already owned")
+                if reservation.sequence != self._spool_sequence:
+                    raise ExactPublicationError(
+                        "Sysmon exact candidate sequence is not the current journal tail"
+                    )
+                state = connection.execute(
+                    "SELECT phase, candidate_rows, candidate_bytes "
+                    "FROM finalization_state WHERE singleton = ?",
+                    (1,),
+                ).fetchone()
+                if state is None or state[0] != "candidate":
+                    raise SourceFinalizationError(
+                        "Sysmon journal rejected an exact candidate commit"
+                    )
+                candidate_rows = int(state[1]) + 1
+                candidate_bytes = int(state[2]) + reservation.retained_bytes
+                try:
+                    connection.execute(
+                        """INSERT INTO events
+                        (sequence, sort_key, phase, payload, payload_bytes, ordinal,
+                         route_kind, route_key, payload_digest)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        expected_row,
+                    )
+                    connection.execute(
+                        """UPDATE finalization_state
+                        SET candidate_rows = ?, candidate_bytes = ?,
+                            high_water_rows = MAX(high_water_rows, ?),
+                            high_water_bytes = MAX(high_water_bytes, ?)
+                        WHERE singleton = ?""",
+                        (
+                            candidate_rows,
+                            candidate_bytes,
+                            high_water_rows,
+                            high_water_bytes,
+                            1,
+                        ),
+                    )
+                    self._commit_journal_unlocked()
+                except BaseException:
+                    reconciled_row = connection.execute(
+                        """SELECT sequence, sort_key, phase, payload, payload_bytes, ordinal,
+                                  route_kind, route_key, payload_digest
+                           FROM events WHERE sequence = ?""",
+                        (reservation.sequence,),
+                    ).fetchone()
+                    reconciled_state = connection.execute(
+                        "SELECT phase, candidate_rows, candidate_bytes "
+                        "FROM finalization_state WHERE singleton = ?",
+                        (1,),
+                    ).fetchone()
+                    committed = bool(
+                        not connection.in_transaction
+                        and reconciled_row == expected_row
+                        and reconciled_state == ("candidate", candidate_rows, candidate_bytes)
+                    )
+                    if not committed:
+                        connection.rollback()
+                        raise
+                self._spool_sequence = reservation.sequence + 1
+                self._spooled_count += 1
+                if not reservation.admitted:
+                    participant.admitted_rows += 1
+                    reservation.admitted = True
+
+    def _release_exact_candidate_row(self, key: ExactPublicationKey) -> None:
+        """Mark one durable candidate released without discarding its retry receipt."""
+
+        self._validate_exact_candidate_key(key)
+        participant_key = key[:2]
+        with self._exact_publication_condition:
+            participant = self._exact_candidate_participants.get(participant_key)
+            reservation = self._exact_candidate_reservations.get(key)
+            if participant is None or reservation is None:
+                raise ExactPublicationError(
+                    "Sysmon exact candidate release lost its retained reservation"
+                )
+            if reservation.released:
+                return
+            if not reservation.admitted:
+                raise ExactPublicationError(
+                    "Sysmon exact candidate release lost its committed reservation"
+                )
+            with self._file_lock:
+                connection = self._spool_conn
+                if connection is None:
+                    raise ExactPublicationError(
+                        "Sysmon exact candidate release lost its private journal"
+                    )
+                route_key = f"{key[0]}:{key[1]}:{key[2]}"
+                retained = connection.execute(
+                    """SELECT phase, payload, payload_bytes, route_kind, route_key,
+                              payload_digest
+                       FROM events WHERE sequence = ?""",
+                    (reservation.sequence,),
+                ).fetchone()
+                state = connection.execute(
+                    "SELECT phase, candidate_rows, candidate_bytes "
+                    "FROM finalization_state WHERE singleton = ?",
+                    (1,),
+                ).fetchone()
+                with self._candidate_admission_lock:
+                    expected_state = (
+                        "candidate",
+                        self._candidate_admitted_rows,
+                        self._candidate_admitted_bytes,
+                    )
+                if retained is None or len(retained) != 6 or type(retained[1]) is not str:
+                    raise ExactPublicationError(
+                        "Sysmon exact candidate release found malformed journal state"
+                    )
+                payload = retained[1]
+                encoded = payload.encode("utf-8")
+                expected_metadata = (
+                    "candidate",
+                    reservation.retained_bytes,
+                    _EXACT_CANDIDATE_MARKER,
+                    route_key,
+                    reservation.digest,
+                )
+                retained_metadata = (
+                    retained[0],
+                    retained[2],
+                    retained[3],
+                    retained[4],
+                    retained[5],
+                )
+                if (
+                    retained_metadata != expected_metadata
+                    or len(encoded) != reservation.retained_bytes
+                    or hashlib.sha256(encoded).hexdigest() != reservation.digest
+                    or state != expected_state
+                ):
+                    raise ExactPublicationError(
+                        "Sysmon exact candidate release found conflicting journal state"
+                    )
+            if not participant.render_state_finalized:
+                if not participant.render_state_authenticated:
+                    raise ExactPublicationError(
+                        "Sysmon exact candidate release lost renderer authentication"
+                    )
+                with self._sysmon_render_state_lock:
+                    self._finalize_exact_render_state_receipts_unlocked(participant)
+            self._mark_exact_participant_completed_unlocked(participant)
+            released_rows = participant.released_rows + 1
+            released_bytes = participant.released_bytes + reservation.retained_bytes
+            if (
+                released_rows > participant.reserved_rows
+                or released_bytes > participant.reserved_bytes
+            ):
+                raise ExactPublicationError("Sysmon exact candidate release accounting overflowed")
+            reservation.released = True
+            participant.released_rows = released_rows
+            participant.released_bytes = released_bytes
+            self._exact_candidate_released_rows += 1
+            self._exact_candidate_released_bytes += reservation.retained_bytes
+            if (
+                participant.completed
+                and participant.released_rows == participant.reserved_rows
+                and participant.released_bytes == participant.reserved_bytes
+            ):
+                self._active_exact_publication_keys.discard(participant_key)
+                self._exact_publication_condition.notify_all()
+
+    def _complete_exact_publication_batch(
+        self,
+        key: ExactPublicationParticipantKey,
+    ) -> None:
+        """Keep terminal source operations fenced until exact receipts release."""
+
+        with self._exact_publication_condition:
+            participant = self._exact_candidate_participants.get(key)
+            if participant is None:
+                raise ExactPublicationError("Sysmon exact completion lost its participant owner")
+            if participant.completed:
+                return
+            if participant.reserved_rows == 0:
+                with self._sysmon_render_state_lock:
+                    self._retire_exact_render_state_receipts_unlocked(participant)
+                    participant.render_state_finalized = True
+                self._mark_exact_participant_completed_unlocked(participant)
+                self._exact_candidate_participants.pop(key)
+                self._exact_candidate_current_participants -= 1
+                self._exact_candidate_completed_participants -= 1
+                self._active_exact_publication_keys.discard(key)
+                self._exact_publication_condition.notify_all()
+                return
+            self._mark_exact_participant_completed_unlocked(participant)
+            if (
+                participant.released_rows == participant.reserved_rows
+                and participant.released_bytes == participant.reserved_bytes
+            ):
+                self._active_exact_publication_keys.discard(key)
+                self._exact_publication_condition.notify_all()
+
+    def _abort_exact_publication_batch(
+        self,
+        key: ExactPublicationParticipantKey,
+    ) -> None:
+        """Release every uncommitted exact reservation after precanonical cancel."""
+
+        with self._exact_publication_condition:
+            participant = self._exact_candidate_participants.get(key)
+            if participant is None:
+                self._active_exact_publication_keys.discard(key)
+                self._exact_publication_condition.notify_all()
+                return
+            if participant.admitted_rows:
+                raise ExactPublicationError("Sysmon cannot abort an admitted exact candidate batch")
+            for candidate_key in participant.reservation_keys:
+                reservation = self._exact_candidate_reservations.get(candidate_key)
+                if (
+                    reservation is None
+                    or reservation.admitted
+                    or reservation.released
+                    or not reservation.capacity_charged
+                ):
+                    raise ExactPublicationError(
+                        "Sysmon exact candidate abort found conflicting ownership"
+                    )
+            with self._sysmon_render_state_lock:
+                self._validate_exact_render_state_receipts_unlocked(participant)
+            with self._candidate_admission_lock:
+                self._release_candidate_admissions_unlocked(
+                    participant.reserved_rows,
+                    participant.reserved_bytes,
+                )
+            with self._sysmon_render_state_lock:
+                self._restore_exact_render_state_receipts_unlocked(participant)
+            for candidate_key in participant.reservation_keys:
+                self._exact_candidate_reservations.pop(candidate_key)
+            self._exact_candidate_current_rows -= participant.reserved_rows
+            self._exact_candidate_current_bytes -= participant.reserved_bytes
+            self._exact_candidate_current_participants -= 1
+            self._exact_candidate_participants.pop(key)
+            self._active_exact_publication_keys.discard(key)
+            self._exact_publication_condition.notify_all()
 
     def _release_candidate_admission_unlocked(self, payload_bytes: int) -> None:
         """Undo a candidate reservation that never reached memory or the FIFO."""
 
         if payload_bytes == 0:
             return
-        if self._candidate_admitted_rows <= 0 or self._candidate_admitted_bytes < payload_bytes:
+        self._release_candidate_admissions_unlocked(1, payload_bytes)
+
+    def _release_candidate_admissions_unlocked(self, rows: int, payload_bytes: int) -> None:
+        """Undo bounded candidates that never reached durable journal admission."""
+
+        if type(rows) is not int or rows < 0 or type(payload_bytes) is not int or payload_bytes < 0:
+            raise SourceFinalizationError("Sysmon candidate release accounting is malformed")
+        if rows == 0 and payload_bytes == 0:
+            return
+        if (
+            rows <= 0
+            or self._candidate_admitted_rows < rows
+            or self._candidate_admitted_bytes < payload_bytes
+        ):
             raise SourceFinalizationError("Sysmon candidate admission accounting underflowed")
-        self._candidate_admitted_rows -= 1
+        self._candidate_admitted_rows -= rows
         self._candidate_admitted_bytes -= payload_bytes
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
@@ -3163,6 +4657,10 @@ class SysmonEventEmitter(LogEmitter):
     def _flush_unlocked(self) -> None:
         """Prepare, render, and write one ordinary legacy Sysmon cohort."""
 
+        if self._exact_candidate_abort_close_rendering:
+            raise ExactPublicationError(
+                "Sysmon exact abort publication cannot use legacy streaming render"
+            )
         if not self._event_dicts:
             return
 
@@ -3585,6 +5083,10 @@ class SysmonEventEmitter(LogEmitter):
                 )
                 if not legacy_close_owner:
                     self._require_accepting_events_locked()
+                    if self._exact_candidate_abort_close_rendering:
+                        raise SourceFinalizationError(
+                            "Sysmon abort close retry owner rejects an external barrier"
+                        )
             elif state != "quiescing":
                 raise SourceFinalizationError(
                     "Sysmon source-finalization rejected a terminal barrier"
@@ -3615,6 +5117,10 @@ class SysmonEventEmitter(LogEmitter):
         owner = get_ident()
         with self._close_condition:
             state = self._source_finalization_state
+            if self._exact_candidate_abort_close_rendering:
+                raise SourceFinalizationError(
+                    "Sysmon abort close retry owner rejects source quiescence"
+                )
             if state in {"quiesced", "sealed", "published", "closed"}:
                 return
             if state == "open":
@@ -3684,6 +5190,113 @@ class SysmonEventEmitter(LogEmitter):
 
         if self._spool_conn is not None:
             self._spool_conn.rollback()
+
+    def _validate_exact_candidate_receipts_before_seal_unlocked(self) -> None:
+        """Authenticate every retained exact candidate before final metadata replaces it."""
+
+        connection = self._spool_conn
+        if connection is None:
+            raise SourceFinalizationError("Sysmon source journal is not open")
+        if self._active_exact_publication_keys:
+            raise ExactPublicationError("Sysmon exact candidate seal found an active publication")
+        if (
+            self._exact_candidate_current_rows != self._exact_candidate_released_rows
+            or self._exact_candidate_current_bytes != self._exact_candidate_released_bytes
+            or self._exact_candidate_current_participants
+            != self._exact_candidate_completed_participants
+            or len(self._exact_candidate_reservations) != self._exact_candidate_current_rows
+            or len(self._exact_candidate_participants) != self._exact_candidate_current_participants
+        ):
+            raise ExactPublicationError(
+                "Sysmon exact candidate seal found incomplete receipt ownership"
+            )
+
+        matched_rows = 0
+        cursor = connection.execute(
+            """SELECT sequence, sort_key, phase, payload, payload_bytes, ordinal,
+                      route_kind, route_key, payload_digest
+               FROM events WHERE route_kind = ? ORDER BY sequence""",
+            (_EXACT_CANDIDATE_MARKER,),
+        )
+        for row in cursor:
+            if (
+                len(row) != 9
+                or type(row[0]) is not int
+                or type(row[1]) is not str
+                or row[2] != "candidate"
+                or type(row[3]) is not str
+                or type(row[4]) is not int
+                or row[4] <= 0
+                or row[5] is not None
+                or row[6] != _EXACT_CANDIDATE_MARKER
+                or type(row[7]) is not str
+                or len(row[7]) > 96
+                or type(row[8]) is not str
+            ):
+                raise ExactPublicationError(
+                    "Sysmon exact candidate seal found malformed journal metadata"
+                )
+            (
+                sequence,
+                sort_key,
+                _phase,
+                payload,
+                payload_bytes,
+                _ordinal,
+                _marker,
+                route_key,
+                digest,
+            ) = row
+            route_parts = route_key.split(":")
+            if len(route_parts) != 3:
+                raise ExactPublicationError(
+                    "Sysmon exact candidate seal found a noncanonical journal key"
+                )
+            try:
+                key = (route_parts[0], int(route_parts[1]), int(route_parts[2]))
+            except ValueError:
+                raise ExactPublicationError(
+                    "Sysmon exact candidate seal found a noncanonical journal key"
+                ) from None
+            self._validate_exact_candidate_key(key)
+            if route_key != f"{key[0]}:{key[1]}:{key[2]}":
+                raise ExactPublicationError(
+                    "Sysmon exact candidate seal found a noncanonical journal key"
+                )
+            reservation = self._exact_candidate_reservations.get(key)
+            if (
+                reservation is None
+                or not reservation.capacity_charged
+                or not reservation.admitted
+                or not reservation.released
+                or reservation.sequence != sequence
+                or reservation.retained_bytes != payload_bytes
+                or reservation.digest != digest
+            ):
+                raise ExactPublicationError(
+                    "Sysmon exact candidate seal found foreign or conflicting ownership"
+                )
+            encoded = payload.encode("utf-8")
+            try:
+                expected_sort_key = self._event_sort_key(_sysmon_spool_decode(payload))
+            except (RecursionError, TypeError, ValueError):
+                raise ExactPublicationError(
+                    "Sysmon exact candidate seal found a malformed payload"
+                ) from None
+            if (
+                len(encoded) != reservation.retained_bytes
+                or hashlib.sha256(encoded).hexdigest() != reservation.digest
+                or sort_key != expected_sort_key
+            ):
+                raise ExactPublicationError(
+                    "Sysmon exact candidate seal found a changed payload or sort key"
+                )
+            matched_rows += 1
+
+        if matched_rows != self._exact_candidate_current_rows:
+            raise ExactPublicationError(
+                "Sysmon exact candidate seal found a missing or extra journal receipt"
+            )
 
     def _route_id_unlocked(
         self,
@@ -3845,6 +5458,7 @@ class SysmonEventEmitter(LogEmitter):
             sealed = False
             connection.execute("BEGIN IMMEDIATE")
             try:
+                self._validate_exact_candidate_receipts_before_seal_unlocked()
                 self._event_dicts = events
                 self._adopt_render_state(working_state)
                 all_finalized = self._apply_compatibility_causal_shifts_unlocked()
@@ -4018,6 +5632,41 @@ class SysmonEventEmitter(LogEmitter):
             )
         return writer
 
+    def _read_final_row_unlocked(self, ordinal: int) -> ExactSourceRow:
+        """Load and authenticate one immutable final row by exact ordinal."""
+
+        if type(ordinal) is not int or ordinal < 0:
+            raise SourceFinalizationError(
+                "Sysmon immutable final row ordinal must be a nonnegative exact int"
+            )
+        connection = self._spool_conn
+        if connection is None:
+            raise SourceFinalizationError("Sysmon source journal is not open")
+        row = connection.execute(
+            """SELECT route_kind, route_key, payload, payload_bytes, payload_digest
+               FROM events WHERE phase = ? AND ordinal = ?""",
+            ("final", ordinal),
+        ).fetchone()
+        if row is None:
+            raise SourceFinalizationError("Sysmon immutable final row is missing")
+        route_kind, route_key, rendered, payload_bytes, payload_digest = row
+        if (
+            type(route_kind) is not str
+            or type(route_key) is not str
+            or type(rendered) is not str
+            or type(payload_bytes) is not int
+            or payload_bytes < 0
+            or type(payload_digest) is not str
+        ):
+            raise SourceFinalizationError("Sysmon immutable final row has invalid types")
+        encoded = rendered.encode("utf-8")
+        if len(encoded) != payload_bytes or hashlib.sha256(encoded).hexdigest() != payload_digest:
+            raise SourceFinalizationError("Sysmon immutable final row failed validation")
+        return ExactSourceRow(
+            writer=self._resolve_sealed_writer_unlocked(route_kind, route_key),
+            content=rendered,
+        )
+
     def _read_final_chunk_unlocked(
         self,
         cursor: int,
@@ -4027,32 +5676,15 @@ class SysmonEventEmitter(LogEmitter):
 
         if cursor >= final_rows:
             return None
-        connection = self._spool_conn
-        if connection is None:
-            raise SourceFinalizationError("Sysmon source journal is not open")
         rows: list[ExactSourceRow] = []
         retained_bytes = 0
         route_ids: set[int] = set()
         while len(rows) < _FINALIZATION_CHUNK_ROWS and cursor + len(rows) < final_rows:
             ordinal = cursor + len(rows)
-            row = connection.execute(
-                """SELECT route_kind, route_key, payload, payload_bytes, payload_digest
-                   FROM events WHERE phase = ? AND ordinal = ?""",
-                ("final", ordinal),
-            ).fetchone()
-            if row is None:
-                raise SourceFinalizationError("Sysmon immutable final row is missing")
-            route_kind, route_key, rendered, payload_bytes, payload_digest = row
-            if not all(isinstance(value, str) for value in (route_kind, route_key, rendered)):
-                raise SourceFinalizationError("Sysmon immutable final row has invalid types")
-            encoded = rendered.encode("utf-8")
-            if len(encoded) != int(payload_bytes) or hashlib.sha256(encoded).hexdigest() != str(
-                payload_digest
-            ):
-                raise SourceFinalizationError("Sysmon immutable final row failed validation")
-            writer = self._resolve_sealed_writer_unlocked(route_kind, route_key)
+            row = self._read_final_row_unlocked(ordinal)
+            encoded = row.content.encode("utf-8")
             next_bytes = retained_bytes + len(encoded)
-            next_route_ids = route_ids | {id(writer)}
+            next_route_ids = route_ids | {id(row.writer)}
             if rows and (
                 next_bytes > _FINALIZATION_CHUNK_BYTES
                 or len(next_route_ids) > _FINALIZATION_CHUNK_ROUTES
@@ -4064,7 +5696,7 @@ class SysmonEventEmitter(LogEmitter):
                 )
             retained_bytes = next_bytes
             route_ids = next_route_ids
-            rows.append(ExactSourceRow(writer=writer, content=rendered))
+            rows.append(row)
         if not rows:
             raise SourceFinalizationError("Sysmon source chunk could not make bounded progress")
         return _SysmonFinalChunk(
@@ -4187,6 +5819,22 @@ class SysmonEventEmitter(LogEmitter):
                 ),
             )
 
+    def exact_candidate_census(self) -> SysmonExactCandidateCensus:
+        """Return constant-time same-process exact candidate ownership counts."""
+
+        with self._exact_publication_condition:
+            return SysmonExactCandidateCensus(
+                current_rows=self._exact_candidate_current_rows,
+                current_bytes=self._exact_candidate_current_bytes,
+                current_participants=self._exact_candidate_current_participants,
+                released_rows=self._exact_candidate_released_rows,
+                released_bytes=self._exact_candidate_released_bytes,
+                completed_participants=self._exact_candidate_completed_participants,
+                high_water_rows=self._exact_candidate_high_water_rows,
+                high_water_bytes=self._exact_candidate_high_water_bytes,
+                high_water_participants=self._exact_candidate_high_water_participants,
+            )
+
     def source_finalization_census(self) -> SysmonSourceFinalizationCensus:
         """Return bounded journal counts for diagnostics and tests."""
 
@@ -4232,7 +5880,28 @@ class SysmonEventEmitter(LogEmitter):
     def flush(self, force: bool = False) -> None:
         """Spill exact candidates or preserve ordinary legacy rendering."""
 
-        source_state, _ = self._source_lifecycle_snapshot()
+        current = get_ident()
+        with self._close_condition:
+            source_state = self._source_finalization_state
+            retained_exact_candidates = bool(
+                self._active_exact_publication_keys
+                or self._exact_candidate_current_rows
+                or self._exact_candidate_current_bytes
+                or self._exact_candidate_current_participants
+                or self._exact_candidate_released_rows
+                or self._exact_candidate_released_bytes
+                or self._exact_candidate_completed_participants
+                or self._exact_candidate_reservations
+                or self._exact_candidate_participants
+            )
+            if self._exact_candidate_abort_close_rendering and self._close_thread != current:
+                raise SourceFinalizationError(
+                    "Sysmon abort close retry owner rejects an external flush"
+                )
+            if self._source_finalization_bound and force and retained_exact_candidates:
+                raise SourceFinalizationError(
+                    "Sysmon released exact candidates require authenticated abort close"
+                )
         if self._source_finalization_bound and source_state != "open":
             raise SourceFinalizationError(
                 "Sysmon source-finalization rejected legacy flush after quiescence"
@@ -4262,6 +5931,275 @@ class SysmonEventEmitter(LogEmitter):
             return
         self._close_sysmon_emitter()
 
+    def _finish_exact_candidate_terminal_cleanup(self) -> None:
+        """Drop bounded released receipts only after terminal source ownership ends."""
+
+        with self._exact_publication_condition:
+            if self._active_exact_publication_keys:
+                raise ExactPublicationError(
+                    "Sysmon terminal cleanup found an active exact candidate batch"
+                )
+            if (
+                self._exact_candidate_current_participants
+                != self._exact_candidate_completed_participants
+            ):
+                raise ExactPublicationError(
+                    "Sysmon terminal cleanup found an incomplete exact participant"
+                )
+            if (
+                self._exact_candidate_current_rows != self._exact_candidate_released_rows
+                or self._exact_candidate_current_bytes != self._exact_candidate_released_bytes
+            ):
+                raise ExactPublicationError(
+                    "Sysmon terminal cleanup found an unreleased exact candidate"
+                )
+            if (
+                len(self._exact_candidate_reservations) != self._exact_candidate_current_rows
+                or len(self._exact_candidate_participants)
+                != self._exact_candidate_current_participants
+            ):
+                raise ExactPublicationError(
+                    "Sysmon terminal cleanup found inconsistent exact candidate ownership"
+                )
+            if (
+                self._exact_candidate_abort_pending_row is not None
+                or self._exact_candidate_abort_registered_writers
+            ):
+                raise ExactPublicationError(
+                    "Sysmon terminal cleanup found incomplete exact abort publication"
+                )
+            self._exact_candidate_reservations.clear()
+            self._exact_candidate_participants.clear()
+            self._exact_candidate_current_rows = 0
+            self._exact_candidate_current_bytes = 0
+            self._exact_candidate_current_participants = 0
+            self._exact_candidate_released_rows = 0
+            self._exact_candidate_released_bytes = 0
+            self._exact_candidate_completed_participants = 0
+            self._exact_candidate_abort_participant_key = None
+
+    def _validate_exact_candidate_receipts_before_abort_close(self) -> bool:
+        """Authenticate released exact candidates before abort may clear or render them."""
+
+        with self._exact_publication_condition:
+            retained = bool(
+                self._exact_candidate_current_rows
+                or self._exact_candidate_current_bytes
+                or self._exact_candidate_current_participants
+                or self._exact_candidate_released_rows
+                or self._exact_candidate_released_bytes
+                or self._exact_candidate_completed_participants
+                or self._exact_candidate_reservations
+                or self._exact_candidate_participants
+            )
+            if not retained:
+                return False
+            with self._file_lock:
+                self._validate_exact_candidate_receipts_before_seal_unlocked()
+            return True
+
+    def _exact_candidate_abort_participant(self) -> ExactPublicationParticipantKey:
+        """Retain one authenticated candidate participant for exact abort publication."""
+
+        with self._exact_publication_condition:
+            retained = self._exact_candidate_abort_participant_key
+            if retained is not None:
+                if retained not in self._exact_candidate_participants:
+                    raise ExactPublicationError(
+                        "Sysmon exact abort publication lost its candidate participant"
+                    )
+                return retained
+            if not self._exact_candidate_participants:
+                raise ExactPublicationError(
+                    "Sysmon exact abort publication requires a retained participant"
+                )
+            retained = min(self._exact_candidate_participants)
+            self._validate_exact_candidate_participant_key(retained)
+            self._exact_candidate_abort_participant_key = retained
+            return retained
+
+    def _register_exact_candidate_abort_writer(
+        self,
+        writer: _SingleHostWriter,
+        participant_key: ExactPublicationParticipantKey,
+    ) -> None:
+        """Fence one final writer under the retained abort participant."""
+
+        writer_id = id(writer)
+        retained = self._exact_candidate_abort_registered_writers.get(writer_id)
+        if retained is not None:
+            if retained is not writer:
+                raise ExactPublicationError(
+                    "Sysmon exact abort publication changed a retained final writer"
+                )
+            return
+        writer._register_exact_publication_batch(participant_key)
+        self._exact_candidate_abort_registered_writers[writer_id] = writer
+
+    def _mark_exact_candidate_abort_published_unlocked(self) -> None:
+        """Durably mark a fully checkpointed abort cohort published."""
+
+        connection = self._spool_conn
+        if connection is None:
+            raise SourceFinalizationError("Sysmon source journal is not open")
+        connection.execute(
+            """UPDATE finalization_state SET phase = ?
+               WHERE singleton = ? AND phase = ? AND published_rows = final_rows""",
+            ("published", 1, "sealed"),
+        )
+        try:
+            self._commit_journal_unlocked()
+        except BaseException:
+            if connection.in_transaction or str(self._journal_state_unlocked()[0]) != "published":
+                self._rollback_journal_unlocked()
+                raise
+        if str(self._journal_state_unlocked()[0]) != "published":
+            raise SourceFinalizationError("Sysmon exact abort publication state was not durable")
+
+    def _resume_exact_candidate_abort_rows(self) -> None:
+        """Publish sealed abort rows one at a time through exact final-writer receipts."""
+
+        participant_key = self._exact_candidate_abort_participant()
+        while True:
+            pending = self._exact_candidate_abort_pending_row
+            release_pending = False
+            publication_complete = False
+            rendered = ""
+            with self._file_lock:
+                state = self._journal_state_unlocked()
+                phase = str(state[0])
+                final_rows = int(state[3])
+                cursor = int(state[6])
+                if cursor < 0 or cursor > final_rows:
+                    raise SourceFinalizationError(
+                        "Sysmon exact abort publication cursor is out of range"
+                    )
+                if pending is not None and cursor == pending.ordinal + 1:
+                    release_pending = True
+                elif pending is not None and cursor != pending.ordinal:
+                    raise ExactPublicationError(
+                        "Sysmon exact abort publication lost its pending row cursor"
+                    )
+                elif phase == "published":
+                    if cursor != final_rows:
+                        raise SourceFinalizationError(
+                            "Sysmon published abort cohort retained an incomplete cursor"
+                        )
+                    publication_complete = True
+                elif phase != "sealed":
+                    raise SourceFinalizationError(
+                        "Sysmon exact abort publication requires a sealed journal"
+                    )
+                elif cursor == final_rows:
+                    self._mark_exact_candidate_abort_published_unlocked()
+                    publication_complete = True
+                else:
+                    row = self._read_final_row_unlocked(cursor)
+                    rendered = row.content
+                    digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+                    key = (participant_key[0], participant_key[1], cursor)
+                    if pending is None:
+                        pending = _SysmonAbortExactPendingRow(
+                            ordinal=cursor,
+                            key=key,
+                            writer=row.writer,
+                            digest=digest,
+                        )
+                        self._exact_candidate_abort_pending_row = pending
+                    elif (
+                        pending.key != key
+                        or pending.writer is not row.writer
+                        or pending.digest != digest
+                    ):
+                        raise ExactPublicationError(
+                            "Sysmon exact abort publication changed its pending final row"
+                        )
+
+            if release_pending:
+                if pending is None:
+                    raise ExactPublicationError(
+                        "Sysmon exact abort publication lost its release owner"
+                    )
+                pending.writer._release_exact_row(pending.key)
+                self._exact_candidate_abort_pending_row = None
+                continue
+            if publication_complete:
+                break
+            if pending is None:
+                raise ExactPublicationError("Sysmon exact abort publication lost its pending row")
+            self._register_exact_candidate_abort_writer(pending.writer, participant_key)
+            pending.writer._commit_exact_row(pending.key, pending.digest, rendered)
+            self._checkpoint_source_chunk(pending.ordinal, pending.ordinal + 1)
+
+        for writer in tuple(self._exact_candidate_abort_registered_writers.values()):
+            writer._complete_exact_publication_batch(participant_key)
+        self._exact_candidate_abort_registered_writers.clear()
+
+    def _resume_exact_candidate_abort_render(self) -> None:
+        """Seal, exactly publish, and clean one authenticated abort cohort."""
+
+        with self._close_condition:
+            output_target = self._source_finalization_output_target
+            header = self._source_finalization_header
+            footer = self._source_finalization_footer
+            if output_target is None and header is None and footer is None:
+                self._source_finalization_output_target = self.output_target
+                self._source_finalization_header = self.format_def.output.header_template or ""
+                self._source_finalization_footer = self.format_def.output.footer_template or ""
+            elif (
+                output_target != self.output_target
+                or header != (self.format_def.output.header_template or "")
+                or footer != (self.format_def.output.footer_template or "")
+            ):
+                raise ExactPublicationError(
+                    "Sysmon exact abort publication changed its frozen output contract"
+                )
+        self._set_source_lifecycle_state("quiesced")
+        try:
+            with self._file_lock:
+                self._spool_event_dicts_unlocked()
+            self._seal_source_finalization()
+            self._resume_exact_candidate_abort_rows()
+        finally:
+            self._set_source_lifecycle_state("open")
+        self._exact_candidate_abort_close_rows_rendered = True
+        with self._file_lock:
+            self._cleanup_spool_unlocked()
+
+    def _prepare_exact_candidate_abort_close_render(self) -> bool:
+        """Resume authenticated abort rendering and report whether rows already rendered."""
+
+        if self._exact_candidate_abort_close_render_complete:
+            if (
+                not self._exact_candidate_abort_close_rendering
+                or not self._exact_candidate_abort_close_rows_rendered
+            ):
+                raise ExactPublicationError(
+                    "Sysmon abort close lost its exact render-completion owner"
+                )
+            return True
+        if self._exact_candidate_abort_close_rows_rendered:
+            if not self._exact_candidate_abort_close_rendering:
+                raise ExactPublicationError(
+                    "Sysmon abort close retained rows without an exact render owner"
+                )
+            with self._file_lock:
+                self._cleanup_spool_unlocked()
+            if not self._exact_candidate_abort_close_render_complete:
+                raise ExactPublicationError(
+                    "Sysmon abort close did not retain journal-cleanup completion"
+                )
+            return True
+        if self._exact_candidate_abort_close_rendering:
+            self._resume_exact_candidate_abort_render()
+            return True
+        retained = self._validate_exact_candidate_receipts_before_abort_close()
+        if not retained:
+            return False
+        self._exact_candidate_abort_close_rendering = True
+        self._resume_exact_candidate_abort_render()
+        return True
+
     def _close_sysmon_emitter(self) -> None:
         """Run exact or legacy close while the required source owner is held."""
 
@@ -4279,6 +6217,7 @@ class SysmonEventEmitter(LogEmitter):
             output_target = self._source_finalization_output_target
             if footer is None or output_target is None:
                 raise SourceFinalizationError("Sysmon source close lost its frozen contract")
+            self._finish_exact_candidate_terminal_cleanup()
             for writer in self._host_writers.values():
                 if footer and writer.event_count > 0 and output_target != OutputTarget.SPLUNK:
                     writer.write_footer(footer)
@@ -4299,27 +6238,40 @@ class SysmonEventEmitter(LogEmitter):
         try:
             if self.threaded:
                 self.stop_thread()
+            skip_render = False
             if self._source_finalization_bound:
+                skip_render = self._prepare_exact_candidate_abort_close_render()
+            if not skip_render and self._source_finalization_bound:
                 with self._file_lock:
                     self._spool_event_dicts_unlocked()
                     self._cleanup_spool_unlocked()
-            else:
+            elif not skip_render:
                 self.flush(force=True)
-                footer = self.format_def.output.footer_template or ""
-                for writer in self._host_writers.values():
+            if (
+                self._exact_candidate_abort_close_rendering
+                and not self._exact_candidate_abort_close_render_complete
+            ):
+                raise ExactPublicationError(
+                    "Sysmon abort close did not complete its authenticated exact render"
+                )
+            footer = self.format_def.output.footer_template or ""
+            for writer in self._host_writers.values():
+                if footer and writer.event_count > 0 and self.output_target != OutputTarget.SPLUNK:
+                    writer.write_footer(footer)
+                else:
                     writer.flush()
-                    if (
-                        footer
-                        and writer.event_count > 0
-                        and self.output_target != OutputTarget.SPLUNK
-                    ):
-                        writer.write_footer(footer)
-                for writer in self._snare_writers.values():
-                    writer.flush()
+            for writer in self._snare_writers.values():
+                writer.flush()
+            self._source_finalization_routes.clear()
+            self._source_finalization_route_ids.clear()
+            self._finish_exact_candidate_terminal_cleanup()
         except BaseException:
             self._fail_close()
             raise
         if self._source_finalization_bound:
+            self._exact_candidate_abort_close_rendering = False
+            self._exact_candidate_abort_close_rows_rendered = False
+            self._exact_candidate_abort_close_render_complete = False
             self._set_source_lifecycle_state("aborted")
         self._finish_close()
 
