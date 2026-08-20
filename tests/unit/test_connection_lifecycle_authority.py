@@ -444,9 +444,18 @@ def test_connection_composite_commits_in_lifecycle_state_application_order(
         manager: StateManager,
         committed_plan: ConnectionCompositeMaterializationPlan,
         committed_rng: random.Random,
+        *,
+        smb_connection_pin: object | None,
+        smb_file_mutation_terminalization: object | None,
     ) -> ConnectionCompositeMaterializationResult:
         order.append("state")
-        return original_state(manager, committed_plan, committed_rng)
+        return original_state(
+            manager,
+            committed_plan,
+            committed_rng,
+            smb_connection_pin=smb_connection_pin,
+            smb_file_mutation_terminalization=smb_file_mutation_terminalization,
+        )
 
     def _http_commit(
         manager: HttpApplicationChannelManager,
@@ -1229,9 +1238,18 @@ def test_prepared_network_commits_full_authority_chain_in_exact_order(
         manager: StateManager,
         plan: ConnectionCompositeMaterializationPlan,
         rng: random.Random,
+        *,
+        smb_connection_pin: object | None,
+        smb_file_mutation_terminalization: object | None,
     ) -> ConnectionCompositeMaterializationResult:
         order.append("state")
-        return original_state(manager, plan, rng)
+        return original_state(
+            manager,
+            plan,
+            rng,
+            smb_connection_pin=smb_connection_pin,
+            smb_file_mutation_terminalization=smb_file_mutation_terminalization,
+        )
 
     def _http_commit(
         manager: HttpApplicationChannelManager,
@@ -1329,14 +1347,14 @@ def test_prepared_network_commits_full_authority_chain_in_exact_order(
     assert timing.authenticates_preparation_receipt(result.timing)
     assert result.connection.state.connection is not None
     committed_version = state.materialization_version
-    with pytest.raises(StateError, match="failed runtime authentication"):
-        authority.materialize_prepared_network_transaction(
-            root,
-            owner_rng,
-            source_timing_preparation=timing_preparation,
-            lifecycle_token=lifecycle_token,
-            application_token=application_token,
-        )
+    replay = authority.materialize_prepared_network_transaction(
+        root,
+        owner_rng,
+        source_timing_preparation=timing_preparation,
+        lifecycle_token=lifecycle_token,
+        application_token=application_token,
+    )
+    assert replay is result
     assert state.materialization_version == committed_version
 
 

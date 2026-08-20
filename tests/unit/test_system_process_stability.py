@@ -1535,6 +1535,13 @@ class TestSystemProcessProtection:
         engine, authority, registry, _shadow, systems = self._strict_fleet_engine(state_manager)
         before_state = state_manager.materialization_digest()
         before_registry = registry.census()
+        original_begin_materialization_batch = StateManager.begin_materialization_batch
+        retry_planning_calls = 0
+
+        def track_retry_planning(manager: StateManager) -> MaterializationBatchBuilder:
+            nonlocal retry_planning_calls
+            retry_planning_calls += 1
+            return original_begin_materialization_batch(manager)
 
         if seam == "state":
             original = PreparedMaterializationBatch.apply_provisional
@@ -1599,14 +1606,15 @@ class TestSystemProcessProtection:
             )
             if committed_lost_return
             else patch.object(
-                state_manager,
+                StateManager,
                 "begin_materialization_batch",
-                wraps=state_manager.begin_materialization_batch,
+                new=track_retry_planning,
             )
         )
         with retry_context:
             engine._seed_system_process_trees()
 
+        assert retry_planning_calls == (0 if committed_lost_return else 1)
         assert state_manager.materialization_version == 1
         assert registry.stats().live_processes == len(state_manager.list_running_processes())
         assert all(state_manager.get_boot_time(system.hostname) is not None for system in systems)
@@ -2406,6 +2414,9 @@ class TestSystemProcessProtection:
         # Also seed some user processes that SHOULD be terminable
         test_user = User(username="alice", full_name="Alice", email="a@t.com", enabled=True)
         engine.scenario.environment.users = [test_user]
+        parent = state_manager.get_process("WKS-01", pids["explorer"])
+        assert parent is not None
+        state_manager.set_current_time(parent.start_time)
         state_manager.create_session(
             username="alice", system="WKS-01", logon_type=2, source_ip="10.0.10.1"
         )
@@ -2585,6 +2596,9 @@ class TestSystemProcessProtection:
 
         test_user = User(username="alice", full_name="Alice", email="a@t.com", enabled=True)
         engine.scenario.environment.users = [test_user]
+        parent = state_manager.get_process("WKS-01", pids["explorer"])
+        assert parent is not None
+        state_manager.set_current_time(parent.start_time)
         state_manager.create_session(
             username="alice", system="WKS-01", logon_type=2, source_ip="10.0.10.1"
         )
