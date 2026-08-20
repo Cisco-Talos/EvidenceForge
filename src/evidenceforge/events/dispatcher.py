@@ -34,6 +34,7 @@ import hmac
 import json
 import logging
 import secrets
+import sys
 from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
@@ -126,6 +127,13 @@ if TYPE_CHECKING:
         LifecycleShadowViolationSummary,
     )
     from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+    from evidenceforge.generation.persistent_smb_projection import (
+        PersistentSmbProjectionGroupCensus,
+        PersistentSmbProjectionGroupToken,
+        PersistentSmbProjectionMemberRecovery,
+        PersistentSmbProjectionMemberToken,
+        PersistentSmbProjectionPhase,
+    )
     from evidenceforge.generation.source_timing import (
         SourceTimingPlan,
         SourceTimingPlanner,
@@ -1166,6 +1174,18 @@ def _is_successful_remote_interactive_transport(event: CanonicalOccurrence) -> b
     return True
 
 
+@dataclass(frozen=True, slots=True)
+class _PersistentSmbTopologyPreparation:
+    """Detached weak target-generation snapshot awaiting a group reservation."""
+
+    configuration_digest: str
+    base_registry: dict[int, tuple[ReferenceType[object], str]]
+    target_generations: dict[int, tuple[ReferenceType[object], str]]
+    next_target_generation: int
+    target_generation_semantic_bytes: int
+    target_generation_table_backing_bytes: int
+
+
 class EventDispatcher:
     """Routes sealed canonical occurrences to state and matching emitters."""
 
@@ -1190,6 +1210,10 @@ class EventDispatcher:
         action_cohort_member_capacity: int = _DEFAULT_ACTION_COHORT_MEMBER_CAPACITY,
         action_cohort_byte_capacity: int = _DEFAULT_ACTION_COHORT_BYTE_CAPACITY,
         action_cohort_receipt_capacity: int = _DEFAULT_ACTION_COHORT_RECEIPT_CAPACITY,
+        persistent_smb_group_capacity: int = 1_024,
+        persistent_smb_member_capacity: int = 65_536,
+        persistent_smb_receipt_capacity: int = 65_536,
+        persistent_smb_byte_capacity: int = 64 * 1024 * 1024,
     ) -> None:
         if enforce_lifecycle_authority and lifecycle_shadow is None:
             raise ValueError(
@@ -1203,6 +1227,16 @@ class EventDispatcher:
         ):
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} must be a positive exact int")
+        for name, value in (
+            ("persistent_smb_group_capacity", persistent_smb_group_capacity),
+            ("persistent_smb_member_capacity", persistent_smb_member_capacity),
+            ("persistent_smb_receipt_capacity", persistent_smb_receipt_capacity),
+            ("persistent_smb_byte_capacity", persistent_smb_byte_capacity),
+        ):
+            if type(value) is not int:
+                raise ValueError(f"{name} must be a positive exact int")
+            if value <= 0 or value > (1 << 63) - 1:
+                raise ValueError(f"{name} must fit the positive signed 63-bit range")
         self.state_manager = state_manager
         self.emitters = emitters
         self.visibility_engine = visibility_engine
@@ -1336,8 +1370,522 @@ class EventDispatcher:
             timing_runtime=self.timing_runtime,
         )
         from evidenceforge.generation.identity_lifecycle import IdentityLifecyclePlanner
+        from evidenceforge.generation.persistent_smb_projection import (
+            PersistentSmbProjectionGroupAuthority,
+        )
 
         self.identity_lifecycle_planner = IdentityLifecyclePlanner(state_manager)
+        self._persistent_smb_projection_authority = PersistentSmbProjectionGroupAuthority(
+            group_capacity=persistent_smb_group_capacity,
+            member_capacity=persistent_smb_member_capacity,
+            receipt_capacity=persistent_smb_receipt_capacity,
+            byte_capacity=persistent_smb_byte_capacity,
+        )
+        self._persistent_smb_group_lock = Lock()
+        self._persistent_smb_topology_lock = Lock()
+        self._persistent_smb_target_generations: dict[
+            int,
+            tuple[ReferenceType[object], str],
+        ] = {}
+        self._persistent_smb_next_target_generation = 1
+        self._persistent_smb_target_generation_capacity = 16_385
+        self._persistent_smb_target_generation_semantic_bytes = 0
+        self._persistent_smb_target_generation_table_backing_bytes = sys.getsizeof(
+            self._persistent_smb_target_generations
+        )
+        self._persistent_smb_high_water_target_generations = 0
+        self._persistent_smb_high_water_target_generation_table_backing_bytes = (
+            self._persistent_smb_target_generation_table_backing_bytes
+        )
+
+    @staticmethod
+    def _persistent_smb_sha256_digest(value: object, field_name: str) -> str:
+        """Validate one exact lowercase SHA-256 digest."""
+
+        if type(value) is not str or len(value) != 64:
+            raise EventContractError(f"{field_name} must be one exact SHA-256 digest")
+        try:
+            encoded = value.encode("ascii")
+        except UnicodeEncodeError as error:
+            raise EventContractError(f"{field_name} must be one exact SHA-256 digest") from error
+        if any(byte not in b"0123456789abcdef" for byte in encoded):
+            raise EventContractError(f"{field_name} must be one exact SHA-256 digest")
+        return value
+
+    @staticmethod
+    def _persistent_smb_bounded_utf8(
+        value: object,
+        field_name: str,
+        *,
+        maximum: int = 4_096,
+    ) -> bytes:
+        """Return bounded exact UTF-8 bytes without coercion callbacks."""
+
+        if type(value) is not str or not value:
+            raise EventContractError(f"{field_name} must be one non-empty exact string")
+        if len(value) > maximum:
+            raise EventContractError(f"{field_name} exceeds {maximum} UTF-8 bytes")
+        try:
+            encoded = value.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise EventContractError(f"{field_name} must contain valid UTF-8 text") from error
+        if len(encoded) > maximum:
+            raise EventContractError(f"{field_name} exceeds {maximum} UTF-8 bytes")
+        return encoded
+
+    @staticmethod
+    def _persistent_smb_target_generation_is_valid(generation: object) -> bool:
+        """Validate a target-generation scalar without conversion callbacks."""
+
+        if type(generation) is not str or len(generation) != 64:
+            return False
+        try:
+            encoded = generation.encode("ascii")
+        except UnicodeEncodeError:
+            return False
+        return not any(byte not in b"0123456789abcdef" for byte in encoded)
+
+    @staticmethod
+    def _persistent_smb_target_type_identity(
+        target: object,
+        field_prefix: str,
+    ) -> tuple[bytes, bytes]:
+        """Read one target's class-owned identity without metaclass dispatch."""
+
+        target_type = type(target)
+        module_descriptor = type.__dict__["__module__"]
+        qualified_name_descriptor = type.__dict__["__qualname__"]
+        module_name = module_descriptor.__get__(target_type, type(target_type))
+        qualified_name = qualified_name_descriptor.__get__(target_type, type(target_type))
+        return (
+            EventDispatcher._persistent_smb_bounded_utf8(
+                module_name,
+                f"{field_prefix} module name",
+            ),
+            EventDispatcher._persistent_smb_bounded_utf8(
+                qualified_name,
+                f"{field_prefix} qualified name",
+            ),
+        )
+
+    def _persistent_smb_target_generation(self, counter: int) -> str:
+        """Prepare one monotonic, nonce-bound target-generation digest."""
+
+        if type(counter) is not int or counter < 1 or counter > (1 << 63) - 1:
+            raise EventContractError("Persistent SMB target generation capacity is exhausted")
+        nonce = secrets.token_hex(16)
+        if type(nonce) is not str or len(nonce) != 32:
+            raise EventContractError("Persistent SMB target generation returned a malformed scalar")
+        try:
+            nonce_bytes = nonce.encode("ascii")
+        except UnicodeEncodeError as error:
+            raise EventContractError(
+                "Persistent SMB target generation returned a malformed scalar"
+            ) from error
+        if any(byte not in b"0123456789abcdef" for byte in nonce_bytes):
+            raise EventContractError("Persistent SMB target generation returned a malformed scalar")
+        values = (
+            b"persistent-smb-target-generation-v1",
+            self._persistent_smb_projection_authority.dispatcher_id.encode("ascii"),
+            counter.to_bytes(8, "big"),
+            nonce_bytes,
+        )
+        framed = b"".join(len(value).to_bytes(8, "big") + value for value in values)
+        return hashlib.sha256(framed).hexdigest()
+
+    @staticmethod
+    def _persistent_smb_target_generation_entry_bytes(
+        identity: int,
+        row: tuple[ReferenceType[object], str],
+    ) -> int:
+        """Return exact shallow semantic backing for one trusted registry row."""
+
+        return (
+            sys.getsizeof(identity)
+            + sys.getsizeof(row)
+            + sys.getsizeof(row[0])
+            + sys.getsizeof(row[1])
+        )
+
+    def _persistent_smb_prepare_projection_configuration(
+        self,
+        *,
+        route_generation_digest: str,
+    ) -> tuple[_PersistentSmbTopologyPreparation, tuple[object, ...]]:
+        """Prepare a weak target topology and compiled route generation.
+
+        Caller-reachable targets and class facts are snapshotted before the
+        dispatcher group lock. No registry or generation counter changes until
+        a group reserve succeeds. The staged registry contains only exact weak
+        locators; the separate strong snapshot is released after all locks.
+        """
+
+        route_digest = self._persistent_smb_sha256_digest(
+            route_generation_digest,
+            "persistent SMB route generation digest",
+        )
+        emitter_map = object.__getattribute__(self, "emitters")
+        if type(emitter_map) is not dict:
+            raise EventContractError("Persistent SMB projection requires an exact emitter map")
+        emitter_count = dict.__len__(emitter_map)
+        if emitter_count > 16_384:
+            raise EventContractError("Persistent SMB projection has too many emitter targets")
+        try:
+            emitter_items = tuple(dict.items(emitter_map))
+        except RuntimeError as error:
+            raise EventContractError(
+                "Persistent SMB projection emitter map changed during snapshot"
+            ) from error
+        if len(emitter_items) != emitter_count or dict.__len__(emitter_map) != emitter_count:
+            raise EventContractError(
+                "Persistent SMB projection emitter map changed during snapshot"
+            )
+        if any(type(format_name) is not str for format_name, _emitter in emitter_items):
+            raise EventContractError(
+                "Persistent SMB projection emitter names require exact strings"
+            )
+        if any(len(format_name) > 4_096 for format_name, _emitter in emitter_items):
+            raise EventContractError("persistent SMB emitter name exceeds 4096 UTF-8 bytes")
+        target_rows: list[tuple[bytes, object, ReferenceType[object], bytes, bytes]] = []
+        encoded_work = 0
+        for format_name, emitter in emitter_items:
+            format_bytes = self._persistent_smb_bounded_utf8(
+                format_name,
+                "persistent SMB emitter name",
+            )
+            module_bytes, qualified_bytes = self._persistent_smb_target_type_identity(
+                emitter,
+                "persistent SMB emitter",
+            )
+            try:
+                emitter_ref = ref(emitter)
+            except TypeError as error:
+                raise EventContractError(
+                    "Persistent SMB projection targets require weak-reference support"
+                ) from error
+            encoded_work += len(format_bytes) + len(module_bytes) + len(qualified_bytes) + 32
+            if encoded_work > 16 * 1024 * 1024:
+                raise EventContractError(
+                    "Persistent SMB projection target topology exceeds its byte budget"
+                )
+            target_rows.append((format_bytes, emitter, emitter_ref, module_bytes, qualified_bytes))
+        target_rows.sort(key=lambda row: row[0])
+
+        deployment_digest = "0" * 64
+        deployment = self.collection_deployment
+        if deployment is not None:
+            from evidenceforge.generation.collection_deployment import (
+                CompiledCollectionDeployment,
+            )
+
+            if type(deployment) is not CompiledCollectionDeployment:
+                raise EventContractError(
+                    "Persistent SMB projection requires an exact compiled deployment"
+                )
+            deployment_digest = self._persistent_smb_sha256_digest(
+                object.__getattribute__(deployment, "content_digest"),
+                "persistent SMB compiled deployment digest",
+            )
+
+        profile_bytes = self._persistent_smb_bounded_utf8(
+            object.__getattribute__(self.observation_policy, "profile_name"),
+            "persistent SMB observation profile name",
+        )
+        visibility = self.visibility_engine
+        visibility_type_bytes: tuple[bytes, bytes] | None = None
+        visibility_ref: ReferenceType[object] | None = None
+        if visibility is not None:
+            visibility_type_bytes = self._persistent_smb_target_type_identity(
+                visibility,
+                "persistent SMB visibility",
+            )
+            try:
+                visibility_ref = ref(visibility)
+            except TypeError as error:
+                raise EventContractError(
+                    "Persistent SMB projection targets require weak-reference support"
+                ) from error
+
+        active_targets = tuple((row[1], row[2]) for row in target_rows) + (
+            () if visibility is None else ((visibility, visibility_ref),)
+        )
+        unique_target_count = len({id(target) for target, _target_ref in active_targets})
+        if unique_target_count > self._persistent_smb_target_generation_capacity:
+            raise EventContractError("Persistent SMB target-generation capacity is exhausted")
+        target_generations: dict[int, str] = {}
+        with self._persistent_smb_topology_lock:
+            base_registry = self._persistent_smb_target_generations
+            base_snapshot = dict.copy(base_registry)
+            next_generation = self._persistent_smb_next_target_generation
+        staged_registry: dict[int, tuple[ReferenceType[object], str]] = {}
+        for target, target_ref in active_targets:
+            assert target_ref is not None
+            identity = id(target)
+            located = base_snapshot.get(identity)
+            if (
+                type(located) is not tuple
+                or len(located) != 2
+                or type(located[0]) is not ReferenceType
+                or located[0]() is not target
+                or not self._persistent_smb_target_generation_is_valid(located[1])
+            ):
+                located = staged_registry.get(identity)
+                if (
+                    type(located) is not tuple
+                    or len(located) != 2
+                    or type(located[0]) is not ReferenceType
+                    or located[0]() is not target
+                ):
+                    located = (
+                        target_ref,
+                        self._persistent_smb_target_generation(next_generation),
+                    )
+                    next_generation += 1
+            staged_registry[identity] = located
+            target_generations[identity] = located[1]
+        target_semantic_bytes = sum(
+            self._persistent_smb_target_generation_entry_bytes(identity, row)
+            for identity, row in staged_registry.items()
+        )
+        target_table_backing_bytes = sys.getsizeof(staged_registry)
+
+        digest = hashlib.sha256()
+
+        def update(value: bytes) -> None:
+            digest.update(len(value).to_bytes(8, "big"))
+            digest.update(value)
+
+        update(b"persistent-smb-dispatcher-configuration-v2")
+        update(self._persistent_smb_projection_authority.dispatcher_id.encode("ascii"))
+        update(route_digest.encode("ascii"))
+        update(deployment_digest.encode("ascii"))
+        update(profile_bytes)
+        update(len(target_rows).to_bytes(8, "big"))
+        for format_bytes, emitter, _emitter_ref, module_bytes, qualified_bytes in target_rows:
+            update(b"emitter")
+            update(format_bytes)
+            update(module_bytes)
+            update(qualified_bytes)
+            update(target_generations[id(emitter)].encode("ascii"))
+        if visibility is None:
+            update(b"visibility-none")
+        else:
+            assert visibility_type_bytes is not None
+            update(b"visibility")
+            update(visibility_type_bytes[0])
+            update(visibility_type_bytes[1])
+            update(target_generations[id(visibility)].encode("ascii"))
+        retained_targets = tuple(target for target, _target_ref in active_targets)
+        return (
+            _PersistentSmbTopologyPreparation(
+                configuration_digest=digest.hexdigest(),
+                base_registry=base_registry,
+                target_generations=staged_registry,
+                next_target_generation=next_generation,
+                target_generation_semantic_bytes=target_semantic_bytes,
+                target_generation_table_backing_bytes=target_table_backing_bytes,
+            ),
+            retained_targets,
+        )
+
+    def _persistent_smb_commit_projection_configuration(
+        self,
+        preparation: _PersistentSmbTopologyPreparation,
+    ) -> None:
+        """Install a staged weak topology after group reservation succeeds."""
+
+        with self._persistent_smb_topology_lock:
+            if self._persistent_smb_target_generations is not preparation.base_registry:
+                raise EventContractError("Persistent SMB topology changed before reservation")
+            released_registry: dict[int, tuple[ReferenceType[object], str]] = (
+                self._persistent_smb_target_generations
+            )
+            self._persistent_smb_target_generations = preparation.target_generations
+            self._persistent_smb_next_target_generation = preparation.next_target_generation
+            retained_target_generations = len(preparation.target_generations)
+            self._persistent_smb_target_generation_semantic_bytes = (
+                preparation.target_generation_semantic_bytes
+            )
+            self._persistent_smb_target_generation_table_backing_bytes = (
+                preparation.target_generation_table_backing_bytes
+            )
+            self._persistent_smb_high_water_target_generations = max(
+                self._persistent_smb_high_water_target_generations,
+                retained_target_generations,
+            )
+            self._persistent_smb_high_water_target_generation_table_backing_bytes = max(
+                self._persistent_smb_high_water_target_generation_table_backing_bytes,
+                preparation.target_generation_table_backing_bytes,
+            )
+        released_registry.clear()
+
+    def _persistent_smb_retire_projection_topology(self) -> None:
+        """Drop every weak topology row after the last group is reclaimed."""
+
+        empty_registry: dict[int, tuple[ReferenceType[object], str]] = {}
+        with self._persistent_smb_topology_lock:
+            released_registry: dict[int, tuple[ReferenceType[object], str]] = (
+                self._persistent_smb_target_generations
+            )
+            self._persistent_smb_target_generations = empty_registry
+            self._persistent_smb_target_generation_semantic_bytes = 0
+            self._persistent_smb_target_generation_table_backing_bytes = sys.getsizeof(
+                empty_registry
+            )
+        released_registry.clear()
+
+    def reserve_persistent_smb_projection_group(
+        self,
+        *,
+        route_generation_digest: str,
+        member_budget: int,
+        byte_budget: int,
+    ) -> PersistentSmbProjectionGroupToken:
+        """Reserve one empty detached group before canonical SMB open mutation."""
+
+        while True:
+            members, retained_bytes = (
+                self._persistent_smb_projection_authority._preflight_group_reservation(
+                    member_budget=member_budget,
+                    byte_budget=byte_budget,
+                )
+            )
+            topology, retained_targets = self._persistent_smb_prepare_projection_configuration(
+                route_generation_digest=route_generation_digest,
+            )
+            try:
+                with self._persistent_smb_group_lock:
+                    members, retained_bytes = (
+                        self._persistent_smb_projection_authority._preflight_group_reservation(
+                            member_budget=members,
+                            byte_budget=retained_bytes,
+                        )
+                    )
+                    with self._persistent_smb_topology_lock:
+                        topology_is_current = (
+                            self._persistent_smb_target_generations is topology.base_registry
+                        )
+                    if not topology_is_current:
+                        continue
+                    group = self._persistent_smb_projection_authority.reserve_group(
+                        projection_configuration_digest=topology.configuration_digest,
+                        member_budget=members,
+                        byte_budget=retained_bytes,
+                    )
+                    try:
+                        self._persistent_smb_commit_projection_configuration(topology)
+                    except BaseException:
+                        self._persistent_smb_projection_authority.cancel_empty_group(group)
+                        raise
+                    return group
+            finally:
+                del retained_targets
+
+    def prepare_persistent_smb_projection_member(
+        self,
+        group: PersistentSmbProjectionGroupToken,
+        *,
+        phase: PersistentSmbProjectionPhase,
+        operation_id: str,
+        operation_binding_digest: str,
+        projection_capsule: bytes,
+        timing_preparation: SourceTimingPreparation,
+    ) -> PersistentSmbProjectionMemberToken:
+        """Preinstall one deeply frozen inactive member before owner mutation."""
+
+        return self._persistent_smb_projection_authority.prepare_member(
+            group,
+            phase=phase,
+            operation_id=operation_id,
+            operation_binding_digest=operation_binding_digest,
+            projection_capsule=projection_capsule,
+            timing_planner=self.source_timing_planner,
+            timing_preparation=timing_preparation,
+        )
+
+    def recover_inactive_persistent_smb_projection_member(
+        self,
+        group: PersistentSmbProjectionGroupToken,
+        *,
+        operation_id: str,
+        operation_binding_digest: str,
+    ) -> PersistentSmbProjectionMemberRecovery:
+        """Resolve one exact same-operation append lost return in O(1)."""
+
+        return self._persistent_smb_projection_authority.recover_inactive_member(
+            group,
+            operation_id=operation_id,
+            operation_binding_digest=operation_binding_digest,
+            timing_planner=self.source_timing_planner,
+        )
+
+    def cancel_persistent_smb_projection_member(
+        self,
+        token: PersistentSmbProjectionMemberToken,
+    ) -> None:
+        """Cancel one inactive member and reclaim its complete reservation."""
+
+        self._persistent_smb_projection_authority.cancel_member(
+            token,
+            timing_planner=self.source_timing_planner,
+        )
+
+    def cancel_empty_persistent_smb_projection_group(
+        self,
+        group: PersistentSmbProjectionGroupToken,
+    ) -> None:
+        """Cancel one empty group before canonical open ownership exists."""
+
+        with self._persistent_smb_group_lock:
+            self._persistent_smb_projection_authority.cancel_empty_group(group)
+            if self._persistent_smb_projection_authority.census().retained_groups == 0:
+                self._persistent_smb_retire_projection_topology()
+
+    def persistent_smb_projection_group_census(
+        self,
+        *,
+        estimate_bytes: bool = False,
+    ) -> PersistentSmbProjectionGroupCensus:
+        """Return constant-time detached group and inactive-capacity counts."""
+
+        if type(estimate_bytes) is not bool:
+            raise EventContractError("estimate_bytes requires an exact bool")
+        with self._persistent_smb_group_lock:
+            with self._persistent_smb_topology_lock:
+                retained_target_generations = len(self._persistent_smb_target_generations)
+                target_semantic_bytes = (
+                    self._persistent_smb_target_generation_semantic_bytes if estimate_bytes else 0
+                )
+                target_table_backing_bytes = (
+                    self._persistent_smb_target_generation_table_backing_bytes
+                    if estimate_bytes
+                    else 0
+                )
+                high_water_target_generations = self._persistent_smb_high_water_target_generations
+                high_water_target_table_backing_bytes = (
+                    self._persistent_smb_high_water_target_generation_table_backing_bytes
+                )
+            authority_census = self._persistent_smb_projection_authority.census(
+                estimate_bytes=estimate_bytes,
+            )
+        return replace(
+            authority_census,
+            retained_target_generations=retained_target_generations,
+            target_generation_capacity=self._persistent_smb_target_generation_capacity,
+            high_water_target_generations=high_water_target_generations,
+            target_generation_semantic_bytes=target_semantic_bytes,
+            target_generation_table_backing_bytes=target_table_backing_bytes,
+            high_water_target_generation_table_backing_bytes=(
+                high_water_target_table_backing_bytes
+            ),
+            entry_semantic_bytes=(authority_census.entry_semantic_bytes + target_semantic_bytes),
+            table_backing_bytes=(authority_census.table_backing_bytes + target_table_backing_bytes),
+            estimated_bytes=(
+                authority_census.estimated_bytes
+                + target_semantic_bytes
+                + target_table_backing_bytes
+            ),
+        )
 
     @property
     def source_evidence_status(self) -> dict[str, dict[str, dict[str, int]]]:
