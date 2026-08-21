@@ -1886,21 +1886,29 @@ def _session_started_by(session: Any, time: datetime) -> bool:
     return session_start <= activity_time
 
 
+def _session_activity_end_time(session: Any) -> datetime | None:
+    """Return the earliest canonical boundary that ends session-owned activity."""
+    deadlines: list[datetime] = []
+    end_plan = getattr(session, "end_plan", None)
+    if end_plan is not None:
+        deadlines.append(ensure_utc(end_plan.canonical_end))
+    network_close_time = getattr(session, "network_close_time", None)
+    if network_close_time is not None:
+        deadlines.append(ensure_utc(network_close_time))
+    return min(deadlines) if deadlines else None
+
+
 def _session_active_for_activity(
     session: Any, time: datetime, *, margin_seconds: float = 0.0
 ) -> bool:
     """Return whether a session can own activity at the given visible time."""
     if not _session_started_by(session, time):
         return False
-    network_close_time = getattr(session, "network_close_time", None)
-    if network_close_time is None:
+    activity_end = _session_activity_end_time(session)
+    if activity_end is None:
         return True
-    if network_close_time.tzinfo is None:
-        network_close_time = network_close_time.replace(tzinfo=UTC)
-    else:
-        network_close_time = network_close_time.astimezone(UTC)
     activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
-    return activity_time < network_close_time - timedelta(seconds=margin_seconds)
+    return activity_time < activity_end - timedelta(seconds=margin_seconds)
 
 
 def _session_source_ready_time(session: Any) -> datetime | None:
@@ -4660,6 +4668,17 @@ class RdpLifecycleJournalCensus:
     pending_generations: int
     disconnected_generations: int
     capacity: int
+
+
+_BashHistorySecondKey = tuple[str, int]
+
+
+@dataclass(frozen=True, slots=True)
+class _BashHistorySecondReservation:
+    """Allocation-free user-second cadence update awaiting final session fit."""
+
+    scheduled_time: datetime
+    updated_counts: tuple[tuple[_BashHistorySecondKey, int], ...]
 
 
 @dataclass(slots=True)
@@ -26170,7 +26189,13 @@ class ActivityGenerator:
         )
         if scheduled_time is None:
             return None
-        scheduled_time = self._reserve_bash_history_second(user, system, scheduled_time, command)
+        second_reservation = self._prepare_bash_history_second(
+            user,
+            system,
+            scheduled_time,
+            command,
+        )
+        scheduled_time = second_reservation.scheduled_time
         scheduled_time = self._fit_bash_history_time_to_linux_session(
             user,
             system,
@@ -26191,6 +26216,7 @@ class ActivityGenerator:
         )
         if scheduled_time is None:
             return None
+        self._commit_bash_history_second_no_fail(second_reservation)
         dwell_seconds = _bash_command_dwell_seconds(command)
         jitter_rng = random.Random(
             _stable_seed(
@@ -26298,15 +26324,15 @@ class ActivityGenerator:
             if session.system == system.hostname
             and session.session_kind not in {"network", "service"}
             and session.logon_type not in {3, 5}
-            and _session_started_by(session, activity_time)
+            and _session_active_for_activity(session, activity_time)
         ]
         if not sessions:
             return
         session = max(sessions, key=lambda candidate: ensure_utc(candidate.start_time))
         marker = ensure_utc(completion_time)
-        if session.network_close_time is not None:
-            network_close_time = ensure_utc(session.network_close_time)
-            marker = min(marker, network_close_time - timedelta(milliseconds=900))
+        activity_end = _session_activity_end_time(session)
+        if activity_end is not None:
+            marker = min(marker, activity_end - timedelta(milliseconds=900))
         if session.last_activity_time is None or marker > ensure_utc(session.last_activity_time):
             session.last_activity_time = marker
 
@@ -26341,11 +26367,12 @@ class ActivityGenerator:
         sessions.sort(key=lambda session: ensure_utc(session.start_time))
         for session in sessions:
             window_start = _session_source_ready_time(session) or ensure_utc(session.start_time)
-            window_end = getattr(session, "network_close_time", None)
-            if window_end is not None:
-                window_end = ensure_utc(window_end) - timedelta(milliseconds=900)
             candidate_time = max(activity_time, window_start)
-            if window_end is None or candidate_time < window_end:
+            if _session_active_for_activity(
+                session,
+                candidate_time,
+                margin_seconds=0.9,
+            ):
                 return candidate_time
         return None
 
@@ -26379,23 +26406,30 @@ class ActivityGenerator:
         )
         return ready_time + timedelta(milliseconds=180 + (ready_seed % 420))
 
-    def _reserve_bash_history_second(
+    def _prepare_bash_history_second(
         self,
         user: User,
         system: System,
         scheduled_time: datetime,
         command: str,
-    ) -> datetime:
-        """Avoid exact same-user bash-history seconds across different hosts."""
+    ) -> _BashHistorySecondReservation:
+        """Prepare exact same-user collision updates without allocating them."""
         username_key = user.username.lower()
         candidate = scheduled_time
+        updated_counts: dict[_BashHistorySecondKey, int] = {}
         for attempt in range(8):
             second_key = (username_key, int(candidate.timestamp()))
-            if second_key not in self._bash_history_user_seconds:
-                self._bash_history_user_seconds[second_key] = 1
-                return candidate
-            collision_count = self._bash_history_user_seconds[second_key]
-            self._bash_history_user_seconds[second_key] = collision_count + 1
+            if second_key in updated_counts:
+                collision_count = updated_counts[second_key]
+            elif second_key in self._bash_history_user_seconds:
+                collision_count = self._bash_history_user_seconds[second_key]
+            else:
+                updated_counts[second_key] = 1
+                return _BashHistorySecondReservation(
+                    scheduled_time=candidate,
+                    updated_counts=tuple(updated_counts.items()),
+                )
+            updated_counts[second_key] = collision_count + 1
             delay_rng = random.Random(
                 _stable_seed(
                     "bash_user_second_collision:"
@@ -26406,10 +26440,24 @@ class ActivityGenerator:
             candidate += timedelta(seconds=delay_rng.randint(1, 23))
 
         second_key = (username_key, int(candidate.timestamp()))
-        self._bash_history_user_seconds[second_key] = (
-            self._bash_history_user_seconds.get(second_key, 0) + 1
+        updated_counts[second_key] = (
+            updated_counts.get(
+                second_key,
+                self._bash_history_user_seconds.get(second_key, 0),
+            )
+            + 1
         )
-        return candidate
+        return _BashHistorySecondReservation(
+            scheduled_time=candidate,
+            updated_counts=tuple(updated_counts.items()),
+        )
+
+    def _commit_bash_history_second_no_fail(
+        self,
+        reservation: _BashHistorySecondReservation,
+    ) -> None:
+        """Publish one already-fitted Bash user-second reservation."""
+        self._bash_history_user_seconds.update(reservation.updated_counts)
 
     def generate_bash_command_with_noise(
         self,

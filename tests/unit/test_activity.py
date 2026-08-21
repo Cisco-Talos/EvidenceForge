@@ -153,6 +153,7 @@ from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models import NetworkConfig, NetworkSegment, System, User
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import reset_thread_rng
 from tests.network_factories import network_plan
 
@@ -13104,6 +13105,283 @@ class TestActivityGenerator:
         assert process_events
         assert process_events[-1].process.image == "/usr/bin/git"
         assert process_events[-1].process.parent_pid == bash_pid
+
+    def test_generate_bash_command_rejects_session_past_planned_logoff(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """A retained shell cannot own history or children after its planned logoff."""
+        command_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc125"
+        state_manager.set_current_time(command_time - timedelta(minutes=30))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=command_time - timedelta(minutes=20),
+            session_kind="interactive",
+        )
+        session.session_shell_pid = bash_pid
+        state_manager.plan_session_end(
+            logon_id,
+            SessionEndPlan(
+                canonical_end=command_time - timedelta(seconds=1),
+                authority="generated",
+            ),
+        )
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid, "bash": bash_pid}}
+
+        assert bash_pid == 33383
+        assert state_manager.get_process(linux.hostname, bash_pid) is not None
+        assert not state_manager.is_process_active_at(linux.hostname, bash_pid, command_time)
+        before_processes = tuple(
+            (process.pid, process.start_time)
+            for process in state_manager.get_processes_on_system(linux.hostname)
+        )
+        before_scheduler_state = (
+            dict(activity_gen._bash_history_next_time),
+            dict(activity_gen._bash_history_user_seconds),
+            dict(activity_gen._bash_history_command_counts),
+            dict(activity_gen._bash_history_quick_streaks),
+            dict(activity_gen._foreground_shell_next_time),
+        )
+        before_session_state = (
+            session.last_activity_time,
+            session.session_shell_pid,
+            session.end_plan,
+        )
+        before_emits = {name: emitter.emit.call_count for name, emitter in mock_emitters.items()}
+
+        scheduled = [
+            activity_gen.generate_bash_command(
+                test_user,
+                linux,
+                command_time,
+                "git status",
+            )
+            for _attempt in range(2)
+        ]
+
+        assert scheduled == [None, None]
+        assert {
+            name: emitter.emit.call_count for name, emitter in mock_emitters.items()
+        } == before_emits
+        assert (
+            dict(activity_gen._bash_history_next_time),
+            dict(activity_gen._bash_history_user_seconds),
+            dict(activity_gen._bash_history_command_counts),
+            dict(activity_gen._bash_history_quick_streaks),
+            dict(activity_gen._foreground_shell_next_time),
+        ) == before_scheduler_state
+        assert (
+            session.last_activity_time,
+            session.session_shell_pid,
+            session.end_plan,
+        ) == before_session_state
+        assert (
+            tuple(
+                (process.pid, process.start_time)
+                for process in state_manager.get_processes_on_system(linux.hostname)
+            )
+            == before_processes
+        )
+        assert state_manager.get_process(linux.hostname, bash_pid) is not None
+
+    def test_generate_bash_command_finishes_before_future_planned_logoff(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """A live planned session still owns one complete shell-process lifecycle."""
+        command_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        planned_logoff = command_time + timedelta(minutes=5)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc126"
+        state_manager.set_current_time(command_time - timedelta(minutes=30))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=command_time - timedelta(minutes=20),
+            session_kind="interactive",
+        )
+        session.session_shell_pid = bash_pid
+        state_manager.plan_session_end(
+            logon_id,
+            SessionEndPlan(canonical_end=planned_logoff, authority="generated"),
+        )
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid, "bash": bash_pid}}
+
+        scheduled = activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "git status",
+        )
+
+        assert scheduled == command_time
+        emitted_events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_create = next(
+            event
+            for event in emitted_events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line == "git status"
+        )
+        process_terminate = next(
+            event
+            for event in emitted_events
+            if event.event_type == "process_terminate"
+            and event.process is not None
+            and event.process.pid == process_create.process.pid
+        )
+        assert process_create.process.parent_pid == bash_pid
+        assert process_create.timestamp < process_terminate.timestamp < planned_logoff
+        assert session.last_activity_time is not None
+        assert session.last_activity_time < planned_logoff
+
+    def test_generate_bash_command_collision_rejection_is_retry_neutral(self, test_user):
+        """A collision shifted past a session fence cannot consume later cadence state."""
+        command_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        initial_fence = command_time + timedelta(milliseconds=1500)
+        moved_fence = command_time + timedelta(minutes=10)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc127"
+        collision_key = (test_user.username.lower(), int(command_time.timestamp()))
+
+        def _build_generator() -> tuple[StateManager, ActivityGenerator, ActiveSession, Mock]:
+            state = StateManager()
+            bash_emitter = Mock()
+            bash_emitter.can_handle.return_value = True
+            emitters = {"bash_history": bash_emitter}
+            dispatcher = EventDispatcher(state_manager=state, emitters=emitters)
+            generator = ActivityGenerator(state, emitters, dispatcher=dispatcher)
+            state.set_current_time(command_time - timedelta(minutes=30))
+            session = state.register_session(
+                logon_id=logon_id,
+                username=test_user.username,
+                system=linux.hostname,
+                logon_type=2,
+                source_ip="-",
+                start_time=command_time - timedelta(minutes=20),
+                session_kind="interactive",
+            )
+            state.plan_session_end(
+                logon_id,
+                SessionEndPlan(canonical_end=initial_fence, authority="generated"),
+            )
+            generator._bash_history_user_seconds = {collision_key: 1}
+            return state, generator, session, bash_emitter
+
+        clean_state, clean_generator, clean_session, clean_emitter = _build_generator()
+        attempted_state, attempted_generator, attempted_session, attempted_emitter = (
+            _build_generator()
+        )
+        before_rejection = dict(attempted_generator._bash_history_user_seconds)
+
+        rejected = attempted_generator.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "git status",
+            emit_process_telemetry=False,
+        )
+
+        assert rejected is None
+        assert attempted_generator._bash_history_user_seconds == before_rejection
+        assert attempted_emitter.emit.call_count == 0
+
+        moved_plan = SessionEndPlan(canonical_end=moved_fence, authority="generated")
+        assert clean_state.plan_session_end(logon_id, moved_plan)
+        assert attempted_state.plan_session_end(logon_id, moved_plan)
+        clean_scheduled = clean_generator.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "git status",
+            emit_process_telemetry=False,
+        )
+        attempted_scheduled = attempted_generator.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "git status",
+            emit_process_telemetry=False,
+        )
+
+        assert clean_scheduled is not None
+        assert clean_scheduled == command_time + timedelta(seconds=23)
+        assert attempted_scheduled == clean_scheduled
+        assert attempted_generator._bash_history_user_seconds == (
+            clean_generator._bash_history_user_seconds
+        )
+        assert (
+            attempted_generator._bash_history_next_time == clean_generator._bash_history_next_time
+        )
+        assert attempted_generator._bash_history_command_counts == (
+            clean_generator._bash_history_command_counts
+        )
+        assert attempted_generator._bash_history_quick_streaks == (
+            clean_generator._bash_history_quick_streaks
+        )
+        assert attempted_session.last_activity_time == clean_session.last_activity_time
+        assert attempted_emitter.emit.call_count == clean_emitter.emit.call_count == 1
 
     def test_workstation_bash_command_bootstraps_local_session_process_telemetry(
         self, activity_gen, test_user, state_manager, mock_emitters
