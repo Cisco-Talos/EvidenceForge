@@ -37,8 +37,10 @@ from evidenceforge.generation.activity.http_multipart import build_http_multipar
 from evidenceforge.generation.network_identities import ScenarioNetworkResolver
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.proxy_channels import (
+    ExplicitProxyAdmissionReceipt,
     ExplicitProxyChannelAffinity,
     ExplicitProxyChannelManager,
+    ExplicitProxyTunnelOpen,
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
@@ -4179,6 +4181,243 @@ class TestExplicitProxyVisibility:
         assert generator._application_channel_registry.census().open_channels == 1
         assert generator._http_channel_manager.census().open_transport_views == 0
         assert lifecycle_modes == ["network", "network", "application_child"]
+
+    def test_late_inspected_requests_preflight_to_request_local_setup_only(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A late three-request flow uses exact request-local authenticated transports."""
+
+        publications: list[NetworkConnectionIdentityCapture] = []
+        original_publish = NetworkConnectionIdentityCapture._publish_committed_claimed
+
+        def record_publication(
+            capture: NetworkConnectionIdentityCapture,
+            claim: object,
+            *,
+            root: object,
+            receipt: object,
+            application_receipt: object | None = None,
+            prepared_dispatch: object | None = None,
+            outcome: object,
+        ) -> None:
+            original_publish(
+                capture,
+                claim,
+                root=root,
+                receipt=receipt,
+                application_receipt=application_receipt,
+                prepared_dispatch=prepared_dispatch,
+                outcome=outcome,
+            )
+            publications.append(capture)
+
+        monkeypatch.setattr(
+            NetworkConnectionIdentityCapture,
+            "_publish_committed_claimed",
+            record_publication,
+        )
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        prepare_calls: list[dict[str, object]] = []
+        prepare_affinities: list[object] = []
+        original_prepare = generator._proxy_channel_manager.prepare_open_tunnel
+
+        def record_prepare(*args: object, **kwargs: object) -> object:
+            assert len(args) == 1
+            prepare_affinities.append(args[0])
+            prepare_calls.append(dict(kwargs))
+            return original_prepare(*args, **kwargs)
+
+        monkeypatch.setattr(
+            generator._proxy_channel_manager,
+            "prepare_open_tunnel",
+            record_prepare,
+        )
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        request_specs = (
+            (start_time, "/", 1.0, 240, 1800, 1200, 1),
+            (start_time + timedelta(seconds=2), "/app.js", 0.3, 180, 900, 700, 2),
+            (start_time + timedelta(seconds=4), "/favicon.ico", 0.2, 160, 700, 500, 3),
+        )
+        returned_uids = []
+        for request_time, uri, duration, orig_bytes, resp_bytes, body_bytes, depth in request_specs:
+            returned_uids.append(
+                generator.generate_connection(
+                    src_ip="10.0.1.10",
+                    dst_ip="93.184.216.34",
+                    time=request_time,
+                    dst_port=443,
+                    proto="tcp",
+                    service="ssl",
+                    duration=duration,
+                    orig_bytes=orig_bytes,
+                    resp_bytes=resp_bytes,
+                    source_system=generator._ip_to_system["10.0.1.10"],
+                    hostname="example.com",
+                    conn_state="SF",
+                    http=HttpContext(
+                        method="GET",
+                        host="example.com",
+                        uri=uri,
+                        version="1.1",
+                        user_agent="Mozilla/5.0",
+                        response_body_len=body_bytes,
+                        flow_request_body_len=480 if depth == 1 else None,
+                        flow_response_body_len=3600 if depth == 1 else None,
+                        flow_transaction_count=3 if depth == 1 else None,
+                        trans_depth=depth,
+                        status_code=200,
+                        status_msg="OK",
+                    ),
+                )
+            )
+
+        physical_events = [
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if not call.args[0].network.application_layer_only
+        ]
+        client_events = [
+            event
+            for event in physical_events
+            if event.network.src_ip == "10.0.1.10"
+            and event.network.dst_ip == "10.0.3.10"
+            and event.network.dst_port == 8080
+        ]
+        origin_events = [
+            event
+            for event in physical_events
+            if event.network.src_ip == "10.0.3.10" and event.network.dst_port == 443
+        ]
+        proxy_events = [call.args[0] for call in emitters["proxy_access"].emit.call_args_list]
+        assert len(client_events) == 3
+        assert len(origin_events) == 3
+        assert len(proxy_events) == 3
+        assert [
+            (event.network.orig_bytes, event.network.resp_bytes) for event in client_events
+        ] == [(846, 1615), (636, 932), (566, 697)]
+        assert [
+            (event.network.orig_bytes, event.network.resp_bytes) for event in origin_events
+        ] == [(768, 6219), (619, 3601), (792, 5520)]
+        assert [
+            (event.protocol.proxy.cs_bytes, event.protocol.proxy.sc_bytes) for event in proxy_events
+        ] == [(367, 1439), (316, 789), (335, 567)]
+        assert [event.protocol.proxy.url for event in proxy_events] == [
+            "https://example.com/",
+            "https://example.com/app.js",
+            "https://example.com/favicon.ico",
+        ]
+        assert len(set(returned_uids)) == 3
+        assert {event.network.zeek_uid for event in client_events} == set(returned_uids)
+        assert len({event.network.zeek_uid for event in origin_events}) == 3
+
+        clients_by_id = {
+            capture.require().stable_id: capture
+            for capture in publications
+            if capture.transaction is not None
+            and capture.transaction.src_ip == "10.0.1.10"
+            and capture.transaction.dst_ip == "10.0.3.10"
+            and capture.transaction.dst_port == 8080
+        }
+        origin_captures = [
+            capture
+            for capture in publications
+            if capture.transaction is not None
+            and capture.transaction.src_ip == "10.0.3.10"
+            and capture.transaction.dst_port == 443
+        ]
+        assert len(clients_by_id) == 3
+        assert len(origin_captures) == 3
+        proxy_events_by_group = {
+            event.protocol.proxy.transaction.stable_id: event
+            for event in proxy_events
+            if event.protocol.proxy.transaction is not None
+        }
+        reserved_request_bytes = 0
+        reserved_response_bytes = 0
+        channel_ids: set[str] = set()
+        application_receipt_tokens: set[str] = set()
+        for origin_capture in origin_captures:
+            origin = origin_capture.require()
+            application_receipt = origin_capture.require_application_receipt()
+            assert isinstance(application_receipt, ExplicitProxyAdmissionReceipt)
+            assert generator._proxy_channel_manager.authenticates_admission_receipt(
+                application_receipt
+            )
+            assert application_receipt.current_transport_id == origin.stable_id
+            assert len(application_receipt.prerequisite_transport_ids) == 1
+            client_capture = clients_by_id[application_receipt.prerequisite_transport_ids[0]]
+            client = client_capture.require()
+
+            opened = application_receipt.sidecar_result
+            assert isinstance(opened, ExplicitProxyTunnelOpen)
+            channel_ids.add(opened.tunnel.channel_id)
+            application_receipt_tokens.add(application_receipt.application_receipt_token)
+            assert opened.tunnel.planned_request_count == 0
+            assert opened.remaining_request_count == 0
+            assert opened.remaining_request_wire_bytes == 0
+            assert opened.remaining_response_wire_bytes == 0
+            common_receipt = application_receipt.application_receipt
+            assert common_receipt.kind == "open_completed_close"
+            snapshot = common_receipt.snapshot
+            proxy_event = proxy_events_by_group[opened.tunnel.tunnel_group_id]
+            phase = proxy_event.protocol.proxy.transaction
+            assert phase is not None
+            assert client.closed_at is not None
+            assert snapshot.closed_at == phase.client_flush_at
+            assert snapshot.last_activity_at == phase.client_flush_at
+            assert snapshot.close_reason == "setup-only"
+            assert snapshot.reserved_operations == 1
+            assert snapshot.completed_operations == 1
+            assert snapshot.reserved_initiator_bytes == (
+                phase.tunnel_setup_cs_bytes + proxy_event.protocol.proxy.cs_bytes
+            )
+            assert snapshot.reserved_responder_bytes == (
+                phase.tunnel_setup_sc_bytes + proxy_event.protocol.proxy.sc_bytes
+            )
+            assert client.orig_bytes == snapshot.reserved_initiator_bytes
+            assert client.resp_bytes == snapshot.reserved_responder_bytes
+            reserved_request_bytes += snapshot.reserved_initiator_bytes
+            reserved_response_bytes += snapshot.reserved_responder_bytes
+
+            origin_receipt = origin_capture.require_receipt()
+            client_receipt = client_capture.require_receipt()
+            assert origin_receipt.connection_receipt.prerequisite_proofs[0].receipt_token == (
+                client_receipt.connection_receipt.receipt_token
+            )
+
+        assert sum(event.network.orig_bytes for event in client_events) == reserved_request_bytes
+        assert sum(event.network.resp_bytes for event in client_events) == reserved_response_bytes
+        assert len(channel_ids) == 3
+        assert len(application_receipt_tokens) == 3
+        assert [call["planned_request_count"] for call in prepare_calls] == [0, 0, 0]
+        assert all(call["aggregate_request_wire_bytes"] == 0 for call in prepare_calls)
+        assert all(call["aggregate_response_wire_bytes"] == 0 for call in prepare_calls)
+        assert len(prepare_affinities) == 3
+        census = generator._proxy_channel_manager.census()
+        assert census.open_tunnel_views == 0
+        assert census.prepared_admissions == 0
+        assert census.claimed_admissions == 0
+        assert census.reserved_channel_ids == 0
+        assert census.reserved_affinities == 0
+        assert census.reserved_origin_transport_ids == 0
+        assert census.application.open_channels == 0
+        assert census.application.active_operations == 0
+        assert census.application.prepared_admissions == 0
+        assert census.application.claimed_admissions == 0
+        assert census.application.reserved_channel_ids == 0
+        assert census.application.reserved_transport_ids == 0
+        assert census.application.reserved_operation_ids == 0
 
     def test_proxy_manager_owns_one_parent_transport_and_three_browser_children(self):
         """One BrowserSession aggregate must not duplicate tunnel setup or physical legs."""

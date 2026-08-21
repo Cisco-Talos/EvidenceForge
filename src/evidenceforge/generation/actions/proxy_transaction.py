@@ -661,6 +661,28 @@ class ProxyTransactionActionBundle:
             transaction=phase_plan,
             time_taken=phase_plan.time_taken_ms,
         )
+        scenario_end = getattr(executor, "_scenario_end_time", None)
+        request_localized_transport = False
+        if (
+            planned_request_count > 1
+            and request.dst_port == 443
+            and request.http is not None
+            and proxy_context.method != "CONNECT"
+            and phase_plan.terminal_outcome == "success"
+            and (scenario_end is None or phase_plan.close_at <= ensure_utc(scenario_end))
+            and not executor._proxy_channel_manager.has_future_reuse_headroom(
+                opened_at=phase_plan.client_connect_at,
+                closes_at=phase_plan.close_at,
+                setup_completed_at=phase_plan.client_flush_at,
+            )
+        ):
+            # The manager has ruled out reuse before the client transport owns
+            # bytes. Keep this leg request-local so later physical legs cannot
+            # repeat payload that was speculatively reserved here.
+            planned_request_count = 1
+            planned_http_orig_bytes = request_local_orig_bytes
+            planned_http_resp_bytes = request_local_resp_bytes
+            request_localized_transport = True
         client_http = self._build_client_http(proxy_context)
         child_cs_bytes = max(1, int(proxy_context.cs_bytes or 1))
         child_sc_bytes = max(0, int(proxy_context.sc_bytes or 0))
@@ -712,6 +734,13 @@ class ProxyTransactionActionBundle:
             if will_emit_origin_transaction
             else None
         )
+        if request_localized_transport and egress_http is not None:
+            egress_http = replace(
+                egress_http,
+                flow_request_body_len=egress_http.request_body_len,
+                flow_response_body_len=egress_http.response_body_len,
+                flow_transaction_count=1,
+            )
         if egress_http is not None:
             egress_http = replace(
                 egress_http,
@@ -807,7 +836,6 @@ class ProxyTransactionActionBundle:
             )
 
         explicit_proxy_open_preparation = None
-        scenario_end = getattr(executor, "_scenario_end_time", None)
         if (
             request.dst_port == 443
             and phase_plan.terminal_outcome == "success"

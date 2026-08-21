@@ -121,6 +121,8 @@ def _prepare_open(
     suffix: str = "1",
     opened_at: datetime = _START,
     duration: timedelta = timedelta(seconds=30),
+    setup_offset: timedelta = timedelta(milliseconds=10),
+    setup_duration: timedelta = timedelta(milliseconds=20),
     request_count: int = 1,
     aggregate_request_bytes: int = 1_000,
     aggregate_response_bytes: int = 5_000,
@@ -136,8 +138,8 @@ def _prepare_open(
         origin_source_port=40_000 + int(suffix),
         opened_at=opened_at,
         closes_at=opened_at + duration,
-        setup_started_at=opened_at + timedelta(milliseconds=10),
-        setup_completed_at=opened_at + timedelta(milliseconds=30),
+        setup_started_at=opened_at + setup_offset,
+        setup_completed_at=opened_at + setup_offset + setup_duration,
         setup_request_wire_bytes=120,
         setup_response_wire_bytes=240,
         planned_request_count=request_count,
@@ -726,6 +728,62 @@ def test_setup_only_tunnel_summarizes_setup_without_open_reuse_state(
     assert census.prepared_admissions == 0
     assert census.application.open_channels == 0
     assert census.application.prepared_admissions == 0
+
+
+def test_initial_setup_reuse_guard_is_exclusive_and_mutation_free() -> None:
+    """Exact guard exhaustion misses admission while one microsecond of headroom succeeds."""
+
+    at_guard = _manager(close_guard=timedelta(seconds=2))
+    assert not at_guard.has_future_reuse_headroom(
+        opened_at=_START,
+        closes_at=_START + timedelta(seconds=10),
+        setup_completed_at=_START + timedelta(seconds=8),
+    )
+    preflight_census = at_guard.census()
+    assert preflight_census.open_tunnel_views == 0
+    assert preflight_census.prepared_admissions == 0
+    assert preflight_census.application.retained_channels == 0
+    assert (
+        _prepare_open(
+            at_guard,
+            duration=timedelta(seconds=10),
+            setup_offset=timedelta(seconds=1),
+            setup_duration=timedelta(seconds=7),
+        )
+        is None
+    )
+    at_guard_census = at_guard.census()
+    assert at_guard_census.open_tunnel_views == 0
+    assert at_guard_census.prepared_admissions == 0
+    assert at_guard_census.reserved_channel_ids == 0
+    assert at_guard_census.reserved_affinities == 0
+    assert at_guard_census.reserved_origin_transport_ids == 0
+    assert at_guard_census.application.retained_channels == 0
+    assert at_guard_census.application.prepared_admissions == 0
+
+    before_guard = _manager(close_guard=timedelta(seconds=2))
+    assert before_guard.has_future_reuse_headroom(
+        opened_at=_START,
+        closes_at=_START + timedelta(seconds=10),
+        setup_completed_at=_START + timedelta(seconds=7, microseconds=999_999),
+    )
+    token = _prepare_open(
+        before_guard,
+        duration=timedelta(seconds=10),
+        setup_offset=timedelta(seconds=1),
+        setup_duration=timedelta(seconds=6, microseconds=999_999),
+    )
+    assert token is not None
+    assert token.result.tunnel.planned_request_count == 1
+    assert before_guard.cancel_prepared_admission(token)
+    before_guard_census = before_guard.census()
+    assert before_guard_census.open_tunnel_views == 0
+    assert before_guard_census.prepared_admissions == 0
+    assert before_guard_census.reserved_channel_ids == 0
+    assert before_guard_census.reserved_affinities == 0
+    assert before_guard_census.reserved_origin_transport_ids == 0
+    assert before_guard_census.application.retained_channels == 0
+    assert before_guard_census.application.prepared_admissions == 0
 
 
 def test_one_child_reuses_exact_identity_and_does_not_double_count_upload() -> None:

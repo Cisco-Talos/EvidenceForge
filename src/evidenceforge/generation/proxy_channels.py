@@ -1761,6 +1761,32 @@ class ExplicitProxyChannelManager:
         self._register_admission_locked(token)
         return token
 
+    def has_future_reuse_headroom(
+        self,
+        *,
+        opened_at: datetime,
+        closes_at: datetime,
+        setup_completed_at: datetime,
+    ) -> bool:
+        """Return whether setup leaves strict manager-owned future-reuse headroom.
+
+        This preflight is pure: it allocates no identities, takes no mutation
+        locks, and publishes no prepared or canonical state.
+        """
+
+        canonical_open = ensure_utc(opened_at)
+        canonical_close = ensure_utc(closes_at)
+        setup_complete = ensure_utc(setup_completed_at)
+        if canonical_close <= canonical_open:
+            raise StateError("Explicit-proxy tunnel close must follow its open")
+        if canonical_open < self._window_start or canonical_open >= self._window_end:
+            raise StateError("Explicit-proxy tunnel open is outside the manager window")
+        if canonical_close > self._window_end:
+            raise StateError("Explicit-proxy tunnel close is outside the manager window")
+        if not canonical_open <= setup_complete <= canonical_close:
+            raise StateError("Explicit-proxy setup must be contained by its client transport")
+        return setup_complete < canonical_close - self._close_guard
+
     def prepare_open_tunnel(
         self,
         affinity: ExplicitProxyChannelAffinity,
@@ -1835,9 +1861,13 @@ class ExplicitProxyChannelManager:
         if setup_outcome != "success":
             return None
 
-        reuse_deadline = canonical_close - self._close_guard
-        if planned_request_count and setup_complete >= reuse_deadline:
+        if planned_request_count and not self.has_future_reuse_headroom(
+            opened_at=canonical_open,
+            closes_at=canonical_close,
+            setup_completed_at=setup_complete,
+        ):
             return None
+        reuse_deadline = canonical_close - self._close_guard
 
         affinity_digest = affinity.digest
         channel_id = self._channel_id(

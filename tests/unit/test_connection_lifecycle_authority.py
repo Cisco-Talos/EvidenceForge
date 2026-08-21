@@ -1597,6 +1597,28 @@ def test_prepared_proxy_origin_requires_full_prepared_prerequisite_receipt() -> 
         lifecycle_token=client_lifecycle,
     )
     origin_rng = random.Random(106)
+    proofless_root, proofless_lifecycle = _prepared_physical_root(
+        authority,
+        adapter,
+        runtime,
+        origin_rng,
+        stable_id="prepared-proxy-proofless-origin",
+        src_ip="10.0.3.10",
+        src_port=40_001,
+    )
+    state_before = state.materialization_digest()
+    with pytest.raises(StateError, match="prerequisites require an application manager proof"):
+        authority.materialize_prepared_network_transaction(
+            proofless_root,
+            origin_rng,
+            source_timing_preparation=_sealed_source_timing(timing),
+            lifecycle_token=proofless_lifecycle,
+            prerequisite_receipts=(client.receipt,),
+        )
+
+    assert state.materialization_digest() == state_before
+    assert proxy.census().prepared_admissions == 0
+
     origin_root, origin_lifecycle = _prepared_physical_root(
         authority,
         adapter,
