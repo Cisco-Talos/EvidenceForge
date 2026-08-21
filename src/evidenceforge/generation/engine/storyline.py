@@ -60,6 +60,10 @@ from evidenceforge.generation.actions import (
     WebScanRequest,
     dhcp_renewal_interval_seconds,
 )
+from evidenceforge.generation.actions.rdp_session import (
+    RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS,
+    RDP_TRANSPORT_DURATION_MAX_SECONDS,
+)
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.dns_txt import choose_background_dns_txt_record
 from evidenceforge.generation.activity.external_actor_profiles import pick_external_actor_ip
@@ -75,6 +79,12 @@ from evidenceforge.generation.activity.http_content import (
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.generation.activity.network_params import activity_dns_resolver_ips
 from evidenceforge.generation.intent_ledger import IntentSection
+from evidenceforge.generation.world_model import (
+    RDP_BOOTSTRAP_MAX_LEAD_SECONDS,
+    RDP_BOOTSTRAP_MIN_LEAD_SECONDS,
+    RDP_SOURCE_PROCESS_MAX_LEAD_SECONDS,
+    RDP_SOURCE_PROCESS_MIN_LEAD_SECONDS,
+)
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.ids import IdsAlertAttachmentSpec
 from evidenceforge.models.scenario import (
@@ -86,12 +96,14 @@ from evidenceforge.models.scenario import (
     User,
 )
 from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
-from evidenceforge.utils.time import parse_duration, parse_iso8601
+from evidenceforge.utils.time import ensure_utc, parse_duration, parse_iso8601
 
 logger = logging.getLogger(__name__)
 
 
 _MAX_EMBEDDED_COMMAND_B64_CHARS = 16_384
+_AUTHORED_EVENT_MAX_EARLY_JITTER_SECONDS = 30.0
+_AUTHORED_RDP_FRONTIER_EPSILON = timedelta(microseconds=1)
 _STORYLINE_SHELL_TEMPLATE_FORMATTER = string.Formatter()
 _IPV4_LITERAL_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 _POWERSHELL_WEB_CMDLET_USER_AGENT = (
@@ -2126,22 +2138,35 @@ class StorylineMixin:
             return logon_id
 
         required_until = self._next_storyline_logoff_time_for_actor_system(actor, system, time)
-        plan = self.world_model.plan_session(
-            user=actor,
-            target_system=system,
-            rng=rng,
-        )
+        session_kind = self._storyline_non_session_kind(actor, system, rng)
         target_session = self.world_planner.ensure_user_session(
             actor,
             system,
             time,
             rng,
-            session_kind=plan.session_kind,
+            session_kind=session_kind,
             storyline_protected=True,
             required_until=required_until,
         )
         self._record_storyline_logon(actor, system, target_session.logon_id)
         return target_session.logon_id
+
+    def _storyline_non_session_kind(
+        self,
+        actor: User,
+        system: System,
+        rng: random.Random,
+    ) -> str:
+        """Keep non-session authored activity from implicitly creating RDP."""
+
+        plan = self.world_model.plan_session(
+            user=actor,
+            target_system=system,
+            rng=rng,
+        )
+        if _get_os_category(system.os) == "windows" and plan.session_kind == "rdp":
+            return "interactive"
+        return plan.session_kind
 
     def _select_web_server_for_spillage(
         self, actor_system: System, requested_scheme: str | None
@@ -3163,6 +3188,260 @@ class StorylineMixin:
             return time
         return available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
 
+    def _authored_rdp_minimum_anchor(
+        self,
+        *,
+        spec: Any,
+        system: System,
+        child_time: datetime,
+        cumulative_shift: timedelta,
+    ) -> datetime | None:
+        """Return the earliest RDP action frontier one typed child can consume."""
+
+        if spec.type == "rdp_session":
+            return child_time - timedelta(seconds=RDP_BOOTSTRAP_MAX_LEAD_SECONDS)
+        if (
+            spec.type == "logon"
+            and spec.logon_type == 10
+            and _get_os_category(system.os) == "windows"
+            and spec.source_ip not in {"-", system.ip}
+        ):
+            return child_time
+        if (
+            spec.type != "credential_spray"
+            or spec.logon_type != 10
+            or spec.success is None
+            or _get_os_category(system.os) != "windows"
+            or spec.source_ip in (None, "", "-", system.ip)
+        ):
+            return None
+
+        start_time = (
+            self._parse_storyline_time(spec.start_time) + cumulative_shift
+            if spec.start_time
+            else child_time
+        )
+        interval_seconds = parse_duration(spec.interval).total_seconds()
+        success_after = int(spec.success["after"])
+        minimum_offset = max(0.0, (success_after - spec.jitter) * interval_seconds)
+        return start_time + timedelta(seconds=minimum_offset)
+
+    def _authored_event_rdp_nominal_lower_bound(
+        self,
+        event: Any,
+        event_time: datetime,
+    ) -> datetime | None:
+        """Return one conservative pre-execution RDP bound for an authored group."""
+
+        target_system = self._find_system(event.system)
+        if target_system is None:
+            return None
+        group_lower_bound = ensure_utc(event_time) - timedelta(
+            seconds=(_AUTHORED_EVENT_MAX_EARLY_JITTER_SECONDS + RDP_BOOTSTRAP_MAX_LEAD_SECONDS)
+        )
+        lower_bounds: list[datetime] = []
+        for spec in event.events:
+            if spec.type == "rdp_session":
+                lower_bounds.append(group_lower_bound)
+                continue
+            if (
+                spec.type == "logon"
+                and spec.logon_type == 10
+                and _get_os_category(target_system.os) == "windows"
+                and spec.source_ip not in {"-", target_system.ip}
+            ):
+                lower_bounds.append(group_lower_bound)
+                continue
+            if (
+                spec.type != "credential_spray"
+                or spec.logon_type != 10
+                or spec.success is None
+                or _get_os_category(target_system.os) != "windows"
+                or spec.source_ip in (None, "", "-", target_system.ip)
+            ):
+                continue
+            start_time = (
+                self._parse_storyline_time(spec.start_time)
+                if spec.start_time
+                else ensure_utc(event_time)
+                - timedelta(seconds=_AUTHORED_EVENT_MAX_EARLY_JITTER_SECONDS)
+            )
+            interval_seconds = parse_duration(spec.interval).total_seconds()
+            success_after = int(spec.success["after"])
+            minimum_offset = max(0.0, (success_after - spec.jitter) * interval_seconds)
+            lower_bounds.append(start_time + timedelta(seconds=minimum_offset))
+        return min(lower_bounds) if lower_bounds else None
+
+    def _authored_rdp_latest_anchor(
+        self,
+        *,
+        actor: User,
+        spec: Any,
+        system: System,
+        shifted_child_time: datetime,
+        cumulative_shift: timedelta,
+    ) -> datetime | None:
+        """Return a conservative upper bound for one shifted RDP action anchor."""
+
+        child_time = ensure_utc(shifted_child_time)
+        if spec.type == "rdp_session":
+            source_candidates: list[System]
+            if spec.source_ip:
+                modeled_source = self.world_model.system_for_ip(spec.source_ip)
+                source_candidates = [modeled_source] if modeled_source is not None else []
+            else:
+                source_candidates = [
+                    candidate
+                    for candidate in self.scenario.environment.systems
+                    if candidate.ip != system.ip and _get_os_category(candidate.os) == "windows"
+                ]
+            if not source_candidates:
+                return child_time
+            earliest_initial_source_process = child_time - timedelta(
+                seconds=(RDP_BOOTSTRAP_MAX_LEAD_SECONDS + RDP_SOURCE_PROCESS_MAX_LEAD_SECONDS)
+            )
+            latest_initial_source_process = child_time - timedelta(
+                seconds=(RDP_BOOTSTRAP_MIN_LEAD_SECONDS + RDP_SOURCE_PROCESS_MIN_LEAD_SECONDS)
+            )
+            alignment_hour_end = latest_initial_source_process.replace(
+                minute=0,
+                second=0,
+                microsecond=0,
+            ) + timedelta(hours=1)
+            source_hostnames = {candidate.hostname for candidate in source_candidates}
+            has_possible_future_source_session = any(
+                session.system in source_hostnames
+                and session.logon_type in {2, 10, 11}
+                and session.session_kind not in {"network", "service"}
+                and earliest_initial_source_process
+                < ensure_utc(session.start_time)
+                < alignment_hour_end
+                for session in self.state_manager.get_sessions_for_user(actor.username)
+            )
+            if not has_possible_future_source_session:
+                return child_time
+            latest_aligned_transport = alignment_hour_end + timedelta(
+                seconds=RDP_SOURCE_PROCESS_MAX_LEAD_SECONDS
+            )
+            return max(child_time, latest_aligned_transport)
+        if (
+            spec.type == "logon"
+            and spec.logon_type == 10
+            and _get_os_category(system.os) == "windows"
+            and spec.source_ip not in {"-", system.ip}
+        ):
+            return child_time
+        if (
+            spec.type != "credential_spray"
+            or spec.logon_type != 10
+            or spec.success is None
+            or _get_os_category(system.os) != "windows"
+            or spec.source_ip in (None, "", "-", system.ip)
+        ):
+            return None
+
+        start_time = (
+            self._parse_storyline_time(spec.start_time) + cumulative_shift
+            if spec.start_time
+            else child_time
+        )
+        interval_seconds = parse_duration(spec.interval).total_seconds()
+        success_after = int(spec.success["after"])
+        latest_offset = (success_after + spec.jitter) * interval_seconds
+        monotonic_clamp_margin = timedelta(milliseconds=success_after)
+        return ensure_utc(start_time) + timedelta(seconds=latest_offset) + monotonic_clamp_margin
+
+    def _authored_rdp_transport_lower_bound(self, current_hour: datetime) -> datetime | None:
+        """Return a best-effort current/next-hour fence that limits baseline distortion.
+
+        Live authored admission owns monotonicity; periodic specs may place an
+        explicit start outside the nominal group hour represented by this fence.
+        """
+
+        window_start = ensure_utc(current_hour)
+        hour_keys = (
+            int(window_start.timestamp()),
+            int((window_start + timedelta(hours=1)).timestamp()),
+        )
+        lower_bounds: list[datetime] = []
+        authored_groups = (
+            (self.scenario.storyline, getattr(self, "_storyline_by_hour", {})),
+            (self.scenario.red_herrings, getattr(self, "_red_herring_by_hour", {})),
+        )
+        for events, events_by_hour in authored_groups:
+            for hour_key in hour_keys:
+                for event_time, event_idx in events_by_hour.get(hour_key, ()):
+                    lower_bound = self._authored_event_rdp_nominal_lower_bound(
+                        events[event_idx],
+                        event_time,
+                    )
+                    if lower_bound is not None:
+                        lower_bounds.append(lower_bound)
+        return min(lower_bounds) if lower_bounds else None
+
+    def _shift_authored_rdp_child_after_frontier(
+        self,
+        *,
+        actor: User,
+        spec: Any,
+        system: System,
+        child_time: datetime,
+        cumulative_shift: timedelta,
+    ) -> tuple[datetime, timedelta]:
+        """Keep one RDP-producing child and its remaining siblings monotonic."""
+
+        minimum_anchor = self._authored_rdp_minimum_anchor(
+            spec=spec,
+            system=system,
+            child_time=child_time,
+            cumulative_shift=cumulative_shift,
+        )
+        if minimum_anchor is None:
+            return child_time, cumulative_shift
+        frontier = self.activity_generator._rdp_session_lifecycle_frontier()
+        required_anchor = frontier + _AUTHORED_RDP_FRONTIER_EPSILON
+        shift = max(timedelta(0), required_anchor - minimum_anchor)
+        shifted_child_time = child_time + shift
+        shifted_cumulative = cumulative_shift + shift
+        latest_anchor = self._authored_rdp_latest_anchor(
+            actor=actor,
+            spec=spec,
+            system=system,
+            shifted_child_time=shifted_child_time,
+            cumulative_shift=shifted_cumulative,
+        )
+        if latest_anchor is None:
+            raise StateError("Authored RDP admission lost its guarded action shape")
+        session_end_plan_getter = getattr(self, "_session_end_plan_for_current_start", None)
+        session_end_plan = session_end_plan_getter() if callable(session_end_plan_getter) else None
+        explicit_anchor_limit = (
+            ensure_utc(session_end_plan.canonical_end)
+            - timedelta(milliseconds=RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS)
+            if session_end_plan is not None
+            else None
+        )
+        if explicit_anchor_limit is not None and latest_anchor >= explicit_anchor_limit:
+            raise StateError(
+                "Authored RDP cannot be serialized before its explicit session end: "
+                f"latest action anchor {latest_anchor.isoformat()} must precede "
+                f"{explicit_anchor_limit.isoformat()}"
+            )
+        scenario_end = getattr(self, "end_time", None)
+        scenario_anchor_limit = (
+            ensure_utc(scenario_end)
+            - timedelta(seconds=RDP_TRANSPORT_DURATION_MAX_SECONDS)
+            - _AUTHORED_RDP_FRONTIER_EPSILON
+            if scenario_end is not None
+            else None
+        )
+        if scenario_anchor_limit is not None and latest_anchor >= scenario_anchor_limit:
+            raise StateError(
+                "Authored RDP cannot be serialized before the scenario end: "
+                f"latest action anchor {latest_anchor.isoformat()} must precede "
+                f"{scenario_anchor_limit.isoformat()}"
+            )
+        return shifted_child_time, shifted_cumulative
+
     def _execute_storyline(self) -> None:
         """Execute storyline events (malicious/suspicious activities).
 
@@ -3226,6 +3505,7 @@ class StorylineMixin:
 
             previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
             self.dispatcher.storyline_cluster_id = storyline_event.id
+            cumulative_rdp_shift = timedelta(0)
             try:
                 for i, spec in enumerate(storyline_event.events):
                     intent = self.authored_intent_ledger.intent_at(
@@ -3239,23 +3519,43 @@ class StorylineMixin:
                     self.dispatcher.authored_intent_id = intent.intent_id
                     self.intent_execution_ledger.mark_planned(intent.intent_id)
                     try:
-                        event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                        event_t = (
+                            event_time
+                            + timedelta(seconds=cadence_offsets[i])
+                            + cumulative_rdp_shift
+                        )
                         event_t = self._apply_storyline_shell_availability(
                             actor=actor,
                             system=system,
                             time=event_t,
                             rng=rng,
                         )
-                        self.state_manager.set_current_time(event_t)
-                        malicious_event = self._execute_typed_event(
-                            spec=spec,
-                            actor=actor,
-                            system=system,
-                            time=event_t,
-                            activity=storyline_event.activity,
-                            explicit_types=explicit_types,
-                            future_specs=itertools.islice(storyline_event.events, i + 1, None),
+                        event_t, cumulative_rdp_shift = (
+                            self._shift_authored_rdp_child_after_frontier(
+                                actor=actor,
+                                spec=spec,
+                                system=system,
+                                child_time=event_t,
+                                cumulative_shift=cumulative_rdp_shift,
+                            )
                         )
+                        self.state_manager.set_current_time(event_t)
+                        typed_event_kwargs = {
+                            "spec": spec,
+                            "actor": actor,
+                            "system": system,
+                            "time": event_t,
+                            "activity": storyline_event.activity,
+                            "explicit_types": explicit_types,
+                            "future_specs": itertools.islice(
+                                storyline_event.events,
+                                i + 1,
+                                None,
+                            ),
+                        }
+                        if cumulative_rdp_shift:
+                            typed_event_kwargs["authored_time_shift"] = cumulative_rdp_shift
+                        malicious_event = self._execute_typed_event(**typed_event_kwargs)
                         if malicious_event:
                             malicious_event["intent_id"] = intent.intent_id
                             self.malicious_events.append(malicious_event)
@@ -3267,7 +3567,9 @@ class StorylineMixin:
                 self.dispatcher.storyline_cluster_id = previous_cluster
 
             if cadence_offsets:
-                _prev_event_time = event_time + timedelta(seconds=cadence_offsets[-1])
+                _prev_event_time = (
+                    event_time + timedelta(seconds=cadence_offsets[-1]) + cumulative_rdp_shift
+                )
             else:
                 _prev_event_time = event_time
 
@@ -3308,6 +3610,7 @@ class StorylineMixin:
 
         previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
         self.dispatcher.storyline_cluster_id = storyline_event.id
+        cumulative_rdp_shift = timedelta(0)
         try:
             for i, spec in enumerate(storyline_event.events):
                 intent = self.authored_intent_ledger.intent_at(
@@ -3321,12 +3624,21 @@ class StorylineMixin:
                 self.dispatcher.authored_intent_id = intent.intent_id
                 self.intent_execution_ledger.mark_planned(intent.intent_id)
                 try:
-                    event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                    event_t = (
+                        event_time + timedelta(seconds=cadence_offsets[i]) + cumulative_rdp_shift
+                    )
                     event_t = self._apply_storyline_shell_availability(
                         actor=actor,
                         system=system,
                         time=event_t,
                         rng=rng,
+                    )
+                    event_t, cumulative_rdp_shift = self._shift_authored_rdp_child_after_frontier(
+                        actor=actor,
+                        spec=spec,
+                        system=system,
+                        child_time=event_t,
+                        cumulative_shift=cumulative_rdp_shift,
                     )
                     self.state_manager.set_current_time(event_t)
                     malicious_event = self._execute_typed_event(
@@ -3337,6 +3649,7 @@ class StorylineMixin:
                         activity=storyline_event.activity,
                         explicit_types=explicit_types,
                         future_specs=itertools.islice(storyline_event.events, i + 1, None),
+                        authored_time_shift=cumulative_rdp_shift,
                     )
                     if malicious_event:
                         malicious_event["intent_id"] = intent.intent_id
@@ -3386,6 +3699,7 @@ class StorylineMixin:
 
         previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
         self.dispatcher.storyline_cluster_id = f"red_herring:{rh_event.id}"
+        cumulative_rdp_shift = timedelta(0)
         try:
             for i, spec in enumerate(rh_event.events):
                 intent = self.authored_intent_ledger.intent_at(
@@ -3397,12 +3711,21 @@ class StorylineMixin:
                 self.dispatcher.authored_intent_id = intent.intent_id
                 self.intent_execution_ledger.mark_planned(intent.intent_id)
                 try:
-                    event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                    event_t = (
+                        event_time + timedelta(seconds=cadence_offsets[i]) + cumulative_rdp_shift
+                    )
                     event_t = self._apply_storyline_shell_availability(
                         actor=actor,
                         system=system,
                         time=event_t,
                         rng=rng,
+                    )
+                    event_t, cumulative_rdp_shift = self._shift_authored_rdp_child_after_frontier(
+                        actor=actor,
+                        spec=spec,
+                        system=system,
+                        child_time=event_t,
+                        cumulative_shift=cumulative_rdp_shift,
                     )
                     self.state_manager.set_current_time(event_t)
                     result = self._execute_typed_event(
@@ -3413,6 +3736,7 @@ class StorylineMixin:
                         activity=rh_event.activity,
                         explicit_types=explicit_types,
                         future_specs=itertools.islice(rh_event.events, i + 1, None),
+                        authored_time_shift=cumulative_rdp_shift,
                     )
                     if result:
                         # Track as red herring, not malicious
@@ -3434,6 +3758,7 @@ class StorylineMixin:
         activity: str,
         explicit_types: set[str],
         future_specs: Sequence[Any] = (),
+        authored_time_shift: timedelta = timedelta(0),
     ) -> dict | None:
         """Execute a single typed event from the storyline events list.
 
@@ -3647,19 +3972,13 @@ class StorylineMixin:
                             system,
                             time,
                         )
-                        # Pre-compute the session kind via the planner so reuse
-                        # filtering matches the correct transport type.
-                        plan = self.world_model.plan_session(
-                            user=actor,
-                            target_system=system,
-                            rng=rng,
-                        )
+                        session_kind = self._storyline_non_session_kind(actor, system, rng)
                         target_session = self.world_planner.ensure_user_session(
                             actor,
                             system,
                             time,
                             rng,
-                            session_kind=plan.session_kind,
+                            session_kind=session_kind,
                             storyline_protected=True,
                             required_until=required_until,
                         )
@@ -6089,14 +6408,18 @@ class StorylineMixin:
 
         elif spec.type == "credential_spray":
             # Timing
-            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+            start = (
+                self._parse_storyline_time(spec.start_time) + authored_time_shift
+                if spec.start_time
+                else time
+            )
             interval_sec = parse_duration(spec.interval).total_seconds()
             duration_sec = None
             count = spec.count
             if spec.duration is not None:
                 duration_sec = parse_duration(spec.duration).total_seconds()
             elif spec.end_time is not None:
-                end_dt = self._parse_storyline_time(spec.end_time)
+                end_dt = self._parse_storyline_time(spec.end_time) + authored_time_shift
                 duration_sec = (end_dt - start).total_seconds()
 
             spray_src_ip = spec.source_ip or system.ip

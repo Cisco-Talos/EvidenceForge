@@ -92,6 +92,10 @@ from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
+RDP_TRANSPORT_DURATION_MAX_SECONDS = 3600.0
+RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS = 1500
+_RDP_EXPLICIT_END_CLOSE_GAP_MIN_MILLISECONDS = 100
+
 
 @dataclass(frozen=True, slots=True)
 class _RdpTerminalProjectionTimingProof:
@@ -641,15 +645,19 @@ class RdpSessionActionBundle:
         )
         if callable(lifecycle_drain):
             lifecycle_drain(self._request.time)
-        duration = rng.uniform(60.0, 3600.0)
+        duration = rng.uniform(60.0, RDP_TRANSPORT_DURATION_MAX_SECONDS)
         end_plan = self._request.session_end_plan
         if end_plan is not None and end_plan.is_authoritative:
-            close_gap_ms = 100 + (
+            close_gap_ms = _RDP_EXPLICIT_END_CLOSE_GAP_MIN_MILLISECONDS + (
                 _stable_seed(
                     "rdp_transport_before_explicit_logoff:"
                     f"{self._request.stable_id}:{end_plan.canonical_end.isoformat()}"
                 )
-                % 1401
+                % (
+                    RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS
+                    - _RDP_EXPLICIT_END_CLOSE_GAP_MIN_MILLISECONDS
+                    + 1
+                )
             )
             latest_close = end_plan.canonical_end - timedelta(milliseconds=close_gap_ms)
             if latest_close <= self._request.time:
@@ -1232,12 +1240,16 @@ class RdpSessionActionBundle:
         )
         if prior is None:
             raise StateError("Exact RDP reconnect lost its logical session deadline")
-        close_gap_ms = 100 + (
+        close_gap_ms = _RDP_EXPLICIT_END_CLOSE_GAP_MIN_MILLISECONDS + (
             _stable_seed(
                 "rdp_reconnect_transport_before_logout:"
                 f"{self._request.stable_id}:{prior.identity.hard_deadline.isoformat()}"
             )
-            % 1401
+            % (
+                RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS
+                - _RDP_EXPLICIT_END_CLOSE_GAP_MIN_MILLISECONDS
+                + 1
+            )
         )
         latest_close = prior.identity.hard_deadline - timedelta(milliseconds=close_gap_ms)
         if latest_close <= open_time:

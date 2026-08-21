@@ -5515,7 +5515,7 @@ class ActivityGenerator:
                 f"{canonical_cutoff.isoformat()} < {self._proxy_channel_watermark.isoformat()}"
             )
         if advance_rdp_lifecycle:
-            self.advance_rdp_session_lifecycle_watermark(canonical_cutoff)
+            self.advance_rdp_session_retention_watermark(canonical_cutoff)
         self._advance_rdp_manager_watermark(canonical_cutoff)
         self._proxy_channel_manager.watermark(canonical_cutoff)
         self._http_channel_manager.watermark(canonical_cutoff)
@@ -6571,6 +6571,21 @@ class ActivityGenerator:
                     raise StateError("Exact RDP lifecycle entry changed before acknowledgement")
                 self._pending_rdp_lifecycle_continuations.pop(continuation.continuation_id)
         self._rdp_lifecycle_watermark = canonical_cutoff
+
+    def advance_rdp_session_retention_watermark(self, cutoff: datetime) -> None:
+        """Advance shared retention without reversing the RDP action frontier."""
+
+        canonical_cutoff = ensure_utc(cutoff)
+        lifecycle_frontier = self._rdp_session_lifecycle_frontier()
+        if canonical_cutoff < lifecycle_frontier:
+            return
+        self.advance_rdp_session_lifecycle_watermark(canonical_cutoff)
+
+    def _rdp_session_lifecycle_frontier(self) -> datetime:
+        """Return the exact committed RDP lifecycle scheduling frontier."""
+
+        with self._rdp_lifecycle_journal_lock:
+            return self._rdp_lifecycle_watermark
 
     def rdp_lifecycle_journal_census(self) -> RdpLifecycleJournalCensus:
         """Return bounded counts for prepared and installed RDP lifecycle work."""
@@ -28112,13 +28127,13 @@ class ActivityGenerator:
                     logon_type = 2
             elif sys_type in ("server", "domain_controller"):
                 # Servers/DCs: Type 3 (network) dominates
-                logon_type = rng.choices([3, 5, 10, 4, 2, 8], weights=[70, 15, 8, 4, 2, 1], k=1)[0]
+                logon_type = rng.choices([3, 5, 3, 4, 2, 8], weights=[70, 15, 8, 4, 2, 1], k=1)[0]
             elif is_service_account:
                 # Service accounts on workstations: network + service logons
-                logon_type = rng.choices([3, 5, 10], weights=[70, 25, 5], k=1)[0]
+                logon_type = rng.choices([3, 5, 3], weights=[70, 25, 5], k=1)[0]
             else:
                 # Regular users on workstations: Type 3 dominant, no Type 5
-                logon_type = rng.choices([3, 2, 7, 11, 10], weights=[55, 20, 10, 10, 5], k=1)[0]
+                logon_type = rng.choices([3, 2, 7, 11, 3], weights=[55, 20, 10, 10, 5], k=1)[0]
 
             active_interactive = None
             if (

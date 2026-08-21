@@ -117,6 +117,10 @@ _DHCP_SERVER_SERVICES = {
 
 _SSH_RECEIVER_SERVICES = {"ssh", "sshd", "openssh-server"}
 _RDP_RECEIVER_SERVICES = {"rdp", "remote-desktop", "remote_desktop", "termservice"}
+RDP_BOOTSTRAP_MIN_LEAD_SECONDS = 0.5
+RDP_BOOTSTRAP_MAX_LEAD_SECONDS = 5.0
+RDP_SOURCE_PROCESS_MIN_LEAD_SECONDS = 1.799999
+RDP_SOURCE_PROCESS_MAX_LEAD_SECONDS = 3.200001
 _SMB_CLIENT_SERVICES = {
     "cifs-client",
     "cifs-utils",
@@ -130,6 +134,16 @@ _SMB_SERVER_SERVICES = {
     "smbd",
 }
 _SMB_GENERIC_SERVICES = {"cifs", "fileshare", "smb"}
+
+
+def _sample_rdp_bootstrap_lead_seconds(rng: random.Random) -> float:
+    """Sample the existing RDP lead with Random.uniform's exact arithmetic."""
+
+    return (
+        RDP_BOOTSTRAP_MIN_LEAD_SECONDS
+        + (RDP_BOOTSTRAP_MAX_LEAD_SECONDS - RDP_BOOTSTRAP_MIN_LEAD_SECONDS) * rng.random()
+    )
+
 
 _ADMIN_PERSONAS = {"sysadmin", "help_desk"}
 _LINUX_SSH_ADMIN_PERSONAS = {"sysadmin"}
@@ -323,6 +337,18 @@ class SessionBootstrapResult:
 
     session: ActiveSession
     network_uid: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedRdpSessionBootstrap:
+    """Resolved RDP bootstrap facts that must retain one lifecycle ordering key."""
+
+    session_plan: SessionPlan
+    username: str
+    requested_activity_time: datetime
+    transport_time: datetime
+    activity_time: datetime
+    source_process_time: datetime | None
 
 
 class WorldModel:
@@ -974,6 +1000,181 @@ class WorldPlanner:
             source=source,
         )
 
+    @staticmethod
+    def _canonical_aware_time(value: datetime, *, field_name: str) -> datetime:
+        """Validate one public bootstrap time and return its canonical UTC value."""
+
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{field_name} must be timezone-aware")
+        return value.astimezone(UTC)
+
+    def _prepare_rdp_session_bootstrap(
+        self,
+        *,
+        user: User,
+        target_system: System,
+        time: datetime,
+        rng: random.Random,
+        source_system: System | None = None,
+        source_ip_override: str | None = None,
+    ) -> _PreparedRdpSessionBootstrap:
+        """Freeze the exact RDP bundle timing facts before lifecycle ordering.
+
+        This preparation is intentionally specific to RDP. It resolves the
+        session plan, the ordinary bootstrap lead, and any source-workstation
+        alignment exactly once so later global scheduling can sort on the same
+        transport time that the RDP action bundle will consume.
+        """
+
+        requested_activity_time = self._canonical_aware_time(time, field_name="time")
+        session_plan = self.world_model.plan_session(
+            user=user,
+            target_system=target_system,
+            rng=rng,
+            session_kind="rdp",
+            source_system=source_system,
+            source_ip_override=source_ip_override,
+        )
+        if (
+            session_plan.session_kind != "rdp"
+            or session_plan.logon_type != 10
+            or not session_plan.requires_transport
+        ):
+            raise ValueError(
+                "Prepared RDP bootstrap requires a resolvable remote interactive "
+                f"session for {user.username} on {target_system.hostname}"
+            )
+
+        transport_time = requested_activity_time - timedelta(
+            seconds=_sample_rdp_bootstrap_lead_seconds(rng)
+        )
+        activity_time = requested_activity_time
+        source_process_time = self._rdp_source_process_time(
+            user=user,
+            plan=session_plan,
+            logon_time=transport_time,
+        )
+        if session_plan.source_system is not None:
+            assert source_process_time is not None
+            aligned_source_time = self._align_rdp_source_after_future_workstation_session(
+                username=user.username,
+                source_system=session_plan.source_system,
+                source_process_time=source_process_time,
+                rng=rng,
+            )
+            if aligned_source_time > source_process_time:
+                shift = aligned_source_time - source_process_time
+                source_process_time = aligned_source_time
+                transport_time += shift
+                activity_time += shift
+
+        prepared = _PreparedRdpSessionBootstrap(
+            session_plan=session_plan,
+            username=user.username,
+            requested_activity_time=requested_activity_time,
+            transport_time=transport_time,
+            activity_time=activity_time,
+            source_process_time=source_process_time,
+        )
+        self._validate_prepared_rdp_session_bootstrap(
+            prepared,
+            user=user,
+            target_system=target_system,
+            time=requested_activity_time,
+            source_system=source_system,
+            source_ip_override=source_ip_override,
+            session_kind="rdp",
+        )
+        return prepared
+
+    def _bootstrap_prepared_rdp_session(
+        self,
+        *,
+        user: User,
+        prepared: _PreparedRdpSessionBootstrap,
+        rng: random.Random,
+        allow_existing: bool = True,
+    ) -> SessionBootstrapResult:
+        """Consume one planner-issued RDP timing carrier without resampling it."""
+
+        return self.bootstrap_user_session(
+            user=user,
+            target_system=prepared.session_plan.target_system,
+            time=prepared.requested_activity_time,
+            rng=rng,
+            session_kind="rdp",
+            source_system=prepared.session_plan.source_system,
+            allow_existing=allow_existing,
+            _prepared_rdp_bootstrap=prepared,
+        )
+
+    def _validate_prepared_rdp_session_bootstrap(
+        self,
+        prepared: _PreparedRdpSessionBootstrap,
+        *,
+        user: User,
+        target_system: System,
+        time: datetime,
+        source_system: System | None,
+        source_ip_override: str | None,
+        session_kind: str | None,
+    ) -> None:
+        """Reject stale or semantically mismatched prepared RDP facts."""
+
+        if session_kind != "rdp":
+            raise ValueError("Prepared RDP bootstrap requires session_kind='rdp'")
+
+        plan = prepared.session_plan
+        if plan.session_kind != "rdp" or plan.logon_type != 10 or not plan.requires_transport:
+            raise ValueError("Prepared RDP bootstrap must contain a Type 10 transport plan")
+        if prepared.username != user.username:
+            raise ValueError("Prepared RDP bootstrap username does not match the request")
+        if (
+            plan.target_system.hostname != target_system.hostname
+            or plan.target_system.ip != target_system.ip
+        ):
+            raise ValueError("Prepared RDP bootstrap target does not match the request")
+
+        prepared_source = plan.source_system
+        if source_system is not None:
+            source_matches = (
+                prepared_source is not None
+                and prepared_source.hostname == source_system.hostname
+                and prepared_source.ip == source_system.ip
+            )
+            if not source_matches:
+                raise ValueError("Prepared RDP bootstrap source does not match the request")
+        if source_ip_override is not None and plan.source_ip != source_ip_override:
+            raise ValueError("Prepared RDP bootstrap source IP does not match the request")
+
+        requested_time = self._canonical_aware_time(time, field_name="time")
+        if prepared.requested_activity_time != requested_time:
+            raise ValueError("Prepared RDP bootstrap activity time does not match the request")
+        for field_name, value in (
+            ("requested_activity_time", prepared.requested_activity_time),
+            ("transport_time", prepared.transport_time),
+            ("activity_time", prepared.activity_time),
+        ):
+            if value.tzinfo is not UTC:
+                raise ValueError(f"Prepared RDP bootstrap {field_name} must be canonical UTC")
+        if prepared.transport_time > prepared.activity_time:
+            raise ValueError("Prepared RDP transport time must not follow its activity time")
+        if prepared.activity_time < prepared.requested_activity_time:
+            raise ValueError("Prepared RDP activity time must not precede its requested time")
+
+        if prepared_source is None:
+            if prepared.source_process_time is not None:
+                raise ValueError("External RDP bootstrap cannot contain a source process time")
+        else:
+            if _get_os_category(prepared_source.os) != "windows":
+                raise ValueError("Prepared RDP bootstrap requires a Windows source system")
+            if prepared.source_process_time is None:
+                raise ValueError("Modeled RDP source requires a source process time")
+            if prepared.source_process_time.tzinfo is not UTC:
+                raise ValueError("Prepared RDP bootstrap source_process_time must be canonical UTC")
+            if prepared.source_process_time >= prepared.transport_time:
+                raise ValueError("Prepared RDP source process must precede transport")
+
     def ensure_user_session(
         self,
         user: User,
@@ -1038,7 +1239,19 @@ class WorldPlanner:
         required_until: datetime | None = None,
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
+        _prepared_rdp_bootstrap: _PreparedRdpSessionBootstrap | None = None,
     ) -> SessionBootstrapResult:
+        if _prepared_rdp_bootstrap is not None:
+            self._validate_prepared_rdp_session_bootstrap(
+                _prepared_rdp_bootstrap,
+                user=user,
+                target_system=target_system,
+                time=time,
+                source_system=source_system,
+                source_ip_override=source_ip_override,
+                session_kind=session_kind,
+            )
+
         if allow_existing and session_kind in (None, "interactive"):
             existing_interactive = self._find_windows_interactive_session(
                 user.username,
@@ -1107,23 +1320,31 @@ class WorldPlanner:
                     existing.storyline_protected = True
                 return SessionBootstrapResult(session=existing, network_uid=None)
 
-        plan = self.world_model.plan_session(
-            user=user,
-            target_system=target_system,
-            rng=rng,
-            session_kind=session_kind,
-            source_system=source_system,
-            source_ip_override=source_ip_override,
-        )
-        if plan.session_kind == "ssh":
-            # SSH emits connection, accepted-auth, PAM, eCAR session, then shell
-            # process evidence. Give that source-native sequence room before
-            # the first user-visible command tied to the session.
-            logon_time = time - timedelta(seconds=rng.uniform(6.0, 12.0))
-        elif plan.session_kind == "interactive" and _get_os_category(target_system.os) == "linux":
-            logon_time = time - timedelta(seconds=rng.uniform(7.0, 15.0))
+        if _prepared_rdp_bootstrap is not None:
+            plan = _prepared_rdp_bootstrap.session_plan
+            logon_time = _prepared_rdp_bootstrap.transport_time
+            activity_time = _prepared_rdp_bootstrap.activity_time
         else:
-            logon_time = time - timedelta(seconds=rng.uniform(0.5, 5.0))
+            plan = self.world_model.plan_session(
+                user=user,
+                target_system=target_system,
+                rng=rng,
+                session_kind=session_kind,
+                source_system=source_system,
+                source_ip_override=source_ip_override,
+            )
+            if plan.session_kind == "ssh":
+                # SSH emits connection, accepted-auth, PAM, eCAR session, then shell
+                # process evidence. Give that source-native sequence room before
+                # the first user-visible command tied to the session.
+                logon_time = time - timedelta(seconds=rng.uniform(6.0, 12.0))
+            elif (
+                plan.session_kind == "interactive" and _get_os_category(target_system.os) == "linux"
+            ):
+                logon_time = time - timedelta(seconds=rng.uniform(7.0, 15.0))
+            else:
+                logon_time = time - timedelta(seconds=_sample_rdp_bootstrap_lead_seconds(rng))
+            activity_time = time
         self.state_manager.set_current_time(logon_time)
 
         if plan.session_kind == "ssh":
@@ -1158,10 +1379,11 @@ class WorldPlanner:
                 user,
                 plan,
                 logon_time,
-                time,
+                activity_time,
                 rng,
                 session_end_plan=session_end_plan,
                 ids_alerts=ids_alerts,
+                prepared_rdp_bootstrap=_prepared_rdp_bootstrap,
             )
             if storyline_protected and result.session:
                 result.session.storyline_protected = True
@@ -1866,27 +2088,32 @@ class WorldPlanner:
         rng: random.Random,
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
+        prepared_rdp_bootstrap: _PreparedRdpSessionBootstrap | None = None,
     ) -> SessionBootstrapResult:
         source_pid = -1
-        source_process_time = self._rdp_source_process_time(
-            user=user,
-            plan=plan,
-            logon_time=logon_time,
-        )
+        if prepared_rdp_bootstrap is not None:
+            source_process_time = prepared_rdp_bootstrap.source_process_time
+        else:
+            source_process_time = self._rdp_source_process_time(
+                user=user,
+                plan=plan,
+                logon_time=logon_time,
+            )
         source_process_factory = None
         if plan.source_system is not None:
             assert source_process_time is not None
-            aligned_source_time = self._align_rdp_source_after_future_workstation_session(
-                username=user.username,
-                source_system=plan.source_system,
-                source_process_time=source_process_time,
-                rng=rng,
-            )
-            if aligned_source_time > source_process_time:
-                shift = aligned_source_time - source_process_time
-                source_process_time = aligned_source_time
-                logon_time += shift
-                activity_time += shift
+            if prepared_rdp_bootstrap is None:
+                aligned_source_time = self._align_rdp_source_after_future_workstation_session(
+                    username=user.username,
+                    source_system=plan.source_system,
+                    source_process_time=source_process_time,
+                    rng=rng,
+                )
+                if aligned_source_time > source_process_time:
+                    shift = aligned_source_time - source_process_time
+                    source_process_time = aligned_source_time
+                    logon_time += shift
+                    activity_time += shift
             source_process_factory = self._rdp_source_process_factory(rng)
         uid, logon_id = self.activity_generator._execute_rdp_session_bundle(
             user=user,
@@ -1929,9 +2156,9 @@ class WorldPlanner:
         lead_seconds = self._timing_planner("rdp-bootstrap").triangular_seconds(
             relationship_key="world.rdp.source_process_create_lead",
             stable_id=lifecycle_id,
-            minimum=1.799999,
+            minimum=RDP_SOURCE_PROCESS_MIN_LEAD_SECONDS,
             mode=2.5,
-            maximum=3.200001,
+            maximum=RDP_SOURCE_PROCESS_MAX_LEAD_SECONDS,
             host=source_system.hostname,
             lifecycle_id=lifecycle_id,
             sample_key="source-process-lead",

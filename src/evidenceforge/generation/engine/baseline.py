@@ -121,6 +121,7 @@ from evidenceforge.generation.activity.windows_auth_realism import (
 from evidenceforge.generation.world_model import (
     HostCapability,
     WorldModel,
+    _PreparedRdpSessionBootstrap,
     host_services_support_database_service,
     normalize_database_service,
 )
@@ -214,6 +215,17 @@ class _BaselineSmbIntent:
     orig_bytes: int
     resp_bytes: int
     emit_dns: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _BaselineRdpIntent:
+    """One baseline RDP session request planned for the shared hourly timeline."""
+
+    time: datetime
+    target_system: System
+    user: User
+    source_system: System | None
+    prepared_bootstrap: _PreparedRdpSessionBootstrap
 
 
 @dataclass(frozen=True, slots=True)
@@ -3141,6 +3153,101 @@ class BaselineMixin:
         key = (target_hostname, source_hostname, username)
         state[key] = self._utc(session_time)
 
+    @staticmethod
+    def _baseline_rdp_execution_anchor(request: _BaselineRdpIntent) -> datetime:
+        """Return the exact lifecycle anchor used by one baseline RDP request."""
+
+        return request.prepared_bootstrap.transport_time
+
+    @staticmethod
+    def _baseline_rdp_anchor_is_in_hour(
+        prepared: _PreparedRdpSessionBootstrap,
+        current_hour: datetime,
+    ) -> bool:
+        """Keep per-hour RDP batches inside one explicit half-open frontier window."""
+
+        window_start = ensure_utc(current_hour)
+        return window_start <= prepared.transport_time < window_start + timedelta(hours=1)
+
+    @staticmethod
+    def _baseline_rdp_anchor_is_admissible(
+        prepared: _PreparedRdpSessionBootstrap,
+        *,
+        current_hour: datetime,
+        committed_frontier: datetime,
+        authored_lower_bound: datetime | None,
+    ) -> bool:
+        """Apply the hourly, committed, and authored RDP frontier fences."""
+
+        if not BaselineMixin._baseline_rdp_anchor_is_in_hour(prepared, current_hour):
+            return False
+        if prepared.transport_time < ensure_utc(committed_frontier):
+            return False
+        return authored_lower_bound is None or prepared.transport_time < ensure_utc(
+            authored_lower_bound
+        )
+
+    @staticmethod
+    def _baseline_rdp_request_sort_key(
+        request: _BaselineRdpIntent,
+    ) -> tuple[datetime, str, str, str, str, str]:
+        """Return one total semantic order for the shared RDP lifecycle frontier."""
+
+        source = request.source_system
+        return (
+            BaselineMixin._baseline_rdp_execution_anchor(request),
+            request.target_system.hostname.casefold(),
+            request.target_system.ip,
+            request.user.username.casefold(),
+            source.hostname.casefold() if source is not None else "",
+            source.ip if source is not None else "",
+        )
+
+    def _execute_baseline_rdp_requests(
+        self,
+        requests: tuple[_BaselineRdpIntent, ...],
+        rng: random.Random,
+    ) -> None:
+        """Execute all planned RDP sessions on one globally ordered hourly timeline."""
+
+        for request in sorted(requests, key=BaselineMixin._baseline_rdp_request_sort_key):
+            target_system = request.target_system
+            rdp_user = request.user
+            source_system = request.source_system
+            source_hostname = source_system.hostname if source_system is not None else "-"
+            execution_anchor = BaselineMixin._baseline_rdp_execution_anchor(request)
+            frontier_getter = getattr(
+                getattr(self, "activity_generator", None),
+                "_rdp_session_lifecycle_frontier",
+                None,
+            )
+            if callable(frontier_getter) and execution_anchor < frontier_getter():
+                continue
+            if not self._baseline_rdp_cooldown_allows(
+                target_hostname=target_system.hostname,
+                source_hostname=source_hostname,
+                username=rdp_user.username,
+                planned_time=execution_anchor,
+            ):
+                continue
+
+            self.state_manager.set_current_time(execution_anchor)
+            result = self.world_planner._bootstrap_prepared_rdp_session(
+                user=rdp_user,
+                prepared=request.prepared_bootstrap,
+                rng=rng,
+                allow_existing=True,
+            )
+            session_time = (
+                result.session.start_time if result.session is not None else execution_anchor
+            )
+            self._remember_baseline_rdp_session(
+                target_hostname=target_system.hostname,
+                source_hostname=source_hostname,
+                username=rdp_user.username,
+                session_time=session_time,
+            )
+
     def _select_windows_scheduled_task(
         self,
         *,
@@ -4982,6 +5089,17 @@ class BaselineMixin:
                     svc = "ldap" if port == 389 else "ssl"
                     _emit_conn(lx, dc, port, svc)
 
+    @staticmethod
+    def _baseline_generic_session_kind(system: System) -> str:
+        """Resolve baseline activity sessions without creating implicit RDP."""
+
+        if _get_os_category(system.os) == "linux" and (system.type or "workstation").lower() in {
+            "server",
+            "domain_controller",
+        }:
+            return "ssh"
+        return "interactive"
+
     def _ensure_session_on_system(self, user: User, system, time, rng) -> str:
         """Ensure the user has an active session on the target system.
 
@@ -5000,7 +5118,13 @@ class BaselineMixin:
                 return existing_interactive.logon_id
 
         if hasattr(self, "world_planner"):
-            session = self.world_planner.ensure_user_session(user, system, time, rng)
+            session = self.world_planner.ensure_user_session(
+                user,
+                system,
+                time,
+                rng,
+                session_kind=self._baseline_generic_session_kind(system),
+            )
             return session.logon_id
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
@@ -5014,20 +5138,16 @@ class BaselineMixin:
         logon_time = time - timedelta(seconds=rng.randint(1, 5))
         self.state_manager.set_current_time(logon_time)
         sys_type = (system.type or "workstation").lower()
-        logon_type = (
+        sampled_logon_type = (
             rng.choices([3, 10], weights=[70, 30], k=1)[0]
-            if sys_type
-            in (
-                "server",
-                "domain_controller",
-            )
+            if sys_type in {"server", "domain_controller"}
             else 2
         )
         return self.activity_generator.generate_logon(
             user=user,
             system=system,
             time=logon_time,
-            logon_type=logon_type,
+            logon_type=2 if sampled_logon_type == 10 else sampled_logon_type,
         )
 
     def _existing_windows_interactive_session(
@@ -5105,7 +5225,7 @@ class BaselineMixin:
                             user=result["user"],
                             system=target_system,
                             time=result["time"],
-                            logon_type=result["logon_type"],
+                            logon_type=(2 if result["logon_type"] == 10 else result["logon_type"]),
                         )
 
             elif pattern_type == "suspicious_cli":
@@ -6518,7 +6638,13 @@ class BaselineMixin:
         )
         if not has_session_on_system and activities:
             if hasattr(self, "world_planner"):
-                self.world_planner.ensure_user_session(user, system, event_time, rng)
+                self.world_planner.ensure_user_session(
+                    user,
+                    system,
+                    event_time,
+                    rng,
+                    session_kind=self._baseline_generic_session_kind(system),
+                )
             else:
                 self._ensure_session_on_system(user, system, event_time, rng)
 
@@ -9722,7 +9848,14 @@ class BaselineMixin:
                             ws_user, system, cmd_time, cmd
                         )
 
-        # RDP: IT admin connections to Windows servers/DCs
+        # RDP: IT admin connections to Windows servers/DCs. Plan every target
+        # first because the exact lifecycle journal owns one global frontier.
+        # Bootstrap consumes the shared deterministic RNG, so completing all
+        # placement draws first also prevents one target's execution texture
+        # from feeding back into later targets' request times.
+        rdp_requests: list[_BaselineRdpIntent] = []
+        committed_rdp_frontier = self.activity_generator._rdp_session_lifecycle_frontier()
+        authored_rdp_lower_bound = self._authored_rdp_transport_lower_bound(current_hour)
         for system in self.scenario.environment.systems:
             os_cat_rdp = _get_os_category(system.os)
             sys_type_rdp = (system.type or "workstation").lower()
@@ -9745,7 +9878,6 @@ class BaselineMixin:
             if not roster:
                 continue
 
-            rdp_requests = []
             for _ in range(num_rdp):
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
@@ -9757,35 +9889,37 @@ class BaselineMixin:
                 )
                 if source_system is not None and _get_os_category(source_system.os) != "windows":
                     continue
-                rdp_requests.append((ts, rdp_user, source_system))
-
-            for ts, rdp_user, source_system in sorted(rdp_requests, key=lambda request: request[0]):
-                source_hostname = source_system.hostname if source_system is not None else "-"
-                if not self._baseline_rdp_cooldown_allows(
-                    target_hostname=system.hostname,
-                    source_hostname=source_hostname,
-                    username=rdp_user.username,
-                    planned_time=ts,
-                ):
+                if source_system is None:
                     continue
-
-                self.state_manager.set_current_time(ts)
-                result = self.world_planner.bootstrap_user_session(
+                prepared_bootstrap = self.world_planner._prepare_rdp_session_bootstrap(
                     user=rdp_user,
                     target_system=system,
                     time=ts,
                     rng=rng,
-                    session_kind="rdp",
                     source_system=source_system,
-                    allow_existing=True,
                 )
-                session_time = result.session.start_time if result.session is not None else ts
-                self._remember_baseline_rdp_session(
-                    target_hostname=system.hostname,
-                    source_hostname=source_hostname,
-                    username=rdp_user.username,
-                    session_time=session_time,
+                # Optional baseline RDP is consumed before later system and
+                # authored activity can invalidate its frozen source-session
+                # snapshot. The authored fence limits scheduling distortion;
+                # the live authored frontier shift remains the safety proof.
+                if not self._baseline_rdp_anchor_is_admissible(
+                    prepared_bootstrap,
+                    current_hour=current_hour,
+                    committed_frontier=committed_rdp_frontier,
+                    authored_lower_bound=authored_rdp_lower_bound,
+                ):
+                    continue
+                rdp_requests.append(
+                    _BaselineRdpIntent(
+                        time=ts,
+                        target_system=system,
+                        user=rdp_user,
+                        source_system=source_system,
+                        prepared_bootstrap=prepared_bootstrap,
+                    )
                 )
+
+        self._execute_baseline_rdp_requests(tuple(rdp_requests), rng)
 
         # RSAT: admin workstation → DC management sessions (mmc.exe + LDAP/RPC)
         self._generate_rsat_sessions(current_hour, rng, local_dt)
