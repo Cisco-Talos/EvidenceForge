@@ -7120,6 +7120,7 @@ class EventDispatcher:
         """Fail closed before rendering unless the concrete sink has exact admission."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
         from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 
         if format_name == "ecar" and type(emitter) is EcarEmitter:
@@ -7128,6 +7129,12 @@ class EventDispatcher:
             format_name == "windows_event_security"
             and type(emitter) is WindowsEventEmitter
             and getattr(emitter, "supports_exact_candidate_publication", None) is True
+        ):
+            return
+        if (
+            format_name == "windows_event_sysmon"
+            and type(emitter) is SysmonEventEmitter
+            and getattr(emitter, "supports_exact_projection_publication", None) is True
         ):
             return
         raise EventContractError(

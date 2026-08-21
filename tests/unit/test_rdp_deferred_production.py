@@ -27,6 +27,7 @@ from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.emitters.base import ExactPublicationAuthority
 from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.engine import GenerationEngine
@@ -51,12 +52,14 @@ class _RdpTerminalHarness:
     generator: ActivityGenerator
     ecar: EcarEmitter
     windows: WindowsEventEmitter
+    sysmon: SysmonEventEmitter | None
     zeek: ZeekEmitter
     source_hostname: str
     target_hostname: str
     logon_id: str
     session_object_id: str
     terminal_process_object_ids: tuple[str, ...]
+    terminal_process_identities: tuple[ProcessIdentity, ...]
     disconnect_at: datetime
     output_root: Path
 
@@ -66,6 +69,7 @@ def _open_rdp_terminal_harness(
     *,
     clock_profile_name: str = "complete",
     output_start_time: datetime | None = None,
+    include_sysmon: bool = False,
 ) -> _RdpTerminalHarness:
     """Open one exact initial RDP generation whose full terminal graph is still pending."""
 
@@ -80,6 +84,7 @@ def _open_rdp_terminal_harness(
         threaded=False,
         source_finalization=True,
     )
+    sysmon = None
     emitters = {
         "ecar": ecar,
         "windows_event_security": windows,
@@ -159,12 +164,25 @@ def _open_rdp_terminal_harness(
     assert len(target_identities) == 3 and all(
         identity is not None for identity in target_identities
     )
+    if include_sysmon:
+        # The existing harness intentionally omits the production deployment and
+        # host-boot timing setup needed by Sysmon Event 1. Attach the real sink
+        # only at the terminal boundary under test so its Event 5 path remains
+        # production-identical without weakening those unrelated prerequisites.
+        sysmon = SysmonEventEmitter(
+            load_format("windows_event_sysmon"),
+            tmp_path / "sysmon",
+            threaded=False,
+            source_finalization=True,
+        )
+        emitters["windows_event_sysmon"] = sysmon
     return _RdpTerminalHarness(
         state=state,
         dispatcher=dispatcher,
         generator=generator,
         ecar=ecar,
         windows=windows,
+        sysmon=sysmon,
         zeek=zeek,
         source_hostname=source.hostname,
         target_hostname=target.hostname,
@@ -173,6 +191,10 @@ def _open_rdp_terminal_harness(
         terminal_process_object_ids=(
             source_identity.object_id,
             *(identity.object_id for identity in target_identities if identity is not None),
+        ),
+        terminal_process_identities=(
+            source_identity,
+            *(identity for identity in target_identities if identity is not None),
         ),
         disconnect_at=session.network_close_time,
         output_root=tmp_path,
@@ -415,12 +437,12 @@ def test_nonsuppressed_rdp_terminal_zero_source_shape_fails_closed(
 
 
 def _close_rdp_terminal_harness(harness: _RdpTerminalHarness) -> None:
-    """Finish exact source recovery and close the three harness sinks in owner order."""
+    """Finish exact source recovery and close every harness sink in owner order."""
 
     harness.dispatcher.drain_exact_projection_recoveries()
     harness.dispatcher.assert_exact_projection_recoveries_drained()
     coordinator = SourceFinalizationCoordinator(
-        (harness.windows,),
+        tuple(emitter for emitter in (harness.windows, harness.sysmon) if emitter is not None),
         ExactPublicationAuthority(
             capacity=1,
             row_capacity=256,
@@ -429,6 +451,8 @@ def _close_rdp_terminal_harness(harness: _RdpTerminalHarness) -> None:
     )
     coordinator.finalize()
     harness.windows.close()
+    if harness.sysmon is not None:
+        harness.sysmon.close()
     coordinator.mark_closed()
     harness.ecar.close()
     harness.zeek.close()
@@ -443,6 +467,16 @@ def _read_json_lines(root: Path, filename: str) -> list[dict[str, object]]:
         for line in output.read_text(encoding="utf-8").splitlines()
         if line
     ]
+
+
+def _xml_events(rendered: str, event_id: int) -> tuple[str, ...]:
+    """Return complete Windows XML records for one native event identifier."""
+
+    return tuple(
+        event
+        for event in re.findall(r"<Event\b.*?</Event>", rendered, flags=re.DOTALL)
+        if f"<EventID>{event_id}</EventID>" in event
+    )
 
 
 def _windows_security_time(
@@ -464,6 +498,157 @@ def _windows_security_time(
         matches.append(datetime.fromisoformat(timestamp.group(1).replace("Z", "+00:00")))
     assert len(matches) == 1
     return matches[0]
+
+
+class _SysmonSubclass(SysmonEventEmitter):
+    """Concrete-type impostor that inherits the instance-bound exact marker."""
+
+
+class _DuckExactSysmon:
+    """Duck marker whose descriptor must not authorize an exact sink."""
+
+    marker_reads = 0
+
+    @property
+    def supports_exact_projection_publication(self) -> bool:
+        """Fail if dispatcher admission executes a foreign marker callback."""
+
+        type(self).marker_reads += 1
+        raise AssertionError("duck Sysmon exact marker executed")
+
+
+def test_rdp_exact_sysmon_admission_requires_bound_concrete_sink(tmp_path: Path) -> None:
+    """Direct, subclassed, and duck-marked Sysmon targets remain fail-closed."""
+
+    direct = SysmonEventEmitter(
+        load_format("windows_event_sysmon"),
+        tmp_path / "direct",
+        threaded=False,
+    )
+    subclass = _SysmonSubclass(
+        load_format("windows_event_sysmon"),
+        tmp_path / "subclass",
+        threaded=False,
+        source_finalization=True,
+    )
+    duck = _DuckExactSysmon()
+    try:
+        for emitter in (direct, subclass, duck):
+            with pytest.raises(
+                EventContractError,
+                match="windows_event_sysmon.*unsupported before rendering",
+            ):
+                EventDispatcher._require_exact_projection_target(
+                    "windows_event_sysmon",
+                    emitter,
+                )
+        assert _DuckExactSysmon.marker_reads == 0
+    finally:
+        direct.close()
+        subclass.close()
+
+
+@pytest.mark.parametrize("failure_mode", ("success", "fail-before", "lost-return"))
+def test_visible_rdp_terminal_chain_publishes_exact_sysmon_process_closes(
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Visible RDP close owns one correlated Security, Sysmon, and eCAR process terminal."""
+
+    harness = _open_rdp_terminal_harness(tmp_path, include_sysmon=True)
+    sysmon = harness.sysmon
+    assert sysmon is not None
+    original_claim = EventDispatcher.claimed_action_cohort
+    injected = False
+
+    @contextmanager
+    def faulting_claim(
+        owner: EventDispatcher,
+        batch: object,
+    ) -> Iterator[object]:
+        nonlocal injected
+        if failure_mode == "fail-before" and not injected:
+            injected = True
+            raise OSError("injected exact Sysmon RDP fail-before")
+        with original_claim(owner, batch) as capability:
+            yield capability
+        result = capability.result
+        if (
+            failure_mode == "lost-return"
+            and not injected
+            and result is not None
+            and result.receipt.root_action_id.endswith(":process-terminate")
+        ):
+            injected = True
+            raise OSError("injected exact Sysmon RDP lost-return")
+
+    if failure_mode != "success":
+        monkeypatch.setattr(EventDispatcher, "claimed_action_cohort", faulting_claim)
+        with pytest.raises(OSError, match=f"exact Sysmon RDP {failure_mode}"):
+            harness.generator.advance_rdp_session_lifecycle_watermark(harness.disconnect_at)
+        disconnected = harness.generator.rdp_session_manager.get(harness.session_object_id)
+        assert disconnected is not None
+        assert disconnected.state is RdpSessionState.DISCONNECTED
+        assert harness.generator.rdp_lifecycle_journal_census().pending_generations == 1
+
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_session(harness.logon_id) is None
+    _close_rdp_terminal_harness(harness)
+
+    exact = sysmon.exact_candidate_census()
+    assert exact.current_rows == 0
+    assert exact.current_bytes == 0
+    assert exact.current_participants == 0
+    assert exact.high_water_rows >= len(harness.terminal_process_identities)
+    assert exact.high_water_participants == len(harness.terminal_process_identities)
+    recovery = harness.dispatcher.exact_projection_recovery_census()
+    assert recovery.unresolved_recoveries == 0
+    assert recovery.authority.active_batches == 0
+    assert recovery.authority.prepared_batches == 0
+    assert recovery.authority.retained_rows == 0
+
+    rendered_windows = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "windows").rglob("*.xml")
+    )
+    rendered_sysmon = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "sysmon").rglob("*.xml")
+    )
+    windows_terminations = _xml_events(rendered_windows, 4689)
+    sysmon_terminations = _xml_events(rendered_sysmon, 5)
+    assert len(windows_terminations) == len(harness.terminal_process_identities)
+    assert len(sysmon_terminations) == len(harness.terminal_process_identities)
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    for identity in harness.terminal_process_identities:
+        assert (
+            sum(
+                f'<Data Name="ProcessId">0x{identity.pid:x}</Data>' in event
+                and f'<Data Name="ProcessName">{identity.image}</Data>' in event
+                for event in windows_terminations
+            )
+            == 1
+        )
+        assert (
+            sum(
+                f'<Data Name="ProcessId">{identity.pid}</Data>' in event
+                and f'<Data Name="Image">{identity.image}</Data>' in event
+                for event in sysmon_terminations
+            )
+            == 1
+        )
+        assert (
+            sum(
+                row.get("object") == "PROCESS"
+                and row.get("action") == "TERMINATE"
+                and row.get("objectID") == identity.object_id
+                for row in ecar_rows
+            )
+            == 1
+        )
 
 
 def test_activity_generator_uses_injected_shared_rdp_owner() -> None:
