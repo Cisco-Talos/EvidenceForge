@@ -125,6 +125,7 @@ from evidenceforge.generation.world_model import (
     host_services_support_database_service,
     normalize_database_service,
 )
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import EmailMessageEventSpec, Persona, System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -5673,6 +5674,21 @@ class BaselineMixin:
                         continue
                     if proc.last_activity_time is not None and term_time <= proc.last_activity_time:
                         term_time = proc.last_activity_time + timedelta(seconds=rng.uniform(2, 30))
+                    self._advance_rdp_before_generic_teardown(term_time)
+                    live_process = self.state_manager.get_process(system.hostname, proc.pid)
+                    if live_process is None:
+                        if (
+                            self.state_manager.get_process_object_id(system.hostname, proc.pid)
+                            == proc.ecar_object_id
+                        ):
+                            continue
+                        raise StateError(
+                            "RDP-owned stale-process drain lost the frozen process identity"
+                        )
+                    if live_process.ecar_object_id != proc.ecar_object_id:
+                        raise StateError(
+                            "RDP-owned stale-process drain crossed a reused process identity"
+                        )
                     self.state_manager.set_current_time(term_time)
                     self.activity_generator.generate_process_termination(
                         user=actor,
@@ -5682,6 +5698,16 @@ class BaselineMixin:
                         process_name=proc.image,
                         logon_id=logon_id,
                     )
+
+    def _advance_rdp_before_generic_teardown(self, cutoff: datetime) -> None:
+        """Drain exact RDP ownership before a generic baseline teardown.
+
+        The retention entrypoint preserves the strict monotonic action frontier:
+        a cutoff behind the committed RDP frontier is already satisfied, while a
+        later cutoff drains every due exact continuation before State is consumed.
+        """
+
+        self.activity_generator.advance_rdp_session_retention_watermark(ensure_utc(cutoff))
 
     def _evaluate_firewall_policy(
         self,
@@ -6183,13 +6209,39 @@ class BaselineMixin:
                 continue
 
             logoff_time = current_hour + timedelta(seconds=offset)
+            teardown_markers = [
+                ensure_utc(marker)
+                for marker in (session.last_activity_time, session.network_close_time)
+                if marker is not None
+            ]
+            teardown_markers.extend(
+                ensure_utc(process.last_activity_time or process.start_time)
+                for process in self.state_manager.get_processes_for_session(
+                    session.logon_id,
+                    session.system,
+                )
+            )
+            teardown_frontier = max(ensure_utc(logoff_time), *teardown_markers)
+            self._advance_rdp_before_generic_teardown(teardown_frontier)
+            live_session = self.state_manager.get_session(session.logon_id)
+            if live_session is None:
+                if (
+                    self.state_manager.get_session_object_id(session.logon_id)
+                    == session.ecar_object_id
+                ):
+                    continue
+                raise StateError("RDP-owned logoff drain lost the frozen session identity")
+            if live_session.ecar_object_id != session.ecar_object_id:
+                raise StateError("RDP-owned logoff drain crossed a reused session identity")
+            if live_session.storyline_protected or live_session.closure_owned_by_bundle:
+                continue
             self.state_manager.set_current_time(logoff_time)
             self.activity_generator.generate_logoff(
                 user=user,
                 system=system,
                 time=logoff_time,
-                logon_id=session.logon_id,
-                logon_type=session.logon_type,
+                logon_id=live_session.logon_id,
+                logon_type=live_session.logon_type,
             )
 
     def _barrier_flush_all_emitters(self) -> None:

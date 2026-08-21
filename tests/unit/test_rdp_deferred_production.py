@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -41,6 +43,7 @@ from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.source_deployment_compiler import exact_source_instance_id
 from evidenceforge.generation.source_finalization import SourceFinalizationCoordinator
@@ -87,12 +90,13 @@ def _open_rdp_terminal_harness(
     modeled_source: bool = True,
     session_end_plan: SessionEndPlan | None = None,
     production_timing_runtime: bool = False,
+    open_time: datetime = _START,
 ) -> _RdpTerminalHarness:
     """Open one exact initial RDP generation whose full terminal graph is still pending."""
 
     reset_thread_rng(42)
     state = StateManager()
-    state.set_current_time(_START - timedelta(minutes=5))
+    state.set_current_time(open_time - timedelta(minutes=5))
     ecar = EcarEmitter(load_format("ecar"), tmp_path / "ecar", threaded=False)
     zeek = ZeekEmitter(load_format("zeek_conn"), tmp_path / "zeek.json", threaded=False)
     windows = WindowsEventEmitter(
@@ -162,7 +166,7 @@ def _open_rdp_terminal_harness(
             username="SYSTEM",
             integrity_level="System",
             os_category="windows",
-            start_time=_START - timedelta(minutes=5),
+            start_time=open_time - timedelta(minutes=5),
         )
         system_process, _receipt = generator._lifecycle_authority.materialize_process(system_plan)
         target_system_process_object_id = system_process.ecar_object_id
@@ -174,13 +178,13 @@ def _open_rdp_terminal_harness(
         source_logon = generator.generate_logon(
             user,
             source,
-            _START - timedelta(seconds=30),
+            open_time - timedelta(seconds=30),
             logon_type=2,
         )
         source_pid = generator.generate_process(
             user,
             source,
-            _START - timedelta(seconds=3),
+            open_time - timedelta(seconds=3),
             source_logon,
             r"C:\Windows\System32\mstsc.exe",
             f"mstsc.exe /v:{target.hostname}",
@@ -193,7 +197,7 @@ def _open_rdp_terminal_harness(
     _uid, logon_id = generator._execute_rdp_session_bundle(
         user=user,
         target_system=target,
-        time=_START,
+        time=open_time,
         source_ip=source_ip,
         source_system=source_system,
         source_pid=source_pid,
@@ -315,6 +319,161 @@ def _aborted_engine_for_rdp_harness(harness: _RdpTerminalHarness) -> GenerationE
     engine._closed_emitter_names = set()
     engine._exact_projection_recovery_dispatcher = None
     return engine
+
+
+def _baseline_owner_for_rdp_harness(
+    harness: _RdpTerminalHarness,
+) -> tuple[GenerationEngine, User, System, ProcessIdentity]:
+    """Return the real baseline teardown owner for one pending source-side mstsc."""
+
+    source_identity = next(
+        identity
+        for identity in harness.terminal_process_identities
+        if identity.hostname == harness.source_hostname
+    )
+    user = User(
+        username=source_identity.principal,
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    source = System(
+        hostname=harness.source_hostname,
+        ip="10.10.0.25",
+        os="Windows 11",
+        type="workstation",
+    )
+    engine = GenerationEngine.__new__(GenerationEngine)
+    engine.state_manager = harness.state
+    engine.activity_generator = harness.generator
+    engine.scenario = SimpleNamespace(
+        environment=SimpleNamespace(users=[user], systems=[source]),
+        personas=[],
+    )
+    engine._system_pids = {}
+    return engine, user, source, source_identity
+
+
+@pytest.mark.parametrize(
+    ("open_time", "output_start_time"),
+    (
+        (_START, None),
+        (_START + timedelta(minutes=59, seconds=30), _END),
+    ),
+    ids=("within-hour-visible", "cross-hour-warmup-suppressed"),
+)
+def test_hourly_logoff_drains_exact_rdp_source_before_generic_session_teardown(
+    open_time: datetime,
+    output_start_time: datetime | None,
+    tmp_path: Path,
+) -> None:
+    """A source logoff cannot consume mstsc/session before the due RDP journal entry."""
+
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        output_start_time=output_start_time,
+        open_time=open_time,
+    )
+    engine, user, source, source_identity = _baseline_owner_for_rdp_harness(harness)
+    source_session = harness.state.get_session(source_identity.logon_id)
+    assert source_session is not None
+    assert source_session.last_activity_time == harness.disconnect_at
+    hour_start = open_time.replace(minute=0, second=0, microsecond=0)
+    planned_logoff = open_time + timedelta(seconds=15)
+    assert planned_logoff < harness.disconnect_at
+    if output_start_time is not None:
+        assert harness.disconnect_at >= hour_start + timedelta(hours=1)
+
+    BaselineMixin._generate_logoffs_for_hour(
+        engine,
+        [user],
+        hour_start,
+        {
+            (source.hostname, source_identity.logon_id): (
+                planned_logoff - hour_start
+            ).total_seconds()
+        },
+    )
+
+    disconnected = harness.generator.rdp_session_manager.get(harness.session_object_id)
+    assert disconnected is not None
+    assert disconnected.state is RdpSessionState.DISCONNECTED
+    assert harness.state.get_process(source.hostname, source_identity.pid) is None
+    assert harness.state.get_session(source_identity.logon_id) is None
+    assert harness.generator.rdp_lifecycle_journal_census().disconnected_generations == 1
+    assert harness.generator._rdp_session_lifecycle_frontier() == harness.disconnect_at
+
+    primary = RuntimeError("unrelated generation failure")
+    abort_engine = _aborted_engine_for_rdp_harness(harness)
+    abort_engine.progress_callback = None
+    abort_engine._abort_failed_generation(primary)
+    assert not getattr(primary, "__notes__", ())
+    assert harness.generator.rdp_lifecycle_journal_census().pending_generations == 0
+
+    _close_rdp_terminal_harness(harness)
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    source_terminations = [
+        row
+        for row in ecar_rows
+        if row.get("object") == "PROCESS"
+        and row.get("action") == "TERMINATE"
+        and row.get("objectID") == source_identity.object_id
+    ]
+    assert len(source_terminations) == (0 if output_start_time is not None else 1)
+
+
+def test_hourly_stale_cleanup_drains_due_rdp_before_consuming_exact_mstsc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stale cleanup delegates a due exact mstsc close to the RDP journal owner."""
+
+    harness = _open_rdp_terminal_harness(tmp_path)
+    engine, user, source, source_identity = _baseline_owner_for_rdp_harness(harness)
+    stale_frontier = source_identity.started_at + timedelta(hours=12)
+    assert harness.disconnect_at < stale_frontier < _END
+    monkeypatch.setattr(
+        "evidenceforge.generation.engine.baseline._get_rng",
+        lambda: random.Random(1),
+    )
+
+    BaselineMixin._terminate_stale_processes(engine, stale_frontier)
+
+    disconnected = harness.generator.rdp_session_manager.get(harness.session_object_id)
+    assert disconnected is not None
+    assert disconnected.state is RdpSessionState.DISCONNECTED
+    assert harness.state.get_process(source.hostname, source_identity.pid) is None
+    assert harness.generator.rdp_lifecycle_journal_census().disconnected_generations == 1
+
+    harness.generator.generate_logoff(
+        user,
+        source,
+        stale_frontier + timedelta(seconds=1),
+        source_identity.logon_id,
+        logon_type=2,
+    )
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    _close_rdp_terminal_harness(harness)
+
+
+def test_directly_missing_rdp_source_session_still_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """Bypassing hourly ownership cannot weaken exact source-session identity checks."""
+
+    harness = _open_rdp_terminal_harness(tmp_path)
+    _engine, user, source, source_identity = _baseline_owner_for_rdp_harness(harness)
+    harness.generator.generate_logoff(
+        user,
+        source,
+        harness.disconnect_at + timedelta(seconds=30),
+        source_identity.logon_id,
+        logon_type=2,
+    )
+
+    with pytest.raises(StateError, match="Action cohort live session target is absent or drifted"):
+        harness.generator.advance_rdp_session_lifecycle_watermark(harness.disconnect_at)
+
+    _close_rdp_terminal_harness(harness)
 
 
 @pytest.mark.parametrize("modeled_target_pid4", (False, True), ids=("virtual", "modeled"))
