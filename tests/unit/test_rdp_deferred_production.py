@@ -16,15 +16,25 @@ from pathlib import Path
 import pytest
 
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.collection_policy import (
+    SourceCollectionPolicy,
+    SourceInstanceIdentity,
+)
 from evidenceforge.events.contexts import AuthContext, HostContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.identity import ProcessIdentity
-from evidenceforge.events.observation import ObservationDecision
+from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.observation import ObservationDecision, ObservationPolicy
 from evidenceforge.events.rdp import RdpSessionState
+from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
+from evidenceforge.generation.collection_deployment import (
+    CompiledCollectionDeployment,
+    SourceInstanceDeployment,
+)
 from evidenceforge.generation.emitters.base import ExactPublicationAuthority
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
@@ -32,9 +42,11 @@ from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
+from evidenceforge.generation.source_deployment_compiler import exact_source_instance_id
 from evidenceforge.generation.source_finalization import SourceFinalizationCoordinator
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models.exceptions import EventContractError, StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import reset_thread_rng
@@ -72,6 +84,9 @@ def _open_rdp_terminal_harness(
     output_start_time: datetime | None = None,
     include_sysmon: bool = False,
     modeled_target_pid4: bool = False,
+    modeled_source: bool = True,
+    session_end_plan: SessionEndPlan | None = None,
+    production_timing_runtime: bool = False,
 ) -> _RdpTerminalHarness:
     """Open one exact initial RDP generation whose full terminal graph is still pending."""
 
@@ -96,7 +111,17 @@ def _open_rdp_terminal_harness(
         state,
         emitters,
         output_start_time=output_start_time,
-        source_timing_planner=SourceTimingPlanner(clock_profile_name=clock_profile_name),
+        source_timing_planner=SourceTimingPlanner(
+            clock_profile_name=clock_profile_name,
+            timing_runtime=(
+                TimingRuntime(
+                    reference_time=_START - timedelta(days=1),
+                    namespace="rdp-terminal-production",
+                )
+                if production_timing_runtime
+                else None
+            ),
+        ),
     )
     generator = ActivityGenerator(
         state,
@@ -123,7 +148,9 @@ def _open_rdp_terminal_harness(
         full_name="Security Analyst",
         email="analyst@example.test",
     )
-    generator._ip_to_system = {source.ip: source, target.ip: target}
+    generator._ip_to_system = (
+        {source.ip: source, target.ip: target} if modeled_source else {target.ip: target}
+    )
     target_system_process_object_id = None
     if modeled_target_pid4:
         system_plan = state.plan_process_materialization(
@@ -139,31 +166,40 @@ def _open_rdp_terminal_harness(
         )
         system_process, _receipt = generator._lifecycle_authority.materialize_process(system_plan)
         target_system_process_object_id = system_process.ecar_object_id
-    source_logon = generator.generate_logon(
-        user,
-        source,
-        _START - timedelta(seconds=30),
-        logon_type=2,
-    )
-    source_pid = generator.generate_process(
-        user,
-        source,
-        _START - timedelta(seconds=3),
-        source_logon,
-        r"C:\Windows\System32\mstsc.exe",
-        f"mstsc.exe /v:{target.hostname}",
-        parent_pid=4,
-    )
-    source_identity = state.get_process_identity(source.hostname, source_pid)
-    assert source_identity is not None
+    source_identity = None
+    source_pid = -1
+    source_ip = "198.51.100.25"
+    source_system = None
+    if modeled_source:
+        source_logon = generator.generate_logon(
+            user,
+            source,
+            _START - timedelta(seconds=30),
+            logon_type=2,
+        )
+        source_pid = generator.generate_process(
+            user,
+            source,
+            _START - timedelta(seconds=3),
+            source_logon,
+            r"C:\Windows\System32\mstsc.exe",
+            f"mstsc.exe /v:{target.hostname}",
+            parent_pid=4,
+        )
+        source_identity = state.get_process_identity(source.hostname, source_pid)
+        assert source_identity is not None
+        source_ip = source.ip
+        source_system = source
     _uid, logon_id = generator._execute_rdp_session_bundle(
         user=user,
         target_system=target,
         time=_START,
-        source_ip=source.ip,
-        source_system=source,
+        source_ip=source_ip,
+        source_system=source_system,
         source_pid=source_pid,
         source_port=50_001,
+        preserve_explicit_source=not modeled_source,
+        session_end_plan=session_end_plan,
     )
     session = state.get_session(logon_id)
     session_identity = state.get_session_identity(logon_id)
@@ -201,21 +237,56 @@ def _open_rdp_terminal_harness(
         windows=windows,
         sysmon=sysmon,
         zeek=zeek,
-        source_hostname=source.hostname,
+        source_hostname=source.hostname if modeled_source else "",
         target_hostname=target.hostname,
         target_system_process_object_id=target_system_process_object_id,
         logon_id=logon_id,
         session_object_id=session_identity.object_id,
         terminal_process_object_ids=(
-            source_identity.object_id,
+            *((source_identity.object_id,) if source_identity is not None else ()),
             *(identity.object_id for identity in target_identities if identity is not None),
         ),
         terminal_process_identities=(
-            source_identity,
+            *((source_identity,) if source_identity is not None else ()),
             *(identity for identity in target_identities if identity is not None),
         ),
         disconnect_at=session.network_close_time,
         output_root=tmp_path,
+    )
+
+
+def _rdp_terminal_source(
+    format_name: str,
+    hostname: str,
+    *,
+    enabled: bool = True,
+) -> SourceInstanceDeployment:
+    """Return one exact endpoint source for compiled RDP terminal projection."""
+
+    descriptor = DEFAULT_SOURCE_CATALOG.descriptor(format_name)
+    return SourceInstanceDeployment(
+        identity=SourceInstanceIdentity(
+            source_instance=exact_source_instance_id(descriptor.family, hostname),
+            hostname=hostname,
+            family=descriptor.family,
+        ),
+        formats=(format_name,),
+        policy=SourceCollectionPolicy(
+            enabled=enabled,
+            capabilities=descriptor.capabilities,
+        ),
+    )
+
+
+def _compiled_rdp_terminal_deployment(*, enabled: bool = True) -> CompiledCollectionDeployment:
+    """Return exact eCAR and Security instances for both RDP endpoints."""
+
+    return CompiledCollectionDeployment(
+        tuple(
+            _rdp_terminal_source(format_name, hostname, enabled=enabled)
+            for hostname in ("WS-01", "RDS-01")
+            for format_name in ("ecar", "windows_event_security")
+        )
     )
 
 
@@ -607,16 +678,19 @@ def test_visible_rdp_disconnect_rejects_a_zero_row_renderer(
     assert rendered_windows.count("<EventID>4779</EventID>") == 1
 
 
-@pytest.mark.parametrize("zero_source_shape", ("post-window", "mixed"))
+@pytest.mark.parametrize("zero_source_shape", ("post-window", "mixed", "dropped", "filtered"))
 def test_nonsuppressed_rdp_terminal_zero_source_shape_fails_closed(
     zero_source_shape: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Post-window and mixed missingness cannot impersonate exact warm-up suppression."""
+    """Window, drop, and filter gaps cannot impersonate exact warm-up suppression."""
 
     harness = _open_rdp_terminal_harness(tmp_path)
-    harness.dispatcher.output_end_time = harness.disconnect_at
+    if zero_source_shape in {"post-window", "mixed"}:
+        harness.dispatcher.output_end_time = harness.disconnect_at
+    elif zero_source_shape == "filtered":
+        harness.dispatcher.collection_deployment = _compiled_rdp_terminal_deployment(enabled=False)
 
     with monkeypatch.context() as fault:
         if zero_source_shape == "mixed":
@@ -625,6 +699,12 @@ def test_nonsuppressed_rdp_terminal_zero_source_shape_fails_closed(
                 return ObservationDecision(status="dropped" if format_name == "ecar" else "visible")
 
             fault.setattr(harness.dispatcher.observation_policy, "decide", mixed_decision)
+        elif zero_source_shape == "dropped":
+
+            def dropped_decision(_format_name: str, _event: object) -> ObservationDecision:
+                return ObservationDecision(status="dropped")
+
+            fault.setattr(harness.dispatcher.observation_policy, "decide", dropped_decision)
         with pytest.raises(
             StateError,
             match="visible RDP terminal timing proof requires source frontiers",
@@ -640,6 +720,7 @@ def test_nonsuppressed_rdp_terminal_zero_source_shape_fails_closed(
     assert cohort.prepared_projections == 0
 
     harness.dispatcher.output_end_time = None
+    harness.dispatcher.collection_deployment = None
     harness.generator.finalize_rdp_session_lifecycles(_END)
     harness.generator.assert_rdp_session_lifecycles_drained()
     _close_rdp_terminal_harness(harness)
@@ -707,6 +788,282 @@ def _windows_security_time(
         matches.append(datetime.fromisoformat(timestamp.group(1).replace("Z", "+00:00")))
     assert len(matches) == 1
     return matches[0]
+
+
+def test_exact_rdp_deadline_rejects_insufficient_headroom_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An impossible terminal window rejects before port, State, or journal publication."""
+
+    reset_thread_rng(42)
+    state = StateManager()
+    state.set_current_time(_START)
+    ecar = EcarEmitter(load_format("ecar"), tmp_path / "ecar", threaded=False)
+    zeek = ZeekEmitter(load_format("zeek_conn"), tmp_path / "zeek.json", threaded=False)
+    windows = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "windows",
+        threaded=False,
+        source_finalization=True,
+    )
+    emitters = {
+        "ecar": ecar,
+        "windows_event_security": windows,
+        "zeek_conn": zeek,
+    }
+    dispatcher = EventDispatcher(state, emitters, output_end_time=_END)
+    generator = ActivityGenerator(
+        state,
+        emitters,
+        dispatcher=dispatcher,
+        generation_window_start=_START,
+        generation_window_end=_END,
+    )
+    target = System(
+        hostname="RDS-01",
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    generator._ip_to_system = {target.ip: target}
+    before_state = state.materialization_digest()
+    before_frontier = generator._rdp_session_lifecycle_frontier()
+    before_journal = generator.rdp_lifecycle_journal_census()
+    before_manager = generator.rdp_session_manager.census()
+    before_timing = generator.timing_runtime.state_digest()
+    before_source_timing = generator._source_timing_planner.state_digest()
+    port_calls = 0
+    sinks_closed = False
+
+    def count_port(*_args: object, **_kwargs: object) -> int:
+        nonlocal port_calls
+        port_calls += 1
+        return 50_001
+
+    monkeypatch.setattr(generator, "_allocate_ephemeral_port", count_port)
+    try:
+        with pytest.raises(StateError, match="no half-open disconnect/logout window"):
+            generator._execute_rdp_session_bundle(
+                user=user,
+                target_system=target,
+                time=_END - timedelta(seconds=10),
+                source_ip="198.51.100.25",
+                source_system=None,
+                preserve_explicit_source=True,
+            )
+
+        assert port_calls == 0
+        assert state.materialization_digest() == before_state
+        assert generator._rdp_session_lifecycle_frontier() == before_frontier
+        assert generator.rdp_lifecycle_journal_census() == before_journal
+        assert generator.rdp_session_manager.census() == before_manager
+        assert generator.timing_runtime.state_digest() == before_timing
+        assert generator._source_timing_planner.state_digest() == before_source_timing
+        assert not state.list_open_connections()
+        assert not state.get_sessions_on_system(target.hostname)
+
+        valid_time = _START + timedelta(hours=1)
+        uid, logon_id = generator._execute_rdp_session_bundle(
+            user=user,
+            target_system=target,
+            time=valid_time,
+            source_ip="198.51.100.25",
+            source_system=None,
+            preserve_explicit_source=True,
+        )
+        assert uid
+        assert state.get_session(logon_id) is not None
+        assert generator._rdp_session_lifecycle_frontier() == valid_time
+        assert port_calls == 1
+
+        generator.finalize_rdp_session_lifecycles(_END)
+        generator.assert_rdp_session_lifecycles_drained()
+        dispatcher.drain_exact_projection_recoveries()
+        dispatcher.assert_exact_projection_recoveries_drained()
+        coordinator = SourceFinalizationCoordinator(
+            (windows,),
+            ExactPublicationAuthority(
+                capacity=1,
+                row_capacity=256,
+                byte_capacity=8 * 1024 * 1024,
+            ),
+        )
+        coordinator.finalize()
+        windows.close()
+        coordinator.mark_closed()
+        ecar.close()
+        zeek.close()
+        sinks_closed = True
+    finally:
+        if not sinks_closed:
+            windows.close()
+            ecar.close()
+            zeek.close()
+
+
+def test_compiled_enterprise_rdp_logout_reserves_source_frontiers_before_output_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compiled enterprise logout keeps mandatory endpoint rows inside the output fence."""
+
+    closure_tail = SourceTimingPlanner.max_session_closure_tail(("ecar", "windows_event_security"))
+    expected_deadline = _END - closure_tail - timedelta(microseconds=1)
+    original_logout = RdpSessionActionBundle.logout_exact_rdp_session
+    explicit_storyline_end = SessionEndPlan(
+        _END,
+        "explicit_storyline",
+        "rdp-window-close",
+    )
+    for modeled_source, explicit_end in ((True, None), (False, explicit_storyline_end)):
+        harness = _open_rdp_terminal_harness(
+            tmp_path / ("modeled" if modeled_source else "external"),
+            clock_profile_name="enterprise_standard",
+            modeled_source=modeled_source,
+            session_end_plan=explicit_end,
+            production_timing_runtime=True,
+        )
+        snapshot = harness.generator.rdp_session_manager.get(harness.session_object_id)
+        assert snapshot is not None
+        assert snapshot.identity.hard_deadline == expected_deadline
+        state_end_plan = harness.state.get_session_end_plan(harness.logon_id)
+        assert state_end_plan is not None
+        assert state_end_plan.canonical_end == snapshot.identity.hard_deadline
+        assert state_end_plan.authority == (
+            explicit_end.authority if explicit_end is not None else "action_bundle"
+        )
+        assert state_end_plan.storyline_event_id == (
+            explicit_end.storyline_event_id if explicit_end is not None else ""
+        )
+        harness.dispatcher.collection_deployment = _compiled_rdp_terminal_deployment()
+        harness.dispatcher.observation_policy = ObservationPolicy("enterprise_standard")
+        harness.dispatcher.output_end_time = _END
+
+        if explicit_end is None:
+            harness.generator.finalize_rdp_session_lifecycles(_END)
+        else:
+            logout_calls = 0
+
+            def fail_first_logout(
+                owner: RdpSessionActionBundle,
+                continuation: object,
+                logout_time: datetime,
+            ) -> None:
+                nonlocal logout_calls
+                logout_calls += 1
+                if logout_calls == 1:
+                    raise OSError("injected bounded explicit RDP logout failure")
+                original_logout(owner, continuation, logout_time)
+
+            with monkeypatch.context() as fault:
+                fault.setattr(
+                    RdpSessionActionBundle,
+                    "logout_exact_rdp_session",
+                    fail_first_logout,
+                )
+                with pytest.raises(OSError, match="bounded explicit RDP logout failure"):
+                    harness.generator.finalize_rdp_session_lifecycles(_END)
+                assert harness.generator.rdp_lifecycle_journal_census().pending_generations == 1
+                harness.generator.finalize_rdp_session_lifecycles(_END)
+            assert logout_calls == 2
+        harness.generator.assert_rdp_session_lifecycles_drained()
+        assert harness.state.get_session(harness.logon_id) is None
+        live_process_object_ids = {
+            process.ecar_object_id
+            for hostname in tuple(
+                item for item in (harness.source_hostname, harness.target_hostname) if item
+            )
+            for process in harness.state.get_processes_on_system(hostname)
+        }
+        assert live_process_object_ids.isdisjoint(harness.terminal_process_object_ids)
+
+        terminal = harness.generator.rdp_lifecycle_journal_census()
+        manager = harness.generator.rdp_session_manager.census()
+        assert terminal.prepared_reservations == 0
+        assert terminal.pending_generations == 0
+        assert terminal.disconnected_generations == 0
+        assert manager.connected_sessions == 0
+        assert manager.disconnected_sessions == 0
+        assert manager.logged_out_sessions == 1
+        assert manager.active_operations == 0
+        assert manager.active_leases == 0
+        assert manager.application.open_channels == 0
+        assert manager.application.active_operations == 0
+        assert manager.application.prepared_admissions == 0
+        assert manager.application.claimed_admissions == 0
+
+        _close_rdp_terminal_harness(harness)
+        recovery = harness.dispatcher.exact_projection_recovery_census()
+        cohort = harness.dispatcher.action_cohort_publication_census()
+        assert recovery.unresolved_recoveries == 0
+        assert recovery.reserved_recoveries == 0
+        assert recovery.active_recoveries == 0
+        assert recovery.authority.active_batches == 0
+        assert recovery.authority.prepared_batches == 0
+        assert recovery.authority.retained_rows == 0
+        assert cohort.prepared_batches == 0
+        assert cohort.claimed_batches == 0
+        assert cohort.retained_members == 0
+        assert cohort.prepared_projections == 0
+        assert cohort.projection_groups == 0
+
+        rendered_windows = "\n".join(
+            output.read_text(encoding="utf-8")
+            for output in (harness.output_root / "windows").rglob("*.xml")
+        )
+        assert rendered_windows.count("<EventID>4634</EventID>") == 1
+        assert _windows_security_time(rendered_windows, 4634) < _END
+        windows_terminations = _xml_events(rendered_windows, 4689)
+        assert all(
+            datetime.fromisoformat(timestamp.replace("Z", "+00:00")) < _END
+            for timestamp in re.findall(r'<TimeCreated SystemTime="([^"]+)"', rendered_windows)
+        )
+
+        ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+        assert all(
+            datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < _END for row in ecar_rows
+        )
+        ecar_logouts = [
+            row
+            for row in ecar_rows
+            if row.get("object") == "USER_SESSION"
+            and row.get("action") == "LOGOUT"
+            and row.get("objectID") == harness.session_object_id
+        ]
+        assert len(ecar_logouts) == 1
+        assert datetime.fromtimestamp(ecar_logouts[0]["timestamp_ms"] / 1_000, tz=UTC) < _END
+
+        target_identities = tuple(
+            identity
+            for identity in harness.terminal_process_identities
+            if identity.hostname == harness.target_hostname
+        )
+        assert len(target_identities) == 3
+        for identity in target_identities:
+            assert (
+                sum(
+                    f'<Data Name="ProcessId">0x{identity.pid:x}</Data>' in event
+                    and f'<Data Name="ProcessName">{identity.image}</Data>' in event
+                    for event in windows_terminations
+                )
+                == 1
+            )
+            assert (
+                sum(
+                    row.get("object") == "PROCESS"
+                    and row.get("action") == "TERMINATE"
+                    and row.get("objectID") == identity.object_id
+                    for row in ecar_rows
+                )
+                == 1
+            )
 
 
 class _SysmonSubclass(SysmonEventEmitter):

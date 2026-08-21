@@ -649,13 +649,6 @@ class RdpSessionActionBundle:
             self._request.source_ip,
         )
         source_ip, source_system, source_pid = self._resolve_source(rng, user)
-        lifecycle_drain = getattr(
-            self._executor,
-            "advance_rdp_session_lifecycle_watermark",
-            None,
-        )
-        if callable(lifecycle_drain):
-            lifecycle_drain(self._request.time)
         duration = rng.uniform(60.0, RDP_TRANSPORT_DURATION_MAX_SECONDS)
         end_plan = self._request.session_end_plan
         if end_plan is not None and end_plan.is_authoritative:
@@ -678,6 +671,21 @@ class RdpSessionActionBundle:
                     f"{end_plan.canonical_end.isoformat()}"
                 )
             duration = min(duration, (latest_close - self._request.time).total_seconds())
+        effective_end_plan: SessionEndPlan | None = None
+        if self._may_use_exact_initial_publication(
+            source_system=source_system,
+            source_pid=source_pid,
+        ):
+            effective_end_plan = self._effective_rdp_end_plan(
+                ensure_utc(self._request.time) + timedelta(seconds=duration)
+            )
+        lifecycle_drain = getattr(
+            self._executor,
+            "advance_rdp_session_lifecycle_watermark",
+            None,
+        )
+        if callable(lifecycle_drain):
+            lifecycle_drain(self._request.time)
         src_port = self._request.source_port
         if src_port is None:
             src_port = self._executor._allocate_ephemeral_port(
@@ -715,6 +723,8 @@ class RdpSessionActionBundle:
             source_system=source_system,
             source_pid=source_pid,
         ):
+            if effective_end_plan is None:
+                raise StateError("Exact RDP initial publication was not deadline-preflighted")
             uid = self._execute_exact_initial_session(
                 user=user,
                 source_ip=source_ip,
@@ -723,6 +733,7 @@ class RdpSessionActionBundle:
                 source_port=src_port,
                 duration=duration,
                 logon_time=logon_time,
+                effective_end_plan=effective_end_plan,
             )
             return uid
         remote_request = WindowsRemoteAuthenticationRequest(
@@ -873,6 +884,29 @@ class RdpSessionActionBundle:
             return False
         return self._has_exact_deferred_projection_owners()
 
+    def _may_use_exact_initial_publication(
+        self,
+        *,
+        source_system: System | None,
+        source_pid: int,
+    ) -> bool:
+        """Return whether exact initial publication can follow source materialization."""
+
+        if self._uses_exact_initial_publication(
+            source_system=source_system,
+            source_pid=source_pid,
+        ):
+            return True
+        return bool(
+            not self._request.logon_id
+            and _get_os_category(self._request.target_system.os) == "windows"
+            and source_system is not None
+            and source_pid <= 0
+            and self._request.source_process_time is not None
+            and self._source_process_factory is not None
+            and self._has_exact_deferred_projection_owners()
+        )
+
     def _uses_exact_reconnect_publication(
         self,
         *,
@@ -954,7 +988,10 @@ class RdpSessionActionBundle:
         registry_end = ensure_utc(
             self._executor._rdp_session_manager.application_registry.window_end
         )
-        window_deadline = registry_end - timedelta(microseconds=1)
+        closure_tail = SourceTimingPlanner.max_session_closure_tail(
+            ("ecar", "windows_event_security")
+        )
+        window_deadline = registry_end - closure_tail - timedelta(microseconds=1)
         end_plan = self._request.session_end_plan
         deadline = (
             min(ensure_utc(end_plan.canonical_end), window_deadline)
@@ -969,6 +1006,19 @@ class RdpSessionActionBundle:
             )
         return deadline
 
+    def _effective_rdp_end_plan(self, transport_close: datetime) -> SessionEndPlan:
+        """Return one immutable end plan shared by State and the RDP manager."""
+
+        deadline = self._exact_rdp_deadline(transport_close)
+        requested = self._request.session_end_plan
+        if requested is not None and ensure_utc(requested.canonical_end) == deadline:
+            return requested
+        return SessionEndPlan(
+            canonical_end=deadline,
+            authority=requested.authority if requested is not None else "action_bundle",
+            storyline_event_id=requested.storyline_event_id if requested is not None else "",
+        )
+
     def _execute_exact_initial_session(
         self,
         *,
@@ -979,6 +1029,7 @@ class RdpSessionActionBundle:
         source_port: int,
         duration: float,
         logon_time: datetime,
+        effective_end_plan: SessionEndPlan,
     ) -> str:
         """Publish one initial RDP transport, State batch, and source cohort exactly."""
 
@@ -987,7 +1038,6 @@ class RdpSessionActionBundle:
         )
         open_time = ensure_utc(self._request.time)
         transport_close = open_time + timedelta(seconds=duration)
-        deadline = self._exact_rdp_deadline(transport_close)
         prepared = self._prepare_exact_initial_session(
             user=user,
             source_ip=source_ip,
@@ -996,7 +1046,7 @@ class RdpSessionActionBundle:
             source_port=source_port,
             logon_time=logon_time,
             transport_close=transport_close,
-            hard_deadline=deadline,
+            effective_end_plan=effective_end_plan,
         )
         rng = _get_rng()
         try:
@@ -1053,7 +1103,7 @@ class RdpSessionActionBundle:
         source_port: int,
         logon_time: datetime,
         transport_close: datetime,
-        hard_deadline: datetime,
+        effective_end_plan: SessionEndPlan,
     ) -> _PreparedDeferredRdpOpen:
         """Prepare the exact initial RDP owner graph without State mutation."""
 
@@ -1079,7 +1129,7 @@ class RdpSessionActionBundle:
             network_close_time=transport_close,
             source_ready_time=auth_time,
             closure_owned_by_bundle=True,
-            end_plan=self._request.session_end_plan,
+            end_plan=effective_end_plan,
         )
         winlogon = batch_builder.plan_process(
             system=self._request.target_system.hostname,
@@ -1157,7 +1207,7 @@ class RdpSessionActionBundle:
             source_host=(source_system.hostname if source_system is not None else source_ip),
             target_host=self._request.target_system.hostname,
             principal=user.username,
-            hard_deadline=hard_deadline,
+            hard_deadline=ensure_utc(effective_end_plan.canonical_end),
             user_sid=self._executor._preview_sid(user.username),
             elevated=elevated,
             privilege_list=(
@@ -1211,7 +1261,7 @@ class RdpSessionActionBundle:
             source_system=source_system,
             source_identity=source_identity,
             source_session_identity=source_session_identity,
-            hard_deadline=hard_deadline,
+            hard_deadline=ensure_utc(effective_end_plan.canonical_end),
             expected_generation=0,
             source_tag=self._request.source,
         )
