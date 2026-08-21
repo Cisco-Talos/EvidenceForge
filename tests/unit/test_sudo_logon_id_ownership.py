@@ -399,6 +399,135 @@ def test_strict_carried_in_sudo_materializes_session_before_shell(tmp_path: Path
     assert engine.lifecycle_shadow.violation_summary["total"] == 0
 
 
+def test_strict_sudo_replaces_historically_active_closed_session_owner(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    historical_plan = state.plan_session_materialization(
+        username=user.username,
+        system=system.hostname,
+        logon_type=10,
+        source_ip="10.30.0.99",
+        source_port=51249,
+        start_time=engine.start_time - timedelta(minutes=5),
+        session_kind="ssh",
+        lifecycle_group_id="sudo:historical-ssh-owner",
+        session_id=349741,
+    )
+    historical_session, historical_receipt = engine.lifecycle_authority.materialize_session(
+        historical_plan
+    )
+    assert engine.lifecycle_authority.authenticates_materialization_receipt(
+        historical_plan,
+        historical_receipt,
+    )
+
+    generator.generate_logoff(
+        user,
+        system,
+        engine.start_time + timedelta(minutes=2),
+        historical_session.logon_id,
+        logon_type=10,
+        from_storyline=True,
+    )
+    historical_snapshot = engine.lifecycle_registry.get_session(historical_session.ecar_object_id)
+    assert historical_snapshot is not None
+    assert historical_snapshot.closed_at is not None
+    tty_key = (system.hostname, user.username, "pts/1")
+    generator._linux_sudo_tty_sessions[tty_key] = historical_session.logon_id
+
+    sudo_pid, child_pid, _shift, _tty = _generate_sudo_processes(
+        generator,
+        system,
+        sudo_time=engine.start_time + timedelta(seconds=30),
+        lifecycle_group_id="sudo:after-historical-ssh-close",
+        sudo_user=user.username,
+    )
+
+    assert sudo_pid > 0
+    assert child_pid is not None
+    sudo_process = state.get_process(system.hostname, sudo_pid)
+    assert sudo_process is not None
+    assert sudo_process.logon_id != historical_session.logon_id
+    replacement = state.get_session(sudo_process.logon_id)
+    assert replacement is not None
+    replacement_snapshot = engine.lifecycle_registry.get_session(replacement.ecar_object_id)
+    assert replacement_snapshot is not None
+    assert replacement_snapshot.closed_at is None
+    assert generator._linux_sudo_tty_sessions[tty_key] == replacement.logon_id
+    assert len(generator._linux_sudo_tty_sessions) == 1
+    assert generator._linux_sudo_tty_assignments == {tty_key: "pts/1"}
+    assert generator._linux_sudo_tty_owners == {
+        (system.hostname, "pts/1"): tty_key,
+    }
+    assert not generator._linux_sudo_tty_capacity_claims
+
+
+def test_strict_sudo_bootstrap_does_not_reuse_closed_local_session_owner(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    historical_plan = state.plan_session_materialization(
+        username=user.username,
+        system=system.hostname,
+        logon_type=2,
+        source_ip="-",
+        source_port=0,
+        start_time=engine.start_time + timedelta(minutes=5),
+        session_kind="interactive",
+        lifecycle_group_id="sudo:historical-local-owner",
+        session_id=349742,
+    )
+    historical_session, historical_receipt = engine.lifecycle_authority.materialize_session(
+        historical_plan
+    )
+    assert engine.lifecycle_authority.authenticates_materialization_receipt(
+        historical_plan,
+        historical_receipt,
+    )
+    generator.generate_logoff(
+        user,
+        system,
+        engine.start_time + timedelta(minutes=30),
+        historical_session.logon_id,
+        logon_type=2,
+        from_storyline=True,
+    )
+
+    with patch.object(
+        generator, "generate_logon", wraps=generator.generate_logon
+    ) as generate_logon:
+        sudo_pid, child_pid, _shift, _tty = _generate_sudo_processes(
+            generator,
+            system,
+            sudo_time=engine.start_time + timedelta(minutes=20),
+            lifecycle_group_id="sudo:after-historical-local-close",
+            sudo_user=user.username,
+        )
+
+    generate_logon.assert_called_once()
+    assert sudo_pid > 0
+    assert child_pid is not None
+    sudo_process = state.get_process(system.hostname, sudo_pid)
+    assert sudo_process is not None
+    assert sudo_process.logon_id != historical_session.logon_id
+    replacement = state.get_session(sudo_process.logon_id)
+    assert replacement is not None
+    replacement_snapshot = engine.lifecycle_registry.get_session(replacement.ecar_object_id)
+    assert replacement_snapshot is not None
+    assert replacement_snapshot.closed_at is None
+
+
 def test_strict_sudo_tty_namespace_is_host_local_and_retry_exact(tmp_path: Path) -> None:
     engine, generator, state, first_system = _strict_sudo_generator(tmp_path)
     second_system = next(
@@ -857,21 +986,126 @@ def test_strict_carried_in_sudo_rejects_state_only_reuse_without_backfill(
     assert session is not None
     state_before = state.materialization_digest()
     registry_before = engine.lifecycle_registry.stats()
+    authority_before = engine.lifecycle_authority.census()
+    shadow_before = dict(engine.lifecycle_shadow.violation_summary)
     tty_before = _sudo_tty_state(generator)
+    processes_before = tuple(state.list_running_processes())
 
-    with pytest.raises(StateError, match="exact lifecycle ownership"):
-        _generate_sudo_processes(
-            generator,
-            system,
-            sudo_time=engine.start_time + timedelta(seconds=30),
-            lifecycle_group_id="sudo:state-only-reuse",
-            sudo_user="linux_user",
-        )
+    with patch.object(
+        generator.dispatcher,
+        "dispatch_builder",
+        wraps=generator.dispatcher.dispatch_builder,
+    ) as dispatch_builder:
+        with pytest.raises(StateError, match="exact lifecycle ownership"):
+            _generate_sudo_processes(
+                generator,
+                system,
+                sudo_time=engine.start_time + timedelta(seconds=30),
+                lifecycle_group_id="sudo:state-only-reuse",
+                sudo_user="linux_user",
+            )
 
+    dispatch_builder.assert_not_called()
     assert state.materialization_digest() == state_before
     assert engine.lifecycle_registry.get_session(session.ecar_object_id) is None
     assert engine.lifecycle_registry.stats() == registry_before
+    assert engine.lifecycle_authority.census() == authority_before
+    assert engine.lifecycle_shadow.violation_summary == shadow_before
+    assert tuple(state.list_running_processes()) == processes_before
     assert _sudo_tty_state(generator) == tty_before
+
+
+def test_strict_sudo_rejects_foreign_lifecycle_identity_and_retries_exactly(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    candidate_plan = state.plan_session_materialization(
+        username="linux_user",
+        system=system.hostname,
+        logon_type=2,
+        source_ip="-",
+        start_time=engine.start_time - timedelta(minutes=5),
+        session_kind="interactive",
+        lifecycle_group_id="sudo:identity-drift-candidate",
+        session_id=41,
+    )
+    candidate, candidate_receipt = engine.lifecycle_authority.materialize_session(candidate_plan)
+    assert engine.lifecycle_authority.authenticates_materialization_receipt(
+        candidate_plan,
+        candidate_receipt,
+    )
+    foreign_plan = state.plan_session_materialization(
+        username="windows_user",
+        system=system.hostname,
+        logon_type=2,
+        source_ip="-",
+        start_time=engine.start_time - timedelta(minutes=4),
+        session_kind="interactive",
+        lifecycle_group_id="sudo:identity-drift-foreign",
+        session_id=42,
+    )
+    foreign, foreign_receipt = engine.lifecycle_authority.materialize_session(foreign_plan)
+    assert engine.lifecycle_authority.authenticates_materialization_receipt(
+        foreign_plan,
+        foreign_receipt,
+    )
+    foreign_snapshot = engine.lifecycle_registry.get_session(foreign.ecar_object_id)
+    assert foreign_snapshot is not None
+    original_get_session = engine.lifecycle_registry.get_session
+    state_before = state.materialization_digest()
+    registry_before = engine.lifecycle_registry.stats()
+    authority_before = engine.lifecycle_authority.census()
+    shadow_before = dict(engine.lifecycle_shadow.violation_summary)
+    tty_before = _sudo_tty_state(generator)
+    processes_before = tuple(state.list_running_processes())
+
+    def return_foreign_snapshot(object_id: str) -> object:
+        if object_id == candidate.ecar_object_id:
+            return foreign_snapshot
+        return original_get_session(object_id)
+
+    with (
+        patch.object(
+            engine.lifecycle_registry,
+            "get_session",
+            side_effect=return_foreign_snapshot,
+        ),
+        patch.object(
+            generator.dispatcher,
+            "dispatch_builder",
+            wraps=generator.dispatcher.dispatch_builder,
+        ) as dispatch_builder,
+    ):
+        with pytest.raises(StateError, match="exact lifecycle ownership"):
+            _generate_sudo_processes(
+                generator,
+                system,
+                sudo_time=engine.start_time + timedelta(seconds=30),
+                lifecycle_group_id="sudo:identity-drift-rejected",
+                sudo_user="linux_user",
+            )
+
+    dispatch_builder.assert_not_called()
+    assert state.materialization_digest() == state_before
+    assert engine.lifecycle_registry.stats() == registry_before
+    assert engine.lifecycle_authority.census() == authority_before
+    assert engine.lifecycle_shadow.violation_summary == shadow_before
+    assert tuple(state.list_running_processes()) == processes_before
+    assert _sudo_tty_state(generator) == tty_before
+
+    sudo_pid, child_pid, _shift, assigned_tty = _generate_sudo_processes(
+        generator,
+        system,
+        sudo_time=engine.start_time + timedelta(seconds=30),
+        lifecycle_group_id="sudo:identity-drift-retry",
+        sudo_user="linux_user",
+    )
+
+    assert sudo_pid > 0 and child_pid is not None
+    assert assigned_tty == "pts/1"
+    sudo_process = state.get_process(system.hostname, sudo_pid)
+    assert sudo_process is not None
+    assert sudo_process.logon_id == candidate.logon_id
 
 
 def test_strict_carried_in_sudo_rendering_and_allocators_are_deterministic(

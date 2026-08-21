@@ -7721,7 +7721,7 @@ class ActivityGenerator:
 
         candidates = [
             session
-            for session in self.state_manager.get_sessions_for_user_at(user.username, time)
+            for session in self.state_manager.get_active_sessions_for_user_at(user.username, time)
             if (
                 session.system == system.hostname
                 and session.logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
@@ -33480,10 +33480,7 @@ class ActivityGenerator:
             session = None
             existing_logon_id = tty_sessions.get(tty_key)
             if existing_logon_id:
-                candidate = self.state_manager.get_session_at(
-                    existing_logon_id,
-                    effective_sudo_time,
-                )
+                candidate = self.state_manager.get_session(existing_logon_id)
                 if candidate is not None and _session_active_for_activity(
                     candidate,
                     reserve_until,
@@ -33493,7 +33490,7 @@ class ActivityGenerator:
             if session is None:
                 compatible_sessions = [
                     candidate
-                    for candidate in self.state_manager.get_sessions_for_user_at(
+                    for candidate in self.state_manager.get_active_sessions_for_user_at(
                         user.username,
                         effective_sudo_time,
                     )
