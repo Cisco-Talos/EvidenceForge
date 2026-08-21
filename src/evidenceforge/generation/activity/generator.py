@@ -20628,10 +20628,7 @@ class ActivityGenerator:
                     "source_timing",
                     timing,
                     (
-                        "retained_preparations",
                         "active_claims",
-                        "terminal_preparations",
-                        "retained_receipts",
                         "retained_plan_operations",
                     ),
                 ),

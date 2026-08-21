@@ -40,6 +40,7 @@ from evidenceforge.models import (
     Environment,
     OutputSpec,
     Scenario,
+    StateError,
     System,
     TimeWindow,
     User,
@@ -743,6 +744,77 @@ def test_terminal_census_allows_bounded_committed_dispatcher_receipt_history() -
     generator._terminal_census_fields = select_exact_unresolved_counts  # type: ignore[method-assign]
 
     generator.assert_terminal_transient_state_drained()
+
+
+def test_terminal_census_allows_bounded_committed_source_timing_history() -> None:
+    """Committed SourceTiming preparations and receipts are not transient ownership."""
+
+    generator = object.__new__(ActivityGenerator)
+    empty_owner = SimpleNamespace(census=lambda: SimpleNamespace())
+    registry = SimpleNamespace(
+        action_cohort_preparation_census=lambda: SimpleNamespace(),
+        closed_transport_preparation_census=lambda: SimpleNamespace(),
+        service_preparation_census=lambda: SimpleNamespace(),
+    )
+    timing = SimpleNamespace(
+        retained_preparations=8,
+        active_claims=0,
+        terminal_preparations=8,
+        retained_receipts=19,
+        retained_plan_operations=0,
+    )
+    detached_timing = SimpleNamespace(retained_bindings=0)
+    generator._application_channel_registry = empty_owner
+    generator._proxy_channel_manager = empty_owner
+    generator._http_channel_manager = empty_owner
+    generator._ssh_channel_manager = empty_owner
+    generator._rdp_session_manager = empty_owner
+    generator._smb_channel_manager = empty_owner
+    generator._network_transaction_runtime = empty_owner
+    generator._lifecycle_authority = SimpleNamespace(
+        census=lambda: SimpleNamespace(),
+        registry=registry,
+    )
+    generator._source_timing_planner = SimpleNamespace(
+        preparation_authority_census=lambda: timing,
+        detached_binding_census=lambda: detached_timing,
+    )
+    generator.dispatcher = SimpleNamespace(
+        exact_projection_recovery_census=lambda: SimpleNamespace(
+            authority=SimpleNamespace(),
+        ),
+        action_cohort_publication_census=lambda: SimpleNamespace(),
+    )
+    generator.persistent_smb_terminal_state_census = (  # type: ignore[method-assign]
+        lambda: TerminalTransientOwnerCensus(counts=())
+    )
+
+    def select_source_timing_counts(
+        prefix: str,
+        census: object,
+        fields: tuple[str, ...],
+    ) -> tuple[tuple[str, int], ...]:
+        if prefix not in {"source_timing", "source_timing_detached"}:
+            return ()
+        return tuple((f"{prefix}.{field}", getattr(census, field)) for field in fields)
+
+    generator._terminal_census_fields = select_source_timing_counts  # type: ignore[method-assign]
+
+    generator.assert_terminal_transient_state_drained()
+
+    timing.active_claims = 1
+    with pytest.raises(StateError, match="source_timing.active_claims"):
+        generator.assert_terminal_transient_state_drained()
+    timing.active_claims = 0
+
+    timing.retained_plan_operations = 1
+    with pytest.raises(StateError, match="source_timing.retained_plan_operations"):
+        generator.assert_terminal_transient_state_drained()
+    timing.retained_plan_operations = 0
+
+    detached_timing.retained_bindings = 1
+    with pytest.raises(StateError, match="source_timing_detached.retained_bindings"):
+        generator.assert_terminal_transient_state_drained()
 
 
 @pytest.mark.parametrize("generation_succeeded", (True, False), ids=("success", "abort"))
