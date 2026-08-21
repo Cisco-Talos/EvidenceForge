@@ -14755,7 +14755,7 @@ class ActivityGenerator:
 
         for timing_delta in used_timing_deltas:
             timing_delta.publish()
-        if session is not None:
+        if session is not None and self._has_linux_sudo_tty_route(logon_id):
             self._require_accepted_linux_sudo_session_close_owner(session)
             self._release_session_retention_state(
                 hostname=session.system,
@@ -32834,6 +32834,23 @@ class ActivityGenerator:
             if deadline is not None and type(deadline) is not datetime:
                 raise StateError("Linux sudo TTY availability route has a malformed deadline")
             return logon_id, deadline
+
+    def _has_linux_sudo_tty_route(self, logon_id: str) -> bool:
+        """Return whether one exact nonempty reverse TTY route exists for a session."""
+
+        if type(logon_id) is not str or not logon_id:
+            raise StateError("Linux sudo TTY route lookup requires a non-empty exact LogonID")
+        missing = object()
+        with self._linux_sudo_tty_lock:
+            reverse = self._linux_sudo_tty_keys_by_logon_id
+            if type(reverse) is not dict:
+                raise StateError("Linux sudo TTY reverse routes must be an exact dictionary")
+            tty_keys = dict.get(reverse, logon_id, missing)
+            if tty_keys is missing:
+                return False
+            if type(tty_keys) is not set or set.__len__(tty_keys) == 0:
+                raise StateError("Linux sudo TTY reverse route has a malformed key bucket")
+            return True
 
     def _remember_linux_sudo_tty_session(
         self,

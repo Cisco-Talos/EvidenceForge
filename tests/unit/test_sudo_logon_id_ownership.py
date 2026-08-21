@@ -635,6 +635,199 @@ def test_strict_sudo_tty_route_releases_after_public_generic_session_close(
     assert not generator._linux_sudo_tty_keys_by_logon_id
 
 
+def test_strict_generic_close_without_sudo_tty_route_skips_sudo_cleanup(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session = _materialize_strict_session(
+        engine,
+        state,
+        system,
+        user,
+        session_id=349_746,
+        lifecycle_group_id="generic-close-without-sudo-route",
+    )
+    tty_before = _sudo_tty_state(generator)
+
+    with (
+        patch.object(
+            generator,
+            "_require_accepted_linux_sudo_session_close_owner",
+            wraps=generator._require_accepted_linux_sudo_session_close_owner,
+        ) as require_sudo_close_owner,
+        patch.object(
+            generator,
+            "_release_session_retention_state",
+            wraps=generator._release_session_retention_state,
+        ) as release_session_retention,
+    ):
+        generator.generate_logoff(
+            user,
+            system,
+            session.start_time + timedelta(minutes=5),
+            session.logon_id,
+            logon_type=2,
+            from_storyline=True,
+        )
+
+    require_sudo_close_owner.assert_not_called()
+    release_session_retention.assert_not_called()
+    lifecycle = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    assert state.get_session(session.logon_id) is None
+    assert lifecycle is not None and lifecycle.closed_at is not None
+    assert _sudo_tty_state(generator) == tty_before
+
+
+@pytest.mark.parametrize("bucket", [None, [], set()])
+def test_linux_sudo_tty_route_predicate_rejects_malformed_bucket(
+    bucket: object,
+) -> None:
+    generator, _state, _system = _sudo_generator()
+    logon_id = "0xroute-owner"
+    assert not generator._has_linux_sudo_tty_route(logon_id)
+    dict.__setitem__(generator._linux_sudo_tty_keys_by_logon_id, logon_id, bucket)
+
+    with pytest.raises(StateError, match="malformed key bucket"):
+        generator._has_linux_sudo_tty_route(logon_id)
+
+
+def test_linux_sudo_tty_route_predicate_rejects_callback_input_before_lock() -> None:
+    generator, _state, _system = _sudo_generator()
+    callbacks: list[tuple[str, bool]] = []
+    hostile_logon_id = _CallbackStr(
+        "0xroute-owner",
+        lock=generator._linux_sudo_tty_lock,
+        callbacks=callbacks,
+    )
+
+    with pytest.raises(StateError, match="non-empty exact LogonID"):
+        generator._has_linux_sudo_tty_route(hostile_logon_id)
+
+    assert not callbacks
+
+
+def test_strict_generic_close_tolerates_route_removed_after_positive_probe(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session, _tty_key = _materialize_strict_sudo_tty_route(
+        engine,
+        generator,
+        state,
+        system,
+        user,
+        session_id=349_747,
+        lifecycle_group_id="sudo:generic-close-route-removal-race",
+    )
+    route_probed = Event()
+    resume_close = Event()
+    original_has_route = generator._has_linux_sudo_tty_route
+
+    def pause_after_route_probe(logon_id: str) -> bool:
+        has_route = original_has_route(logon_id)
+        assert has_route
+        route_probed.set()
+        assert resume_close.wait(timeout=5)
+        return has_route
+
+    with (
+        patch.object(generator, "_has_linux_sudo_tty_route", side_effect=pause_after_route_probe),
+        ThreadPoolExecutor(max_workers=1) as pool,
+    ):
+        close = pool.submit(
+            generator.generate_logoff,
+            user,
+            system,
+            session.start_time + timedelta(minutes=5),
+            session.logon_id,
+            2,
+            True,
+        )
+        assert route_probed.wait(timeout=5)
+        released = generator._release_session_retention_state(
+            hostname=session.system,
+            username=session.username,
+            logon_id=session.logon_id,
+        )
+        assert released.sudo_tty_rows == 5
+        resume_close.set()
+        close.result(timeout=5)
+
+    lifecycle = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    assert state.get_session(session.logon_id) is None
+    assert lifecycle is not None and lifecycle.closed_at is not None
+    assert not any(_sudo_tty_state(generator))
+
+
+def test_strict_generic_close_prevents_route_addition_after_negative_probe(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session = _materialize_strict_session(
+        engine,
+        state,
+        system,
+        user,
+        session_id=349_748,
+        lifecycle_group_id="generic-close-route-addition-race",
+    )
+    route_probed = Event()
+    resume_close = Event()
+    original_has_route = generator._has_linux_sudo_tty_route
+
+    def pause_after_route_probe(logon_id: str) -> bool:
+        has_route = original_has_route(logon_id)
+        assert not has_route
+        route_probed.set()
+        assert resume_close.wait(timeout=5)
+        return has_route
+
+    with (
+        patch.object(generator, "_has_linux_sudo_tty_route", side_effect=pause_after_route_probe),
+        ThreadPoolExecutor(max_workers=1) as pool,
+    ):
+        close = pool.submit(
+            generator.generate_logoff,
+            user,
+            system,
+            session.start_time + timedelta(minutes=5),
+            session.logon_id,
+            2,
+            True,
+        )
+        assert route_probed.wait(timeout=5)
+        tty_key = (system.hostname, user.username, "pts/1")
+        with pytest.raises(StateError, match="exact lifecycle ownership"):
+            generator._remember_linux_sudo_tty_session(
+                tty_key,
+                session.logon_id,
+                available_until=session.start_time + timedelta(minutes=6),
+                session=session,
+            )
+        resume_close.set()
+        close.result(timeout=5)
+
+    lifecycle = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    assert state.get_session(session.logon_id) is None
+    assert lifecycle is not None and lifecycle.closed_at is not None
+    assert not any(_sudo_tty_state(generator))
+
+
 def test_strict_sudo_tty_route_survives_rejected_generic_close_and_retry(
     tmp_path: Path,
 ) -> None:
