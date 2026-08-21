@@ -852,6 +852,7 @@ class _PreparedActionCohortBatchRecord:
     intent_request: IntentExecutionBatchRequest | None
     intent_token: IntentExecutionBatchToken | None
     exact_projection: bool
+    exact_all_suppressed: bool
     exact_publication_batch: ExactPublicationBatch | None
     exact_prepared_identifiers: tuple[tuple[str, str], ...]
     observation_deltas: tuple[_ActionCohortObservationDelta, ...]
@@ -1077,6 +1078,7 @@ class DeferredSessionPublicationPrecommit:
     composition_token: str
     member_digest: str
     target_proof_digest: str
+    all_suppressed: bool
     _integrity: str = ""
 
 
@@ -1182,6 +1184,7 @@ class _PreparedDeferredSessionPublicationRecord:
     member_integrity_tokens: tuple[str, ...]
     occurrence_ids: tuple[str, ...]
     member_binary_identity_kinds: tuple[str, ...]
+    all_suppressed: bool
     retained_bytes: int
     integrity_token: str
     exact_publication_batch: ExactPublicationBatch | None = None
@@ -6512,6 +6515,7 @@ class EventDispatcher:
                 record.observation_digest,
                 record.nested_token_digest,
                 record.exact_projection,
+                record.exact_all_suppressed,
                 id(record.exact_publication_batch),
                 record.exact_prepared_identifiers,
                 tuple(
@@ -7445,10 +7449,12 @@ class EventDispatcher:
         self,
         projection: _PreparedProjection,
     ) -> tuple[LogEmitter, ...]:
-        """Require one concrete exact eCAR terminal target and no other source."""
+        """Require eCAR, except for one exact zero-row warm-up terminal."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
 
+        if self._projection_is_exact_warmup_suppressed(projection):
+            return ()
         participants: list[LogEmitter] = []
         participant_ids: set[int] = set()
         for format_name, emitter in self._exact_projection_targets(projection):
@@ -7486,6 +7492,10 @@ class EventDispatcher:
             )
         projection = record.trusted_projections[0]
         exact_kind = self._exact_action_cohort_projection_kind(record)
+        record.exact_all_suppressed = bool(
+            exact_kind.startswith("ssh_")
+            and self._projection_is_exact_warmup_suppressed(projection)
+        )
         if (
             record.artifact_publications
             or record.effect_member_bindings
@@ -7518,6 +7528,14 @@ class EventDispatcher:
             raise EventContractError("Exact action-cohort batch was not issued")
         projection = record.trusted_projections[0]
         exact_kind = self._exact_action_cohort_projection_kind(record)
+        exact_all_suppressed = bool(
+            exact_kind.startswith("ssh_")
+            and self._projection_is_exact_warmup_suppressed(projection)
+        )
+        if exact_all_suppressed is not record.exact_all_suppressed:
+            raise EventContractError(
+                "Exact SSH terminal warm-up suppression changed before rendering"
+            )
         participants = (
             self._exact_projection_participants(projection)
             if exact_kind == "type5"
@@ -7532,6 +7550,17 @@ class EventDispatcher:
         record.exact_prepared_identifiers = self._validate_exact_projection_identifiers(
             prepared_result
         )
+        if exact_kind.startswith("ssh_"):
+            prepared_row_count = batch.prepared_row_count
+            if record.exact_all_suppressed:
+                if prepared_row_count != 0 or record.exact_prepared_identifiers != ():
+                    raise EventContractError(
+                        "Exact SSH warm-up terminal projection changed its zero-row shape"
+                    )
+            elif prepared_row_count <= 0:
+                raise EventContractError(
+                    "Exact visible SSH terminal projection staged no durable row"
+                )
 
     @staticmethod
     def _require_state_neutral_type_five_projection(
@@ -8541,6 +8570,7 @@ class EventDispatcher:
                     intent_request=intent_request,
                     intent_token=intent_token,
                     exact_projection=exact_projection,
+                    exact_all_suppressed=False,
                     exact_publication_batch=None,
                     exact_prepared_identifiers=(),
                     observation_deltas=observation_deltas,
@@ -9921,8 +9951,8 @@ class EventDispatcher:
                     )
         return False
 
-    @staticmethod
     def _released_exact_projection_result_authenticates(
+        self,
         record: _ExactProjectionRecoveryRecord,
     ) -> bool:
         """Authenticate retained terminal result identity after batch release won the race."""
@@ -9932,6 +9962,28 @@ class EventDispatcher:
         result = record.result
         if record.kind == "deferred_session":
             outcomes = record.outcomes
+            owner = record.owner_record
+            all_suppressed_terminal = bool(
+                type(owner) is _PreparedDeferredSessionPublicationRecord
+                and owner.exact_recovery is record
+                and owner.all_suppressed
+                and owner.prepared_target_proofs is record.target_proofs
+                and owner.prepared_identifiers is record.member_identifiers
+                and record.target_proofs == ()
+                and record.batch.commit_cursor == 0
+                and all(member == () for member in record.member_identifiers)
+                and all(
+                    self._projection_is_exact_warmup_suppressed(prepared._projection)
+                    for prepared in owner.dispatches
+                )
+            )
+            positive_target_terminal = bool(
+                type(owner) is _PreparedDeferredSessionPublicationRecord
+                and owner.exact_recovery is record
+                and not owner.all_suppressed
+                and record.target_proofs
+                and record.target_proofs[-1].row_end == record.batch.commit_cursor
+            )
             return bool(
                 record.batch.released
                 and type(receipt) is DeferredSessionPublicationReceipt
@@ -9943,8 +9995,7 @@ class EventDispatcher:
                 and receipt.occurrence_ids == record.occurrence_ids
                 and receipt.target_proof_digest
                 == hashlib.sha256(repr(record.target_proofs).encode("utf-8")).hexdigest()
-                and record.target_proofs
-                and record.target_proofs[-1].row_end == record.batch.commit_cursor
+                and (positive_target_terminal or all_suppressed_terminal)
                 and hmac.compare_digest(
                     receipt.member_integrity_digest,
                     record.member_integrity_digest,
@@ -10615,6 +10666,7 @@ class EventDispatcher:
                 ),
                 record.prepared_identifiers,
                 record.prepared_target_proofs,
+                record.all_suppressed,
                 record.occurrence_ids,
                 record.member_binary_identity_kinds,
                 record.member_digest,
@@ -10701,6 +10753,7 @@ class EventDispatcher:
         expected = self._deferred_session_publication_batch_integrity(batch, record)
         if (
             batch._occurrence_count != len(record.dispatches)
+            or type(record.all_suppressed) is not bool
             or not hmac.compare_digest(batch._integrity_token, expected)
             or not hmac.compare_digest(record.integrity_token, expected)
         ):
@@ -11220,6 +11273,49 @@ class EventDispatcher:
                     "before its dependent"
                 )
 
+    def _projection_is_exact_warmup_suppressed(
+        self,
+        projection: _PreparedProjection,
+    ) -> bool:
+        """Return whether one member has the exact canonical warm-up suppression shape."""
+
+        return bool(
+            self.output_start_time is not None
+            and self._is_suppressed(projection.occurrence.timestamp)
+            and projection.mode == "suppressed"
+            and projection.initial_statuses == (("all", "out_of_window"),)
+            and projection.legacy_targets == ()
+            and projection.compiled_targets == ()
+        )
+
+    def _validate_deferred_session_all_suppressed_projection(
+        self,
+        dispatches: tuple[PreparedDispatch, ...],
+        identifiers: tuple[tuple[tuple[str, str], ...], ...],
+        proofs: tuple[DeferredSessionExactTargetProof, ...],
+        *,
+        prepared_row_facts: tuple[tuple[str, str, int], ...],
+    ) -> None:
+        """Authenticate the sole zero-row exception for a fully suppressed warm-up cohort."""
+
+        if (
+            type(dispatches) is not tuple
+            or not dispatches
+            or not all(
+                self._projection_is_exact_warmup_suppressed(prepared._projection)
+                for prepared in dispatches
+            )
+            or type(identifiers) is not tuple
+            or len(identifiers) != len(dispatches)
+            or any(member != () for member in identifiers)
+            or proofs != ()
+            or prepared_row_facts != ()
+            or self._deferred_session_exact_projection_participants(dispatches) != ()
+        ):
+            raise EventContractError(
+                "Deferred-session all-suppressed projection changed its zero-row warm-up shape"
+            )
+
     @staticmethod
     def _deferred_session_allowed_state_members(root: object) -> tuple[object, ...]:
         """Return exact session/process/active-session members of one root."""
@@ -11544,6 +11640,10 @@ class EventDispatcher:
             raise EventContractError(
                 "Deferred-session composition changed during dispatcher validation"
             )
+        all_suppressed = all(
+            self._projection_is_exact_warmup_suppressed(prepared._projection)
+            for prepared in dispatches
+        )
 
         retained_bytes = len(
             repr(
@@ -11600,6 +11700,7 @@ class EventDispatcher:
                 member_binary_identity_kinds=tuple(
                     prepared._binary_identity_kind for prepared in dispatches
                 ),
+                all_suppressed=all_suppressed,
                 retained_bytes=retained_bytes,
                 integrity_token="",
                 state="freezing",
@@ -11668,11 +11769,20 @@ class EventDispatcher:
                     member_count=len(dispatches),
                 )
             )
-            self._validate_deferred_session_target_proofs(
-                dispatches,
-                prepared_target_proofs,
-                prepared_row_facts=exact_batch._prepared_row_facts(),
-            )
+            prepared_row_facts = exact_batch._prepared_row_facts()
+            if all_suppressed:
+                self._validate_deferred_session_all_suppressed_projection(
+                    dispatches,
+                    prepared_identifiers,
+                    prepared_target_proofs,
+                    prepared_row_facts=prepared_row_facts,
+                )
+            else:
+                self._validate_deferred_session_target_proofs(
+                    dispatches,
+                    prepared_target_proofs,
+                    prepared_row_facts=prepared_row_facts,
+                )
             observation_deltas_by_member = tuple(
                 self._action_cohort_projection_observation_deltas(prepared._projection)
                 for prepared in dispatches
@@ -11958,11 +12068,20 @@ class EventDispatcher:
             if exact_batch is None or exact_batch.state != "ready":
                 raise EventContractError("Deferred-session exact source projection is not ready")
             exact_batch._require_authority()
-            self._validate_deferred_session_target_proofs(
-                record.dispatches,
-                record.prepared_target_proofs,
-                prepared_row_facts=exact_batch._prepared_row_facts(),
-            )
+            prepared_row_facts = exact_batch._prepared_row_facts()
+            if record.all_suppressed:
+                self._validate_deferred_session_all_suppressed_projection(
+                    record.dispatches,
+                    record.prepared_identifiers,
+                    record.prepared_target_proofs,
+                    prepared_row_facts=prepared_row_facts,
+                )
+            else:
+                self._validate_deferred_session_target_proofs(
+                    record.dispatches,
+                    record.prepared_target_proofs,
+                    prepared_row_facts=prepared_row_facts,
+                )
             if record.intent_token is None:
                 if any(
                     value is not None
@@ -12179,6 +12298,8 @@ class EventDispatcher:
                 precommit.composition_token,
                 precommit.member_digest,
                 precommit.target_proof_digest,
+                precommit.all_suppressed,
+                record.all_suppressed,
                 record.integrity_token,
                 id(record.carrier),
                 id(exact_batch),
@@ -12224,11 +12345,13 @@ class EventDispatcher:
             )
             or type(precommit.batch_id) is not int
             or precommit.batch_id <= 0
+            or type(precommit.all_suppressed) is not bool
             or precommit.dispatcher_id != self._deferred_session_publication_dispatcher_id
             or precommit.batch_id != record.batch_id
             or precommit.composition_token != record.composition_token
             or precommit.member_digest != record.member_digest
             or precommit.target_proof_digest != record.target_proof_digest
+            or precommit.all_suppressed is not record.all_suppressed
             or not hmac.compare_digest(
                 precommit._integrity,
                 self._deferred_session_precommit_integrity(precommit, record),
@@ -12269,6 +12392,7 @@ class EventDispatcher:
                 composition_token=record.composition_token,
                 member_digest=record.member_digest,
                 target_proof_digest=record.target_proof_digest,
+                all_suppressed=record.all_suppressed,
             )
             object.__setattr__(
                 precommit,

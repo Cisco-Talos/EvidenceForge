@@ -24,6 +24,7 @@ from evidenceforge.generation.actions.network_connection import NetworkConnectio
 from evidenceforge.generation.actions.ssh_session import SshSessionActionBundle, SshSessionRequest
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
+from evidenceforge.generation.emitters.base import ExactPublicationBatch
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.emitters.web import WebEmitter
@@ -122,6 +123,7 @@ def _fixture(
     threaded: bool = False,
     extra_emitters: dict[str, object] | None = None,
     member_capacity: int = 65_536,
+    output_start_time: datetime | None = None,
 ) -> _RealSshFixture:
     """Build the real production caller with concrete eCAR and Zeek adapters."""
 
@@ -136,6 +138,7 @@ def _fixture(
     dispatcher = EventDispatcher(
         state,
         emitters,  # type: ignore[arg-type]
+        output_start_time=output_start_time,
         action_cohort_member_capacity=member_capacity,
     )
     generator = ActivityGenerator(
@@ -181,6 +184,7 @@ def _assert_no_dispatcher_residue(dispatcher: EventDispatcher) -> None:
 
     deferred = dispatcher.deferred_session_publication_census()
     recovery = dispatcher.exact_projection_recovery_census()
+    action = dispatcher.action_cohort_publication_census()
     assert deferred.prepared_batches == 0
     assert deferred.retained_members == 0
     assert deferred.retained_bytes == 0
@@ -190,9 +194,22 @@ def _assert_no_dispatcher_residue(dispatcher: EventDispatcher) -> None:
     assert recovery.unresolved_recoveries == 0
     assert recovery.reserved_recoveries == 0
     assert recovery.authority.active_batches == 0
+    assert action.prepared_batches == 0
+    assert action.claimed_batches == 0
+    assert action.retained_members == 0
+    assert action.retained_bytes == 0
+    assert action.capability_locators == 0
+    assert action.prepared_projections == 0
+    assert action.projection_groups == 0
+    assert action.projection_retained_bytes == 0
 
 
-def _execute_real_caller(fixture: _RealSshFixture) -> tuple[str, str]:
+def _execute_real_caller(
+    fixture: _RealSshFixture,
+    *,
+    emit_session_close: bool = False,
+    defer_session_close: bool = False,
+) -> tuple[str, str]:
     """Use the ActivityGenerator entrypoint exercised by production callers."""
 
     request = fixture.request()
@@ -207,6 +224,8 @@ def _execute_real_caller(fixture: _RealSshFixture) -> tuple[str, str]:
         orig_bytes=request.orig_bytes,
         resp_bytes=request.resp_bytes,
         auth_method=request.auth_method,
+        emit_session_close=emit_session_close,
+        defer_session_close=defer_session_close,
         source=request.source,
     )
 
@@ -357,6 +376,125 @@ def test_real_ssh_caller_reaches_exact_bridge_and_publishes_transport_first(
     assert zeek_rows[0]["uid"] == uid
     assert zeek_rows[0]["orig_bytes"] == 12_345
     assert zeek_rows[0]["resp_bytes"] == 54_321
+
+
+def test_real_ssh_caller_materializes_fully_suppressed_warmup_session(
+    tmp_path: Path,
+) -> None:
+    """A wholly pre-output SSH owner graph commits canonically without source rows."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(
+        tmp_path,
+        output_start_time=_START + timedelta(hours=1),
+    )
+
+    uid, logon_id = _execute_real_caller(
+        fixture,
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+
+    assert uid
+    session = fixture.state.get_session(logon_id)
+    assert session is not None
+    assert session.session_kind == "ssh"
+    assert session.transport_pid is not None
+    receiver_pid = session.transport_pid
+    assert session.network_close_time is not None
+    fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
+    assert fixture.state.get_session(logon_id) is None
+    assert fixture.state.get_process(fixture.target.hostname, receiver_pid) is None
+    assert fixture.generator._ssh_channel_manager.census().open_sessions == 0
+    assert fixture.generator.ssh_close_journal_census().total_pending == 0
+    assert (
+        fixture.generator._source_timing_planner.preparation_authority_census().active_claims == 0
+    )
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    assert ecar_rows == []
+    assert zeek_rows == []
+
+
+def test_real_ssh_mixed_warmup_and_visible_members_still_require_positive_targets(
+    tmp_path: Path,
+) -> None:
+    """A suppressed transport cannot admit later visible session members without proof."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(
+        tmp_path,
+        output_start_time=_START + timedelta(seconds=1),
+    )
+    before = (
+        fixture.state.materialization_digest(),
+        fixture.generator._lifecycle_authority.registry.census(),
+        fixture.generator._ssh_channel_manager.census(),
+    )
+
+    with pytest.raises(EventContractError, match="positive exact target"):
+        _execute_real_caller(fixture)
+
+    after = (
+        fixture.state.materialization_digest(),
+        fixture.generator._lifecycle_authority.registry.census(),
+        fixture.generator._ssh_channel_manager.census(),
+    )
+    assert after == before
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    assert ecar_rows == []
+    assert zeek_rows == []
+
+
+@pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))
+def test_zero_row_warmup_open_release_recovers_exactly_once(
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero-row release retries or adopts one canonical warm-up owner graph."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(
+        tmp_path,
+        output_start_time=_START + timedelta(hours=1),
+    )
+    original = ExactPublicationBatch.release_no_fail
+    attempts = 0
+
+    def inject(batch: ExactPublicationBatch) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            if failure_mode == "lost-return":
+                original(batch)
+            raise OSError(f"zero-row release {failure_mode}")
+        original(batch)
+
+    monkeypatch.setattr(ExactPublicationBatch, "release_no_fail", inject)
+    if failure_mode == "fail-before":
+        with pytest.raises(OSError, match=f"zero-row release {failure_mode}"):
+            _execute_real_caller(fixture)
+        before_retry = fixture.state.materialization_digest()
+        recovery = fixture.generator.dispatcher.exact_projection_recovery_census()
+        assert recovery.unresolved_recoveries == 1
+        results = fixture.generator.dispatcher.drain_exact_projection_recoveries()
+        assert len(results) == 1
+        assert all(outcome.status == "succeeded" for outcome in results[0].projections)
+        assert fixture.state.materialization_digest() == before_retry
+    else:
+        uid, _logon_id = _execute_real_caller(fixture)
+        assert uid
+
+    assert attempts == (2 if failure_mode == "fail-before" else 1)
+    assert (
+        fixture.generator._source_timing_planner.preparation_authority_census().active_claims == 0
+    )
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    assert ecar_rows == []
+    assert zeek_rows == []
 
 
 def test_real_ssh_exact_bytes_match_threaded_and_direct_modes(tmp_path: Path) -> None:
