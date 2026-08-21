@@ -56,6 +56,7 @@ class _RdpTerminalHarness:
     zeek: ZeekEmitter
     source_hostname: str
     target_hostname: str
+    target_system_process_object_id: str | None
     logon_id: str
     session_object_id: str
     terminal_process_object_ids: tuple[str, ...]
@@ -70,6 +71,7 @@ def _open_rdp_terminal_harness(
     clock_profile_name: str = "complete",
     output_start_time: datetime | None = None,
     include_sysmon: bool = False,
+    modeled_target_pid4: bool = False,
 ) -> _RdpTerminalHarness:
     """Open one exact initial RDP generation whose full terminal graph is still pending."""
 
@@ -122,6 +124,21 @@ def _open_rdp_terminal_harness(
         email="analyst@example.test",
     )
     generator._ip_to_system = {source.ip: source, target.ip: target}
+    target_system_process_object_id = None
+    if modeled_target_pid4:
+        system_plan = state.plan_process_materialization(
+            system=target.hostname,
+            fixed_pid=4,
+            parent_pid=0,
+            image="System",
+            command_line="",
+            username="SYSTEM",
+            integrity_level="System",
+            os_category="windows",
+            start_time=_START - timedelta(minutes=5),
+        )
+        system_process, _receipt = generator._lifecycle_authority.materialize_process(system_plan)
+        target_system_process_object_id = system_process.ecar_object_id
     source_logon = generator.generate_logon(
         user,
         source,
@@ -186,6 +203,7 @@ def _open_rdp_terminal_harness(
         zeek=zeek,
         source_hostname=source.hostname,
         target_hostname=target.hostname,
+        target_system_process_object_id=target_system_process_object_id,
         logon_id=logon_id,
         session_object_id=session_identity.object_id,
         terminal_process_object_ids=(
@@ -198,6 +216,197 @@ def _open_rdp_terminal_harness(
         ),
         disconnect_at=session.network_close_time,
         output_root=tmp_path,
+    )
+
+
+def _aborted_engine_for_rdp_harness(harness: _RdpTerminalHarness) -> GenerationEngine:
+    """Return the real failed-generation terminal path with only RDP work pending."""
+
+    engine = GenerationEngine.__new__(GenerationEngine)
+    engine.activity_generator = harness.generator
+    engine.dispatcher = harness.dispatcher
+    engine.emitters = {}
+    engine.end_time = _END
+    engine._source_finalization_coordinator = None
+    engine._ssh_lifecycles_finalized = True
+    engine._rdp_lifecycles_finalized = False
+    engine._persistent_smb_terminal_asserted = True
+    engine._application_channels_finalized = True
+    engine._foreground_lifecycles_finalized = True
+    engine._terminal_runtime_cleanup_finalized = True
+    engine._exact_projection_recoveries_finalized = True
+    engine._terminal_transient_census_asserted = True
+    engine._finalization_complete = False
+    engine._finalization_aborted = False
+    engine._source_coordinator_closed = False
+    engine._ids_alert_summary_applied = True
+    engine._expected_close_emitters = None
+    engine._closed_emitter_names = set()
+    engine._exact_projection_recovery_dispatcher = None
+    return engine
+
+
+@pytest.mark.parametrize("modeled_target_pid4", (False, True), ids=("virtual", "modeled"))
+@pytest.mark.parametrize("failure_mode", ("success", "fail-before", "lost-return"))
+def test_aborted_rdp_target_drain_reauthenticates_exact_pid4_parent(
+    modeled_target_pid4: bool,
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Abort cleanup preserves modeled PID-4 ancestry and retry-exact terminal rows."""
+
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        modeled_target_pid4=modeled_target_pid4,
+    )
+    winlogon = next(
+        identity
+        for identity in harness.terminal_process_identities
+        if identity.image.casefold().endswith("winlogon.exe")
+    )
+    lifecycle = harness.generator._lifecycle_authority.registry.get_process(winlogon.object_id)
+    assert lifecycle is not None
+    assert lifecycle.identity.parent_object_id == (harness.target_system_process_object_id or "")
+
+    original_terminate = RdpSessionActionBundle.terminate_exact_rdp_process
+    selected_calls = 0
+
+    def faulting_terminate(
+        owner: RdpSessionActionBundle,
+        continuation: object,
+        identity: ProcessIdentity,
+        terminate_time: datetime,
+    ) -> object:
+        nonlocal selected_calls
+        if identity.object_id != winlogon.object_id:
+            return original_terminate(owner, continuation, identity, terminate_time)
+        selected_calls += 1
+        if failure_mode == "fail-before" and selected_calls == 1:
+            raise OSError("injected modeled-parent RDP fail-before")
+        result = original_terminate(owner, continuation, identity, terminate_time)
+        if failure_mode == "lost-return" and selected_calls == 1:
+            raise OSError("injected modeled-parent RDP lost-return")
+        return result
+
+    monkeypatch.setattr(
+        RdpSessionActionBundle,
+        "terminate_exact_rdp_process",
+        faulting_terminate,
+    )
+    engine = _aborted_engine_for_rdp_harness(harness)
+    if failure_mode == "success":
+        engine._finalize(generation_succeeded=False)
+    else:
+        with pytest.raises(OSError, match=f"modeled-parent RDP {failure_mode}"):
+            engine._finalize(generation_succeeded=False)
+        engine._finalize(generation_succeeded=False)
+
+    assert selected_calls == (1 if failure_mode == "success" else 2)
+    assert engine._finalization_complete
+    assert harness.state.get_session(harness.logon_id) is None
+    live_process_object_ids = {
+        process.ecar_object_id
+        for hostname in (harness.source_hostname, harness.target_hostname)
+        for process in harness.state.get_processes_on_system(hostname)
+    }
+    assert live_process_object_ids.isdisjoint(harness.terminal_process_object_ids)
+    journal = harness.generator.rdp_lifecycle_journal_census()
+    assert journal.prepared_reservations == 0
+    assert journal.pending_generations == 0
+    manager = harness.generator.rdp_session_manager.census()
+    assert manager.connected_sessions == 0
+    assert manager.disconnected_sessions == 0
+    assert manager.logged_out_sessions == 1
+    assert manager.active_operations == 0
+    assert manager.active_leases == 0
+
+    _close_rdp_terminal_harness(harness)
+    recovery = harness.dispatcher.exact_projection_recovery_census()
+    cohort = harness.dispatcher.action_cohort_publication_census()
+    assert recovery.unresolved_recoveries == 0
+    assert recovery.reserved_recoveries == 0
+    assert recovery.active_recoveries == 0
+    assert recovery.authority.active_batches == 0
+    assert recovery.authority.prepared_batches == 0
+    assert recovery.authority.retained_rows == 0
+    assert cohort.prepared_batches == 0
+    assert cohort.claimed_batches == 0
+    assert cohort.retained_members == 0
+    assert cohort.prepared_projections == 0
+    assert cohort.projection_groups == 0
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    for object_id in harness.terminal_process_object_ids:
+        assert (
+            sum(
+                row.get("object") == "PROCESS"
+                and row.get("action") == "TERMINATE"
+                and row.get("objectID") == object_id
+                for row in ecar_rows
+            )
+            == 1
+        )
+
+
+def test_aborted_rdp_target_drain_rejects_a_lost_modeled_pid4_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A published PID-4 parent may not silently degrade to the virtual-parent shape."""
+
+    harness = _open_rdp_terminal_harness(tmp_path, modeled_target_pid4=True)
+    winlogon = next(
+        identity
+        for identity in harness.terminal_process_identities
+        if identity.image.casefold().endswith("winlogon.exe")
+    )
+    registry = harness.generator._lifecycle_authority.registry
+    original_lookup = type(registry).process_for_pid_at
+
+    def hide_target_system_parent(
+        owner: object,
+        hostname: str,
+        pid: int,
+        canonical_time: datetime,
+    ) -> object:
+        if hostname == harness.target_hostname and pid == 4:
+            return None
+        return original_lookup(owner, hostname, pid, canonical_time)
+
+    engine = _aborted_engine_for_rdp_harness(harness)
+    with monkeypatch.context() as fault:
+        fault.setattr(type(registry), "process_for_pid_at", hide_target_system_parent)
+        with pytest.raises(
+            StateError,
+            match="registered process has no exact lifecycle parent",
+        ):
+            engine._finalize(generation_succeeded=False)
+
+    assert not engine._finalization_complete
+    assert harness.state.get_process(harness.target_hostname, winlogon.pid) is not None
+    retained = registry.get_process(winlogon.object_id)
+    assert retained is not None
+    assert retained.closed_at is None
+    cohort = harness.dispatcher.action_cohort_publication_census()
+    assert cohort.prepared_batches == 0
+    assert cohort.claimed_batches == 0
+    assert cohort.prepared_projections == 0
+
+    engine._finalize(generation_succeeded=False)
+    assert engine._finalization_complete
+    assert harness.state.get_process(harness.target_hostname, winlogon.pid) is None
+    _close_rdp_terminal_harness(harness)
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    assert (
+        sum(
+            row.get("object") == "PROCESS"
+            and row.get("action") == "TERMINATE"
+            and row.get("objectID") == winlogon.object_id
+            for row in ecar_rows
+        )
+        == 1
     )
 
 

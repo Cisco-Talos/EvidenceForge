@@ -3970,18 +3970,22 @@ class GeneratorLifecycleAuthority:
                 f"{identity.object_id}"
             )
         parent_object_id = ""
-        if identity.parent_pid not in {0, 4}:
+        if identity.parent_pid != 0:
             parent = self._registry.process_for_pid_at(
                 identity.hostname,
                 identity.parent_pid,
                 identity.started_at,
             )
-            if parent is None:
+            if parent is None and (identity.parent_pid != 4 or snapshot.identity.parent_object_id):
                 raise StateError(
                     "Action cohort registered process has no exact lifecycle parent: "
                     f"{identity.object_id}"
                 )
-            parent_object_id = parent.identity.object_id
+            # Narrow compatibility fixtures may model Windows PID 4 as a virtual
+            # kernel parent with no lifecycle row. Production boot fleets materialize
+            # it, in which case the exact at-start parent must agree below.
+            if parent is not None:
+                parent_object_id = parent.identity.object_id
         expected, _token, _membership = self._shadow.project_process_start(
             identity,
             integrity_level=snapshot.token.integrity_level,
