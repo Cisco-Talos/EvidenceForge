@@ -44,6 +44,8 @@ from evidenceforge.generation.source_timing import (
     ecar_session_render_key,
     endpoint_event_render_key,
 )
+from evidenceforge.generation.timing import TimingRuntime
+from evidenceforge.models.exceptions import StateError
 from tests.network_factories import network_plan
 
 
@@ -381,10 +383,9 @@ def test_samba_session_and_file_follow_admitted_ecar_flow() -> None:
     )
     planner.plan_event(logoff_event, "ecar")
 
-    flow_time = max(
-        flow_event.source_timing.finalized_times[ecar_flow_render_key("outbound", client.hostname)],
-        flow_event.source_timing.finalized_times[ecar_flow_render_key("inbound", server.hostname)],
-    )
+    flow_time = flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", server.hostname)
+    ]
     login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
     logout_time = logoff_event.source_timing.finalized_times[ecar_session_render_key("logout")]
     file_time = planned_file.source_timing.finalized_times[
@@ -1799,6 +1800,170 @@ def _remote_auth_timing_events(
     return flow_event, auth_event
 
 
+def _clock_skewed_remote_auth_timing_events() -> tuple[OccurrenceBuilder, OccurrenceBuilder]:
+    """Return the short anonymous-SMB transport that exposed target-clock inversion."""
+
+    started_at = datetime(2024, 3, 18, 12, 8, 46, 448104, tzinfo=UTC)
+    closed_at = datetime(2024, 3, 18, 12, 8, 47, 516768, tzinfo=UTC)
+    auth_time = datetime(2024, 3, 18, 12, 8, 46, 620646, tzinfo=UTC)
+    source = HostContext(
+        hostname="LT-MRIVERA-02",
+        ip="10.10.1.99",
+        fqdn="LT-MRIVERA-02.meridianhcs.com",
+        os="Windows 11",
+        os_category="windows",
+        system_type="laptop",
+        domain="meridianhcs.com",
+        netbios_domain="MERIDIANHCS",
+    )
+    target = HostContext(
+        hostname="MAIL-FIN-01",
+        ip="10.10.2.27",
+        fqdn="MAIL-FIN-01.meridianhcs.com",
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="server",
+        domain="meridianhcs.com",
+        netbios_domain="MERIDIANHCS",
+    )
+    transaction_id = "network-connection-anonymous-clock-window"
+    action_id = "windows-remote-auth-anonymous-clock-window"
+    network = replace(
+        network_plan(
+            src_ip=source.ip,
+            src_port=48869,
+            dst_ip=target.ip,
+            dst_port=445,
+            protocol="tcp",
+            service="smb",
+            zeek_uid="CanonymousClockWindow",
+            conn_id="conn-anonymous-clock-window",
+            duration=(closed_at - started_at).total_seconds(),
+            source_visible_start_time=started_at,
+            source_visible_close_time=closed_at,
+            orig_bytes=1200,
+            resp_bytes=2400,
+            orig_pkts=4,
+            resp_pkts=5,
+            orig_ip_bytes=1360,
+            resp_ip_bytes=2600,
+            conn_state="SF",
+            history="ShADadFf",
+            local_orig=True,
+            local_resp=True,
+        ),
+        stable_id=transaction_id,
+    )
+    transport = RemoteAuthenticationTransportPlan(
+        role="target_service",
+        transaction_id=transaction_id,
+        tuple=NetworkTuple(
+            src_ip=source.ip,
+            src_port=48869,
+            dst_ip=target.ip,
+            dst_port=445,
+            protocol="tcp",
+        ),
+        started_at=started_at,
+        closed_at=closed_at,
+        primary=True,
+    )
+    remote_auth = RemoteAuthenticationPlan(
+        stable_id=action_id,
+        source_hostname=source.hostname,
+        target_hostname=target.hostname,
+        logon_type=3,
+        auth_protocol="NTLM",
+        outcome="success",
+        canonical_auth_time=auth_time,
+        transports=(transport,),
+        session_object_id="session-anonymous-clock-window",
+        logon_id="0x3e7",
+    )
+    flow_event = OccurrenceBuilder(
+        timestamp=started_at,
+        event_type="connection",
+        src_host=source,
+        dst_host=target,
+        network=network,
+        lifecycle=ActionLifecycleContext(
+            group_id=transaction_id,
+            canonical_start=started_at,
+            phase="start",
+            parent_group_id=action_id,
+        ),
+    )
+    auth_event = OccurrenceBuilder(
+        timestamp=auth_time,
+        event_type="logon",
+        src_host=source,
+        dst_host=target,
+        auth=AuthContext(
+            username="ANONYMOUS LOGON",
+            user_sid="S-1-5-7",
+            logon_id="0x3e7",
+            logon_type=3,
+            auth_package="NTLM",
+            source_ip=source.ip,
+            source_port=48869,
+        ),
+        remote_auth=remote_auth,
+    )
+    return flow_event, auth_event
+
+
+def _source_timing_planner(clock_profile_name: str) -> SourceTimingPlanner:
+    """Return the iteration scenario's deterministic source-timing owner."""
+
+    return SourceTimingPlanner(
+        clock_profile_name=clock_profile_name,
+        timing_runtime=TimingRuntime(
+            reference_time=datetime(2024, 3, 18, 10, 0, tzinfo=UTC),
+            namespace="shared-timing-v1",
+            generation_seed=42,
+        ),
+    )
+
+
+def _clock_skewed_source_timing_planner() -> SourceTimingPlanner:
+    """Return the iteration scenario's deterministic endpoint-clock owner."""
+
+    return _source_timing_planner("enterprise_standard")
+
+
+def _remote_auth_wfp_event(
+    flow_event: OccurrenceBuilder,
+    login_event: OccurrenceBuilder,
+) -> OccurrenceBuilder:
+    """Build the target-local WFP projection for a remote-auth transport."""
+
+    target = flow_event.dst_host
+    network = flow_event.network
+    remote_auth = login_event.remote_auth
+    assert target is not None
+    assert network is not None
+    assert remote_auth is not None
+    return OccurrenceBuilder(
+        timestamp=network.started_at,
+        event_type="wfp_connection",
+        src_host=target,
+        network=network_plan(
+            src_ip=network.src_ip,
+            src_port=network.src_port,
+            dst_ip=network.dst_ip,
+            dst_port=network.dst_port,
+            protocol="tcp",
+            initiating_pid=4,
+        ),
+        lifecycle=ActionLifecycleContext(
+            group_id=network.stable_id,
+            canonical_start=network.started_at,
+            phase="dependent",
+            parent_group_id=remote_auth.stable_id,
+        ),
+    )
+
+
 def test_remote_auth_ecar_login_follows_admitted_exact_transport() -> None:
     """Dispatcher timing should place eCAR authentication after its exact FLOW."""
 
@@ -1809,23 +1974,281 @@ def test_remote_auth_ecar_login_follows_admitted_exact_transport() -> None:
     planner.record_admitted_source_event(flow_event, "ecar")
     planner.plan_event(login_event, "ecar")
 
-    assert flow_event.src_host is not None
-    endpoint_flow_times = [
-        flow_event.source_timing.finalized_times[
-            ecar_flow_render_key("outbound", flow_event.src_host.hostname)
-        ],
-        flow_event.source_timing.finalized_times[ecar_flow_render_key("inbound", "FILE-SRV-01")],
+    target_flow_time = flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", "FILE-SRV-01")
     ]
     login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
+    assert timedelta(milliseconds=8) <= login_time - target_flow_time <= timedelta(milliseconds=140)
+
+
+def test_remote_auth_ecar_login_uses_target_local_transport_close() -> None:
+    """Target clock skew must not compare an eCAR auth row to an unprojected close."""
+
+    planner = _clock_skewed_source_timing_planner()
+    flow_event, login_event = _clock_skewed_remote_auth_timing_events()
+
+    planner.plan_event(flow_event, "ecar")
+    assert flow_event.src_host is not None
+    assert flow_event.dst_host is not None
+    assert flow_event.network is not None
+    assert flow_event.network.started_at == datetime(2024, 3, 18, 12, 8, 46, 448104, tzinfo=UTC)
+    assert login_event.timestamp == datetime(2024, 3, 18, 12, 8, 46, 620646, tzinfo=UTC)
+    outbound_flow_time = datetime(2024, 3, 18, 12, 8, 46, 905000, tzinfo=UTC)
+    target_flow_time = datetime(2024, 3, 18, 12, 8, 47, 673398, tzinfo=UTC)
+    flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("outbound", flow_event.src_host.hostname)
+    ] = outbound_flow_time
+    flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", flow_event.dst_host.hostname)
+    ] = target_flow_time
     assert (
-        timedelta(milliseconds=8)
-        <= login_time - max(endpoint_flow_times)
-        <= timedelta(milliseconds=140)
+        flow_event.source_timing.finalized_times[
+            ecar_flow_render_key("outbound", flow_event.src_host.hostname)
+        ]
+        == outbound_flow_time
+    )
+    assert (
+        flow_event.source_timing.finalized_times[
+            ecar_flow_render_key("inbound", flow_event.dst_host.hostname)
+        ]
+        == target_flow_time
+    )
+    canonical_close = flow_event.network.closed_at
+    assert canonical_close == datetime(2024, 3, 18, 12, 8, 47, 516768, tzinfo=UTC)
+    assert target_flow_time - canonical_close == timedelta(microseconds=156630)
+    projected_close = canonical_close + planner.endpoint_clock_adjustment_for_host(
+        hostname=flow_event.dst_host.hostname,
+        os_category=flow_event.dst_host.os_category,
+        timestamp=canonical_close,
+    )
+    assert canonical_close < target_flow_time < projected_close
+
+    planner.record_admitted_source_event(flow_event, "ecar")
+    planner.plan_event(login_event, "ecar")
+
+    login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
+    assert login_event.timestamp == datetime(2024, 3, 18, 12, 8, 46, 620646, tzinfo=UTC)
+    assert target_flow_time < login_time < projected_close
+
+
+def test_remote_auth_ecar_projection_order_retains_same_target_window() -> None:
+    """Source and target FLOW projection order must not change target authentication."""
+
+    observed: list[datetime] = []
+    for projection_order in (
+        ("source_endpoint", "destination_endpoint"),
+        ("destination_endpoint", "source_endpoint"),
+    ):
+        planner = _clock_skewed_source_timing_planner()
+        flow_event, login_event = _clock_skewed_remote_auth_timing_events()
+        for projection_role in projection_order:
+            projection = replace(flow_event, source_timing=None)
+            planner.plan_event(projection, "ecar", projection_role=projection_role)
+            planner.record_admitted_source_event(projection, "ecar")
+        planner.plan_event(login_event, "ecar")
+        observed.append(login_event.source_timing.finalized_times[ecar_session_render_key("login")])
+
+    assert observed[0] == observed[1]
+
+
+def test_remote_auth_ecar_source_only_projection_does_not_create_target_anchor() -> None:
+    """A source-only connection without a modeled target cannot anchor target auth."""
+
+    planner = _clock_skewed_source_timing_planner()
+    reference = _clock_skewed_source_timing_planner()
+    flow_event, login_event = _clock_skewed_remote_auth_timing_events()
+    flow_event.dst_host = None
+    reference_login = replace(login_event, source_timing=None)
+
+    planner.plan_event(flow_event, "ecar", projection_role="source_endpoint")
+    planner.record_admitted_source_event(flow_event, "ecar")
+    planner.plan_event(login_event, "ecar")
+    reference.plan_event(reference_login, "ecar")
+
+    assert login_event.source_timing == reference_login.source_timing
+
+
+@pytest.mark.parametrize("remaining_microseconds", [0, 1, 2])
+def test_remote_auth_ecar_target_window_with_at_most_two_microseconds_fails_closed(
+    remaining_microseconds: int,
+) -> None:
+    """The target-local close guard must still reject a truly impossible window."""
+
+    planner = _clock_skewed_source_timing_planner()
+    flow_event, login_event = _clock_skewed_remote_auth_timing_events()
+    planner.plan_event(flow_event, "ecar")
+    assert flow_event.dst_host is not None
+    assert flow_event.network is not None
+    canonical_close = flow_event.network.closed_at
+    assert canonical_close is not None
+    target_close = canonical_close + planner.endpoint_clock_adjustment_for_host(
+        hostname=flow_event.dst_host.hostname,
+        os_category=flow_event.dst_host.os_category,
+        timestamp=canonical_close,
+    )
+    flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", flow_event.dst_host.hostname)
+    ] = target_close - timedelta(microseconds=remaining_microseconds)
+    planner.record_admitted_source_event(flow_event, "ecar")
+
+    with pytest.raises(StateError, match="cannot fit after its admitted transport"):
+        planner.plan_event(login_event, "ecar")
+
+
+def test_remote_auth_ecar_three_microsecond_target_window_remains_admissible() -> None:
+    """The first viable target-local window must remain narrowly admissible."""
+
+    planner = _clock_skewed_source_timing_planner()
+    flow_event, login_event = _clock_skewed_remote_auth_timing_events()
+    planner.plan_event(flow_event, "ecar")
+    assert flow_event.dst_host is not None
+    assert flow_event.network is not None
+    canonical_close = flow_event.network.closed_at
+    assert canonical_close is not None
+    target_close = canonical_close + planner.endpoint_clock_adjustment_for_host(
+        hostname=flow_event.dst_host.hostname,
+        os_category=flow_event.dst_host.os_category,
+        timestamp=canonical_close,
+    )
+    target_anchor = target_close - timedelta(microseconds=3)
+    flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", flow_event.dst_host.hostname)
+    ] = target_anchor
+    planner.record_admitted_source_event(flow_event, "ecar")
+
+    planner.plan_event(login_event, "ecar")
+
+    login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
+    assert target_anchor < login_time < target_close
+
+
+def test_remote_auth_target_window_rejection_is_preparation_neutral_and_retryable() -> None:
+    """A rejected target window must cancel cleanly and allow the exact retry."""
+
+    planner = _clock_skewed_source_timing_planner()
+    before_digest = planner.state_digest()
+    before_census = planner.census(estimate_bytes=True)
+    before_audit = planner.timing_runtime.audit.snapshot()
+    failed_flow, failed_login = _clock_skewed_remote_auth_timing_events()
+
+    with planner.prepared_planning() as failed_preparation:
+        failed_preparation.plan_event(failed_flow, "ecar")
+        assert failed_flow.dst_host is not None
+        failed_flow.source_timing.finalized_times[
+            ecar_flow_render_key("inbound", failed_flow.dst_host.hostname)
+        ] = datetime(2024, 3, 19, tzinfo=UTC)
+        failed_preparation.record_admitted_source_event(failed_flow, "ecar")
+        with pytest.raises(StateError, match="cannot fit after its admitted transport"):
+            failed_preparation.plan_event(failed_login, "ecar")
+    failed_preparation.cancel()
+
+    assert planner.state_digest() == before_digest
+    assert planner.census(estimate_bytes=True) == before_census
+    assert planner.timing_runtime.audit.snapshot() == before_audit
+
+    retry_flow, retry_login = _clock_skewed_remote_auth_timing_events()
+    with planner.prepared_planning() as retry_preparation:
+        retry_preparation.plan_event(retry_flow, "ecar")
+        retry_preparation.record_admitted_source_event(retry_flow, "ecar")
+        retry_preparation.plan_event(retry_login, "ecar")
+    with retry_preparation.claimed_commit():
+        retry_preparation.commit_no_fail()
+
+    assert retry_preparation.committed
+    assert retry_flow.dst_host is not None
+    target_flow_time = retry_flow.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", retry_flow.dst_host.hostname)
+    ]
+    login_time = retry_login.source_timing.finalized_times[ecar_session_render_key("login")]
+    assert target_flow_time < login_time
+
+
+def test_remote_auth_windows_login_uses_target_local_transport_close() -> None:
+    """Target WFP and Windows authentication must share one endpoint clock window."""
+
+    planner = _clock_skewed_source_timing_planner()
+    flow_event, login_event = _clock_skewed_remote_auth_timing_events()
+    target = flow_event.dst_host
+    assert target is not None
+    assert flow_event.network is not None
+    wfp_event = _remote_auth_wfp_event(flow_event, login_event)
+
+    planner.plan_event(wfp_event, "windows_event_security")
+    wfp_time = wfp_event.source_timing.finalized_times["windows.wfp_connection"]
+    canonical_close = datetime(2024, 3, 18, 12, 8, 47, tzinfo=UTC)
+    assert login_event.remote_auth is not None
+    primary_transport = login_event.remote_auth.primary_transport
+    assert primary_transport is not None
+    login_event.remote_auth = replace(
+        login_event.remote_auth,
+        transports=(replace(primary_transport, closed_at=canonical_close),),
+    )
+    planner.record_admitted_source_event(wfp_event, "windows_event_security")
+    planner.plan_event(login_event, "windows_event_security")
+
+    projected_close = canonical_close + planner.endpoint_clock_adjustment_for_host(
+        hostname=target.hostname,
+        os_category=target.os_category,
+        timestamp=canonical_close,
+    )
+    login_time = login_event.source_timing.finalized_times["windows.remote_authentication"]
+    assert canonical_close < wfp_time < login_time < projected_close
+
+
+def test_windows_wfp_source_clock_adjustment_is_applied_once() -> None:
+    """The WFP source floor must translate clocks without adding skew twice."""
+
+    enterprise = _clock_skewed_source_timing_planner()
+    complete = _source_timing_planner("complete")
+    flow_event, login_event = _clock_skewed_remote_auth_timing_events()
+    enterprise_event = _remote_auth_wfp_event(flow_event, login_event)
+    complete_event = replace(enterprise_event, source_timing=None)
+
+    enterprise.plan_event(enterprise_event, "windows_event_security")
+    complete.plan_event(complete_event, "windows_event_security")
+
+    enterprise_time = enterprise_event.source_timing.finalized_times["windows.wfp_connection"]
+    complete_time = complete_event.source_timing.finalized_times["windows.wfp_connection"]
+    target = enterprise_event.src_host
+    assert target is not None
+    adjustment = enterprise.endpoint_clock_adjustment_for_host(
+        hostname=target.hostname,
+        os_category=target.os_category,
+        timestamp=enterprise_event.timestamp,
+    )
+    assert enterprise_time - complete_time == adjustment
+
+
+def test_windows_wfp_zero_clock_retains_previous_canonical_floor() -> None:
+    """A zero-offset profile must preserve the prior WFP timestamp exactly."""
+
+    planned = _source_timing_planner("complete")
+    flow_event, login_event = _clock_skewed_remote_auth_timing_events()
+    planned_event = _remote_auth_wfp_event(flow_event, login_event)
+    host = planned_event.src_host
+    assert host is not None
+    assert planned.endpoint_clock_adjustment_for_host(
+        hostname=host.hostname,
+        os_category=host.os_category,
+        timestamp=planned_event.timestamp,
+    ) == timedelta(0)
+
+    planned.plan_event(planned_event, "windows_event_security")
+
+    assert planned_event.source_timing.finalized_times["windows.wfp_connection"] == datetime(
+        2024,
+        3,
+        18,
+        12,
+        8,
+        46,
+        465139,
+        tzinfo=UTC,
     )
 
 
-def test_remote_auth_ecar_login_follows_later_source_endpoint_flow() -> None:
-    """RDP authentication must not precede the source endpoint FLOW observation."""
+def test_remote_auth_ecar_login_does_not_follow_other_host_flow_clock() -> None:
+    """Target authentication must not consume the source host's FLOW clock."""
 
     planner = SourceTimingPlanner()
     flow_event, login_event = _remote_auth_timing_events()
@@ -1839,8 +2262,12 @@ def test_remote_auth_ecar_login_follows_later_source_endpoint_flow() -> None:
     planner.record_admitted_source_event(flow_event, "ecar")
     planner.plan_event(login_event, "ecar")
 
+    target_flow_time = flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", "FILE-SRV-01")
+    ]
     login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
-    assert timedelta(milliseconds=8) <= login_time - source_flow_time <= timedelta(milliseconds=140)
+    assert timedelta(milliseconds=8) <= login_time - target_flow_time <= timedelta(milliseconds=140)
+    assert login_time < source_flow_time
 
 
 def test_ecar_session_process_create_follows_admitted_session_login() -> None:
@@ -1957,13 +2384,9 @@ def test_remote_auth_failed_ecar_login_follows_transport_without_session() -> No
     planner.record_admitted_source_event(flow_event, "ecar")
     planner.plan_event(failed_event, "ecar")
 
-    assert flow_event.src_host is not None
-    flow_time = max(
-        flow_event.source_timing.finalized_times[
-            ecar_flow_render_key("outbound", flow_event.src_host.hostname)
-        ],
-        flow_event.source_timing.finalized_times[ecar_flow_render_key("inbound", "FILE-SRV-01")],
-    )
+    flow_time = flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", "FILE-SRV-01")
+    ]
     failure_time = failed_event.source_timing.finalized_times[
         ecar_session_render_key("failed_login")
     ]
@@ -2086,13 +2509,9 @@ def test_remote_auth_timing_reuses_transaction_without_parent_action_metadata() 
     planner.plan_event(flow_event, "ecar")
     planner.record_admitted_source_event(flow_event, "ecar")
     planner.plan_event(login_event, "ecar")
-    assert flow_event.src_host is not None
-    ecar_flow_time = max(
-        flow_event.source_timing.finalized_times[
-            ecar_flow_render_key("outbound", flow_event.src_host.hostname)
-        ],
-        flow_event.source_timing.finalized_times[ecar_flow_render_key("inbound", target.hostname)],
-    )
+    ecar_flow_time = flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", target.hostname)
+    ]
     ecar_login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
     assert (
         timedelta(milliseconds=8) <= ecar_login_time - ecar_flow_time <= timedelta(milliseconds=140)

@@ -2941,7 +2941,7 @@ class SourceTimingPlanner:
             and network is not None
             and event.dst_host is not None
         ):
-            timestamp = self._latest_ecar_endpoint_flow_time(event)
+            timestamp = self._target_ecar_endpoint_flow_time(event)
             if timestamp is not None:
                 transaction_key = self._transaction_transport_key(
                     network.stable_id,
@@ -2953,15 +2953,9 @@ class SourceTimingPlanner:
                     network.protocol,
                 )
                 self._admitted_ecar_transport_transactions[transaction_key] = timestamp
-                close_candidates = [network.closed_at]
-                close_candidates.extend(
-                    observation.observed_close_time for observation in event.network_observations
-                )
-                close_candidates = [
-                    candidate for candidate in close_candidates if candidate is not None
-                ]
-                if close_candidates:
-                    self._ecar_transport_close_deadlines[transaction_key] = min(close_candidates)
+                close_time = self._target_ecar_endpoint_flow_close(event)
+                if close_time is not None:
+                    self._ecar_transport_close_deadlines[transaction_key] = close_time
         if (
             format_name in {"windows_security", "windows_event_security"}
             and event.event_type == "wfp_connection"
@@ -2991,7 +2985,7 @@ class SourceTimingPlanner:
             and network.dst_port == 445
             and event.dst_host is not None
         ):
-            timestamp = self._latest_ecar_endpoint_flow_time(event)
+            timestamp = self._target_ecar_endpoint_flow_time(event)
             if timestamp is not None:
                 self._admitted_ecar_smb_transports[
                     self._smb_transport_key(
@@ -3038,7 +3032,7 @@ class SourceTimingPlanner:
         if event.event_type == "connection":
             transaction_id = network.stable_id
             if format_name == "ecar" and event.dst_host is not None:
-                timestamp = self._latest_ecar_endpoint_flow_time(event)
+                timestamp = self._target_ecar_endpoint_flow_time(event)
                 if timestamp is not None:
                     self._admitted_ecar_remote_transports[
                         self._remote_transport_key(
@@ -4080,7 +4074,21 @@ class SourceTimingPlanner:
         )
         if primary_transport is None or primary_transport.closed_at is None:
             return timestamp
-        close_time = ensure_utc(primary_transport.closed_at)
+        if family == "ecar":
+            close_time = self._remote_auth_transport_close_deadline(event)
+            if close_time is None:
+                raise StateError(
+                    "Authentication source window is missing its admitted target transport close: "
+                    f"family={family} anchor={anchor.isoformat()}"
+                )
+        elif family == "windows_security":
+            close_time = self._runtime_endpoint_clock_time(
+                primary_transport.closed_at,
+                hostname=hostname,
+                os_category="windows",
+            )
+        else:
+            close_time = ensure_utc(primary_transport.closed_at)
         if ticket_anchor is not None and ticket_anchor >= close_time:
             # Kerberos service-ticket acquisition is a prerequisite, not an
             # application-session transport interval.  A machine-account logon
@@ -4991,6 +4999,29 @@ class SourceTimingPlanner:
             )
         )
 
+    def _remote_auth_transport_close_deadline(
+        self,
+        event: TimingOccurrence,
+    ) -> datetime | None:
+        """Return the exact target-local close for one admitted eCAR transport."""
+
+        remote_auth = event.remote_auth
+        if remote_auth is None or remote_auth.primary_transport is None:
+            return None
+        transport = remote_auth.primary_transport
+        tuple_view = transport.tuple
+        return self._ecar_transport_close_deadlines.get(
+            self._transaction_transport_key(
+                transport.transaction_id,
+                remote_auth.target_hostname,
+                tuple_view.src_ip,
+                tuple_view.src_port,
+                tuple_view.dst_ip,
+                tuple_view.dst_port,
+                tuple_view.protocol,
+            )
+        )
+
     @staticmethod
     def _remote_transport_key(
         action_group_id: str,
@@ -5119,25 +5150,33 @@ class SourceTimingPlanner:
         return plan.finalized_times.get(key) if plan is not None else None
 
     @classmethod
-    def _latest_ecar_endpoint_flow_time(cls, event: TimingOccurrence) -> datetime | None:
-        """Return the later admitted endpoint observation for one eCAR transport."""
+    def _target_ecar_endpoint_flow_time(cls, event: TimingOccurrence) -> datetime | None:
+        """Return the target host's admitted eCAR FLOW observation."""
 
-        timestamps = []
-        if event.src_host is not None:
-            timestamp = cls._finalized_time(
-                event,
-                ecar_flow_render_key("outbound", event.src_host.hostname),
-            )
-            if timestamp is not None:
-                timestamps.append(timestamp)
-        if event.dst_host is not None:
-            timestamp = cls._finalized_time(
-                event,
-                ecar_flow_render_key("inbound", event.dst_host.hostname),
-            )
-            if timestamp is not None:
-                timestamps.append(timestamp)
-        return max(timestamps) if timestamps else None
+        if event.dst_host is None:
+            return None
+        return cls._finalized_time(
+            event,
+            ecar_flow_render_key("inbound", event.dst_host.hostname),
+        )
+
+    def _target_ecar_endpoint_flow_close(
+        self,
+        event: TimingOccurrence,
+    ) -> datetime | None:
+        """Return the canonical FLOW close projected through the target host clock."""
+
+        target = event.dst_host
+        if target is None:
+            return None
+        _started_at, closed_at = self._ecar_flow_interval(event, ())
+        if closed_at is None:
+            return None
+        return self._runtime_endpoint_clock_time(
+            closed_at,
+            hostname=target.hostname,
+            os_category=target.os_category,
+        )
 
     def _plan_ecar_flow_times(
         self,
