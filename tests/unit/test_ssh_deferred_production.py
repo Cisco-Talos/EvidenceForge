@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import copy
@@ -26,6 +27,7 @@ from evidenceforge.generation.actions.ssh_session import SshSessionActionBundle,
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.emitters.base import ExactPublicationBatch
+from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.emitters.syslog import SyslogEmitter
@@ -378,6 +380,48 @@ def test_real_ssh_caller_reaches_exact_bridge_and_publishes_transport_first(
     assert zeek_rows[0]["uid"] == uid
     assert zeek_rows[0]["orig_bytes"] == 12_345
     assert zeek_rows[0]["resp_bytes"] == 54_321
+
+
+def test_real_ssh_caller_publishes_exact_cisco_transport_lifecycle(
+    tmp_path: Path,
+) -> None:
+    """The production SSH caller admits a concrete Cisco sink exactly once."""
+
+    reset_thread_rng(42)
+    asa_root = tmp_path / "asa"
+    asa = CiscoAsaEmitter(
+        load_format("cisco_asa"),
+        asa_root,
+        threaded=False,
+        sensor_hostnames=["fw01"],
+    )
+    asa._segment_config = [
+        {"name": "workstations", "cidr": "10.0.0.0/28"},
+        {"name": "servers", "cidr": "10.0.0.16/28"},
+    ]
+    asa._sensor_interfaces = {
+        "fw01": {
+            "workstations": "inside",
+            "servers": "dmz",
+            "_default": "outside",
+        }
+    }
+    fixture = _fixture(tmp_path, extra_emitters={"cisco_asa": asa})
+
+    uid, logon_id = _execute_real_caller(fixture)
+
+    assert uid
+    assert fixture.state.get_session(logon_id) is not None
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    asa.close()
+    rendered = b"\n".join(output.read_bytes() for output in sorted(asa_root.rglob("cisco_asa.log")))
+    built_ids = re.findall(rb"Built .* connection (\d+) for", rendered)
+    teardown_ids = re.findall(rb"Teardown .* connection (\d+) for", rendered)
+    assert len(built_ids) == len(teardown_ids) == 1
+    assert built_ids == teardown_ids
+    assert any(row.get("object") == "USER_SESSION" for row in ecar_rows)
+    assert len(zeek_rows) == 1
 
 
 def test_real_ssh_caller_materializes_fully_suppressed_warmup_session(

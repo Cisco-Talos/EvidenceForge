@@ -33,8 +33,6 @@ import ipaddress
 import random
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import IdsAlertPlan
 from evidenceforge.formats import load_format
@@ -205,27 +203,52 @@ def test_random_activity_external_ip_excludes_rfc5737():
 # ---------------------------------------------------------------------------
 
 
-def test_asa_conn_id_not_round():
-    """ASA connection IDs should be monotonic without clock-shaped jumps."""
-    from datetime import datetime
-
+def test_asa_conn_id_not_round(tmp_path):
+    """ASA final IDs should follow canonical ordinals without clock-shaped jumps."""
     fmt = load_format("cisco_asa")
     emitter = CiscoAsaEmitter(
         format_def=fmt,
-        output_path=pytest.importorskip("pathlib").Path("/tmp/test_asa_conn"),
+        output_path=tmp_path,
         sensor_hostnames=["fw01"],
     )
     ts1 = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
     ts2 = datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC)
-    first_id = emitter._next_conn_id("fw01", ts1)
+    first_event = OccurrenceBuilder(
+        timestamp=ts1,
+        event_type="connection",
+        network=network_plan(
+            src_ip="10.0.10.50",
+            src_port=40_000,
+            dst_ip="8.8.8.8",
+            dst_port=443,
+            protocol="TCP",
+            conn_id="conn-100",
+            source_visible_start_time=ts1,
+        ),
+    )
+    second_event = OccurrenceBuilder(
+        timestamp=ts2,
+        event_type="connection",
+        network=network_plan(
+            src_ip="10.0.10.50",
+            src_port=40_001,
+            dst_ip="8.8.8.8",
+            dst_port=443,
+            protocol="TCP",
+            conn_id="conn-101",
+            source_visible_start_time=ts2,
+        ),
+    )
+    first_id = emitter._connection_id(first_event, "fw01")
     assert first_id > 0, "Connection ID should be positive"
 
-    second_id = emitter._next_conn_id("fw01", ts2)
+    second_id = emitter._connection_id(second_event, "fw01")
     assert second_id > first_id, "Later timestamps should produce higher IDs"
     assert second_id - first_id < 100, "Connection IDs should not encode timestamp buckets"
+    assert emitter._connection_id(first_event, "fw01") == first_id
 
     # Different sensor should get a different starting ID
-    other_id = emitter._next_conn_id("fw02")
+    other_id = emitter._connection_id(first_event, "fw02")
     assert other_id != first_id, "Different sensors should get different starting IDs"
 
 

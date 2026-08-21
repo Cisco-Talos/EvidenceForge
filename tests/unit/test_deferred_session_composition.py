@@ -6,6 +6,7 @@
 import gc
 import json
 import random
+import re
 from collections.abc import Callable
 from copy import copy, deepcopy
 from dataclasses import dataclass, replace
@@ -35,8 +36,11 @@ from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.lifecycle import ActionLifecycleContext, LifecycleHold
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
+    NatSensorObservation,
+    NetworkSensorObservation,
     NetworkTrafficLedger,
     NetworkTransactionPlan,
+    NetworkTuple,
 )
 from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.events.rdp import (
@@ -74,6 +78,7 @@ from evidenceforge.generation.deferred_session_preseal import (
     DeferredSessionProtocol,
 )
 from evidenceforge.generation.emitters.base import ExactPublicationBatch, LogEmitter
+from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.emitters.syslog import SyslogEmitter
@@ -1231,6 +1236,34 @@ def _compiled_ssh_syslog_deployment() -> CompiledCollectionDeployment:
     return CompiledCollectionDeployment(tuple(sources))
 
 
+def _compiled_ssh_cisco_deployment() -> CompiledCollectionDeployment:
+    """Return visible eCAR hosts plus one exact Cisco ASA sensor source."""
+
+    sources = []
+    for format_name, hostname in (
+        ("ecar", "WS-01"),
+        ("ecar", "DB-01"),
+        ("cisco_asa", "fw01"),
+        ("zeek_conn", "fw01"),
+    ):
+        descriptor = DEFAULT_SOURCE_CATALOG.descriptor(format_name)
+        sources.append(
+            SourceInstanceDeployment(
+                identity=SourceInstanceIdentity(
+                    source_instance=exact_source_instance_id(descriptor.family, hostname),
+                    hostname=hostname,
+                    family=descriptor.family,
+                ),
+                formats=(format_name,),
+                policy=SourceCollectionPolicy(
+                    enabled=True,
+                    capabilities=descriptor.capabilities,
+                ),
+            )
+        )
+    return CompiledCollectionDeployment(tuple(sources))
+
+
 def _foundation_publication_fixture(
     kind: DeferredSessionKind,
     tmp_path: Path,
@@ -1254,6 +1287,8 @@ def _foundation_publication_fixture(
     output_start_time: datetime | None = None,
     output_end_time: datetime | None = None,
     rdp_elevated: bool = False,
+    cisco_sensor_hostname: str | None = None,
+    cisco_nat: NatSensorObservation | None = None,
 ) -> _PublicationFixture:
     """Build one exact eCAR/Zeek deferred bridge without using caller mocks."""
 
@@ -1319,6 +1354,43 @@ def _foundation_publication_fixture(
     )
     session = fixture.session_plan.identity
     dependent_time = session.started_at + timedelta(seconds=5)
+    cisco_observations = (
+        (
+            NetworkSensorObservation(
+                sensor_identity=cisco_sensor_hostname,
+                path_role="transit",
+                capture_profile="well_synced",
+                tuple_view=NetworkTuple(
+                    src_ip=transaction.src_ip,
+                    src_port=transaction.src_port,
+                    dst_ip=transaction.dst_ip,
+                    dst_port=transaction.dst_port,
+                    protocol=transaction.protocol,
+                ),
+                connection_uid=transaction.zeek_uid,
+                connection_ids=((transaction.zeek_uid, transaction.zeek_uid),),
+                file_ids=(),
+                local_orig=transaction.local_orig,
+                local_resp=transaction.local_resp,
+                observed_start_time=transaction.started_at,
+                observed_close_time=transaction.closed_at,
+                traffic=transaction.traffic,
+                visible_formats=frozenset({"cisco_asa", "zeek_conn"}),
+                history=transaction.history,
+                firewall_teardown_reason="TCP FINs",
+                firewall_teardown_time=transaction.closed_at,
+                nat=cisco_nat,
+                source_times=(("zeek_conn", transaction.started_at),),
+                source_durations=(
+                    (("zeek_conn", transaction.duration),)
+                    if transaction.duration is not None
+                    else ()
+                ),
+            ),
+        )
+        if cisco_sensor_hostname is not None
+        else ()
+    )
     with planner.prepared_planning() as timing:
         transport = dispatcher.prepare_builder(
             OccurrenceBuilder(
@@ -1327,6 +1399,16 @@ def _foundation_publication_fixture(
                 src_host=transport_src_host,
                 dst_host=dst_host,
                 network=transaction,
+                network_observations=cisco_observations,
+                network_observations_planned=bool(cisco_observations),
+                _sensor_hostnames_by_format=(
+                    {
+                        "cisco_asa": [cisco_sensor_hostname],
+                        "zeek_conn": [cisco_sensor_hostname],
+                    }
+                    if cisco_sensor_hostname is not None
+                    else {}
+                ),
             ),
             state_intent=PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT,
             lifecycle_ticket=fixture.prepared_root,
@@ -1617,6 +1699,33 @@ def _next_rdp_publication_fixture(
     )
 
 
+def _exact_cisco_emitter(
+    output_path: Path,
+    *,
+    same_interface: bool,
+) -> CiscoAsaEmitter:
+    """Return one real ASA sink with deterministic test interface ownership."""
+
+    emitter = CiscoAsaEmitter(
+        load_format("cisco_asa"),
+        output_path,
+        threaded=False,
+        sensor_hostnames=["fw01"],
+    )
+    emitter._segment_config = [
+        {"name": "workstations", "cidr": "10.0.0.0/28"},
+        {"name": "servers", "cidr": "10.0.0.16/28"},
+    ]
+    emitter._sensor_interfaces = {
+        "fw01": {
+            "workstations": "inside",
+            "servers": "inside" if same_interface else "dmz",
+            "_default": "outside",
+        }
+    }
+    return emitter
+
+
 def _close_and_read_publication(
     publication: _PublicationFixture,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
@@ -1794,6 +1903,485 @@ def test_unmigrated_network_planner_stops_before_prepared_ownership_transfer(
     assert emitter.emit.call_count == 0
     assert generator.dispatcher is not None
     _assert_deferred_dispatcher_reservations_released(generator.dispatcher)
+
+
+def test_exact_deferred_ssh_filters_same_interface_asa_before_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A same-interface/no-NAT ASA route cannot block other exact SSH evidence."""
+
+    asa_root = tmp_path / "asa"
+    asa = _exact_cisco_emitter(asa_root, same_interface=True)
+    original_reserve = ExactPublicationBatch.reserve_participants
+    reserved_participants: list[tuple[object, ...]] = []
+
+    def capture_participants(
+        batch: ExactPublicationBatch,
+        participants: tuple[object, ...],
+    ) -> None:
+        reserved_participants.append(participants)
+        original_reserve(batch, participants)
+
+    monkeypatch.setattr(ExactPublicationBatch, "reserve_participants", capture_participants)
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"cisco_asa": asa},
+        collection_deployment=_compiled_ssh_cisco_deployment(),
+        cisco_sensor_hostname="fw01",
+    )
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    assert (
+        publication.fixture.state.get_session(publication.fixture.session_plan.identity.logon_id)
+        is not None
+    )
+    assert reserved_participants
+    assert all(asa not in participants for participants in reserved_participants)
+    publication.ecar.close()
+    publication.zeek.close()
+    asa.close()
+    assert not tuple(asa_root.rglob("cisco_asa.log"))
+    zeek_outputs = tuple(tmp_path.rglob("conn.json"))
+    assert len(zeek_outputs) == 1
+    zeek_rows = [
+        json.loads(line) for line in zeek_outputs[0].read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(zeek_rows) == 1
+    assert zeek_rows[0]["uid"] == publication.fixture.prepared_root.transaction.zeek_uid
+
+
+def test_exact_deferred_ssh_cross_interface_asa_emits_one_stable_lifecycle(
+    tmp_path: Path,
+) -> None:
+    """A real cross-interface ASA target publishes one correlated Built/Teardown pair."""
+
+    asa_root = tmp_path / "asa"
+    asa = _exact_cisco_emitter(asa_root, same_interface=False)
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"cisco_asa": asa},
+        collection_deployment=_compiled_ssh_cisco_deployment(),
+        cisco_sensor_hostname="fw01",
+    )
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    publication.ecar.close()
+    publication.zeek.close()
+    asa.close()
+    rendered = "\n".join(
+        output.read_text(encoding="utf-8") for output in asa_root.rglob("cisco_asa.log")
+    )
+    built_ids = re.findall(r"Built .* connection (\d+) for", rendered)
+    teardown_ids = re.findall(r"Teardown .* connection (\d+) for", rendered)
+    assert len(built_ids) == len(teardown_ids) == 1
+    assert built_ids == teardown_ids
+
+
+def test_exact_deferred_ssh_same_interface_planned_nat_remains_visible(
+    tmp_path: Path,
+) -> None:
+    """A planned same-interface ASA NAT route remains a positive exact target."""
+
+    asa_root = tmp_path / "asa"
+    asa = _exact_cisco_emitter(asa_root, same_interface=True)
+    close_time = _START + timedelta(seconds=30)
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"cisco_asa": asa},
+        collection_deployment=_compiled_ssh_cisco_deployment(),
+        cisco_sensor_hostname="fw01",
+        cisco_nat=NatSensorObservation(
+            nat_type="dynamic_pat",
+            direction="source",
+            local_ip="10.0.0.10",
+            local_port=50_001,
+            global_ip="198.51.100.10",
+            global_port=60_001,
+            built_time=_START,
+            teardown_time=close_time,
+        ),
+    )
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    publication.ecar.close()
+    publication.zeek.close()
+    asa.close()
+    rendered = "\n".join(
+        output.read_text(encoding="utf-8") for output in asa_root.rglob("cisco_asa.log")
+    )
+    assert rendered.count("Built dynamic TCP translation") == 1
+    assert rendered.count("Built outbound TCP connection") == 1
+    assert rendered.count("Teardown TCP connection") == 1
+    assert rendered.count("Teardown dynamic TCP translation") == 1
+
+
+class _OpenCiscoSubclass(CiscoAsaEmitter):
+    """Inherited exact marker that must not satisfy Cisco admission."""
+
+
+class _OpenDuckCisco:
+    """A foreign Cisco-shaped object whose marker and renderer must remain inert."""
+
+    marker_reads = 0
+    emit_calls = 0
+
+    @property
+    def supports_exact_projection_publication(self) -> bool:
+        """Fail if exact admission executes a foreign descriptor."""
+
+        type(self).marker_reads += 1
+        raise AssertionError("duck Cisco exact marker executed")
+
+    def can_handle(self, event: object) -> bool:
+        """Claim the transport so concrete admission must reject this object."""
+
+        return getattr(event, "network", None) is not None
+
+    def emit(self, _event: object) -> None:
+        """Remain inert because rejection must precede rendering."""
+
+        type(self).emit_calls += 1
+
+
+class _DescriptorCiscoFormat:
+    """A foreign format object whose descriptor must remain inert."""
+
+    name_reads = 0
+
+    @property
+    def name(self) -> str:
+        """Fail if exact admission executes the foreign descriptor."""
+
+        type(self).name_reads += 1
+        raise AssertionError("foreign Cisco format descriptor executed")
+
+
+@pytest.mark.parametrize(
+    "target_kind",
+    (
+        "subclass",
+        "duck",
+        "alias",
+        "wrong-format",
+        "replaced",
+        "copied-format",
+        "mutated-format",
+        "descriptor-format",
+        "unsorted-writer",
+    ),
+)
+def test_exact_deferred_ssh_rejects_nonowned_cisco_target_before_state(
+    target_kind: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cisco type, format, identity, and writer substitutions fail closed."""
+
+    _OpenDuckCisco.marker_reads = 0
+    _OpenDuckCisco.emit_calls = 0
+    _DescriptorCiscoFormat.name_reads = 0
+    output_path = tmp_path / target_kind
+    if target_kind == "subclass":
+        emitter: object = _OpenCiscoSubclass(
+            load_format("cisco_asa"),
+            output_path,
+            sensor_hostnames=["fw01"],
+        )
+    elif target_kind == "duck":
+        emitter = _OpenDuckCisco()
+    elif target_kind == "wrong-format":
+        emitter = CiscoAsaEmitter(
+            load_format("zeek_conn"),
+            output_path,
+            sensor_hostnames=["fw01"],
+        )
+    elif target_kind == "copied-format":
+        emitter = CiscoAsaEmitter(
+            load_format("cisco_asa").model_copy(deep=True),
+            output_path,
+            sensor_hostnames=["fw01"],
+        )
+    else:
+        emitter = _exact_cisco_emitter(output_path, same_interface=False)
+    if target_kind == "mutated-format":
+        format_definition = object.__getattribute__(emitter, "__dict__")["format_def"]
+        monkeypatch.setattr(
+            format_definition,
+            "description",
+            f"{format_definition.description} (mutated)",
+        )
+    elif target_kind == "descriptor-format":
+        object.__getattribute__(emitter, "__dict__")["format_def"] = _DescriptorCiscoFormat()
+    elif target_kind == "unsorted-writer":
+        writer = emitter._get_writer("fw01")
+        object.__getattribute__(writer, "__dict__")["_sorted_writer"] = None
+    format_name = "cisco_asa_alias" if target_kind == "alias" else "cisco_asa"
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={format_name: emitter},  # type: ignore[dict-item]
+        cisco_sensor_hostname="fw01",
+        prepare_publication=False,
+    )
+    if target_kind == "replaced":
+        publication.dispatcher.emitters["cisco_asa"] = _exact_cisco_emitter(
+            tmp_path / "replacement",
+            same_interface=False,
+        )
+    state_version = publication.fixture.state.materialization_version
+    state_digest = publication.fixture.state.materialization_digest()
+    timing_digest = publication.fixture.timing_planner.state_digest()
+
+    with pytest.raises(EventContractError, match="lacks exact projection publication"):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+
+    assert publication.fixture.state.materialization_version == state_version
+    assert publication.fixture.state.materialization_digest() == state_digest
+    assert publication.fixture.timing_planner.state_digest() == timing_digest
+    assert _OpenDuckCisco.marker_reads == 0
+    assert _OpenDuckCisco.emit_calls == 0
+    assert _DescriptorCiscoFormat.name_reads == 0
+    assert not output_path.exists()
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+
+
+def test_exact_deferred_ssh_admitted_zero_row_cisco_fails_before_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An admitted concrete Cisco target must prove at least one immutable row."""
+
+    asa = _exact_cisco_emitter(tmp_path / "asa", same_interface=False)
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"cisco_asa": asa},
+        collection_deployment=_compiled_ssh_cisco_deployment(),
+        cisco_sensor_hostname="fw01",
+        prepare_publication=False,
+    )
+    monkeypatch.setattr(asa, "_emit_built", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(asa, "_emit_teardown", lambda *_args, **_kwargs: False)
+    state_version = publication.fixture.state.materialization_version
+    state_digest = publication.fixture.state.materialization_digest()
+    timing_digest = publication.fixture.timing_planner.state_digest()
+
+    with pytest.raises(EventContractError, match="staged no durable row"):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+
+    assert publication.fixture.state.materialization_version == state_version
+    assert publication.fixture.state.materialization_digest() == state_digest
+    assert publication.fixture.timing_planner.state_digest() == timing_digest
+    assert not tuple((tmp_path / "asa").rglob("cisco_asa.log"))
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+
+
+@pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))
+def test_exact_deferred_ssh_cisco_prepare_retry_keeps_final_id_and_bytes(
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed exact preflight rerenders the identical final Cisco lifecycle."""
+
+    asa_root = tmp_path / "asa"
+    asa = _exact_cisco_emitter(asa_root, same_interface=False)
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"cisco_asa": asa},
+        collection_deployment=_compiled_ssh_cisco_deployment(),
+        cisco_sensor_hostname="fw01",
+        prepare_publication=False,
+    )
+    original_built = asa._emit_built
+    original_prepare = ExactPublicationBatch.prepare
+    attempted_ids: list[int] = []
+    prepare_attempts = 0
+
+    def capture_built(*args: object, **kwargs: object) -> None:
+        attempted_ids.append(args[3])  # type: ignore[arg-type]
+        original_built(*args, **kwargs)  # type: ignore[arg-type]
+
+    def inject_prepare(
+        batch: ExactPublicationBatch,
+        render: Callable[[], object],
+    ) -> object:
+        nonlocal prepare_attempts
+        prepare_attempts += 1
+        if prepare_attempts == 1:
+            if failure_mode == "lost-return":
+                original_prepare(batch, render)
+            raise OSError(f"injected Cisco prepare {failure_mode}")
+        return original_prepare(batch, render)
+
+    monkeypatch.setattr(asa, "_emit_built", capture_built)
+    monkeypatch.setattr(ExactPublicationBatch, "prepare", inject_prepare)
+    with pytest.raises(OSError, match=f"Cisco prepare {failure_mode}"):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    batch = publication.dispatcher.prepare_deferred_session_publication_batch(
+        publication.composition,
+        publication.fixture.coordinator,
+    )
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=batch,
+    )
+
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    assert prepare_attempts == 2
+    assert len(attempted_ids) == (2 if failure_mode == "lost-return" else 1)
+    assert len(set(attempted_ids)) == 1
+    publication.ecar.close()
+    publication.zeek.close()
+    asa.close()
+    rendered = b"\n".join(output.read_bytes() for output in sorted(asa_root.rglob("cisco_asa.log")))
+    assert rendered.count(b"Built outbound TCP connection") == 1
+    assert rendered.count(b"Teardown TCP connection") == 1
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    ("commit-fail-before", "commit-lost-return", "release-fail-before", "release-lost-return"),
+)
+def test_exact_deferred_ssh_cisco_sink_recovery_is_exactly_once(
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cisco exact row commit/release faults recover without ID or row duplication."""
+
+    asa_root = tmp_path / "asa"
+    asa = _exact_cisco_emitter(asa_root, same_interface=False)
+    writer = asa._get_writer("fw01")
+    assert writer._sorted_writer is not None
+    sorted_writer = writer._sorted_writer
+    original_commit = sorted_writer._commit_exact_row
+    original_release = sorted_writer._release_exact_row
+    attempts = 0
+
+    def inject_commit(key: object, digest: str, frozen: object) -> None:
+        nonlocal attempts
+        if failure_mode.startswith("commit-") and attempts == 0:
+            attempts += 1
+            if failure_mode.endswith("lost-return"):
+                original_commit(key, digest, frozen)  # type: ignore[arg-type]
+            raise OSError(f"injected Cisco {failure_mode}")
+        original_commit(key, digest, frozen)  # type: ignore[arg-type]
+
+    def inject_release(key: object) -> None:
+        nonlocal attempts
+        if failure_mode.startswith("release-") and attempts == 0:
+            attempts += 1
+            if failure_mode.endswith("lost-return"):
+                original_release(key)  # type: ignore[arg-type]
+            raise OSError(f"injected Cisco {failure_mode}")
+        original_release(key)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sorted_writer, "_commit_exact_row", inject_commit)
+    monkeypatch.setattr(sorted_writer, "_release_exact_row", inject_release)
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"cisco_asa": asa},
+        collection_deployment=_compiled_ssh_cisco_deployment(),
+        cisco_sensor_hostname="fw01",
+    )
+    with pytest.raises(OSError, match=f"Cisco {failure_mode}"):
+        publication.authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            publication.fixture.coordinator,
+            publication.fixture.owner_rng,
+            dispatcher=publication.dispatcher,
+            publication_batch=publication.batch,
+        )
+    assert (
+        publication.fixture.state.get_session(publication.fixture.session_plan.identity.logon_id)
+        is not None
+    )
+    resumed = publication.dispatcher.drain_exact_projection_recoveries()
+    assert len(resumed) == 1
+    assert all(
+        outcome.status == "succeeded" for result in resumed for outcome in result.projections
+    )
+    assert attempts == 1
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    publication.ecar.close()
+    publication.zeek.close()
+    asa.close()
+    rendered = b"\n".join(output.read_bytes() for output in sorted(asa_root.rglob("cisco_asa.log")))
+    built_ids = re.findall(rb"Built .* connection (\d+) for", rendered)
+    teardown_ids = re.findall(rb"Teardown .* connection (\d+) for", rendered)
+    assert len(built_ids) == len(teardown_ids) == 1
+    assert built_ids == teardown_ids
+
+
+def test_exact_deferred_ssh_cisco_warmup_stages_no_rows(
+    tmp_path: Path,
+) -> None:
+    """A fully suppressed Cisco cohort preserves the sole zero-row warm-up exception."""
+
+    asa_root = tmp_path / "asa"
+    asa = _exact_cisco_emitter(asa_root, same_interface=False)
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"cisco_asa": asa},
+        collection_deployment=_compiled_ssh_cisco_deployment(),
+        cisco_sensor_hostname="fw01",
+        output_start_time=_END,
+    )
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    publication.ecar.close()
+    publication.zeek.close()
+    asa.close()
+    assert not tuple(asa_root.rglob("cisco_asa.log"))
 
 
 @pytest.mark.parametrize(

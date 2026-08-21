@@ -10971,6 +10971,10 @@ class EventDispatcher:
     ) -> tuple[LogEmitter, ...]:
         """Return explicitly exact-capable participants or fail before rendering."""
 
+        from evidenceforge.generation.emitters.cisco_asa import (
+            CiscoAsaEmitter,
+            _supports_cisco_asa_exact_projection_publication,
+        )
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.syslog import SyslogEmitter
         from evidenceforge.generation.emitters.windows import (
@@ -10980,6 +10984,7 @@ class EventDispatcher:
         from evidenceforge.generation.emitters.zeek import ZeekEmitter
 
         exact_types_by_format: dict[str, type[LogEmitter]] = {
+            "cisco_asa": CiscoAsaEmitter,
             "ecar": EcarEmitter,
             "syslog": SyslogEmitter,
             "windows_event_security": WindowsEventEmitter,
@@ -10987,6 +10992,7 @@ class EventDispatcher:
         }
         participants: list[LogEmitter] = []
         participant_ids: set[int] = set()
+        emitter_map = object.__getattribute__(self, "emitters")
         for prepared in dispatches:
             for format_name, emitter in self._exact_projection_targets(prepared._projection):
                 emitter_type = type(emitter)
@@ -11005,6 +11011,18 @@ class EventDispatcher:
                     )
                 elif supported and emitter_type is WindowsEventEmitter:
                     supported = _supports_windows_exact_projection_publication(emitter)
+                supported = supported and dict.get(emitter_map, format_name) is emitter
+                if supported and emitter_type is CiscoAsaEmitter:
+                    occurrence = prepared._projection.occurrence
+                    network = occurrence.network
+                    firewall = occurrence.firewall
+                    supported = (
+                        _supports_cisco_asa_exact_projection_publication(emitter)
+                        and occurrence.event_type is EventKind.CONNECTION
+                        and network is not None
+                        and network.outcome == "success"
+                        and (firewall is None or firewall.action == "permit")
+                    )
                 if not supported:
                     raise EventContractError(
                         f"Deferred-session projection target {format_name!r} lacks exact "
@@ -14937,6 +14955,7 @@ class EventDispatcher:
                 event,
                 network_observations=self._admit_network_sensor_observations(event),
             )
+            event, targets = self._apply_compiled_source_native_filters(event, targets)
         targets = [
             replace(target, decision=ObservationDecision(status="visible"))
             if target.decision is not None
@@ -15021,6 +15040,85 @@ class EventDispatcher:
                 )
             )
         return event, finalized_targets
+
+    @staticmethod
+    def _apply_compiled_source_native_filters(
+        event: CanonicalOccurrence,
+        targets: list[_ProjectionTarget],
+    ) -> tuple[CanonicalOccurrence, list[_ProjectionTarget]]:
+        """Filter source-native zero-row routes from the frozen compiled projection."""
+
+        from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
+
+        filtered_sensor_keys: set[str] = set()
+        filtered_targets: list[_ProjectionTarget] = []
+        for target in targets:
+            envelope = target.envelope
+            decision = target.decision
+            if (
+                target.format_name != "cisco_asa"
+                or type(target.emitter) is not CiscoAsaEmitter
+                or envelope is None
+                or not envelope.admitted
+                or not target.topology_visible
+                or decision is None
+                or decision.status == "dropped"
+            ):
+                filtered_targets.append(target)
+                continue
+            sensor_key = envelope.source.hostname.casefold()
+            observations = tuple(
+                observation
+                for observation in event.network_observations
+                if observation.sensor_identity.casefold() == sensor_key
+                and "cisco_asa" in observation.visible_formats
+            )
+            if observations and any(
+                CiscoAsaEmitter._route_projection(
+                    target.emitter,
+                    event,
+                    observation.sensor_identity,
+                    observation,
+                ).emits_rows
+                for observation in observations
+            ):
+                filtered_targets.append(target)
+                continue
+            filtered_sensor_keys.add(sensor_key)
+            filtered_targets.append(replace(target, topology_visible=False))
+
+        if not filtered_sensor_keys:
+            return event, filtered_targets
+        retained_observations: list[NetworkSensorObservation] = []
+        for observation in event.network_observations:
+            if observation.sensor_identity.casefold() not in filtered_sensor_keys:
+                retained_observations.append(observation)
+                continue
+            visible_formats = observation.visible_formats - {"cisco_asa"}
+            if visible_formats:
+                retained_observations.append(
+                    replace(observation, visible_formats=frozenset(visible_formats))
+                )
+        any_visible_cisco = any(
+            target.format_name == "cisco_asa"
+            and target.envelope is not None
+            and target.envelope.admitted
+            and target.topology_visible
+            and target.decision is not None
+            and target.decision.status != "dropped"
+            for target in filtered_targets
+        )
+        observed_formats = event._observed_formats
+        if not any_visible_cisco:
+            observed_formats = observed_formats - {"cisco_asa"}
+        return (
+            replace(
+                event,
+                _observed_formats=frozenset(observed_formats),
+                network_observations=tuple(retained_observations),
+            ),
+            filtered_targets,
+        )
 
     def _render_projection_targets(
         self,

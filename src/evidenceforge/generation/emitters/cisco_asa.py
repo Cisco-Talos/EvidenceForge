@@ -32,13 +32,16 @@ partitioned by event year.
 
 import hashlib
 import ipaddress
+import math
 import re
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from threading import Lock
+from typing import Any, cast
+from weakref import ReferenceType, ref
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.network import (
@@ -46,7 +49,16 @@ from evidenceforge.events.network import (
     NetworkSensorObservation,
     NetworkTransactionPlan,
 )
-from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.formats.format_def import (
+    EventVariant,
+    FieldConstraint,
+    FieldDefinition,
+    FieldType,
+    FormatDefinition,
+    OutputTemplate,
+)
+from evidenceforge.generation.emitters.base import ExactPublicationError
+from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.emitters.syslog_family import (
     bounded_syslog_int,
     make_syslog_family_route_key,
@@ -54,14 +66,293 @@ from evidenceforge.generation.emitters.syslog_family import (
     rfc3164_timestamp_sort_key,
     sanitize_syslog_family_route_key,
     syslog_family_writer_path,
-    syslog_route_source,
-    syslog_route_year,
 )
-from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter, _SingleZeekWriter
 from evidenceforge.output_targets import OutputTarget
 
 # ASA facility: local4 (20)
 _ASA_FACILITY = 20
+_EXACT_FORMAT_MODEL_TAGS: tuple[tuple[type[object], str], ...] = (
+    (FieldConstraint, "field_constraint"),
+    (FieldDefinition, "field_definition"),
+    (EventVariant, "event_variant"),
+    (OutputTemplate, "output_template"),
+    (FormatDefinition, "format_definition"),
+)
+_EXACT_FORMAT_SNAPSHOT_MAX_DEPTH = 64
+_EXACT_FORMAT_SNAPSHOT_MAX_NODES = 100_000
+
+
+def _exact_cisco_format_snapshot_value(value: object) -> object:
+    """Freeze one ASA format-model value without invoking participant callbacks."""
+
+    active_ids: set[int] = set()
+    remaining_nodes = _EXACT_FORMAT_SNAPSHOT_MAX_NODES
+
+    def freeze(item: object, depth: int) -> object:
+        nonlocal remaining_nodes
+        if depth > _EXACT_FORMAT_SNAPSHOT_MAX_DEPTH or remaining_nodes <= 0:
+            raise ExactPublicationError("Exact Cisco ASA format snapshot exceeds its bound")
+        remaining_nodes -= 1
+        item_type = type(item)
+        if item is None:
+            return ("none",)
+        if item_type is bool:
+            return ("bool", item)
+        if item_type is int:
+            return ("int", item)
+        if item_type is float:
+            if not math.isfinite(cast(float, item)):
+                raise ExactPublicationError("Exact Cisco ASA format contains a non-finite number")
+            return ("float", item)
+        if item_type is str:
+            return ("str", item)
+        if item_type is FieldType:
+            enum_value = object.__getattribute__(item, "_value_")
+            if type(enum_value) is not str:
+                raise ExactPublicationError(
+                    "Exact Cisco ASA format contains a malformed field type"
+                )
+            return ("field_type", enum_value)
+
+        item_id = id(item)
+        if item_id in active_ids:
+            raise ExactPublicationError("Exact Cisco ASA format contains a reference cycle")
+        active_ids.add(item_id)
+        try:
+            if item_type is list:
+                return ("list", tuple(freeze(child, depth + 1) for child in item))
+            if item_type is tuple:
+                return ("tuple", tuple(freeze(child, depth + 1) for child in item))
+            if item_type is dict:
+                entries: list[tuple[object, object]] = []
+                for key, child in dict.items(cast(dict[object, object], item)):
+                    if type(key) is not str and type(key) is not int:
+                        raise ExactPublicationError(
+                            "Exact Cisco ASA format contains a non-scalar mapping key"
+                        )
+                    entries.append((freeze(key, depth + 1), freeze(child, depth + 1)))
+                return ("dict", tuple(entries))
+            model_tag = None
+            for model_type, tag in _EXACT_FORMAT_MODEL_TAGS:
+                if item_type is model_type:
+                    model_tag = tag
+                    break
+            if model_tag is not None:
+                state = object.__getattribute__(item, "__dict__")
+                if type(state) is not dict:
+                    raise ExactPublicationError(
+                        "Exact Cisco ASA format model state must be an exact dict"
+                    )
+                fields: list[tuple[str, object]] = []
+                for key, child in dict.items(state):
+                    if type(key) is not str:
+                        raise ExactPublicationError(
+                            "Exact Cisco ASA format model key must be an exact str"
+                        )
+                    fields.append((key, freeze(child, depth + 1)))
+                return ("model", model_tag, tuple(fields))
+            raise ExactPublicationError("Exact Cisco ASA format contains an unsupported value type")
+        finally:
+            active_ids.remove(item_id)
+
+    return freeze(value, 0)
+
+
+def _exact_cisco_format_snapshot(format_definition: object) -> tuple[object, ...]:
+    """Return one callback-free inert snapshot of the built-in ASA format."""
+
+    if type(format_definition) is not FormatDefinition:
+        raise ExactPublicationError("Exact Cisco ASA format must be one exact FormatDefinition")
+    snapshot = _exact_cisco_format_snapshot_value(format_definition)
+    if type(snapshot) is not tuple:
+        raise ExactPublicationError("Exact Cisco ASA format snapshot is malformed")
+    return cast(tuple[object, ...], snapshot)
+
+
+@dataclass(frozen=True, slots=True)
+class _CiscoExactWriterSettings:
+    """Immutable writer construction truth retained outside the emitter instance."""
+
+    buffer_size: int
+    sort_before_flush: bool
+    external_sorting: bool
+    sort_key: Callable[[str], Any]
+
+
+@dataclass(frozen=True, slots=True)
+class _CiscoExactProjectionBinding:
+    """Closure-retained constructor truth for deferred exact ASA publication."""
+
+    builtin_format: bool
+    format_definition_id: int
+    format_snapshot: tuple[object, ...] | None
+    writers_id: int
+    writers_lock_id: int
+    writer_settings: _CiscoExactWriterSettings
+
+
+def _new_cisco_exact_projection_binding_registry() -> tuple[
+    Callable[[object, object, int], None],
+    Callable[[object], bool],
+    Callable[[object], _CiscoExactWriterSettings | None],
+]:
+    """Create the callback-free constructor and writer capability registry."""
+
+    from evidenceforge.config import get_formats_directory
+    from evidenceforge.formats.loader import load_format
+    from evidenceforge.utils.files import load_yaml
+
+    canonical_data = load_yaml(get_formats_directory() / "cisco_asa.yaml")
+    if type(canonical_data) is not dict:
+        raise ExactPublicationError("Built-in Cisco ASA format must decode to one exact mapping")
+    canonical_snapshot = _exact_cisco_format_snapshot(FormatDefinition(**canonical_data))
+    bindings: dict[int, tuple[ReferenceType[object], _CiscoExactProjectionBinding]] = {}
+    registry_lock = Lock()
+
+    def discard(owner_id: int, owner_reference: ReferenceType[object]) -> None:
+        with registry_lock:
+            retained = bindings.get(owner_id)
+            if retained is not None and retained[0] is owner_reference:
+                bindings.pop(owner_id, None)
+
+    def bind(owner: object, format_definition: object, buffer_size: int) -> None:
+        current_snapshot: tuple[object, ...] | None = None
+        if type(format_definition) is FormatDefinition:
+            try:
+                current_snapshot = _exact_cisco_format_snapshot(format_definition)
+            except ExactPublicationError:
+                current_snapshot = None
+        owner_state = object.__getattribute__(owner, "__dict__")
+        if type(owner_state) is not dict:
+            raise ExactPublicationError("Exact Cisco ASA emitter state must be an exact dict")
+        writers = dict.get(owner_state, "_writers")
+        writers_lock = dict.get(owner_state, "_writers_lock")
+        if type(writers) is not dict or writers_lock is None:
+            raise ExactPublicationError("Exact Cisco ASA writer topology is malformed")
+        if type(buffer_size) is not int or buffer_size <= 0:
+            raise ExactPublicationError(
+                "Exact Cisco ASA writer buffer size must be a positive exact int"
+            )
+        owner_id = id(owner)
+        owner_reference = ref(
+            owner,
+            lambda expired, retained_id=owner_id: discard(retained_id, expired),
+        )
+        binding = _CiscoExactProjectionBinding(
+            builtin_format=(
+                format_definition is load_format("cisco_asa")
+                and current_snapshot == canonical_snapshot
+            ),
+            format_definition_id=id(format_definition),
+            format_snapshot=current_snapshot,
+            writers_id=id(writers),
+            writers_lock_id=id(writers_lock),
+            writer_settings=_CiscoExactWriterSettings(
+                buffer_size=buffer_size,
+                sort_before_flush=True,
+                external_sorting=True,
+                sort_key=rfc3164_timestamp_sort_key,
+            ),
+        )
+        with registry_lock:
+            retained = bindings.get(owner_id)
+            if retained is not None and retained[0]() is not owner:
+                raise ExactPublicationError("Exact Cisco ASA emitter identity was recycled")
+            bindings[owner_id] = (owner_reference, binding)
+
+    def binding_for(owner: object) -> _CiscoExactProjectionBinding | None:
+        with registry_lock:
+            retained = bindings.get(id(owner))
+            if retained is None or retained[0]() is not owner:
+                return None
+            return retained[1]
+
+    def writer_settings(owner: object) -> _CiscoExactWriterSettings | None:
+        binding = binding_for(owner)
+        if binding is None:
+            return None
+        owner_state = object.__getattribute__(owner, "__dict__")
+        if type(owner_state) is not dict:
+            return None
+        writers = dict.get(owner_state, "_writers")
+        writers_lock = dict.get(owner_state, "_writers_lock")
+        if id(writers) != binding.writers_id or id(writers_lock) != binding.writers_lock_id:
+            return None
+        return binding.writer_settings
+
+    def writer_authenticates(
+        writer: object,
+        settings: _CiscoExactWriterSettings,
+    ) -> bool:
+        if type(writer) is not _SingleZeekWriter:
+            return False
+        writer_state = object.__getattribute__(writer, "__dict__")
+        if type(writer_state) is not dict:
+            return False
+        sorted_writer = dict.get(writer_state, "_sorted_writer")
+        if type(sorted_writer) is not ExternalSortedLineWriter:
+            return False
+        sorted_state = object.__getattribute__(sorted_writer, "__dict__")
+        if type(sorted_state) is not dict:
+            return False
+        return bool(
+            dict.get(writer_state, "buffer_size") == settings.buffer_size
+            and dict.get(writer_state, "_sort_before_flush") is settings.sort_before_flush
+            and dict.get(writer_state, "_sort_key") is settings.sort_key
+            and dict.get(writer_state, "_closed") is False
+            and dict.get(writer_state, "_close_state") == "open"
+            and dict.get(sorted_state, "buffer_size") == settings.buffer_size
+            and dict.get(sorted_state, "_sort_key") is settings.sort_key
+            and dict.get(sorted_state, "_closed") is False
+            and dict.get(sorted_state, "_close_state") == "open"
+            and dict.get(writer_state, "output_path") is dict.get(sorted_state, "output_path")
+        )
+
+    def authenticates(owner: object) -> bool:
+        if type(owner) is not CiscoAsaEmitter:
+            return False
+        owner_state = object.__getattribute__(owner, "__dict__")
+        if type(owner_state) is not dict:
+            return False
+        format_definition = dict.get(owner_state, "format_def")
+        writers = dict.get(owner_state, "_writers")
+        writers_lock = dict.get(owner_state, "_writers_lock")
+        if type(format_definition) is not FormatDefinition or type(writers) is not dict:
+            return False
+        try:
+            current_snapshot = _exact_cisco_format_snapshot(format_definition)
+        except ExactPublicationError:
+            return False
+        binding = binding_for(owner)
+        return bool(
+            binding is not None
+            and binding.builtin_format
+            and binding.format_definition_id == id(format_definition)
+            and binding.format_snapshot == current_snapshot
+            and current_snapshot == canonical_snapshot
+            and binding.writers_id == id(writers)
+            and binding.writers_lock_id == id(writers_lock)
+            and all(
+                type(route_key) is str and writer_authenticates(writer, binding.writer_settings)
+                for route_key, writer in dict.items(writers)
+            )
+        )
+
+    return bind, authenticates, writer_settings
+
+
+(
+    _bind_cisco_exact_projection_publication,
+    _authenticates_cisco_exact_projection_publication,
+    _cisco_exact_writer_settings,
+) = _new_cisco_exact_projection_binding_registry()
+
+
+def _supports_cisco_asa_exact_projection_publication(emitter: object) -> bool:
+    """Authenticate concrete type, constructor format, and live final writers."""
+
+    return _authenticates_cisco_exact_projection_publication(emitter)
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +400,23 @@ class _AsaNetworkProjection:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _AsaRouteProjection:
+    """One allocation-free ASA route decision shared with compiled admission."""
+
+    timestamp: datetime
+    network: Any
+    src_interface: str
+    dst_interface: str
+    nat: NatSensorObservation | None
+
+    @property
+    def emits_rows(self) -> bool:
+        """Return whether this interface/NAT view can produce ASA evidence."""
+
+        return self.src_interface != self.dst_interface or self.nat is not None
+
+
 class CiscoAsaEmitter(SensorMultiplexEmitter):
     """Emitter for Cisco ASA firewall syslog format.
 
@@ -126,6 +434,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
     _sort_before_flush = True
     _external_sorting = True
     _sort_key_func = staticmethod(rfc3164_timestamp_sort_key)
+    supports_exact_projection_publication = True
 
     def __init__(
         self,
@@ -136,10 +445,6 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         sensor_hostnames: list[str] | None = None,
     ):
         super().__init__(format_def, output_path, buffer_size, threaded, sensor_hostnames)
-        # Per-sensor temporary connection ID counters. Final visible IDs are
-        # normalized after sorted flush so they follow log order without
-        # exposing timestamp buckets.
-        self._conn_id_sequences: dict[str, int] = {}
         # Network segment config for interface resolution (set by emitter_setup)
         self._segment_config: list[dict[str, str]] = []
         # Per-sensor interface mappings (set by emitter_setup)
@@ -157,6 +462,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._td_burst_window: int = 20  # seconds for burst rate calculation
         self._td_avg_window: int = 60  # seconds for average rate calculation
         self._td_cooldown: int = 20  # seconds between re-firings (= burst period)
+        _bind_cisco_exact_projection_publication(self, format_def, buffer_size)
 
     def _safe_writer_key(self, sensor_hostname: str) -> str:
         return sanitize_syslog_family_route_key(sensor_hostname)
@@ -170,186 +476,57 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             flat_filename=self._flat_filename,
         )
 
-    def _next_conn_id(self, sensor_hostname: str, ts: Any = None) -> int:
-        """Get a deterministic temporary ASA connection ID."""
-        seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
-        current = self._conn_id_sequences.get(sensor_hostname)
-        if current is None:
-            current = 1_000_000 + seed % 500_000
-        gap = 1 + int(hashlib.md5(f"{sensor_hostname}:{current}".encode()).hexdigest()[:2], 16) % 5
-        next_id = current + gap
-        self._conn_id_sequences[sensor_hostname] = next_id
-        return next_id
+    def _get_writer(self, sensor_hostname: str) -> _SingleZeekWriter:
+        """Create ASA writers only from constructor-bound exact sort settings."""
 
-    def close(self) -> None:
-        """Close all writers and normalize visible connection IDs once.
-
-        Barrier flushes can happen many times during long generations. Keep
-        them append-only, and defer the whole-file ID normalization until the
-        final close after writers have performed their final global sort.
-        """
-        super().close()
-        self._normalize_visible_connection_ids()
-
-    def _normalize_visible_connection_ids(self) -> None:
-        """Rewrite rendered ASA connection IDs in visible chronological order."""
-        with self._writers_lock:
-            writers = list(self._writers.items())
-        by_sensor: dict[str, list[tuple[str, Any]]] = {}
-        for route_key, writer in writers:
-            by_sensor.setdefault(syslog_route_source(route_key), []).append((route_key, writer))
-        for sensor_hostname, route_writers in by_sensor.items():
-            mapping = self._connection_id_mapping(route_writers, sensor_hostname)
-            for _route_key, writer in route_writers:
-                self._apply_connection_id_mapping(writer.output_path, mapping)
-
-    @staticmethod
-    def _normalize_connection_ids_in_file(path: Path, sensor_hostname: str) -> None:
-        """Rewrite rendered ASA connection IDs in one file.
-
-        Kept for focused tests and direct-file usage. Normal generated output
-        uses _normalize_visible_connection_ids so year-partitioned files share
-        one connection-ID mapping per sensor.
-        """
-        if not path.exists():
-            return
-        lines = path.read_text(encoding="utf-8").splitlines()
-        if not lines:
-            return
-
-        mapping = CiscoAsaEmitter._build_connection_id_mapping(
-            ((0, line) for line in lines),
-            sensor_hostname,
-        )
-        CiscoAsaEmitter._apply_connection_id_mapping(path, mapping)
+        settings = _cisco_exact_writer_settings(self)
+        owner_state = object.__getattribute__(self, "__dict__")
+        if settings is None or type(owner_state) is not dict:
+            raise ExactPublicationError("Cisco ASA writer constructor binding is unavailable")
+        writers = dict.get(owner_state, "_writers")
+        writers_lock = dict.get(owner_state, "_writers_lock")
+        if type(writers) is not dict or writers_lock is None:
+            raise ExactPublicationError("Cisco ASA writer topology is malformed")
+        safe_sensor = CiscoAsaEmitter._safe_writer_key(self, sensor_hostname)
+        writer = dict.get(writers, safe_sensor)
+        if writer is not None:
+            if type(writer) is not _SingleZeekWriter:
+                raise ExactPublicationError("Cisco ASA retained a foreign sensor writer")
+            return writer
+        with cast(Any, writers_lock):
+            writer = dict.get(writers, safe_sensor)
+            if writer is not None:
+                if type(writer) is not _SingleZeekWriter:
+                    raise ExactPublicationError("Cisco ASA retained a foreign sensor writer")
+                return writer
+            path = CiscoAsaEmitter._writer_path_for_key(self, safe_sensor)
+            writer = _SingleZeekWriter(
+                path,
+                settings.buffer_size,
+                sort_before_flush=settings.sort_before_flush,
+                sort_key=settings.sort_key,
+                external_sorting=settings.external_sorting,
+            )
+            dict.__setitem__(writers, safe_sensor, writer)
+            return writer
 
     @staticmethod
-    def _connection_id_mapping(
-        route_writers: list[tuple[str, Any]],
-        sensor_hostname: str,
-    ) -> dict[str, int]:
-        rows: list[tuple[int, tuple[int, int, int, int, int], int, str]] = []
-        for route_key, writer in route_writers:
-            if not writer.output_path.exists():
-                continue
-            year = int(syslog_route_year(route_key) or 0)
-            for line_index, line in enumerate(
-                writer.output_path.read_text(encoding="utf-8").splitlines()
-            ):
-                rows.append((year, rfc3164_timestamp_sort_key(line), line_index, line))
-        rows.sort(key=lambda row: (row[0], row[1], row[2]))
-        return CiscoAsaEmitter._build_connection_id_mapping(
-            ((year, line) for year, _sort_key, _line_index, line in rows),
-            sensor_hostname,
-        )
+    def _connection_id(event: CanonicalOccurrence, sensor_hostname: str) -> int:
+        """Return the retry-invariant final ASA ID for one canonical transport."""
 
-    @staticmethod
-    def _build_connection_id_mapping(
-        lines: Iterable[tuple[int, str]],
-        sensor_hostname: str,
-    ) -> dict[str, int]:
-        seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
-        current = 1_000_000 + seed % 500_000
-        mapping: dict[str, int] = {}
-        pattern = re.compile(r"(connection )(\d+)( for)")
-        visible_index = 0
-        previous_second: int | None = None
-        for year, line in lines:
-            match = pattern.search(line)
-            if match is None:
-                continue
-            old_id = match.group(2)
-            if int(old_id) < 1_000_000:
-                continue
-            if old_id not in mapping:
-                current_second = CiscoAsaEmitter._line_epoch_second(year, line)
-                gap = CiscoAsaEmitter._hidden_connection_id_gap(
-                    sensor_hostname=sensor_hostname,
-                    current=current,
-                    visible_index=visible_index,
-                    line=line,
-                    previous_second=previous_second,
-                    current_second=current_second,
-                )
-                current += gap
-                mapping[old_id] = current
-                visible_index += 1
-                if current_second is not None:
-                    previous_second = current_second
-        return mapping
-
-    @staticmethod
-    def _line_epoch_second(year: int, line: str) -> int | None:
-        """Return an approximate epoch-second key for an RFC3164 ASA line."""
-        month, day, hour, minute, second = rfc3164_timestamp_sort_key(line)
-        if month == 99 or day == 99:
-            return None
-        try:
-            line_dt = datetime(max(year, 1970), month, day, hour, minute, second)
-        except ValueError:
-            return None
-        return int(line_dt.timestamp())
-
-    @staticmethod
-    def _hidden_connection_id_gap(
-        *,
-        sensor_hostname: str,
-        current: int,
-        visible_index: int,
-        line: str,
-        previous_second: int | None,
-        current_second: int | None,
-    ) -> int:
-        """Return a deterministic visible ASA connection-ID gap.
-
-        ASA connection IDs are device-wide counters. A collected log stream sees
-        only a subset of firewall activity, so adjacent visible connection IDs
-        should include hidden connection volume rather than revealing a tight
-        synthetic 1-5 increment range.
-        """
-        gap_seed = f"asa-hidden-conn-gap:{sensor_hostname}:{current}:{visible_index}:{line[:96]}"
-        digest = hashlib.md5(gap_seed.encode()).digest()
-        bucket = digest[0] % 100
-        if bucket < 34:
-            base_gap = 1 + digest[1] % 4
-        elif bucket < 70:
-            base_gap = 5 + digest[1] % 11
-        elif bucket < 93:
-            base_gap = 16 + digest[1] % 35
-        else:
-            base_gap = 52 + digest[1] % 180
-
-        elapsed_gap = 0
-        if previous_second is not None and current_second is not None:
-            elapsed_seconds = max(0, current_second - previous_second)
-            if elapsed_seconds > 0:
-                hidden_rate = 0.08 + (digest[2] / 255.0) * 0.42
-                elapsed_gap = min(500, int(elapsed_seconds * hidden_rate))
-
-        return max(1, base_gap + elapsed_gap)
-
-    @staticmethod
-    def _apply_connection_id_mapping(path: Path, mapping: dict[str, int]) -> None:
-        if not path.exists() or not mapping:
-            return
-        lines = path.read_text(encoding="utf-8").splitlines()
-        pattern = re.compile(r"(connection )(\d+)( for)")
-        changed = False
-        normalized: list[str] = []
-        for line in lines:
-            match = pattern.search(line)
-            if match is None:
-                normalized.append(line)
-                continue
-            old_id = match.group(2)
-            if old_id not in mapping:
-                normalized.append(line)
-                continue
-            new_id = str(mapping[old_id])
-            normalized.append(pattern.sub(rf"\g<1>{new_id}\g<3>", line, count=1))
-            changed = changed or new_id != old_id
-        if changed:
-            path.write_text("\n".join(normalized) + "\n", encoding="utf-8")
+        network = event.network
+        if network is None:
+            raise ValueError("ASA connection IDs require canonical network truth")
+        sensor_key = sensor_hostname.casefold()
+        sensor_digest = hashlib.sha256(f"asa-sensor:{sensor_key}".encode()).digest()
+        sensor_base = 1_000_000 + int.from_bytes(sensor_digest[:4], "big") % 1_000_000
+        canonical_match = re.fullmatch(r"conn-(0|[1-9][0-9]*)", network.conn_id)
+        if canonical_match is not None:
+            return sensor_base + int(canonical_match.group(1))
+        compatibility_digest = hashlib.sha256(
+            f"asa-compatibility-connection:{sensor_key}:{network.stable_id}".encode()
+        ).digest()
+        return 1_000_000 + int.from_bytes(compatibility_digest[:8], "big") % 999_000_000
 
     @staticmethod
     def _compatibility_teardown_plan(net: Any, protocol: str) -> tuple[str, float]:
@@ -432,6 +609,36 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             and not event.network.application_layer_only
         )
 
+    def _route_projection(
+        self,
+        event: CanonicalOccurrence,
+        sensor_hostname: str,
+        observation: NetworkSensorObservation | None,
+    ) -> _AsaRouteProjection:
+        """Resolve one source-local ASA view without allocating or writing anything."""
+
+        network = event.network
+        if network is None:
+            raise ValueError("ASA route projection requires canonical network truth")
+        timestamp = event.timestamp
+        projected_network: Any = network
+        if observation is not None:
+            timestamp = observation.observed_start_time
+            projected_network = _AsaNetworkProjection.from_observation(network, observation)
+        src_interface = self._resolve_interface(projected_network.src_ip, sensor_hostname)
+        dst_interface = self._resolve_interface(projected_network.dst_ip, sensor_hostname)
+        firewall = event.firewall
+        if firewall is not None:
+            src_interface = firewall.src_interface or src_interface
+            dst_interface = firewall.dst_interface or dst_interface
+        return _AsaRouteProjection(
+            timestamp=timestamp,
+            network=projected_network,
+            src_interface=src_interface,
+            dst_interface=dst_interface,
+            nat=self._nat_view(event, projected_network, observation),
+        )
+
     def emit(self, event: CanonicalOccurrence) -> None:
         """Render ASA syslog records from a connection event.
 
@@ -461,28 +668,18 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             sensor_hosts = self._sensor_hostnames or [""]
 
         for sensor_hostname in sensor_hosts:
-            sensor_timestamp = event.timestamp
-            sensor_net = net
             observation = observations.get(sensor_hostname)
-            if observation is not None:
-                sensor_timestamp = observation.observed_start_time
-                sensor_net = _AsaNetworkProjection.from_observation(net, observation)
-            src_iface = self._resolve_interface(sensor_net.src_ip, sensor_hostname)
-            dst_iface = self._resolve_interface(sensor_net.dst_ip, sensor_hostname)
-            if fw is not None:
-                src_iface = fw.src_interface or src_iface
-                dst_iface = fw.dst_interface or dst_iface
-            nat_view = self._nat_view(event, sensor_net, observation)
-            conn_id = (
-                fw.connection_id
-                if fw is not None and fw.connection_id > 0
-                else self._next_conn_id(sensor_hostname, sensor_timestamp)
-            )
+            route = self._route_projection(event, sensor_hostname, observation)
+            if not route.emits_rows:
+                continue
+            sensor_timestamp = route.timestamp
+            sensor_net = route.network
+            src_iface = route.src_interface
+            dst_iface = route.dst_interface
+            nat_view = route.nat
             fw_hostname = sensor_hostname or "fw01"
 
             if is_deny:
-                if src_iface == dst_iface and nat_view is None:
-                    continue
                 if self._should_suppress_outside_private_deny(
                     sensor_net, src_iface, dst_iface, sensor_hostname
                 ):
@@ -497,8 +694,11 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     fw_hostname,
                 )
             else:
-                if src_iface == dst_iface and nat_view is None:
-                    continue
+                conn_id = (
+                    fw.connection_id
+                    if fw is not None and fw.connection_id > 0
+                    else self._connection_id(event, sensor_hostname)
+                )
                 if nat_view is not None and nat_view.nat_type != "static":
                     self._emit_nat_built(
                         sensor_net,
