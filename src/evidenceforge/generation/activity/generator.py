@@ -102,6 +102,7 @@ from evidenceforge.events.cryptography import (
 )
 from evidenceforge.events.dispatcher import (
     ActionCohortEffectMemberBinding,
+    ActionCohortProjectionDisposition,
     ActionCohortProjectionOutcome,
     ActionCohortPublicationResult,
     EventDispatcher,
@@ -4670,6 +4671,7 @@ class _RdpLifecycleJournalEntry:
     source_terminated: bool = False
     source_termination_at: datetime | None = None
     source_projection_frontiers: tuple[tuple[str, int, datetime], ...] = ()
+    source_projection_disposition: ActionCohortProjectionDisposition | None = None
     manager_logged_out: bool = False
     target_terminations: tuple[tuple[ProcessIdentity, datetime], ...] | None = None
     logout_published: bool = False
@@ -6326,6 +6328,23 @@ class ActivityGenerator:
             and snapshot.generation.binding.transport_id == expected.generation.binding.transport_id
         )
 
+    @staticmethod
+    def _rdp_source_projection_proof_complete(
+        entry: _RdpLifecycleJournalEntry,
+        source_identity: ProcessIdentity | None,
+    ) -> bool:
+        """Require the exact no-source, visible-source, or suppressed-source journal shape."""
+
+        disposition = entry.source_projection_disposition
+        frontiers = entry.source_projection_frontiers
+        if source_identity is None:
+            return disposition is None and frontiers == ()
+        if disposition is ActionCohortProjectionDisposition.EXACT_WARMUP_SUPPRESSED:
+            return frontiers == ()
+        return bool(
+            disposition is ActionCohortProjectionDisposition.SOURCE_FRONTIERS_REQUIRED and frontiers
+        )
+
     def _disconnect_exact_rdp_entry(self, entry: _RdpLifecycleJournalEntry) -> None:
         """Disconnect one exact generation, project 4779, and close its mstsc owner."""
 
@@ -6358,9 +6377,9 @@ class ActivityGenerator:
                 or not entry.disconnect_published
                 or not entry.source_terminated
                 or entry.source_termination_at is None
-                or (
-                    continuation.prepared.source_identity is not None
-                    and not entry.source_projection_frontiers
+                or not self._rdp_source_projection_proof_complete(
+                    entry,
+                    continuation.prepared.source_identity,
                 )
                 or snapshot.generation.disconnected_at != continuation.disconnect_at
             ):
@@ -6375,6 +6394,7 @@ class ActivityGenerator:
             source_identity = continuation.prepared.source_identity
             source_termination_at = continuation.disconnect_at
             source_projection_frontiers: tuple[tuple[str, int, datetime], ...] = ()
+            source_projection_disposition: ActionCohortProjectionDisposition | None = None
             if source_identity is not None:
                 timing_proof = self._rdp_bundle_for_continuation(
                     continuation
@@ -6385,20 +6405,22 @@ class ActivityGenerator:
                 )
                 source_termination_at = timing_proof.canonical_time
                 source_projection_frontiers = timing_proof.source_frontiers
+                source_projection_disposition = timing_proof.disposition
             if ensure_utc(source_termination_at) != continuation.disconnect_at:
                 raise StateError("Exact RDP source termination does not match transport close")
-            if source_identity is not None and not source_projection_frontiers:
-                raise StateError("Exact RDP source termination lost its projection frontiers")
             entry.source_termination_at = ensure_utc(source_termination_at)
             entry.source_projection_frontiers = source_projection_frontiers
+            entry.source_projection_disposition = source_projection_disposition
+            if not self._rdp_source_projection_proof_complete(entry, source_identity):
+                raise StateError("Exact RDP source termination lost its projection proof")
             entry.source_terminated = True
         if entry.source_termination_at is None:
             raise StateError("Exact RDP disconnect lost its canonical source termination")
         if entry.source_termination_at != continuation.disconnect_at:
             raise StateError("Exact RDP disconnect changed its canonical source termination")
-        if (
-            continuation.prepared.source_identity is not None
-            and not entry.source_projection_frontiers
+        if not self._rdp_source_projection_proof_complete(
+            entry,
+            continuation.prepared.source_identity,
         ):
             raise StateError("Exact RDP disconnect lost its source projection proof")
         if not entry.disconnect_published:

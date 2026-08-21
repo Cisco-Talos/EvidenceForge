@@ -19,6 +19,7 @@ from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import AuthContext, HostContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.events.rdp import RdpSessionState
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle
@@ -33,7 +34,7 @@ from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.source_finalization import SourceFinalizationCoordinator
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.exceptions import EventContractError, StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import reset_thread_rng
 
@@ -64,6 +65,7 @@ def _open_rdp_terminal_harness(
     tmp_path: Path,
     *,
     clock_profile_name: str = "complete",
+    output_start_time: datetime | None = None,
 ) -> _RdpTerminalHarness:
     """Open one exact initial RDP generation whose full terminal graph is still pending."""
 
@@ -86,6 +88,7 @@ def _open_rdp_terminal_harness(
     dispatcher = EventDispatcher(
         state,
         emitters,
+        output_start_time=output_start_time,
         source_timing_planner=SourceTimingPlanner(clock_profile_name=clock_profile_name),
     )
     generator = ActivityGenerator(
@@ -174,6 +177,241 @@ def _open_rdp_terminal_harness(
         disconnect_at=session.network_close_time,
         output_root=tmp_path,
     )
+
+
+@pytest.mark.parametrize("failure_seam", ("action-cohort", "state-neutral"))
+@pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))
+def test_warmup_suppressed_rdp_terminal_chain_retries_without_rows(
+    failure_seam: str,
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fully suppressed RDP terminal chain still closes every canonical owner exactly once."""
+
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        output_start_time=_END,
+    )
+    original_claim = EventDispatcher.claimed_action_cohort
+    original_state_neutral = EventDispatcher.publish_state_neutral_exact_projection
+    injected = False
+
+    @contextmanager
+    def faulting_claim(
+        owner: EventDispatcher,
+        batch: object,
+    ) -> Iterator[object]:
+        nonlocal injected
+        if failure_seam == "action-cohort" and not injected and failure_mode == "fail-before":
+            injected = True
+            raise OSError("injected suppressed RDP action-cohort fail-before")
+        with original_claim(owner, batch) as capability:
+            yield capability
+        result = capability.result
+        if (
+            failure_seam == "action-cohort"
+            and not injected
+            and failure_mode == "lost-return"
+            and result is not None
+            and result.receipt.root_action_id.endswith(":process-terminate")
+        ):
+            injected = True
+            raise OSError("injected suppressed RDP action-cohort lost-return")
+
+    def faulting_state_neutral(owner: EventDispatcher, carrier: object) -> object:
+        nonlocal injected
+        if failure_seam == "state-neutral" and not injected and failure_mode == "fail-before":
+            injected = True
+            raise OSError("injected suppressed RDP state-neutral fail-before")
+        result = original_state_neutral(owner, carrier)
+        if failure_seam == "state-neutral" and not injected and failure_mode == "lost-return":
+            injected = True
+            error = OSError("injected suppressed RDP state-neutral lost-return")
+            error.state_neutral_projection_receipt = result.receipt
+            error.state_neutral_projection_result = result
+            raise error
+        return result
+
+    monkeypatch.setattr(EventDispatcher, "claimed_action_cohort", faulting_claim)
+    monkeypatch.setattr(
+        EventDispatcher,
+        "publish_state_neutral_exact_projection",
+        faulting_state_neutral,
+    )
+    with pytest.raises(OSError, match=f"suppressed RDP {failure_seam} {failure_mode}"):
+        harness.generator.advance_rdp_session_lifecycle_watermark(harness.disconnect_at)
+
+    disconnected = harness.generator.rdp_session_manager.get(harness.session_object_id)
+    assert disconnected is not None
+    assert disconnected.state is RdpSessionState.DISCONNECTED
+    assert harness.generator.rdp_lifecycle_journal_census().pending_generations == 1
+
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_session(harness.logon_id) is None
+    assert harness.generator.rdp_lifecycle_journal_census().pending_generations == 0
+    manager = harness.generator.rdp_session_manager.census()
+    assert manager.connected_sessions == 0
+    assert manager.disconnected_sessions == 0
+    assert manager.logged_out_sessions == 1
+    assert manager.active_operations == 0
+    assert manager.active_leases == 0
+    live_process_object_ids = {
+        process.ecar_object_id
+        for hostname in (harness.source_hostname, harness.target_hostname)
+        for process in harness.state.get_processes_on_system(hostname)
+    }
+    assert live_process_object_ids.isdisjoint(harness.terminal_process_object_ids)
+
+    _close_rdp_terminal_harness(harness)
+    exact = harness.dispatcher.exact_projection_recovery_census()
+    cohort = harness.dispatcher.action_cohort_publication_census()
+    assert exact.unresolved_recoveries == 0
+    assert exact.reserved_recoveries == 0
+    assert exact.active_recoveries == 0
+    assert exact.authority.active_batches == 0
+    assert exact.authority.prepared_batches == 0
+    assert exact.authority.retained_rows == 0
+    assert cohort.prepared_batches == 0
+    assert cohort.claimed_batches == 0
+    assert cohort.retained_members == 0
+    assert cohort.prepared_projections == 0
+    assert cohort.projection_groups == 0
+    assert _read_json_lines(harness.output_root / "ecar", "ecar.json") == []
+    rendered_windows = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "windows").rglob("*.xml")
+    )
+    assert "<EventID>4689</EventID>" not in rendered_windows
+    assert "<EventID>4779</EventID>" not in rendered_windows
+    assert "<EventID>4634</EventID>" not in rendered_windows
+
+
+def test_visible_rdp_process_terminal_rejects_a_zero_row_renderer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A visible process terminal cannot use the warm-up zero-row disposition."""
+
+    harness = _open_rdp_terminal_harness(tmp_path)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(EcarEmitter, "emit", lambda _owner, _event: None)
+        fault.setattr(WindowsEventEmitter, "emit", lambda _owner, _event: None)
+        with pytest.raises(
+            EventContractError,
+            match="visible terminal projection staged no durable row",
+        ):
+            harness.generator.advance_rdp_session_lifecycle_watermark(harness.disconnect_at)
+
+    disconnected = harness.generator.rdp_session_manager.get(harness.session_object_id)
+    assert disconnected is not None
+    assert disconnected.state is RdpSessionState.DISCONNECTED
+    assert harness.generator.rdp_lifecycle_journal_census().pending_generations == 1
+    assert harness.dispatcher.exact_projection_recovery_census().unresolved_recoveries == 0
+    assert harness.dispatcher.action_cohort_publication_census().prepared_batches == 0
+
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    _close_rdp_terminal_harness(harness)
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    for object_id in harness.terminal_process_object_ids:
+        assert (
+            sum(
+                row.get("object") == "PROCESS"
+                and row.get("action") == "TERMINATE"
+                and row.get("objectID") == object_id
+                for row in ecar_rows
+            )
+            == 1
+        )
+
+
+def test_visible_rdp_disconnect_rejects_a_zero_row_renderer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A visible 4779 publication must stage a row before its canonical owner commits."""
+
+    harness = _open_rdp_terminal_harness(tmp_path)
+    original = EventDispatcher.publish_state_neutral_exact_projection
+    injected = False
+
+    def zero_first_disconnect(owner: EventDispatcher, carrier: object) -> object:
+        nonlocal injected
+        if injected:
+            return original(owner, carrier)
+        injected = True
+        with monkeypatch.context() as fault:
+            fault.setattr(EcarEmitter, "emit", lambda _owner, _event: None)
+            fault.setattr(WindowsEventEmitter, "emit", lambda _owner, _event: None)
+            return original(owner, carrier)
+
+    monkeypatch.setattr(
+        EventDispatcher,
+        "publish_state_neutral_exact_projection",
+        zero_first_disconnect,
+    )
+    with pytest.raises(
+        EventContractError,
+        match="visible RDP disconnect staged no durable row",
+    ):
+        harness.generator.advance_rdp_session_lifecycle_watermark(harness.disconnect_at)
+
+    disconnected = harness.generator.rdp_session_manager.get(harness.session_object_id)
+    assert disconnected is not None
+    assert disconnected.state is RdpSessionState.DISCONNECTED
+    assert harness.generator.rdp_lifecycle_journal_census().pending_generations == 1
+    assert harness.dispatcher.exact_projection_recovery_census().unresolved_recoveries == 0
+
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    _close_rdp_terminal_harness(harness)
+    rendered_windows = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "windows").rglob("*.xml")
+    )
+    assert rendered_windows.count("<EventID>4779</EventID>") == 1
+
+
+@pytest.mark.parametrize("zero_source_shape", ("post-window", "mixed"))
+def test_nonsuppressed_rdp_terminal_zero_source_shape_fails_closed(
+    zero_source_shape: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Post-window and mixed missingness cannot impersonate exact warm-up suppression."""
+
+    harness = _open_rdp_terminal_harness(tmp_path)
+    harness.dispatcher.output_end_time = harness.disconnect_at
+
+    with monkeypatch.context() as fault:
+        if zero_source_shape == "mixed":
+
+            def mixed_decision(format_name: str, _event: object) -> ObservationDecision:
+                return ObservationDecision(status="dropped" if format_name == "ecar" else "visible")
+
+            fault.setattr(harness.dispatcher.observation_policy, "decide", mixed_decision)
+        with pytest.raises(
+            StateError,
+            match="visible RDP terminal timing proof requires source frontiers",
+        ):
+            harness.generator.advance_rdp_session_lifecycle_watermark(harness.disconnect_at)
+
+    assert harness.generator.rdp_lifecycle_journal_census().pending_generations == 1
+    exact = harness.dispatcher.exact_projection_recovery_census()
+    cohort = harness.dispatcher.action_cohort_publication_census()
+    assert exact.unresolved_recoveries == 0
+    assert exact.authority.active_batches == 0
+    assert cohort.prepared_batches == 0
+    assert cohort.prepared_projections == 0
+
+    harness.dispatcher.output_end_time = None
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    _close_rdp_terminal_harness(harness)
 
 
 def _close_rdp_terminal_harness(harness: _RdpTerminalHarness) -> None:

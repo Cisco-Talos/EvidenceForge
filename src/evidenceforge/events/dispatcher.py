@@ -417,6 +417,13 @@ class ActionCohortSourceProjectionFacts:
         )
 
 
+class ActionCohortProjectionDisposition(StrEnum):
+    """Authenticated source-row requirement for one exact projection preflight."""
+
+    SOURCE_FRONTIERS_REQUIRED = "source_frontiers_required"
+    EXACT_WARMUP_SUPPRESSED = "exact_warmup_suppressed"
+
+
 @dataclass(frozen=True, slots=True)
 class ActionCohortProjectionFacts:
     """Detached canonical and source-native facts from one projection preflight."""
@@ -424,6 +431,7 @@ class ActionCohortProjectionFacts:
     occurrence: CanonicalOccurrence
     initial_statuses: tuple[tuple[str, ObservationStatus], ...]
     sources: tuple[ActionCohortSourceProjectionFacts, ...]
+    disposition: ActionCohortProjectionDisposition
 
     def finalized_times_for(self, render_key: str) -> tuple[datetime, ...]:
         """Return every ordered source-target time finalized for ``render_key``."""
@@ -852,9 +860,11 @@ class _PreparedActionCohortBatchRecord:
     intent_request: IntentExecutionBatchRequest | None
     intent_token: IntentExecutionBatchToken | None
     exact_projection: bool
+    exact_projection_kind: str
     exact_all_suppressed: bool
     exact_publication_batch: ExactPublicationBatch | None
     exact_prepared_identifiers: tuple[tuple[str, str], ...]
+    exact_prepared_row_count: int
     observation_deltas: tuple[_ActionCohortObservationDelta, ...]
     observation_digest: str
     member_integrity_digest: str
@@ -917,6 +927,9 @@ class _StateNeutralProjectionPublicationRecord:
     observation_deltas: tuple[_ActionCohortObservationDelta, ...]
     exact_publication_batch: ExactPublicationBatch
     projection_outcome: ActionCohortProjectionOutcome
+    exact_kind: str
+    exact_all_suppressed: bool
+    prepared_row_count: int
     prepared_observation_updates: tuple[_ActionCohortPreparedObservationCluster, ...] | None = None
     observation_committed: bool = False
     expected_timing_receipt: SourceTimingPreparationReceipt | None = None
@@ -3434,6 +3447,11 @@ class EventDispatcher:
             occurrence=occurrence,
             initial_statuses=tuple(projection.initial_statuses),
             sources=tuple(sources),
+            disposition=(
+                ActionCohortProjectionDisposition.EXACT_WARMUP_SUPPRESSED
+                if self._projection_is_exact_warmup_suppressed(projection)
+                else ActionCohortProjectionDisposition.SOURCE_FRONTIERS_REQUIRED
+            ),
         )
 
     def _action_cohort_admitted_source_events(
@@ -6515,9 +6533,11 @@ class EventDispatcher:
                 record.observation_digest,
                 record.nested_token_digest,
                 record.exact_projection,
+                record.exact_projection_kind,
                 record.exact_all_suppressed,
                 id(record.exact_publication_batch),
                 record.exact_prepared_identifiers,
+                record.exact_prepared_row_count,
                 tuple(
                     (
                         id(token),
@@ -6945,6 +6965,7 @@ class EventDispatcher:
                 occurrence_ids=record.member_occurrence_ids,
                 member_integrity_digest=record.member_integrity_digest,
                 identifiers=record.exact_prepared_identifiers,
+                owner_record=record,
             )
         if not self._action_cohort_expected_publications_authenticate(record):
             raise EventContractError(
@@ -7475,6 +7496,21 @@ class EventDispatcher:
             raise EventContractError("Exact SSH terminal projection requires one eCAR target")
         return tuple(participants)
 
+    def _rdp_terminal_exact_projection_participants(
+        self,
+        projection: _PreparedProjection,
+    ) -> tuple[LogEmitter, ...]:
+        """Require an exact RDP sink, except for one authenticated warm-up zero-row shape."""
+
+        if self._projection_is_exact_warmup_suppressed(projection):
+            return ()
+        participants = self._exact_projection_participants(projection)
+        if not participants:
+            raise EventContractError(
+                "Exact visible RDP terminal projection requires a durable source target"
+            )
+        return participants
+
     def _initialize_action_cohort_exact_projection(
         self,
         record: _PreparedActionCohortBatchRecord,
@@ -7492,9 +7528,10 @@ class EventDispatcher:
             )
         projection = record.trusted_projections[0]
         exact_kind = self._exact_action_cohort_projection_kind(record)
+        record.exact_projection_kind = exact_kind
+        terminal_kind = exact_kind.startswith(("ssh_", "rdp_"))
         record.exact_all_suppressed = bool(
-            exact_kind.startswith("ssh_")
-            and self._projection_is_exact_warmup_suppressed(projection)
+            terminal_kind and self._projection_is_exact_warmup_suppressed(projection)
         )
         if (
             record.artifact_publications
@@ -7512,6 +7549,8 @@ class EventDispatcher:
             self._exact_projection_participants(projection)
         elif exact_kind.startswith("ssh_"):
             self._ssh_terminal_exact_projection_participants(projection)
+        elif exact_kind.startswith("rdp_"):
+            self._rdp_terminal_exact_projection_participants(projection)
         else:
             self._exact_projection_participants(projection)
         cleanup_record.exact_publication_batch = self._exact_publication_authority.issue_batch()
@@ -7528,19 +7567,21 @@ class EventDispatcher:
             raise EventContractError("Exact action-cohort batch was not issued")
         projection = record.trusted_projections[0]
         exact_kind = self._exact_action_cohort_projection_kind(record)
+        if exact_kind != record.exact_projection_kind:
+            raise EventContractError("Exact action-cohort projection kind changed before rendering")
+        terminal_kind = exact_kind.startswith(("ssh_", "rdp_"))
         exact_all_suppressed = bool(
-            exact_kind.startswith("ssh_")
-            and self._projection_is_exact_warmup_suppressed(projection)
+            terminal_kind and self._projection_is_exact_warmup_suppressed(projection)
         )
         if exact_all_suppressed is not record.exact_all_suppressed:
-            raise EventContractError(
-                "Exact SSH terminal warm-up suppression changed before rendering"
-            )
+            raise EventContractError("Exact terminal warm-up suppression changed before rendering")
         participants = (
             self._exact_projection_participants(projection)
             if exact_kind == "type5"
             else self._ssh_terminal_exact_projection_participants(projection)
             if exact_kind.startswith("ssh_")
+            else self._rdp_terminal_exact_projection_participants(projection)
+            if exact_kind.startswith("rdp_")
             else self._exact_projection_participants(projection)
         )
         batch.reserve_participants(cast(tuple[object, ...], participants))
@@ -7550,23 +7591,22 @@ class EventDispatcher:
         record.exact_prepared_identifiers = self._validate_exact_projection_identifiers(
             prepared_result
         )
-        if exact_kind.startswith("ssh_"):
-            prepared_row_count = batch.prepared_row_count
+        record.exact_prepared_row_count = batch.prepared_row_count
+        if terminal_kind:
+            prepared_row_count = record.exact_prepared_row_count
             if record.exact_all_suppressed:
                 if prepared_row_count != 0 or record.exact_prepared_identifiers != ():
                     raise EventContractError(
-                        "Exact SSH warm-up terminal projection changed its zero-row shape"
+                        "Exact warm-up terminal projection changed its zero-row shape"
                     )
             elif prepared_row_count <= 0:
-                raise EventContractError(
-                    "Exact visible SSH terminal projection staged no durable row"
-                )
+                raise EventContractError("Exact visible terminal projection staged no durable row")
 
     @staticmethod
     def _require_state_neutral_type_five_projection(
         record: _PreparedActionCohortProjectionRecord,
-    ) -> None:
-        """Require one narrow exact no-State authentication/transition shape."""
+    ) -> str:
+        """Return the narrow authenticated no-State authentication/transition kind."""
 
         from evidenceforge.events.contexts import AuthContext, HostContext
         from evidenceforge.events.identity import (
@@ -7614,7 +7654,7 @@ class EventDispatcher:
                 raise EventContractError(
                     "State-neutral exact RDP disconnect disagrees with its live session"
                 )
-            return
+            return "rdp_disconnect"
         EventDispatcher._require_type_five_projection(record.projection)
         expected_accounts = {
             "SYSTEM": ("S-1-5-18", "0x3e7"),
@@ -7662,6 +7702,7 @@ class EventDispatcher:
             raise EventContractError(
                 "State-neutral exact projection built-in account/SID/LUID tuple is invalid"
             )
+        return "type5"
 
     def _state_neutral_intent_request(
         self,
@@ -7830,8 +7871,23 @@ class EventDispatcher:
                 raise EventContractError("State-neutral projection failed nested authentication")
             if not self.source_timing_planner.authenticates_preparation(timing_preparation):
                 raise EventContractError("State-neutral source timing is not sealed and authentic")
-            self._require_state_neutral_type_five_projection(record)
-            participants = self._exact_projection_participants(record.projection)
+            exact_kind = self._require_state_neutral_type_five_projection(record)
+            exact_all_suppressed = bool(
+                exact_kind == "rdp_disconnect"
+                and record.facts.disposition
+                is ActionCohortProjectionDisposition.EXACT_WARMUP_SUPPRESSED
+            )
+            if exact_kind == "rdp_disconnect" and exact_all_suppressed != (
+                self._projection_is_exact_warmup_suppressed(record.projection)
+            ):
+                raise EventContractError(
+                    "State-neutral RDP disconnect disposition changed before rendering"
+                )
+            participants = (
+                self._rdp_terminal_exact_projection_participants(record.projection)
+                if exact_kind == "rdp_disconnect"
+                else self._exact_projection_participants(record.projection)
+            )
             exact_batch = self._exact_publication_authority.issue_batch()
             exact_batch.reserve_participants(cast(tuple[object, ...], participants))
             prepared_identifiers = self._validate_exact_projection_identifiers(
@@ -7841,6 +7897,15 @@ class EventDispatcher:
                     )
                 )
             )
+            prepared_row_count = exact_batch.prepared_row_count
+            if exact_kind == "rdp_disconnect":
+                if exact_all_suppressed:
+                    if prepared_row_count != 0 or prepared_identifiers != ():
+                        raise EventContractError(
+                            "Exact warm-up RDP disconnect changed its zero-row shape"
+                        )
+                elif prepared_row_count <= 0:
+                    raise EventContractError("Exact visible RDP disconnect staged no durable row")
             observation_deltas = self._action_cohort_projection_observation_deltas(
                 record.projection
             )
@@ -7863,6 +7928,9 @@ class EventDispatcher:
                         record.projection_digest,
                         record.facts_digest,
                         record.timing_digest,
+                        exact_kind,
+                        exact_all_suppressed,
+                        prepared_row_count,
                     )
                 ).encode("utf-8")
             ).hexdigest()
@@ -7878,6 +7946,9 @@ class EventDispatcher:
                 observation_deltas=observation_deltas,
                 exact_publication_batch=exact_batch,
                 projection_outcome=outcome,
+                exact_kind=exact_kind,
+                exact_all_suppressed=exact_all_suppressed,
+                prepared_row_count=prepared_row_count,
             )
 
             with ExitStack() as claims:
@@ -7949,6 +8020,7 @@ class EventDispatcher:
                     occurrence_ids=receipt.occurrence_ids,
                     member_integrity_digest=member_integrity_digest,
                     identifiers=prepared_identifiers,
+                    owner_record=publication,
                 )
                 publication.expected_timing_receipt = timing_receipt
                 publication.expected_intent_receipt = intent_receipt
@@ -8570,9 +8642,11 @@ class EventDispatcher:
                     intent_request=intent_request,
                     intent_token=intent_token,
                     exact_projection=exact_projection,
+                    exact_projection_kind="",
                     exact_all_suppressed=False,
                     exact_publication_batch=None,
                     exact_prepared_identifiers=(),
+                    exact_prepared_row_count=0,
                     observation_deltas=observation_deltas,
                     observation_digest=observation_digest,
                     member_integrity_digest=member_digest,
@@ -10030,12 +10104,51 @@ class EventDispatcher:
         ):
             return False
         if record.kind == "action_cohort":
+            owner = record.owner_record
+            if (
+                type(owner) is not _PreparedActionCohortBatchRecord
+                or owner.exact_recovery is not record
+                or owner.exact_publication_batch is not record.batch
+                or owner.exact_prepared_identifiers != record.identifiers
+                or (
+                    owner.exact_projection_kind.startswith(("ssh_", "rdp_"))
+                    and (
+                        owner.exact_prepared_row_count != record.batch.commit_cursor
+                        or (
+                            owner.exact_all_suppressed
+                            and (owner.exact_prepared_row_count != 0 or record.identifiers != ())
+                        )
+                        or (not owner.exact_all_suppressed and owner.exact_prepared_row_count <= 0)
+                    )
+                )
+            ):
+                return False
             return bool(
                 type(receipt) is ActionCohortPublicationReceipt
                 and type(result) is ActionCohortPublicationResult
                 and result.receipt is receipt
                 and result.projections == (outcome,)
             )
+        owner = record.owner_record
+        if (
+            type(owner) is not _StateNeutralProjectionPublicationRecord
+            or owner.publication_receipt is not receipt
+            or owner.publication_result is not result
+            or owner.exact_publication_batch is not record.batch
+            or owner.projection_outcome is not outcome
+            or (
+                owner.exact_kind == "rdp_disconnect"
+                and (
+                    owner.prepared_row_count != record.batch.commit_cursor
+                    or (
+                        owner.exact_all_suppressed
+                        and (owner.prepared_row_count != 0 or record.identifiers != ())
+                    )
+                    or (not owner.exact_all_suppressed and owner.prepared_row_count <= 0)
+                )
+            )
+        ):
+            return False
         return bool(
             record.kind == "state_neutral"
             and type(receipt) is StateNeutralProjectionPublicationReceipt

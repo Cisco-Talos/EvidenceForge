@@ -39,6 +39,7 @@ from typing import Any, Protocol
 from evidenceforge.events.contexts import AuthContext, IdsAlertPlan, ProcessContext
 from evidenceforge.events.contracts import EventKind
 from evidenceforge.events.dispatcher import (
+    ActionCohortProjectionDisposition,
     ActionCohortProjectionOutcome,
     ActionCohortPublicationReceipt,
     ActionCohortPublicationResult,
@@ -103,11 +104,14 @@ class _RdpTerminalProjectionTimingProof:
 
     canonical_time: datetime
     source_frontiers: tuple[tuple[str, int, datetime], ...]
+    disposition: ActionCohortProjectionDisposition
 
     def __post_init__(self) -> None:
         canonical_time = ensure_utc(self.canonical_time)
-        if type(self.source_frontiers) is not tuple or not self.source_frontiers:
-            raise StateError("Exact RDP terminal timing proof requires source frontiers")
+        if type(self.source_frontiers) is not tuple:
+            raise StateError("Exact RDP terminal timing proof requires an exact frontier tuple")
+        if type(self.disposition) is not ActionCohortProjectionDisposition:
+            raise StateError("Exact RDP terminal timing proof requires its dispatcher disposition")
         normalized: list[tuple[str, int, datetime]] = []
         seen: set[tuple[str, int]] = set()
         for frontier in self.source_frontiers:
@@ -127,6 +131,13 @@ class _RdpTerminalProjectionTimingProof:
                 raise StateError("Exact RDP terminal timing proof repeats a source")
             seen.add(source_key)
             normalized.append((format_name, source_ordinal, ensure_utc(timestamp)))
+        if self.disposition is ActionCohortProjectionDisposition.EXACT_WARMUP_SUPPRESSED:
+            if normalized:
+                raise StateError(
+                    "Exact warm-up-suppressed RDP terminal proof cannot carry source frontiers"
+                )
+        elif not normalized:
+            raise StateError("Exact visible RDP terminal timing proof requires source frontiers")
         object.__setattr__(self, "canonical_time", canonical_time)
         object.__setattr__(
             self,
@@ -1564,6 +1575,7 @@ class RdpSessionActionBundle:
             timing_proof = _RdpTerminalProjectionTimingProof(
                 canonical_time=projection_facts.occurrence.timestamp,
                 source_frontiers=tuple(source_frontiers),
+                disposition=projection_facts.disposition,
             )
             if timing_proof.canonical_time != ensure_utc(event.timestamp):
                 raise StateError("Exact RDP terminal projection changed its canonical time")
