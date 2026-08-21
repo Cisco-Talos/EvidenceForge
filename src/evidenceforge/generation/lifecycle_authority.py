@@ -9248,6 +9248,38 @@ class GeneratorLifecycleAuthority:
         )
         return members
 
+    def live_session_member_process_census(
+        self,
+        hostname: str,
+        logon_id: str,
+        *,
+        limit: int = _DEFAULT_DUE_PAGE,
+    ) -> tuple[ProcessLifecycleSnapshot, ...]:
+        """Return one bounded complete indexed census of exact live session members."""
+
+        if type(limit) is not int or limit <= 0 or limit > _DEFAULT_DUE_PAGE:
+            raise ValueError(
+                f"Lifecycle session-member census limit must be in [1, {_DEFAULT_DUE_PAGE}]"
+            )
+        session = self.ensure_session(hostname, logon_id)
+        members: list[ProcessLifecycleSnapshot] = []
+        cursor: int | None = None
+        while True:
+            remaining = limit - len(members)
+            if remaining <= 0:
+                raise StateError(
+                    "Lifecycle session-member census exceeds its bounded page capacity: "
+                    f"session={session.object_id} limit={limit}"
+                )
+            page, cursor = self._registry.live_session_member_process_page(
+                session.object_id,
+                after_handle=cursor,
+                limit=min(remaining, _DEFAULT_DUE_PAGE),
+            )
+            members.extend(page)
+            if cursor is None:
+                return tuple(members)
+
     def live_child_process_page_for_object(
         self,
         process_object_id: str,
@@ -9261,6 +9293,87 @@ class GeneratorLifecycleAuthority:
             limit=limit,
         )
         return children
+
+    def live_process_descendant_postorder(
+        self,
+        process_object_id: str,
+        *,
+        limit: int = _DEFAULT_DUE_PAGE,
+    ) -> tuple[ProcessLifecycleSnapshot, ...]:
+        """Return one bounded exact children-first process-descendant census."""
+
+        if type(process_object_id) is not str or not process_object_id:
+            raise ValueError("Lifecycle descendant census requires a process object ID")
+        if type(limit) is not int or limit <= 0 or limit > _DEFAULT_DUE_PAGE:
+            raise ValueError(
+                f"Lifecycle descendant census limit must be in [1, {_DEFAULT_DUE_PAGE}]"
+            )
+
+        snapshots: dict[str, ProcessLifecycleSnapshot] = {}
+        visiting: set[str] = set()
+        completed: set[str] = set()
+        postorder: list[ProcessLifecycleSnapshot] = []
+        stack: list[tuple[str, bool]] = [(process_object_id, False)]
+        while stack:
+            object_id, expanded = stack.pop()
+            if expanded:
+                visiting.discard(object_id)
+                completed.add(object_id)
+                snapshot = snapshots.get(object_id)
+                if snapshot is not None:
+                    postorder.append(snapshot)
+                continue
+            if object_id in completed:
+                continue
+            if object_id in visiting:
+                raise StateError(
+                    f"Lifecycle descendant ancestry cycle detected at process {object_id}"
+                )
+            visiting.add(object_id)
+            stack.append((object_id, True))
+
+            children: list[ProcessLifecycleSnapshot] = []
+            cursor: int | None = None
+            while True:
+                remaining = limit - len(snapshots) - len(children)
+                page, cursor = self._registry.live_child_process_page(
+                    object_id,
+                    after_handle=cursor,
+                    limit=max(1, min(remaining, _DEFAULT_DUE_PAGE)),
+                )
+                if remaining <= 0 and page:
+                    raise StateError(
+                        "Lifecycle descendant census exceeds its bounded page capacity: "
+                        f"root={process_object_id} limit={limit}"
+                    )
+                children.extend(page)
+                if cursor is None:
+                    break
+            for child in children:
+                child_id = child.identity.object_id
+                retained = snapshots.get(child_id)
+                if retained is not None and retained != child:
+                    raise StateError(
+                        f"Lifecycle descendant process {child_id} changed during census"
+                    )
+                if child_id in completed or child_id in visiting or retained is not None:
+                    raise StateError(
+                        f"Lifecycle descendant process {child_id} has ambiguous ancestry"
+                    )
+                snapshots[child_id] = child
+            for child in reversed(children):
+                stack.append((child.identity.object_id, False))
+        return tuple(postorder)
+
+    def process_latest_closed_child_at_for_object(
+        self,
+        process_object_id: str,
+    ) -> datetime | None:
+        """Return one process's latest retained child close without requiring a drain."""
+
+        if type(process_object_id) is not str or not process_object_id:
+            raise ValueError("Lifecycle latest child close requires a process object ID")
+        return self._registry.process_latest_closed_child_at(process_object_id)
 
     def reconcile_prepared_process_close(
         self,

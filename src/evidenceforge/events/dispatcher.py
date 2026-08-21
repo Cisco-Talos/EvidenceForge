@@ -7178,9 +7178,9 @@ class EventDispatcher:
     ) -> str:
         """Authenticate one narrow SSH terminal State/event cohort.
 
-        SSH terminal exact mode is deliberately limited to one client-process
-        termination or one target SSH-session logout.  It cannot be used as a
-        generic exact action-cohort escape hatch.
+        SSH terminal exact mode is deliberately limited to one source, receiver,
+        or frozen receiver-descendant process termination, or one target-session
+        logout.  It cannot be used as a generic exact action-cohort escape hatch.
         """
 
         from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
@@ -7221,13 +7221,35 @@ class EventDispatcher:
         if event.event_type is EventKind.PROCESS_TERMINATE:
             source_terminal = record.root_action_id.endswith(":source-terminate")
             receiver_terminal = record.root_action_id.endswith(":receiver-terminate")
+            descendant_marker = ":receiver-descendant:"
+            descendant_owner, descendant_separator, descendant_object_id = (
+                record.root_action_id.rpartition(descendant_marker)
+            )
+            receiver_descendant_terminal = bool(
+                descendant_separator
+                and descendant_owner.startswith("ssh-close:")
+                and descendant_object_id
+                and ":" not in descendant_object_id
+                and len(descendant_object_id) <= 4_096
+            )
             if (
-                not (source_terminal or receiver_terminal)
+                sum(
+                    (
+                        source_terminal,
+                        receiver_terminal,
+                        receiver_descendant_terminal,
+                    )
+                )
+                != 1
                 or len(plan.process_terminations) != 1
                 or plan.session_terminalizations
                 or type(identity_plan.subject) is not ProcessIdentity
                 or identity_plan.actor is not None
                 or identity_plan.target is not None
+                or (
+                    identity_plan.session is not None
+                    and type(identity_plan.session) is not SessionIdentity
+                )
                 or len(plan.session_activity_patches) > 1
                 or type(event.src_host) is not HostContext
                 or event.dst_host is not None
@@ -7235,7 +7257,7 @@ class EventDispatcher:
                 or type(event.auth) is not AuthContext
             ):
                 raise EventContractError(
-                    "Exact SSH source termination changed its singleton State/event shape"
+                    "Exact SSH process termination changed its singleton State/event shape"
                 )
             identity = identity_plan.subject
             termination = plan.process_terminations[0]
@@ -7250,6 +7272,7 @@ class EventDispatcher:
             if (
                 termination.identity != identity
                 or termination.end_time != event.timestamp
+                or (receiver_descendant_terminal and descendant_object_id != identity.object_id)
                 or ((identity_plan.session is None) is not (session_patch_identity is None))
                 or (
                     identity_plan.session is not None
@@ -7265,6 +7288,7 @@ class EventDispatcher:
                 )
                 or (receiver_terminal and executable != "sshd")
                 or (receiver_terminal and identity.principal.casefold() != "root")
+                or (receiver_descendant_terminal and event.src_host.os_category != "linux")
                 or event.src_host.hostname != identity.hostname
                 or event.process.pid != identity.pid
                 or event.process.parent_pid not in {0, identity.parent_pid}
@@ -7279,7 +7303,7 @@ class EventDispatcher:
                 or lifecycle.parent_group_id != (identity.parent_lifecycle_group_id or None)
             ):
                 raise EventContractError(
-                    "Exact SSH source termination disagrees with its live process identity"
+                    "Exact SSH process termination disagrees with its live process identity"
                 )
             return "ssh_process_terminate"
 

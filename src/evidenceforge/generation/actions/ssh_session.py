@@ -35,7 +35,7 @@ import random
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from threading import Lock
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from evidenceforge.events.application import (
     ApplicationChannelIdentity,
@@ -114,9 +114,35 @@ from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
+if TYPE_CHECKING:
+    from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
+
 logger = logging.getLogger(__name__)
 
 _SSH_TERMINAL_TAIL_RESERVATION = timedelta(milliseconds=3_500)
+_SSH_RECEIVER_DESCENDANT_PHASE_PREFIX = "receiver-descendant:"
+_SSH_RECEIVER_DESCENDANT_CAPACITY = 4_096
+
+
+def _ssh_receiver_descendant_phase_object_id(phase: str) -> str | None:
+    """Return the bounded per-object suffix for one descendant phase."""
+
+    if type(phase) is not str or not phase.startswith(_SSH_RECEIVER_DESCENDANT_PHASE_PREFIX):
+        return None
+    object_id = phase.removeprefix(_SSH_RECEIVER_DESCENDANT_PHASE_PREFIX)
+    if not object_id or ":" in object_id or len(object_id) > 4_096:
+        return None
+    return object_id
+
+
+def _is_ssh_process_termination_phase(phase: str) -> bool:
+    """Return whether a close-journal phase owns one exact process close."""
+
+    if type(phase) is not str:
+        return False
+    return phase in {"source-terminate", "receiver-terminate"} or bool(
+        _ssh_receiver_descendant_phase_object_id(phase)
+    )
 
 
 def _linux_uid_for_user(username: str) -> int:
@@ -766,7 +792,7 @@ class _PreparedSshClosePlan:
 
 
 class _SshCloseProjectionProgress:
-    """Exact receipt-backed progress for terminal source-native close projections."""
+    """Exact receipt-backed progress for every source-native SSH close projection."""
 
     __slots__ = ("_bindings", "_completed", "_lock", "_recoveries")
 
@@ -789,7 +815,9 @@ class _SshCloseProjectionProgress:
 
     @classmethod
     def _validate_phase(cls, phase: str) -> None:
-        if phase not in cls._PHASES:
+        if type(phase) is not str or (
+            phase not in cls._PHASES and not _is_ssh_process_termination_phase(phase)
+        ):
             raise StateError(f"Exact SSH close projection phase is unsupported: {phase!r}")
 
     @staticmethod
@@ -833,7 +861,7 @@ class _SshCloseProjectionProgress:
             or result.projections[0].occurrence_id != occurrence_id
         ):
             return False
-        if phase in {"source-terminate", "receiver-terminate"}:
+        if _is_ssh_process_termination_phase(phase):
             return bool(
                 type(expected_identity) is ProcessIdentity
                 and result.state.terminated_processes == (expected_identity,)
@@ -1012,6 +1040,90 @@ class _SshCloseProjectionProgress:
             self._bindings.pop(phase, None)
             self._completed.add(phase)
         return True
+
+
+@dataclass(frozen=True, slots=True)
+class _SshReceiverDescendantTermination:
+    """One frozen target-process close owned by an exact SSH continuation."""
+
+    identity: ProcessIdentity
+    terminate_at: datetime
+    concurrency_group_id: str
+    session_identity: SessionIdentity | None
+
+    def __post_init__(self) -> None:
+        """Normalize time and reject mutable or anonymous process facts."""
+
+        if type(self.identity) is not ProcessIdentity:
+            raise TypeError("Exact SSH descendant close requires a ProcessIdentity")
+        if (
+            _ssh_receiver_descendant_phase_object_id(
+                f"{_SSH_RECEIVER_DESCENDANT_PHASE_PREFIX}{self.identity.object_id}"
+            )
+            != self.identity.object_id
+        ):
+            raise ValueError("Exact SSH descendant process object ID is malformed or oversized")
+        if type(self.terminate_at) is not datetime:
+            raise TypeError("Exact SSH descendant close requires a datetime")
+        if type(self.concurrency_group_id) is not str or len(self.concurrency_group_id) > 4_096:
+            raise ValueError("Exact SSH descendant concurrency group is malformed or oversized")
+        if self.session_identity is not None and type(self.session_identity) is not SessionIdentity:
+            raise TypeError("Exact SSH descendant session identity changed type")
+        if self.session_identity is not None and (
+            self.session_identity.hostname != self.identity.hostname
+            or self.session_identity.logon_id != self.identity.logon_id
+        ):
+            raise ValueError("Exact SSH descendant crossed its owning session identity")
+        object.__setattr__(self, "terminate_at", ensure_utc(self.terminate_at))
+
+    @property
+    def phase(self) -> str:
+        """Return the exact per-process close-journal phase."""
+
+        return f"{_SSH_RECEIVER_DESCENDANT_PHASE_PREFIX}{self.identity.object_id}"
+
+
+class _SshReceiverDescendantTerminationBinding:
+    """One-shot frozen children-first target-process schedule."""
+
+    __slots__ = ("_entries", "_lock")
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._entries: tuple[_SshReceiverDescendantTermination, ...] | None = None
+
+    def bind(
+        self,
+        entries: tuple[_SshReceiverDescendantTermination, ...],
+    ) -> tuple[_SshReceiverDescendantTermination, ...]:
+        """Install or authenticate the sole immutable descendant schedule."""
+
+        if type(entries) is not tuple or any(
+            type(entry) is not _SshReceiverDescendantTermination for entry in entries
+        ):
+            raise TypeError("Exact SSH descendant schedule requires an immutable typed tuple")
+        if len(entries) > _SSH_RECEIVER_DESCENDANT_CAPACITY:
+            raise StateError("Exact SSH descendant schedule exceeds its bounded capacity")
+        object_ids = tuple(entry.identity.object_id for entry in entries)
+        if len(object_ids) != len(set(object_ids)):
+            raise StateError("Exact SSH descendant schedule repeats a process identity")
+        if any(
+            prior.terminate_at >= following.terminate_at
+            for prior, following in zip(entries, entries[1:], strict=False)
+        ):
+            raise StateError("Exact SSH descendant schedule is not strictly children-first")
+        with self._lock:
+            if self._entries is None:
+                self._entries = entries
+            elif self._entries != entries:
+                raise StateError("Exact SSH descendant schedule changed after first close attempt")
+            return self._entries
+
+    def retained(self) -> tuple[_SshReceiverDescendantTermination, ...] | None:
+        """Return the already-frozen schedule, if finalization has planned it."""
+
+        with self._lock:
+            return self._entries
 
 
 class _SshCloseContinuationBinding:
@@ -1378,6 +1490,11 @@ class _PreparedSshCloseContinuation:
         compare=False,
         repr=False,
     )
+    _receiver_descendants: _SshReceiverDescendantTerminationBinding = field(
+        default_factory=_SshReceiverDescendantTerminationBinding,
+        compare=False,
+        repr=False,
+    )
     _application_retirement: _SshApplicationRetirementBinding = field(
         default_factory=_SshApplicationRetirementBinding,
         compare=False,
@@ -1522,6 +1639,21 @@ class _PreparedSshCloseContinuation:
 
         return self._progress.recover(phase, dispatcher)
 
+    def receiver_descendant_terminations(
+        self,
+    ) -> tuple[_SshReceiverDescendantTermination, ...] | None:
+        """Return the retained target-process close schedule, when planned."""
+
+        return self._receiver_descendants.retained()
+
+    def bind_receiver_descendant_terminations(
+        self,
+        entries: tuple[_SshReceiverDescendantTermination, ...],
+    ) -> tuple[_SshReceiverDescendantTermination, ...]:
+        """Freeze the sole children-first target-process close schedule."""
+
+        return self._receiver_descendants.bind(entries)
+
 
 @dataclass(frozen=True, slots=True)
 class _SshCloseContinuation:
@@ -1626,6 +1758,21 @@ class _SshCloseContinuation:
         """Resume one terminal sink projection from retained facts and receipt."""
 
         return self.prepared.recover_projection(phase, dispatcher)
+
+    def receiver_descendant_terminations(
+        self,
+    ) -> tuple[_SshReceiverDescendantTermination, ...] | None:
+        """Return the exact retained target-process schedule, when planned."""
+
+        return self.prepared.receiver_descendant_terminations()
+
+    def bind_receiver_descendant_terminations(
+        self,
+        entries: tuple[_SshReceiverDescendantTermination, ...],
+    ) -> tuple[_SshReceiverDescendantTermination, ...]:
+        """Freeze one children-first target-process schedule on this journal owner."""
+
+        return self.prepared.bind_receiver_descendant_terminations(entries)
 
     def materialize_state(self) -> _SshTransportState:
         """Build fresh mutable compatibility state from immutable committed facts."""
@@ -1806,6 +1953,7 @@ class SshSessionExecutor(Protocol):
     identity_directory: IdentityDirectory | None
     timing_runtime: TimingRuntime
     _ssh_channel_manager: SshApplicationChannelManager
+    _lifecycle_authority: GeneratorLifecycleAuthority
 
     def _build_host_context(self, system: System) -> HostContext:
         """Build canonical host context for a scenario system."""
@@ -3180,7 +3328,7 @@ class SshSessionActionBundle:
                 or result.projections[0].error is not None
             ):
                 return False
-            if phase in {"source-terminate", "receiver-terminate"}:
+            if _is_ssh_process_termination_phase(phase):
                 return bool(
                     type(expected_identity) is ProcessIdentity
                     and result.state.terminated_processes == (expected_identity,)
@@ -3214,7 +3362,7 @@ class SshSessionActionBundle:
 
         if (
             type(continuation) is not _SshCloseContinuation
-            or phase not in {"source-terminate", "receiver-terminate", "logout"}
+            or not (_is_ssh_process_termination_phase(phase) or phase == "logout")
             or type(state_plan) is not ActionCohortMaterializationPlan
             or type(event) is not OccurrenceBuilder
             or type(expected_identity) not in {ProcessIdentity, SessionIdentity}
@@ -3363,7 +3511,7 @@ class SshSessionActionBundle:
                         f"{phase} receipt attachment",
                         attachment_error,
                     )
-                if phase in {"source-terminate", "receiver-terminate"}:
+                if _is_ssh_process_termination_phase(phase):
                     try:
                         self.executor._commit_exact_ssh_source_process_termination(event)
                     except BaseException as cache_error:
@@ -3383,7 +3531,7 @@ class SshSessionActionBundle:
                     )
             raise
 
-        if phase in {"source-terminate", "receiver-terminate"}:
+        if _is_ssh_process_termination_phase(phase):
             self.executor._commit_exact_ssh_source_process_termination(event)
         continuation.mark_projection_complete(phase)
         return result
@@ -3505,6 +3653,74 @@ class SshSessionActionBundle:
         self._publish_exact_ssh_terminal_cohort(
             continuation=continuation,
             phase="receiver-terminate",
+            state_plan=state_plan,
+            event=event,
+            expected_identity=identity,
+        )
+
+    def _publish_exact_receiver_descendant_termination(
+        self,
+        *,
+        continuation: _SshCloseContinuation,
+        planned: _SshReceiverDescendantTermination,
+    ) -> None:
+        """Commit one frozen SSH target-process close and exact eCAR row atomically."""
+
+        plan = continuation.plan
+        identity = planned.identity
+        session_identity = planned.session_identity
+        if (
+            identity.hostname != plan.target_system.hostname
+            or identity.pid == plan.auth_state.sshd_pid
+            or planned.terminate_at >= plan.receiver_terminate_time
+        ):
+            raise StateError("Exact SSH descendant close crossed its receiver owner")
+        state_builder = self.executor.state_manager.begin_action_cohort_materialization()
+        if session_identity is not None:
+            state_builder.patch_session_activity(session_identity, planned.terminate_at)
+        state_builder.terminate_process(identity, end_time=planned.terminate_at)
+        state_plan = state_builder.seal()
+        exact_termination = state_plan.process_terminations[0]
+        event = OccurrenceBuilder(
+            timestamp=exact_termination.end_time,
+            event_type=EventKind.PROCESS_TERMINATE,
+            src_host=plan.target_host.materialize(),
+            auth=AuthContext(
+                username=identity.principal,
+                user_sid=self.executor._get_sid(identity.principal),
+                logon_id=identity.logon_id,
+                session_id=session_identity.session_id if session_identity is not None else 0,
+                logon_type=(
+                    10
+                    if session_identity is not None and session_identity.session_kind == "ssh"
+                    else 2
+                ),
+            ),
+            process=ProcessContext(
+                pid=identity.pid,
+                parent_pid=identity.parent_pid,
+                image=identity.image,
+                command_line="",
+                username=identity.principal,
+                logon_id=identity.logon_id,
+                start_time=identity.started_at,
+                concurrency_group_id=planned.concurrency_group_id,
+            ),
+            storyline_origin=plan.source_tag.startswith("storyline"),
+            identity_plan=EventIdentityPlan(
+                subject=identity,
+                session=session_identity,
+            ),
+            lifecycle=ActionLifecycleContext(
+                group_id=identity.lifecycle_group_id,
+                canonical_start=identity.started_at,
+                phase="closure",
+                parent_group_id=identity.parent_lifecycle_group_id or None,
+            ),
+        )
+        self._publish_exact_ssh_terminal_cohort(
+            continuation=continuation,
+            phase=planned.phase,
             state_plan=state_plan,
             event=event,
             expected_identity=identity,
@@ -4333,8 +4549,15 @@ class SshSessionActionBundle:
                 close_time,
                 continuation=continuation,
             )
-            self._terminate_receiver_session_children(state, auth_state, close_time)
-            self._terminate_receiver_session_shell(state, close_time)
+            if continuation is None:
+                self._terminate_receiver_session_children(state, auth_state, close_time)
+                self._terminate_receiver_session_shell(state, close_time)
+            else:
+                self._terminate_exact_receiver_descendants(
+                    state,
+                    auth_state,
+                    continuation,
+                )
             # A real dispatcher applies the logoff to StateManager immediately.
             # Capture and schedule responder termination before that logoff
             # consumes the live session/process graph.
@@ -4557,6 +4780,312 @@ class SshSessionActionBundle:
             closed_at=close_time,
             reason="bundle_close",
         )
+
+    def _plan_exact_receiver_descendant_terminations(
+        self,
+        state: _SshTransportState,
+        auth_state: _SshLinuxAuthState,
+        continuation: _SshCloseContinuation,
+    ) -> tuple[_SshReceiverDescendantTermination, ...]:
+        """Freeze all SSH target processes in structural children-first order."""
+
+        plan = continuation.plan
+        authority = self.executor._lifecycle_authority
+        expected_session_identity = plan.session_identity()
+        receiver = self.executor.state_manager.get_process(
+            plan.target_system.hostname,
+            auth_state.sshd_pid,
+        )
+        receiver_identity = self.executor.state_manager.get_process_identity(
+            plan.target_system.hostname,
+            auth_state.sshd_pid,
+        )
+        receiver_snapshot = (
+            authority.registry.get_process(receiver_identity.object_id)
+            if receiver_identity is not None
+            else None
+        )
+        if (
+            auth_state != plan.auth_state
+            or ensure_utc(state.close_time) != plan.close_time
+            or receiver is None
+            or receiver_identity is None
+            or receiver_snapshot is None
+            or receiver_snapshot.closed_at is not None
+            or receiver_snapshot.close_barrier is not None
+            or receiver_snapshot.closure_ticket is not None
+            or receiver.ecar_object_id != receiver_identity.object_id
+            or receiver_identity.hostname != plan.target_system.hostname
+            or receiver_identity.pid != auth_state.sshd_pid
+            or receiver_identity.image != "/usr/sbin/sshd"
+            or receiver_identity.principal.casefold() != "root"
+            or receiver_identity.started_at != plan.receiver_started_at
+            or receiver_identity.logon_id != plan.logon_id
+            or receiver.logon_id != plan.logon_id
+            or receiver.token_logon_id != plan.logon_id
+            or receiver.auth_session_id != plan.session_id
+            or receiver.auth_logon_type != 10
+            or receiver_snapshot.identity.object_id != receiver_identity.object_id
+            or receiver_snapshot.identity.hostname != receiver_identity.hostname
+            or receiver_snapshot.identity.pid != receiver_identity.pid
+            or receiver_snapshot.identity.image != receiver_identity.image
+            or receiver_snapshot.identity.started_at != receiver_identity.started_at
+            or receiver_snapshot.token.logon_id != plan.logon_id
+            or receiver_snapshot.token.session_id != plan.session_id
+            or receiver_snapshot.token.logon_type != 10
+            or receiver_snapshot.membership.owner_kind != "session"
+            or receiver_snapshot.membership.owner_object_id != plan.session_object_id
+            or receiver_snapshot.membership.session_object_id != plan.session_object_id
+            or self.executor.state_manager.get_session_identity(plan.logon_id)
+            != expected_session_identity
+        ):
+            raise StateError("Exact SSH descendant planning lost its live receiver identity")
+
+        snapshots = {
+            snapshot.identity.object_id: snapshot
+            for snapshot in authority.live_process_descendant_postorder(
+                receiver_identity.object_id,
+                limit=_SSH_RECEIVER_DESCENDANT_CAPACITY,
+            )
+        }
+        members = authority.live_session_member_process_census(
+            plan.target_system.hostname,
+            plan.logon_id,
+            limit=_SSH_RECEIVER_DESCENDANT_CAPACITY,
+        )
+        for member in members:
+            object_id = member.identity.object_id
+            if object_id == receiver_identity.object_id:
+                continue
+            if object_id in snapshots:
+                if snapshots[object_id] != member:
+                    raise StateError(
+                        f"Exact SSH lifecycle process {object_id} changed during census"
+                    )
+                continue
+            snapshots[object_id] = member
+            for descendant in authority.live_process_descendant_postorder(
+                object_id,
+                limit=_SSH_RECEIVER_DESCENDANT_CAPACITY,
+            ):
+                descendant_id = descendant.identity.object_id
+                retained = snapshots.get(descendant_id)
+                if retained is not None and retained != descendant:
+                    raise StateError(
+                        f"Exact SSH lifecycle process {descendant_id} changed during census"
+                    )
+                snapshots.setdefault(descendant_id, descendant)
+            if len(snapshots) > _SSH_RECEIVER_DESCENDANT_CAPACITY:
+                raise StateError("Exact SSH descendant schedule exceeds its bounded capacity")
+
+        for snapshot in snapshots.values():
+            if (
+                snapshot.token.logon_id != plan.logon_id
+                or snapshot.membership.owner_kind != "session"
+                or snapshot.membership.owner_object_id != plan.session_object_id
+                or snapshot.membership.session_object_id != plan.session_object_id
+            ):
+                raise StateError(
+                    "Exact SSH lifecycle target crossed its session owner: "
+                    f"process={snapshot.identity.object_id}"
+                )
+
+        def structural_depth(object_id: str) -> int:
+            depth = 0
+            seen: set[str] = set()
+            current = snapshots.get(object_id)
+            while current is not None:
+                current_id = current.identity.object_id
+                if current_id in seen:
+                    raise StateError(
+                        f"Exact SSH descendant ancestry cycle detected at process {current_id}"
+                    )
+                seen.add(current_id)
+                parent = snapshots.get(current.identity.parent_object_id)
+                if parent is None:
+                    break
+                depth += 1
+                current = parent
+            return depth
+
+        ordered = sorted(
+            snapshots.values(),
+            key=lambda snapshot: (
+                structural_depth(snapshot.identity.object_id),
+                snapshot.identity.started_at,
+                snapshot.identity.pid,
+            ),
+            reverse=True,
+        )
+        receiver_terminate_at = plan.receiver_terminate_time
+        retained_receiver_child_close = authority.process_latest_closed_child_at_for_object(
+            receiver_identity.object_id
+        )
+        if (
+            retained_receiver_child_close is not None
+            and retained_receiver_child_close >= receiver_terminate_at
+        ):
+            raise StateError("Exact SSH retained child close does not precede its receiver")
+        transport_close_at = plan.close_time
+        available = receiver_terminate_at - transport_close_at
+        if ordered and available <= timedelta(0):
+            raise StateError("Exact SSH receiver has no structural descendant close interval")
+        step = available / max(2, len(ordered) + 1)
+        prior = transport_close_at
+        planned: list[_SshReceiverDescendantTermination] = []
+        for ordinal, snapshot in enumerate(ordered, start=1):
+            if snapshot.close_barrier is not None or snapshot.closure_ticket is not None:
+                raise StateError(
+                    "Exact SSH descendant entered finalization with a prior close ticket: "
+                    f"process={snapshot.identity.object_id}"
+                )
+            running = self.executor.state_manager.get_process(
+                snapshot.identity.hostname,
+                snapshot.identity.pid,
+            )
+            identity = self.executor.state_manager.get_process_identity(
+                snapshot.identity.hostname,
+                snapshot.identity.pid,
+            )
+            if (
+                running is None
+                or identity is None
+                or identity.object_id != snapshot.identity.object_id
+                or identity.hostname != snapshot.identity.hostname
+                or identity.pid != snapshot.identity.pid
+                or identity.image != snapshot.identity.image
+                or identity.started_at != snapshot.identity.started_at
+                or identity.principal != snapshot.token.principal
+                or identity.logon_id != plan.logon_id
+                or running.logon_id != plan.logon_id
+                or running.token_logon_id != snapshot.token.logon_id
+                or running.auth_session_id != snapshot.token.session_id
+                or running.auth_logon_type != snapshot.token.logon_type
+            ):
+                raise StateError(
+                    "Exact SSH lifecycle descendant disagrees with live State identity: "
+                    f"process={snapshot.identity.object_id}"
+                )
+            owning_session = self.executor.state_manager.get_session_identity(running.logon_id)
+            if (
+                owning_session != expected_session_identity
+                or self.executor.state_manager.get_session(running.logon_id) is None
+            ):
+                raise StateError(
+                    "Exact SSH State target crossed its session owner: "
+                    f"process={snapshot.identity.object_id}"
+                )
+            retained_child_close = authority.process_latest_closed_child_at_for_object(
+                snapshot.identity.object_id
+            )
+            minimum = max(
+                transport_close_at,
+                identity.started_at,
+                ensure_utc(running.last_activity_time or identity.started_at),
+                ensure_utc(snapshot.latest_dependent_at or identity.started_at)
+                + timedelta(microseconds=1),
+                ensure_utc(snapshot.latest_hold_until or identity.started_at)
+                + timedelta(microseconds=1),
+                ensure_utc(retained_child_close or identity.started_at) + timedelta(microseconds=1),
+                prior,
+            )
+            terminate_at = max(transport_close_at + step * ordinal, minimum)
+            if terminate_at >= receiver_terminate_at:
+                raise StateError(
+                    "Exact SSH descendant cannot terminate before its receiver parent: "
+                    f"process={identity.object_id} "
+                    f"process_close={terminate_at.isoformat()} "
+                    f"receiver_close={receiver_terminate_at.isoformat()}"
+                )
+            planned.append(
+                _SshReceiverDescendantTermination(
+                    identity=identity,
+                    terminate_at=terminate_at,
+                    concurrency_group_id=running.concurrency_group_id,
+                    session_identity=owning_session,
+                )
+            )
+            prior = terminate_at + timedelta(microseconds=1)
+        return continuation.bind_receiver_descendant_terminations(tuple(planned))
+
+    def _terminate_exact_receiver_descendants(
+        self,
+        state: _SshTransportState,
+        auth_state: _SshLinuxAuthState,
+        continuation: _SshCloseContinuation,
+    ) -> None:
+        """Publish the frozen SSH target-process schedule before receiver close."""
+
+        planned = continuation.receiver_descendant_terminations()
+        if planned is None:
+            planned = self._plan_exact_receiver_descendant_terminations(
+                state,
+                auth_state,
+                continuation,
+            )
+        for entry in planned:
+            if continuation.recover_projection(entry.phase, self.executor.dispatcher):
+                continue
+            running = self.executor.state_manager.get_process(
+                entry.identity.hostname,
+                entry.identity.pid,
+            )
+            identity = self.executor.state_manager.get_process_identity(
+                entry.identity.hostname,
+                entry.identity.pid,
+            )
+            if (
+                running is None
+                or identity is None
+                or identity != entry.identity
+                or running.ecar_object_id != entry.identity.object_id
+            ):
+                raise StateError(
+                    "Exact SSH descendant lost live State without a retained receipt: "
+                    f"process={entry.identity.object_id}"
+                )
+            try:
+                self._publish_exact_receiver_descendant_termination(
+                    continuation=continuation,
+                    planned=entry,
+                )
+            except BaseException as error:
+                continuation.retain_projection_failure(entry.phase, error)
+                raise
+
+        receiver_identity = self.executor.state_manager.get_process_identity(
+            continuation.plan.target_system.hostname,
+            auth_state.sshd_pid,
+        )
+        if receiver_identity is None:
+            raise StateError("Exact SSH descendant census lost its receiver identity")
+        live_children = self.executor._lifecycle_authority.live_child_process_page_for_object(
+            receiver_identity.object_id,
+            limit=1,
+        )
+        live_members = self.executor._lifecycle_authority.live_session_member_process_census(
+            continuation.plan.target_system.hostname,
+            continuation.plan.logon_id,
+            limit=_SSH_RECEIVER_DESCENDANT_CAPACITY,
+        )
+        residual_members = tuple(
+            member
+            for member in live_members
+            if member.identity.object_id != receiver_identity.object_id
+        )
+        if live_children or residual_members:
+            residual = tuple(
+                sorted(
+                    {
+                        *(child.identity.object_id for child in live_children),
+                        *(member.identity.object_id for member in residual_members),
+                    }
+                )
+            )
+            raise StateError(
+                "Exact SSH target-process terminal census retained live descendants: "
+                f"receiver={receiver_identity.object_id} residual={residual!r}"
+            )
 
     def _terminate_receiver_session_children(
         self,
