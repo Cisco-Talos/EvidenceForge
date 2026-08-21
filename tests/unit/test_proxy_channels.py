@@ -654,6 +654,39 @@ def test_prepared_replacement_and_overflow_abort_preserve_existing_tunnel() -> N
     assert manager.get_tunnel(replacement_result.tunnel.channel_id) == replacement_result.tunnel
 
 
+def test_replacement_open_during_prior_setup_closes_at_completed_setup_frontier() -> None:
+    """Parallel proxy setup replaces only after the prior setup's last activity."""
+
+    manager = _manager()
+    prior = _open(
+        manager,
+        setup_offset=timedelta(seconds=1),
+        setup_duration=timedelta(seconds=2),
+    )
+    assert prior is not None
+    prior_snapshot = manager.channel_snapshot(prior.tunnel.channel_id)
+    assert prior_snapshot is not None
+    assert prior_snapshot.last_activity_at == _START + timedelta(seconds=3)
+
+    replacement = _prepare_open(
+        manager,
+        suffix="2",
+        opened_at=_START + timedelta(seconds=2, milliseconds=500),
+    )
+    assert replacement is not None
+    with manager.prepared_admission(replacement) as transaction:
+        committed = transaction.commit_no_fail()
+
+    replacement_result = committed.result
+    assert isinstance(replacement_result, ExplicitProxyTunnelOpen)
+    closed_prior = manager.channel_snapshot(prior.tunnel.channel_id)
+    assert closed_prior is not None
+    assert closed_prior.closed_at == prior_snapshot.last_activity_at
+    assert closed_prior.close_reason == "replaced"
+    assert manager.get_tunnel(prior.tunnel.channel_id) is None
+    assert manager.get_tunnel(replacement_result.tunnel.channel_id) == replacement_result.tunnel
+
+
 def test_setup_only_tunnel_summarizes_setup_without_open_reuse_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

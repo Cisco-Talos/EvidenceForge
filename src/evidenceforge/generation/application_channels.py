@@ -3749,6 +3749,10 @@ class ApplicationChannelRegistry:
                         )
                     if canonical_close < replacement_snapshot.identity.opened_at:
                         raise StateError("Application channel cannot close before it opens")
+                    if canonical_close < replacement_snapshot.last_activity_at:
+                        raise StateError(
+                            "Application channel cannot close before its last activity"
+                        )
                     if canonical_close > self._effective_deadline(replacement_snapshot):
                         raise StateError(
                             "Application channel cannot close after its idle, hard, or "

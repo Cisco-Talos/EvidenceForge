@@ -1190,6 +1190,56 @@ def test_prepared_open_cancel_restores_exact_structural_census() -> None:
     assert registry.census() == before
 
 
+def test_prepared_replacement_rejects_close_before_last_activity_without_mutation() -> None:
+    """An impossible replacement fails before reserving or changing either channel."""
+
+    registry = _registry()
+    prior_identity = _identity()
+    prior_operation = _operation("prior-operation", ordinal=0)
+    prior = registry.open_channel_with_completed_operation(prior_identity, prior_operation)
+    before = registry.census()
+    shard = registry._owner_shard(
+        registry.owner_partition_id(prior.identity.owner_id), create=False
+    )
+    assert shard is not None
+    before_mutation_version = shard.mutation_version
+    replacement_open = _START + timedelta(seconds=90)
+    replacement_identity = _identity(
+        "channel-2",
+        transport_id="transport-2",
+        opened_at=replacement_open,
+    )
+    replacement_operation = _operation(
+        "replacement-operation",
+        ordinal=0,
+        channel_id="channel-2",
+        started_at=replacement_open + timedelta(seconds=1),
+        ended_at=replacement_open + timedelta(seconds=2),
+    )
+
+    with pytest.raises(StateError, match="cannot close before its last activity"):
+        registry.prepare_open_channel_with_completed_operation(
+            replacement_identity,
+            replacement_operation,
+            replacement_channel_id=prior.channel_id,
+            replacement_closed_at=replacement_open,
+            replacement_reason="replaced",
+        )
+
+    assert registry.get(prior.channel_id) == prior
+    assert registry.get(replacement_identity.channel_id) is None
+    after = registry.census()
+    assert shard.mutation_version == before_mutation_version
+    assert after.retained_channels == before.retained_channels
+    assert after.open_channels == before.open_channels
+    assert after.used_operation_ids == before.used_operation_ids
+    assert after.prepared_admissions == 0
+    assert after.claimed_admissions == 0
+    assert after.reserved_channel_ids == 0
+    assert after.reserved_transport_ids == 0
+    assert after.reserved_operation_ids == 0
+
+
 def test_prepared_open_claim_commits_once_and_returns_close_token() -> None:
     """A claimed open becomes visible only through its one-shot final commit."""
 

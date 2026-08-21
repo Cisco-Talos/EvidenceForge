@@ -1909,12 +1909,19 @@ class ExplicitProxyChannelManager:
                     raise StateError(
                         f"Explicit-proxy tunnel view {same_affinity.channel_id!r} is not open"
                     )
-                replacement_channel_id = same_affinity.channel_id
-                replacement_closed_at = min(
-                    canonical_open,
+                effective_deadline = min(
                     prior_snapshot.idle_deadline,
                     prior_snapshot.identity.hard_deadline,
                     prior_snapshot.identity.binding.closes_at,
+                )
+                replacement_channel_id = same_affinity.channel_id
+                replacement_closed_at = min(
+                    effective_deadline,
+                    max(
+                        canonical_open,
+                        prior_snapshot.identity.opened_at,
+                        prior_snapshot.last_activity_at,
+                    ),
                 )
 
             identity = _validated_application_identity(
