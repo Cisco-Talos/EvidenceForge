@@ -603,6 +603,8 @@ class _ProcessMaterializationPayload:
     concurrency_group_id: str
     pid_logical_position: int
     state_time: datetime
+    parent_identity: ProcessIdentity | None
+    virtual_parent_pid: int | None
     parent_activity_time: datetime | None
     auth_session_id: int | None
     auth_logon_type: int | None
@@ -636,6 +638,12 @@ class ProcessMaterializationPlan:
         """Return the authenticated token bound to downstream prepared work."""
 
         return self._integrity_token
+
+    @property
+    def parent_identity(self) -> ProcessIdentity | None:
+        """Return the exact modeled parent captured before publication."""
+
+        return self._payload.parent_identity
 
     @property
     def integrity_level(self) -> str:
@@ -9277,12 +9285,27 @@ class StateManager:
             if raw_start is None:
                 raise StateError("Cannot plan process: current_time not set")
             effective_start = ensure_utc(raw_start)
-            if parent_pid not in {0, 4} and not self.is_process_active_at(
-                system, parent_pid, effective_start
-            ):
-                raise StateError(
-                    f"Cannot plan process: parent PID {parent_pid} does not exist on {system}"
-                )
+            parent_identity = (
+                self._process_identity_active_at_locked(system, parent_pid, effective_start)
+                if parent_pid > 0
+                else None
+            )
+            virtual_parent_pid = None
+            if parent_pid > 0 and parent_identity is None:
+                if parent_pid != 4:
+                    raise StateError(
+                        f"Cannot plan process: parent PID {parent_pid} does not exist on {system}"
+                    )
+                if (
+                    self.state.running_processes.get((system, parent_pid)) is not None
+                    or self._ended_processes_by_key.get((system, parent_pid)) is not None
+                ):
+                    raise StateError(
+                        f"Cannot plan process: parent PID {parent_pid} is not active on {system}"
+                    )
+                # PID 4 without a modeled identity is retained only for direct
+                # compatibility callers. Exact engine batches model and capture it.
+                virtual_parent_pid = 4
             if require_session and not logon_id:
                 raise StateError("Session-owned process materialization requires a LogonID")
             owning_session = self.get_session_at(logon_id, effective_start) if logon_id else None
@@ -9409,6 +9432,8 @@ class StateManager:
                 concurrency_group_id=concurrency_group_id,
                 pid_logical_position=logical_position,
                 state_time=effective_start,
+                parent_identity=parent_identity,
+                virtual_parent_pid=virtual_parent_pid,
                 parent_activity_time=(
                     ensure_utc(parent_activity_time) if parent_activity_time is not None else None
                 ),
@@ -9601,6 +9626,7 @@ class StateManager:
             effective_start = ensure_utc(raw_start)
 
             planned_parent: ProcessIdentity | None = None
+            virtual_parent_pid: int | None = None
             if parent_plan is not None:
                 if parent_plan not in builder._processes:
                     raise StateError("Batch process parent must be an earlier planned member")
@@ -9611,14 +9637,29 @@ class StateManager:
                     or planned_parent.started_at > effective_start
                 ):
                     raise StateError("Batch process parent identity is not active for child start")
-            elif parent_pid not in {0, 4} and not self.is_process_active_at(
-                system,
-                parent_pid,
-                effective_start,
-            ):
-                raise StateError(
-                    f"Cannot plan process: parent PID {parent_pid} does not exist on {system}"
+            elif parent_pid > 0:
+                planned_parent = self._process_identity_active_at_locked(
+                    system,
+                    parent_pid,
+                    effective_start,
                 )
+                if planned_parent is None:
+                    if parent_pid != 4:
+                        raise StateError(
+                            f"Cannot plan process: parent PID {parent_pid} does not exist on "
+                            f"{system}"
+                        )
+                    if (
+                        self.state.running_processes.get((system, parent_pid)) is not None
+                        or self._ended_processes_by_key.get((system, parent_pid)) is not None
+                    ):
+                        raise StateError(
+                            f"Cannot plan process: parent PID {parent_pid} is not active on "
+                            f"{system}"
+                        )
+                    # Preserve the narrow virtual-kernel compatibility shape as
+                    # authenticated plan truth instead of treating it like PID 0.
+                    virtual_parent_pid = 4
 
             if require_session and not logon_id:
                 raise StateError("Session-owned process materialization requires a LogonID")
@@ -9735,7 +9776,7 @@ class StateManager:
                         prefix_patch = (system, prefix)
                     builder._pid_prefixes[system] = prefix
                 minimum_parent = None
-                if planned_parent is not None:
+                if parent_plan is not None:
                     minimum_parent = parent_plan._payload.pid_logical_position
                 else:
                     parent = self.state.running_processes.get((system, parent_pid))
@@ -9845,6 +9886,8 @@ class StateManager:
                 concurrency_group_id=concurrency_group_id,
                 pid_logical_position=logical_position,
                 state_time=effective_start,
+                parent_identity=planned_parent,
+                virtual_parent_pid=virtual_parent_pid,
                 parent_activity_time=(
                     ensure_utc(parent_activity_time) if parent_activity_time is not None else None
                 ),
@@ -10366,6 +10409,10 @@ class StateManager:
                 session_logons.add(identity.logon_id)
 
             process_indexes = {id(process): index for index, process in enumerate(plan.processes)}
+            process_plans_by_pid = {
+                (process.identity.hostname, process.identity.pid): process
+                for process in plan.processes
+            }
             processes: dict[str, ProcessMaterializationPlan] = {}
             processes_by_pid: dict[tuple[str, int], ProcessMaterializationPlan] = {}
             thread_keys: set[tuple[str, str, int]] = set()
@@ -10400,18 +10447,17 @@ class StateManager:
                     or primary_thread.started_at != identity.started_at
                 ):
                     raise StateError("Action cohort primary thread disagrees with its process")
-                if identity.parent_pid not in {0, 4}:
-                    parent = processes_by_pid.get((identity.hostname, identity.parent_pid))
-                    if parent is not None and process_indexes[id(parent)] >= index:
-                        raise StateError("Action cohort process parent is not ordered first")
-                    if parent is None and not self.is_process_active_at(
-                        identity.hostname,
-                        identity.parent_pid,
-                        identity.started_at,
-                    ):
-                        raise StateError("Action cohort process parent is not active at start")
-                    if parent is not None and parent.identity.started_at > identity.started_at:
-                        raise StateError("Action cohort process parent starts after its child")
+                parent_key = (identity.hostname, identity.parent_pid)
+                ordered_parent = (
+                    process_plans_by_pid.get(parent_key) if identity.parent_pid > 0 else None
+                )
+                if ordered_parent is not None and process_indexes[id(ordered_parent)] >= index:
+                    raise StateError("Action cohort process parent is not ordered first")
+                parent = processes_by_pid.get(parent_key)
+                self._validate_process_parent_identity_locked(
+                    process,
+                    staged_parent=parent.identity if parent is not None else None,
+                )
                 staged_session = sessions_by_host_logon.get((identity.hostname, identity.logon_id))
                 live_session = (
                     self.get_session_at(identity.logon_id, identity.started_at)
@@ -13017,11 +13063,16 @@ class StateManager:
                 ):
                     raise StateError(f"Session {role} process must belong to the session")
 
+            process_indexes = {id(process): index for index, process in enumerate(plan.processes)}
+            process_plans_by_pid = {
+                (process.identity.hostname, process.identity.pid): process
+                for process in plan.processes
+            }
             staged_processes: dict[str, ProcessIdentity] = {}
             staged_processes_by_pid: dict[tuple[str, int], ProcessIdentity] = {}
             staged_pids: set[tuple[str, int]] = set()
             staged_threads: set[tuple[str, str, int]] = set()
-            for process in plan.processes:
+            for index, process in enumerate(plan.processes):
                 identity = process.identity
                 primary_thread = identity.primary_thread
                 if primary_thread is None:
@@ -13048,24 +13099,17 @@ class StateManager:
                     raise StateError(
                         f"Process materialization primary thread is already live: {thread_key!r}"
                     )
-                if identity.parent_pid not in {0, 4}:
-                    planned_parent = staged_processes_by_pid.get(
-                        (identity.hostname, identity.parent_pid)
-                    )
-                    if planned_parent is None and not self.is_process_active_at(
-                        identity.hostname,
-                        identity.parent_pid,
-                        identity.started_at,
-                    ):
-                        raise StateError(
-                            f"Process materialization parent PID {identity.parent_pid} "
-                            "is not active"
-                        )
-                    if (
-                        planned_parent is not None
-                        and planned_parent.started_at > identity.started_at
-                    ):
-                        raise StateError("Batch process parent starts after its child")
+                parent_key = (identity.hostname, identity.parent_pid)
+                ordered_parent = (
+                    process_plans_by_pid.get(parent_key) if identity.parent_pid > 0 else None
+                )
+                if ordered_parent is not None and process_indexes[id(ordered_parent)] >= index:
+                    raise StateError("Batch process parent is not ordered first")
+                planned_parent = staged_processes_by_pid.get(parent_key)
+                self._validate_process_parent_identity_locked(
+                    process,
+                    staged_parent=planned_parent,
+                )
                 if process._payload.require_session and not identity.logon_id:
                     raise StateError("Session-owned process materialization requires a LogonID")
                 if process._payload.require_session and identity.logon_id:
@@ -13200,14 +13244,7 @@ class StateManager:
                 raise StateError(
                     f"Process materialization primary thread is already live: {thread_key!r}"
                 )
-            if identity.parent_pid not in {0, 4} and not self.is_process_active_at(
-                identity.hostname,
-                identity.parent_pid,
-                identity.started_at,
-            ):
-                raise StateError(
-                    f"Process materialization parent PID {identity.parent_pid} is not active"
-                )
+            self._validate_process_parent_identity_locked(plan)
             if plan._payload.require_session and not identity.logon_id:
                 raise StateError("Session-owned process materialization requires a LogonID")
             owning_session = (
@@ -14116,6 +14153,106 @@ class StateManager:
             parent_lifecycle_group_id=process.parent_lifecycle_group_id,
             primary_thread=primary_thread,
         )
+
+    @staticmethod
+    def _process_parent_identity_fields(identity: ProcessIdentity) -> tuple[object, ...]:
+        """Return stable process-owner fields used for parent snapshot validation."""
+
+        return (
+            identity.hostname,
+            identity.object_id,
+            identity.pid,
+            identity.parent_pid,
+            identity.image,
+            identity.command_line,
+            identity.principal,
+            identity.logon_id,
+            identity.started_at,
+            identity.lifecycle_group_id,
+            identity.parent_lifecycle_group_id,
+        )
+
+    def _process_identity_active_at_locked(
+        self,
+        system: str,
+        pid: int,
+        event_time: datetime,
+    ) -> ProcessIdentity | None:
+        """Return the exact live or retained PID incarnation spanning ``event_time``."""
+
+        effective_time = ensure_utc(event_time)
+        candidates = (
+            self.state.running_processes.get((system, pid)),
+            self._ended_processes_by_key.get((system, pid)),
+        )
+        seen: set[int] = set()
+        for process in candidates:
+            if process is None or id(process) in seen:
+                continue
+            seen.add(id(process))
+            if process.start_time <= effective_time and (
+                process.end_time is None or effective_time < process.end_time
+            ):
+                return self._process_identity(process)
+        return None
+
+    def _validate_process_parent_identity_locked(
+        self,
+        plan: ProcessMaterializationPlan,
+        *,
+        staged_parent: ProcessIdentity | None = None,
+    ) -> None:
+        """Validate one authenticated parent snapshot against exact State or batch truth."""
+
+        identity = plan.identity
+        parent = plan.parent_identity
+        virtual_parent_pid = plan._payload.virtual_parent_pid
+        if identity.parent_pid == 0:
+            if parent is not None or virtual_parent_pid is not None:
+                raise StateError("PID-0 process root cannot carry a parent identity")
+            return
+        if identity.parent_pid == identity.pid:
+            raise StateError("Process materialization cannot be its own parent")
+        if virtual_parent_pid is not None:
+            if (
+                type(virtual_parent_pid) is not int
+                or virtual_parent_pid != 4
+                or identity.parent_pid != virtual_parent_pid
+                or parent is not None
+                or staged_parent is not None
+                or self.state.running_processes.get((identity.hostname, virtual_parent_pid))
+                is not None
+                or self._ended_processes_by_key.get((identity.hostname, virtual_parent_pid))
+                is not None
+            ):
+                raise StateError("Virtual PID-4 parent conflicts with modeled process identity")
+            return
+        if type(parent) is not ProcessIdentity:
+            raise StateError("Process materialization requires an exact parent identity")
+        if (
+            parent.hostname != identity.hostname
+            or parent.pid != identity.parent_pid
+            or parent.object_id == identity.object_id
+            or parent.started_at > identity.started_at
+        ):
+            raise StateError("Process materialization parent identity is invalid for child start")
+        if staged_parent is not None:
+            if self._process_parent_identity_fields(parent) != self._process_parent_identity_fields(
+                staged_parent
+            ):
+                raise StateError("Batch process parent identity drifted from its earlier member")
+            return
+        active_parent = self._process_identity_active_at_locked(
+            identity.hostname,
+            identity.parent_pid,
+            identity.started_at,
+        )
+        if active_parent is None:
+            raise StateError("Process materialization parent identity is not active at child start")
+        if self._process_parent_identity_fields(parent) != self._process_parent_identity_fields(
+            active_parent
+        ):
+            raise StateError("Process materialization parent identity drifted before commit")
 
     def get_process(self, system: str, pid: int) -> RunningProcess | None:
         """Get a running process.

@@ -4535,12 +4535,13 @@ class GeneratorLifecycleAuthority:
             if identity.parent_pid:
                 staged_parent = staged_processes.get((identity.hostname, identity.parent_pid))
                 if staged_parent is not None:
+                    if process_plan.parent_identity != staged_parent:
+                        raise StateError(
+                            "Connection composite parent differs from authenticated process plan"
+                        )
                     parent_object_id = staged_parent.object_id
                 else:
-                    parent = self._state_manager.get_process_identity(
-                        identity.hostname,
-                        identity.parent_pid,
-                    )
+                    parent = process_plan.parent_identity
                     if parent is None:
                         if identity.parent_pid != 4:
                             raise StateError(
@@ -8146,6 +8147,9 @@ class GeneratorLifecycleAuthority:
         publishes every member and advances the StateManager fence exactly once.
         """
 
+        if not self._state_manager.authenticates_materialization_plan(plan):
+            raise StateError("Materialization batch plan integrity validation failed")
+
         session_plan = plan.session
         session_request: LifecycleSessionStartRequest | None = None
         staged_session: SessionIdentity | None = None
@@ -8174,12 +8178,13 @@ class GeneratorLifecycleAuthority:
             if identity.parent_pid:
                 staged_parent = staged_processes.get((identity.hostname, identity.parent_pid))
                 if staged_parent is not None:
+                    if process_plan.parent_identity != staged_parent:
+                        raise StateError(
+                            "Lifecycle batch parent differs from authenticated process plan"
+                        )
                     parent_object_id = staged_parent.object_id
                 else:
-                    parent = self._state_manager.get_process_identity(
-                        identity.hostname,
-                        identity.parent_pid,
-                    )
+                    parent = process_plan.parent_identity
                     if parent is None:
                         if identity.parent_pid != 4:
                             raise StateError(
@@ -8346,13 +8351,13 @@ class GeneratorLifecycleAuthority:
     ) -> LifecycleProcessStartRequest:
         """Project one exact lifecycle request without allocating State identity."""
 
+        if not self._state_manager.authenticates_materialization_plan(plan):
+            raise StateError("Process materialization plan integrity validation failed")
+
         identity = plan.identity
         parent_object_id = ""
         if identity.parent_pid:
-            parent = self._state_manager.get_process_identity(
-                identity.hostname,
-                identity.parent_pid,
-            )
+            parent = plan.parent_identity
             if parent is None:
                 if identity.parent_pid == 4:
                     # PID 4 is the Windows virtual kernel/System parent in narrow

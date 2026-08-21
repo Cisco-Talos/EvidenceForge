@@ -86,7 +86,9 @@ def _open_rdp_terminal_harness(
     clock_profile_name: str = "complete",
     output_start_time: datetime | None = None,
     include_sysmon: bool = False,
+    include_sysmon_during_open: bool = False,
     modeled_target_pid4: bool = False,
+    modeled_source_pid4: bool = False,
     modeled_source: bool = True,
     session_end_plan: SessionEndPlan | None = None,
     production_timing_runtime: bool = False,
@@ -105,12 +107,23 @@ def _open_rdp_terminal_harness(
         threaded=False,
         source_finalization=True,
     )
-    sysmon = None
+    sysmon = (
+        SysmonEventEmitter(
+            load_format("windows_event_sysmon"),
+            tmp_path / "sysmon",
+            threaded=False,
+            source_finalization=True,
+        )
+        if include_sysmon_during_open
+        else None
+    )
     emitters = {
         "ecar": ecar,
         "windows_event_security": windows,
         "zeek_conn": zeek,
     }
+    if sysmon is not None:
+        emitters["windows_event_sysmon"] = sysmon
     dispatcher = EventDispatcher(
         state,
         emitters,
@@ -170,6 +183,19 @@ def _open_rdp_terminal_harness(
         )
         system_process, _receipt = generator._lifecycle_authority.materialize_process(system_plan)
         target_system_process_object_id = system_process.ecar_object_id
+    if modeled_source_pid4:
+        source_system_plan = state.plan_process_materialization(
+            system=source.hostname,
+            fixed_pid=4,
+            parent_pid=0,
+            image="System",
+            command_line="",
+            username="SYSTEM",
+            integrity_level="System",
+            os_category="windows",
+            start_time=open_time - timedelta(minutes=5),
+        )
+        generator._lifecycle_authority.materialize_process(source_system_plan)
     source_identity = None
     source_pid = -1
     source_ip = "198.51.100.25"
@@ -221,7 +247,7 @@ def _open_rdp_terminal_harness(
     assert len(target_identities) == 3 and all(
         identity is not None for identity in target_identities
     )
-    if include_sysmon:
+    if include_sysmon and sysmon is None:
         # The existing harness intentionally omits the production deployment and
         # host-boot timing setup needed by Sysmon Event 1. Attach the real sink
         # only at the terminal boundary under test so its Event 5 path remains
@@ -1240,6 +1266,108 @@ class _DuckExactSysmon:
 
         type(self).marker_reads += 1
         raise AssertionError("duck Sysmon exact marker executed")
+
+
+def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
+    tmp_path: Path,
+) -> None:
+    """Production RDP Event 1 rows use authenticated staged and boot-parent identities."""
+
+    output_start = _START - timedelta(minutes=1)
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        clock_profile_name="enterprise_standard",
+        output_start_time=output_start,
+        include_sysmon=True,
+        include_sysmon_during_open=True,
+        modeled_target_pid4=True,
+        modeled_source_pid4=True,
+        production_timing_runtime=True,
+    )
+    sysmon = harness.sysmon
+    assert sysmon is not None
+    target_identities = {
+        identity.image.replace("\\", "/").rsplit("/", 1)[-1].casefold(): identity
+        for identity in harness.terminal_process_identities
+        if identity.hostname == harness.target_hostname
+    }
+    winlogon = target_identities["winlogon.exe"]
+    userinit = target_identities["userinit.exe"]
+    explorer = target_identities["explorer.exe"]
+    pid4 = harness.state.get_process_identity(harness.target_hostname, 4)
+    assert pid4 is not None
+    assert pid4.started_at < output_start
+    assert winlogon.parent_pid == pid4.pid
+    assert userinit.parent_pid == winlogon.pid
+    assert explorer.parent_pid == userinit.pid
+
+    planner = harness.dispatcher.source_timing_planner
+    parent_object_id = planner._sysmon_process_object_id(
+        harness.target_hostname,
+        pid4.pid,
+        pid4.started_at,
+    )
+    parent_render_time = planner._sysmon_process_render_create_times.get(
+        (f"sysmon:{harness.target_hostname.casefold()}", parent_object_id)
+    )
+    assert parent_render_time is not None
+    expected_pid4_guid = sysmon._generate_process_guid(
+        harness.target_hostname,
+        pid4.pid,
+        parent_render_time,
+    )
+
+    _close_rdp_terminal_harness(harness)
+    rendered = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "sysmon").rglob("*.xml")
+    )
+    event_one_rows = _xml_events(rendered, 1)
+
+    def _field(event: str, name: str) -> str:
+        match = re.search(rf'<Data Name="{name}">(.*?)</Data>', event)
+        assert match is not None
+        return match.group(1)
+
+    def _event_time(event: str) -> datetime:
+        match = re.search(r'<TimeCreated SystemTime="([^"]+)"', event)
+        assert match is not None
+        return datetime.fromisoformat(match.group(1).replace("Z", "+00:00"))
+
+    target_rows = {
+        _field(event, "Image").replace("\\", "/").rsplit("/", 1)[-1].casefold(): event
+        for event in event_one_rows
+        if _field(event, "Image").replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        in {"winlogon.exe", "userinit.exe", "explorer.exe"}
+    }
+    assert set(target_rows) == {"winlogon.exe", "userinit.exe", "explorer.exe"}
+    assert not any(_field(event, "ProcessId") == "4" for event in event_one_rows)
+    assert _field(target_rows["winlogon.exe"], "ParentProcessGuid") == expected_pid4_guid
+    assert _field(target_rows["userinit.exe"], "ParentProcessGuid") == _field(
+        target_rows["winlogon.exe"],
+        "ProcessGuid",
+    )
+    assert _field(target_rows["explorer.exe"], "ParentProcessGuid") == _field(
+        target_rows["userinit.exe"],
+        "ProcessGuid",
+    )
+    rendered_times = {
+        image: _event_time(target_rows[image])
+        for image in ("winlogon.exe", "userinit.exe", "explorer.exe")
+    }
+    assert (
+        parent_render_time
+        < rendered_times["winlogon.exe"]
+        < rendered_times["userinit.exe"]
+        < rendered_times["explorer.exe"]
+    )
+    for image, identity in target_identities.items():
+        assert _field(target_rows[image], "ProcessId") == str(identity.pid)
+        assert _field(target_rows[image], "ProcessGuid") == sysmon._generate_process_guid(
+            identity.hostname,
+            identity.pid,
+            rendered_times[image],
+        )
 
 
 def test_rdp_exact_sysmon_admission_requires_bound_concrete_sink(tmp_path: Path) -> None:

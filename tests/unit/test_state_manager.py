@@ -204,6 +204,204 @@ def test_process_materialization_plan_rejects_process_thread_and_allocator_tampe
         assert manager._materialization_version == 0
 
 
+def test_process_materialization_plan_authenticates_exact_external_parent() -> None:
+    """A captured modeled parent is immutable plan truth and tampering is allocation-free."""
+
+    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+    manager = StateManager()
+    manager.set_current_time(start)
+    parent_plan = manager.plan_process_materialization(
+        system="WS-01",
+        parent_pid=0,
+        image=r"C:\Windows\System32\System",
+        command_line="System",
+        username="SYSTEM",
+        integrity_level="System",
+        os_category="windows",
+        start_time=start,
+        fixed_pid=4,
+    )
+    parent = manager.materialize_process(parent_plan)
+    child_plan = manager.plan_process_materialization(
+        system="WS-01",
+        parent_pid=parent.pid,
+        image=r"C:\Windows\System32\cmd.exe",
+        command_line="cmd.exe /c whoami",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="windows",
+        start_time=start + timedelta(seconds=1),
+    )
+    assert child_plan.parent_identity == manager.get_process_identity("WS-01", parent.pid)
+    captured_parent = child_plan.parent_identity
+    assert captured_parent is not None
+    object.__setattr__(
+        child_plan,
+        "_payload",
+        replace(
+            child_plan._payload,
+            parent_identity=replace(captured_parent, principal="tampered-parent"),
+        ),
+    )
+    digest = manager.materialization_digest()
+
+    with pytest.raises(StateError, match="integrity validation failed"):
+        manager.materialize_process(child_plan)
+
+    assert manager.materialization_digest() == digest
+    assert len(manager.get_processes_on_system("WS-01")) == 1
+
+
+@pytest.mark.parametrize("drift", ("host", "object", "start", "interval"))
+def test_process_materialization_rejects_parent_drift_before_child_publication(
+    drift: str,
+) -> None:
+    """ABA identity drift and a closed parent interval fail before allocator mutation."""
+
+    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+    manager = StateManager()
+    manager.set_current_time(start)
+    parent_plan = manager.plan_process_materialization(
+        system="WS-01",
+        parent_pid=0,
+        image=r"C:\Windows\System32\System",
+        command_line="System",
+        username="SYSTEM",
+        integrity_level="System",
+        os_category="windows",
+        start_time=start,
+        fixed_pid=4,
+    )
+    parent = manager.materialize_process(parent_plan)
+    child_plan = manager.plan_process_materialization(
+        system="WS-01",
+        parent_pid=parent.pid,
+        image=r"C:\Windows\System32\cmd.exe",
+        command_line="cmd.exe /c whoami",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="windows",
+        start_time=start + timedelta(seconds=1),
+    )
+    if drift == "host":
+        parent.system = "WS-02"
+    elif drift == "object":
+        parent.ecar_object_id = "reused-pid-parent"
+    elif drift == "start":
+        shifted_start = start + timedelta(seconds=2)
+        parent.start_time = shifted_start
+        primary_thread = manager.state.running_threads[
+            ("WS-01", parent.ecar_object_id, parent.primary_tid)
+        ]
+        primary_thread.start_time = shifted_start
+    else:
+        parent.end_time = start + timedelta(milliseconds=500)
+    digest = manager.materialization_digest()
+    allocator_census = manager.pid_allocator_census()
+
+    with pytest.raises(StateError, match="parent identity (?:drifted|is not active)"):
+        manager.materialize_process(child_plan)
+
+    assert manager.materialization_digest() == digest
+    assert manager.pid_allocator_census() == allocator_census
+    assert manager.get_process("WS-01", child_plan.identity.pid) is None
+
+
+@pytest.mark.parametrize(
+    ("child_host", "child_parent_pid"),
+    (("WS-02", 4), ("WS-01", 8)),
+    ids=("host", "pid"),
+)
+def test_batch_process_plan_captures_parent_and_rejects_mismatched_owner(
+    child_host: str,
+    child_parent_pid: int,
+) -> None:
+    """A batch child captures its exact earlier parent and cannot change host or PID."""
+
+    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+    manager = StateManager()
+    manager.set_current_time(start)
+    builder = manager.begin_materialization_batch()
+    parent = builder.plan_process(
+        system="WS-01",
+        parent_pid=0,
+        image=r"C:\Windows\System32\System",
+        command_line="System",
+        username="SYSTEM",
+        integrity_level="System",
+        os_category="windows",
+        start_time=start,
+        fixed_pid=4,
+    )
+    child = builder.plan_process(
+        system="WS-01",
+        parent_pid=parent.identity.pid,
+        image=r"C:\Windows\System32\winlogon.exe",
+        command_line="winlogon.exe",
+        username="SYSTEM",
+        integrity_level="System",
+        os_category="windows",
+        start_time=start + timedelta(milliseconds=100),
+        parent_plan=parent,
+    )
+    assert child.parent_identity == parent.identity
+
+    with pytest.raises(StateError, match="parent identity is not active"):
+        builder.plan_process(
+            system=child_host,
+            parent_pid=child_parent_pid,
+            image=r"C:\Windows\System32\winlogon.exe",
+            command_line="winlogon.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            os_category="windows",
+            start_time=start + timedelta(milliseconds=200),
+            parent_plan=parent,
+        )
+
+    plan = builder.seal()
+    manager.validate_materialization_batch(plan)
+
+
+def test_batch_virtual_pid4_parent_rejects_a_later_modeled_parent_before_mutation() -> None:
+    """Compatibility PID 4 cannot conceal a same-batch parent ordered after its child."""
+
+    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+    manager = StateManager()
+    manager.set_current_time(start)
+    builder = manager.begin_materialization_batch()
+    builder.plan_process(
+        system="WS-01",
+        parent_pid=4,
+        image=r"C:\Windows\System32\winlogon.exe",
+        command_line="winlogon.exe",
+        username="SYSTEM",
+        integrity_level="System",
+        os_category="windows",
+        start_time=start + timedelta(milliseconds=100),
+    )
+    builder.plan_process(
+        system="WS-01",
+        parent_pid=0,
+        image=r"C:\Windows\System32\System",
+        command_line="System",
+        username="SYSTEM",
+        integrity_level="System",
+        os_category="windows",
+        start_time=start,
+        fixed_pid=4,
+    )
+    plan = builder.seal()
+    digest = manager.materialization_digest()
+    allocator_census = manager.pid_allocator_census()
+
+    with pytest.raises(StateError, match="parent is not ordered first"):
+        manager.validate_materialization_batch(plan)
+
+    assert manager.materialization_digest() == digest
+    assert manager.pid_allocator_census() == allocator_census
+
+
 def test_materialization_plans_reject_public_same_field_checksum_forgery() -> None:
     """Only the issuing StateManager can authenticate an otherwise exact plan."""
 

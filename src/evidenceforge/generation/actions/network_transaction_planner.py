@@ -664,6 +664,8 @@ class NetworkTransactionPlanner:
 
         if type(authority) is not DeferredSessionNetworkAuthority:
             raise TypeError("Deferred session dependent authority changed exact type")
+        if not self._executor.state_manager.authenticates_materialization_plan(root.state_plan):
+            raise StateError("Deferred session State plan integrity validation failed")
         specs = DeferredSessionNetworkAuthority.validate_dependent_occurrences(authority)
         if not specs:
             return ()
@@ -807,7 +809,10 @@ class NetworkTransactionPlanner:
                         else None
                     ),
                     occurrence_key=occurrence_key,
-                    identity_plan=EventIdentityPlan(subject=identity),
+                    identity_plan=EventIdentityPlan(
+                        subject=identity,
+                        actor=member.parent_identity,
+                    ),
                     lifecycle=ActionLifecycleContext(
                         group_id=identity.lifecycle_group_id,
                         canonical_start=identity.started_at,
