@@ -324,7 +324,11 @@ from evidenceforge.generation.network_runtime import (
     NetworkRuntimePointFamily,
     NetworkTransactionRuntime,
 )
-from evidenceforge.generation.process_runtime_cache import BoundedRuntimeCache, deadline_seconds
+from evidenceforge.generation.process_runtime_cache import (
+    ActivityGeneratorSessionRetentionRelease,
+    BoundedRuntimeCache,
+    deadline_seconds,
+)
 from evidenceforge.generation.proxy_channels import ExplicitProxyChannelManager
 from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.runtime_content import (
@@ -5453,6 +5457,10 @@ class ActivityGenerator:
         ] = {}
         self._linux_sudo_tty_sessions: dict[tuple[str, str, str], str] = {}
         self._linux_sudo_tty_available: dict[tuple[str, str, str], datetime] = {}
+        self._linux_sudo_tty_keys_by_logon_id: dict[
+            str,
+            set[tuple[str, str, str]],
+        ] = {}
         self._linux_sudo_tty_publication_hook: Callable[[str], None] | None = None
         self._ssh_session_ready_times: dict[str, datetime] = {}
         self._ssh_close_journal_lock = Lock()
@@ -6815,6 +6823,11 @@ class ActivityGenerator:
         )
         continuation.prepared.require_projection_owner(self)
         continuation.prepared.require_application_session_retired()
+        self._release_session_retention_state(
+            hostname=continuation.plan.target_system.hostname,
+            username=continuation.plan.username,
+            logon_id=continuation.plan.logon_id,
+        )
 
     def _finalize_exact_ssh_close_continuation(self, continuation: Any) -> None:
         """Execute and acknowledge one installed immediate SSH close continuation."""
@@ -14742,6 +14755,13 @@ class ActivityGenerator:
 
         for timing_delta in used_timing_deltas:
             timing_delta.publish()
+        if session is not None:
+            self._require_accepted_linux_sudo_session_close_owner(session)
+            self._release_session_retention_state(
+                hostname=session.system,
+                username=session.username,
+                logon_id=logon_id,
+            )
         logger.debug(
             f"Generated logoff: {user.username} on {system.hostname} (LogonID: {logon_id})"
         )
@@ -32783,6 +32803,357 @@ class ActivityGenerator:
             ),
         ).execute()
 
+    @staticmethod
+    def _validate_linux_sudo_tty_key(tty_key: object) -> tuple[str, str, str]:
+        """Return one exact host/user/TTY key or reject it before mutation."""
+
+        if (
+            type(tty_key) is not tuple
+            or len(tty_key) != 3
+            or any(type(component) is not str or not component for component in tty_key)
+        ):
+            raise StateError("Linux sudo TTY session keys require three non-empty exact strings")
+        return tty_key
+
+    def _linux_sudo_tty_route_state(
+        self,
+        tty_key: tuple[str, str, str],
+    ) -> tuple[str | None, datetime | None]:
+        """Read one exact TTY session route and serialization deadline."""
+
+        tty_key = self._validate_linux_sudo_tty_key(tty_key)
+        with self._linux_sudo_tty_lock:
+            sessions = self._linux_sudo_tty_sessions
+            available = self._linux_sudo_tty_available
+            if type(sessions) is not dict or type(available) is not dict:
+                raise StateError("Linux sudo TTY session maps must be exact dictionaries")
+            logon_id = dict.get(sessions, tty_key)
+            deadline = dict.get(available, tty_key)
+            if logon_id is not None and type(logon_id) is not str:
+                raise StateError("Linux sudo TTY session route has a malformed LogonID")
+            if deadline is not None and type(deadline) is not datetime:
+                raise StateError("Linux sudo TTY availability route has a malformed deadline")
+            return logon_id, deadline
+
+    def _remember_linux_sudo_tty_session(
+        self,
+        tty_key: tuple[str, str, str],
+        logon_id: str,
+        *,
+        available_until: datetime | None = None,
+        session: ActiveSession | None = None,
+        requested_tty_key: tuple[str, str, str] | None = None,
+        capacity_claim: object | None = None,
+        handoff_pair_deltas: tuple[bool, bool] | None = None,
+    ) -> None:
+        """Bind one actual TTY key to its exact live session and reverse close route."""
+
+        tty_key = self._validate_linux_sudo_tty_key(tty_key)
+        if type(logon_id) is not str or not logon_id:
+            raise StateError("Linux sudo TTY session routes require a non-empty exact LogonID")
+        if available_until is not None:
+            available_until = ensure_utc(available_until)
+        claim_handoff = any(
+            value is not None for value in (requested_tty_key, capacity_claim, handoff_pair_deltas)
+        )
+        if claim_handoff and (
+            requested_tty_key is None or capacity_claim is None or handoff_pair_deltas is None
+        ):
+            raise StateError("Linux sudo TTY handoff requires its complete exact claim")
+        if requested_tty_key is not None:
+            requested_tty_key = self._validate_linux_sudo_tty_key(requested_tty_key)
+            if (
+                requested_tty_key[:2] != tty_key[:2]
+                or type(capacity_claim) is not object
+                or type(handoff_pair_deltas) is not tuple
+                or len(handoff_pair_deltas) != 2
+                or any(type(delta) is not bool for delta in handoff_pair_deltas)
+            ):
+                raise StateError("Linux sudo TTY handoff crossed its exact pair owner")
+        if session is not None and (
+            type(session) is not ActiveSession
+            or session.logon_id != logon_id
+            or session.system != tty_key[0]
+            or session.username != tty_key[1]
+        ):
+            raise StateError("Linux sudo TTY session publication crossed its exact owner")
+
+        retained: list[object] = []
+        with self._linux_sudo_tty_lock:
+            sessions = self._linux_sudo_tty_sessions
+            available = self._linux_sudo_tty_available
+            reverse = self._linux_sudo_tty_keys_by_logon_id
+            if (
+                type(sessions) is not dict
+                or type(available) is not dict
+                or type(reverse) is not dict
+            ):
+                raise StateError("Linux sudo TTY session maps must be exact dictionaries")
+            if (
+                dict.__len__(sessions) > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+                or dict.__len__(available) > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+                or dict.__len__(reverse) > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+            ):
+                raise StateError("Linux sudo TTY session maps exceed their bounded census")
+            assignments: dict[tuple[str, str, str], str] | None = None
+            owners: dict[tuple[str, str], tuple[str, str, str]] | None = None
+            claims: (
+                dict[
+                    tuple[str, str, str],
+                    tuple[object, str, bool, bool, bool],
+                ]
+                | None
+            ) = None
+            if requested_tty_key is not None:
+                assignments = self._linux_sudo_tty_assignments
+                owners = self._linux_sudo_tty_owners
+                claims = self._linux_sudo_tty_capacity_claims
+                if (
+                    type(assignments) is not dict
+                    or type(owners) is not dict
+                    or type(claims) is not dict
+                ):
+                    raise StateError("Linux sudo TTY handoff maps must be exact dictionaries")
+                claim = dict.get(claims, requested_tty_key)
+                inverse_key = (tty_key[0], tty_key[2])
+                forward_value = dict.get(assignments, requested_tty_key)
+                inverse_value = dict.get(owners, inverse_key)
+                if (
+                    type(claim) is not tuple
+                    or len(claim) != 5
+                    or claim[0] is not capacity_claim
+                    or type(claim[1]) is not str
+                    or type(claim[2]) is not bool
+                    or type(claim[3]) is not bool
+                    or type(claim[4]) is not bool
+                    or claim[1] != tty_key[2]
+                    or claim[2]
+                    or claim[3]
+                    or not claim[4]
+                    or type(forward_value) is not str
+                    or forward_value != tty_key[2]
+                    or type(inverse_value) is not tuple
+                    or len(inverse_value) != 3
+                    or any(type(component) is not str for component in inverse_value)
+                    or inverse_value != requested_tty_key
+                ):
+                    raise StateError("Linux sudo TTY handoff lost its exact active pair claim")
+            if session is not None:
+                try:
+                    self._require_linux_sudo_session_lifecycle_owner(session)
+                except StateError as owner_error:
+                    if requested_tty_key is None:
+                        raise
+                    assert assignments is not None
+                    assert owners is not None
+                    assert claims is not None
+                    assert handoff_pair_deltas is not None
+                    reverse_keys = dict.get(reverse, logon_id)
+                    if reverse_keys is not None and type(reverse_keys) is not set:
+                        raise StateError(
+                            "Linux sudo TTY reverse route has a malformed key bucket"
+                        ) from owner_error
+                    route_is_absent = dict.get(sessions, tty_key) is None
+                    deadline_is_absent = tty_key not in available
+                    reverse_is_absent = reverse_keys is None or tty_key not in reverse_keys
+                    if route_is_absent and deadline_is_absent and reverse_is_absent:
+                        rollback_forward, rollback_inverse = handoff_pair_deltas
+                        if rollback_inverse:
+                            retained.append(dict.pop(owners, (tty_key[0], tty_key[2])))
+                        if rollback_forward:
+                            retained.append(dict.pop(assignments, requested_tty_key))
+                    retained.append(dict.pop(claims, requested_tty_key))
+                    raise
+
+            previous_logon_id = dict.get(sessions, tty_key)
+            if previous_logon_id is not None and type(previous_logon_id) is not str:
+                raise StateError("Linux sudo TTY session route has a malformed LogonID")
+            missing = object()
+            previous_deadline = dict.get(available, tty_key, missing)
+            if previous_deadline is not missing and type(previous_deadline) is not datetime:
+                raise StateError("Linux sudo TTY availability route has a malformed deadline")
+
+            previous_keys: set[tuple[str, str, str]] | None = None
+            if previous_logon_id is not None and previous_logon_id != logon_id:
+                previous_keys = dict.get(reverse, previous_logon_id)
+                if previous_keys is not None and type(previous_keys) is not set:
+                    raise StateError("Linux sudo TTY reverse route has a malformed key bucket")
+            current_keys = dict.get(reverse, logon_id)
+            if current_keys is not None and type(current_keys) is not set:
+                raise StateError("Linux sudo TTY reverse route has a malformed key bucket")
+
+            previous_after = set(previous_keys or ())
+            previous_after.discard(tty_key)
+            current_after = set(current_keys or ())
+            current_after.add(tty_key)
+            if len(current_after) > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT:
+                raise StateError("Linux sudo TTY reverse route exceeds its bounded census")
+            reverse_delta = int(current_keys is None)
+            if (
+                previous_logon_id is not None
+                and previous_logon_id != logon_id
+                and previous_keys is not None
+                and not previous_after
+            ):
+                reverse_delta -= 1
+            if (
+                dict.__len__(sessions) + int(previous_logon_id is None)
+                > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+                or dict.__len__(available)
+                + int(available_until is not None and previous_deadline is missing)
+                > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+                or dict.__len__(reverse) + reverse_delta > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+            ):
+                raise StateError("Linux sudo TTY session routes exhausted their bounded census")
+
+            dict.__setitem__(sessions, tty_key, logon_id)
+            if available_until is not None:
+                dict.__setitem__(available, tty_key, available_until)
+            if previous_logon_id is not None and previous_logon_id != logon_id:
+                if previous_after:
+                    dict.__setitem__(reverse, previous_logon_id, previous_after)
+                elif previous_keys is not None:
+                    retained.append(dict.pop(reverse, previous_logon_id))
+            dict.__setitem__(reverse, logon_id, current_after)
+            if requested_tty_key is not None:
+                assert claims is not None
+                retained.append(dict.pop(claims, requested_tty_key))
+        del retained
+
+    def _update_linux_sudo_tty_availability(
+        self,
+        tty_key: tuple[str, str, str],
+        logon_id: str,
+        available_until: datetime | None,
+    ) -> bool:
+        """Update one deadline only while the exact session still owns its TTY route."""
+
+        tty_key = self._validate_linux_sudo_tty_key(tty_key)
+        if type(logon_id) is not str or not logon_id:
+            raise StateError("Linux sudo TTY availability requires a non-empty exact LogonID")
+        normalized_deadline = ensure_utc(available_until) if available_until is not None else None
+        retained: object | None = None
+        with self._linux_sudo_tty_lock:
+            sessions = self._linux_sudo_tty_sessions
+            available = self._linux_sudo_tty_available
+            if type(sessions) is not dict or type(available) is not dict:
+                raise StateError("Linux sudo TTY session maps must be exact dictionaries")
+            current_logon_id = dict.get(sessions, tty_key)
+            if current_logon_id is not None and type(current_logon_id) is not str:
+                raise StateError("Linux sudo TTY session route has a malformed LogonID")
+            if current_logon_id != logon_id:
+                return False
+            if normalized_deadline is None:
+                retained = dict.pop(available, tty_key, None)
+            else:
+                dict.__setitem__(available, tty_key, normalized_deadline)
+        del retained
+        return True
+
+    def _release_session_retention_state(
+        self,
+        *,
+        hostname: str,
+        username: str,
+        logon_id: str,
+    ) -> ActivityGeneratorSessionRetentionRelease:
+        """Release only exact sudo-TTY rows after one accepted complete session close."""
+
+        if any(type(value) is not str or not value for value in (hostname, username, logon_id)):
+            raise StateError("Linux sudo TTY release requires exact non-empty owner strings")
+
+        sudo_tty_rows = 0
+        retained: list[object] = []
+        with self._linux_sudo_tty_lock:
+            assignments = self._linux_sudo_tty_assignments
+            owners = self._linux_sudo_tty_owners
+            claims = self._linux_sudo_tty_capacity_claims
+            sessions = self._linux_sudo_tty_sessions
+            available = self._linux_sudo_tty_available
+            reverse = self._linux_sudo_tty_keys_by_logon_id
+            if any(
+                type(mapping) is not dict
+                for mapping in (assignments, owners, claims, sessions, available, reverse)
+            ):
+                raise StateError("Linux sudo TTY release maps must be exact dictionaries")
+
+            tty_keys = dict.get(reverse, logon_id)
+            if tty_keys is None:
+                return ActivityGeneratorSessionRetentionRelease()
+            if type(tty_keys) is not set:
+                raise StateError("Linux sudo TTY reverse route has a malformed key bucket")
+
+            removals: list[
+                tuple[
+                    tuple[str, str, str],
+                    tuple[str, str] | None,
+                    tuple[str, str, str] | None,
+                ]
+            ] = []
+            retained_keys: set[tuple[str, str, str]] = set()
+            for raw_tty_key in tty_keys:
+                tty_key = self._validate_linux_sudo_tty_key(raw_tty_key)
+                routed_logon_id = dict.get(sessions, tty_key)
+                if routed_logon_id is not None and type(routed_logon_id) is not str:
+                    raise StateError("Linux sudo TTY session route has a malformed LogonID")
+                if routed_logon_id != logon_id:
+                    continue
+                if tty_key[:2] != (hostname, username):
+                    retained_keys.add(tty_key)
+                    continue
+
+                inverse_key = (tty_key[0], tty_key[2])
+                requested_tty_key = dict.get(owners, inverse_key)
+                if requested_tty_key is not None:
+                    requested_tty_key = self._validate_linux_sudo_tty_key(requested_tty_key)
+                assigned_tty = (
+                    dict.get(assignments, requested_tty_key)
+                    if requested_tty_key is not None
+                    else None
+                )
+                if assigned_tty is not None and type(assigned_tty) is not str:
+                    raise StateError("Linux sudo TTY forward route has a malformed assignment")
+                exact_pair = (
+                    requested_tty_key is not None
+                    and requested_tty_key[:2] == (hostname, username)
+                    and assigned_tty == tty_key[2]
+                    and dict.get(claims, requested_tty_key) is None
+                )
+                removals.append(
+                    (
+                        tty_key,
+                        inverse_key if exact_pair else None,
+                        requested_tty_key if exact_pair else None,
+                    )
+                )
+
+            if retained_keys:
+                dict.__setitem__(reverse, logon_id, retained_keys)
+            else:
+                retained.append(dict.pop(reverse, logon_id))
+            sudo_tty_rows += len(tty_keys) - len(retained_keys)
+            missing = object()
+            for tty_key, inverse_key, requested_tty_key in removals:
+                removed = dict.pop(sessions, tty_key, missing)
+                if removed is not missing:
+                    retained.append(removed)
+                    sudo_tty_rows += 1
+                removed = dict.pop(available, tty_key, missing)
+                if removed is not missing:
+                    retained.append(removed)
+                    sudo_tty_rows += 1
+                if inverse_key is not None and requested_tty_key is not None:
+                    removed = dict.pop(owners, inverse_key, missing)
+                    if removed is not missing:
+                        retained.append(removed)
+                        sudo_tty_rows += 1
+                    removed = dict.pop(assignments, requested_tty_key, missing)
+                    if removed is not missing:
+                        retained.append(removed)
+                        sudo_tty_rows += 1
+        del retained
+        return ActivityGeneratorSessionRetentionRelease(sudo_tty_rows=sudo_tty_rows)
+
     def _reconcile_linux_sudo_tty_assignment(
         self,
         *,
@@ -32792,6 +33163,7 @@ class ActivityGenerator:
         publish: bool,
         capacity_claim: object | None = None,
         release_capacity_claim: bool = False,
+        handoff_pair_deltas: list[tuple[bool, bool]] | None = None,
     ) -> str:
         """Select, reserve, repair, or publish one exact forward/inverse TTY pair."""
 
@@ -32804,8 +33176,25 @@ class ActivityGenerator:
             or type(requested_tty) is not str
             or (assigned_tty is not None and type(assigned_tty) is not str)
             or (capacity_claim is not None and type(capacity_claim) is not object)
+            or (
+                handoff_pair_deltas is not None
+                and (
+                    type(handoff_pair_deltas) is not list
+                    or len(handoff_pair_deltas) > 1
+                    or any(
+                        type(delta) is not tuple
+                        or len(delta) != 2
+                        or any(type(component) is not bool for component in delta)
+                        for delta in handoff_pair_deltas
+                    )
+                )
+            )
         ):
             raise StateError("Linux sudo TTY ownership keys require exact strings")
+        if handoff_pair_deltas is not None and (
+            capacity_claim is None or publish or release_capacity_claim
+        ):
+            raise StateError("Linux sudo TTY handoff capture requires one selection claim")
         if release_capacity_claim:
             if capacity_claim is None or publish or assigned_tty is not None:
                 raise StateError("Linux sudo TTY capacity release requires only its exact claim")
@@ -32884,7 +33273,7 @@ class ActivityGenerator:
                     or type(needs_forward) is not bool
                     or type(needs_inverse) is not bool
                     or type(active) is not bool
-                    or not (needs_forward or needs_inverse)
+                    or (not active and not (needs_forward or needs_inverse))
                 ):
                     raise conflict("malformed capacity claim")
                 claimed_tty = (key[0], candidate)
@@ -33182,6 +33571,11 @@ class ActivityGenerator:
                     assert capacity_claim is not None
                     assert target_claim is not None
                     retained_claim = target_claim
+                    if handoff_pair_deltas is not None and not handoff_pair_deltas:
+                        list.append(
+                            handoff_pair_deltas,
+                            (target_claim[2], target_claim[3]),
+                        )
                     install_capacity_claim(
                         current_claims,
                         (
@@ -33206,11 +33600,16 @@ class ActivityGenerator:
                     capacity_claim is not None
                     and not publish
                     and action is None
-                    and (forward_delta or inverse_delta)
+                    and target_claim is None
                 ):
                     if len(current_claim_snapshot) + 1 > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT:
                         capacity_exhausted = True
                     else:
+                        if handoff_pair_deltas is not None and not handoff_pair_deltas:
+                            list.append(
+                                handoff_pair_deltas,
+                                (bool(forward_delta), bool(inverse_delta)),
+                            )
                         install_capacity_claim(
                             current_claims,
                             (
@@ -33288,13 +33687,10 @@ class ActivityGenerator:
                                 target_claim[3],
                                 True,
                             )
-                            if replacement_claim[2] or replacement_claim[3]:
-                                install_capacity_claim(
-                                    current_claims,
-                                    replacement_claim,
-                                )
-                            else:
-                                retained_claim = remove_capacity_claim(current_claims)
+                            install_capacity_claim(
+                                current_claims,
+                                replacement_claim,
+                            )
                 else:
                     inverse_key = (hostname, candidate)
                     if dict.get(current_inverse, inverse_key, missing) is not missing:
@@ -33314,13 +33710,10 @@ class ActivityGenerator:
                                 False,
                                 True,
                             )
-                            if replacement_claim[2] or replacement_claim[3]:
-                                install_capacity_claim(
-                                    current_claims,
-                                    replacement_claim,
-                                )
-                            else:
-                                retained_claim = remove_capacity_claim(current_claims)
+                            install_capacity_claim(
+                                current_claims,
+                                replacement_claim,
+                            )
             if stale:
                 continue
             del retained_claim
@@ -33348,6 +33741,40 @@ class ActivityGenerator:
         ):
             raise StateError(
                 f"Linux sudo session lacks exact lifecycle ownership: {session.ecar_object_id}"
+            )
+
+    def _require_accepted_linux_sudo_session_close_owner(
+        self,
+        session: ActiveSession,
+    ) -> None:
+        """Reject cleanup unless State and lifecycle accepted the exact captured close."""
+
+        active = self.state_manager.get_session(session.logon_id)
+        state_identity = self.state_manager.get_session_identity(session.logon_id)
+        if (
+            active is not None
+            or state_identity is None
+            or state_identity.object_id != session.ecar_object_id
+            or state_identity.hostname != session.system
+            or state_identity.principal != session.username
+            or state_identity.started_at != session.start_time
+        ):
+            raise StateError(
+                f"Linux sudo cleanup lacks exact closed State ownership: {session.ecar_object_id}"
+            )
+        if self._lifecycle_compatibility_fixture_mode:
+            return
+        lifecycle_snapshot = self._lifecycle_authority.registry.get_session(session.ecar_object_id)
+        if (
+            lifecycle_snapshot is None
+            or lifecycle_snapshot.closed_at is None
+            or lifecycle_snapshot.identity != LifecycleShadow.project_session_start(state_identity)
+            or lifecycle_snapshot.close_barrier is None
+            or lifecycle_snapshot.closure_ticket is None
+        ):
+            raise StateError(
+                "Linux sudo cleanup lacks exact accepted lifecycle close ownership: "
+                f"{session.ecar_object_id}"
             )
 
     def _recover_linux_sudo_session_materialization(
@@ -33458,6 +33885,7 @@ class ActivityGenerator:
         requested_tty_key = (system.hostname, sudo_user, tty)
         capacity_claim = object()
         tty_pair_published = False
+        handoff_pair_deltas: list[tuple[bool, bool]] = []
         try:
             assigned_tty = self._reconcile_linux_sudo_tty_assignment(
                 requested_tty_key=requested_tty_key,
@@ -33465,11 +33893,12 @@ class ActivityGenerator:
                 assigned_tty=None,
                 publish=False,
                 capacity_claim=capacity_claim,
+                handoff_pair_deltas=handoff_pair_deltas,
             )
+            if len(handoff_pair_deltas) != 1:
+                raise StateError("Linux sudo TTY selection lost its exact handoff delta")
             tty_key = (system.hostname, sudo_user, assigned_tty)
-            tty_sessions = self._linux_sudo_tty_sessions
-            tty_available = self._linux_sudo_tty_available
-            available = tty_available.get(tty_key)
+            existing_logon_id, available = self._linux_sudo_tty_route_state(tty_key)
             effective_sudo_time = sudo_time
             if available is not None and effective_sudo_time <= available:
                 effective_sudo_time = available + timedelta(milliseconds=20)
@@ -33478,7 +33907,6 @@ class ActivityGenerator:
             reserve_until += timing_shift
 
             session = None
-            existing_logon_id = tty_sessions.get(tty_key)
             if existing_logon_id:
                 candidate = self.state_manager.get_session(existing_logon_id)
                 if candidate is not None and _session_active_for_activity(
@@ -33544,6 +33972,15 @@ class ActivityGenerator:
                 capacity_claim=capacity_claim,
             )
             tty_pair_published = True
+            self._remember_linux_sudo_tty_session(
+                tty_key,
+                session.logon_id,
+                available_until=reserve_until,
+                session=session,
+                requested_tty_key=requested_tty_key,
+                capacity_claim=capacity_claim,
+                handoff_pair_deltas=handoff_pair_deltas[0],
+            )
         finally:
             try:
                 self._reconcile_linux_sudo_tty_assignment(
@@ -33560,8 +33997,6 @@ class ActivityGenerator:
                 # completed call must surface the cleanup integrity failure.
                 if tty_pair_published:
                     raise
-        tty_sessions[tty_key] = session.logon_id
-        tty_available[tty_key] = reserve_until
         shell_pid = self.ensure_linux_session_shell(
             user=user,
             target_system=system,
@@ -33585,7 +34020,11 @@ class ActivityGenerator:
         child_time += shell_shift
         reserve_until += shell_shift
         timing_shift += shell_shift
-        tty_available[tty_key] = reserve_until
+        self._update_linux_sudo_tty_availability(
+            tty_key,
+            session.logon_id,
+            reserve_until,
+        )
         if not _session_active_for_activity(
             session,
             reserve_until,
@@ -33595,10 +34034,11 @@ class ActivityGenerator:
             # transport close after the initial session-admission check. The
             # ambient invocation has not emitted anything yet, so reject it
             # rather than attaching process/PAM evidence to an ended session.
-            if available is None:
-                tty_available.pop(tty_key, None)
-            else:
-                tty_available[tty_key] = available
+            self._update_linux_sudo_tty_availability(
+                tty_key,
+                session.logon_id,
+                available,
+            )
             return 0, None, timing_shift, assigned_tty
         sudo_pid = self.generate_process(
             user=user,

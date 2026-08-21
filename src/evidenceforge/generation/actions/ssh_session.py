@@ -88,6 +88,9 @@ from evidenceforge.generation.deferred_session_preseal import (
     DeferredSessionProtocol,
 )
 from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
+from evidenceforge.generation.process_runtime_cache import (
+    ActivityGeneratorSessionRetentionRelease,
+)
 from evidenceforge.generation.source_timing import SourceTimingPlanner, SourceTimingPlanningRuntime
 from evidenceforge.generation.ssh_channels import (
     SshApplicationChannelManager,
@@ -2130,6 +2133,16 @@ class SshSessionExecutor(Protocol):
 
     def _get_system_pid(self, hostname: str, role: str, fallback: int) -> int:
         """Return a stable system process PID."""
+        ...
+
+    def _release_session_retention_state(
+        self,
+        *,
+        hostname: str,
+        username: str,
+        logon_id: str,
+    ) -> ActivityGeneratorSessionRetentionRelease:
+        """Release exact sudo-TTY state after a complete accepted session close."""
         ...
 
     def _remember_ssh_session_ready_time(
@@ -4586,22 +4599,28 @@ class SshSessionActionBundle:
             continuation is not None
             and continuation.recover_projection("logind-remove", self.executor.dispatcher)
         )
-        if logind_complete:
-            return
-        try:
-            self._dispatch_linux_logind_removed(
-                state,
-                event,
-                auth_state,
-                close_time,
-                continuation=continuation,
-            )
-        except BaseException as error:
+        if not logind_complete:
+            try:
+                self._dispatch_linux_logind_removed(
+                    state,
+                    event,
+                    auth_state,
+                    close_time,
+                    continuation=continuation,
+                )
+            except BaseException as error:
+                if continuation is not None:
+                    continuation.retain_projection_failure("logind-remove", error)
+                raise
             if continuation is not None:
-                continuation.retain_projection_failure("logind-remove", error)
-            raise
-        if continuation is not None:
-            continuation.mark_projection_complete("logind-remove")
+                continuation.mark_projection_complete("logind-remove")
+
+        if continuation is None:
+            self.executor._release_session_retention_state(
+                hostname=self.request.target_system.hostname,
+                username=self.request.user.username,
+                logon_id=state.logon_id,
+            )
 
     def _dispatch_linux_session_logout(
         self,

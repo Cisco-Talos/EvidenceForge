@@ -24,7 +24,8 @@ from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import Scenario
 from evidenceforge.models.exceptions import StateError
-from evidenceforge.models.scenario import System
+from evidenceforge.models.scenario import System, User
+from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.files import load_yaml
 from evidenceforge.utils.rng import _thread_local
 
@@ -246,7 +247,73 @@ def _sudo_tty_state(
         dict(getattr(generator, "_linux_sudo_tty_capacity_claims", {})),
         dict(getattr(generator, "_linux_sudo_tty_sessions", {})),
         dict(getattr(generator, "_linux_sudo_tty_available", {})),
+        {
+            logon_id: set(tty_keys)
+            for logon_id, tty_keys in getattr(
+                generator,
+                "_linux_sudo_tty_keys_by_logon_id",
+                {},
+            ).items()
+        },
     )
+
+
+def _materialize_strict_session(
+    engine: GenerationEngine,
+    state: StateManager,
+    system: System,
+    user: User,
+    *,
+    session_id: int,
+    lifecycle_group_id: str,
+) -> ActiveSession:
+    """Create one exact live session without child processes."""
+
+    plan = state.plan_session_materialization(
+        username=user.username,
+        system=system.hostname,
+        logon_type=2,
+        source_ip="-",
+        start_time=engine.start_time + timedelta(seconds=15),
+        session_kind="interactive",
+        lifecycle_group_id=lifecycle_group_id,
+        session_id=session_id,
+    )
+    session, receipt = engine.lifecycle_authority.materialize_session(plan)
+    assert engine.lifecycle_authority.authenticates_materialization_receipt(plan, receipt)
+    return session
+
+
+def _materialize_strict_sudo_tty_route(
+    engine: GenerationEngine,
+    generator: ActivityGenerator,
+    state: StateManager,
+    system: System,
+    user: User,
+    *,
+    session_id: int,
+    lifecycle_group_id: str,
+) -> tuple[ActiveSession, tuple[str, str, str]]:
+    """Create one exact live session and bind a sudo TTY without child processes."""
+
+    session = _materialize_strict_session(
+        engine,
+        state,
+        system,
+        user,
+        session_id=session_id,
+        lifecycle_group_id=lifecycle_group_id,
+    )
+    tty_key = (system.hostname, user.username, "pts/1")
+    generator._linux_sudo_tty_assignments[tty_key] = tty_key[2]
+    generator._linux_sudo_tty_owners[(system.hostname, tty_key[2])] = tty_key
+    generator._remember_linux_sudo_tty_session(
+        tty_key,
+        session.logon_id,
+        available_until=session.start_time + timedelta(seconds=30),
+        session=session,
+    )
+    return session, tty_key
 
 
 def _seed_sudo_tty_pairs(
@@ -526,6 +593,359 @@ def test_strict_sudo_bootstrap_does_not_reuse_closed_local_session_owner(
     replacement_snapshot = engine.lifecycle_registry.get_session(replacement.ecar_object_id)
     assert replacement_snapshot is not None
     assert replacement_snapshot.closed_at is None
+
+
+def test_strict_sudo_tty_route_releases_after_public_generic_session_close(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session, tty_key = _materialize_strict_sudo_tty_route(
+        engine,
+        generator,
+        state,
+        system,
+        user,
+        session_id=349_743,
+        lifecycle_group_id="sudo:generic-close-success",
+    )
+    assert generator._linux_sudo_tty_sessions == {tty_key: session.logon_id}
+    assert tty_key in generator._linux_sudo_tty_available
+
+    generator.generate_logoff(
+        user,
+        system,
+        session.start_time + timedelta(minutes=5),
+        session.logon_id,
+        logon_type=2,
+        from_storyline=True,
+    )
+
+    lifecycle = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    assert state.get_session(session.logon_id) is None
+    assert lifecycle is not None and lifecycle.closed_at is not None
+    assert tty_key not in generator._linux_sudo_tty_sessions
+    assert tty_key not in generator._linux_sudo_tty_available
+    assert not generator._linux_sudo_tty_assignments
+    assert not generator._linux_sudo_tty_owners
+    assert not generator._linux_sudo_tty_keys_by_logon_id
+
+
+def test_strict_sudo_tty_route_survives_rejected_generic_close_and_retry(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session, _tty_key = _materialize_strict_sudo_tty_route(
+        engine,
+        generator,
+        state,
+        system,
+        user,
+        session_id=349_744,
+        lifecycle_group_id="sudo:generic-close-retry",
+    )
+    snapshot_before = _sudo_tty_state(generator)
+    original_dispatch = generator.dispatcher.dispatch_builder
+
+    def reject_logoff(event: object) -> object:
+        if getattr(event, "event_type", "") == "logoff":
+            raise RuntimeError("injected generic close rejection")
+        return original_dispatch(event)  # type: ignore[arg-type]
+
+    with patch.object(generator.dispatcher, "dispatch_builder", side_effect=reject_logoff):
+        with pytest.raises(RuntimeError, match="generic close rejection"):
+            generator.generate_logoff(
+                user,
+                system,
+                session.start_time + timedelta(minutes=5),
+                session.logon_id,
+                logon_type=2,
+                from_storyline=True,
+            )
+
+    lifecycle = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    assert state.get_session(session.logon_id) is session
+    assert lifecycle is not None and lifecycle.closed_at is None
+    assert _sudo_tty_state(generator) == snapshot_before
+
+    generator.generate_logoff(
+        user,
+        system,
+        session.start_time + timedelta(minutes=5),
+        session.logon_id,
+        logon_type=2,
+        from_storyline=True,
+    )
+
+    assert state.get_session(session.logon_id) is None
+    assert not generator._linux_sudo_tty_sessions
+    assert not generator._linux_sudo_tty_keys_by_logon_id
+
+
+def test_strict_sudo_tty_route_survives_prepared_but_unclosed_generic_lifecycle(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    sudo_time = engine.start_time + timedelta(seconds=30)
+    generator.generate_linux_sudo_session(
+        system=system,
+        time=sudo_time,
+        command_message=(
+            "linux_user : TTY=pts/1 ; PWD=/home/linux_user ; USER=root ; COMMAND=/usr/bin/id"
+        ),
+        sudo_user=user.username,
+        uid=1000,
+        runtime=timedelta(seconds=2),
+    )
+    session = state.get_sessions_for_user(user.username)[0]
+    snapshot_before = _sudo_tty_state(generator)
+
+    with pytest.raises(StateError, match="exact accepted lifecycle close ownership"):
+        generator.generate_logoff(
+            user,
+            system,
+            sudo_time + timedelta(minutes=5),
+            session.logon_id,
+            logon_type=2,
+            from_storyline=True,
+        )
+
+    lifecycle = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    assert state.get_session(session.logon_id) is None
+    assert lifecycle is not None
+    assert lifecycle.close_barrier is not None
+    assert lifecycle.closure_ticket is not None
+    assert lifecycle.closed_at is None
+    assert _sudo_tty_state(generator) == snapshot_before
+
+
+def test_strict_sudo_tty_close_at_inverse_postcommit_rolls_back_pair_and_retries(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session = _materialize_strict_session(
+        engine,
+        state,
+        system,
+        user,
+        session_id=349_745,
+        lifecycle_group_id="sudo:inverse-postcommit-close",
+    )
+    _seed_sudo_tty_pairs(generator, hostname=system.hostname, count=3)
+    tty_before = _sudo_tty_state(generator)
+    processes_before = tuple(state.list_running_processes())
+    close_time = session.start_time + timedelta(minutes=5)
+
+    def close_after_exact_pair(phase: str) -> None:
+        if phase != "inverse-postcommit":
+            return
+        generator._linux_sudo_tty_publication_hook = None
+        generator.generate_logoff(
+            user,
+            system,
+            close_time,
+            session.logon_id,
+            logon_type=2,
+            from_storyline=True,
+        )
+
+    generator._linux_sudo_tty_publication_hook = close_after_exact_pair
+    with pytest.raises(StateError, match="exact lifecycle ownership"):
+        _generate_sudo_processes(
+            generator,
+            system,
+            sudo_time=engine.start_time + timedelta(seconds=30),
+            lifecycle_group_id="sudo:inverse-postcommit-close:first",
+            sudo_user=user.username,
+        )
+
+    closed = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    assert state.get_session(session.logon_id) is None
+    assert closed is not None and closed.closed_at is not None
+    assert tuple(state.list_running_processes()) == processes_before
+    assert _sudo_tty_state(generator) == tty_before
+
+    sudo_pid, child_pid, _shift, assigned_tty = _generate_sudo_processes(
+        generator,
+        system,
+        sudo_time=engine.start_time + timedelta(seconds=30),
+        lifecycle_group_id="sudo:inverse-postcommit-close:retry",
+        sudo_user=user.username,
+    )
+
+    assert sudo_pid > 0 and child_pid is not None
+    assert assigned_tty == "pts/1"
+    replacement = state.get_session(
+        generator._linux_sudo_tty_sessions[(system.hostname, user.username, assigned_tty)]
+    )
+    assert replacement is not None
+    assert replacement.logon_id != session.logon_id
+    assert not generator._linux_sudo_tty_capacity_claims
+
+
+def test_strict_sudo_tty_route_releases_after_public_exact_ssh_close(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    ssh_time = engine.start_time + timedelta(minutes=10)
+    generator.generate_ssh_session(
+        user=user,
+        target_system=system,
+        time=ssh_time,
+        source_ip="10.30.0.99",
+        source_port=51249,
+        duration=180.0,
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+    session = state.get_active_sessions_for_user_at(
+        user.username,
+        ssh_time + timedelta(minutes=1),
+    )[0]
+    generator.generate_linux_sudo_session(
+        system=system,
+        time=session.start_time + timedelta(seconds=30),
+        command_message=(
+            "linux_user : TTY=pts/1 ; PWD=/home/linux_user ; USER=root ; COMMAND=/usr/bin/id"
+        ),
+        sudo_user=user.username,
+        uid=1000,
+        runtime=timedelta(seconds=2),
+    )
+    tty_key = (system.hostname, user.username, "pts/1")
+    assert generator._linux_sudo_tty_sessions == {tty_key: session.logon_id}
+    assert generator.ssh_close_journal_census().total_pending == 1
+
+    generator.finalize_ssh_session_lifecycles(session.network_close_time + timedelta(minutes=1))
+
+    snapshot = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    assert state.get_session(session.logon_id) is None
+    assert snapshot is not None and snapshot.closed_at is not None
+    assert generator.ssh_close_journal_census().total_pending == 0
+    assert not generator._linux_sudo_tty_assignments
+    assert not generator._linux_sudo_tty_owners
+    assert not generator._linux_sudo_tty_sessions
+    assert not generator._linux_sudo_tty_available
+    assert not generator._linux_sudo_tty_keys_by_logon_id
+
+
+def test_sudo_tty_reverse_release_is_exact_idempotent_and_plateaus() -> None:
+    generator, _state, system = _sudo_generator()
+    hostname = system.hostname
+    username = "testuser"
+    old_logon_id = "0xold"
+    new_logon_id = "0xnew"
+    main_requested = (hostname, username, "pts/1")
+    main_actual = (hostname, username, "pts/2")
+    second_key = (hostname, username, "pts/3")
+    foreign_key = ("OTHER-LINUX-01", "other", "pts/9")
+
+    for requested_key, actual_key in (
+        (main_requested, main_actual),
+        (second_key, second_key),
+        (foreign_key, foreign_key),
+    ):
+        generator._linux_sudo_tty_assignments[requested_key] = actual_key[2]
+        generator._linux_sudo_tty_owners[(actual_key[0], actual_key[2])] = requested_key
+        generator._remember_linux_sudo_tty_session(
+            actual_key,
+            old_logon_id,
+            available_until=_SCENARIO_START + timedelta(seconds=1),
+        )
+
+    generator._remember_linux_sudo_tty_session(
+        main_actual,
+        new_logon_id,
+        available_until=_SCENARIO_START + timedelta(seconds=2),
+    )
+
+    released = generator._release_session_retention_state(
+        hostname=hostname,
+        username=username,
+        logon_id=old_logon_id,
+    )
+
+    assert released.sudo_tty_rows == 5
+    assert generator._linux_sudo_tty_sessions == {
+        main_actual: new_logon_id,
+        foreign_key: old_logon_id,
+    }
+    assert generator._linux_sudo_tty_keys_by_logon_id == {
+        old_logon_id: {foreign_key},
+        new_logon_id: {main_actual},
+    }
+    assert main_requested in generator._linux_sudo_tty_assignments
+    assert second_key not in generator._linux_sudo_tty_assignments
+    assert foreign_key in generator._linux_sudo_tty_assignments
+    assert (
+        generator._release_session_retention_state(
+            hostname=hostname,
+            username=username,
+            logon_id=old_logon_id,
+        ).total_rows
+        == 0
+    )
+
+    generator._release_session_retention_state(
+        hostname=foreign_key[0],
+        username=foreign_key[1],
+        logon_id=old_logon_id,
+    )
+    generator._release_session_retention_state(
+        hostname=hostname,
+        username=username,
+        logon_id=new_logon_id,
+    )
+    assert not generator._linux_sudo_tty_assignments
+    assert not generator._linux_sudo_tty_owners
+    assert not generator._linux_sudo_tty_sessions
+    assert not generator._linux_sudo_tty_available
+    assert not generator._linux_sudo_tty_keys_by_logon_id
+
+    plateau_key = (hostname, username, "pts/7")
+    for ordinal in range(256):
+        logon_id = f"0xplateau-{ordinal:x}"
+        generator._linux_sudo_tty_assignments[plateau_key] = plateau_key[2]
+        generator._linux_sudo_tty_owners[(hostname, plateau_key[2])] = plateau_key
+        generator._remember_linux_sudo_tty_session(
+            plateau_key,
+            logon_id,
+            available_until=_SCENARIO_START + timedelta(seconds=ordinal),
+        )
+        assert generator._linux_sudo_tty_keys_by_logon_id == {logon_id: {plateau_key}}
+        assert (
+            generator._release_session_retention_state(
+                hostname=hostname,
+                username=username,
+                logon_id=logon_id,
+            ).sudo_tty_rows
+            == 5
+        )
+        assert sum(len(mapping) for mapping in _sudo_tty_state(generator)) == 0
 
 
 def test_strict_sudo_tty_namespace_is_host_local_and_retry_exact(tmp_path: Path) -> None:
@@ -1749,7 +2169,19 @@ def test_strict_sudo_tty_postclaim_concurrency_retains_both_authoritative_caches
             tty="pts/1",
         )
         assert first_pair_published.wait(timeout=10)
+        first_key = (system.hostname, "linux_user", "pts/1")
+        handoff_claim = generator._linux_sudo_tty_capacity_claims[first_key]
+        assert handoff_claim[1:] == ("pts/1", False, False, True)
         try:
+            with pytest.raises(StateError, match="active capacity claim"):
+                _generate_sudo_processes(
+                    generator,
+                    system,
+                    sudo_time=engine.start_time + timedelta(seconds=31),
+                    lifecycle_group_id="sudo:postclaim-cache:conflict",
+                    sudo_user="linux_user",
+                    tty="pts/1",
+                )
             second = _generate_sudo_processes(
                 generator,
                 system,
@@ -1770,7 +2202,7 @@ def test_strict_sudo_tty_postclaim_concurrency_retains_both_authoritative_caches
     assert len(sessions) == 1
     session = sessions[0]
     expected_keys = {
-        (system.hostname, "linux_user", "pts/1"),
+        first_key,
         (system.hostname, "linux_user", "pts/2"),
     }
     assert set(generator._linux_sudo_tty_assignments) >= expected_keys

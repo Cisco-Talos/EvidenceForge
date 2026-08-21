@@ -23,7 +23,11 @@ from evidenceforge.events.dispatcher import EventDispatcher, PreparedActionCohor
 from evidenceforge.events.lifecycle import ProcessLifecycleSnapshot
 from evidenceforge.formats.loader import load_format
 from evidenceforge.generation.actions.network_connection import NetworkConnectionIdentityCapture
-from evidenceforge.generation.actions.ssh_session import SshSessionActionBundle, SshSessionRequest
+from evidenceforge.generation.actions.ssh_session import (
+    SshSessionActionBundle,
+    SshSessionRequest,
+    _PreparedSshCloseContinuation,
+)
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.emitters.base import ExactPublicationAuthority, ExactPublicationBatch
@@ -39,6 +43,9 @@ from evidenceforge.generation.lifecycle_registry import (
     PreparedLifecycleClosedTransportPublication,
 )
 from evidenceforge.generation.network_runtime import NetworkTransactionPreparedCommit
+from evidenceforge.generation.process_runtime_cache import (
+    ActivityGeneratorSessionRetentionRelease,
+)
 from evidenceforge.generation.source_finalization import SourceFinalizationCoordinator
 from evidenceforge.generation.source_timing import SourceTimingPreparation
 from evidenceforge.generation.ssh_channels import (
@@ -2236,6 +2243,178 @@ def test_exact_close_retries_terminal_sink_from_retained_receipt_not_missing_sta
         if row.get("hostname") == fixture.target.hostname and row.get("object") == "USER_SESSION"
     ]
     assert len(source_terminates) == 1
+    assert [row["action"] for row in target_sessions] == ["LOGIN", "LOGOUT"]
+    assert len(zeek_rows) == 1
+
+
+@pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))
+def test_exact_ssh_close_retries_sudo_tty_release_after_canonical_close(
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exact SSH continuation retries sudo-TTY release without consulting closed State."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(tmp_path)
+    _uid, logon_id = _execute_real_caller(
+        fixture,
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+    session = fixture.state.get_session(logon_id)
+    assert session is not None
+    fixture.generator.generate_linux_sudo_session(
+        system=fixture.target,
+        time=_START + timedelta(seconds=10),
+        command_message=(
+            "analyst : TTY=pts/1 ; PWD=/home/analyst ; USER=root ; COMMAND=/usr/bin/id"
+        ),
+        sudo_user=fixture.user.username,
+        uid=1000,
+        runtime=timedelta(seconds=2),
+    )
+    tty_key = (fixture.target.hostname, fixture.user.username, "pts/1")
+    assert fixture.generator._linux_sudo_tty_sessions == {tty_key: logon_id}
+    assert fixture.generator._linux_sudo_tty_keys_by_logon_id == {logon_id: {tty_key}}
+    assert fixture.generator.ssh_close_journal_census().exact_pending == 1
+
+    original_release = fixture.generator._release_session_retention_state
+    attempts = 0
+
+    def fail_release(
+        *,
+        hostname: str,
+        username: str,
+        logon_id: str,
+    ) -> ActivityGeneratorSessionRetentionRelease:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            if failure_mode == "lost-return":
+                original_release(
+                    hostname=hostname,
+                    username=username,
+                    logon_id=logon_id,
+                )
+            raise OSError(f"sudo TTY release {failure_mode}")
+        return original_release(
+            hostname=hostname,
+            username=username,
+            logon_id=logon_id,
+        )
+
+    monkeypatch.setattr(fixture.generator, "_release_session_retention_state", fail_release)
+    close_horizon = _START + timedelta(hours=1)
+    with pytest.raises(OSError, match=f"sudo TTY release {failure_mode}"):
+        fixture.generator.finalize_ssh_session_lifecycles(close_horizon)
+
+    lifecycle = fixture.generator._lifecycle_authority.registry.get_session(session.ecar_object_id)
+    assert fixture.state.get_session(logon_id) is None
+    assert lifecycle is not None and lifecycle.closed_at is not None
+    assert fixture.generator.ssh_close_journal_census().exact_pending == 1
+    if failure_mode == "fail-before":
+        assert fixture.generator._linux_sudo_tty_sessions == {tty_key: logon_id}
+        assert fixture.generator._linux_sudo_tty_keys_by_logon_id == {logon_id: {tty_key}}
+    else:
+        assert not fixture.generator._linux_sudo_tty_sessions
+        assert not fixture.generator._linux_sudo_tty_keys_by_logon_id
+
+    fixture.generator.finalize_ssh_session_lifecycles(close_horizon)
+
+    assert attempts == 2
+    assert fixture.generator.ssh_close_journal_census().exact_pending == 0
+    assert not fixture.generator._linux_sudo_tty_assignments
+    assert not fixture.generator._linux_sudo_tty_owners
+    assert not fixture.generator._linux_sudo_tty_sessions
+    assert not fixture.generator._linux_sudo_tty_available
+    assert not fixture.generator._linux_sudo_tty_keys_by_logon_id
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    target_sessions = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == fixture.target.hostname and row.get("object") == "USER_SESSION"
+    ]
+    assert [row["action"] for row in target_sessions] == ["LOGIN", "LOGOUT"]
+    assert len(zeek_rows) == 1
+
+
+def test_exact_ssh_postcondition_rejection_retains_sudo_tty_route_before_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exact postconditions precede cleanup so a rejected tail preserves retry state."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(tmp_path)
+    _uid, logon_id = _execute_real_caller(
+        fixture,
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+    session = fixture.state.get_session(logon_id)
+    assert session is not None
+    fixture.generator.generate_linux_sudo_session(
+        system=fixture.target,
+        time=_START + timedelta(seconds=10),
+        command_message=(
+            "analyst : TTY=pts/1 ; PWD=/home/analyst ; USER=root ; COMMAND=/usr/bin/id"
+        ),
+        sudo_user=fixture.user.username,
+        uid=1000,
+        runtime=timedelta(seconds=2),
+    )
+    tty_key = (fixture.target.hostname, fixture.user.username, "pts/1")
+    assert fixture.generator._linux_sudo_tty_sessions == {tty_key: logon_id}
+    assert fixture.generator._linux_sudo_tty_keys_by_logon_id == {logon_id: {tty_key}}
+
+    original_postcondition = _PreparedSshCloseContinuation.require_application_session_retired
+    postcondition_attempts = 0
+
+    def reject_postcondition_once(prepared: _PreparedSshCloseContinuation) -> None:
+        nonlocal postcondition_attempts
+        postcondition_attempts += 1
+        if postcondition_attempts == 1:
+            raise OSError("injected exact SSH postcondition rejection")
+        original_postcondition(prepared)
+
+    release = Mock(wraps=fixture.generator._release_session_retention_state)
+    monkeypatch.setattr(
+        _PreparedSshCloseContinuation,
+        "require_application_session_retired",
+        reject_postcondition_once,
+    )
+    monkeypatch.setattr(fixture.generator, "_release_session_retention_state", release)
+    close_horizon = _START + timedelta(hours=1)
+    with pytest.raises(OSError, match="exact SSH postcondition rejection"):
+        fixture.generator.finalize_ssh_session_lifecycles(close_horizon)
+
+    lifecycle = fixture.generator._lifecycle_authority.registry.get_session(session.ecar_object_id)
+    assert fixture.state.get_session(logon_id) is None
+    assert lifecycle is not None and lifecycle.closed_at is not None
+    assert fixture.generator.ssh_close_journal_census().exact_pending == 1
+    assert release.call_count == 0
+    assert fixture.generator._linux_sudo_tty_sessions == {tty_key: logon_id}
+    assert fixture.generator._linux_sudo_tty_keys_by_logon_id == {logon_id: {tty_key}}
+
+    fixture.generator.finalize_ssh_session_lifecycles(close_horizon)
+
+    assert postcondition_attempts == 2
+    assert release.call_count == 1
+    assert fixture.generator.ssh_close_journal_census().exact_pending == 0
+    assert not fixture.generator._linux_sudo_tty_assignments
+    assert not fixture.generator._linux_sudo_tty_owners
+    assert not fixture.generator._linux_sudo_tty_sessions
+    assert not fixture.generator._linux_sudo_tty_available
+    assert not fixture.generator._linux_sudo_tty_keys_by_logon_id
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    target_sessions = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == fixture.target.hostname and row.get("object") == "USER_SESSION"
+    ]
     assert [row["action"] for row in target_sessions] == ["LOGIN", "LOGOUT"]
     assert len(zeek_rows) == 1
 
