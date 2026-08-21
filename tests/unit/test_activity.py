@@ -4735,6 +4735,92 @@ class TestActivityGenerator:
             for event in kerberos_events
         )
 
+    def test_machine_account_registration_fail_before_preserves_logon_id(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A rejected registration must not consume the previewed machine LogonID."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        expected_logon_id = state_manager.preview_logon_id("DC-01", timestamp)
+
+        def reject_registration(**kwargs: object) -> None:
+            assert kwargs["logon_id"] == expected_logon_id
+            raise StateError("injected machine-account registration failure")
+
+        monkeypatch.setattr(state_manager, "register_session", reject_registration)
+
+        with pytest.raises(StateError, match="injected machine-account registration failure"):
+            activity_gen.generate_machine_account_logon(
+                hostname="WKS-01",
+                machine_username="WKS-01$",
+                dc_hostname="DC-01",
+                source_ip="10.0.1.10",
+                dc_ip="10.0.2.10",
+                time=timestamp,
+                domain="EXAMPLE",
+            )
+
+        assert state_manager.get_session_identity(expected_logon_id) is None
+        assert state_manager.preview_logon_id("DC-01", timestamp) == expected_logon_id
+        emitted_types = {
+            call.args[0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        }
+        assert "machine_logon" not in emitted_types
+        assert "logoff" not in emitted_types
+
+    def test_machine_account_registration_lost_return_reuses_exact_session(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A lost registration return must not allocate a sibling machine session."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        expected_logon_id = state_manager.preview_logon_id("DC-01", timestamp)
+        assert expected_logon_id == "0x176341e"
+        sessions_before = len(state_manager.state.active_sessions)
+        register_session = state_manager.register_session
+
+        def commit_then_raise(**kwargs: object) -> None:
+            registered = register_session(**kwargs)
+            assert registered.logon_id == expected_logon_id
+            raise RuntimeError("injected machine-account registration lost return")
+
+        monkeypatch.setattr(state_manager, "register_session", commit_then_raise)
+
+        activity_gen.generate_machine_account_logon(
+            hostname="WKS-01",
+            machine_username="WKS-01$",
+            dc_hostname="DC-01",
+            source_ip="10.0.1.10",
+            dc_ip="10.0.2.10",
+            time=timestamp,
+            domain="EXAMPLE",
+        )
+
+        security_events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        machine_logon = next(
+            event for event in security_events if event.event_type == "machine_logon"
+        )
+        machine_logoff = next(event for event in security_events if event.event_type == "logoff")
+        assert machine_logon.auth.logon_id == expected_logon_id
+        assert machine_logoff.auth.logon_id == expected_logon_id
+        assert machine_logon.identity_plan.object_id == machine_logoff.identity_plan.object_id
+        assert len(state_manager.state.active_sessions) == sessions_before
+        identity = state_manager.get_session_identity(expected_logon_id)
+        assert identity is not None
+        assert identity.object_id == machine_logon.identity_plan.object_id
+        assert state_manager.preview_logon_id("DC-01", timestamp) != expected_logon_id
+
     def test_bash_history_preserves_blocking_command_dwell(
         self, activity_gen, state_manager, mock_emitters
     ):

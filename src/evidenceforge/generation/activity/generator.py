@@ -29024,7 +29024,7 @@ class ActivityGenerator:
 
         domain = domain or getattr(self, "_netbios_domain", "CORP")
         rng = _get_rng()
-        logon_id = self.state_manager.allocate_logon_id(dc_hostname, time)
+        logon_id = self.state_manager.preview_logon_id(dc_hostname, time)
         tgt_time, tgs_time = self._kerberos_ticket_times(
             time,
             rng,
@@ -29087,7 +29087,7 @@ class ActivityGenerator:
             transport_role="target_service",
             source="machine_account_logon",
         )
-        session = self.state_manager.register_session(
+        expected_session = self.state_manager.plan_session_materialization(
             logon_id=logon_id,
             username=machine_username,
             system=dc_hostname,
@@ -29099,6 +29099,36 @@ class ActivityGenerator:
             logon_guid_required=False,
             lifecycle_group_id=remote_request.stable_id,
         )
+        try:
+            returned_session = self.state_manager.register_session(
+                logon_id=logon_id,
+                username=machine_username,
+                system=dc_hostname,
+                logon_type=3,
+                source_ip=source_ip,
+                start_time=time,
+                source_port=service_source_port,
+                session_kind="network",
+                logon_guid_required=False,
+                lifecycle_group_id=remote_request.stable_id,
+            )
+        except BaseException:
+            # Registration can have committed its exact State plan before an
+            # acknowledgement fault. Adopt only that already-planned identity;
+            # a fail-before or foreign owner remains an error.
+            returned_session = self.state_manager.get_session(logon_id)
+            if (
+                returned_session is None
+                or self.state_manager.get_session_identity(logon_id) != expected_session.identity
+            ):
+                raise
+        session = self.state_manager.get_session(logon_id)
+        if (
+            session is None
+            or session is not returned_session
+            or self.state_manager.get_session_identity(logon_id) != expected_session.identity
+        ):
+            raise StateError("Machine-account logon registered a different session identity")
         session_obj_id = session.ecar_object_id
         remote_authentication_plan = WindowsRemoteAuthenticationActionBundle(
             self,
