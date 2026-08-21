@@ -1463,7 +1463,15 @@ class SysmonEventEmitter(LogEmitter):
                 is_application_layer_only = (
                     event.network is not None and event.network.application_layer_only
                 )
-                if not is_application_layer_only and self._passes_event3_filter(event):
+                production_projection = (
+                    event.source_timing is not None and not event.source_timing.compatibility_mode
+                )
+                event3_eligible = (
+                    self._event3_projection_eligible(event)
+                    if production_projection
+                    else self._passes_event3_filter(event)
+                )
+                if not is_application_layer_only and event3_eligible:
                     self._render_sysmon_network_connect(event)
                 if event.dns and self._passes_event22_filter(event):
                     self._render_sysmon_dns_query(event)
@@ -1974,9 +1982,14 @@ class SysmonEventEmitter(LogEmitter):
                 raise ExactPublicationError("Sysmon filter cache disappeared")
             return filters
 
-    def _passes_event3_filter(self, event: CanonicalOccurrence) -> bool:
-        """Check if a connection event passes the Event 3 (NetworkConnect) filter."""
-        cfg = self._get_filters().get("network_connect", {})
+    @staticmethod
+    def _event3_filter_matches(
+        event: CanonicalOccurrence,
+        cfg: dict[object, object],
+        image: str,
+    ) -> bool:
+        """Evaluate the allocation-free Event 3 policy for one resolved image."""
+
         if not cfg.get("enabled", True):
             return False
         if not event.network:
@@ -1992,21 +2005,7 @@ class SysmonEventEmitter(LogEmitter):
         if dst_ip in exclude_ips:
             return False
 
-        # Check include rules — pass if image matches OR dest port matches.
-        # Production resolves only a carrier-owned process whose Sysmon identity
-        # was frozen upstream. PID lookup remains a direct-compatibility fallback.
-        image = ""
-        host = event.src_host
-        carrier_process = self._carrier_owned_process(event, host) if host is not None else None
-        if carrier_process is not None:
-            image = carrier_process[1].rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        elif event.source_timing is not None and not event.source_timing.compatibility_mode:
-            return False
-        elif event.network and event.network.initiating_pid > 0 and event.src_host:
-            _pid, resolved_image = self._resolve_process_from_pid(
-                event.src_host.hostname, event.network.initiating_pid
-            )
-            image = resolved_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        image = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         include_images = [img.lower() for img in cfg.get("include_images", [])]
         if image in include_images:
             return True
@@ -2044,6 +2043,63 @@ class SysmonEventEmitter(LogEmitter):
             return True
 
         return False
+
+    def _passes_event3_filter(self, event: CanonicalOccurrence) -> bool:
+        """Check if a connection event passes the Event 3 (NetworkConnect) filter."""
+
+        cfg = self._get_filters().get("network_connect", {})
+        image = ""
+        host = event.src_host
+        carrier_process = self._carrier_owned_process(event, host) if host is not None else None
+        if carrier_process is not None:
+            image = carrier_process[1]
+        elif event.source_timing is not None and not event.source_timing.compatibility_mode:
+            return False
+        elif event.network and event.network.initiating_pid > 0 and event.src_host:
+            _pid, resolved_image = self._resolve_process_from_pid(
+                event.src_host.hostname, event.network.initiating_pid
+            )
+            image = resolved_image
+        return self._event3_filter_matches(event, cfg, image)
+
+    def _event3_projection_eligible(self, event: CanonicalOccurrence) -> bool:
+        """Return whether one compiled connection can render a Sysmon Event 3 row.
+
+        The decision reads only canonical carrier identity and an existing or
+        locally loaded filter snapshot. It never consults StateManager, allocates
+        emitter state, or fabricates process attribution.
+        """
+
+        host = event.src_host
+        network = event.network
+        if (
+            event.event_type != "connection"
+            or host is None
+            or host.os_category != "windows"
+            or network is None
+            or network.application_layer_only
+        ):
+            return False
+        carrier_process = self._carrier_owned_process(event, host)
+        if carrier_process is None:
+            return False
+        pid, image, _principal, _started_at = carrier_process
+        if pid <= 0 or not image or image == "-":
+            return False
+        owner_state = object.__getattribute__(self, "__dict__")
+        filters = dict.get(owner_state, "_filters")
+        if filters is None:
+            filters = load_sysmon_filters()
+        retained = self._validate_sysmon_render_mapping(
+            filters,
+            label="projection filter",
+        )
+        if retained is None:
+            raise ExactPublicationError("Sysmon projection filter disappeared")
+        cfg = retained.get("network_connect", {})
+        if type(cfg) is not dict:
+            raise ExactPublicationError("Sysmon Event 3 projection filter is malformed")
+        return self._event3_filter_matches(event, cfg, image)
 
     def _passes_event7_filter(self, event: CanonicalOccurrence) -> bool:
         """Check if an image_load event passes the Event 7 (ImageLoaded) filter."""

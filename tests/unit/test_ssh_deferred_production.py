@@ -26,11 +26,12 @@ from evidenceforge.generation.actions.network_connection import NetworkConnectio
 from evidenceforge.generation.actions.ssh_session import SshSessionActionBundle, SshSessionRequest
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
-from evidenceforge.generation.emitters.base import ExactPublicationBatch
+from evidenceforge.generation.emitters.base import ExactPublicationAuthority, ExactPublicationBatch
 from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.emitters.syslog import SyslogEmitter
+from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 from evidenceforge.generation.emitters.web import WebEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
@@ -38,6 +39,7 @@ from evidenceforge.generation.lifecycle_registry import (
     PreparedLifecycleClosedTransportPublication,
 )
 from evidenceforge.generation.network_runtime import NetworkTransactionPreparedCommit
+from evidenceforge.generation.source_finalization import SourceFinalizationCoordinator
 from evidenceforge.generation.source_timing import SourceTimingPreparation
 from evidenceforge.generation.ssh_channels import (
     SshApplicationChannelManager,
@@ -1393,6 +1395,85 @@ def test_storyline_scp_shape_uses_existing_source_process_in_exact_bridge(
     assert source_flows
     assert source_flows[0]["pid"] == source_pid
     assert len(zeek_rows) == 1
+
+
+def test_modeled_ssh_client_publishes_one_source_finalized_sysmon_event3(
+    tmp_path: Path,
+) -> None:
+    """The real exact SSH caller publishes one actor-bound Sysmon transport row."""
+
+    reset_thread_rng(42)
+    sysmon_root = tmp_path / "sysmon"
+    fixture = _fixture(tmp_path)
+    source_logon = fixture.generator.generate_logon(
+        fixture.user,
+        fixture.source,
+        _START,
+        logon_type=3,
+        source_ip=fixture.source.ip,
+        emit_network_evidence=False,
+    )
+    source_image = r"C:\Windows\System32\OpenSSH\ssh.exe"
+    source_pid = fixture.generator.generate_process(
+        fixture.user,
+        fixture.source,
+        _START + timedelta(seconds=1),
+        source_logon,
+        source_image,
+        f"{source_image} {fixture.target.hostname}",
+        parent_pid=0,
+        suppress_command_file_effect=True,
+    )
+    sysmon = SysmonEventEmitter(
+        load_format("windows_event_sysmon"),
+        sysmon_root,
+        threaded=False,
+        source_finalization=True,
+    )
+    fixture.generator.dispatcher.emitters["windows_event_sysmon"] = sysmon
+    request = replace(
+        fixture.request(),
+        time=_START + timedelta(seconds=2),
+        source_pid=source_pid,
+        source_process_image=source_image,
+        source="storyline_ssh",
+    )
+
+    uid = SshSessionActionBundle(request, fixture.generator).execute()
+    application = fixture.generator._ssh_channel_manager.find_by_transport(
+        fixture.generator._last_connection_effective_transaction_id
+    )
+    assert uid and application is not None
+    assert application.transport.source_process is not None
+    assert application.transport.source_process.pid == source_pid
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+
+    coordinator = SourceFinalizationCoordinator(
+        (sysmon,),
+        ExactPublicationAuthority(
+            capacity=1,
+            row_capacity=256,
+            byte_capacity=8 * 1024 * 1024,
+        ),
+    )
+    coordinator.finalize()
+    sysmon.close()
+    coordinator.mark_closed()
+    _ecar_rows, zeek_rows = fixture.close_and_read()
+    rendered = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in sysmon_root.rglob("windows_event_sysmon.xml")
+    )
+    assert rendered.count("<EventID>3</EventID>") == 1
+    assert f'<Data Name="ProcessId">{source_pid}</Data>' in rendered
+    assert f'<Data Name="Image">{source_image}</Data>' in rendered
+    assert '<Data Name="SourceIp">10.0.0.10</Data>' in rendered
+    assert '<Data Name="DestinationIp">10.0.0.20</Data>' in rendered
+    assert '<Data Name="DestinationPort">22</Data>' in rendered
+    assert len(zeek_rows) == 1
+    exact = sysmon.exact_candidate_census()
+    assert exact.current_rows == exact.current_bytes == exact.current_participants == 0
+    assert exact.released_rows == exact.released_bytes == exact.completed_participants == 0
 
 
 @pytest.mark.parametrize("ended_owner", ("process", "session"))

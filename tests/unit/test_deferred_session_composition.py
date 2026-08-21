@@ -32,7 +32,7 @@ from evidenceforge.events.dispatcher import (
     PreparedDispatch,
     PreparedDispatchStateIntent,
 )
-from evidenceforge.events.identity import EventIdentityPlan
+from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity
 from evidenceforge.events.lifecycle import ActionLifecycleContext, LifecycleHold
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -77,7 +77,11 @@ from evidenceforge.generation.deferred_session_preseal import (
     DeferredSessionBindingDisposition,
     DeferredSessionProtocol,
 )
-from evidenceforge.generation.emitters.base import ExactPublicationBatch, LogEmitter
+from evidenceforge.generation.emitters.base import (
+    ExactPublicationAuthority,
+    ExactPublicationBatch,
+    LogEmitter,
+)
 from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
@@ -111,6 +115,7 @@ from evidenceforge.generation.rdp_sessions import (
     RdpSessionAdmissionToken,
 )
 from evidenceforge.generation.source_deployment_compiler import exact_source_instance_id
+from evidenceforge.generation.source_finalization import SourceFinalizationCoordinator
 from evidenceforge.generation.source_timing import SourceTimingPlanner, SourceTimingPreparation
 from evidenceforge.generation.ssh_channels import (
     SshApplicationChannelManager,
@@ -1264,6 +1269,55 @@ def _compiled_ssh_cisco_deployment() -> CompiledCollectionDeployment:
     return CompiledCollectionDeployment(tuple(sources))
 
 
+def _compiled_ssh_sysmon_deployment() -> CompiledCollectionDeployment:
+    """Return visible eCAR hosts plus one concrete Sysmon source endpoint."""
+
+    sources = []
+    for format_name, hostname in (
+        ("ecar", "WS-01"),
+        ("ecar", "DB-01"),
+        ("windows_event_sysmon", "WS-01"),
+    ):
+        descriptor = DEFAULT_SOURCE_CATALOG.descriptor(format_name)
+        sources.append(
+            SourceInstanceDeployment(
+                identity=SourceInstanceIdentity(
+                    source_instance=exact_source_instance_id(descriptor.family, hostname),
+                    hostname=hostname,
+                    family=descriptor.family,
+                ),
+                formats=(format_name,),
+                policy=SourceCollectionPolicy(
+                    enabled=True,
+                    capabilities=descriptor.capabilities,
+                ),
+            )
+        )
+    return CompiledCollectionDeployment(tuple(sources))
+
+
+def _compiled_ssh_sysmon_only_deployment() -> CompiledCollectionDeployment:
+    """Return one Sysmon source so a filtered route cannot borrow another proof."""
+
+    descriptor = DEFAULT_SOURCE_CATALOG.descriptor("windows_event_sysmon")
+    return CompiledCollectionDeployment(
+        (
+            SourceInstanceDeployment(
+                identity=SourceInstanceIdentity(
+                    source_instance=exact_source_instance_id(descriptor.family, "WS-01"),
+                    hostname="WS-01",
+                    family=descriptor.family,
+                ),
+                formats=("windows_event_sysmon",),
+                policy=SourceCollectionPolicy(
+                    enabled=True,
+                    capabilities=descriptor.capabilities,
+                ),
+            ),
+        )
+    )
+
+
 def _foundation_publication_fixture(
     kind: DeferredSessionKind,
     tmp_path: Path,
@@ -1289,6 +1343,8 @@ def _foundation_publication_fixture(
     rdp_elevated: bool = False,
     cisco_sensor_hostname: str | None = None,
     cisco_nat: NatSensorObservation | None = None,
+    transport_source_pid: int = -1,
+    transport_source_image: str = "",
 ) -> _PublicationFixture:
     """Build one exact eCAR/Zeek deferred bridge without using caller mocks."""
 
@@ -1352,6 +1408,36 @@ def _foundation_publication_fixture(
         if spoof_transport_source_hostname
         else src_host
     )
+    source_process_started_at = transaction.started_at - timedelta(seconds=5)
+    source_process = (
+        ProcessContext(
+            pid=transport_source_pid,
+            parent_pid=4,
+            image=transport_source_image,
+            command_line=f"{transport_source_image} {dst_host.hostname}",
+            username="analyst",
+            logon_id="0x50001",
+            start_time=source_process_started_at,
+        )
+        if transport_source_pid > 0 and transport_source_image
+        else None
+    )
+    source_process_identity = (
+        ProcessIdentity(
+            hostname=transport_src_host.hostname,
+            object_id="source-ssh-process-1",
+            pid=transport_source_pid,
+            parent_pid=4,
+            image=transport_source_image,
+            command_line=f"{transport_source_image} {dst_host.hostname}",
+            principal="analyst",
+            logon_id="0x50001",
+            started_at=source_process_started_at,
+            lifecycle_group_id="source-ssh-process-lifecycle-1",
+        )
+        if source_process is not None
+        else None
+    )
     session = fixture.session_plan.identity
     dependent_time = session.started_at + timedelta(seconds=5)
     cisco_observations = (
@@ -1398,6 +1484,7 @@ def _foundation_publication_fixture(
                 event_type="connection",
                 src_host=transport_src_host,
                 dst_host=dst_host,
+                process=source_process,
                 network=transaction,
                 network_observations=cisco_observations,
                 network_observations_planned=bool(cisco_observations),
@@ -1408,6 +1495,11 @@ def _foundation_publication_fixture(
                     }
                     if cisco_sensor_hostname is not None
                     else {}
+                ),
+                identity_plan=(
+                    EventIdentityPlan(actor=source_process_identity)
+                    if source_process_identity is not None
+                    else None
                 ),
             ),
             state_intent=PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT,
@@ -2678,24 +2770,367 @@ def test_exact_deferred_ssh_open_rejects_nonconcrete_syslog_before_state(
         emitter.close()
 
 
-def test_exact_deferred_bridge_rejects_unadapted_sysmon_before_state_or_render(
+def _finalize_sysmon_source(emitter: SysmonEventEmitter) -> None:
+    """Finalize and close one exact Sysmon source in engine owner order."""
+
+    coordinator = SourceFinalizationCoordinator(
+        (emitter,),
+        ExactPublicationAuthority(
+            capacity=1,
+            row_capacity=256,
+            byte_capacity=8 * 1024 * 1024,
+        ),
+    )
+    coordinator.finalize()
+    emitter.close()
+    coordinator.mark_closed()
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    (
+        "success",
+        "commit-fail-before",
+        "commit-lost-return",
+        "release-fail-before",
+        "release-lost-return",
+    ),
+)
+def test_exact_deferred_ssh_open_publishes_bound_sysmon_event3_once(
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A modeled SSH client makes one exact recoverable Sysmon Event 3 row."""
+
+    sysmon_root = tmp_path / "sysmon"
+    sysmon = SysmonEventEmitter(
+        load_format("windows_event_sysmon"),
+        sysmon_root,
+        threaded=False,
+        source_finalization=True,
+    )
+    original_commit = sysmon._commit_exact_candidate_row
+    original_release = sysmon._release_exact_candidate_row
+    commit_attempts = 0
+    release_attempts = 0
+
+    def fault_event3_commit(key: object, digest: str, frozen: object) -> None:
+        nonlocal commit_attempts
+        if failure_mode.startswith("commit-") and commit_attempts == 0:
+            commit_attempts += 1
+            if failure_mode.endswith("lost-return"):
+                original_commit(key, digest, frozen)  # type: ignore[arg-type]
+            raise OSError(f"injected SSH-open Sysmon {failure_mode}")
+        original_commit(key, digest, frozen)  # type: ignore[arg-type]
+
+    def fault_event3_release(key: object) -> None:
+        nonlocal release_attempts
+        if failure_mode.startswith("release-") and release_attempts == 0:
+            release_attempts += 1
+            if failure_mode.endswith("lost-return"):
+                original_release(key)  # type: ignore[arg-type]
+            raise OSError(f"injected SSH-open Sysmon {failure_mode}")
+        original_release(key)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sysmon, "_commit_exact_candidate_row", fault_event3_commit)
+    monkeypatch.setattr(sysmon, "_release_exact_candidate_row", fault_event3_release)
+    source_pid = 4_321
+    source_image = r"C:\Windows\System32\OpenSSH\ssh.exe"
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"windows_event_sysmon": sysmon},
+        collection_deployment=_compiled_ssh_sysmon_deployment(),
+        transport_source_pid=source_pid,
+        transport_source_image=source_image,
+    )
+
+    if failure_mode == "success":
+        committed = publication.authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            publication.fixture.coordinator,
+            publication.fixture.owner_rng,
+            dispatcher=publication.dispatcher,
+            publication_batch=publication.batch,
+        )
+        assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    else:
+        with pytest.raises(OSError, match=f"SSH-open Sysmon {failure_mode}"):
+            publication.authority.materialize_prepared_deferred_session_publication(
+                publication.composition,
+                publication.fixture.coordinator,
+                publication.fixture.owner_rng,
+                dispatcher=publication.dispatcher,
+                publication_batch=publication.batch,
+            )
+        assert (
+            publication.fixture.state.get_session(
+                publication.fixture.session_plan.identity.logon_id
+            )
+            is not None
+        )
+        state_version = publication.fixture.state.materialization_version
+        state_digest = publication.fixture.state.materialization_digest()
+        recovery = publication.dispatcher.exact_projection_recovery_census()
+        assert recovery.unresolved_recoveries == 1
+        resumed = publication.dispatcher.drain_exact_projection_recoveries()
+        assert len(resumed) == 1
+        assert all(
+            outcome.status == "succeeded" for result in resumed for outcome in result.projections
+        )
+        assert publication.fixture.state.materialization_version == state_version
+        assert publication.fixture.state.materialization_digest() == state_digest
+
+    assert (
+        publication.fixture.state.get_session(publication.fixture.session_plan.identity.logon_id)
+        is not None
+    )
+    assert commit_attempts == int(failure_mode.startswith("commit-"))
+    assert release_attempts == int(failure_mode.startswith("release-"))
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    publication.ecar.close()
+    publication.zeek.close()
+    _finalize_sysmon_source(sysmon)
+    rendered = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in sysmon_root.rglob("windows_event_sysmon.xml")
+    )
+    assert rendered.count("<EventID>3</EventID>") == 1
+    assert f'<Data Name="ProcessId">{source_pid}</Data>' in rendered
+    assert f'<Data Name="Image">{source_image}</Data>' in rendered
+    assert '<Data Name="SourceIp">10.0.0.10</Data>' in rendered
+    assert '<Data Name="SourcePort">50001</Data>' in rendered
+    assert '<Data Name="DestinationIp">10.0.0.20</Data>' in rendered
+    assert '<Data Name="DestinationPort">22</Data>' in rendered
+    exact = sysmon.exact_candidate_census()
+    assert exact.current_rows == exact.current_bytes == exact.current_participants == 0
+    assert exact.released_rows == exact.released_bytes == exact.completed_participants == 0
+    assert exact.high_water_rows == exact.high_water_participants == 1
+
+
+def test_exact_deferred_ssh_open_filters_actorless_sysmon_before_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An actorless transport keeps its eCAR proof without inventing Event 3."""
+
+    sysmon_root = tmp_path / "sysmon"
+    sysmon = SysmonEventEmitter(
+        load_format("windows_event_sysmon"),
+        sysmon_root,
+        threaded=False,
+        source_finalization=True,
+    )
+    marker_reads = 0
+    helper_calls = 0
+    original_helper = getattr(SysmonEventEmitter, "_event3_projection_eligible", None)
+
+    def reject_marker_read(_emitter: SysmonEventEmitter) -> bool:
+        nonlocal marker_reads
+        marker_reads += 1
+        raise AssertionError("filtered Sysmon exact marker executed")
+
+    def capture_helper(emitter: SysmonEventEmitter, event: object) -> bool:
+        nonlocal helper_calls
+        helper_calls += 1
+        if original_helper is None:
+            return False
+        return original_helper(emitter, event)
+
+    monkeypatch.setattr(
+        SysmonEventEmitter,
+        "supports_exact_projection_publication",
+        property(reject_marker_read),
+    )
+    monkeypatch.setattr(
+        SysmonEventEmitter,
+        "_event3_projection_eligible",
+        capture_helper,
+        raising=False,
+    )
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"windows_event_sysmon": sysmon},
+        collection_deployment=_compiled_ssh_sysmon_deployment(),
+        prepare_publication=False,
+    )
+    assert "_filters" not in sysmon.__dict__
+    state_version = publication.fixture.state.materialization_version
+    state_digest = publication.fixture.state.materialization_digest()
+    batch = publication.dispatcher.prepare_deferred_session_publication_batch(
+        publication.composition,
+        publication.fixture.coordinator,
+    )
+    assert publication.fixture.state.materialization_version == state_version
+    assert publication.fixture.state.materialization_digest() == state_digest
+
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=batch,
+    )
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    assert helper_calls == 1
+    assert marker_reads == 0
+    assert "_filters" not in sysmon.__dict__
+    assert sysmon.exact_candidate_census().high_water_rows == 0
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    publication.ecar.close()
+    publication.zeek.close()
+    _finalize_sysmon_source(sysmon)
+    assert not tuple(sysmon_root.rglob("windows_event_sysmon.xml"))
+
+
+def test_actorless_sysmon_filter_preserves_positive_member_guard(
     tmp_path: Path,
 ) -> None:
-    """Current sorted Sysmon target remains an explicit foundation stop."""
+    """Filtering the sole zero-row source cannot authorize an unproven member."""
 
-    output_path = tmp_path / "sysmon"
-    emitter = SysmonEventEmitter(
+    sysmon_root = tmp_path / "sysmon"
+    sysmon = SysmonEventEmitter(
         load_format("windows_event_sysmon"),
-        output_path,
+        sysmon_root,
         threaded=False,
         source_finalization=True,
     )
     publication = _foundation_publication_fixture(
-        DeferredSessionKind.RDP,
+        DeferredSessionKind.SSH,
         tmp_path,
-        extra_emitters={"windows_event_sysmon": emitter},
+        extra_emitters={"windows_event_sysmon": sysmon},
+        collection_deployment=_compiled_ssh_sysmon_only_deployment(),
         prepare_publication=False,
     )
+    state_version = publication.fixture.state.materialization_version
+    state_digest = publication.fixture.state.materialization_digest()
+    timing_digest = publication.fixture.timing_planner.state_digest()
+
+    with pytest.raises(EventContractError, match="positive exact target for every member"):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+
+    assert publication.fixture.state.materialization_version == state_version
+    assert publication.fixture.state.materialization_digest() == state_digest
+    assert publication.fixture.timing_planner.state_digest() == timing_digest
+    assert sysmon.exact_candidate_census().high_water_rows == 0
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    _cancel_unmaterialized_publication(publication)
+    publication.ecar.close()
+    publication.zeek.close()
+    _finalize_sysmon_source(sysmon)
+    assert not tuple(sysmon_root.rglob("windows_event_sysmon.xml"))
+
+
+class _OpenSysmonSubclass(SysmonEventEmitter):
+    """Inherited exact capability that must not satisfy the concrete allowlist."""
+
+    marker_reads = 0
+
+    @property
+    def supports_exact_projection_publication(self) -> bool:
+        """Fail if deferred admission executes a subclass descriptor."""
+
+        type(self).marker_reads += 1
+        raise AssertionError("subclass Sysmon exact marker executed")
+
+
+class _OpenDuckSysmon:
+    """Duck exact marker that must not execute during deferred admission."""
+
+    marker_reads = 0
+    emit_calls = 0
+
+    @property
+    def supports_exact_projection_publication(self) -> bool:
+        """Fail if deferred admission executes a foreign descriptor."""
+
+        type(self).marker_reads += 1
+        raise AssertionError("duck Sysmon exact marker executed")
+
+    def can_handle(self, event: object) -> bool:
+        """Participate only in the actorful Windows connection member."""
+
+        return getattr(event, "event_type", None) == "connection"
+
+    def emit(self, _event: object) -> None:
+        """Remain inert because admission must fail before rendering."""
+
+        type(self).emit_calls += 1
+
+
+@pytest.mark.parametrize(
+    "target_kind",
+    ("direct", "subclass", "duck", "alias", "replaced"),
+)
+def test_exact_deferred_ssh_open_rejects_unbound_or_nonconcrete_sysmon_before_state(
+    target_kind: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the exact bound concrete Sysmon instance can join an SSH open."""
+
+    _OpenSysmonSubclass.marker_reads = 0
+    _OpenDuckSysmon.marker_reads = 0
+    _OpenDuckSysmon.emit_calls = 0
+    alias_marker_reads = 0
+    output_path = tmp_path / target_kind
+    replaced: SysmonEventEmitter | None = None
+    if target_kind == "direct":
+        emitter: object = SysmonEventEmitter(
+            load_format("windows_event_sysmon"),
+            output_path,
+            threaded=False,
+        )
+    elif target_kind == "subclass":
+        emitter = _OpenSysmonSubclass(
+            load_format("windows_event_sysmon"),
+            output_path,
+            threaded=False,
+            source_finalization=True,
+        )
+    elif target_kind == "duck":
+        emitter = _OpenDuckSysmon()
+    else:
+        if target_kind == "alias":
+
+            def reject_alias_marker(_emitter: SysmonEventEmitter) -> bool:
+                nonlocal alias_marker_reads
+                alias_marker_reads += 1
+                raise AssertionError("wrong-alias Sysmon exact marker executed")
+
+            monkeypatch.setattr(
+                SysmonEventEmitter,
+                "supports_exact_projection_publication",
+                property(reject_alias_marker),
+            )
+        emitter = SysmonEventEmitter(
+            load_format("windows_event_sysmon"),
+            output_path,
+            threaded=False,
+            source_finalization=True,
+        )
+    format_name = "sysmon_alias" if target_kind == "alias" else "windows_event_sysmon"
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={format_name: emitter},  # type: ignore[dict-item]
+        prepare_publication=False,
+        transport_source_pid=4_321,
+        transport_source_image=r"C:\Windows\System32\OpenSSH\ssh.exe",
+    )
+    if target_kind == "replaced":
+        replaced = SysmonEventEmitter(
+            load_format("windows_event_sysmon"),
+            tmp_path / "replacement",
+            threaded=False,
+            source_finalization=True,
+        )
+        publication.dispatcher.emitters["windows_event_sysmon"] = replaced
     state_version = publication.fixture.state.materialization_version
     state_digest = publication.fixture.state.materialization_digest()
     timing_digest = publication.fixture.timing_planner.state_digest()
@@ -2710,11 +3145,96 @@ def test_exact_deferred_bridge_rejects_unadapted_sysmon_before_state_or_render(
     assert publication.fixture.state.materialization_digest() == state_digest
     assert publication.fixture.timing_planner.state_digest() == timing_digest
     assert not output_path.exists()
+    assert _OpenSysmonSubclass.marker_reads == 0
+    assert _OpenDuckSysmon.marker_reads == 0
+    assert _OpenDuckSysmon.emit_calls == 0
+    assert alias_marker_reads == 0
     _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
     _cancel_unmaterialized_publication(publication)
     publication.ecar.close()
     publication.zeek.close()
-    emitter.close()
+    if isinstance(emitter, SysmonEventEmitter):
+        emitter.close()
+    if replaced is not None:
+        replaced.close()
+
+
+def test_exact_deferred_ssh_sysmon_warmup_skips_capability_and_filter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fully suppressed actorful SSH open never consults its Sysmon sink."""
+
+    sysmon_root = tmp_path / "sysmon"
+    sysmon = SysmonEventEmitter(
+        load_format("windows_event_sysmon"),
+        sysmon_root,
+        threaded=False,
+        source_finalization=True,
+    )
+    marker_reads = 0
+    helper_calls = 0
+
+    def reject_marker_read(_emitter: SysmonEventEmitter) -> bool:
+        nonlocal marker_reads
+        marker_reads += 1
+        raise AssertionError("suppressed Sysmon exact marker executed")
+
+    def reject_helper(_emitter: SysmonEventEmitter, _event: object) -> bool:
+        nonlocal helper_calls
+        helper_calls += 1
+        raise AssertionError("suppressed Sysmon Event 3 helper executed")
+
+    monkeypatch.setattr(
+        SysmonEventEmitter,
+        "supports_exact_projection_publication",
+        property(reject_marker_read),
+    )
+    monkeypatch.setattr(
+        SysmonEventEmitter,
+        "_event3_projection_eligible",
+        reject_helper,
+        raising=False,
+    )
+    original_prepare = ExactPublicationBatch.prepare
+    prepared_row_counts: list[int] = []
+
+    def capture_row_count(
+        batch: ExactPublicationBatch,
+        render: Callable[[], object],
+    ) -> object:
+        result = original_prepare(batch, render)
+        prepared_row_counts.append(batch.prepared_row_count)
+        return result
+
+    monkeypatch.setattr(ExactPublicationBatch, "prepare", capture_row_count)
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"windows_event_sysmon": sysmon},
+        collection_deployment=_compiled_ssh_sysmon_deployment(),
+        output_start_time=_END,
+        transport_source_pid=4_321,
+        transport_source_image=r"C:\Windows\System32\OpenSSH\ssh.exe",
+    )
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    assert prepared_row_counts == [0]
+    assert marker_reads == helper_calls == 0
+    assert "_filters" not in sysmon.__dict__
+    assert sysmon.exact_candidate_census().high_water_rows == 0
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    publication.ecar.close()
+    publication.zeek.close()
+    _finalize_sysmon_source(sysmon)
+    assert not tuple(sysmon_root.rglob("windows_event_sysmon.xml"))
 
 
 def test_exact_deferred_bridge_rejects_marker_impostor_before_render(

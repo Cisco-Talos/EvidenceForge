@@ -10977,6 +10977,7 @@ class EventDispatcher:
         )
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.syslog import SyslogEmitter
+        from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
         from evidenceforge.generation.emitters.windows import (
             WindowsEventEmitter,
             _supports_windows_exact_projection_publication,
@@ -10988,6 +10989,7 @@ class EventDispatcher:
             "ecar": EcarEmitter,
             "syslog": SyslogEmitter,
             "windows_event_security": WindowsEventEmitter,
+            "windows_event_sysmon": SysmonEventEmitter,
             "zeek_conn": ZeekEmitter,
         }
         participants: list[LogEmitter] = []
@@ -11006,6 +11008,10 @@ class EventDispatcher:
                 )
                 supported = expected_type is emitter_type and marker is True
                 if expected_type is emitter_type and emitter_type is SyslogEmitter:
+                    supported = type(marker) is property and (
+                        getattr(emitter, "supports_exact_projection_publication", None) is True
+                    )
+                elif expected_type is emitter_type and emitter_type is SysmonEventEmitter:
                     supported = type(marker) is property and (
                         getattr(emitter, "supports_exact_projection_publication", None) is True
                     )
@@ -15039,26 +15045,26 @@ class EventDispatcher:
                     network_observations=target_observations,
                 )
             )
-        return event, finalized_targets
+        return self._apply_compiled_source_native_filters(event, finalized_targets)
 
-    @staticmethod
     def _apply_compiled_source_native_filters(
+        self,
         event: CanonicalOccurrence,
         targets: list[_ProjectionTarget],
     ) -> tuple[CanonicalOccurrence, list[_ProjectionTarget]]:
         """Filter source-native zero-row routes from the frozen compiled projection."""
 
         from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
+        from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 
         filtered_sensor_keys: set[str] = set()
+        filtered_sysmon = False
         filtered_targets: list[_ProjectionTarget] = []
         for target in targets:
             envelope = target.envelope
             decision = target.decision
             if (
-                target.format_name != "cisco_asa"
-                or type(target.emitter) is not CiscoAsaEmitter
-                or envelope is None
+                envelope is None
                 or not envelope.admitted
                 or not target.topology_visible
                 or decision is None
@@ -15066,28 +15072,69 @@ class EventDispatcher:
             ):
                 filtered_targets.append(target)
                 continue
-            sensor_key = envelope.source.hostname.casefold()
-            observations = tuple(
-                observation
-                for observation in event.network_observations
-                if observation.sensor_identity.casefold() == sensor_key
-                and "cisco_asa" in observation.visible_formats
-            )
-            if observations and any(
-                CiscoAsaEmitter._route_projection(
-                    target.emitter,
-                    event,
-                    observation.sensor_identity,
-                    observation,
-                ).emits_rows
-                for observation in observations
+
+            if (
+                target.format_name == "cisco_asa"
+                and type(target.emitter) is CiscoAsaEmitter
+                and target.projected_timestamp is None
+            ):
+                sensor_key = envelope.source.hostname.casefold()
+                observations = tuple(
+                    observation
+                    for observation in event.network_observations
+                    if observation.sensor_identity.casefold() == sensor_key
+                    and "cisco_asa" in observation.visible_formats
+                )
+                if observations and any(
+                    CiscoAsaEmitter._route_projection(
+                        target.emitter,
+                        event,
+                        observation.sensor_identity,
+                        observation,
+                    ).emits_rows
+                    for observation in observations
+                ):
+                    filtered_targets.append(target)
+                    continue
+                filtered_sensor_keys.add(sensor_key)
+                filtered_targets.append(replace(target, topology_visible=False))
+                continue
+
+            if (
+                target.format_name != "windows_event_sysmon"
+                or type(target.emitter) is not SysmonEventEmitter
+                or target.projected_timestamp is None
+                or target.source_timing is None
+                or envelope.observed_time is None
+                or event.event_type is not EventKind.CONNECTION
+                or event.dns is not None
             ):
                 filtered_targets.append(target)
                 continue
-            filtered_sensor_keys.add(sensor_key)
+
+            projected_event = replace(
+                event,
+                timestamp=target.projected_timestamp,
+                source_timing=target.source_timing,
+                network_observations=(
+                    target.network_observations
+                    if target.network_observations is not None
+                    else event.network_observations
+                ),
+            )
+            if not self._admit_projection_target(projected_event, target):
+                filtered_targets.append(target)
+                continue
+            if SysmonEventEmitter._event3_projection_eligible(
+                target.emitter,
+                projected_event,
+            ):
+                filtered_targets.append(target)
+                continue
+            filtered_sysmon = True
             filtered_targets.append(replace(target, topology_visible=False))
 
-        if not filtered_sensor_keys:
+        if not filtered_sensor_keys and not filtered_sysmon:
             return event, filtered_targets
         retained_observations: list[NetworkSensorObservation] = []
         for observation in event.network_observations:
@@ -15111,6 +15158,16 @@ class EventDispatcher:
         observed_formats = event._observed_formats
         if not any_visible_cisco:
             observed_formats = observed_formats - {"cisco_asa"}
+        if filtered_sysmon and not any(
+            target.format_name == "windows_event_sysmon"
+            and target.envelope is not None
+            and target.envelope.admitted
+            and target.topology_visible
+            and target.decision is not None
+            and target.decision.status != "dropped"
+            for target in filtered_targets
+        ):
+            observed_formats = observed_formats - {"windows_event_sysmon"}
         return (
             replace(
                 event,
