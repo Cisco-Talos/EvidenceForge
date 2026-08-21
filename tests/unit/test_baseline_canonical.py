@@ -2171,24 +2171,81 @@ class TestDhcpLease:
 class TestAnonymousLogon:
     """Anonymous logons use a complete short-lived session lifecycle."""
 
-    @pytest.fixture(autouse=True)
-    def _preview_unconsumed_logon_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Keep the direct generator fixture on the allocation-free planning seam."""
+    def test_anonymous_logon_registration_fail_before_preserves_logon_id(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        timestamp,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A rejected registration must not consume the previewed LogonID."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.10.100",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        state_manager.set_current_time(timestamp)
+        expected_logon_id = state_manager.preview_logon_id(dc.hostname, timestamp)
 
-        def preview_logon_id(
-            manager: StateManager,
-            system: str,
-            event_time: datetime | None = None,
-        ) -> str:
-            resolved_time = event_time if event_time is not None else manager.state.current_time
-            assert resolved_time is not None
-            before = manager.materialization_digest()
-            logon_id = manager.preview_logon_id(system, resolved_time)
-            assert logon_id == "0x176341f"
-            assert manager.materialization_digest() == before
-            return logon_id
+        def reject_registration(**kwargs: object) -> None:
+            assert kwargs["logon_id"] == expected_logon_id
+            raise StateError("injected anonymous registration failure")
 
-        monkeypatch.setattr(StateManager, "allocate_logon_id", preview_logon_id)
+        monkeypatch.setattr(state_manager, "register_session", reject_registration)
+        state_before = state_manager.materialization_digest()
+
+        with pytest.raises(StateError, match="injected anonymous registration failure"):
+            activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
+
+        assert state_manager.materialization_digest() == state_before
+        assert state_manager.get_session_identity(expected_logon_id) is None
+        assert state_manager.preview_logon_id(dc.hostname, timestamp) == expected_logon_id
+        assert not mock_emitters["windows_event_security"].emit.called
+
+    def test_anonymous_logon_registration_lost_return_reuses_exact_session(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        timestamp,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A committed registration with a lost return must not allocate a sibling session."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.10.100",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        state_manager.set_current_time(timestamp)
+        expected_logon_id = state_manager.preview_logon_id(dc.hostname, timestamp)
+        assert expected_logon_id == "0x176341f"
+        sessions_before = len(state_manager.state.active_sessions)
+        register_session = state_manager.register_session
+
+        def commit_then_raise(**kwargs: object) -> None:
+            registered = register_session(**kwargs)
+            assert registered.logon_id == expected_logon_id
+            raise RuntimeError("injected anonymous registration lost return")
+
+        monkeypatch.setattr(state_manager, "register_session", commit_then_raise)
+
+        activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
+
+        events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type in {"logon", "logoff"}
+        ]
+        assert [event.event_type for event in events] == ["logon", "logoff"]
+        assert {event.auth.logon_id for event in events} == {expected_logon_id}
+        assert len(state_manager.state.active_sessions) == sessions_before
+        identity = state_manager.get_session_identity(expected_logon_id)
+        assert identity is not None
+        assert identity.object_id == events[0].identity_plan.object_id
+        assert state_manager.preview_logon_id(dc.hostname, timestamp) != expected_logon_id
 
     def test_generate_anonymous_logon_dispatches(
         self, activity_gen, state_manager, mock_emitters, timestamp

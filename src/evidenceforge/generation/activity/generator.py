@@ -32503,7 +32503,7 @@ class ActivityGenerator:
             )
             source_system = getattr(self, "_ip_to_system", {}).get(source_ip)
             workstation_name = source_system.hostname if source_system else "-"
-        logon_id = self.state_manager.allocate_logon_id(system.hostname, time)
+        logon_id = self.state_manager.preview_logon_id(system.hostname, time)
         remote_request = None
         lifecycle_group_id = request.stable_id
         if source_ip != "-":
@@ -32521,7 +32521,7 @@ class ActivityGenerator:
                 source="anonymous_logon",
             )
             lifecycle_group_id = remote_request.stable_id
-        session = self.state_manager.register_session(
+        expected_session = self.state_manager.plan_session_materialization(
             logon_id=logon_id,
             username="ANONYMOUS LOGON",
             system=system.hostname,
@@ -32533,6 +32533,36 @@ class ActivityGenerator:
             logon_guid_required=False,
             lifecycle_group_id=lifecycle_group_id,
         )
+        try:
+            returned_session = self.state_manager.register_session(
+                logon_id=logon_id,
+                username="ANONYMOUS LOGON",
+                system=system.hostname,
+                logon_type=3,
+                source_ip=source_ip,
+                source_port=source_port,
+                start_time=time,
+                session_kind="anonymous_network",
+                logon_guid_required=False,
+                lifecycle_group_id=lifecycle_group_id,
+            )
+        except BaseException:
+            # Registration can have committed its exact State plan before an
+            # acknowledgement fault. Adopt only that already-planned identity;
+            # a fail-before or foreign owner remains an error.
+            returned_session = self.state_manager.get_session(logon_id)
+            if (
+                returned_session is None
+                or self.state_manager.get_session_identity(logon_id) != expected_session.identity
+            ):
+                raise
+        session = self.state_manager.get_session(logon_id)
+        if (
+            session is None
+            or session is not returned_session
+            or self.state_manager.get_session_identity(logon_id) != expected_session.identity
+        ):
+            raise StateError("Anonymous logon registered a different session identity")
         session_obj_id = session.ecar_object_id
         remote_authentication_plan = None
         if remote_request is not None:
