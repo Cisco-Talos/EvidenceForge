@@ -27,6 +27,7 @@ from evidenceforge.generation.application_channels import ApplicationChannelRegi
 from evidenceforge.generation.emitters.base import ExactPublicationBatch
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
+from evidenceforge.generation.emitters.syslog import SyslogEmitter
 from evidenceforge.generation.emitters.web import WebEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
@@ -380,12 +381,28 @@ def test_real_ssh_caller_reaches_exact_bridge_and_publishes_transport_first(
 
 def test_real_ssh_caller_materializes_fully_suppressed_warmup_session(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A wholly pre-output SSH owner graph commits canonically without source rows."""
 
     reset_thread_rng(42)
+    syslog_root = tmp_path / "syslog"
+    syslog = SyslogEmitter(load_format("syslog"), syslog_root, threaded=False)
+    marker_reads = 0
+
+    def reject_marker_read(_emitter: SyslogEmitter) -> bool:
+        nonlocal marker_reads
+        marker_reads += 1
+        raise AssertionError("suppressed SSH Syslog exact marker executed")
+
+    monkeypatch.setattr(
+        SyslogEmitter,
+        "supports_exact_projection_publication",
+        property(reject_marker_read),
+    )
     fixture = _fixture(
         tmp_path,
+        extra_emitters={"syslog": syslog},
         output_start_time=_START + timedelta(hours=1),
     )
 
@@ -412,8 +429,15 @@ def test_real_ssh_caller_materializes_fully_suppressed_warmup_session(
     )
     _assert_no_dispatcher_residue(fixture.generator.dispatcher)
     ecar_rows, zeek_rows = fixture.close_and_read()
+    syslog.close()
     assert ecar_rows == []
     assert zeek_rows == []
+    assert marker_reads == 0
+    assert not tuple(syslog_root.rglob("syslog.log"))
+    exact = syslog.exact_candidate_census()
+    assert exact.high_water_rows == exact.high_water_bytes == 0
+    assert exact.admitted_rows == exact.admitted_bytes == 0
+    assert exact.reserved_rows == exact.reserved_bytes == 0
 
 
 def test_real_ssh_mixed_warmup_and_visible_members_still_require_positive_targets(
@@ -2252,6 +2276,219 @@ def test_exact_close_accepts_stable_full_emitter_topology(tmp_path: Path) -> Non
         fixture.ecar.close()
         fixture.zeek.close()
         web.close()
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    (
+        "success",
+        "commit-fail-before",
+        "commit-lost-return",
+        "release-fail-before",
+        "release-lost-return",
+    ),
+)
+def test_exact_close_accepts_concrete_syslog_and_publishes_one_logout(
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real SSH close publishes one recoverable target logout to eCAR and Syslog."""
+
+    reset_thread_rng(42)
+    syslog_root = tmp_path / "syslog"
+    syslog = SyslogEmitter(
+        load_format("syslog"),
+        syslog_root,
+        threaded=False,
+    )
+    fixture = _fixture(
+        tmp_path / "ssh",
+        extra_emitters={"syslog": syslog},
+    )
+    request = replace(
+        fixture.request(),
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+    try:
+        _uid, logon_id = SshSessionActionBundle(request, fixture.generator).execute_with_identity()
+        original_reserve = ExactPublicationBatch.reserve_participants
+        reserved_participants: list[tuple[object, ...]] = []
+
+        def capture_participants(
+            batch: ExactPublicationBatch,
+            participants: tuple[object, ...],
+        ) -> None:
+            reserved_participants.append(participants)
+            original_reserve(batch, participants)
+
+        monkeypatch.setattr(ExactPublicationBatch, "reserve_participants", capture_participants)
+        original_commit = syslog._commit_exact_candidate
+        original_release = syslog._release_exact_candidate
+        commit_attempts = 0
+        release_attempts = 0
+
+        def fault_exact_logout(key: object, digest: str, frozen: object) -> None:
+            nonlocal commit_attempts
+            _route, _logical_route, rendered = SyslogEmitter._decode_exact_candidate(frozen)
+            is_logout = "session closed for user analyst" in rendered
+            if failure_mode.startswith("commit-") and is_logout and commit_attempts == 0:
+                commit_attempts += 1
+                if failure_mode.endswith("lost-return"):
+                    original_commit(key, digest, frozen)
+                raise OSError(f"injected exact Syslog {failure_mode}")
+            original_commit(key, digest, frozen)
+
+        def fault_exact_release(key: object) -> None:
+            nonlocal release_attempts
+            if failure_mode.startswith("release-") and release_attempts == 0:
+                release_attempts += 1
+                if failure_mode.endswith("lost-return"):
+                    original_release(key)
+                raise OSError(f"injected exact Syslog {failure_mode}")
+            original_release(key)
+
+        monkeypatch.setattr(syslog, "_commit_exact_candidate", fault_exact_logout)
+        monkeypatch.setattr(syslog, "_release_exact_candidate", fault_exact_release)
+        if failure_mode != "success":
+            with pytest.raises(OSError, match=f"exact Syslog {failure_mode}"):
+                fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
+            assert fixture.state.get_session(logon_id) is None
+            recovery = fixture.generator.dispatcher.exact_projection_recovery_census()
+            assert recovery.unresolved_recoveries == 1
+            resumed = fixture.generator.dispatcher.drain_exact_projection_recoveries()
+            assert len(resumed) == 1
+            assert all(
+                outcome.status == "succeeded"
+                for result in resumed
+                for outcome in result.projections
+            )
+        fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
+
+        assert fixture.state.get_session(logon_id) is None
+        assert fixture.generator.ssh_close_journal_census().total_pending == 0
+        assert commit_attempts == int(failure_mode.startswith("commit-"))
+        assert release_attempts == int(failure_mode.startswith("release-"))
+        assert any(
+            len(participants) == 2 and participants[0] is fixture.ecar and participants[1] is syslog
+            for participants in reserved_participants
+        )
+        _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+        ecar_rows, zeek_rows = fixture.close_and_read()
+        syslog.close()
+        target_rows = [
+            row
+            for row in ecar_rows
+            if row.get("hostname") == fixture.target.hostname
+            and row.get("object") == "USER_SESSION"
+        ]
+        rendered_syslog = "\n".join(
+            output.read_text(encoding="utf-8") for output in syslog_root.rglob("syslog.log")
+        )
+        assert [row["action"] for row in target_rows] == ["LOGIN", "LOGOUT"]
+        assert rendered_syslog.count("session closed for user analyst") == 1
+        assert len(zeek_rows) == 1
+        exact = syslog.exact_candidate_census()
+        assert exact.admitted_rows == exact.admitted_bytes == 0
+        assert exact.reserved_rows == exact.reserved_bytes == 0
+    finally:
+        fixture.ecar.close()
+        fixture.zeek.close()
+        syslog.close()
+
+
+class _SyslogSubclass(SyslogEmitter):
+    """Concrete-type impostor that inherits the exact publication marker."""
+
+
+class _DuckExactSyslog:
+    """Duck marker whose descriptor must not authorize an exact SSH sink."""
+
+    marker_reads = 0
+    emit_calls = 0
+
+    @property
+    def supports_exact_projection_publication(self) -> bool:
+        """Fail if concrete-type admission executes a foreign descriptor."""
+
+        type(self).marker_reads += 1
+        raise AssertionError("duck Syslog exact marker executed")
+
+    def can_handle(self, event: object) -> bool:
+        """Participate in every SyslogContext projection."""
+
+        return getattr(event, "syslog", None) is not None
+
+    def emit(self, _event: object) -> None:
+        """Accept ordinary preterminal rows without side effects."""
+
+        type(self).emit_calls += 1
+
+
+@pytest.mark.parametrize("target_kind", ("subclass", "duck", "alias"))
+def test_exact_close_syslog_admission_rejects_nonconcrete_targets_before_state(
+    target_kind: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inherited, duck, and wrongly aliased markers cannot authorize a Syslog target."""
+
+    reset_thread_rng(42)
+    _DuckExactSyslog.marker_reads = 0
+    _DuckExactSyslog.emit_calls = 0
+    alias_marker_reads = 0
+    target: object
+    if target_kind == "subclass":
+        target = _SyslogSubclass(load_format("syslog"), tmp_path / "subclass")
+    elif target_kind == "duck":
+        target = _DuckExactSyslog()
+    else:
+
+        def reject_alias_marker(_emitter: SyslogEmitter) -> bool:
+            nonlocal alias_marker_reads
+            alias_marker_reads += 1
+            raise AssertionError("wrong-alias Syslog exact marker executed")
+
+        monkeypatch.setattr(
+            SyslogEmitter,
+            "supports_exact_projection_publication",
+            property(reject_alias_marker),
+        )
+        target = SyslogEmitter(load_format("syslog"), tmp_path / "alias")
+    target_name = "syslog_alias" if target_kind == "alias" else "syslog"
+    fixture = _fixture(
+        tmp_path / "ssh",
+        extra_emitters={target_name: target},
+    )
+    request = replace(
+        fixture.request(),
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+    try:
+        _uid, logon_id = SshSessionActionBundle(request, fixture.generator).execute_with_identity()
+        session_before = fixture.state.get_session_identity(logon_id)
+        assert session_before is not None
+
+        with pytest.raises(EventContractError, match="syslog.*unsupported before State"):
+            fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
+
+        assert fixture.state.get_session_identity(logon_id) == session_before
+        assert len(fixture.generator._pending_ssh_session_closures) == 1
+        _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+        assert _DuckExactSyslog.marker_reads == 0
+        assert _DuckExactSyslog.emit_calls == 0
+        assert alias_marker_reads == 0
+        if isinstance(target, SyslogEmitter):
+            exact = target.exact_candidate_census()
+            assert exact.admitted_rows == exact.admitted_bytes == 0
+            assert exact.reserved_rows == exact.reserved_bytes == 0
+    finally:
+        fixture.ecar.close()
+        fixture.zeek.close()
+        if isinstance(target, SyslogEmitter):
+            target.close()
 
 
 def test_exact_close_terminal_capacity_preserves_canonical_owners_and_retry_converges(

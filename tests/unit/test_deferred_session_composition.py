@@ -6,6 +6,7 @@
 import gc
 import json
 import random
+from collections.abc import Callable
 from copy import copy, deepcopy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -20,6 +21,10 @@ from evidenceforge.events.application import (
     ApplicationTransportBinding,
 )
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.collection_policy import (
+    SourceCollectionPolicy,
+    SourceInstanceIdentity,
+)
 from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext, SyslogContext
 from evidenceforge.events.dispatcher import (
     EventDispatcher,
@@ -39,6 +44,7 @@ from evidenceforge.events.rdp import (
     RdpSessionAffinity,
     RdpTransportPlan,
 )
+from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions.network_connection import (
     DeferredRdpApplicationIntent,
@@ -52,7 +58,10 @@ from evidenceforge.generation.actions.network_transaction_planner import (
 )
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
-from evidenceforge.generation.collection_deployment import CompiledCollectionDeployment
+from evidenceforge.generation.collection_deployment import (
+    CompiledCollectionDeployment,
+    SourceInstanceDeployment,
+)
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.generation.deferred_session_composition import (
     DeferredSessionComposition,
@@ -96,6 +105,7 @@ from evidenceforge.generation.rdp_sessions import (
     RdpReconnectStateManager,
     RdpSessionAdmissionToken,
 )
+from evidenceforge.generation.source_deployment_compiler import exact_source_instance_id
 from evidenceforge.generation.source_timing import SourceTimingPlanner, SourceTimingPreparation
 from evidenceforge.generation.ssh_channels import (
     SshApplicationChannelManager,
@@ -1194,6 +1204,33 @@ class _PublicationFixture:
     batch: object | None
 
 
+def _compiled_ssh_syslog_deployment() -> CompiledCollectionDeployment:
+    """Return visible concrete eCAR and Syslog host sources for an SSH open."""
+
+    sources = []
+    for format_name, hostname in (
+        ("ecar", "WS-01"),
+        ("ecar", "DB-01"),
+        ("syslog", "DB-01"),
+    ):
+        descriptor = DEFAULT_SOURCE_CATALOG.descriptor(format_name)
+        sources.append(
+            SourceInstanceDeployment(
+                identity=SourceInstanceIdentity(
+                    source_instance=exact_source_instance_id(descriptor.family, hostname),
+                    hostname=hostname,
+                    family=descriptor.family,
+                ),
+                formats=(format_name,),
+                policy=SourceCollectionPolicy(
+                    enabled=True,
+                    capabilities=descriptor.capabilities,
+                ),
+            )
+        )
+    return CompiledCollectionDeployment(tuple(sources))
+
+
 def _foundation_publication_fixture(
     kind: DeferredSessionKind,
     tmp_path: Path,
@@ -1759,37 +1796,316 @@ def test_unmigrated_network_planner_stops_before_prepared_ownership_transfer(
     _assert_deferred_dispatcher_reservations_released(generator.dispatcher)
 
 
-@pytest.mark.parametrize("source_kind", ("syslog", "sysmon"))
-def test_exact_deferred_bridge_rejects_unadapted_sources_before_state_or_render(
-    source_kind: str,
+@pytest.mark.parametrize(
+    "failure_mode",
+    (
+        "success",
+        "commit-fail-before",
+        "commit-lost-return",
+        "release-fail-before",
+        "release-lost-return",
+    ),
+)
+def test_exact_deferred_ssh_open_accepts_compiled_visible_concrete_syslog(
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deployed concrete Syslog sink joins the recoverable atomic SSH open."""
+
+    syslog_root = tmp_path / "syslog"
+    syslog = SyslogEmitter(
+        load_format("syslog"),
+        syslog_root,
+        threaded=False,
+    )
+    original_commit = syslog._commit_exact_candidate
+    original_release = syslog._release_exact_candidate
+    commit_attempts = 0
+    release_attempts = 0
+
+    def fault_open_commit(key: object, digest: str, frozen: object) -> None:
+        nonlocal commit_attempts
+        _route, _logical_route, rendered = SyslogEmitter._decode_exact_candidate(frozen)
+        is_open = "Accepted password for analyst" in rendered
+        if failure_mode.startswith("commit-") and is_open and commit_attempts == 0:
+            commit_attempts += 1
+            if failure_mode.endswith("lost-return"):
+                original_commit(key, digest, frozen)
+            raise OSError(f"injected SSH-open Syslog {failure_mode}")
+        original_commit(key, digest, frozen)
+
+    def fault_open_release(key: object) -> None:
+        nonlocal release_attempts
+        if failure_mode.startswith("release-") and release_attempts == 0:
+            release_attempts += 1
+            if failure_mode.endswith("lost-return"):
+                original_release(key)
+            raise OSError(f"injected SSH-open Syslog {failure_mode}")
+        original_release(key)
+
+    monkeypatch.setattr(syslog, "_commit_exact_candidate", fault_open_commit)
+    monkeypatch.setattr(syslog, "_release_exact_candidate", fault_open_release)
+    original_reserve = ExactPublicationBatch.reserve_participants
+    reserved_participants: list[tuple[object, ...]] = []
+
+    def capture_participants(
+        batch: ExactPublicationBatch,
+        participants: tuple[object, ...],
+    ) -> None:
+        reserved_participants.append(participants)
+        original_reserve(batch, participants)
+
+    monkeypatch.setattr(ExactPublicationBatch, "reserve_participants", capture_participants)
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"syslog": syslog},
+        include_syslog_context=True,
+        collection_deployment=_compiled_ssh_syslog_deployment(),
+    )
+    assert any(
+        len(participants) == 2 and participants[0] is publication.ecar and participants[1] is syslog
+        for participants in reserved_participants
+    )
+    if failure_mode == "success":
+        committed = publication.authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            publication.fixture.coordinator,
+            publication.fixture.owner_rng,
+            dispatcher=publication.dispatcher,
+            publication_batch=publication.batch,
+        )
+        assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    else:
+        with pytest.raises(OSError, match=f"SSH-open Syslog {failure_mode}"):
+            publication.authority.materialize_prepared_deferred_session_publication(
+                publication.composition,
+                publication.fixture.coordinator,
+                publication.fixture.owner_rng,
+                dispatcher=publication.dispatcher,
+                publication_batch=publication.batch,
+            )
+        assert (
+            publication.fixture.state.get_session(
+                publication.fixture.session_plan.identity.logon_id
+            )
+            is not None
+        )
+        assert publication.dispatcher.exact_projection_recovery_census().unresolved_recoveries == 1
+        resumed = publication.dispatcher.drain_exact_projection_recoveries()
+        assert len(resumed) == 1
+        assert all(
+            outcome.status == "succeeded" for result in resumed for outcome in result.projections
+        )
+
+    assert (
+        publication.fixture.state.get_session(publication.fixture.session_plan.identity.logon_id)
+        is not None
+    )
+    assert commit_attempts == int(failure_mode.startswith("commit-"))
+    assert release_attempts == int(failure_mode.startswith("release-"))
+    recovery = publication.dispatcher.exact_projection_recovery_census()
+    assert recovery.unresolved_recoveries == 0
+    assert recovery.reserved_recoveries == 0
+    assert recovery.authority.active_batches == 0
+    before_close = syslog.exact_candidate_census()
+    assert before_close.admitted_rows == before_close.released_rows == 1
+    assert before_close.reserved_rows == before_close.reserved_bytes == 0
+    publication.ecar.close()
+    publication.zeek.close()
+    syslog.close()
+    rendered = "\n".join(
+        output.read_text(encoding="utf-8") for output in syslog_root.rglob("syslog.log")
+    )
+    assert rendered.count("Accepted password for analyst") == 1
+    exact = syslog.exact_candidate_census()
+    assert exact.admitted_rows == exact.admitted_bytes == 0
+    assert exact.reserved_rows == exact.reserved_bytes == 0
+
+
+def test_exact_deferred_ssh_open_syslog_warmup_stages_zero_rows_without_marker_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fully suppressed SSH open stays canonical and never inspects its Syslog sink."""
+
+    syslog_root = tmp_path / "syslog"
+    syslog = SyslogEmitter(load_format("syslog"), syslog_root, threaded=False)
+    marker_reads = 0
+
+    def reject_marker_read(_emitter: SyslogEmitter) -> bool:
+        nonlocal marker_reads
+        marker_reads += 1
+        raise AssertionError("suppressed Syslog exact marker executed")
+
+    monkeypatch.setattr(
+        SyslogEmitter,
+        "supports_exact_projection_publication",
+        property(reject_marker_read),
+    )
+    original_prepare = ExactPublicationBatch.prepare
+    prepared_row_counts: list[int] = []
+
+    def capture_row_count(
+        batch: ExactPublicationBatch,
+        render: Callable[[], object],
+    ) -> object:
+        result = original_prepare(batch, render)
+        prepared_row_counts.append(batch.prepared_row_count)
+        return result
+
+    monkeypatch.setattr(ExactPublicationBatch, "prepare", capture_row_count)
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"syslog": syslog},
+        include_syslog_context=True,
+        collection_deployment=_compiled_ssh_syslog_deployment(),
+        output_start_time=_END,
+    )
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    assert prepared_row_counts == [0]
+    assert marker_reads == 0
+    publication.ecar.close()
+    publication.zeek.close()
+    syslog.close()
+    assert not tuple(syslog_root.rglob("syslog.log"))
+    exact = syslog.exact_candidate_census()
+    assert exact.high_water_rows == exact.high_water_bytes == 0
+    assert exact.admitted_rows == exact.admitted_bytes == 0
+    assert exact.reserved_rows == exact.reserved_bytes == 0
+
+
+class _OpenSyslogSubclass(SyslogEmitter):
+    """Inherited exact marker that must not satisfy the concrete open allowlist."""
+
+    marker_reads = 0
+
+    @property
+    def supports_exact_projection_publication(self) -> bool:
+        """Fail if SSH-open admission executes a subclass descriptor."""
+
+        type(self).marker_reads += 1
+        raise AssertionError("subclass Syslog exact marker executed")
+
+
+class _OpenDuckSyslog:
+    """Duck exact marker that must not execute during SSH-open admission."""
+
+    marker_reads = 0
+    emit_calls = 0
+
+    @property
+    def supports_exact_projection_publication(self) -> bool:
+        """Fail if SSH-open admission executes a foreign descriptor."""
+
+        type(self).marker_reads += 1
+        raise AssertionError("duck Syslog exact marker executed")
+
+    def can_handle(self, event: object) -> bool:
+        """Participate only in the fixture's explicit SyslogContext dependent."""
+
+        return getattr(event, "syslog", None) is not None
+
+    def emit(self, _event: object) -> None:
+        """Remain inert because admission must fail before rendering."""
+
+        type(self).emit_calls += 1
+
+
+@pytest.mark.parametrize("target_kind", ("subclass", "duck", "alias"))
+def test_exact_deferred_ssh_open_rejects_nonconcrete_syslog_before_state(
+    target_kind: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Subclass, duck, and wrongly aliased Syslog targets fail without marker calls."""
+
+    _OpenSyslogSubclass.marker_reads = 0
+    _OpenDuckSyslog.marker_reads = 0
+    _OpenDuckSyslog.emit_calls = 0
+    alias_marker_reads = 0
+    output_path = tmp_path / target_kind
+    if target_kind == "subclass":
+        emitter: object = _OpenSyslogSubclass(load_format("syslog"), output_path)
+    elif target_kind == "duck":
+        emitter = _OpenDuckSyslog()
+    else:
+
+        def reject_alias_marker(_emitter: SyslogEmitter) -> bool:
+            nonlocal alias_marker_reads
+            alias_marker_reads += 1
+            raise AssertionError("wrong-alias Syslog exact marker executed")
+
+        monkeypatch.setattr(
+            SyslogEmitter,
+            "supports_exact_projection_publication",
+            property(reject_alias_marker),
+        )
+        emitter = SyslogEmitter(load_format("syslog"), output_path)
+    format_name = "syslog_alias" if target_kind == "alias" else "syslog"
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={format_name: emitter},  # type: ignore[dict-item]
+        include_syslog_context=True,
+        prepare_publication=False,
+    )
+    state_version = publication.fixture.state.materialization_version
+    state_digest = publication.fixture.state.materialization_digest()
+    timing_digest = publication.fixture.timing_planner.state_digest()
+
+    with pytest.raises(EventContractError, match="lacks exact projection publication"):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+
+    assert publication.fixture.state.materialization_version == state_version
+    assert publication.fixture.state.materialization_digest() == state_digest
+    assert publication.fixture.timing_planner.state_digest() == timing_digest
+    assert not output_path.exists()
+    assert _OpenSyslogSubclass.marker_reads == 0
+    assert _OpenDuckSyslog.marker_reads == 0
+    assert _OpenDuckSyslog.emit_calls == 0
+    assert alias_marker_reads == 0
+    if isinstance(emitter, SyslogEmitter):
+        exact = emitter.exact_candidate_census()
+        assert exact.admitted_rows == exact.admitted_bytes == 0
+        assert exact.reserved_rows == exact.reserved_bytes == 0
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    _cancel_unmaterialized_publication(publication)
+    publication.ecar.close()
+    publication.zeek.close()
+    if isinstance(emitter, SyslogEmitter):
+        emitter.close()
+
+
+def test_exact_deferred_bridge_rejects_unadapted_sysmon_before_state_or_render(
     tmp_path: Path,
 ) -> None:
-    """Current sorted Syslog and Sysmon targets remain explicit foundation stops."""
+    """Current sorted Sysmon target remains an explicit foundation stop."""
 
-    if source_kind == "syslog":
-        output_path = tmp_path / "syslog"
-        emitter: LogEmitter = SyslogEmitter(
-            load_format("syslog"),
-            output_path,
-            threaded=False,
-        )
-        format_name = "syslog"
-        kind = DeferredSessionKind.SSH
-    else:
-        output_path = tmp_path / "sysmon"
-        emitter = SysmonEventEmitter(
-            load_format("windows_event_sysmon"),
-            output_path,
-            threaded=False,
-            source_finalization=True,
-        )
-        format_name = "windows_event_sysmon"
-        kind = DeferredSessionKind.RDP
+    output_path = tmp_path / "sysmon"
+    emitter = SysmonEventEmitter(
+        load_format("windows_event_sysmon"),
+        output_path,
+        threaded=False,
+        source_finalization=True,
+    )
     publication = _foundation_publication_fixture(
-        kind,
+        DeferredSessionKind.RDP,
         tmp_path,
-        extra_emitters={format_name: emitter},
-        include_syslog_context=source_kind == "syslog",
+        extra_emitters={"windows_event_sysmon": emitter},
         prepare_publication=False,
     )
     state_version = publication.fixture.state.materialization_version

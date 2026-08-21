@@ -7477,30 +7477,48 @@ class EventDispatcher:
         self,
         projection: _PreparedProjection,
     ) -> tuple[LogEmitter, ...]:
-        """Require eCAR, except for one exact zero-row warm-up terminal."""
+        """Require concrete exact eCAR/Syslog sinks or one suppressed warm-up."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
 
         if self._projection_is_exact_warmup_suppressed(projection):
             return ()
+        exact_types_by_format: dict[str, type[LogEmitter]] = {
+            "ecar": EcarEmitter,
+            "syslog": SyslogEmitter,
+        }
         participants: list[LogEmitter] = []
         participant_ids: set[int] = set()
+        target_counts = {"ecar": 0, "syslog": 0}
         for format_name, emitter in self._exact_projection_targets(projection):
-            marker = type(emitter).__dict__.get("supports_exact_projection_publication")
-            if (
-                format_name != "ecar"
-                or type(emitter) is not EcarEmitter
-                or marker is None
-                or getattr(emitter, "supports_exact_projection_publication", None) is not True
-            ):
+            emitter_type = type(emitter)
+            expected_type = exact_types_by_format.get(format_name)
+            marker = (
+                emitter_type.__dict__.get("supports_exact_projection_publication")
+                if expected_type is emitter_type
+                else None
+            )
+            supported = expected_type is emitter_type and (
+                marker is True
+                if emitter_type is EcarEmitter
+                else type(marker) is property
+                and getattr(emitter, "supports_exact_projection_publication", None) is True
+            )
+            if not supported:
                 raise EventContractError(
                     f"Exact SSH terminal target {format_name!r} is unsupported before State"
                 )
+            target_counts[format_name] += 1
             if id(emitter) not in participant_ids:
                 participant_ids.add(id(emitter))
                 participants.append(emitter)
-        if len(participants) != 1:
+        if target_counts["ecar"] != 1:
             raise EventContractError("Exact SSH terminal projection requires one eCAR target")
+        if target_counts["syslog"] > 1:
+            raise EventContractError(
+                "Exact SSH terminal projection permits at most one Syslog target"
+            )
         return tuple(participants)
 
     def _rdp_terminal_exact_projection_participants(
@@ -10930,6 +10948,7 @@ class EventDispatcher:
         """Return explicitly exact-capable participants or fail before rendering."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
         from evidenceforge.generation.emitters.windows import (
             WindowsEventEmitter,
             _supports_windows_exact_projection_publication,
@@ -10938,6 +10957,7 @@ class EventDispatcher:
 
         exact_types_by_format: dict[str, type[LogEmitter]] = {
             "ecar": EcarEmitter,
+            "syslog": SyslogEmitter,
             "windows_event_security": WindowsEventEmitter,
             "zeek_conn": ZeekEmitter,
         }
@@ -10955,7 +10975,11 @@ class EventDispatcher:
                     else None
                 )
                 supported = expected_type is emitter_type and marker is True
-                if supported and emitter_type is WindowsEventEmitter:
+                if expected_type is emitter_type and emitter_type is SyslogEmitter:
+                    supported = type(marker) is property and (
+                        getattr(emitter, "supports_exact_projection_publication", None) is True
+                    )
+                elif supported and emitter_type is WindowsEventEmitter:
                     supported = _supports_windows_exact_projection_publication(emitter)
                 if not supported:
                     raise EventContractError(
