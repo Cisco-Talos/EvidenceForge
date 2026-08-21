@@ -3668,7 +3668,7 @@ class BashHistoryEmitter(LogEmitter):
 
         self._ensure_exact_journal_capabilities()
         if _EXACT_HISTORY_REGISTRATION_READY.get() == key:
-            super()._register_exact_publication_batch(key)
+            super()._activate_exact_publication_batch(key)
             return
         while True:
             self._wait_for_exact_publication_turn(None)
@@ -3681,7 +3681,7 @@ class BashHistoryEmitter(LogEmitter):
                         self._close_condition.wait()
                 if self.threaded:
                     self._drain_threaded_before_exact()
-                super()._register_exact_publication_batch(key)
+                super()._activate_exact_publication_batch(key)
                 return
 
     def _ensure_exact_journal_capabilities(self) -> None:

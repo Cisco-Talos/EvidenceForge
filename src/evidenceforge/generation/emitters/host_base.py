@@ -462,7 +462,7 @@ class HostMultiplexEmitter(LogEmitter):
         if self.threaded:
             self._emit_threaded(event_data)
         else:
-            self._begin_queue_admission()
+            self._begin_queue_admission(allow_exact=True)
             try:
                 self._dispatch(deepcopy(event_data))
             finally:

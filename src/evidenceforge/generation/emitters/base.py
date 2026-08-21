@@ -793,6 +793,10 @@ _EXACT_PUBLICATION_ATTEMPT: ContextVar[_ExactPublicationAttempt | None] = Contex
     "evidenceforge_exact_publication_attempt",
     default=None,
 )
+_EXACT_PREFIX_BARRIER_EMITTER: ContextVar[int | None] = ContextVar(
+    "evidenceforge_exact_prefix_barrier_emitter",
+    default=None,
+)
 _QUEUE_PUT = Queue.put
 
 
@@ -947,6 +951,13 @@ class _FlushRequest:
         self.completed = Event()
 
 
+class _ExactPublicationDrainRequest:
+    """FIFO position proving that every pre-fence worker item completed."""
+
+    def __init__(self) -> None:
+        self.completed = Event()
+
+
 @dataclass(slots=True)
 class _ExactQueuedPublication:
     """One synchronous exact-publication queue item with a worker acknowledgement."""
@@ -1042,6 +1053,7 @@ class LogEmitter(ABC):
         self._exact_file_pending: dict[ExactPublicationKey, tuple[str, int, int]] = {}
         self._exact_publication_condition = Condition(Lock())
         self._active_exact_publication_keys: set[ExactPublicationParticipantKey] = set()
+        self._pending_exact_publication_key: ExactPublicationParticipantKey | None = None
         # Close admission, exact fences, and queue handoff share one lock so no
         # successful check can be overtaken by a terminal close transition.
         self._close_condition = self._exact_publication_condition
@@ -1208,10 +1220,18 @@ class LogEmitter(ABC):
             finally:
                 self._finish_queue_admission()
             return
-        self._require_accepting_events()
-        if not attempt.batch._has_participant(self):
-            self.barrier_flush()
         attempt.register_participant(self)
+        participant_key = attempt.batch._participant_key
+        owns_participant = attempt.batch._has_participant(self)
+        with self._exact_publication_condition:
+            if (
+                not owns_participant
+                or self._active_exact_publication_keys != {participant_key}
+                or self._close_state == "closed"
+            ):
+                raise ExactPublicationError(
+                    f"{self.format_def.name} exact queue handoff lost its participant fence"
+                )
         queued = _ExactQueuedPublication(payload=deepcopy(event_data), attempt=attempt)
         while True:
             self._raise_if_thread_failed()
@@ -1231,6 +1251,20 @@ class LogEmitter(ABC):
         This ensures all queued events are rendered and written to disk
         before proceeding. Used for temporal consistency in Phase 2.1.
         """
+        attempt = _EXACT_PUBLICATION_ATTEMPT.get()
+        if attempt is not None and attempt.batch._has_participant(self):
+            raise ExactPublicationError(
+                f"{self.format_def.name} barrier cannot re-enter its active exact render"
+            )
+        self._begin_queue_admission(allow_closing_owner=True)
+        try:
+            self._barrier_flush_admitted()
+        finally:
+            self._finish_queue_admission()
+
+    def _barrier_flush_admitted(self) -> None:
+        """Complete one barrier whose caller already owns its admission."""
+
         if self.threaded:
             logger.debug(f"Waiting for {self.format_def.name} emitter to flush at barrier")
             self._raise_if_thread_failed()
@@ -1253,15 +1287,17 @@ class LogEmitter(ABC):
 
             logger.debug(f"Barrier flush complete for {self.format_def.name}")
         else:
-            # Non-threaded mode: just flush directly
-            self._wait_for_exact_publication_turn(None)
-            self.flush()
+            self._flush_at_barrier()
 
     def _handle_flush_request(self, queue_item: Any) -> bool:
         """Process a queued barrier request and acknowledge its completion."""
+        if type(queue_item) is _ExactPublicationDrainRequest:
+            queue_item.completed.set()
+            return True
         if not isinstance(queue_item, _FlushRequest):
             return False
 
+        barrier_token = _EXACT_PREFIX_BARRIER_EMITTER.set(id(self))
         try:
             self._wait_for_exact_publication_turn(None)
             logger.debug(f"Flushing {self.format_def.name} emitter at barrier")
@@ -1274,6 +1310,7 @@ class LogEmitter(ABC):
             )
             self._stop_event.set()
         finally:
+            _EXACT_PREFIX_BARRIER_EMITTER.reset(barrier_token)
             queue_item.completed.set()
         return True
 
@@ -1318,11 +1355,54 @@ class LogEmitter(ABC):
         ):
             raise RuntimeError(f"{self.format_def.name} emitter is closing or closed")
 
-    def _begin_queue_admission(self) -> None:
-        """Reserve one ordinary FIFO handoff before close installs its barrier."""
+    def _begin_queue_admission(
+        self,
+        *,
+        allow_closing_owner: bool = False,
+        allow_exact: bool = False,
+    ) -> None:
+        """Reserve one FIFO handoff without overtaking an exact registration."""
 
+        attempt = _EXACT_PUBLICATION_ATTEMPT.get()
+        if allow_exact and attempt is not None:
+            # Synchronous multiplex emitters must install their participant
+            # fence before counting the exact render as a queue admission.
+            # Otherwise dynamic first registration waits on its own admission.
+            attempt.register_participant(self)
+        owns_participant = (
+            allow_exact and attempt is not None and attempt.batch._has_participant(self)
+        )
+        allowed = (
+            attempt.batch._participant_key if owns_participant and attempt is not None else None
+        )
+        owner_thread = get_ident()
+        worker_thread = self._thread.ident if self._thread is not None else None
+        prefix_barrier_worker = (
+            owner_thread == worker_thread and _EXACT_PREFIX_BARRIER_EMITTER.get() == id(self)
+        )
         with self._close_condition:
-            self._require_accepting_events_locked()
+            while (
+                self._pending_exact_publication_key is not None and not prefix_barrier_worker
+            ) or (
+                self._active_exact_publication_keys
+                and self._active_exact_publication_keys != {allowed}
+            ):
+                self._close_condition.wait()
+            closing_owner = (
+                allow_closing_owner
+                and self._close_state == "closing"
+                and self._close_thread == owner_thread
+            )
+            active_exact_owner = (
+                allowed is not None
+                and self._close_state == "closing"
+                and self._active_exact_publication_keys == {allowed}
+            )
+            if closing_owner:
+                if self._stop_event is not None and self._stop_event.is_set():
+                    raise RuntimeError(f"{self.format_def.name} emitter is stopping or stopped")
+            elif not active_exact_owner:
+                self._require_accepting_events_locked()
             self._queue_admissions += 1
 
     def _finish_queue_admission(self) -> None:
@@ -1337,12 +1417,16 @@ class LogEmitter(ABC):
 
         owner_thread = get_ident()
         with self._close_condition:
-            while self._close_state == "closing":
-                if self._close_thread == owner_thread:
-                    raise RuntimeError("Emitter close cannot be re-entered")
+            while True:
+                while self._close_state == "closing":
+                    if self._close_thread == owner_thread:
+                        raise RuntimeError("Emitter close cannot be re-entered")
+                    self._close_condition.wait()
+                if self._close_state == "closed":
+                    return False
+                if self._pending_exact_publication_key is None:
+                    break
                 self._close_condition.wait()
-            if self._close_state == "closed":
-                return False
             self._close_state = "closing"
             self._close_thread = owner_thread
             while self._active_exact_publication_keys or self._queue_admissions:
@@ -1351,7 +1435,11 @@ class LogEmitter(ABC):
 
     def _finish_close(self) -> None:
         with self._close_condition:
-            if self._active_exact_publication_keys or self._queue_admissions:
+            if (
+                self._pending_exact_publication_key is not None
+                or self._active_exact_publication_keys
+                or self._queue_admissions
+            ):
                 raise ExactPublicationError(
                     "Emitter cannot close with unresolved exact rows or queue admissions"
                 )
@@ -1378,11 +1466,71 @@ class LogEmitter(ABC):
         self,
         key: ExactPublicationParticipantKey,
     ) -> None:
-        """Fence queue/barrier/close progression behind one exact sink admission."""
+        """Drain the ordinary FIFO prefix, then install one exact participant fence."""
+
+        worker_thread = self._thread.ident if self._thread is not None else None
+        if worker_thread == get_ident():
+            raise ExactPublicationError(
+                f"{self.format_def.name} exact publication cannot register from its worker"
+            )
+        claimed = False
+        try:
+            with self._exact_publication_condition:
+                if key in self._active_exact_publication_keys:
+                    return
+                foreign = self._active_exact_publication_keys - {key}
+                if foreign or self._pending_exact_publication_key is not None:
+                    raise ExactPublicationError(
+                        f"{self.format_def.name} already has an unresolved exact publication"
+                    )
+                if self._close_state != "open":
+                    raise ExactPublicationError(
+                        f"{self.format_def.name} is closing or closed during exact publication"
+                    )
+                self._pending_exact_publication_key = key
+                claimed = True
+                self._exact_publication_condition.notify_all()
+                while self._queue_admissions:
+                    self._exact_publication_condition.wait(timeout=0.1)
+                    if self.threaded:
+                        self._raise_if_thread_failed()
+            if self.threaded:
+                self._drain_threaded_before_exact_publication()
+            self._activate_exact_publication_batch(key)
+        except BaseException:
+            if claimed:
+                with self._exact_publication_condition:
+                    if self._pending_exact_publication_key == key:
+                        self._pending_exact_publication_key = None
+                    self._active_exact_publication_keys.discard(key)
+                    self._exact_publication_condition.notify_all()
+            raise
+
+    def _drain_threaded_before_exact_publication(self) -> None:
+        """Acknowledge one FIFO marker after every pre-fence worker item."""
+
+        request = _ExactPublicationDrainRequest()
+        while True:
+            self._raise_if_thread_failed()
+            try:
+                _QUEUE_PUT(self._event_queue, request, block=True, timeout=0.1)
+                break
+            except Full:
+                continue
+        while not request.completed.wait(timeout=0.1):
+            self._raise_if_thread_failed()
+        self._raise_if_thread_failed()
+
+    def _activate_exact_publication_batch(
+        self,
+        key: ExactPublicationParticipantKey,
+    ) -> None:
+        """Install a participant fence after the owning protocol drains its prefix."""
 
         with self._exact_publication_condition:
             foreign = self._active_exact_publication_keys - {key}
-            if foreign:
+            pending = self._pending_exact_publication_key
+            if foreign or pending not in {None, key}:
                 raise ExactPublicationError(
                     f"{self.format_def.name} already has an unresolved exact publication"
                 )
@@ -1391,6 +1539,9 @@ class LogEmitter(ABC):
                     f"{self.format_def.name} is closing or closed during exact publication"
                 )
             self._active_exact_publication_keys.add(key)
+            if pending == key:
+                self._pending_exact_publication_key = None
+            self._exact_publication_condition.notify_all()
 
     def _complete_exact_publication_batch(
         self,
@@ -1399,6 +1550,8 @@ class LogEmitter(ABC):
         """Release one exact emitter fence after all staged sink rows commit."""
 
         with self._exact_publication_condition:
+            if self._pending_exact_publication_key == key:
+                self._pending_exact_publication_key = None
             self._active_exact_publication_keys.discard(key)
             self._exact_publication_condition.notify_all()
 
@@ -1417,9 +1570,14 @@ class LogEmitter(ABC):
         """Block unrelated queue/barrier/close work behind exact admission."""
 
         allowed = queued.attempt.batch._participant_key if queued is not None else None
+        worker_thread = self._thread.ident if self._thread is not None else None
+        owner_thread = get_ident()
         with self._exact_publication_condition:
-            while self._active_exact_publication_keys and (
-                allowed is None or self._active_exact_publication_keys != {allowed}
+            while (
+                self._pending_exact_publication_key is not None and owner_thread != worker_thread
+            ) or (
+                self._active_exact_publication_keys
+                and (allowed is None or self._active_exact_publication_keys != {allowed})
             ):
                 self._exact_publication_condition.wait()
 
@@ -1455,7 +1613,6 @@ class LogEmitter(ABC):
         Args:
             rendered: Rendered event string
         """
-        self._require_accepting_events()
         if stage_exact_publication_row(
             self,
             rendered,
@@ -1467,8 +1624,13 @@ class LogEmitter(ABC):
             release=self._release_exact_buffer_row,
         ):
             return
+        self._require_accepting_events()
+        owner_thread = get_ident()
+        worker_thread = self._thread.ident if self._thread is not None else None
         with self._close_condition:
-            while self._active_exact_publication_keys:
+            while (
+                self._pending_exact_publication_key is not None and owner_thread != worker_thread
+            ) or self._active_exact_publication_keys:
                 self._close_condition.wait()
             self._require_accepting_events_locked()
             with self._file_lock:

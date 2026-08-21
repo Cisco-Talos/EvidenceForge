@@ -13,6 +13,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
+from time import monotonic, sleep
 from typing import Any
 
 import pytest
@@ -2081,6 +2082,80 @@ def test_syslog_threaded_close_rejects_target_flush_and_event_races(
     assert not closer.is_alive()
     assert failures == []
     assert emitter.output_target.value == "default"
+
+
+def test_syslog_prefix_barrier_reentry_completes_before_exact_fence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An admitted Syslog barrier may re-enter flush while registration is pending."""
+
+    emitter = SyslogEmitter(load_format("syslog"), tmp_path, threaded=True)
+    blocker_entered = Event()
+    release_blocker = Event()
+    original_dispatch = emitter._dispatch
+
+    def dispatch(event_data: dict[str, object]) -> None:
+        if event_data["message"] == "barrier-blocker":
+            blocker_entered.set()
+            assert release_blocker.wait(timeout=2)
+        original_dispatch(event_data)
+
+    monkeypatch.setattr(emitter, "_dispatch", dispatch)
+    emitter.emit_event(_event(0, "barrier-blocker"))
+    assert blocker_entered.wait(timeout=1)
+    emitter.emit_event(_event(1, "ordinary-prefix"))
+    barrier_returned = Event()
+    barrier = Thread(
+        target=lambda: (emitter.barrier_flush(), barrier_returned.set()),
+        daemon=True,
+    )
+    barrier.start()
+    deadline = monotonic() + 1
+    while monotonic() < deadline:
+        with emitter._exact_publication_condition:
+            if emitter._queue_admissions == 1:
+                break
+        sleep(0.01)
+    else:
+        raise AssertionError("Syslog prefix barrier did not retain its queue admission")
+
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    reserve_returned = Event()
+    reserve_failures: list[BaseException] = []
+
+    def reserve() -> None:
+        try:
+            batch.reserve_participants((emitter,))
+            reserve_returned.set()
+        except BaseException as error:
+            reserve_failures.append(error)
+
+    reserver = Thread(target=reserve, daemon=True)
+    reserver.start()
+    deadline = monotonic() + 1
+    while monotonic() < deadline:
+        with emitter._exact_publication_condition:
+            if emitter._pending_exact_publication_key is not None:
+                break
+        sleep(0.01)
+    else:
+        raise AssertionError("Syslog exact registration did not become pending")
+
+    release_blocker.set()
+    assert barrier_returned.wait(timeout=2)
+    assert reserve_returned.wait(timeout=2)
+    barrier.join(timeout=1)
+    reserver.join(timeout=1)
+    assert reserve_failures == []
+    batch.prepare(lambda: emitter.emit_event(_event(2, "exact-after-barrier")))
+    batch.commit()
+    batch.release_no_fail()
+    emitter.close()
+    output = _output_path(tmp_path, "default").read_text(encoding="utf-8")
+    assert output.count("barrier-blocker") == 1
+    assert output.count("ordinary-prefix") == 1
+    assert output.count("exact-after-barrier") == 1
 
 
 def test_syslog_exact_byte_capacity_is_reclaimed_after_failed_prepare(tmp_path: Path) -> None:

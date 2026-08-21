@@ -8,6 +8,7 @@ from __future__ import annotations
 import gc
 from pathlib import Path
 from threading import Event, Thread
+from time import monotonic, sleep
 from weakref import ref
 
 import pytest
@@ -63,6 +64,43 @@ class _TestBaseEmitter(LogEmitter):
 
 def _new_batch() -> ExactPublicationBatch:
     return ExactPublicationAuthority(capacity=1).issue_batch()
+
+
+def _wait_for_pending_exact_registration(emitter: LogEmitter) -> None:
+    deadline = monotonic() + 2
+    while monotonic() < deadline:
+        with emitter._exact_publication_condition:
+            if emitter._pending_exact_publication_key is not None:
+                return
+        sleep(0.01)
+    raise AssertionError("emitter did not install its pending exact registration")
+
+
+def _start_close_waiting_on_active_exact(
+    emitter: LogEmitter,
+) -> tuple[Thread, Event, list[BaseException]]:
+    """Start close and prove it owns the close transition behind an active fence."""
+
+    returned = Event()
+    failures: list[BaseException] = []
+
+    def close() -> None:
+        try:
+            emitter.close()
+            returned.set()
+        except BaseException as error:
+            failures.append(error)
+
+    closer = Thread(target=close, daemon=True)
+    closer.start()
+    deadline = monotonic() + 1
+    while monotonic() < deadline:
+        with emitter._exact_publication_condition:
+            if emitter._close_state == "closing":
+                assert emitter._active_exact_publication_keys
+                return closer, returned, failures
+        sleep(0.01)
+    raise AssertionError("close did not wait behind the active exact owner")
 
 
 def test_exact_publication_discards_failed_render_and_resumes_sink_commit() -> None:
@@ -452,6 +490,33 @@ def test_exact_publication_base_worker_acknowledges_base_exception(tmp_path: Pat
     assert (tmp_path / "base.log").read_text(encoding="utf-8").splitlines() == ["accepted"]
 
 
+def test_prereserved_exact_worker_base_exception_releases_fence_for_retry(
+    tmp_path: Path,
+) -> None:
+    """A proactively fenced worker failure aborts cleanly before a fresh retry."""
+
+    emitter = _TestBaseEmitter(
+        load_format("syslog"),
+        tmp_path / "base.log",
+        threaded=True,
+    )
+    batch = _new_batch()
+    try:
+        batch.reserve_participants((emitter,))
+        with pytest.raises(KeyboardInterrupt):
+            batch.publish(lambda: emitter.emit_event({"message": "interrupt"}))
+        with emitter._exact_publication_condition:
+            assert emitter._pending_exact_publication_key is None
+            assert emitter._active_exact_publication_keys == set()
+        batch.publish(lambda: emitter.emit_event({"message": "accepted"}))
+        batch.release_no_fail()
+        emitter.barrier_flush()
+    finally:
+        emitter.stop_thread()
+
+    assert (tmp_path / "base.log").read_text(encoding="utf-8").splitlines() == ["accepted"]
+
+
 def test_exact_publication_fences_close_until_direct_admission(tmp_path: Path) -> None:
     """Close cannot overtake a prepared direct-file row or report success before commit."""
 
@@ -738,6 +803,497 @@ def test_exact_worker_barrier_waits_for_durable_admission(tmp_path: Path) -> Non
     batch.release_no_fail()
     emitter.stop_thread()
     assert output.read_text(encoding="utf-8").splitlines() == ["before-barrier"]
+
+
+def test_exact_registration_drains_prefix_and_fences_ordinary_and_barrier_suffix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pending registration drains B/O/barrier before fencing its exact suffix."""
+
+    output = tmp_path / "base.log"
+    emitter = _TestBaseEmitter(load_format("syslog"), output, threaded=True)
+    blocker_entered = Event()
+    release_blocker = Event()
+    dispatch_order: list[str] = []
+    original_render = emitter._render_event
+
+    def render(event_data: dict[str, object]) -> str:
+        label = str(event_data["message"])
+        dispatch_order.append(label)
+        if label == "blocker":
+            blocker_entered.set()
+            assert release_blocker.wait(timeout=2)
+        return original_render(event_data)
+
+    monkeypatch.setattr(emitter, "_render_event", render)
+    emitter.emit_event({"message": "blocker"})
+    assert blocker_entered.wait(timeout=1)
+    emitter.emit_event({"message": "ordinary"})
+
+    prefix_barrier_returned = Event()
+    prefix_barrier = Thread(
+        target=lambda: (emitter.barrier_flush(), prefix_barrier_returned.set()),
+        daemon=True,
+    )
+    prefix_barrier.start()
+    deadline = monotonic() + 1
+    while monotonic() < deadline:
+        with emitter._exact_publication_condition:
+            if emitter._queue_admissions == 1:
+                break
+        sleep(0.01)
+    else:
+        raise AssertionError("prefix barrier did not retain its queue admission")
+
+    batch = _new_batch()
+    reserve_failures: list[BaseException] = []
+    reserve_returned = Event()
+
+    def reserve() -> None:
+        try:
+            batch.reserve_participants((emitter,))
+            reserve_returned.set()
+        except BaseException as error:
+            reserve_failures.append(error)
+
+    reserver = Thread(target=reserve, daemon=True)
+    reserver.start()
+    _wait_for_pending_exact_registration(emitter)
+
+    suffix_returned = Event()
+    suffix = Thread(
+        target=lambda: (emitter.emit_event({"message": "suffix"}), suffix_returned.set()),
+        daemon=True,
+    )
+    post_barrier_returned = Event()
+    post_barrier = Thread(
+        target=lambda: (emitter.barrier_flush(), post_barrier_returned.set()),
+        daemon=True,
+    )
+    suffix.start()
+    post_barrier.start()
+    assert not suffix_returned.wait(timeout=0.05)
+    assert not post_barrier_returned.wait(timeout=0.05)
+
+    release_blocker.set()
+    assert prefix_barrier_returned.wait(timeout=1)
+    assert reserve_returned.wait(timeout=1)
+    reserver.join(timeout=1)
+    prefix_barrier.join(timeout=1)
+    assert reserve_failures == []
+    assert not suffix_returned.is_set()
+    assert not post_barrier_returned.is_set()
+
+    batch.prepare(lambda: emitter.emit_event({"message": "exact"}))
+    assert dispatch_order == ["blocker", "ordinary", "exact"]
+    batch.commit()
+    assert suffix_returned.wait(timeout=1)
+    assert post_barrier_returned.wait(timeout=1)
+    suffix.join(timeout=1)
+    post_barrier.join(timeout=1)
+    batch.release_no_fail()
+    emitter.close()
+    assert dispatch_order == ["blocker", "ordinary", "exact", "suffix"]
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        "blocker",
+        "ordinary",
+        "exact",
+        "suffix",
+    ]
+
+
+def test_nonthreaded_buffer_waits_for_pending_exact_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A direct ordinary buffer mutation cannot overtake pending exact ownership."""
+
+    output = tmp_path / "base.log"
+    emitter = _TestBaseEmitter(load_format("syslog"), output, threaded=False)
+    batch = _new_batch()
+    activation_entered = Event()
+    release_activation = Event()
+    original_activate = emitter._activate_exact_publication_batch
+
+    def activate(key: tuple[int, int]) -> None:
+        activation_entered.set()
+        assert release_activation.wait(timeout=2)
+        original_activate(key)
+
+    monkeypatch.setattr(emitter, "_activate_exact_publication_batch", activate)
+    reserve_returned = Event()
+    reserver = Thread(
+        target=lambda: (batch.reserve_participants((emitter,)), reserve_returned.set()),
+        daemon=True,
+    )
+    reserver.start()
+    assert activation_entered.wait(timeout=1)
+    _wait_for_pending_exact_registration(emitter)
+
+    ordinary_returned = Event()
+    ordinary = Thread(
+        target=lambda: (emitter.emit_event({"message": "ordinary"}), ordinary_returned.set()),
+        daemon=True,
+    )
+    ordinary.start()
+    assert not ordinary_returned.wait(timeout=0.05)
+    assert emitter.buffer == []
+
+    release_activation.set()
+    assert reserve_returned.wait(timeout=1)
+    reserver.join(timeout=1)
+    assert not ordinary_returned.wait(timeout=0.05)
+    batch.prepare(lambda: emitter.emit_event({"message": "exact"}))
+    batch.commit()
+    assert ordinary_returned.wait(timeout=1)
+    ordinary.join(timeout=1)
+    batch.release_no_fail()
+    emitter.close()
+    assert output.read_text(encoding="utf-8").splitlines() == ["exact", "ordinary"]
+
+
+def test_zero_row_participant_releases_post_fence_suffix(tmp_path: Path) -> None:
+    """A proactively reserved zero-row participant releases its ordinary suffix at commit."""
+
+    output = tmp_path / "base.log"
+    emitter = _TestBaseEmitter(load_format("syslog"), output, threaded=True)
+    batch = _new_batch()
+    batch.reserve_participants((emitter,))
+    assert batch.prepare(lambda: "zero-row") == "zero-row"
+    suffix_returned = Event()
+    suffix = Thread(
+        target=lambda: (emitter.emit_event({"message": "suffix"}), suffix_returned.set()),
+        daemon=True,
+    )
+    suffix.start()
+    assert not suffix_returned.wait(timeout=0.05)
+
+    assert batch.commit() == "zero-row"
+    assert suffix_returned.wait(timeout=1)
+    suffix.join(timeout=1)
+    batch.release_no_fail()
+    emitter.close()
+    assert output.read_text(encoding="utf-8").splitlines() == ["suffix"]
+
+
+def test_active_threaded_exact_owner_renders_after_register_first_close(tmp_path: Path) -> None:
+    """Register-first close waits while its active threaded owner queues a nonzero row."""
+
+    output = tmp_path / "base.log"
+    emitter = _TestBaseEmitter(load_format("syslog"), output, threaded=True)
+    batch = _new_batch()
+    batch.reserve_participants((emitter,))
+    closer, close_returned, close_failures = _start_close_waiting_on_active_exact(emitter)
+
+    batch.prepare(lambda: emitter.emit_event({"message": "exact"}))
+    assert not close_returned.is_set()
+    batch.commit()
+    batch.release_no_fail()
+    assert close_returned.wait(timeout=1)
+    closer.join(timeout=1)
+    assert close_failures == []
+    assert output.read_text(encoding="utf-8").splitlines() == ["exact"]
+
+
+def test_active_nonthreaded_base_owner_stages_after_register_first_close(tmp_path: Path) -> None:
+    """A direct base buffer stages for its matching active owner while close waits."""
+
+    output = tmp_path / "base.log"
+    emitter = _TestBaseEmitter(load_format("syslog"), output, threaded=False)
+    batch = _new_batch()
+    batch.reserve_participants((emitter,))
+    closer, close_returned, close_failures = _start_close_waiting_on_active_exact(emitter)
+
+    batch.prepare(lambda: emitter.emit_event({"message": "exact"}))
+    assert not close_returned.is_set()
+    batch.commit()
+    batch.release_no_fail()
+    assert close_returned.wait(timeout=1)
+    closer.join(timeout=1)
+    assert close_failures == []
+    assert output.read_text(encoding="utf-8").splitlines() == ["exact"]
+
+
+@pytest.mark.parametrize("emitter_kind", ["host", "sensor"])
+def test_active_nonthreaded_multiplexer_owner_renders_after_register_first_close(
+    tmp_path: Path,
+    emitter_kind: str,
+) -> None:
+    """Host and sensor synchronous admissions retain their active exact close owner."""
+
+    output = tmp_path / f"{emitter_kind}.log"
+    if emitter_kind == "host":
+        emitter: LogEmitter = _TestHostEmitter(load_format("syslog"), output)
+        event = {"message": "exact", "_host_fqdn": ""}
+    else:
+        emitter = _TestSensorEmitter(load_format("zeek_conn"), output)
+        event = {"message": "exact"}
+    batch = _new_batch()
+    batch.reserve_participants((emitter,))
+    closer, close_returned, close_failures = _start_close_waiting_on_active_exact(emitter)
+
+    batch.prepare(lambda: emitter.emit_event(event))
+    assert not close_returned.is_set()
+    batch.commit()
+    batch.release_no_fail()
+    assert close_returned.wait(timeout=1)
+    closer.join(timeout=1)
+    assert close_failures == []
+    assert output.read_text(encoding="utf-8").splitlines() == ["exact"]
+
+
+def test_register_first_close_releases_after_exact_render_failure(tmp_path: Path) -> None:
+    """A failed nonzero render aborts its active fence and lets the waiting close finish."""
+
+    output = tmp_path / "base.log"
+    emitter = _TestBaseEmitter(load_format("syslog"), output, threaded=False)
+    batch = _new_batch()
+    batch.reserve_participants((emitter,))
+    closer, close_returned, close_failures = _start_close_waiting_on_active_exact(emitter)
+
+    def render() -> None:
+        emitter.emit_event({"message": "discarded"})
+        raise RuntimeError("render failed after staging")
+
+    with pytest.raises(RuntimeError, match="render failed after staging"):
+        batch.prepare(render)
+    assert close_returned.wait(timeout=1)
+    closer.join(timeout=1)
+    assert close_failures == []
+    assert not output.exists()
+
+
+def test_register_first_pending_owner_completes_before_close(tmp_path: Path) -> None:
+    """A close that loses to pending registration waits for its zero-row completion."""
+
+    output = tmp_path / "base.log"
+    emitter = _TestBaseEmitter(load_format("syslog"), output, threaded=True)
+    blocker_entered = Event()
+    release_blocker = Event()
+    original_render = emitter._render_event
+
+    def render(event_data: dict[str, object]) -> str:
+        blocker_entered.set()
+        assert release_blocker.wait(timeout=2)
+        return original_render(event_data)
+
+    emitter._render_event = render
+    emitter.emit_event({"message": "prefix"})
+    assert blocker_entered.wait(timeout=1)
+    batch = _new_batch()
+    reserve_returned = Event()
+    reserve_failures: list[BaseException] = []
+
+    def reserve() -> None:
+        try:
+            batch.reserve_participants((emitter,))
+            reserve_returned.set()
+        except BaseException as error:
+            reserve_failures.append(error)
+
+    reserver = Thread(target=reserve, daemon=True)
+    reserver.start()
+    _wait_for_pending_exact_registration(emitter)
+    close_returned = Event()
+    close_failures: list[BaseException] = []
+
+    def close() -> None:
+        try:
+            emitter.close()
+            close_returned.set()
+        except BaseException as error:
+            close_failures.append(error)
+
+    closer = Thread(target=close, daemon=True)
+    closer.start()
+    assert not close_returned.wait(timeout=0.05)
+    release_blocker.set()
+    assert reserve_returned.wait(timeout=1)
+    assert not close_returned.is_set()
+
+    batch.prepare(lambda: "zero-row")
+    batch.commit()
+    assert close_returned.wait(timeout=1)
+    reserver.join(timeout=1)
+    closer.join(timeout=1)
+    batch.release_no_fail()
+    assert reserve_failures == []
+    assert close_failures == []
+    assert output.read_text(encoding="utf-8").splitlines() == ["prefix"]
+
+
+def test_close_first_rejects_exact_registration_before_render(tmp_path: Path) -> None:
+    """A close that claims admission first rejects a later exact participant."""
+
+    emitter = _TestBaseEmitter(
+        load_format("syslog"),
+        tmp_path / "base.log",
+        threaded=True,
+    )
+    blocker_entered = Event()
+    release_blocker = Event()
+    original_render = emitter._render_event
+
+    def render(event_data: dict[str, object]) -> str:
+        blocker_entered.set()
+        assert release_blocker.wait(timeout=2)
+        return original_render(event_data)
+
+    emitter._render_event = render
+    emitter.emit_event({"message": "prefix"})
+    assert blocker_entered.wait(timeout=1)
+    close_failures: list[BaseException] = []
+
+    def close() -> None:
+        try:
+            emitter.close()
+        except BaseException as error:
+            close_failures.append(error)
+
+    closer = Thread(target=close, daemon=True)
+    closer.start()
+    deadline = monotonic() + 1
+    while monotonic() < deadline:
+        with emitter._exact_publication_condition:
+            if emitter._close_state == "closing":
+                break
+        sleep(0.01)
+    else:
+        raise AssertionError("close did not claim the emitter before registration")
+
+    batch = _new_batch()
+    with pytest.raises(ExactPublicationError, match="closing or closed"):
+        batch.reserve_participants((emitter,))
+    assert batch.state == "issued"
+    release_blocker.set()
+    closer.join(timeout=1)
+    assert not closer.is_alive()
+    assert close_failures == []
+    batch.cancel()
+
+
+def test_exact_registration_failure_clears_pending_fence_for_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fail-before FIFO drain leaves no pending/active owner and can be retried."""
+
+    emitter = _TestBaseEmitter(
+        load_format("syslog"),
+        tmp_path / "base.log",
+        threaded=True,
+    )
+    original_drain = emitter._drain_threaded_before_exact_publication
+    fail_once = True
+
+    def drain() -> None:
+        nonlocal fail_once
+        if fail_once:
+            fail_once = False
+            raise RuntimeError("injected exact registration drain failure")
+        original_drain()
+
+    monkeypatch.setattr(emitter, "_drain_threaded_before_exact_publication", drain)
+    batch = _new_batch()
+    with pytest.raises(RuntimeError, match="registration drain failure"):
+        batch.reserve_participants((emitter,))
+    with emitter._exact_publication_condition:
+        assert emitter._pending_exact_publication_key is None
+        assert emitter._active_exact_publication_keys == set()
+        assert emitter._queue_admissions == 0
+    assert batch.state == "issued"
+
+    batch.reserve_participants((emitter,))
+    batch.prepare(lambda: emitter.emit_event({"message": "recovered"}))
+    batch.commit()
+    batch.release_no_fail()
+    emitter.close()
+    assert (tmp_path / "base.log").read_text(encoding="utf-8").splitlines() == ["recovered"]
+
+
+def test_later_participant_registration_failure_aborts_generic_fence(tmp_path: Path) -> None:
+    """A later participant fail-before removes an earlier generic emitter fence."""
+
+    emitter = _TestBaseEmitter(load_format("syslog"), tmp_path / "base.log")
+    abort_calls = 0
+
+    class FailingParticipant:
+        def _register_exact_publication_batch(self, _key: tuple[str, int]) -> None:
+            raise RuntimeError("later participant rejected")
+
+        def _complete_exact_publication_batch(self, _key: tuple[str, int]) -> None:
+            raise AssertionError("failed reservation cannot complete")
+
+        def _abort_exact_publication_batch(self, _key: tuple[str, int]) -> None:
+            nonlocal abort_calls
+            abort_calls += 1
+
+    batch = _new_batch()
+    with pytest.raises(RuntimeError, match="later participant rejected"):
+        batch.reserve_participants((emitter, FailingParticipant()))
+    with emitter._exact_publication_condition:
+        assert emitter._pending_exact_publication_key is None
+        assert emitter._active_exact_publication_keys == set()
+    assert abort_calls == 1
+    emitter.emit_event({"message": "ordinary-after-abort"})
+    emitter.close()
+    batch.cancel()
+    assert (tmp_path / "base.log").read_text(encoding="utf-8").splitlines() == [
+        "ordinary-after-abort"
+    ]
+
+
+def test_active_exact_render_rejects_reentrant_barrier(tmp_path: Path) -> None:
+    """A control request cannot self-queue behind the exact fence that owns its render."""
+
+    emitter = _TestBaseEmitter(
+        load_format("syslog"),
+        tmp_path / "base.log",
+        threaded=True,
+    )
+    batch = _new_batch()
+    batch.reserve_participants((emitter,))
+    with pytest.raises(ExactPublicationError, match="barrier cannot re-enter"):
+        batch.prepare(emitter.barrier_flush)
+    assert batch.state == "issued"
+
+    batch.publish(lambda: emitter.emit_event({"message": "recovered"}))
+    batch.release_no_fail()
+    emitter.close()
+    assert (tmp_path / "base.log").read_text(encoding="utf-8").splitlines() == ["recovered"]
+
+
+def test_worker_thread_rejects_exact_participant_registration(tmp_path: Path) -> None:
+    """A worker cannot enqueue a drain marker behind the item it is currently rendering."""
+
+    emitter = _TestBaseEmitter(
+        load_format("syslog"),
+        tmp_path / "base.log",
+        threaded=True,
+    )
+    batch = _new_batch()
+    failures: list[BaseException] = []
+    original_render = emitter._render_event
+
+    def render(event_data: dict[str, object]) -> str:
+        try:
+            batch.reserve_participants((emitter,))
+        except BaseException as error:
+            failures.append(error)
+        return original_render(event_data)
+
+    emitter._render_event = render
+    emitter.emit_event({"message": "ordinary"})
+    emitter.barrier_flush()
+    assert len(failures) == 1
+    assert isinstance(failures[0], ExactPublicationError)
+    assert "cannot register from its worker" in str(failures[0])
+    with emitter._exact_publication_condition:
+        assert emitter._pending_exact_publication_key is None
+        assert emitter._active_exact_publication_keys == set()
+    batch.cancel()
+    emitter.close()
 
 
 @pytest.mark.parametrize("emitter_kind", ["host", "sensor"])

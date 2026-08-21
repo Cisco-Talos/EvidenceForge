@@ -7,8 +7,10 @@ from __future__ import annotations
 
 from copy import copy
 from datetime import UTC, datetime
+from multiprocessing import get_context
 from pathlib import Path
 from threading import Event, Thread
+from time import monotonic, sleep
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -105,14 +107,114 @@ def _builtin_type_five_event(*, cluster_id: str | None = None) -> OccurrenceBuil
     )
 
 
-def _ecar_emitter(output_path: Path) -> EcarEmitter:
+def _ecar_emitter(output_path: Path, *, threaded: bool = False) -> EcarEmitter:
     format_def = Mock()
     format_def.name = "ecar"
     format_def.output.template = "{}"
     format_def.output.header_template = None
     format_def.output.footer_template = None
     format_def.output.encoding = "utf-8"
-    return EcarEmitter(format_def, output_path, threaded=False)
+    return EcarEmitter(format_def, output_path, threaded=threaded)
+
+
+def _fifo_probe_row(label: str, second: int) -> dict[str, object]:
+    return {
+        "timestamp": _START.replace(second=second),
+        "hostname": "HOST-01",
+        "object": "FLOW",
+        "action": "CONNECT",
+        "_host_fqdn": "host-01.corp.local",
+        "_fifo_probe_label": label,
+    }
+
+
+def _run_threaded_type_five_fifo_probe(output_root: str) -> None:
+    """Publish real Type-5 evidence behind a blocked ordinary FIFO prefix."""
+
+    state = StateManager()
+    state.set_current_time(_START)
+    emitter = _ecar_emitter(Path(output_root), threaded=True)
+    dispatcher = EventDispatcher(state, {"ecar": emitter})
+    blocker_entered = Event()
+    release_blocker = Event()
+    dispatch_order: list[str] = []
+    failures: list[BaseException] = []
+    results: list[object] = []
+
+    original_dispatch = emitter._dispatch
+
+    def dispatch(event_data: dict[str, object]) -> None:
+        label = str(event_data.pop("_fifo_probe_label", "exact"))
+        dispatch_order.append(label)
+        if label == "blocker":
+            blocker_entered.set()
+            if not release_blocker.wait(timeout=5):
+                raise AssertionError("FIFO blocker was not released")
+        original_dispatch(event_data)
+
+    emitter._dispatch = dispatch
+
+    emitter.emit_event(_fifo_probe_row("blocker", 1))
+    if not blocker_entered.wait(timeout=5):
+        raise AssertionError("threaded eCAR worker did not enter the FIFO blocker")
+    emitter.emit_event(_fifo_probe_row("ordinary", 2))
+
+    def publish() -> None:
+        try:
+            carrier = _prepare_state_neutral_projection(dispatcher, cluster_id="type-five-fifo")
+            results.append(dispatcher.publish_state_neutral_exact_projection(carrier))
+        except BaseException as error:
+            failures.append(error)
+
+    publisher = Thread(target=publish, daemon=True)
+    publisher.start()
+    deadline = monotonic() + 5
+    while monotonic() < deadline:
+        if failures:
+            raise failures[0]
+        with emitter._exact_publication_condition:
+            active = bool(emitter._active_exact_publication_keys)
+            pending = getattr(emitter, "_pending_exact_publication_key", None) is not None
+        if active or pending:
+            break
+        sleep(0.01)
+    else:
+        raise AssertionError("Type-5 publication did not install its FIFO fence")
+
+    release_blocker.set()
+    publisher.join(timeout=5)
+    if publisher.is_alive():
+        raise AssertionError("Type-5 publication deadlocked behind its ordinary FIFO predecessor")
+    if failures:
+        raise failures[0]
+    if len(results) != 1:
+        raise AssertionError("Type-5 publication did not return one result")
+    result = results[0]
+    if not dispatcher.authenticates_state_neutral_projection_publication_receipt(result.receipt):
+        raise AssertionError("Type-5 publication did not return an authentic receipt")
+    if dispatch_order != ["blocker", "ordinary", "exact"]:
+        raise AssertionError(f"unexpected FIFO dispatch order: {dispatch_order!r}")
+    emitter.close()
+    dispatcher.assert_exact_projection_recoveries_drained()
+
+
+def test_threaded_type_five_drains_ordinary_fifo_prefix_before_exact(
+    tmp_path: Path,
+) -> None:
+    """A proactively reserved Type-5 participant cannot strand its FIFO predecessor."""
+
+    context = get_context("spawn")
+    child = context.Process(
+        target=_run_threaded_type_five_fifo_probe,
+        args=(str(tmp_path / "threaded-type-five-child"),),
+    )
+    child.start()
+    child.join(timeout=12)
+    if child.is_alive():
+        child.terminate()
+        child.join(timeout=2)
+        pytest.fail("threaded Type-5 FIFO probe did not exit within its bounded child lifetime")
+    assert child.exitcode == 0
 
 
 def _prepare_state_neutral_projection(

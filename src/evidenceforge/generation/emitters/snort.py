@@ -950,7 +950,7 @@ class SnortEmitter(SensorMultiplexEmitter):
                 self._require_accepting_events()
                 if self.threaded:
                     self._drain_threaded_before_exact()
-            super()._register_exact_publication_batch(key)
+            super()._activate_exact_publication_batch(key)
 
     def _drain_threaded_before_exact(self) -> None:
         """Wait for prior FIFO rendering without establishing a flush boundary."""
@@ -3979,7 +3979,7 @@ class SnortEmitter(SensorMultiplexEmitter):
             self._terminal_cleanup_thread,
         }
         if internal_boundary:
-            super().barrier_flush()
+            super()._barrier_flush_admitted()
             return
         with self._producer_lock:
             self._begin_boundary_admission()
@@ -3989,7 +3989,7 @@ class SnortEmitter(SensorMultiplexEmitter):
                     with self._exact_publication_condition:
                         exact_active = bool(self._active_exact_publication_keys)
                     if not exact_active:
-                        super().barrier_flush()
+                        super()._barrier_flush_admitted()
                         return
                 self._wait_for_exact_publication_turn(None)
         finally:
