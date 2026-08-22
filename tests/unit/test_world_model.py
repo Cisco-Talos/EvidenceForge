@@ -639,6 +639,39 @@ def test_world_planner_does_not_resurrect_session_ended_during_logon_backdate(
     assert state_manager.get_session(result.session.logon_id) is result.session
 
 
+def test_find_windows_interactive_does_not_return_historical_ended_owner(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """Non-monotonic Windows lookup must not reuse an already-retired owner."""
+
+    session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    activity_time = session_start + timedelta(minutes=30)
+    state_manager.set_current_time(session_start)
+    logon_id = state_manager.create_session(
+        username=users["alice.admin"].username,
+        system=systems["WKS-01"].hostname,
+        logon_type=2,
+        source_ip="-",
+        session_kind="interactive",
+    )
+    historical = state_manager.get_session(logon_id)
+    assert historical is not None
+    state_manager.end_session(logon_id, session_start + timedelta(hours=1))
+    historical_activity = historical.last_activity_time
+
+    selected = planner._find_windows_interactive_session(
+        users["alice.admin"].username,
+        systems["WKS-01"],
+        activity_time,
+    )
+
+    assert selected is None
+    assert historical.last_activity_time == historical_activity
+
+
 def test_world_planner_bootstraps_ssh_session(
     planner: WorldPlanner,
     state_manager: StateManager,
@@ -1526,11 +1559,24 @@ def test_linux_local_session_shell_has_visible_terminal_parent(
     assert session is not None
     assert parent_proc.lifecycle_group_id == session.lifecycle_group_id
     assert shell_proc.lifecycle_group_id == session.lifecycle_group_id
+    assert (
+        activity_generator.foreground_process_termination_time(system.hostname, parent_proc.pid)
+        is None
+    )
+    assert (
+        activity_generator.foreground_process_termination_time(system.hostname, shell_proc.pid)
+        is None
+    )
     if parent_proc.image == "/bin/login":
         assert user_manager.image in {"/sbin/init", "/usr/lib/systemd/systemd"}
         assert user_manager.lifecycle_group_id != session.lifecycle_group_id
     else:
         assert user_manager.lifecycle_group_id == session.lifecycle_group_id
+
+    activity_generator.finalize_foreground_process_lifetimes(activity_time + timedelta(minutes=1))
+
+    assert state_manager.get_process(system.hostname, parent_proc.pid) is parent_proc
+    assert state_manager.get_process(system.hostname, shell_proc.pid) is shell_proc
 
 
 def test_pre_window_linux_session_keeps_login_parent_before_collection(
@@ -1622,6 +1668,62 @@ def test_find_user_session_ignores_sessions_starting_after_activity_time(
     )
 
     assert selected is None
+
+
+def test_ssh_bootstrap_does_not_attach_to_historical_ended_owner(
+    world_model: WorldModel,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """Session bootstrap cannot attach new state to an already-closed owner."""
+
+    start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    state_manager.set_current_time(start_time)
+    logon_id = state_manager.create_session(
+        username="alice.admin",
+        system=systems["DB-01"].hostname,
+        logon_type=10,
+        source_ip=systems["WKS-01"].ip,
+        session_kind="ssh",
+    )
+    historical = state_manager.get_session(logon_id)
+    assert historical is not None
+    state_manager.end_session(logon_id, start_time + timedelta(hours=1))
+    historical_activity = historical.last_activity_time
+
+    activity_generator = Mock()
+
+    def execute_ssh_session_bundle(**kwargs):
+        replacement_logon_id = state_manager.create_session(
+            username=kwargs["user"].username,
+            system=kwargs["target_system"].hostname,
+            logon_type=10,
+            source_ip=kwargs["source_ip"],
+            start_time=kwargs["time"],
+            session_kind="ssh",
+        )
+        return "replacement-network-uid", replacement_logon_id
+
+    activity_generator._execute_ssh_session_bundle.side_effect = execute_ssh_session_bundle
+    planner = WorldPlanner(world_model, state_manager, activity_generator)
+
+    selected = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["DB-01"],
+        source_system=systems["WKS-01"],
+        time=start_time + timedelta(minutes=30),
+        rng=random.Random(31),
+        session_kind="ssh",
+    )
+
+    assert selected.session.logon_id != logon_id
+    assert historical.last_activity_time == historical_activity
+    activity_generator.ensure_linux_ssh_session_shell.assert_called_once()
+    assert (
+        activity_generator.ensure_linux_ssh_session_shell.call_args.kwargs["logon_id"]
+        == selected.session.logon_id
+    )
 
 
 def test_align_rdp_source_after_future_session_preserves_naive_time_awareness(

@@ -42,7 +42,7 @@ import uuid
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
@@ -104,6 +104,7 @@ from evidenceforge.events.dispatcher import (
     ActionCohortEffectMemberBinding,
     ActionCohortProjectionDisposition,
     ActionCohortProjectionOutcome,
+    ActionCohortPublicationReceipt,
     ActionCohortPublicationResult,
     EventDispatcher,
     PreparedActionCohortProjection,
@@ -115,8 +116,13 @@ from evidenceforge.events.identity import (
     EntityIdentity,
     EventIdentityPlan,
     ProcessIdentity,
+    SessionIdentity,
 )
-from evidenceforge.events.lifecycle import ActionLifecycleContext, SessionEndPlan
+from evidenceforge.events.lifecycle import (
+    ActionLifecycleContext,
+    LifecycleEntityRef,
+    SessionEndPlan,
+)
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkTrafficLedger,
@@ -345,6 +351,7 @@ from evidenceforge.generation.source_timing import (
 )
 from evidenceforge.generation.ssh_channels import SshApplicationChannelManager
 from evidenceforge.generation.state_manager import (
+    ActionCohortSessionMetadataState,
     MaterializationBatchPlan,
     ProcessMaterializationPlan,
     SessionMaterializationPlan,
@@ -4674,6 +4681,16 @@ class RdpLifecycleJournalCensus:
     capacity: int
 
 
+@dataclass(frozen=True, slots=True)
+class LinuxSudoLogoffJournalCensus:
+    """Bounded count-only view of retained route-bearing local logoffs."""
+
+    pending: int
+    active: int
+    capacity: int
+    high_water_pending: int
+
+
 _BashHistorySecondKey = tuple[str, int]
 
 
@@ -4698,6 +4715,142 @@ class _RdpLifecycleJournalEntry:
     manager_logged_out: bool = False
     target_terminations: tuple[tuple[ProcessIdentity, datetime], ...] | None = None
     logout_published: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _LinuxSudoProcessClosePlan:
+    """Frozen State and source-native facts for one local sudo-session process close."""
+
+    identity: ProcessIdentity
+    end_time: datetime
+    auth_session_id: int
+    auth_logon_type: int
+    concurrency_group_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _LinuxSudoRouteClosePreimage:
+    """Frozen six-map facts for one exact route owned at journal installation."""
+
+    tty_key: tuple[str, str, str]
+    session_present: bool
+    session_logon_id: str | None
+    available_present: bool
+    available_until: datetime | None
+    inverse_key: tuple[str, str]
+    owner_present: bool
+    requested_tty_key: tuple[str, str, str] | None
+    assignment_present: bool
+    assigned_tty: str | None
+    capacity_claim_present: bool
+    capacity_claim: tuple[object, str, bool, bool, bool] | None = field(
+        repr=False,
+        compare=False,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _LinuxSudoRouteCleanupAck:
+    """Frozen exact postimage receipt installed with one atomic route release."""
+
+    continuation_stable_id: str
+    logon_id: str
+    route_keys: tuple[tuple[str, str, str], ...]
+    reverse_bucket_present: bool
+    reverse_bucket: frozenset[tuple[str, str, str]]
+    sudo_tty_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class _LinuxSudoLogoffProjectionOwner:
+    """Frozen local actor, host, and session facts owned by one exact close."""
+
+    username: str
+    hostname: str
+    host_ip: str
+    host_os: str
+    host_os_category: str
+    host_system_type: str
+    host_domain: str
+    host_fqdn: str
+    host_netbios_domain: str
+    host_roles: tuple[str, ...]
+    logon_id: str
+    session_id: int
+    logon_type: int
+    source_ip: str
+    source_port: int
+    session_kind: str
+    auth_protocol: str
+    smb_principal: str
+    account_scope: str
+    auth_session_ref: str
+    effective_uid: int | None
+    effective_gid: int | None
+    session_object_id: str
+    session_started_at: datetime
+    lifecycle_group_id: str
+    parent_lifecycle_group_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _LinuxSudoValidatedRouteOwner:
+    """Callback-free exact leaves copied from one retained route continuation."""
+
+    stable_id: str
+    logon_id: str
+    route_keys: tuple[tuple[str, str, str], ...]
+    reverse_bucket_present: bool
+    reverse_bucket: frozenset[tuple[str, str, str]]
+    route_preimage: tuple[_LinuxSudoRouteClosePreimage, ...]
+    cleanup_ack: _LinuxSudoRouteCleanupAck | None
+    active: bool
+
+
+@dataclass(slots=True)
+class _LinuxSudoClosePhaseProgress:
+    """Authenticated exact-publication progress retained across a public retry."""
+
+    root_action_id: str
+    state_semantic_id: str
+    occurrence_id: str
+    expected_identity: ProcessIdentity | SessionIdentity
+    event: OccurrenceBuilder
+    receipt: ActionCohortPublicationReceipt | None = None
+    result: ActionCohortPublicationResult | None = None
+    projection_complete: bool = False
+    compatibility_adopted: bool = False
+
+
+@dataclass(slots=True)
+class _LinuxSudoLogoffContinuation:
+    """Bounded exact owner for one route-bearing local Linux logoff."""
+
+    stable_id: str
+    request: LogoffRequest
+    user: User
+    system: System
+    session: ActiveSession
+    session_identity: SessionIdentity
+    projection_owner: _LinuxSudoLogoffProjectionOwner
+    base_logoff_time: datetime
+    effective_end_plan: SessionEndPlan | None
+    process_closes: tuple[_LinuxSudoProcessClosePlan, ...]
+    route_keys: tuple[tuple[str, str, str], ...]
+    reverse_bucket_present: bool
+    reverse_bucket: frozenset[tuple[str, str, str]]
+    route_preimage: tuple[_LinuxSudoRouteClosePreimage, ...]
+    timing_deltas: tuple["_FrozenActivityTimingDelta", ...]
+    rendered_dependents_delta: "_FrozenActivityTimingDelta | None"
+    ecar_logout_delta: "_FrozenActivityTimingDelta | None"
+    windows_logout_delta: "_FrozenActivityTimingDelta | None"
+    dispatcher_owner: EventDispatcher = field(repr=False, compare=False)
+    state_owner: StateManager = field(repr=False, compare=False)
+    lifecycle_owner: GeneratorLifecycleAuthority = field(repr=False, compare=False)
+    phases: dict[str, _LinuxSudoClosePhaseProgress] = field(default_factory=dict, repr=False)
+    final_logoff_time: datetime | None = None
+    cleanup_ack: _LinuxSudoRouteCleanupAck | None = None
+    active: bool = False
 
 
 _FailedLogonAttemptKey = tuple[str, str, int, str]
@@ -5461,6 +5614,8 @@ class ActivityGenerator:
             str,
             set[tuple[str, str, str]],
         ] = {}
+        self._pending_linux_sudo_logoffs: dict[str, _LinuxSudoLogoffContinuation] = {}
+        self._linux_sudo_logoff_high_water_pending = 0
         self._linux_sudo_tty_publication_hook: Callable[[str], None] | None = None
         self._ssh_session_ready_times: dict[str, datetime] = {}
         self._ssh_close_journal_lock = Lock()
@@ -14182,6 +14337,1444 @@ class ActivityGenerator:
             return True
         return bool(actor.email and username.lower() == actor.email.lower())
 
+    @staticmethod
+    def _validated_linux_sudo_route_owner(
+        continuation: _LinuxSudoLogoffContinuation,
+    ) -> _LinuxSudoValidatedRouteOwner:
+        """Copy exact callback-free route leaves before using one retained owner."""
+
+        if type(continuation) is not _LinuxSudoLogoffContinuation:
+            raise StateError("Linux sudo logoff journal contains a malformed route owner")
+        stable_id = continuation.stable_id
+        session_identity = continuation.session_identity
+        route_keys = continuation.route_keys
+        reverse_bucket_present = continuation.reverse_bucket_present
+        reverse_bucket = continuation.reverse_bucket
+        route_preimage = continuation.route_preimage
+        cleanup_ack = continuation.cleanup_ack
+        active = continuation.active
+
+        def exact_tty_key(candidate: object) -> bool:
+            return bool(
+                type(candidate) is tuple
+                and len(candidate) == 3
+                and all(type(component) is str and component for component in candidate)
+            )
+
+        if (
+            type(stable_id) is not str
+            or not stable_id
+            or type(session_identity) is not SessionIdentity
+            or type(session_identity.logon_id) is not str
+            or not session_identity.logon_id
+            or type(route_keys) is not tuple
+            or not route_keys
+            or any(not exact_tty_key(key) for key in route_keys)
+            or type(reverse_bucket_present) is not bool
+            or not reverse_bucket_present
+            or type(reverse_bucket) is not frozenset
+            or not reverse_bucket
+            or any(not exact_tty_key(key) for key in reverse_bucket)
+            or type(route_preimage) is not tuple
+            or len(route_preimage) != len(route_keys)
+            or type(active) is not bool
+        ):
+            raise StateError("Linux sudo logoff journal contains a malformed route owner")
+        if len(frozenset(route_keys)) != len(route_keys) or not frozenset(route_keys).issubset(
+            reverse_bucket
+        ):
+            raise StateError("Linux sudo logoff journal contains a malformed route footprint")
+
+        for route_key, route in zip(route_keys, route_preimage, strict=True):
+            if type(route) is not _LinuxSudoRouteClosePreimage:
+                raise StateError("Linux sudo logoff journal contains a malformed route preimage")
+            tty_key = route.tty_key
+            session_logon_id = route.session_logon_id
+            available_until = route.available_until
+            inverse_key = route.inverse_key
+            requested_tty_key = route.requested_tty_key
+            assigned_tty = route.assigned_tty
+            capacity_claim = route.capacity_claim
+            if (
+                not exact_tty_key(tty_key)
+                or type(route.session_present) is not bool
+                or (session_logon_id is not None and type(session_logon_id) is not str)
+                or type(route.available_present) is not bool
+                or (available_until is not None and type(available_until) is not datetime)
+                or type(inverse_key) is not tuple
+                or len(inverse_key) != 2
+                or any(type(component) is not str or not component for component in inverse_key)
+                or type(route.owner_present) is not bool
+                or (requested_tty_key is not None and not exact_tty_key(requested_tty_key))
+                or type(route.assignment_present) is not bool
+                or (assigned_tty is not None and type(assigned_tty) is not str)
+                or type(route.capacity_claim_present) is not bool
+                or (
+                    capacity_claim is not None
+                    and (
+                        type(capacity_claim) is not tuple
+                        or len(capacity_claim) != 5
+                        or type(capacity_claim[0]) is not object
+                        or type(capacity_claim[1]) is not str
+                        or any(type(flag) is not bool for flag in capacity_claim[2:])
+                    )
+                )
+            ):
+                raise StateError("Linux sudo logoff journal contains a malformed route preimage")
+            if (
+                tty_key != route_key
+                or inverse_key != (tty_key[0], tty_key[2])
+                or (requested_tty_key is not None and requested_tty_key[:2] != tty_key[:2])
+            ):
+                raise StateError("Linux sudo logoff journal contains a crossed route preimage")
+
+        if cleanup_ack is not None:
+            if type(cleanup_ack) is not _LinuxSudoRouteCleanupAck:
+                raise StateError("Linux sudo logoff journal has a malformed cleanup receipt")
+            ack_stable_id = cleanup_ack.continuation_stable_id
+            ack_logon_id = cleanup_ack.logon_id
+            ack_route_keys = cleanup_ack.route_keys
+            ack_reverse_bucket = cleanup_ack.reverse_bucket
+            if (
+                type(ack_stable_id) is not str
+                or type(ack_logon_id) is not str
+                or type(ack_route_keys) is not tuple
+                or any(not exact_tty_key(key) for key in ack_route_keys)
+                or type(cleanup_ack.reverse_bucket_present) is not bool
+                or type(ack_reverse_bucket) is not frozenset
+                or any(not exact_tty_key(key) for key in ack_reverse_bucket)
+                or type(cleanup_ack.sudo_tty_rows) is not int
+                or cleanup_ack.sudo_tty_rows < 1
+            ):
+                raise StateError("Linux sudo logoff journal has a malformed cleanup receipt")
+            if (
+                ack_stable_id != stable_id
+                or ack_logon_id != session_identity.logon_id
+                or ack_route_keys != route_keys
+            ):
+                raise StateError("Linux sudo logoff journal has a crossed cleanup receipt")
+
+        return _LinuxSudoValidatedRouteOwner(
+            stable_id=stable_id,
+            logon_id=session_identity.logon_id,
+            route_keys=route_keys,
+            reverse_bucket_present=reverse_bucket_present,
+            reverse_bucket=reverse_bucket,
+            route_preimage=route_preimage,
+            cleanup_ack=cleanup_ack,
+            active=active,
+        )
+
+    def _require_linux_sudo_logoff_projection_owner(
+        self,
+        continuation: _LinuxSudoLogoffContinuation,
+    ) -> _LinuxSudoLogoffProjectionOwner:
+        """Reauthenticate one retained local actor/session/host projection."""
+
+        if type(continuation) is not _LinuxSudoLogoffContinuation:
+            raise StateError("Linux sudo logoff continuation lost its projection owner")
+        owner = continuation.projection_owner
+        request = continuation.request
+        user = continuation.user
+        system = continuation.system
+        session = continuation.session
+        session_identity = continuation.session_identity
+        if (
+            type(owner) is not _LinuxSudoLogoffProjectionOwner
+            or type(request) is not LogoffRequest
+            or type(user) is not User
+            or type(system) is not System
+            or type(session) is not ActiveSession
+            or type(session_identity) is not SessionIdentity
+            or request.user is not user
+            or request.system is not system
+        ):
+            raise StateError("Linux sudo logoff continuation lost its projection owner")
+        if (
+            any(
+                type(value) is not str
+                for value in (
+                    owner.username,
+                    owner.hostname,
+                    owner.host_ip,
+                    owner.host_os,
+                    owner.host_os_category,
+                    owner.host_system_type,
+                    owner.host_domain,
+                    owner.host_fqdn,
+                    owner.host_netbios_domain,
+                    owner.logon_id,
+                    owner.source_ip,
+                    owner.session_kind,
+                    owner.auth_protocol,
+                    owner.smb_principal,
+                    owner.account_scope,
+                    owner.auth_session_ref,
+                    owner.session_object_id,
+                    owner.lifecycle_group_id,
+                    owner.parent_lifecycle_group_id,
+                )
+            )
+            or type(owner.host_roles) is not tuple
+            or any(type(role) is not str for role in owner.host_roles)
+            or type(owner.session_id) is not int
+            or type(owner.logon_type) is not int
+            or type(owner.source_port) is not int
+            or (owner.effective_uid is not None and type(owner.effective_uid) is not int)
+            or (owner.effective_gid is not None and type(owner.effective_gid) is not int)
+            or type(owner.session_started_at) is not datetime
+        ):
+            raise StateError("Linux sudo logoff continuation has a malformed projection owner")
+        if (
+            type(user.username) is not str
+            or type(system.hostname) is not str
+            or type(system.ip) is not str
+            or type(system.os) is not str
+            or type(system.type) is not str
+            or type(system.roles) is not list
+            or any(type(role) is not str for role in system.roles)
+            or type(session.logon_id) is not str
+            or type(session.username) is not str
+            or type(session.system) is not str
+            or type(session.logon_type) is not int
+            or type(session.start_time) is not datetime
+            or type(session.source_ip) is not str
+            or type(session.source_port) is not int
+            or type(session.session_id) is not int
+            or type(session.session_kind) is not str
+            or type(session.auth_protocol) is not str
+            or type(session.smb_principal) is not str
+            or type(session.account_scope) is not str
+            or type(session.auth_session_ref) is not str
+            or (session.effective_uid is not None and type(session.effective_uid) is not int)
+            or (session.effective_gid is not None and type(session.effective_gid) is not int)
+            or type(session.ecar_object_id) is not str
+            or type(session.lifecycle_group_id) is not str
+            or type(session.parent_lifecycle_group_id) is not str
+        ):
+            raise StateError("Linux sudo logoff continuation has a malformed live projection")
+        if (
+            user.username != owner.username
+            or system.hostname != owner.hostname
+            or system.ip != owner.host_ip
+            or system.os != owner.host_os
+            or _get_os_category(system.os) != owner.host_os_category
+            or system.type != owner.host_system_type
+            or tuple(system.roles) != owner.host_roles
+            or session.logon_id != owner.logon_id
+            or session.username != owner.username
+            or session.system != owner.hostname
+            or session.logon_type != owner.logon_type
+            or ensure_utc(session.start_time) != owner.session_started_at
+            or session.source_ip != owner.source_ip
+            or session.source_port != owner.source_port
+            or session.session_id != owner.session_id
+            or session.session_kind != owner.session_kind
+            or session.auth_protocol != owner.auth_protocol
+            or session.smb_principal != owner.smb_principal
+            or session.account_scope != owner.account_scope
+            or session.auth_session_ref != owner.auth_session_ref
+            or session.effective_uid != owner.effective_uid
+            or session.effective_gid != owner.effective_gid
+            or session.ecar_object_id != owner.session_object_id
+            or session.lifecycle_group_id != owner.lifecycle_group_id
+            or session.parent_lifecycle_group_id != owner.parent_lifecycle_group_id
+            or session_identity.object_id != owner.session_object_id
+            or session_identity.logon_id != owner.logon_id
+            or session_identity.hostname != owner.hostname
+            or session_identity.principal != owner.username
+            or session_identity.session_id != owner.session_id
+            or session_identity.started_at != owner.session_started_at
+            or session_identity.lifecycle_group_id != owner.lifecycle_group_id
+            or session_identity.parent_lifecycle_group_id != owner.parent_lifecycle_group_id
+        ):
+            raise StateError("Linux sudo logoff continuation projection owner drifted")
+        return owner
+
+    @staticmethod
+    def _linux_sudo_logoff_host_context(
+        owner: _LinuxSudoLogoffProjectionOwner,
+    ) -> HostContext:
+        """Materialize one event-local host context from an authenticated snapshot."""
+
+        return HostContext(
+            hostname=owner.hostname,
+            ip=owner.host_ip,
+            os=owner.host_os,
+            os_category=owner.host_os_category,
+            system_type=owner.host_system_type,
+            domain=owner.host_domain,
+            fqdn=owner.host_fqdn,
+            netbios_domain=owner.host_netbios_domain,
+            roles=list(owner.host_roles),
+        )
+
+    def _claim_pending_linux_sudo_logoff(
+        self,
+        request: LogoffRequest,
+    ) -> _LinuxSudoLogoffContinuation | None:
+        """Claim a retained exact close before consulting already-consumed State."""
+
+        if (
+            type(request) is not LogoffRequest
+            or type(request.user) is not User
+            or type(request.system) is not System
+            or type(request.time) is not datetime
+            or type(request.logon_id) is not str
+            or not request.logon_id
+            or type(request.logon_type) is not int
+            or type(request.from_storyline) is not bool
+            or (
+                request.session_end_plan is not None
+                and type(request.session_end_plan) is not SessionEndPlan
+            )
+            or type(request.source) is not str
+        ):
+            raise StateError("Linux sudo logoff retry request has a malformed exact shape")
+        stable_id = request.stable_id
+        with self._linux_sudo_tty_lock:
+            journals = self._pending_linux_sudo_logoffs
+            if type(journals) is not dict:
+                raise StateError("Linux sudo logoff journals must be an exact dictionary")
+            continuation = dict.get(journals, stable_id)
+            if continuation is None:
+                for retained in dict.values(journals):
+                    if (
+                        type(retained) is not _LinuxSudoLogoffContinuation
+                        or type(retained.session_identity) is not SessionIdentity
+                        or type(retained.session_identity.logon_id) is not str
+                    ):
+                        raise StateError("Linux sudo logoff journal contains a malformed owner")
+                    if retained.session_identity.logon_id == request.logon_id:
+                        raise StateError(
+                            "Linux sudo logoff retry changed its retained request owner"
+                        )
+                return None
+            retained_request = continuation.request
+            if (
+                type(continuation) is not _LinuxSudoLogoffContinuation
+                or type(continuation.stable_id) is not str
+                or type(retained_request) is not LogoffRequest
+                or type(retained_request.time) is not datetime
+                or type(retained_request.logon_id) is not str
+                or type(retained_request.logon_type) is not int
+                or type(retained_request.from_storyline) is not bool
+                or (
+                    retained_request.session_end_plan is not None
+                    and type(retained_request.session_end_plan) is not SessionEndPlan
+                )
+                or type(retained_request.source) is not str
+                or type(continuation.session_identity) is not SessionIdentity
+                or type(continuation.session_identity.logon_id) is not str
+                or continuation.stable_id != stable_id
+                or type(continuation.active) is not bool
+                or retained_request.user is not request.user
+                or retained_request.system is not request.system
+                or retained_request.time != request.time
+                or retained_request.logon_type != request.logon_type
+                or retained_request.from_storyline is not request.from_storyline
+                or retained_request.session_end_plan is not request.session_end_plan
+                or retained_request.source != request.source
+                or continuation.session_identity.logon_id != request.logon_id
+                or continuation.dispatcher_owner is not self.dispatcher
+                or continuation.state_owner is not self.state_manager
+                or continuation.lifecycle_owner is not self._lifecycle_authority
+            ):
+                raise StateError("Linux sudo logoff retry crossed its exact retained owner")
+            if continuation.active is True:
+                raise StateError("Linux sudo logoff continuation is already active")
+            continuation.active = True
+            return continuation
+
+    def _release_linux_sudo_logoff_claim(
+        self,
+        continuation: _LinuxSudoLogoffContinuation,
+    ) -> None:
+        """Release a journal execution claim without invoking callbacks under its mutex."""
+
+        if (
+            type(continuation) is not _LinuxSudoLogoffContinuation
+            or type(continuation.stable_id) is not str
+        ):
+            raise StateError("Linux sudo logoff claim release has a malformed owner")
+        stable_id = continuation.stable_id
+        with self._linux_sudo_tty_lock:
+            journals = self._pending_linux_sudo_logoffs
+            if type(journals) is not dict or type(continuation.active) is not bool:
+                raise StateError("Linux sudo logoff claim release lost its exact journal")
+            retained = dict.get(journals, stable_id)
+            if retained is continuation:
+                continuation.active = False
+
+    def _install_linux_sudo_logoff_continuation(
+        self,
+        *,
+        request: LogoffRequest,
+        session: ActiveSession,
+        session_identity: SessionIdentity,
+        base_logoff_time: datetime,
+        effective_end_plan: SessionEndPlan | None,
+        process_closes: tuple[_LinuxSudoProcessClosePlan, ...],
+        timing_deltas: tuple[_FrozenActivityTimingDelta, ...],
+        rendered_dependents_delta: _FrozenActivityTimingDelta | None,
+        ecar_logout_delta: _FrozenActivityTimingDelta | None,
+        windows_logout_delta: _FrozenActivityTimingDelta | None,
+    ) -> _LinuxSudoLogoffContinuation:
+        """Install the exact route/session continuation before its first mutation."""
+
+        if (
+            type(request) is not LogoffRequest
+            or type(request.user) is not User
+            or type(request.system) is not System
+            or type(request.user.username) is not str
+            or type(request.system.hostname) is not str
+            or type(request.system.ip) is not str
+            or type(request.system.os) is not str
+            or type(request.system.type) is not str
+            or type(request.system.roles) is not list
+            or any(type(role) is not str for role in request.system.roles)
+            or type(session) is not ActiveSession
+            or type(session_identity) is not SessionIdentity
+            or type(session_identity.object_id) is not str
+            or type(session_identity.logon_id) is not str
+            or type(session_identity.hostname) is not str
+            or type(session_identity.principal) is not str
+            or type(session_identity.session_id) is not int
+            or type(session_identity.started_at) is not datetime
+            or type(session.logon_id) is not str
+            or type(session.username) is not str
+            or type(session.system) is not str
+            or type(session.logon_type) is not int
+            or type(session.start_time) is not datetime
+            or type(session.source_ip) is not str
+            or type(session.source_port) is not int
+            or type(session.session_id) is not int
+            or type(session.session_kind) is not str
+            or type(session.ecar_object_id) is not str
+            or type(session.auth_protocol) is not str
+            or type(session.smb_principal) is not str
+            or type(session.account_scope) is not str
+            or type(session.auth_session_ref) is not str
+            or (session.effective_uid is not None and type(session.effective_uid) is not int)
+            or (session.effective_gid is not None and type(session.effective_gid) is not int)
+            or (session.end_plan is not None and type(session.end_plan) is not SessionEndPlan)
+            or (
+                request.session_end_plan is not None
+                and type(request.session_end_plan) is not SessionEndPlan
+            )
+            or (effective_end_plan is not None and type(effective_end_plan) is not SessionEndPlan)
+            or session_identity.object_id != session.ecar_object_id
+            or session_identity.logon_id != session.logon_id
+            or session_identity.hostname != session.system
+            or session_identity.principal != session.username
+            or session_identity.session_id != session.session_id
+            or session_identity.session_kind != "interactive"
+            or session_identity.started_at != ensure_utc(session.start_time)
+            or session_identity.lifecycle_group_id != session.lifecycle_group_id
+            or session_identity.parent_lifecycle_group_id != session.parent_lifecycle_group_id
+            or session.logon_type != 2
+            or session.session_kind != "interactive"
+            or session.source_ip not in {"", "-"}
+            or session.source_port != 0
+            or request.user.username != session.username
+            or request.system.hostname != session.system
+            or request.logon_id != session.logon_id
+            or request.logon_type != 2
+            or not self._lifecycle_authority.is_strict(
+                LifecycleEntityRef("session", session_identity.object_id),
+                session_identity.hostname,
+            )
+        ):
+            raise StateError("Linux sudo logoff requires one exact strict local session owner")
+        if request.session_end_plan is not None and (
+            session.end_plan is not None
+            and session.end_plan.is_hard_deadline
+            and session.end_plan != request.session_end_plan
+        ):
+            raise StateError("Linux sudo logoff conflicts with its retained hard end plan")
+        if (
+            request.session_end_plan is not None
+            and not request.session_end_plan.is_authoritative
+            and session.end_plan != request.session_end_plan
+        ):
+            raise StateError("Linux sudo logoff lacks its requested retained end-plan owner")
+        retained_effective_end_plan = request.session_end_plan
+        if (
+            retained_effective_end_plan is None
+            and session.end_plan is not None
+            and session.end_plan.is_hard_deadline
+        ):
+            retained_effective_end_plan = session.end_plan
+        if effective_end_plan != retained_effective_end_plan:
+            raise StateError("Linux sudo logoff changed its effective retained end plan")
+        if (
+            effective_end_plan is not None
+            and effective_end_plan.is_authoritative
+            and ensure_utc(base_logoff_time) != ensure_utc(effective_end_plan.canonical_end)
+        ):
+            raise StateError("Linux sudo logoff drifted from its authoritative exact end")
+        if (
+            effective_end_plan is not None
+            and effective_end_plan.is_hard_deadline
+            and ensure_utc(base_logoff_time) > ensure_utc(effective_end_plan.canonical_end)
+        ):
+            raise StateError("Linux sudo logoff exceeds its retained hard end plan")
+        if ensure_utc(base_logoff_time) <= session_identity.started_at or (
+            session.last_activity_time is not None
+            and ensure_utc(base_logoff_time) < ensure_utc(session.last_activity_time)
+        ):
+            raise StateError("Linux sudo logoff cannot fit its exact session terminalization")
+        lifecycle_session = self._lifecycle_authority.registry.get_session(
+            session_identity.object_id
+        )
+        if (
+            lifecycle_session is None
+            or lifecycle_session.closed_at is not None
+            or lifecycle_session.identity != LifecycleShadow.project_session_start(session_identity)
+        ):
+            raise StateError("Linux sudo logoff session lifecycle prestate drifted")
+        for process_close in process_closes:
+            if (
+                type(process_close) is not _LinuxSudoProcessClosePlan
+                or type(process_close.identity) is not ProcessIdentity
+                or self.state_manager.get_process_identity(
+                    process_close.identity.hostname,
+                    process_close.identity.pid,
+                )
+                != process_close.identity
+            ):
+                raise StateError("Linux sudo logoff process State prestate drifted")
+            lifecycle_process = self._lifecycle_authority.registry.get_process(
+                process_close.identity.object_id
+            )
+            if lifecycle_process is None or lifecycle_process.closed_at is not None:
+                raise StateError("Linux sudo logoff process lifecycle prestate drifted")
+            self._lifecycle_authority._action_cohort_registered_process(process_close.identity)
+        latest_child_close = self._lifecycle_authority.process_latest_closed_child_at_for_object(
+            session_identity.object_id
+        )
+        if (
+            effective_end_plan is not None
+            and effective_end_plan.is_hard_deadline
+            and latest_child_close is not None
+            and ensure_utc(latest_child_close) >= ensure_utc(effective_end_plan.canonical_end)
+        ):
+            raise StateError(
+                "Authoritative Linux sudo close cannot follow its retained child graph"
+            )
+        host_context = self._build_host_context(request.system)
+        if (
+            type(host_context) is not HostContext
+            or type(host_context.hostname) is not str
+            or type(host_context.ip) is not str
+            or type(host_context.os) is not str
+            or type(host_context.os_category) is not str
+            or type(host_context.system_type) is not str
+            or type(host_context.domain) is not str
+            or type(host_context.fqdn) is not str
+            or type(host_context.netbios_domain) is not str
+            or type(host_context.roles) is not list
+            or any(type(role) is not str for role in host_context.roles)
+        ):
+            raise StateError("Linux sudo logoff host projection is malformed")
+        projection_owner = _LinuxSudoLogoffProjectionOwner(
+            username=request.user.username,
+            hostname=request.system.hostname,
+            host_ip=host_context.ip,
+            host_os=host_context.os,
+            host_os_category=host_context.os_category,
+            host_system_type=host_context.system_type,
+            host_domain=host_context.domain,
+            host_fqdn=host_context.fqdn,
+            host_netbios_domain=host_context.netbios_domain,
+            host_roles=tuple(host_context.roles),
+            logon_id=session.logon_id,
+            session_id=session.session_id,
+            logon_type=session.logon_type,
+            source_ip=session.source_ip,
+            source_port=session.source_port,
+            session_kind=session.session_kind,
+            auth_protocol=session.auth_protocol,
+            smb_principal=session.smb_principal,
+            account_scope=session.account_scope,
+            auth_session_ref=session.auth_session_ref,
+            effective_uid=session.effective_uid,
+            effective_gid=session.effective_gid,
+            session_object_id=session.ecar_object_id,
+            session_started_at=ensure_utc(session.start_time),
+            lifecycle_group_id=session.lifecycle_group_id,
+            parent_lifecycle_group_id=session.parent_lifecycle_group_id,
+        )
+        stable_id = request.stable_id
+        missing = object()
+        with self._linux_sudo_tty_lock:
+            journals = self._pending_linux_sudo_logoffs
+            reverse = self._linux_sudo_tty_keys_by_logon_id
+            sessions = self._linux_sudo_tty_sessions
+            available = self._linux_sudo_tty_available
+            owners = self._linux_sudo_tty_owners
+            assignments = self._linux_sudo_tty_assignments
+            claims = self._linux_sudo_tty_capacity_claims
+            if any(
+                type(mapping) is not dict
+                for mapping in (
+                    journals,
+                    reverse,
+                    sessions,
+                    available,
+                    owners,
+                    assignments,
+                    claims,
+                )
+            ):
+                raise StateError("Linux sudo logoff owner maps must be exact dictionaries")
+            if any(
+                dict.__len__(mapping) > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+                for mapping in (
+                    journals,
+                    reverse,
+                    sessions,
+                    available,
+                    owners,
+                    assignments,
+                    claims,
+                )
+            ):
+                raise StateError("Linux sudo logoff owner maps exceed their bounded census")
+            for key, value in dict.items(assignments):
+                if (
+                    type(key) is not tuple
+                    or len(key) != 3
+                    or any(type(component) is not str for component in key)
+                    or type(value) is not str
+                ):
+                    raise StateError("Linux sudo logoff assignment map is malformed")
+            for key, value in dict.items(owners):
+                if (
+                    type(key) is not tuple
+                    or len(key) != 2
+                    or any(type(component) is not str for component in key)
+                    or type(value) is not tuple
+                    or len(value) != 3
+                    or any(type(component) is not str for component in value)
+                ):
+                    raise StateError("Linux sudo logoff inverse map is malformed")
+            for key, value in dict.items(claims):
+                if (
+                    type(key) is not tuple
+                    or len(key) != 3
+                    or any(type(component) is not str for component in key)
+                    or type(value) is not tuple
+                    or len(value) != 5
+                    or type(value[0]) is not object
+                    or type(value[1]) is not str
+                    or any(type(flag) is not bool for flag in value[2:])
+                ):
+                    raise StateError("Linux sudo logoff capacity map is malformed")
+            for key, value in dict.items(sessions):
+                if (
+                    type(key) is not tuple
+                    or len(key) != 3
+                    or any(type(component) is not str for component in key)
+                    or type(value) is not str
+                ):
+                    raise StateError("Linux sudo logoff session map is malformed")
+            for key, value in dict.items(available):
+                if (
+                    type(key) is not tuple
+                    or len(key) != 3
+                    or any(type(component) is not str for component in key)
+                    or type(value) is not datetime
+                ):
+                    raise StateError("Linux sudo logoff availability map is malformed")
+            for key, value in dict.items(reverse):
+                if (
+                    type(key) is not str
+                    or type(value) is not set
+                    or not value
+                    or any(
+                        type(route_key) is not tuple
+                        or len(route_key) != 3
+                        or any(type(component) is not str for component in route_key)
+                        for route_key in value
+                    )
+                ):
+                    raise StateError("Linux sudo logoff reverse map is malformed")
+            if dict.get(journals, stable_id) is not None:
+                raise StateError("Linux sudo logoff stable owner is already retained")
+            if dict.__len__(journals) >= _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT:
+                raise StateError("Linux sudo logoff journal exhausted its bounded census")
+            raw_reverse_bucket = dict.get(reverse, session_identity.logon_id, missing)
+            if raw_reverse_bucket is missing:
+                raise StateError("Linux sudo logoff lost its selected exact reverse route")
+            if type(raw_reverse_bucket) is not set or not raw_reverse_bucket:
+                raise StateError("Linux sudo logoff lost its exact reverse-route bucket")
+            reverse_bucket = frozenset(
+                self._validate_linux_sudo_tty_key(key) for key in raw_reverse_bucket
+            )
+            if len(reverse_bucket) != set.__len__(raw_reverse_bucket):
+                raise StateError("Linux sudo logoff reverse route changed during validation")
+            for reverse_key in reverse_bucket:
+                routed_logon_id = dict.get(sessions, reverse_key, missing)
+                if type(routed_logon_id) is not str or routed_logon_id != session_identity.logon_id:
+                    raise StateError("Linux sudo logoff reverse routes crossed their forward owner")
+            route_keys = tuple(
+                sorted(
+                    key
+                    for key in reverse_bucket
+                    if key[:2] == (session_identity.hostname, session_identity.principal)
+                )
+            )
+            if not route_keys:
+                raise StateError("Linux sudo logoff reverse route has no exact session key")
+            retained_route_owners = tuple(
+                self._validated_linux_sudo_route_owner(retained)
+                for retained in dict.values(journals)
+            )
+            for retained_owner in retained_route_owners:
+                if retained_owner.logon_id == session_identity.logon_id:
+                    raise StateError("Linux sudo logoff reverse route is already retained")
+            route_preimage: list[_LinuxSudoRouteClosePreimage] = []
+            for tty_key in route_keys:
+                routed_logon_id = dict.get(sessions, tty_key, missing)
+                deadline = dict.get(available, tty_key, missing)
+                if deadline is not missing and type(deadline) is not datetime:
+                    raise StateError("Linux sudo logoff availability preimage is malformed")
+                inverse_key = (tty_key[0], tty_key[2])
+                requested_tty_key = dict.get(owners, inverse_key, missing)
+                if requested_tty_key is missing:
+                    raise StateError("Linux sudo logoff inverse preimage is incomplete")
+                requested_tty_key = self._validate_linux_sudo_tty_key(requested_tty_key)
+                assigned_tty = dict.get(assignments, requested_tty_key, missing)
+                if type(assigned_tty) is not str or assigned_tty != tty_key[2]:
+                    raise StateError("Linux sudo logoff assignment preimage is incomplete")
+                capacity_claim = dict.get(claims, requested_tty_key, missing)
+                if capacity_claim is not missing:
+                    raise StateError("Linux sudo logoff route has an active capacity claim")
+                if (
+                    sum(
+                        int(
+                            type(candidate_key) is tuple
+                            and len(candidate_key) == 3
+                            and candidate_key[0] == tty_key[0]
+                            and type(candidate_tty) is str
+                            and candidate_tty == tty_key[2]
+                        )
+                        for candidate_key, candidate_tty in dict.items(assignments)
+                    )
+                    != 1
+                ):
+                    raise StateError("Linux sudo logoff assignment preimage is not one-to-one")
+                if (
+                    sum(
+                        int(
+                            type(candidate_key) is tuple
+                            and len(candidate_key) == 2
+                            and type(candidate_owner) is tuple
+                            and len(candidate_owner) == 3
+                            and all(type(component) is str for component in candidate_owner)
+                            and candidate_owner[0] == requested_tty_key[0]
+                            and candidate_owner[1] == requested_tty_key[1]
+                            and candidate_owner[2] == requested_tty_key[2]
+                        )
+                        for candidate_key, candidate_owner in dict.items(owners)
+                    )
+                    != 1
+                ):
+                    raise StateError("Linux sudo logoff inverse preimage is not one-to-one")
+                route_preimage.append(
+                    _LinuxSudoRouteClosePreimage(
+                        tty_key=tty_key,
+                        session_present=True,
+                        session_logon_id=routed_logon_id,
+                        available_present=deadline is not missing,
+                        available_until=None if deadline is missing else deadline,
+                        inverse_key=inverse_key,
+                        owner_present=True,
+                        requested_tty_key=requested_tty_key,
+                        assignment_present=True,
+                        assigned_tty=assigned_tty,
+                        capacity_claim_present=False,
+                        capacity_claim=None,
+                    )
+                )
+            protected_route_keys = set(route_keys)
+            protected_inverse_keys = {route.inverse_key for route in route_preimage}
+            protected_requested_keys = {
+                route.requested_tty_key
+                for route in route_preimage
+                if route.requested_tty_key is not None
+            }
+            for retained_owner in retained_route_owners:
+                retained_route_keys = set(retained_owner.route_keys)
+                retained_inverse_keys = {
+                    route.inverse_key for route in retained_owner.route_preimage
+                }
+                retained_requested_keys = {
+                    route.requested_tty_key
+                    for route in retained_owner.route_preimage
+                    if route.requested_tty_key is not None
+                }
+                if (
+                    protected_route_keys & retained_route_keys
+                    or protected_inverse_keys & retained_inverse_keys
+                    or protected_requested_keys & retained_requested_keys
+                ):
+                    raise StateError("Linux sudo logoff route overlaps a retained close")
+            continuation = _LinuxSudoLogoffContinuation(
+                stable_id=stable_id,
+                request=request,
+                user=request.user,
+                system=request.system,
+                session=session,
+                session_identity=session_identity,
+                projection_owner=projection_owner,
+                base_logoff_time=ensure_utc(base_logoff_time),
+                effective_end_plan=effective_end_plan,
+                process_closes=process_closes,
+                route_keys=route_keys,
+                reverse_bucket_present=True,
+                reverse_bucket=reverse_bucket,
+                route_preimage=tuple(route_preimage),
+                timing_deltas=timing_deltas,
+                rendered_dependents_delta=rendered_dependents_delta,
+                ecar_logout_delta=ecar_logout_delta,
+                windows_logout_delta=windows_logout_delta,
+                dispatcher_owner=self.dispatcher,
+                state_owner=self.state_manager,
+                lifecycle_owner=self._lifecycle_authority,
+                active=True,
+            )
+            high_water = self._linux_sudo_logoff_high_water_pending
+            if type(high_water) is not int or high_water < 0:
+                raise StateError("Linux sudo logoff high-water census is malformed")
+            next_high_water = max(
+                high_water,
+                dict.__len__(journals) + 1,
+            )
+            if next_high_water > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT:
+                raise StateError("Linux sudo logoff high-water census exceeded capacity")
+            dict.__setitem__(journals, stable_id, continuation)
+            self._linux_sudo_logoff_high_water_pending = next_high_water
+            return continuation
+
+    def _plan_linux_sudo_logoff_process_closes(
+        self,
+        *,
+        system: System,
+        session: ActiveSession,
+        processes: list[RunningProcess],
+        base_logoff_time: datetime,
+        authoritative_end_plan: SessionEndPlan | None,
+    ) -> tuple[_LinuxSudoProcessClosePlan, ...]:
+        """Freeze one children-first local process schedule without mutating State."""
+
+        termination_span = (
+            timedelta(milliseconds=min(3000, max(250, 100 * (len(processes) + 1))))
+            if authoritative_end_plan is not None
+            else timedelta(
+                milliseconds=max(
+                    500,
+                    sum(
+                        40
+                        + (
+                            _stable_seed(
+                                "windows_session_process_termination_gap:"
+                                f"{session.system}:{session.logon_id}:{process.pid}:"
+                                f"{base_logoff_time.isoformat()}"
+                            )
+                            % 361
+                        )
+                        for process in processes
+                    )
+                    + 150,
+                )
+            )
+        )
+        termination_start = ensure_utc(base_logoff_time) - termination_span
+        cumulative_gap_ms = 0
+        plans: list[_LinuxSudoProcessClosePlan] = []
+        for ordinal, process in enumerate(processes):
+            if authoritative_end_plan is not None:
+                slot_ms = termination_span.total_seconds() * 1000 / max(1, len(processes) + 1)
+                terminate_at = termination_start + timedelta(milliseconds=slot_ms * ordinal)
+            else:
+                terminate_at = termination_start + timedelta(milliseconds=cumulative_gap_ms)
+                cumulative_gap_ms += 40 + (
+                    _stable_seed(
+                        "windows_session_process_termination_gap:"
+                        f"{session.system}:{session.logon_id}:{process.pid}:"
+                        f"{base_logoff_time.isoformat()}"
+                    )
+                    % 361
+                )
+            if (
+                process.last_activity_time is not None
+                and terminate_at <= process.last_activity_time
+            ):
+                if authoritative_end_plan is not None:
+                    terminate_at = ensure_utc(process.last_activity_time) + timedelta(
+                        milliseconds=25
+                    )
+                else:
+                    delay_rng = random.Random(
+                        _stable_seed(
+                            "process_terminate_after_activity:"
+                            f"{session.system}:{process.pid}:"
+                            f"{process.last_activity_time.isoformat()}"
+                        )
+                    )
+                    terminate_at = ensure_utc(process.last_activity_time) + timedelta(
+                        seconds=delay_rng.uniform(2.0, 30.0)
+                    )
+            terminate_at = self._held_process_termination_time(
+                system=system,
+                pid=process.pid,
+                requested_time=terminate_at,
+            )
+            retained_child_close = (
+                self._lifecycle_authority.process_latest_closed_child_at_for_object(
+                    process.ecar_object_id
+                )
+            )
+            if retained_child_close is not None:
+                terminate_at = max(
+                    terminate_at,
+                    ensure_utc(retained_child_close) + timedelta(microseconds=1),
+                )
+            terminate_at = self._clamp_after_visible_process_create(
+                system,
+                process.pid,
+                terminate_at,
+                "windows.process_exit_after_visible_create",
+            )
+            if plans:
+                terminate_at = max(
+                    ensure_utc(terminate_at),
+                    plans[-1].end_time + timedelta(microseconds=1),
+                )
+            identity = self.state_manager.get_process_identity(session.system, process.pid)
+            if identity is None or identity.object_id != process.ecar_object_id:
+                raise StateError("Linux sudo logoff process identity drifted before preparation")
+            if identity.logon_id != session.logon_id:
+                raise StateError("Linux sudo logoff process crossed its exact session owner")
+            terminate_at = max(
+                ensure_utc(terminate_at),
+                identity.started_at + timedelta(microseconds=1),
+            )
+            if authoritative_end_plan is not None and ensure_utc(terminate_at) >= ensure_utc(
+                authoritative_end_plan.canonical_end
+            ):
+                raise StateError(
+                    "Authoritative Linux sudo close cannot fit its process graph before "
+                    "the exact session end"
+                )
+            plans.append(
+                _LinuxSudoProcessClosePlan(
+                    identity=identity,
+                    end_time=ensure_utc(terminate_at),
+                    auth_session_id=(
+                        process.auth_session_id
+                        if process.auth_session_id is not None
+                        else session.session_id
+                    ),
+                    auth_logon_type=(
+                        process.auth_logon_type
+                        if process.auth_logon_type is not None
+                        else session.logon_type
+                    ),
+                    concurrency_group_id=process.concurrency_group_id,
+                )
+            )
+        return tuple(plans)
+
+    def _linux_sudo_terminal_result_authenticates(
+        self,
+        result: object,
+        *,
+        root_action_id: str,
+        state_semantic_id: str,
+        occurrence_id: str,
+        expected_identity: ProcessIdentity | SessionIdentity,
+        require_succeeded: bool,
+    ) -> bool:
+        """Totally validate one retained sudo-close action-cohort result."""
+
+        try:
+            if type(result) is not ActionCohortPublicationResult:
+                return False
+            receipt = result.receipt
+            if (
+                type(receipt) is not ActionCohortPublicationReceipt
+                or not self.dispatcher.authenticates_action_cohort_publication_receipt(receipt)
+                or receipt.root_action_id != root_action_id
+                or receipt.state_semantic_id != state_semantic_id
+                or receipt.occurrence_ids != (occurrence_id,)
+                or result.state.semantic_id != state_semantic_id
+                or result.state.started_sessions
+                or result.state.started_processes
+                or len(result.projections) != 1
+                or result.projections[0].occurrence_id != occurrence_id
+            ):
+                return False
+            if require_succeeded and (
+                result.projections[0].status != "succeeded"
+                or result.projections[0].error is not None
+            ):
+                return False
+            if type(expected_identity) is ProcessIdentity:
+                return bool(
+                    result.state.terminated_processes == (expected_identity,)
+                    and not result.state.terminalized_sessions
+                )
+            return bool(
+                type(expected_identity) is SessionIdentity
+                and not result.state.terminated_processes
+                and result.state.terminalized_sessions == (expected_identity,)
+            )
+        except BaseException:
+            return False
+
+    def _publish_linux_sudo_terminal_phase(
+        self,
+        *,
+        continuation: _LinuxSudoLogoffContinuation,
+        phase: str,
+        state_plan: object,
+        event: OccurrenceBuilder,
+        expected_identity: ProcessIdentity | SessionIdentity,
+        stage_terminal_timing: bool = False,
+    ) -> _LinuxSudoClosePhaseProgress:
+        """Publish or resume one exact singleton close through its retained receipt."""
+
+        from evidenceforge.generation.actions.command_effects import (
+            ExecutionEffectAuditCohortEntry,
+        )
+        from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
+
+        retained = continuation.phases.get(phase)
+        if retained is not None:
+            if (
+                type(retained) is not _LinuxSudoClosePhaseProgress
+                or retained.expected_identity != expected_identity
+                or retained.receipt is None
+                or retained.result is None
+                or not self._linux_sudo_terminal_result_authenticates(
+                    retained.result,
+                    root_action_id=retained.root_action_id,
+                    state_semantic_id=retained.state_semantic_id,
+                    occurrence_id=retained.occurrence_id,
+                    expected_identity=expected_identity,
+                    require_succeeded=False,
+                )
+            ):
+                raise StateError("Linux sudo close recovery crossed its exact phase binding")
+            if not retained.projection_complete:
+                outcome = retained.result.projections[0]
+                result = (
+                    retained.result
+                    if outcome.status == "succeeded" and outcome.error is None
+                    else self.dispatcher.resume_action_cohort_projection(retained.receipt)
+                )
+                if (
+                    result is not retained.result
+                    or not self._linux_sudo_terminal_result_authenticates(
+                        result,
+                        root_action_id=retained.root_action_id,
+                        state_semantic_id=retained.state_semantic_id,
+                        occurrence_id=retained.occurrence_id,
+                        expected_identity=expected_identity,
+                        require_succeeded=True,
+                    )
+                ):
+                    raise StateError("Linux sudo close recovery returned a forged result")
+                retained.projection_complete = True
+            return retained
+
+        if type(state_plan) is not ActionCohortMaterializationPlan:
+            raise TypeError("Linux sudo close requires one exact State action-cohort plan")
+        root_action_id = f"linux-sudo-close:{continuation.stable_id}:{phase}"
+        audit_plan = ExecutionEffectPlan(
+            ActionAnchor(
+                family="linux_sudo_logoff",
+                stable_id=root_action_id,
+                source="activity_generator",
+            ),
+            (),
+        )
+        audit_entry = ExecutionEffectAuditCohortEntry(
+            audit_plan,
+            audit_plan.reconcile(()),
+        )
+        carrier: PreparedActionCohortProjection | None = None
+        timing_preparation: SourceTimingPreparation | None = None
+        try:
+            with self.dispatcher.source_timing_planner.prepared_planning() as timing_preparation:
+                if type(expected_identity) is ProcessIdentity:
+                    self._plan_process_source_terminate_times(event)
+                elif stage_terminal_timing:
+                    if continuation.ecar_logout_delta is not None:
+                        self._source_timing_planner.record_session_closure_source_time(
+                            event,
+                            "ecar",
+                            event.timestamp + continuation.ecar_logout_delta.value,
+                        )
+                    if continuation.windows_logout_delta is not None:
+                        self._source_timing_planner.record_session_closure_source_time(
+                            event,
+                            "windows_event_security",
+                            event.timestamp + continuation.windows_logout_delta.value,
+                        )
+                    terminal_timing_deltas = tuple(
+                        delta
+                        for delta in (
+                            *continuation.timing_deltas,
+                            continuation.ecar_logout_delta,
+                            continuation.windows_logout_delta,
+                        )
+                        if delta is not None
+                    )
+                    if len({delta.relationship_key for delta in terminal_timing_deltas}) != len(
+                        terminal_timing_deltas
+                    ):
+                        raise StateError("Linux sudo logoff repeated a frozen timing audit key")
+                    for timing_delta in terminal_timing_deltas:
+                        timing_preparation.planning_runtime.sampler.record_logical_sample(
+                            timing_delta.distribution,
+                            relationship_key=timing_delta.relationship_key,
+                        )
+                carrier = self.dispatcher.prepare_action_cohort_projection(
+                    event,
+                    source_timing_preparation=timing_preparation,
+                )
+            occurrence_id = self.dispatcher.action_cohort_projection_occurrence(
+                carrier
+            ).occurrence_id
+            prepared = self.dispatcher.bind_action_cohort_projection(
+                carrier,
+                state_plan=state_plan,
+            )
+            batch = self.dispatcher.prepare_action_cohort_batch(
+                root_action_id,
+                state_plan,
+                (prepared,),
+                (audit_entry,),
+                (),
+                (),
+                exact_projection=True,
+            )
+        except BaseException as primary:
+            if carrier is not None:
+                self._reconcile_generator_cleanup(
+                    primary,
+                    f"Linux sudo {phase} projection",
+                    lambda: self.dispatcher.cancel_prepared_action_cohort_projection(carrier),
+                )
+            self._reconcile_generator_cleanup(
+                primary,
+                f"Linux sudo {phase} orphan projection",
+                self.dispatcher.prune_prepared_action_cohort_projections,
+            )
+            self._reconcile_generator_cleanup(
+                primary,
+                f"Linux sudo {phase} orphan batch",
+                self.dispatcher.prune_prepared_action_cohort_batches,
+            )
+            if timing_preparation is not None and not timing_preparation.committed:
+                self._reconcile_generator_cleanup(
+                    primary,
+                    f"Linux sudo {phase} source timing",
+                    timing_preparation.cancel,
+                )
+            raise
+
+        progress = _LinuxSudoClosePhaseProgress(
+            root_action_id=root_action_id,
+            state_semantic_id=state_plan.semantic_id,
+            occurrence_id=occurrence_id,
+            expected_identity=expected_identity,
+            event=event,
+        )
+        continuation.phases[phase] = progress
+        capability = None
+        try:
+            with self.dispatcher.claimed_action_cohort(batch) as capability:
+                result = capability.commit_no_fail()
+                if (
+                    result is not capability.result
+                    or not self._linux_sudo_terminal_result_authenticates(
+                        result,
+                        root_action_id=root_action_id,
+                        state_semantic_id=state_plan.semantic_id,
+                        occurrence_id=occurrence_id,
+                        expected_identity=expected_identity,
+                        require_succeeded=True,
+                    )
+                ):
+                    raise StateError("Linux sudo close publisher returned a forged result")
+        except BaseException:
+            committed_result = capability.result if capability is not None else None
+            committed_receipt = capability.receipt if capability is not None else None
+            if (
+                capability is not None
+                and capability.committed
+                and type(committed_receipt) is ActionCohortPublicationReceipt
+                and type(committed_result) is ActionCohortPublicationResult
+                and self._linux_sudo_terminal_result_authenticates(
+                    committed_result,
+                    root_action_id=root_action_id,
+                    state_semantic_id=state_plan.semantic_id,
+                    occurrence_id=occurrence_id,
+                    expected_identity=expected_identity,
+                    require_succeeded=False,
+                )
+            ):
+                progress.receipt = committed_receipt
+                progress.result = committed_result
+            else:
+                continuation.phases.pop(phase, None)
+            raise
+        progress.receipt = result.receipt
+        progress.result = result
+        progress.projection_complete = True
+        return progress
+
+    def _execute_linux_sudo_logoff_continuation(
+        self,
+        continuation: _LinuxSudoLogoffContinuation,
+    ) -> None:
+        """Resume one exact route-bearing close through cleanup acknowledgement."""
+
+        if (
+            type(continuation) is not _LinuxSudoLogoffContinuation
+            or continuation.dispatcher_owner is not self.dispatcher
+            or continuation.state_owner is not self.state_manager
+            or continuation.lifecycle_owner is not self._lifecycle_authority
+        ):
+            raise StateError("Linux sudo logoff continuation lost its runtime owner")
+        projection_owner = self._require_linux_sudo_logoff_projection_owner(continuation)
+        route_owner = self._validated_linux_sudo_route_owner(continuation)
+        with self._linux_sudo_tty_lock:
+            journals = self._pending_linux_sudo_logoffs
+            if (
+                type(journals) is not dict
+                or dict.get(journals, route_owner.stable_id) is not continuation
+                or type(continuation.active) is not bool
+                or not continuation.active
+            ):
+                raise StateError("Linux sudo logoff continuation is not its active journal owner")
+        session = continuation.session
+        session_identity = continuation.session_identity
+
+        for process_close in continuation.process_closes:
+            identity = process_close.identity
+            phase = f"process-terminate:{identity.object_id}"
+            progress = continuation.phases.get(phase)
+            if progress is not None and not progress.projection_complete:
+                progress = self._publish_linux_sudo_terminal_phase(
+                    continuation=continuation,
+                    phase=phase,
+                    state_plan=None,
+                    event=progress.event,
+                    expected_identity=identity,
+                )
+            elif progress is None:
+                state_builder = self.state_manager.begin_action_cohort_materialization()
+                state_builder.patch_session_activity(session_identity, process_close.end_time)
+                state_builder.terminate_process(identity, end_time=process_close.end_time)
+                state_plan = state_builder.seal()
+                event = OccurrenceBuilder(
+                    timestamp=process_close.end_time,
+                    event_type="process_terminate",
+                    src_host=self._linux_sudo_logoff_host_context(projection_owner),
+                    auth=AuthContext(
+                        username=identity.principal,
+                        user_sid=self._get_sid(identity.principal),
+                        logon_id=identity.logon_id,
+                        session_id=process_close.auth_session_id,
+                        logon_type=process_close.auth_logon_type,
+                    ),
+                    process=ProcessContext(
+                        pid=identity.pid,
+                        parent_pid=identity.parent_pid,
+                        image=identity.image,
+                        command_line="",
+                        username=identity.principal,
+                        logon_id=identity.logon_id,
+                        start_time=identity.started_at,
+                        concurrency_group_id=process_close.concurrency_group_id,
+                    ),
+                    storyline_origin=continuation.request.from_storyline,
+                    identity_plan=EventIdentityPlan(
+                        subject=identity,
+                        session=session_identity,
+                    ),
+                    lifecycle=ActionLifecycleContext(
+                        group_id=identity.lifecycle_group_id,
+                        canonical_start=identity.started_at,
+                        phase="closure",
+                        parent_group_id=identity.parent_lifecycle_group_id or None,
+                    ),
+                )
+                progress = self._publish_linux_sudo_terminal_phase(
+                    continuation=continuation,
+                    phase=phase,
+                    state_plan=state_plan,
+                    event=event,
+                    expected_identity=identity,
+                )
+            if not progress.compatibility_adopted:
+                self._commit_exact_ssh_source_process_termination(progress.event)
+                progress.compatibility_adopted = True
+
+        if continuation.final_logoff_time is None:
+            final_time = continuation.base_logoff_time
+            visible_terminations = [
+                visible
+                for process_close in continuation.process_closes
+                for visible in (
+                    self.process_source_terminate_time(
+                        process_close.identity.hostname,
+                        process_close.identity.pid,
+                    ),
+                )
+                if visible is not None
+            ]
+            if visible_terminations and continuation.rendered_dependents_delta is not None:
+                observation_gap = self.dispatcher.observation_policy.maximum_delay_difference(
+                    "ecar",
+                    "ecar",
+                )
+                final_time = max(
+                    final_time,
+                    max(visible_terminations)
+                    + continuation.rendered_dependents_delta.value
+                    + observation_gap,
+                )
+                if continuation.rendered_dependents_delta not in continuation.timing_deltas:
+                    continuation.timing_deltas = (
+                        *continuation.timing_deltas,
+                        continuation.rendered_dependents_delta,
+                    )
+            latest_child_close = (
+                self._lifecycle_authority.process_latest_closed_child_at_for_object(
+                    session_identity.object_id
+                )
+            )
+            if latest_child_close is not None:
+                final_time = max(
+                    final_time,
+                    ensure_utc(latest_child_close) + timedelta(microseconds=1),
+                )
+            if continuation.process_closes:
+                final_time = max(
+                    final_time,
+                    max(close.end_time for close in continuation.process_closes)
+                    + timedelta(microseconds=1),
+                )
+            continuation.final_logoff_time = ensure_utc(final_time)
+
+            authoritative_end_plan = continuation.effective_end_plan
+            if (
+                authoritative_end_plan is not None
+                and authoritative_end_plan.is_authoritative
+                and continuation.final_logoff_time
+                != ensure_utc(authoritative_end_plan.canonical_end)
+            ):
+                raise StateError("Linux sudo logoff drifted past its authoritative exact end")
+
+        final_time = continuation.final_logoff_time
+        if final_time is None:  # pragma: no cover - assigned immediately above
+            raise StateError("Linux sudo logoff lost its frozen terminal time")
+        phase = "logout"
+        logout_progress = continuation.phases.get(phase)
+        if logout_progress is not None and not logout_progress.projection_complete:
+            logout_progress = self._publish_linux_sudo_terminal_phase(
+                continuation=continuation,
+                phase=phase,
+                state_plan=None,
+                event=logout_progress.event,
+                expected_identity=session_identity,
+                stage_terminal_timing=True,
+            )
+        elif logout_progress is None:
+            state_builder = self.state_manager.begin_action_cohort_materialization()
+            authoritative_end_plan = continuation.effective_end_plan
+            if authoritative_end_plan is not None and authoritative_end_plan.is_authoritative:
+                current_metadata = state_builder.session_metadata(session_identity)
+                if type(current_metadata) is not ActionCohortSessionMetadataState:
+                    raise StateError("Linux sudo logoff lost its exact session metadata")
+                if current_metadata.end_plan != authoritative_end_plan:
+                    state_builder.transition_session_metadata(
+                        session_identity,
+                        replace(current_metadata, end_plan=authoritative_end_plan),
+                    )
+            state_builder.terminalize_session(session_identity, end_time=final_time)
+            state_plan = state_builder.seal()
+            event = OccurrenceBuilder(
+                timestamp=final_time,
+                event_type="logoff",
+                dst_host=self._linux_sudo_logoff_host_context(projection_owner),
+                auth=AuthContext(
+                    username=projection_owner.username,
+                    user_sid=self._get_sid(projection_owner.username),
+                    logon_id=projection_owner.logon_id,
+                    session_id=projection_owner.session_id,
+                    logon_type=projection_owner.logon_type,
+                    source_ip=projection_owner.source_ip,
+                    source_port=projection_owner.source_port,
+                    session_kind=projection_owner.session_kind,
+                    auth_protocol=projection_owner.auth_protocol,
+                    smb_principal=projection_owner.smb_principal,
+                    account_scope=projection_owner.account_scope,
+                    auth_session_ref=projection_owner.auth_session_ref,
+                    effective_uid=projection_owner.effective_uid,
+                    effective_gid=projection_owner.effective_gid,
+                ),
+                storyline_origin=continuation.request.from_storyline,
+                identity_plan=EventIdentityPlan(
+                    subject=session_identity,
+                    session=session_identity,
+                ),
+                lifecycle=ActionLifecycleContext(
+                    group_id=session_identity.lifecycle_group_id,
+                    canonical_start=session_identity.started_at,
+                    phase="closure",
+                    parent_group_id=session_identity.parent_lifecycle_group_id or None,
+                ),
+            )
+            logout_progress = self._publish_linux_sudo_terminal_phase(
+                continuation=continuation,
+                phase=phase,
+                state_plan=state_plan,
+                event=event,
+                expected_identity=session_identity,
+                stage_terminal_timing=True,
+            )
+        if not logout_progress.compatibility_adopted:
+            self._linux_shell_last_session_close[
+                (projection_owner.hostname, projection_owner.username)
+            ] = final_time
+            logout_progress.compatibility_adopted = True
+
+        self._require_linux_sudo_logoff_projection_owner(continuation)
+        self._require_accepted_linux_sudo_session_close_owner(session)
+        self._release_exact_linux_sudo_route(continuation)
+        if continuation.cleanup_ack is None:
+            raise StateError("Linux sudo logoff cleanup returned without exact acknowledgement")
+        logger.debug(
+            "Generated exact Linux sudo logoff: %s on %s (LogonID: %s)",
+            projection_owner.username,
+            projection_owner.hostname,
+            projection_owner.logon_id,
+        )
+        with self._linux_sudo_tty_lock:
+            retained = dict.get(self._pending_linux_sudo_logoffs, route_owner.stable_id)
+            if retained is not continuation:
+                raise StateError("Linux sudo logoff cleanup changed its retained journal owner")
+            continuation.active = False
+            self._pending_linux_sudo_logoffs.pop(route_owner.stable_id)
+
     def generate_logoff(
         self,
         user: User,
@@ -14220,6 +15813,13 @@ class ActivityGenerator:
 
     def _execute_logoff_bundle(self, request: LogoffRequest) -> None:
         """Expand a logoff bundle through the compatibility adapter."""
+        pending_linux_sudo = self._claim_pending_linux_sudo_logoff(request)
+        if pending_linux_sudo is not None:
+            try:
+                self._execute_linux_sudo_logoff_continuation(pending_linux_sudo)
+            finally:
+                self._release_linux_sudo_logoff_claim(pending_linux_sudo)
+            return
         user = request.user
         system = request.system
         time = request.time
@@ -14235,6 +15835,22 @@ class ActivityGenerator:
         session = self.state_manager.get_session(logon_id)
         if session is not None:
             logon_type = session.logon_type
+        has_linux_sudo_route = bool(
+            session is not None
+            and _get_os_category(system.os) == "linux"
+            and self._has_linux_sudo_tty_route(logon_id)
+        )
+        has_strict_linux_sudo_owner = bool(
+            has_linux_sudo_route
+            and session is not None
+            and self._lifecycle_authority.is_strict(
+                LifecycleEntityRef("session", session.ecar_object_id),
+                session.system,
+            )
+        )
+        if has_linux_sudo_route and not has_strict_linux_sudo_owner:
+            raise StateError("Linux sudo logoff lacks its exact strict lifecycle owner")
+        closes_linux_sudo_route = has_linux_sudo_route
         session_transport_pid = session.transport_pid if session is not None else None
         is_ssh_session = bool(
             session
@@ -14243,6 +15859,36 @@ class ActivityGenerator:
                 or (_get_os_category(system.os) == "linux" and logon_type == 10)
             )
         )
+        if (
+            has_linux_sudo_route
+            and not is_ssh_session
+            and (
+                session is None or session.session_kind != "interactive" or session.logon_type != 2
+            )
+        ):
+            raise StateError("Linux sudo logoff has no exact terminal owner for its session kind")
+        uses_exact_linux_sudo_close = bool(
+            closes_linux_sudo_route
+            and not is_ssh_session
+            and session is not None
+            and session.session_kind == "interactive"
+            and session.logon_type == 2
+        )
+        effective_linux_sudo_end_plan = session_end_plan
+        if (
+            uses_exact_linux_sudo_close
+            and effective_linux_sudo_end_plan is None
+            and session is not None
+            and session.end_plan is not None
+            and session.end_plan.is_hard_deadline
+        ):
+            effective_linux_sudo_end_plan = session.end_plan
+        if (
+            uses_exact_linux_sudo_close
+            and effective_linux_sudo_end_plan is not None
+            and effective_linux_sudo_end_plan.is_authoritative
+        ):
+            authoritative_end_plan = effective_linux_sudo_end_plan
         ssh_transport_close_time = (
             ensure_utc(session.network_close_time)
             if session is not None and is_ssh_session and session.network_close_time is not None
@@ -14299,7 +15945,11 @@ class ActivityGenerator:
                 lifecycle_id=logon_id,
                 sample_key="last_activity_gap",
             )
-            if latest_session_marker is not None and not from_storyline
+            if (
+                latest_session_marker is not None
+                and not from_storyline
+                and authoritative_end_plan is None
+            )
             else None
         )
         rendered_dependents_delta = (
@@ -14315,7 +15965,11 @@ class ActivityGenerator:
                 lifecycle_id=logon_id,
                 sample_key="rendered_dependents_gap",
             )
-            if session is not None and authoritative_end_plan is None
+            if (
+                session is not None
+                and authoritative_end_plan is None
+                and (not uses_exact_linux_sudo_close or effective_linux_sudo_end_plan is None)
+            )
             else None
         )
         ecar_logout_delta = (
@@ -14346,7 +16000,8 @@ class ActivityGenerator:
 
         if authoritative_end_plan is not None:
             time = ensure_utc(authoritative_end_plan.canonical_end)
-            self.state_manager.plan_session_end(logon_id, authoritative_end_plan)
+            if not uses_exact_linux_sudo_close:
+                self.state_manager.plan_session_end(logon_id, authoritative_end_plan)
 
         # Terminate session-specific processes before ending session
         deferred_ssh_transport_process = None
@@ -14357,7 +16012,11 @@ class ActivityGenerator:
                 transport_logoff_time = ssh_transport_close_time + transport_close_delta.value
                 used_timing_deltas.append(transport_close_delta)
                 time = transport_logoff_time
-            if latest_session_marker is not None and not from_storyline:
+            if (
+                latest_session_marker is not None
+                and not from_storyline
+                and authoritative_end_plan is None
+            ):
                 # Source emitters add small native delays (for example Sysmon
                 # Event 1 after canonical process creation). Leave enough room
                 # that final logoff/logout records do not render before those
@@ -14372,6 +16031,7 @@ class ActivityGenerator:
                 _get_os_category(system.os) == "linux"
                 and session.session_kind not in {"network", "service"}
                 and session.logon_type not in {3, 5}
+                and not uses_exact_linux_sudo_close
             ):
                 self._linux_shell_last_session_close[(system.hostname, user.username)] = ensure_utc(
                     time
@@ -14427,6 +16087,34 @@ class ActivityGenerator:
                 key=lambda proc: (_session_process_depth(proc.pid), proc.start_time, proc.pid),
                 reverse=True,
             )
+            if uses_exact_linux_sudo_close:
+                session_identity = self.state_manager.get_session_identity(session.logon_id)
+                if session_identity is None:
+                    raise StateError("Linux sudo logoff lost its exact live session identity")
+                process_closes = self._plan_linux_sudo_logoff_process_closes(
+                    system=system,
+                    session=session,
+                    processes=session_processes,
+                    base_logoff_time=ensure_utc(time),
+                    authoritative_end_plan=effective_linux_sudo_end_plan,
+                )
+                continuation = self._install_linux_sudo_logoff_continuation(
+                    request=request,
+                    session=session,
+                    session_identity=session_identity,
+                    base_logoff_time=ensure_utc(time),
+                    effective_end_plan=effective_linux_sudo_end_plan,
+                    process_closes=process_closes,
+                    timing_deltas=tuple(used_timing_deltas),
+                    rendered_dependents_delta=rendered_dependents_delta,
+                    ecar_logout_delta=ecar_logout_delta,
+                    windows_logout_delta=windows_logout_delta,
+                )
+                try:
+                    self._execute_linux_sudo_logoff_continuation(continuation)
+                finally:
+                    self._release_linux_sudo_logoff_claim(continuation)
+                return
             termination_gaps_ms: list[int] = []
             if authoritative_end_plan is not None:
                 termination_span = timedelta(
@@ -14480,6 +16168,8 @@ class ActivityGenerator:
                         session_process.command_line,
                     )
                     if _get_os_category(system.os) == "windows"
+                    else None
+                    if closes_linux_sudo_route
                     else _linux_foreground_lifetime(
                         session_process.image,
                         session_process.command_line,
@@ -14513,6 +16203,17 @@ class ActivityGenerator:
                         requested_termination_time,
                         bounded_termination_time,
                     )
+                if closes_linux_sudo_route:
+                    retained_child_close = (
+                        self._lifecycle_authority.process_latest_closed_child_at_for_object(
+                            session_process.ecar_object_id
+                        )
+                    )
+                    if retained_child_close is not None:
+                        requested_termination_time = max(
+                            requested_termination_time,
+                            ensure_utc(retained_child_close) + timedelta(microseconds=1),
+                        )
                 self.generate_process_termination(
                     user=user,
                     system=system,
@@ -14755,7 +16456,9 @@ class ActivityGenerator:
 
         for timing_delta in used_timing_deltas:
             timing_delta.publish()
-        if session is not None and self._has_linux_sudo_tty_route(logon_id):
+        if session is not None and (
+            closes_linux_sudo_route or self._has_linux_sudo_tty_route(logon_id)
+        ):
             self._require_accepted_linux_sudo_session_close_owner(session)
             self._release_session_retention_state(
                 hostname=session.system,
@@ -16022,6 +17725,14 @@ class ActivityGenerator:
         )
         if not parent_owns_foreground:
             session = self.state_manager.get_session(actor.logon_id)
+            if (
+                request.lifecycle_group_id
+                and session is not None
+                and request.lifecycle_group_id == session.lifecycle_group_id
+            ):
+                # Explicit session-bootstrap members are closed by their exact
+                # session owner, which preserves the descendant-first graph.
+                return None
             parent_owns_foreground = bool(
                 actor.logon_id
                 and session is not None
@@ -20493,6 +22204,75 @@ class ActivityGenerator:
         if nonzero:
             raise StateError(f"Persistent SMB projection state is not drained: {nonzero!r}")
 
+    def linux_sudo_logoff_journal_census(self) -> LinuxSudoLogoffJournalCensus:
+        """Return a callback-free count of pending exact sudo-logoff owners."""
+
+        with self._linux_sudo_tty_lock:
+            journals = self._pending_linux_sudo_logoffs
+            if type(journals) is not dict:
+                raise StateError("Linux sudo logoff journals must be an exact dictionary")
+            values = tuple(dict.values(journals))
+            if any(type(value) is not _LinuxSudoLogoffContinuation for value in values):
+                raise StateError("Linux sudo logoff journal contains a malformed owner")
+            if any(type(value.active) is not bool for value in values):
+                raise StateError("Linux sudo logoff journal has a malformed execution claim")
+            high_water = self._linux_sudo_logoff_high_water_pending
+            if (
+                type(high_water) is not int
+                or high_water < len(values)
+                or high_water > _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT
+            ):
+                raise StateError("Linux sudo logoff high-water census is malformed")
+            return LinuxSudoLogoffJournalCensus(
+                pending=len(values),
+                active=sum(value.active is True for value in values),
+                capacity=_LINUX_SUDO_TTY_MAP_CENSUS_LIMIT,
+                high_water_pending=high_water,
+            )
+
+    def finalize_linux_sudo_logoffs(self) -> None:
+        """Drain retained route-bearing local logoffs while exact sinks remain open."""
+
+        with self._linux_sudo_tty_lock:
+            journals = self._pending_linux_sudo_logoffs
+            if type(journals) is not dict:
+                raise StateError("Linux sudo logoff journals must be an exact dictionary")
+            values = tuple(dict.values(journals))
+            if any(
+                type(continuation) is not _LinuxSudoLogoffContinuation
+                or type(continuation.base_logoff_time) is not datetime
+                or type(continuation.stable_id) is not str
+                or type(continuation.active) is not bool
+                for continuation in values
+            ):
+                raise StateError("Linux sudo logoff journal contains a malformed owner")
+            continuations = tuple(
+                sorted(
+                    values,
+                    key=lambda continuation: (
+                        continuation.base_logoff_time,
+                        continuation.stable_id,
+                    ),
+                )
+            )
+        for continuation in continuations:
+            if type(continuation) is not _LinuxSudoLogoffContinuation:
+                raise StateError("Linux sudo logoff journal contains a malformed owner")
+            claimed = self._claim_pending_linux_sudo_logoff(continuation.request)
+            if claimed is not continuation:
+                raise StateError("Linux sudo logoff finalizer changed its retained owner")
+            try:
+                self._execute_linux_sudo_logoff_continuation(continuation)
+            finally:
+                self._release_linux_sudo_logoff_claim(continuation)
+
+    def assert_linux_sudo_logoffs_drained(self) -> None:
+        """Reject emitter shutdown while a route-bearing close remains retained."""
+
+        census = self.linux_sudo_logoff_journal_census()
+        if census.pending or census.active:
+            raise StateError(f"Linux sudo logoff journal is not drained: {census!r}")
+
     def terminal_transient_owner_census(self) -> TerminalTransientOwnerCensus:
         """Return the composite terminal census of transient public owners."""
 
@@ -20517,8 +22297,14 @@ class ActivityGenerator:
             raise StateError("Dispatcher has no composite terminal projection census")
         exact = exact_census()
         cohort = cohort_census()
+        linux_sudo_logoff = self.linux_sudo_logoff_journal_census()
         return TerminalTransientOwnerCensus(
             counts=(
+                *self._terminal_census_fields(
+                    "linux_sudo_logoff",
+                    linux_sudo_logoff,
+                    ("pending", "active"),
+                ),
                 *self.persistent_smb_terminal_state_census().counts,
                 *self._terminal_census_fields(
                     "application",
@@ -32852,6 +34638,58 @@ class ActivityGenerator:
                 raise StateError("Linux sudo TTY reverse route has a malformed key bucket")
             return True
 
+    def _linux_sudo_session_strict_retention_deadline(
+        self,
+        session: ActiveSession,
+        available_until: datetime | None,
+    ) -> datetime:
+        """Retain hard lifecycle gates through the bounded session-close horizon."""
+
+        scenario_end = getattr(self, "_scenario_end_time", None)
+        if type(scenario_end) is not datetime:
+            raise StateError("Linux sudo lifecycle ownership requires an exact scenario end")
+        candidates = [ensure_utc(session.start_time), ensure_utc(scenario_end)]
+        if available_until is not None:
+            candidates.append(available_until)
+        if session.end_plan is not None:
+            candidates.append(ensure_utc(session.end_plan.canonical_end))
+        deadline = max(candidates)
+        maximum = datetime.max.replace(tzinfo=UTC)
+        return deadline if deadline == maximum else deadline + timedelta(microseconds=1)
+
+    def _require_linux_sudo_tty_mutation_unprotected_locked(
+        self,
+        *,
+        tty_keys: tuple[tuple[str, str, str], ...] = (),
+        logon_ids: tuple[str, ...] = (),
+        requested_tty_keys: tuple[tuple[str, str, str], ...] = (),
+        inverse_keys: tuple[tuple[str, str], ...] = (),
+    ) -> None:
+        """Reject one six-map mutation intersecting any retained exact close footprint."""
+
+        journals = self._pending_linux_sudo_logoffs
+        if type(journals) is not dict:
+            raise StateError("Linux sudo logoff journals must be an exact dictionary")
+        for continuation in dict.values(journals):
+            retained_owner = self._validated_linux_sudo_route_owner(continuation)
+            protected_logon_id = retained_owner.logon_id
+            protected_tty_keys = retained_owner.route_keys
+            protected_requested_keys = tuple(
+                route.requested_tty_key
+                for route in retained_owner.route_preimage
+                if route.requested_tty_key is not None
+            )
+            protected_inverse_keys = tuple(
+                route.inverse_key for route in retained_owner.route_preimage
+            )
+            if (
+                protected_logon_id in logon_ids
+                or any(key in protected_tty_keys for key in tty_keys)
+                or any(key in protected_requested_keys for key in requested_tty_keys)
+                or any(key in protected_inverse_keys for key in inverse_keys)
+            ):
+                raise StateError("Linux sudo TTY route is closing under an exact journal")
+
     def _remember_linux_sudo_tty_session(
         self,
         tty_key: tuple[str, str, str],
@@ -32896,14 +34734,98 @@ class ActivityGenerator:
             raise StateError("Linux sudo TTY session publication crossed its exact owner")
 
         retained: list[object] = []
+        if session is not None:
+            try:
+                self._require_linux_sudo_session_lifecycle_owner(session)
+                self._lifecycle_authority.mark_strict(
+                    LifecycleEntityRef("session", session.ecar_object_id),
+                    hostname=session.system,
+                    retain_until=self._linux_sudo_session_strict_retention_deadline(
+                        session,
+                        available_until,
+                    ),
+                )
+            except StateError as owner_error:
+                if requested_tty_key is None:
+                    raise
+                assert handoff_pair_deltas is not None
+                missing = object()
+                with self._linux_sudo_tty_lock:
+                    assignments = self._linux_sudo_tty_assignments
+                    owners = self._linux_sudo_tty_owners
+                    claims = self._linux_sudo_tty_capacity_claims
+                    sessions = self._linux_sudo_tty_sessions
+                    available = self._linux_sudo_tty_available
+                    reverse = self._linux_sudo_tty_keys_by_logon_id
+                    if any(
+                        type(mapping) is not dict
+                        for mapping in (
+                            assignments,
+                            owners,
+                            claims,
+                            sessions,
+                            available,
+                            reverse,
+                        )
+                    ):
+                        raise StateError(
+                            "Linux sudo TTY handoff maps must be exact dictionaries"
+                        ) from owner_error
+                    inverse_key = (tty_key[0], tty_key[2])
+                    self._require_linux_sudo_tty_mutation_unprotected_locked(
+                        tty_keys=(tty_key,),
+                        logon_ids=(logon_id,),
+                        requested_tty_keys=(requested_tty_key,),
+                        inverse_keys=(inverse_key,),
+                    )
+                    claim = dict.get(claims, requested_tty_key, missing)
+                    forward_value = dict.get(assignments, requested_tty_key, missing)
+                    inverse_value = dict.get(owners, inverse_key, missing)
+                    if (
+                        type(claim) is not tuple
+                        or len(claim) != 5
+                        or claim[0] is not capacity_claim
+                        or type(claim[1]) is not str
+                        or any(type(flag) is not bool for flag in claim[2:])
+                        or claim[1] != tty_key[2]
+                        or type(forward_value) is not str
+                        or forward_value != tty_key[2]
+                        or type(inverse_value) is not tuple
+                        or len(inverse_value) != 3
+                        or any(type(component) is not str for component in inverse_value)
+                        or inverse_value != requested_tty_key
+                    ):
+                        raise StateError(
+                            "Linux sudo TTY handoff lost its exact rollback owner"
+                        ) from owner_error
+                    reverse_keys = dict.get(reverse, logon_id, missing)
+                    if reverse_keys is not missing and type(reverse_keys) is not set:
+                        raise StateError(
+                            "Linux sudo TTY reverse route has a malformed key bucket"
+                        ) from owner_error
+                    route_is_absent = dict.get(sessions, tty_key, missing) is missing
+                    deadline_is_absent = dict.get(available, tty_key, missing) is missing
+                    reverse_is_absent = reverse_keys is missing or tty_key not in reverse_keys
+                    if route_is_absent and deadline_is_absent and reverse_is_absent:
+                        rollback_forward, rollback_inverse = handoff_pair_deltas
+                        if rollback_inverse:
+                            retained.append(dict.pop(owners, inverse_key))
+                        if rollback_forward:
+                            retained.append(dict.pop(assignments, requested_tty_key))
+                    retained.append(dict.pop(claims, requested_tty_key))
+                del retained
+                raise
+
         with self._linux_sudo_tty_lock:
             sessions = self._linux_sudo_tty_sessions
             available = self._linux_sudo_tty_available
             reverse = self._linux_sudo_tty_keys_by_logon_id
+            journals = self._pending_linux_sudo_logoffs
             if (
                 type(sessions) is not dict
                 or type(available) is not dict
                 or type(reverse) is not dict
+                or type(journals) is not dict
             ):
                 raise StateError("Linux sudo TTY session maps must be exact dictionaries")
             if (
@@ -32955,36 +34877,19 @@ class ActivityGenerator:
                     or inverse_value != requested_tty_key
                 ):
                     raise StateError("Linux sudo TTY handoff lost its exact active pair claim")
-            if session is not None:
-                try:
-                    self._require_linux_sudo_session_lifecycle_owner(session)
-                except StateError as owner_error:
-                    if requested_tty_key is None:
-                        raise
-                    assert assignments is not None
-                    assert owners is not None
-                    assert claims is not None
-                    assert handoff_pair_deltas is not None
-                    reverse_keys = dict.get(reverse, logon_id)
-                    if reverse_keys is not None and type(reverse_keys) is not set:
-                        raise StateError(
-                            "Linux sudo TTY reverse route has a malformed key bucket"
-                        ) from owner_error
-                    route_is_absent = dict.get(sessions, tty_key) is None
-                    deadline_is_absent = tty_key not in available
-                    reverse_is_absent = reverse_keys is None or tty_key not in reverse_keys
-                    if route_is_absent and deadline_is_absent and reverse_is_absent:
-                        rollback_forward, rollback_inverse = handoff_pair_deltas
-                        if rollback_inverse:
-                            retained.append(dict.pop(owners, (tty_key[0], tty_key[2])))
-                        if rollback_forward:
-                            retained.append(dict.pop(assignments, requested_tty_key))
-                    retained.append(dict.pop(claims, requested_tty_key))
-                    raise
-
             previous_logon_id = dict.get(sessions, tty_key)
             if previous_logon_id is not None and type(previous_logon_id) is not str:
                 raise StateError("Linux sudo TTY session route has a malformed LogonID")
+            self._require_linux_sudo_tty_mutation_unprotected_locked(
+                tty_keys=(tty_key,),
+                logon_ids=tuple(
+                    candidate
+                    for candidate in (previous_logon_id, logon_id)
+                    if candidate is not None
+                ),
+                requested_tty_keys=((requested_tty_key,) if requested_tty_key is not None else ()),
+                inverse_keys=(((tty_key[0], tty_key[2]),) if requested_tty_key is not None else ()),
+            )
             missing = object()
             previous_deadline = dict.get(available, tty_key, missing)
             if previous_deadline is not missing and type(previous_deadline) is not datetime:
@@ -33060,12 +34965,222 @@ class ActivityGenerator:
                 raise StateError("Linux sudo TTY session route has a malformed LogonID")
             if current_logon_id != logon_id:
                 return False
+            self._require_linux_sudo_tty_mutation_unprotected_locked(
+                tty_keys=(tty_key,),
+                logon_ids=(logon_id,),
+            )
             if normalized_deadline is None:
                 retained = dict.pop(available, tty_key, None)
             else:
                 dict.__setitem__(available, tty_key, normalized_deadline)
         del retained
         return True
+
+    def _release_exact_linux_sudo_route(
+        self,
+        continuation: _LinuxSudoLogoffContinuation,
+    ) -> ActivityGeneratorSessionRetentionRelease:
+        """Compare-and-delete one frozen six-map route and retain its exact receipt."""
+
+        if (
+            type(continuation) is not _LinuxSudoLogoffContinuation
+            or continuation.dispatcher_owner is not self.dispatcher
+            or continuation.state_owner is not self.state_manager
+            or continuation.lifecycle_owner is not self._lifecycle_authority
+        ):
+            raise StateError("Linux sudo exact cleanup crossed its retained owner")
+        retained_owner = self._validated_linux_sudo_route_owner(continuation)
+        stable_id = retained_owner.stable_id
+        logon_id = retained_owner.logon_id
+        route_keys = retained_owner.route_keys
+        reverse_bucket = retained_owner.reverse_bucket
+        route_preimage = retained_owner.route_preimage
+        cleanup_ack = retained_owner.cleanup_ack
+        target_keys = frozenset(route_keys)
+        reverse_after = reverse_bucket.difference(target_keys)
+
+        missing = object()
+        release: ActivityGeneratorSessionRetentionRelease | None = None
+        with self._linux_sudo_tty_lock:
+            assignments = self._linux_sudo_tty_assignments
+            owners = self._linux_sudo_tty_owners
+            claims = self._linux_sudo_tty_capacity_claims
+            sessions = self._linux_sudo_tty_sessions
+            available = self._linux_sudo_tty_available
+            reverse = self._linux_sudo_tty_keys_by_logon_id
+            journals = self._pending_linux_sudo_logoffs
+            if any(
+                type(mapping) is not dict
+                for mapping in (
+                    assignments,
+                    owners,
+                    claims,
+                    sessions,
+                    available,
+                    reverse,
+                    journals,
+                )
+            ):
+                raise StateError("Linux sudo exact cleanup maps must be exact dictionaries")
+            current_active = continuation.active
+            if (
+                dict.get(journals, stable_id, missing) is not continuation
+                or type(current_active) is not bool
+                or not current_active
+                or continuation.cleanup_ack is not cleanup_ack
+            ):
+                raise StateError("Linux sudo exact cleanup lost its active journal claim")
+
+            ack = cleanup_ack
+            if ack is not None:
+                if (
+                    type(ack) is not _LinuxSudoRouteCleanupAck
+                    or ack.continuation_stable_id != stable_id
+                    or ack.logon_id != logon_id
+                    or ack.route_keys != route_keys
+                    or type(ack.reverse_bucket_present) is not bool
+                    or ack.reverse_bucket_present != bool(reverse_after)
+                    or type(ack.reverse_bucket) is not frozenset
+                    or ack.reverse_bucket != reverse_after
+                    or type(ack.sudo_tty_rows) is not int
+                    or ack.sudo_tty_rows < 1
+                ):
+                    raise StateError("Linux sudo exact cleanup receipt is malformed")
+                current_reverse = dict.get(
+                    reverse,
+                    logon_id,
+                    missing,
+                )
+                if reverse_after:
+                    if (
+                        type(current_reverse) is not set
+                        or any(
+                            type(key) is not tuple
+                            or len(key) != 3
+                            or any(type(component) is not str for component in key)
+                            for key in current_reverse
+                        )
+                        or frozenset(current_reverse) != reverse_after
+                    ):
+                        raise StateError("Linux sudo exact cleanup postimage drifted")
+                elif current_reverse is not missing:
+                    raise StateError("Linux sudo exact cleanup postimage retained reverse state")
+                for route in route_preimage:
+                    if (
+                        dict.get(sessions, route.tty_key, missing) is not missing
+                        or dict.get(available, route.tty_key, missing) is not missing
+                        or dict.get(owners, route.inverse_key, missing) is not missing
+                        or route.requested_tty_key is None
+                        or dict.get(assignments, route.requested_tty_key, missing) is not missing
+                        or dict.get(claims, route.requested_tty_key, missing) is not missing
+                    ):
+                        raise StateError("Linux sudo exact cleanup postimage drifted")
+                release = ActivityGeneratorSessionRetentionRelease(sudo_tty_rows=ack.sudo_tty_rows)
+            else:
+                current_reverse = dict.get(
+                    reverse,
+                    logon_id,
+                    missing,
+                )
+                if (
+                    type(current_reverse) is not set
+                    or any(
+                        type(key) is not tuple
+                        or len(key) != 3
+                        or any(type(component) is not str for component in key)
+                        for key in current_reverse
+                    )
+                    or frozenset(current_reverse) != reverse_bucket
+                ):
+                    raise StateError("Linux sudo exact cleanup reverse preimage drifted")
+
+                sudo_tty_rows = len(route_keys)
+                for route in route_preimage:
+                    if (
+                        type(route) is not _LinuxSudoRouteClosePreimage
+                        or not route.session_present
+                        or route.session_logon_id != logon_id
+                        or not route.owner_present
+                        or route.requested_tty_key is None
+                        or not route.assignment_present
+                        or route.assigned_tty != route.tty_key[2]
+                        or route.capacity_claim_present
+                        or route.capacity_claim is not None
+                    ):
+                        raise StateError("Linux sudo exact cleanup preimage is malformed")
+                    current_session = dict.get(sessions, route.tty_key, missing)
+                    if (
+                        type(current_session) is not str
+                        or current_session != route.session_logon_id
+                    ):
+                        raise StateError("Linux sudo exact cleanup session preimage drifted")
+                    current_available = dict.get(available, route.tty_key, missing)
+                    if route.available_present:
+                        if (
+                            type(route.available_until) is not datetime
+                            or type(current_available) is not datetime
+                            or current_available != route.available_until
+                        ):
+                            raise StateError(
+                                "Linux sudo exact cleanup availability preimage drifted"
+                            )
+                    elif route.available_until is not None or current_available is not missing:
+                        raise StateError("Linux sudo exact cleanup availability preimage drifted")
+                    current_owner = dict.get(owners, route.inverse_key, missing)
+                    if (
+                        type(current_owner) is not tuple
+                        or len(current_owner) != 3
+                        or any(type(component) is not str for component in current_owner)
+                        or current_owner != route.requested_tty_key
+                    ):
+                        raise StateError("Linux sudo exact cleanup inverse preimage drifted")
+                    current_assignment = dict.get(
+                        assignments,
+                        route.requested_tty_key,
+                        missing,
+                    )
+                    if (
+                        type(current_assignment) is not str
+                        or current_assignment != route.assigned_tty
+                    ):
+                        raise StateError("Linux sudo exact cleanup assignment preimage drifted")
+                    if dict.get(claims, route.requested_tty_key, missing) is not missing:
+                        raise StateError("Linux sudo exact cleanup capacity preimage drifted")
+                    sudo_tty_rows += 3 + int(route.available_present)
+
+                cleanup_ack = _LinuxSudoRouteCleanupAck(
+                    continuation_stable_id=stable_id,
+                    logon_id=logon_id,
+                    route_keys=route_keys,
+                    reverse_bucket_present=bool(reverse_after),
+                    reverse_bucket=reverse_after,
+                    sudo_tty_rows=sudo_tty_rows,
+                )
+                reverse_after_set = set(reverse_after)
+                release = ActivityGeneratorSessionRetentionRelease(sudo_tty_rows=sudo_tty_rows)
+
+                # Every allocation and fallible comparison is complete before this point.
+                # The exact built-in preimage values have callback-free destructors, and
+                # replacing the already-present reverse cell cannot resize its dictionary.
+                for route in route_preimage:
+                    dict.pop(sessions, route.tty_key)
+                    if route.available_present:
+                        dict.pop(available, route.tty_key)
+                    dict.pop(owners, route.inverse_key)
+                    assert route.requested_tty_key is not None
+                    dict.pop(assignments, route.requested_tty_key)
+                if reverse_after_set:
+                    dict.__setitem__(
+                        reverse,
+                        logon_id,
+                        reverse_after_set,
+                    )
+                else:
+                    dict.pop(reverse, logon_id)
+                continuation.cleanup_ack = cleanup_ack
+        if release is None:  # pragma: no cover - every authenticated branch assigns it
+            raise StateError("Linux sudo exact cleanup returned without its receipt")
+        return release
 
     def _release_session_retention_state(
         self,
@@ -33078,7 +35193,6 @@ class ActivityGenerator:
 
         if any(type(value) is not str or not value for value in (hostname, username, logon_id)):
             raise StateError("Linux sudo TTY release requires exact non-empty owner strings")
-
         sudo_tty_rows = 0
         retained: list[object] = []
         with self._linux_sudo_tty_lock:
@@ -33088,11 +35202,23 @@ class ActivityGenerator:
             sessions = self._linux_sudo_tty_sessions
             available = self._linux_sudo_tty_available
             reverse = self._linux_sudo_tty_keys_by_logon_id
+            journals = self._pending_linux_sudo_logoffs
             if any(
                 type(mapping) is not dict
-                for mapping in (assignments, owners, claims, sessions, available, reverse)
+                for mapping in (
+                    assignments,
+                    owners,
+                    claims,
+                    sessions,
+                    available,
+                    reverse,
+                    journals,
+                )
             ):
                 raise StateError("Linux sudo TTY release maps must be exact dictionaries")
+            self._require_linux_sudo_tty_mutation_unprotected_locked(
+                logon_ids=(logon_id,),
+            )
 
             tty_keys = dict.get(reverse, logon_id)
             if tty_keys is None:
@@ -33144,6 +35270,14 @@ class ActivityGenerator:
                     )
                 )
 
+            self._require_linux_sudo_tty_mutation_unprotected_locked(
+                tty_keys=tuple(removal[0] for removal in removals),
+                logon_ids=(logon_id,),
+                requested_tty_keys=tuple(
+                    removal[2] for removal in removals if removal[2] is not None
+                ),
+                inverse_keys=tuple(removal[1] for removal in removals if removal[1] is not None),
+            )
             if retained_keys:
                 dict.__setitem__(reverse, logon_id, retained_keys)
             else:
@@ -33224,6 +35358,13 @@ class ActivityGenerator:
 
         def conflict(detail: str) -> StateError:
             return StateError(f"Linux sudo TTY ownership conflict: {detail}")
+
+        def reject_pending_close_locked(candidate: str) -> None:
+            self._require_linux_sudo_tty_mutation_unprotected_locked(
+                tty_keys=((hostname, requested_tty_key[1], candidate),),
+                requested_tty_keys=(requested_tty_key,),
+                inverse_keys=((hostname, candidate),),
+            )
 
         def validated_snapshots(
             assignments: object,
@@ -33511,6 +35652,7 @@ class ActivityGenerator:
                 stale = False
                 retained_claim: object | None = None
                 with self._linux_sudo_tty_lock:
+                    reject_pending_close_locked(candidate)
                     current_assignments = self._linux_sudo_tty_assignments
                     current_owners = self._linux_sudo_tty_owners
                     current_claims = self._linux_sudo_tty_capacity_claims
@@ -33567,6 +35709,7 @@ class ActivityGenerator:
             claim_reserved = False
             retained_claim: object | None = None
             with self._linux_sudo_tty_lock:
+                reject_pending_close_locked(candidate)
                 current_assignments = self._linux_sudo_tty_assignments
                 current_owners = self._linux_sudo_tty_owners
                 current_claims = self._linux_sudo_tty_capacity_claims
@@ -33660,6 +35803,7 @@ class ActivityGenerator:
             capacity_exhausted = False
             retained_claim = None
             with self._linux_sudo_tty_lock:
+                reject_pending_close_locked(candidate)
                 current_assignments = self._linux_sudo_tty_assignments
                 current_owners = self._linux_sudo_tty_owners
                 current_claims = self._linux_sudo_tty_capacity_claims

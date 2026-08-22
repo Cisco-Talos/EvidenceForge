@@ -7363,8 +7363,190 @@ class EventDispatcher:
             try:
                 return self._require_ssh_terminal_projection(record)
             except EventContractError:
-                return self._require_rdp_terminal_projection(record)
+                try:
+                    return self._require_linux_sudo_terminal_projection(record)
+                except EventContractError:
+                    return self._require_rdp_terminal_projection(record)
         return "type5"
+
+    def _require_linux_sudo_terminal_projection(
+        self,
+        record: _PreparedActionCohortBatchRecord,
+    ) -> str:
+        """Authenticate one strict local Linux sudo process or session close."""
+
+        from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+        from evidenceforge.events.identity import (
+            EventIdentityPlan,
+            ProcessIdentity,
+            SessionIdentity,
+        )
+        from evidenceforge.events.lifecycle import ActionLifecycleContext, LifecycleEntityRef
+        from evidenceforge.generation.state_manager import (
+            ActionCohortSessionMetadataPatch,
+            ActionCohortSessionMetadataState,
+        )
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact Linux sudo terminal projection requires one member")
+        event = record.trusted_projections[0].occurrence
+        plan = record.state_plan
+        identity_plan = event.identity_plan
+        lifecycle = event.lifecycle
+        authority = self._lifecycle_authority
+        empty_common_state = not any(
+            (
+                plan.sessions,
+                plan.processes,
+                plan.live_session_process_role_patches,
+                plan.process_activity_patches,
+            )
+        )
+        if (
+            not record.root_action_id.startswith("linux-sudo-close:")
+            or not empty_common_state
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+            or type(identity_plan) is not EventIdentityPlan
+            or type(lifecycle) is not ActionLifecycleContext
+            or lifecycle.phase != "closure"
+            or authority is None
+        ):
+            raise EventContractError("Exact Linux sudo terminal projection changed its owner")
+
+        process_marker = ":process-terminate:"
+        process_owner, process_separator, process_object_id = record.root_action_id.rpartition(
+            process_marker
+        )
+        if event.event_type is EventKind.PROCESS_TERMINATE:
+            if (
+                not process_separator
+                or not process_owner.startswith("linux-sudo-close:")
+                or not process_object_id
+                or ":" in process_object_id
+                or len(process_object_id) > 4_096
+                or len(plan.process_terminations) != 1
+                or plan.session_terminalizations
+                or plan.session_metadata_patches
+                or len(plan.session_activity_patches) != 1
+                or type(identity_plan.subject) is not ProcessIdentity
+                or identity_plan.actor is not None
+                or identity_plan.target is not None
+                or type(identity_plan.session) is not SessionIdentity
+                or type(event.src_host) is not HostContext
+                or event.src_host.os_category != "linux"
+                or event.dst_host is not None
+                or type(event.process) is not ProcessContext
+                or type(event.auth) is not AuthContext
+            ):
+                raise EventContractError(
+                    "Exact Linux sudo process close changed its singleton shape"
+                )
+            identity = identity_plan.subject
+            session_identity = identity_plan.session
+            termination = plan.process_terminations[0]
+            session_patch = plan.session_activity_patches[0]
+            if (
+                process_object_id != identity.object_id
+                or termination.identity != identity
+                or termination.end_time != event.timestamp
+                or self._action_cohort_target_identity(session_patch.target) != session_identity
+                or session_patch.activity_time != event.timestamp
+                or session_identity.hostname != identity.hostname
+                or session_identity.logon_id != identity.logon_id
+                or session_identity.session_kind != "interactive"
+                or not authority.is_strict(
+                    LifecycleEntityRef("session", session_identity.object_id),
+                    session_identity.hostname,
+                )
+                or event.src_host.hostname != identity.hostname
+                or event.process.pid != identity.pid
+                or event.process.parent_pid not in {0, identity.parent_pid}
+                or event.process.image != identity.image
+                or event.process.username != identity.principal
+                or event.process.logon_id != identity.logon_id
+                or event.process.start_time != identity.started_at
+                or event.auth.username != identity.principal
+                or event.auth.logon_id != identity.logon_id
+                or lifecycle.group_id != identity.lifecycle_group_id
+                or lifecycle.canonical_start != identity.started_at
+                or lifecycle.parent_group_id != (identity.parent_lifecycle_group_id or None)
+            ):
+                raise EventContractError(
+                    "Exact Linux sudo process close disagrees with its live identity"
+                )
+            return "linux_sudo_process_terminate"
+
+        if event.event_type is EventKind.LOGOFF:
+            if (
+                not record.root_action_id.endswith(":logout")
+                or process_separator
+                or plan.process_terminations
+                or len(plan.session_terminalizations) != 1
+                or plan.session_activity_patches
+                or type(identity_plan.subject) is not SessionIdentity
+                or identity_plan.actor is not None
+                or identity_plan.target is not None
+                or identity_plan.session != identity_plan.subject
+                or event.src_host is not None
+                or type(event.dst_host) is not HostContext
+                or event.dst_host.os_category != "linux"
+                or type(event.auth) is not AuthContext
+                or event.syslog is not None
+            ):
+                raise EventContractError("Exact Linux sudo logout changed its singleton shape")
+            identity = identity_plan.subject
+            terminalization = plan.session_terminalizations[0]
+            metadata_patches = plan.session_metadata_patches
+            if len(metadata_patches) > 1:
+                raise EventContractError(
+                    "Exact Linux sudo logout repeated its session metadata owner"
+                )
+            if metadata_patches:
+                metadata_patch = metadata_patches[0]
+                if (
+                    type(metadata_patch) is not ActionCohortSessionMetadataPatch
+                    or type(metadata_patch.before) is not ActionCohortSessionMetadataState
+                    or type(metadata_patch.after) is not ActionCohortSessionMetadataState
+                    or self._action_cohort_target_identity(metadata_patch.target) != identity
+                    or metadata_patch.after.end_plan is None
+                    or metadata_patch.before.end_plan == metadata_patch.after.end_plan
+                    or not metadata_patch.after.end_plan.is_authoritative
+                    or metadata_patch.after.end_plan.canonical_end != event.timestamp
+                    or metadata_patch.after
+                    != replace(
+                        metadata_patch.before,
+                        end_plan=metadata_patch.after.end_plan,
+                    )
+                ):
+                    raise EventContractError(
+                        "Exact Linux sudo logout changed unrelated session metadata"
+                    )
+            if (
+                identity.session_kind != "interactive"
+                or not authority.is_strict(
+                    LifecycleEntityRef("session", identity.object_id),
+                    identity.hostname,
+                )
+                or terminalization.identity != identity
+                or terminalization.end_time != event.timestamp
+                or event.dst_host.hostname != identity.hostname
+                or event.auth.username != identity.principal
+                or event.auth.logon_id != identity.logon_id
+                or event.auth.session_id != identity.session_id
+                or event.auth.logon_type != 2
+                or event.auth.source_ip not in {"", "-"}
+                or event.auth.source_port != 0
+                or lifecycle.group_id != identity.lifecycle_group_id
+                or lifecycle.canonical_start != identity.started_at
+                or lifecycle.parent_group_id != (identity.parent_lifecycle_group_id or None)
+            ):
+                raise EventContractError(
+                    "Exact Linux sudo logout disagrees with its live session identity"
+                )
+            return "linux_sudo_logout"
+
+        raise EventContractError("Exact Linux sudo terminal projection kind is unsupported")
 
     @staticmethod
     def _require_rdp_terminal_projection(
@@ -7560,6 +7742,70 @@ class EventDispatcher:
             )
         return participants
 
+    def _linux_sudo_terminal_exact_projection_participants(
+        self,
+        projection: _PreparedProjection,
+    ) -> tuple[LogEmitter, ...]:
+        """Require one built-in eCAR sink or an authenticated exact omission."""
+
+        from evidenceforge.generation.emitters.ecar import EcarEmitter
+
+        if self._linux_sudo_terminal_projection_is_exact_omission(projection):
+            return ()
+        participants = self._exact_projection_participants(projection)
+        targets = self._exact_projection_targets(projection)
+        if (
+            len(targets) != 1
+            or targets[0][0] != "ecar"
+            or type(targets[0][1]) is not EcarEmitter
+            or len(participants) != 1
+            or participants[0] is not targets[0][1]
+        ):
+            raise EventContractError(
+                "Exact Linux sudo terminal projection requires one built-in eCAR target"
+            )
+        return participants
+
+    def _linux_sudo_terminal_projection_is_exact_omission(
+        self,
+        projection: _PreparedProjection,
+    ) -> bool:
+        """Authenticate a sudo terminal omitted by warm-up, filtering, or no eCAR sink."""
+
+        from evidenceforge.generation.emitters.ecar import EcarEmitter
+
+        if self._projection_is_exact_warmup_suppressed(projection):
+            return True
+        if self._exact_projection_targets(projection):
+            return False
+        if any(
+            type(item) is not tuple or len(item) != 2 or item[0] != "ecar" or item[1] != "filtered"
+            for item in projection.initial_statuses
+        ):
+            return False
+        if projection.mode == "legacy":
+            return all(
+                type(target) is _LegacyProjectionTarget
+                and target.format_name == "ecar"
+                and type(target.emitter) is EcarEmitter
+                and target.status in {"dropped", "out_of_window"}
+                and target.occurrence is None
+                for target in projection.legacy_targets
+            )
+        if projection.mode == "compiled":
+            return all(
+                type(target) is _ProjectionTarget
+                and target.format_name == "ecar"
+                and type(target.emitter) is EcarEmitter
+                and self._action_cohort_compiled_projection_status(
+                    projection.occurrence,
+                    target,
+                )
+                in {"filtered", "dropped", "out_of_window"}
+                for target in projection.compiled_targets
+            )
+        return False
+
     def _initialize_action_cohort_exact_projection(
         self,
         record: _PreparedActionCohortBatchRecord,
@@ -7578,9 +7824,14 @@ class EventDispatcher:
         projection = record.trusted_projections[0]
         exact_kind = self._exact_action_cohort_projection_kind(record)
         record.exact_projection_kind = exact_kind
-        terminal_kind = exact_kind.startswith(("ssh_", "rdp_"))
+        terminal_kind = exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         record.exact_all_suppressed = bool(
-            terminal_kind and self._projection_is_exact_warmup_suppressed(projection)
+            terminal_kind
+            and (
+                self._linux_sudo_terminal_projection_is_exact_omission(projection)
+                if exact_kind.startswith("linux_sudo_")
+                else self._projection_is_exact_warmup_suppressed(projection)
+            )
         )
         if (
             record.artifact_publications
@@ -7600,6 +7851,8 @@ class EventDispatcher:
             self._ssh_terminal_exact_projection_participants(projection)
         elif exact_kind.startswith("rdp_"):
             self._rdp_terminal_exact_projection_participants(projection)
+        elif exact_kind.startswith("linux_sudo_"):
+            self._linux_sudo_terminal_exact_projection_participants(projection)
         else:
             self._exact_projection_participants(projection)
         cleanup_record.exact_publication_batch = self._exact_publication_authority.issue_batch()
@@ -7618,9 +7871,14 @@ class EventDispatcher:
         exact_kind = self._exact_action_cohort_projection_kind(record)
         if exact_kind != record.exact_projection_kind:
             raise EventContractError("Exact action-cohort projection kind changed before rendering")
-        terminal_kind = exact_kind.startswith(("ssh_", "rdp_"))
+        terminal_kind = exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         exact_all_suppressed = bool(
-            terminal_kind and self._projection_is_exact_warmup_suppressed(projection)
+            terminal_kind
+            and (
+                self._linux_sudo_terminal_projection_is_exact_omission(projection)
+                if exact_kind.startswith("linux_sudo_")
+                else self._projection_is_exact_warmup_suppressed(projection)
+            )
         )
         if exact_all_suppressed is not record.exact_all_suppressed:
             raise EventContractError("Exact terminal warm-up suppression changed before rendering")
@@ -7631,6 +7889,8 @@ class EventDispatcher:
             if exact_kind.startswith("ssh_")
             else self._rdp_terminal_exact_projection_participants(projection)
             if exact_kind.startswith("rdp_")
+            else self._linux_sudo_terminal_exact_projection_participants(projection)
+            if exact_kind.startswith("linux_sudo_")
             else self._exact_projection_participants(projection)
         )
         batch.reserve_participants(cast(tuple[object, ...], participants))
@@ -7646,7 +7906,7 @@ class EventDispatcher:
             if record.exact_all_suppressed:
                 if prepared_row_count != 0 or record.exact_prepared_identifiers != ():
                     raise EventContractError(
-                        "Exact warm-up terminal projection changed its zero-row shape"
+                        "Exact omitted terminal projection changed its zero-row shape"
                     )
             elif prepared_row_count <= 0:
                 raise EventContractError("Exact visible terminal projection staged no durable row")
@@ -10160,7 +10420,7 @@ class EventDispatcher:
                 or owner.exact_publication_batch is not record.batch
                 or owner.exact_prepared_identifiers != record.identifiers
                 or (
-                    owner.exact_projection_kind.startswith(("ssh_", "rdp_"))
+                    owner.exact_projection_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
                     and (
                         owner.exact_prepared_row_count != record.batch.commit_cursor
                         or (

@@ -2661,6 +2661,68 @@ class TestSystemProcessProtection:
         activity_generator.generate_process_termination.assert_called_once()
         assert activity_generator.generate_process_termination.call_args.kwargs["time"] == deadline
 
+    def test_stale_cleanup_leaves_active_session_process_tree_root_for_exact_close(
+        self, state_manager, mock_emitters, linux_system
+    ):
+        """A live session root must not close before its protected shell child."""
+
+        engine, pids = self._seed_and_get_pids(state_manager, mock_emitters, linux_system)
+        activity_generator = engine.activity_generator
+        actor = User(username="root", full_name="root", email="root@example.test")
+        engine.scenario.environment.users = [actor]
+        start_time = datetime(2024, 3, 15, 8, 10, tzinfo=UTC)
+        state_manager.set_current_time(start_time)
+        logon_id = state_manager.create_session(
+            username=actor.username,
+            system=linux_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        root_pid = state_manager.create_process(
+            linux_system.hostname,
+            pids["systemd"],
+            "/bin/login",
+            "login -- root",
+            actor.username,
+            "Medium",
+            logon_id=logon_id,
+        )
+        shell_pid = state_manager.create_process(
+            linux_system.hostname,
+            root_pid,
+            "/bin/bash",
+            "-bash",
+            actor.username,
+            "Medium",
+            logon_id=logon_id,
+        )
+        leaf_pid = state_manager.create_process(
+            linux_system.hostname,
+            pids["systemd"],
+            "/usr/bin/python3",
+            "python3 /tmp/ordinary.py",
+            actor.username,
+            "Medium",
+            logon_id=logon_id,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        session.process_tree_root = root_pid
+        session.session_shell_pid = shell_pid
+        deadline = start_time + timedelta(minutes=1)
+        activity_generator.foreground_process_termination_time = Mock(
+            side_effect=lambda _hostname, pid: deadline if pid in {root_pid, leaf_pid} else None
+        )
+        activity_generator.generate_process_termination = Mock()
+
+        engine._terminate_stale_processes(start_time + timedelta(hours=1))
+
+        activity_generator.generate_process_termination.assert_called_once()
+        assert activity_generator.generate_process_termination.call_args.kwargs["pid"] == leaf_pid
+        assert state_manager.get_process(linux_system.hostname, root_pid) is not None
+        assert state_manager.get_process(linux_system.hostname, shell_pid) is not None
+
 
 class TestProtectionListCompleteness:
     """Verify the protection list covers all seeded process names."""

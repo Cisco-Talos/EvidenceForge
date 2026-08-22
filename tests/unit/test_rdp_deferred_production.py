@@ -331,6 +331,7 @@ def _aborted_engine_for_rdp_harness(harness: _RdpTerminalHarness) -> GenerationE
     engine._source_finalization_coordinator = None
     engine._ssh_lifecycles_finalized = True
     engine._rdp_lifecycles_finalized = False
+    engine._linux_sudo_logoffs_finalized = False
     engine._persistent_smb_terminal_asserted = True
     engine._application_channels_finalized = True
     engine._foreground_lifecycles_finalized = True
@@ -2238,6 +2239,7 @@ def test_engine_orders_ssh_before_rdp_and_blocks_source_close_during_retry(
     engine._source_finalization_coordinator = sink
     engine._ssh_lifecycles_finalized = False
     engine._rdp_lifecycles_finalized = False
+    engine._linux_sudo_logoffs_finalized = False
     engine._foreground_lifecycles_finalized = True
     engine._finalization_complete = False
     engine._finalization_aborted = False

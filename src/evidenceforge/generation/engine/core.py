@@ -202,6 +202,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._source_finalization_coordinator: SourceFinalizationCoordinator | None = None
         self._ssh_lifecycles_finalized = False
         self._rdp_lifecycles_finalized = False
+        self._linux_sudo_logoffs_finalized = False
         self._foreground_lifecycles_finalized = False
         self._persistent_smb_terminal_asserted = False
         self._application_channels_finalized = False
@@ -986,6 +987,75 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             return
         assert_drained()
 
+    def _finalize_linux_sudo_logoffs_before_close(self) -> None:
+        """Drain sudo-logoff work with one recovery retry, preserving its first failure."""
+
+        if self._linux_sudo_logoffs_finalized:
+            return
+        activity_generator = getattr(self, "activity_generator", None)
+        if activity_generator is None:
+            self._linux_sudo_logoffs_finalized = True
+            return
+
+        owner_state = vars(activity_generator)
+        activity_type = type(activity_generator)
+        owns_journal = (
+            "_pending_linux_sudo_logoffs" in owner_state
+            or "finalize_linux_sudo_logoffs" in owner_state
+            or "assert_linux_sudo_logoffs_drained" in owner_state
+            or getattr(activity_type, "finalize_linux_sudo_logoffs", None) is not None
+            or getattr(activity_type, "assert_linux_sudo_logoffs_drained", None) is not None
+        )
+        if not owns_journal:
+            self._linux_sudo_logoffs_finalized = True
+            return
+        finalizer = getattr(activity_generator, "finalize_linux_sudo_logoffs", None)
+        assert_drained = getattr(activity_generator, "assert_linux_sudo_logoffs_drained", None)
+        if not callable(finalizer):
+            raise RuntimeError("Activity generator has no Linux sudo logoff finalizer")
+        if not callable(assert_drained):
+            raise RuntimeError("Activity generator has no Linux sudo logoff terminal assertion")
+
+        primary: BaseException | None = None
+        for attempt in range(2):
+            try:
+                finalizer()
+                assert_drained()
+            except BaseException as error:
+                if primary is None:
+                    primary = error
+                else:
+                    primary.add_note(f"Linux sudo logoff journal retry also failed: {error!r}")
+                try:
+                    self._drain_exact_projection_recoveries_before_close()
+                except BaseException as recovery_error:
+                    primary.add_note(
+                        "Exact projection recovery after Linux sudo logoff failure also failed: "
+                        f"{recovery_error!r}"
+                    )
+                    raise primary from recovery_error
+                if attempt == 1:
+                    raise primary from None
+                continue
+
+            if primary is None:
+                self._linux_sudo_logoffs_finalized = True
+                return
+            try:
+                # A recovered retry may admit the terminal eCAR row after its
+                # canonical state was already committed. Authenticate both
+                # owners again before remembering the stage as complete.
+                self._drain_exact_projection_recoveries_before_close()
+                assert_drained()
+            except BaseException as recovery_error:
+                primary.add_note(
+                    "Terminal recovery after Linux sudo logoff retry also failed: "
+                    f"{recovery_error!r}"
+                )
+                raise primary from recovery_error
+            self._linux_sudo_logoffs_finalized = True
+            raise primary
+
     def _finalize_rdp_session_lifecycles_before_close(self) -> None:
         """Drain RDP terminal work with one exact-projection recovery retry."""
 
@@ -1237,6 +1307,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         self._finalize_ssh_session_lifecycles_before_close()
         self._finalize_rdp_session_lifecycles_before_close()
+        self._finalize_linux_sudo_logoffs_before_close()
         self._assert_persistent_smb_terminal_state_before_close()
         self._finalize_application_channels_before_close()
         if include_foreground:

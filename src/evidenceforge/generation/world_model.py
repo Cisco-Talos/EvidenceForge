@@ -1215,7 +1215,7 @@ class WorldPlanner:
         cutoff = at_time.replace(tzinfo=UTC) if at_time.tzinfo is None else at_time.astimezone(UTC)
         candidates = [
             session
-            for session in self.state_manager.get_sessions_for_user_at(username, at_time)
+            for session in self.state_manager.get_active_sessions_for_user_at(username, at_time)
             if session.system == target_system.hostname
             and session.logon_type in {2, 10, 11}
             and session.session_kind not in {"network", "service"}
@@ -1979,7 +1979,7 @@ class WorldPlanner:
         stale network sessions over newer SSH/RDP ones.
         """
         sessions = (
-            self.state_manager.get_sessions_for_user_at(username, at_time)
+            self.state_manager.get_active_sessions_for_user_at(username, at_time)
             if at_time is not None
             else self.state_manager.get_sessions_for_user(username)
         )

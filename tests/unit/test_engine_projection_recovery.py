@@ -25,7 +25,7 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Thread
+from threading import Lock, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -191,6 +191,48 @@ class _FaultingSshLifecycleFinalizer:
         return None
 
 
+class _FaultingLinuxSudoLogoffFinalizer:
+    """One retained sudo logoff with a fail-before or lost-return boundary fault."""
+
+    def __init__(self, calls: list[str], *, failure_mode: str) -> None:
+        self._calls = calls
+        self._pending = True
+        self._failure_mode = failure_mode
+        self._injected = False
+
+    @property
+    def pending(self) -> bool:
+        """Return whether the retained logoff still needs execution."""
+
+        return self._pending
+
+    def finalize_linux_sudo_logoffs(self) -> None:
+        """Close the retained logoff, raising once before or after its mutation."""
+
+        self._calls.append("sudo-finalize")
+        if self._pending and not self._injected:
+            self._injected = True
+            if self._failure_mode == "lost-return":
+                self._calls.append("sudo-close")
+                self._pending = False
+            raise OSError(f"sudo-close {self._failure_mode}")
+        if self._pending:
+            self._calls.append("sudo-close")
+            self._pending = False
+
+    def assert_linux_sudo_logoffs_drained(self) -> None:
+        """Require the retained logoff to be terminal before sink shutdown."""
+
+        self._calls.append("sudo-assert-drained")
+        if self._pending:
+            raise AssertionError("Linux sudo logoff journal retained one owner")
+
+    def write_artifacts_manifest(self) -> None:
+        """Satisfy the successful engine finalization adapter surface."""
+
+        return None
+
+
 class _TerminalActivityFinalizer:
     """Record the complete shared terminal-drain protocol."""
 
@@ -216,6 +258,16 @@ class _TerminalActivityFinalizer:
         """Record the RDP journal postcondition."""
 
         self._calls.append("rdp-assert-drained")
+
+    def finalize_linux_sudo_logoffs(self) -> None:
+        """Record local sudo-logoff journal finalization."""
+
+        self._calls.append("sudo-finalize")
+
+    def assert_linux_sudo_logoffs_drained(self) -> None:
+        """Record the local sudo-logoff journal postcondition."""
+
+        self._calls.append("sudo-assert-drained")
 
     def assert_persistent_smb_terminal_state_drained(self) -> None:
         """Record the pre-watermark persistent-SMB postcondition."""
@@ -386,6 +438,8 @@ def _terminal_sequence(generation_succeeded: bool) -> list[str]:
         "ssh-assert-drained",
         "rdp-finalize",
         "rdp-assert-drained",
+        "sudo-finalize",
+        "sudo-assert-drained",
         "smb-terminal-assert",
         "application-watermark",
     ]
@@ -504,6 +558,78 @@ def test_ssh_close_failure_recovers_before_retryable_sink_shutdown(
         if call in {"ssh-assert-drained", "assert-drained"}
     )
     assert calls.index("close") > terminal_assertion
+    if generation_succeeded:
+        assert calls.index("source-finalize") > terminal_assertion
+        assert calls.index("source-finalize") < calls.index("close")
+        assert calls.index("source-closed") > calls.index("close")
+        assert not engine._finalization_aborted
+    else:
+        assert "source-finalize" not in calls
+        assert engine._finalization_aborted
+
+
+@pytest.mark.parametrize("generation_succeeded", (True, False), ids=("success", "abort"))
+@pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))
+def test_sudo_logoff_failure_recovers_before_retryable_sink_shutdown(
+    generation_succeeded: bool,
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sudo close failures drain exact rows before source or emitter shutdown."""
+
+    calls: list[str] = []
+    dispatcher = _RecoveryDispatcher(calls)
+    emitter = _RecordingEmitter(calls)
+    coordinator = _SourceCoordinator(calls)
+    finalizer = _FaultingLinuxSudoLogoffFinalizer(calls, failure_mode=failure_mode)
+    engine = _engine(tmp_path, dispatcher, emitter)
+    engine.activity_generator = finalizer  # type: ignore[assignment]
+    engine.end_time = datetime(2024, 1, 15, 11, tzinfo=UTC)
+    engine._ssh_lifecycles_finalized = True
+    engine._rdp_lifecycles_finalized = True
+    if generation_succeeded:
+        engine._foreground_lifecycles_finalized = True
+        engine._source_finalization_coordinator = coordinator
+        engine._ids_alert_summary_applied = True
+        monkeypatch.setattr(
+            "evidenceforge.events.collection_profile.write_collection_profile",
+            lambda *_args, **_kwargs: None,
+        )
+
+    expected_message = f"sudo-close {failure_mode}"
+    with pytest.raises(OSError, match=expected_message) as raised:
+        engine._finalize(generation_succeeded=generation_succeeded)
+
+    assert str(raised.value) == expected_message
+    assert not finalizer.pending
+    assert engine._linux_sudo_logoffs_finalized
+    assert not engine._finalization_complete
+    assert emitter.close_calls == 0
+    assert "source-finalize" not in calls
+    assert calls == [
+        "sudo-finalize",
+        *(["sudo-close"] if failure_mode == "lost-return" else []),
+        "drain",
+        "assert-drained",
+        "sudo-finalize",
+        *(["sudo-close"] if failure_mode == "fail-before" else []),
+        "sudo-assert-drained",
+        "drain",
+        "assert-drained",
+        "sudo-assert-drained",
+    ]
+
+    engine._finalize(generation_succeeded=generation_succeeded)
+
+    terminal_assertion = max(
+        index
+        for index, call in enumerate(calls)
+        if call in {"sudo-assert-drained", "assert-drained"}
+    )
+    assert emitter.close_calls == 1
+    assert calls.index("close") > terminal_assertion
+    assert engine._finalization_complete
     if generation_succeeded:
         assert calls.index("source-finalize") > terminal_assertion
         assert calls.index("source-finalize") < calls.index("close")
@@ -685,6 +811,8 @@ def test_persistent_smb_terminal_residue_blocks_source_and_emitter_close(
         "ssh-assert-drained",
         "rdp-finalize",
         "rdp-assert-drained",
+        "sudo-finalize",
+        "sudo-assert-drained",
         "smb-terminal-assert",
         "smb-terminal-assert",
     ]
@@ -718,6 +846,9 @@ def test_terminal_census_allows_bounded_committed_dispatcher_receipt_history() -
         preparation_authority_census=lambda: SimpleNamespace(),
         detached_binding_census=lambda: SimpleNamespace(),
     )
+    generator._linux_sudo_tty_lock = Lock()
+    generator._pending_linux_sudo_logoffs = {}
+    generator._linux_sudo_logoff_high_water_pending = 0
     generator.dispatcher = SimpleNamespace(
         exact_projection_recovery_census=lambda: SimpleNamespace(
             unresolved_recoveries=0,
@@ -779,6 +910,9 @@ def test_terminal_census_allows_bounded_committed_source_timing_history() -> Non
         preparation_authority_census=lambda: timing,
         detached_binding_census=lambda: detached_timing,
     )
+    generator._linux_sudo_tty_lock = Lock()
+    generator._pending_linux_sudo_logoffs = {}
+    generator._linux_sudo_logoff_high_water_pending = 0
     generator.dispatcher = SimpleNamespace(
         exact_projection_recovery_census=lambda: SimpleNamespace(
             authority=SimpleNamespace(),

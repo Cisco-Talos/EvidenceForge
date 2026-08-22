@@ -1016,6 +1016,7 @@ def test_named_type5_engine_abort_drains_real_pending_multisink_recovery(
     }
     engine._finalization_complete = False
     engine._finalization_aborted = False
+    engine._linux_sudo_logoffs_finalized = False
     engine._exact_projection_recovery_dispatcher = None
     engine._expected_close_emitters = None
     engine._closed_emitter_names = set()
@@ -1398,7 +1399,12 @@ def test_named_type5_projection_prepare_failure_releases_all_preparations(
     generator.sid_registry["seed-account"] = "S-1-5-21-100-200-300-1100"
     census = _precommit_census(generator, state, registry, dispatcher, timing)
 
-    def fail_projection(_occurrence: object) -> object:
+    def fail_projection(
+        _occurrence: object,
+        *,
+        allowed_formats: frozenset[str] | None = None,
+    ) -> object:
+        assert allowed_formats is None
         raise EventContractError("injected Type-5 projection preparation failure")
 
     monkeypatch.setattr(dispatcher, "_prepare_projection", fail_projection)

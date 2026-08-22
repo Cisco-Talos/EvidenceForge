@@ -5160,7 +5160,10 @@ class BaselineMixin:
         """Return an already-started same-user Windows interactive session."""
         candidates = [
             session
-            for session in self.state_manager.get_sessions_for_user_at(user.username, time)
+            for session in self.state_manager.get_active_sessions_for_user_at(
+                user.username,
+                time,
+            )
             if session.system == system.hostname
             and session.logon_type in {2, 10, 11}
             and session.session_kind not in {"network", "service"}
@@ -5589,8 +5592,27 @@ class BaselineMixin:
 
         rng = _get_rng()
         for system in self.scenario.environment.systems:
-            protected_pids = seeded_pids.get(system.hostname, set())
+            protected_pids = set(seeded_pids.get(system.hostname, ()))
+            # Session teardown owns explicit anchors, and no generic stale close may
+            # consume a process while a live child still depends on it.
+            for session in self.state_manager.get_sessions_on_system(system.hostname):
+                for session_anchor_pid in (
+                    session.process_tree_root,
+                    session.session_shell_pid,
+                    session.transport_pid,
+                    session.session_user_manager_pid,
+                    session.session_winlogon_pid,
+                    session.explorer_pid,
+                    session.initial_explorer_pid,
+                ):
+                    if type(session_anchor_pid) is int and session_anchor_pid > 0:
+                        protected_pids.add(session_anchor_pid)
             processes = self.state_manager.get_processes_on_system(system.hostname)
+            protected_pids.update(
+                process.parent_pid
+                for process in processes
+                if type(process.parent_pid) is int and process.parent_pid > 0
+            )
             for proc in list(processes):
                 image_lower = proc.image.lower()
 
