@@ -1323,6 +1323,33 @@ def _compiled_ssh_sysmon_only_deployment() -> CompiledCollectionDeployment:
     )
 
 
+def _compiled_deferred_ecar_deployment(
+    *,
+    missingness: float,
+) -> CompiledCollectionDeployment:
+    """Return exact endpoint eCAR sources with one explicit loss policy."""
+
+    descriptor = DEFAULT_SOURCE_CATALOG.descriptor("ecar")
+    return CompiledCollectionDeployment(
+        tuple(
+            SourceInstanceDeployment(
+                identity=SourceInstanceIdentity(
+                    source_instance=exact_source_instance_id(descriptor.family, hostname),
+                    hostname=hostname,
+                    family=descriptor.family,
+                ),
+                formats=("ecar",),
+                policy=SourceCollectionPolicy(
+                    enabled=True,
+                    capabilities=descriptor.capabilities,
+                    format_missingness={"ecar": missingness},
+                ),
+            )
+            for hostname in ("WS-01", "DB-01")
+        )
+    )
+
+
 def _foundation_publication_fixture(
     kind: DeferredSessionKind,
     tmp_path: Path,
@@ -3455,6 +3482,45 @@ def test_exact_deferred_bridge_accepts_exact_root_owned_process_dependent(
         index for index, value in enumerate(objects) if value in {"PROCESS", "USER_SESSION"}
     )
     assert len(zeek_rows) == 1
+
+
+@pytest.mark.parametrize("kind", (DeferredSessionKind.SSH, DeferredSessionKind.RDP))
+def test_compiled_deferred_initial_cohort_preserves_target_ecar_proofs_under_missingness(
+    kind: DeferredSessionKind,
+    tmp_path: Path,
+) -> None:
+    """Required target eCAR rows keep every admitted initial member provable."""
+
+    publication = _foundation_publication_fixture(
+        kind,
+        tmp_path,
+        include_process_dependent=True,
+        collection_deployment=_compiled_deferred_ecar_deployment(missingness=1.0),
+        observation_policy=ObservationPolicy("enterprise_standard"),
+    )
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert len(committed.publication.projections) == 3
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    assert {
+        proof.member_ordinal
+        for proof in committed.publication.target_proofs
+        if proof.format_name == "ecar" and proof.row_count > 0
+    } == {0, 1, 2}
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    assert zeek_rows == []
+    assert {str(row.get("hostname")) for row in ecar_rows} == {"DB-01"}
+    assert [row.get("object") for row in ecar_rows] == [
+        "FLOW",
+        "PROCESS",
+        "USER_SESSION",
+    ]
 
 
 def test_exact_deferred_bridge_rejects_reversed_process_host_before_state(

@@ -4348,7 +4348,7 @@ class EventDispatcher:
         projection = (
             _PreparedProjection(mode="deferred", occurrence=event)
             if _defer_projection
-            else self._prepare_projection(event)
+            else self._prepare_projection(event, state_intent=state_intent)
         )
         prepared = PreparedDispatch(
             occurrence=event,
@@ -14377,6 +14377,7 @@ class EventDispatcher:
         event: CanonicalOccurrence,
         *,
         allowed_formats: frozenset[str] | None = None,
+        state_intent: PreparedDispatchStateIntent = PreparedDispatchStateIntent.APPLY,
     ) -> _PreparedProjection:
         """Freeze every observation, timing, and projection decision without rendering."""
 
@@ -14396,7 +14397,11 @@ class EventDispatcher:
             )
             targets = self._apply_deployment_admission(event, targets)
             targets = self._apply_projection_topology(event, targets)
-            targets = self._apply_projection_missingness(event, targets)
+            targets = self._apply_projection_missingness(
+                event,
+                targets,
+                state_intent=state_intent,
+            )
             finalized_event, targets = self._finalize_projection_timing(event, targets)
             return _PreparedProjection(
                 mode="compiled",
@@ -15064,6 +15069,8 @@ class EventDispatcher:
         self,
         event: CanonicalOccurrence,
         targets: list[_ProjectionTarget],
+        *,
+        state_intent: PreparedDispatchStateIntent = PreparedDispatchStateIntent.APPLY,
     ) -> list[_ProjectionTarget]:
         """Sample coherent loss independently for every exact source instance."""
 
@@ -15077,12 +15084,26 @@ class EventDispatcher:
                 result.append(target)
                 continue
             policy = deployment.policy_by_ordinal(target.source_ordinal)
+            preserve_deferred_ecar_target = target.format_name == "ecar" and (
+                (
+                    state_intent is PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT
+                    and target.role is ProjectionRole.DESTINATION_ENDPOINT
+                )
+                or (
+                    state_intent is PreparedDispatchStateIntent.EXTERNAL_DEFERRED_DEPENDENT
+                    and target.role is ProjectionRole.HOST
+                )
+            )
             decision = self.observation_policy.decide_projection(
                 target.format_name,
                 event,
                 source_instance=envelope.source.source_instance,
                 source_hostname=envelope.source.hostname,
-                missingness=policy.missingness_for(target.format_name),
+                missingness=(
+                    0.0
+                    if preserve_deferred_ecar_target
+                    else policy.missingness_for(target.format_name)
+                ),
                 format_specific=target.format_name in policy.format_missingness,
             )
             if self._runtime_owns_projection_timing(event, target) and decision.status != "dropped":
