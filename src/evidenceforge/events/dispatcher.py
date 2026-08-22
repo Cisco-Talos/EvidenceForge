@@ -12598,19 +12598,28 @@ class EventDispatcher:
                     raise EventContractError(
                         "Deferred-session intent expected receipt failed authentication"
                     )
-                intent_claimed.certify_composite_commit(expected_intent_receipt)
-                with self._deferred_session_publication_lock:
-                    if self._active_deferred_session_publication_batch_locked(batch) is not record:
-                        raise EventContractError(
-                            "Deferred-session intent receipt changed bridge ownership"
+                retained_expected_intent_receipt = record.expected_intent_receipt
+                if retained_expected_intent_receipt is None:
+                    intent_claimed.certify_composite_commit(expected_intent_receipt)
+                    with self._deferred_session_publication_lock:
+                        if (
+                            self._active_deferred_session_publication_batch_locked(batch)
+                            is not record
+                        ):
+                            raise EventContractError(
+                                "Deferred-session intent receipt changed bridge ownership"
+                            )
+                        record.expected_intent_receipt = expected_intent_receipt
+                        integrity = self._deferred_session_publication_batch_integrity(
+                            batch,
+                            record,
                         )
-                    record.expected_intent_receipt = expected_intent_receipt
-                    integrity = self._deferred_session_publication_batch_integrity(
-                        batch,
-                        record,
+                        batch._integrity_token = integrity
+                        record.integrity_token = integrity
+                elif retained_expected_intent_receipt is not expected_intent_receipt:
+                    raise EventContractError(
+                        "Deferred-session retained intent receipt changed exact identity"
                     )
-                    batch._integrity_token = integrity
-                    record.integrity_token = integrity
             for prepared, member_lock, integrity in zip(
                 record.dispatches,
                 record.member_locks,

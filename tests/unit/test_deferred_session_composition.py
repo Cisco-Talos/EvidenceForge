@@ -88,7 +88,12 @@ from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWr
 from evidenceforge.generation.emitters.syslog import SyslogEmitter
 from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
-from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
+from evidenceforge.generation.intent_ledger import (
+    AuthoredIntentLedger,
+    IntentExecutionBatchReceipt,
+    IntentExecutionLedger,
+    PreparedIntentExecutionBatch,
+)
 from evidenceforge.generation.lifecycle_authority import (
     GeneratorLifecycleAuthority,
     LifecycleConnectionCompositeReceipt,
@@ -3561,6 +3566,96 @@ def test_exact_deferred_bridge_commits_and_closes_transport_before_session(
     ]
     assert flow_indexes and session_indexes
     assert max(flow_indexes) < min(session_indexes)
+    assert len(zeek_rows) == 1
+
+
+def test_authored_ssh_planner_authentication_precedes_lifecycle_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Planner prevalidation may precede the lifecycle-owned authored commit."""
+
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        with_intent=True,
+        include_process_dependent=True,
+    )
+    dispatcher = publication.dispatcher
+    ledger = dispatcher.intent_execution_ledger
+    assert ledger is not None
+    assert publication.batch is not None
+    assert len(publication.composition.publication_order) == 3
+
+    certification_calls = 0
+    original_certify = PreparedIntentExecutionBatch.certify_composite_commit
+
+    def count_certification(
+        preparation: PreparedIntentExecutionBatch,
+        expected_receipt: IntentExecutionBatchReceipt,
+    ) -> None:
+        nonlocal certification_calls
+        certification_calls += 1
+        original_certify(preparation, expected_receipt)
+
+    monkeypatch.setattr(
+        PreparedIntentExecutionBatch,
+        "certify_composite_commit",
+        count_certification,
+    )
+    boundary = _PreparedNetworkBoundary()
+    boundary.track_deferred_session_publication_batch(dispatcher, publication.batch)
+    boundary.validate_deferred_session_publication_batch()
+    boundary.transfer()
+
+    assert certification_calls == 1
+    assert ledger.snapshot() == ()
+    prepared_census = ledger.batch_preparation_census()
+    assert (
+        prepared_census.reservations,
+        prepared_census.claimed_reservations,
+        prepared_census.reserved_intents,
+        prepared_census.prepared_deltas,
+        prepared_census.prepared_commit_plans,
+        prepared_census.mutation_fences,
+    ) == (1, 1, 1, 3, 1, 1)
+
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    assert certification_calls == 1
+    snapshots = ledger.snapshot()
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    assert snapshot.intent_id == "deferred-bridge-intent"
+    assert snapshot.action_reference_count == 3
+    assert snapshot.occurrence_reference_count == 3
+    assert snapshot.duplicate_occurrence_count == 0
+    final_census = ledger.batch_preparation_census()
+    assert (
+        final_census.reservations,
+        final_census.claimed_reservations,
+        final_census.reserved_intents,
+        final_census.capability_locators,
+        final_census.prepared_deltas,
+        final_census.prepared_commit_plans,
+        final_census.mutation_fences,
+        final_census.retained_bytes,
+    ) == (0, 0, 0, 0, 0, 0, 0, 0)
+    assert (
+        publication.fixture.lifecycle_registry.closed_transport_preparation_census().reservations
+        == 0
+    )
+    _assert_deferred_dispatcher_reservations_released(dispatcher)
+    ecar_rows, zeek_rows = _close_and_read_publication(publication)
+    assert len(ecar_rows) == 4
+    assert sum(row.get("object") == "PROCESS" for row in ecar_rows) == 1
     assert len(zeek_rows) == 1
 
 
