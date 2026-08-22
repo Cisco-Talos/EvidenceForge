@@ -1900,7 +1900,9 @@ class RdpSessionActionBundle:
         source_ip = self._request.source_ip
         source_system = self._request.source_system
         source_pid = self._request.source_pid
-        if source_system is None:
+        # A planner-owned explicit network source intentionally has no endpoint
+        # process owner. Re-discovery here would undo that canonical decision.
+        if source_system is None and not self._request.preserve_explicit_source:
             source_system = self._executor._ip_to_system.get(source_ip)
         if (
             source_system is not None

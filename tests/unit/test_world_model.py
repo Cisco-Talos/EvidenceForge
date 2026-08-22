@@ -1141,6 +1141,104 @@ def test_world_planner_bootstraps_rdp_session_with_owned_state(
     assert rdp_connections[0].source_system == "WKS-01"
 
 
+def test_world_planner_preserves_authored_linux_rdp_source_as_network_only(
+    scenario: Scenario,
+    mock_emitters: dict[str, Mock],
+) -> None:
+    """An authored Linux source IP must not become a fabricated Windows RDP client."""
+
+    linux_source = System(
+        hostname="LT-MRIVERA-02",
+        ip="10.10.1.99",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+    scenario.environment.systems.append(linux_source)
+    world_model = WorldModel(scenario, "corp.local")
+    state_manager = StateManager()
+    dispatcher = EventDispatcher(state_manager=state_manager, emitters=mock_emitters)
+    activity_generator = ActivityGenerator(state_manager, mock_emitters, dispatcher=dispatcher)
+    activity_generator._ad_domain = world_model.ad_domain
+    activity_generator._ip_to_system = dict(world_model.systems_by_ip)
+    activity_generator._all_system_ips = [
+        system.ip for system in world_model.scenario.environment.systems
+    ]
+    planner = WorldPlanner(world_model, state_manager, activity_generator)
+    target = world_model.hosts["APP-01"].system
+    user = world_model.users["alice.admin"].user
+
+    plan = world_model.plan_session(
+        user=user,
+        target_system=target,
+        rng=random.Random(11),
+        session_kind="rdp",
+        source_system=linux_source,
+        source_ip_override=linux_source.ip,
+    )
+    assert plan.source_ip == "10.10.1.99"
+    assert plan.source_system is None
+
+    result = planner.bootstrap_user_session(
+        user=user,
+        target_system=target,
+        time=datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC),
+        rng=random.Random(11),
+        session_kind="rdp",
+        source_system=linux_source,
+        source_ip_override=linux_source.ip,
+        allow_existing=False,
+    )
+
+    session = state_manager.get_session(result.session.logon_id)
+    assert session is not None
+    assert session.source_ip == "10.10.1.99"
+    assert session.transport_pid is None
+    rdp_connections = [
+        connection
+        for connection in state_manager.list_open_connections()
+        if connection.dst_port == 3389
+    ]
+    assert len(rdp_connections) == 1
+    assert rdp_connections[0].src_ip == "10.10.1.99"
+    assert rdp_connections[0].initiating_pid == -1
+    assert not any(
+        process.image.casefold().endswith("mstsc.exe")
+        for process in state_manager.list_running_processes()
+    )
+    assert not any(connection.source_system.startswith("WKS-") for connection in rdp_connections)
+
+
+def test_rdp_preserved_network_only_source_skips_modeled_host_rediscovery(
+    scenario: Scenario,
+) -> None:
+    """The RDP bundle must retain the planner's deliberate source-host absence."""
+
+    linux_source = System(
+        hostname="LT-MRIVERA-02",
+        ip="10.10.1.99",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+    target = next(system for system in scenario.environment.systems if system.hostname == "APP-01")
+    user = next(user for user in scenario.environment.users if user.username == "alice.admin")
+    executor = Mock()
+    executor._ip_to_system = {linux_source.ip: linux_source, target.ip: target}
+    bundle = RdpSessionActionBundle(
+        executor=executor,
+        request=RdpSessionRequest(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC),
+            source_ip=linux_source.ip,
+            source_system=None,
+            source_pid=-1,
+            preserve_explicit_source=True,
+        ),
+    )
+
+    assert bundle._resolve_source(random.Random(11), user) == (linux_source.ip, None, -1)
+
+
 def test_rdp_target_logon_uses_canonical_transport_phase_gap() -> None:
     """RDP canonical authentication should not absorb source-observation latency."""
     scenario = _make_scenario()

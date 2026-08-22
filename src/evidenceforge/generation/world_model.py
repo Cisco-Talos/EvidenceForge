@@ -2124,6 +2124,7 @@ class WorldPlanner:
             source_pid=source_pid,
             source_process_time=source_process_time,
             source_process_factory=source_process_factory,
+            preserve_explicit_source=plan.source_system is None,
             session_end_plan=session_end_plan,
             ids_alerts=ids_alerts,
         )

@@ -102,6 +102,7 @@ def test_rdp_source_process_placement_uses_engine_runtime_and_preserves_bounds()
 
     request = activity.requests[0]
     source_process_time = request["source_process_time"]
+    assert request["preserve_explicit_source"] is False
     assert planner._timing_planner("rdp-bootstrap").runtime is runtime
     assert isinstance(source_process_time, datetime)
     assert _LOGON_TIME - timedelta(seconds=3.2) <= source_process_time
@@ -137,7 +138,12 @@ def test_unmodeled_rdp_source_has_no_timing_planner_or_audit_phantom(
         rng,
     )
 
-    assert activity.requests[0]["source_process_time"] is None
+    request = activity.requests[0]
+    assert request["source_system"] is None
+    assert request["source_pid"] == -1
+    assert request["source_process_time"] is None
+    assert request["source_process_factory"] is None
+    assert request["preserve_explicit_source"] is True
     assert rng.getstate() == rng_state
     assert runtime.audit.snapshot().total_samples == 0
 
