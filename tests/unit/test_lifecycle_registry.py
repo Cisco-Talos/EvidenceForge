@@ -2180,6 +2180,32 @@ def test_session_member_close_deadline_is_exact_and_constant_candidate() -> None
     assert after_closed.lookup_candidates_inspected - before_closed.lookup_candidates_inspected == 1
 
 
+def test_latest_closed_session_member_is_exact_while_another_member_remains_open() -> None:
+    registry = LifecycleRegistry(shard_count=1)
+    session = _register_session(registry)
+    closed_member = _register_process(
+        registry,
+        object_id="retained-closed-member",
+        pid=4881,
+        token_logon_id=session.logon_id,
+    )
+    _register_process(
+        registry,
+        object_id="still-open-member",
+        pid=4882,
+        started_at=_START + timedelta(seconds=2),
+        token_logon_id=session.logon_id,
+    )
+    closed_at = _START + timedelta(minutes=3)
+    _request_and_close(registry, closed_member, requested_at=closed_at)
+
+    before = registry.census()
+    assert registry.session_latest_closed_member_at(session.object_id) == closed_at
+    after = registry.census()
+
+    assert after.lookup_candidates_inspected - before.lookup_candidates_inspected == 1
+
+
 def test_live_session_member_pages_are_indexed_and_drain_after_close() -> None:
     registry = LifecycleRegistry(shard_count=1)
     session = _register_session(registry)

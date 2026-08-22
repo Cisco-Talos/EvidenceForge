@@ -21,7 +21,12 @@ from evidenceforge.events.collection_policy import (
     SourceInstanceIdentity,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
-from evidenceforge.events.lifecycle import LifecycleEntityRef, SessionEndAuthority, SessionEndPlan
+from evidenceforge.events.lifecycle import (
+    LifecycleEntityRef,
+    LifecycleHold,
+    SessionEndAuthority,
+    SessionEndPlan,
+)
 from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG
 from evidenceforge.formats.loader import load_format
@@ -45,7 +50,7 @@ from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.files import load_yaml
-from evidenceforge.utils.rng import _thread_local
+from evidenceforge.utils.rng import _stable_seed, _thread_local
 
 _SCENARIO_START = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
 
@@ -291,6 +296,7 @@ def _materialize_strict_session(
     session_id: int,
     lifecycle_group_id: str,
     end_plan: SessionEndPlan | None = None,
+    session_kind: str = "interactive",
 ) -> ActiveSession:
     """Create one exact live session without child processes."""
 
@@ -300,7 +306,7 @@ def _materialize_strict_session(
         logon_type=2,
         source_ip="-",
         start_time=engine.start_time + timedelta(seconds=15),
-        session_kind="interactive",
+        session_kind=session_kind,
         lifecycle_group_id=lifecycle_group_id,
         session_id=session_id,
         end_plan=end_plan,
@@ -308,6 +314,40 @@ def _materialize_strict_session(
     session, receipt = engine.lifecycle_authority.materialize_session(plan)
     assert engine.lifecycle_authority.authenticates_materialization_receipt(plan, receipt)
     return session
+
+
+def _materialize_strict_process(
+    generator: ActivityGenerator,
+    state: StateManager,
+    system: System,
+    user: User,
+    session: ActiveSession,
+    *,
+    parent_pid: int,
+    image: str,
+    command_line: str,
+    started_at: datetime,
+    lifecycle_group_id: str,
+) -> int:
+    """Create one exact process owned by a strict generic session."""
+
+    pid = generator.generate_process(
+        user,
+        system,
+        started_at,
+        session.logon_id,
+        image,
+        command_line,
+        parent_pid=parent_pid,
+        suppress_command_file_effect=True,
+        lifecycle_group_id=lifecycle_group_id,
+    )
+    process = state.get_process(system.hostname, pid)
+    identity = state.get_process_identity(system.hostname, pid)
+    assert process is not None
+    assert identity is not None
+    assert identity.lifecycle_group_id == lifecycle_group_id
+    return pid
 
 
 def _materialize_strict_sudo_tty_route(
@@ -320,6 +360,7 @@ def _materialize_strict_sudo_tty_route(
     session_id: int,
     lifecycle_group_id: str,
     end_plan: SessionEndPlan | None = None,
+    session_kind: str = "interactive",
 ) -> tuple[ActiveSession, tuple[str, str, str]]:
     """Create one exact live session and bind a sudo TTY without child processes."""
 
@@ -331,6 +372,7 @@ def _materialize_strict_sudo_tty_route(
         session_id=session_id,
         lifecycle_group_id=lifecycle_group_id,
         end_plan=end_plan,
+        session_kind=session_kind,
     )
     tty_key = (system.hostname, user.username, "pts/1")
     generator._linux_sudo_tty_assignments[tty_key] = tty_key[2]
@@ -1197,6 +1239,738 @@ def test_strict_generic_close_without_sudo_tty_route_skips_sudo_cleanup(
     assert state.get_session(session.logon_id) is None
     assert lifecycle is not None and lifecycle.closed_at is not None
     assert _sudo_tty_state(generator) == tty_before
+
+
+def test_exact_sudo_logoff_follows_retained_closed_session_member(tmp_path: Path) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session, _tty_key = _materialize_strict_sudo_tty_route(
+        engine,
+        generator,
+        state,
+        system,
+        user,
+        session_id=349_764,
+        lifecycle_group_id="sudo:retained-session-member",
+    )
+    child_pid = _materialize_strict_process(
+        generator,
+        state,
+        system,
+        user,
+        session,
+        parent_pid=0,
+        image="/usr/bin/id",
+        command_line="id",
+        started_at=session.start_time + timedelta(seconds=1),
+        lifecycle_group_id="sudo:retained-child",
+    )
+    child_identity = state.get_process_identity(system.hostname, child_pid)
+    assert child_identity is not None
+    retained_close = session.start_time + timedelta(minutes=20)
+    generator.generate_process_termination(
+        user,
+        system,
+        retained_close,
+        child_pid,
+        "/usr/bin/id",
+        session.logon_id,
+    )
+    assert state.get_process(system.hostname, child_pid) is None
+
+    generator.generate_logoff(
+        user,
+        system,
+        session.start_time + timedelta(minutes=5),
+        session.logon_id,
+        logon_type=2,
+        from_storyline=True,
+    )
+
+    child_lifecycle = engine.lifecycle_registry.get_process(child_identity.object_id)
+    session_lifecycle = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    assert child_lifecycle is not None
+    assert session_lifecycle is not None
+    assert child_lifecycle.closed_at == retained_close
+    assert session_lifecycle.closed_at > retained_close
+    assert state.get_session(session.logon_id) is None
+    assert _sudo_tty_state(generator) == ({}, {}, {}, {}, {}, {})
+
+
+def test_strict_generic_logoff_follows_retained_linux_child_without_sudo_mutation(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session = _materialize_strict_session(
+        engine,
+        state,
+        system,
+        user,
+        session_id=349_761,
+        lifecycle_group_id="generic:retained-child",
+    )
+    login_pid = _materialize_strict_process(
+        generator,
+        state,
+        system,
+        user,
+        session,
+        parent_pid=0,
+        image="/bin/login",
+        command_line="/bin/login --",
+        started_at=session.start_time + timedelta(seconds=1),
+        lifecycle_group_id=session.lifecycle_group_id,
+    )
+    bash_pid = _materialize_strict_process(
+        generator,
+        state,
+        system,
+        user,
+        session,
+        parent_pid=login_pid,
+        image="/bin/bash",
+        command_line="-bash",
+        started_at=session.start_time + timedelta(seconds=2),
+        lifecycle_group_id=session.lifecycle_group_id,
+    )
+    session.process_tree_root = login_pid
+    session.session_shell_pid = bash_pid
+    bash_identity = state.get_process_identity(system.hostname, bash_pid)
+    login_identity = state.get_process_identity(system.hostname, login_pid)
+    assert bash_identity is not None
+    assert login_identity is not None
+    retained_bash_close = session.start_time + timedelta(minutes=20)
+    requested_logoff = session.start_time + timedelta(minutes=5)
+    tty_before = _sudo_tty_state(generator)
+    frozen_closes: list[object] = []
+    original_planner = generator._plan_generic_logoff_process_closes
+
+    def capture_plan(**kwargs: Any) -> tuple[tuple[object, ...], datetime | None]:
+        plans, frontier = original_planner(**kwargs)
+        frozen_closes.extend(plans)
+        return plans, frontier
+
+    with (
+        patch.object(
+            generator,
+            "generate_process_termination",
+            wraps=generator.generate_process_termination,
+        ) as terminate,
+        patch.object(
+            generator,
+            "_plan_generic_logoff_process_closes",
+            side_effect=capture_plan,
+        ),
+    ):
+        generator.generate_process_termination(
+            user,
+            system,
+            retained_bash_close,
+            bash_pid,
+            "/bin/bash",
+            session.logon_id,
+        )
+        assert state.get_process(system.hostname, bash_pid) is None
+        retained_bash = engine.lifecycle_registry.get_process(bash_identity.object_id)
+        assert retained_bash is not None
+        assert retained_bash.closed_at == retained_bash_close
+
+        generator.generate_logoff(
+            user,
+            system,
+            requested_logoff,
+            session.logon_id,
+            logon_type=2,
+            from_storyline=True,
+        )
+
+    terminated_pids = [
+        call.kwargs["pid"] if "pid" in call.kwargs else call.args[3]
+        for call in terminate.call_args_list
+    ]
+    assert terminated_pids.count(bash_pid) == 1
+    assert terminated_pids.count(login_pid) == 1
+    frozen_login_close = next(plan for plan in frozen_closes if plan.identity.pid == login_pid)
+    assert frozen_login_close.identity == login_identity
+    login_lifecycle = engine.lifecycle_registry.get_process(login_identity.object_id)
+    session_lifecycle = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    assert login_lifecycle is not None
+    assert session_lifecycle is not None
+    assert login_lifecycle.closed_at == frozen_login_close.end_time
+    assert retained_bash_close < login_lifecycle.closed_at < session_lifecycle.closed_at
+    assert state.get_session(session.logon_id) is None
+    assert _sudo_tty_state(generator) == tty_before
+
+
+def test_generic_logoff_exempts_frozen_bootstrap_roles_but_bounds_foreground_child(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session = _materialize_strict_session(
+        engine,
+        state,
+        system,
+        user,
+        session_id=349_762,
+        lifecycle_group_id="generic:bootstrap-window",
+    )
+    login_started = session.start_time + timedelta(seconds=1)
+    login_pid = _materialize_strict_process(
+        generator,
+        state,
+        system,
+        user,
+        session,
+        parent_pid=0,
+        image="/bin/login",
+        command_line="/bin/login --",
+        started_at=login_started,
+        lifecycle_group_id=session.lifecycle_group_id,
+    )
+    bash_started = session.start_time + timedelta(seconds=2)
+    bash_pid = _materialize_strict_process(
+        generator,
+        state,
+        system,
+        user,
+        session,
+        parent_pid=login_pid,
+        image="/bin/bash",
+        command_line="-bash",
+        started_at=bash_started,
+        lifecycle_group_id="generic:direct-shell-role",
+    )
+    child_started = session.start_time + timedelta(seconds=3)
+    child_pid = _materialize_strict_process(
+        generator,
+        state,
+        system,
+        user,
+        session,
+        parent_pid=bash_pid,
+        image="/usr/bin/date",
+        command_line="date -u",
+        started_at=child_started,
+        lifecycle_group_id="generic:foreground-child",
+    )
+    session.process_tree_root = login_pid
+    session.session_shell_pid = bash_pid
+    requested_logoff = session.start_time + timedelta(minutes=20)
+    frozen_closes: list[object] = []
+    original_planner = generator._plan_generic_logoff_process_closes
+
+    def capture_plan(**kwargs: Any) -> tuple[tuple[object, ...], datetime | None]:
+        plans, frontier = original_planner(**kwargs)
+        frozen_closes.extend(plans)
+        return plans, frontier
+
+    with patch.object(
+        generator,
+        "_plan_generic_logoff_process_closes",
+        side_effect=capture_plan,
+    ):
+        generator.generate_logoff(
+            user,
+            system,
+            requested_logoff,
+            session.logon_id,
+            logon_type=2,
+            from_storyline=True,
+        )
+
+    closes_by_pid = {plan.identity.pid: plan.end_time for plan in frozen_closes}
+    assert {login_pid, bash_pid, child_pid} < set(closes_by_pid)
+    assert closes_by_pid[child_pid] < child_started + timedelta(seconds=8)
+    assert closes_by_pid[bash_pid] >= requested_logoff - timedelta(seconds=3)
+    assert closes_by_pid[login_pid] >= requested_logoff - timedelta(seconds=3)
+    assert closes_by_pid[child_pid] < closes_by_pid[bash_pid] < closes_by_pid[login_pid]
+    for plan in frozen_closes:
+        lifecycle = engine.lifecycle_registry.get_process(plan.identity.object_id)
+        assert lifecycle is not None
+        assert lifecycle.closed_at == plan.end_time
+    session_lifecycle = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    assert session_lifecycle is not None
+    assert closes_by_pid[login_pid] < session_lifecycle.closed_at
+
+
+def test_non_ssh_generic_logoff_keeps_short_margin_with_network_close_marker(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session = _materialize_strict_session(
+        engine,
+        state,
+        system,
+        user,
+        session_id=349_766,
+        lifecycle_group_id="generic:non-ssh-network-close-margin",
+    )
+    login_pid = _materialize_strict_process(
+        generator,
+        state,
+        system,
+        user,
+        session,
+        parent_pid=0,
+        image="/bin/login",
+        command_line="/bin/login --",
+        started_at=session.start_time + timedelta(seconds=1),
+        lifecycle_group_id=session.lifecycle_group_id,
+    )
+    session.process_tree_root = login_pid
+    requested_logoff = session.start_time + timedelta(minutes=20)
+    session.network_close_time = requested_logoff - timedelta(minutes=1)
+    frozen_closes: list[object] = []
+    planner_inputs: list[dict[str, Any]] = []
+    original_planner = generator._plan_generic_logoff_process_closes
+
+    def capture_plan(**kwargs: Any) -> tuple[tuple[object, ...], datetime | None]:
+        assert kwargs["uses_ssh_transport_close_margin"] is False
+        planner_inputs.append(kwargs)
+        plans, frontier = original_planner(**kwargs)
+        frozen_closes.extend(plans)
+        return plans, frontier
+
+    with patch.object(
+        generator,
+        "_plan_generic_logoff_process_closes",
+        side_effect=capture_plan,
+    ):
+        generator.generate_logoff(
+            user,
+            system,
+            requested_logoff,
+            session.logon_id,
+            logon_type=2,
+            from_storyline=True,
+        )
+
+    login_close = next(plan.end_time for plan in frozen_closes if plan.identity.pid == login_pid)
+    assert len(planner_inputs) == 1
+    planned_processes = planner_inputs[0]["processes"]
+    termination_gaps_ms = [
+        40
+        + (
+            _stable_seed(
+                "windows_session_process_termination_gap:"
+                f"{session.system}:{session.logon_id}:{process.pid}:"
+                f"{requested_logoff.isoformat()}"
+            )
+            % 361
+        )
+        for process in planned_processes
+    ]
+    termination_span = timedelta(milliseconds=max(500, sum(termination_gaps_ms) + 150))
+    login_ordinal = next(
+        ordinal for ordinal, process in enumerate(planned_processes) if process.pid == login_pid
+    )
+    expected_login_close = (
+        requested_logoff
+        - termination_span
+        + timedelta(milliseconds=sum(termination_gaps_ms[:login_ordinal]))
+    )
+    assert login_close == expected_login_close
+    login_lifecycle = engine.lifecycle_registry.get_process(
+        next(plan.identity.object_id for plan in frozen_closes if plan.identity.pid == login_pid)
+    )
+    assert login_lifecycle is not None
+    assert login_lifecycle.closed_at == login_close
+
+
+def test_ssh_generic_sudo_route_suppresses_linux_foreground_lifetime_clamp(
+    tmp_path: Path,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session, _tty_key = _materialize_strict_sudo_tty_route(
+        engine,
+        generator,
+        state,
+        system,
+        user,
+        session_id=349_767,
+        lifecycle_group_id="sudo:ssh-generic-lifetime",
+        session_kind="ssh",
+    )
+    child_started = session.start_time + timedelta(seconds=1)
+    child_plan = state.plan_process_materialization(
+        system=session.system,
+        parent_pid=4,
+        image="/usr/bin/date",
+        command_line="date -u",
+        username=session.username,
+        integrity_level="Medium",
+        os_category="linux",
+        logon_id=session.logon_id,
+        lifecycle_group_id="sudo:ssh-generic-foreground",
+        parent_lifecycle_group_id=session.lifecycle_group_id,
+        concurrency_group_id="sudo:ssh-generic-foreground",
+        start_time=child_started,
+        require_session=True,
+        auth_session_id=session.session_id,
+        auth_logon_type=session.logon_type,
+    )
+    child, child_receipt = engine.lifecycle_authority.materialize_process(child_plan)
+    assert engine.lifecycle_authority.authenticates_materialization_receipt(
+        child_plan,
+        child_receipt,
+    )
+    child_pid = child.pid
+    session.network_close_time = session.start_time + timedelta(minutes=20)
+    frozen_closes: list[object] = []
+    original_planner = generator._plan_generic_logoff_process_closes
+
+    def capture_plan(**kwargs: Any) -> tuple[tuple[object, ...], datetime | None]:
+        assert kwargs["uses_ssh_transport_close_margin"] is True
+        assert kwargs["suppresses_linux_foreground_lifetime_clamp"] is True
+        plans, frontier = original_planner(**kwargs)
+        frozen_closes.extend(plans)
+        return plans, frontier
+
+    with patch.object(
+        generator,
+        "_plan_generic_logoff_process_closes",
+        side_effect=capture_plan,
+    ):
+        generator.generate_logoff(
+            user,
+            system,
+            session.network_close_time,
+            session.logon_id,
+            logon_type=2,
+            from_storyline=True,
+        )
+
+    child_close = next(plan.end_time for plan in frozen_closes if plan.identity.pid == child_pid)
+    assert child_close > child_started + timedelta(seconds=8)
+    child_lifecycle = engine.lifecycle_registry.get_process(child.ecar_object_id)
+    assert child_lifecycle is not None
+    assert child_lifecycle.closed_at == child_close
+    assert state.get_session(session.logon_id) is None
+    assert _sudo_tty_state(generator) == ({}, {}, {}, {}, {}, {})
+
+
+@pytest.mark.parametrize(
+    ("retained_close_delta", "error_pattern"),
+    [
+        (timedelta(minutes=1), "cannot fit its process graph"),
+        (-timedelta(milliseconds=10), "cannot preserve its frozen process close"),
+    ],
+    ids=["after-deadline", "deadline-clamp"],
+)
+def test_authoritative_generic_logoff_rejects_retained_frontier_before_mutation(
+    tmp_path: Path,
+    retained_close_delta: timedelta,
+    error_pattern: str,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session = _materialize_strict_session(
+        engine,
+        state,
+        system,
+        user,
+        session_id=349_763,
+        lifecycle_group_id="generic:authoritative-rejection",
+    )
+    login_pid = _materialize_strict_process(
+        generator,
+        state,
+        system,
+        user,
+        session,
+        parent_pid=0,
+        image="/bin/login",
+        command_line="/bin/login --",
+        started_at=session.start_time + timedelta(seconds=1),
+        lifecycle_group_id=session.lifecycle_group_id,
+    )
+    bash_pid = _materialize_strict_process(
+        generator,
+        state,
+        system,
+        user,
+        session,
+        parent_pid=login_pid,
+        image="/bin/bash",
+        command_line="-bash",
+        started_at=session.start_time + timedelta(seconds=2),
+        lifecycle_group_id=session.lifecycle_group_id,
+    )
+    session.process_tree_root = login_pid
+    session.session_shell_pid = bash_pid
+    deadline = session.start_time + timedelta(minutes=10)
+    generator.generate_process_termination(
+        user,
+        system,
+        deadline + retained_close_delta,
+        bash_pid,
+        "/bin/bash",
+        session.logon_id,
+    )
+    session_identity_before = state.get_session_identity(session.logon_id)
+    login_identity_before = state.get_process_identity(system.hostname, login_pid)
+    assert session_identity_before is not None
+    assert login_identity_before is not None
+    session_lifecycle_before = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    login_lifecycle_before = engine.lifecycle_registry.get_process(login_identity_before.object_id)
+    assert session_lifecycle_before is not None
+    assert login_lifecycle_before is not None
+    state_digest_before = state.materialization_digest()
+    timing_before = generator.timing_runtime.audit.snapshot()
+    source_timing_before = generator._source_timing_planner.census()
+    effects_before = generator.execution_effect_audit_snapshot()
+    tty_before = _sudo_tty_state(generator)
+    linux_close_cache_before = dict(generator._linux_shell_last_session_close)
+    end_plan = SessionEndPlan(
+        canonical_end=deadline,
+        authority="explicit_storyline",
+        storyline_event_id="generic-retained-frontier-conflict",
+    )
+
+    with (
+        patch.object(state, "plan_session_end", wraps=state.plan_session_end) as plan_end,
+        patch.object(
+            generator,
+            "generate_process_termination",
+            wraps=generator.generate_process_termination,
+        ) as terminate,
+        patch.object(
+            generator.dispatcher,
+            "dispatch_builder",
+            wraps=generator.dispatcher.dispatch_builder,
+        ) as dispatch,
+    ):
+        with pytest.raises(StateError, match=error_pattern):
+            generator.generate_logoff(
+                user,
+                system,
+                deadline,
+                session.logon_id,
+                logon_type=2,
+                from_storyline=True,
+                session_end_plan=end_plan,
+            )
+
+    plan_end.assert_not_called()
+    terminate.assert_not_called()
+    dispatch.assert_not_called()
+    assert state.materialization_digest() == state_digest_before
+    assert state.get_session(session.logon_id) is session
+    assert state.get_session_end_plan(session.logon_id) is None
+    assert state.get_session_identity(session.logon_id) == session_identity_before
+    assert state.get_process_identity(system.hostname, login_pid) == login_identity_before
+    assert engine.lifecycle_registry.get_session(session.ecar_object_id) == session_lifecycle_before
+    assert (
+        engine.lifecycle_registry.get_process(login_identity_before.object_id)
+        == login_lifecycle_before
+    )
+    assert session_lifecycle_before.close_barrier is None
+    assert session_lifecycle_before.closure_ticket is None
+    assert login_lifecycle_before.close_barrier is None
+    assert login_lifecycle_before.closure_ticket is None
+    assert generator.timing_runtime.audit.snapshot() == timing_before
+    assert generator._source_timing_planner.census() == source_timing_before
+    assert generator.execution_effect_audit_snapshot() == effects_before
+    assert _sudo_tty_state(generator) == tty_before
+    assert generator._linux_shell_last_session_close == linux_close_cache_before
+
+
+@pytest.mark.parametrize(
+    ("constraint_kind", "constraint_offset", "error_pattern"),
+    [
+        (
+            "process-dependent",
+            -timedelta(milliseconds=10),
+            "cannot preserve its frozen process close",
+        ),
+        ("session-dependent", timedelta(0), "cannot follow its retained session graph"),
+        ("session-hold", timedelta(seconds=1), "cannot follow its retained session hold"),
+        ("ssh-process-dependent", timedelta(seconds=1), "SSH transport clamp"),
+    ],
+    ids=[
+        "lifecycle-only-process-dependent",
+        "lifecycle-only-session-dependent",
+        "lifecycle-only-session-hold",
+        "ssh-post-clamp-process-dependent",
+    ],
+)
+def test_authoritative_generic_logoff_rejects_lifecycle_only_constraint_before_mutation(
+    tmp_path: Path,
+    constraint_kind: str,
+    constraint_offset: timedelta,
+    error_pattern: str,
+) -> None:
+    engine, generator, state, system = _strict_sudo_generator(tmp_path)
+    user = next(
+        candidate
+        for candidate in engine.scenario.environment.users
+        if candidate.username == "linux_user"
+    )
+    session = _materialize_strict_session(
+        engine,
+        state,
+        system,
+        user,
+        session_id=349_765,
+        lifecycle_group_id=f"generic:authoritative-{constraint_kind}",
+        session_kind="ssh" if constraint_kind.startswith("ssh-") else "interactive",
+    )
+    login_plan = state.plan_process_materialization(
+        system=session.system,
+        parent_pid=0,
+        image="/bin/login",
+        command_line="/bin/login --",
+        username=session.username,
+        integrity_level="Medium",
+        os_category="linux",
+        logon_id=session.logon_id,
+        lifecycle_group_id=session.lifecycle_group_id,
+        start_time=session.start_time + timedelta(seconds=1),
+        require_session=True,
+        auth_session_id=session.session_id,
+        auth_logon_type=session.logon_type,
+    )
+    login, login_receipt = engine.lifecycle_authority.materialize_process(login_plan)
+    assert engine.lifecycle_authority.authenticates_materialization_receipt(
+        login_plan,
+        login_receipt,
+    )
+    login_pid = login.pid
+    session.process_tree_root = login_pid
+    deadline = session.start_time + timedelta(minutes=10)
+    if constraint_kind.startswith("ssh-"):
+        session.network_close_time = deadline - timedelta(minutes=1)
+    session_identity_before = state.get_session_identity(session.logon_id)
+    login_identity_before = state.get_process_identity(system.hostname, login_pid)
+    assert session_identity_before is not None
+    assert login_identity_before is not None
+    constraint_time = (
+        session.network_close_time + constraint_offset
+        if constraint_kind.startswith("ssh-") and session.network_close_time is not None
+        else deadline + constraint_offset
+    )
+    constraint_subject = LifecycleEntityRef(
+        "process" if "process" in constraint_kind else "session",
+        (
+            login_identity_before.object_id
+            if "process" in constraint_kind
+            else session_identity_before.object_id
+        ),
+    )
+    if constraint_kind.endswith("dependent"):
+        engine.lifecycle_registry.record_dependent(
+            constraint_subject,
+            transition_id=f"generic-logoff-{constraint_kind}",
+            canonical_time=constraint_time,
+            action_id=f"generic-logoff-{constraint_kind}",
+        )
+    else:
+        engine.lifecycle_registry.add_hold(
+            LifecycleHold(
+                hold_id=f"generic-logoff-{constraint_kind}",
+                subject=constraint_subject,
+                acquired_at=session.start_time + timedelta(seconds=2),
+                hold_until=constraint_time,
+                action_id=f"generic-logoff-{constraint_kind}",
+                reason="generic_logoff_preflight_regression",
+            )
+        )
+    session_lifecycle_before = engine.lifecycle_registry.get_session(session.ecar_object_id)
+    login_lifecycle_before = engine.lifecycle_registry.get_process(login_identity_before.object_id)
+    assert session_lifecycle_before is not None
+    assert login_lifecycle_before is not None
+    state_digest_before = state.materialization_digest()
+    registry_stats_before = engine.lifecycle_registry.stats()
+    timing_before = generator.timing_runtime.audit.snapshot()
+    source_timing_before = generator._source_timing_planner.census()
+    effects_before = generator.execution_effect_audit_snapshot()
+    tty_before = _sudo_tty_state(generator)
+    linux_close_cache_before = dict(generator._linux_shell_last_session_close)
+    end_plan = SessionEndPlan(
+        canonical_end=deadline,
+        authority="explicit_storyline",
+        storyline_event_id=f"generic-{constraint_kind}-conflict",
+    )
+
+    with (
+        patch.object(state, "plan_session_end", wraps=state.plan_session_end) as plan_end,
+        patch.object(
+            generator,
+            "generate_process_termination",
+            wraps=generator.generate_process_termination,
+        ) as terminate,
+        patch.object(
+            generator.dispatcher,
+            "dispatch_builder",
+            wraps=generator.dispatcher.dispatch_builder,
+        ) as dispatch,
+    ):
+        with pytest.raises(StateError, match=error_pattern):
+            generator.generate_logoff(
+                user,
+                system,
+                deadline,
+                session.logon_id,
+                logon_type=2,
+                from_storyline=True,
+                session_end_plan=end_plan,
+            )
+
+    plan_end.assert_not_called()
+    terminate.assert_not_called()
+    dispatch.assert_not_called()
+    assert state.materialization_digest() == state_digest_before
+    assert state.get_session(session.logon_id) is session
+    assert state.get_session_end_plan(session.logon_id) is None
+    assert state.get_session_identity(session.logon_id) == session_identity_before
+    assert state.get_process_identity(system.hostname, login_pid) == login_identity_before
+    assert engine.lifecycle_registry.get_session(session.ecar_object_id) == session_lifecycle_before
+    assert (
+        engine.lifecycle_registry.get_process(login_identity_before.object_id)
+        == login_lifecycle_before
+    )
+    registry_stats_after = engine.lifecycle_registry.stats()
+    assert registry_stats_after.transitions == registry_stats_before.transitions
+    assert registry_stats_after.holds == registry_stats_before.holds
+    assert registry_stats_after.close_barriers == registry_stats_before.close_barriers
+    assert registry_stats_after.closure_tickets == registry_stats_before.closure_tickets
+    assert session_lifecycle_before.close_barrier is None
+    assert session_lifecycle_before.closure_ticket is None
+    assert login_lifecycle_before.close_barrier is None
+    assert login_lifecycle_before.closure_ticket is None
+    assert generator.timing_runtime.audit.snapshot() == timing_before
+    assert generator._source_timing_planner.census() == source_timing_before
+    assert generator.execution_effect_audit_snapshot() == effects_before
+    assert _sudo_tty_state(generator) == tty_before
+    assert generator._linux_shell_last_session_close == linux_close_cache_before
 
 
 @pytest.mark.parametrize("bucket", [None, [], set()])

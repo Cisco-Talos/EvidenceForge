@@ -42,6 +42,7 @@ import uuid
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -525,6 +526,10 @@ _HTTP_PERSISTENT_TRANSACTION_GAP = timedelta(microseconds=1)
 _RECENT_CONNECTION_REUSE_WINDOW_SECONDS = 86_400.0
 _TLS_RESUMPTION_STATE_HORIZON = timedelta(hours=24)
 _NETWORK_RUNTIME_WATERMARK_PAGE = 4_096
+_GENERIC_LOGOFF_FROZEN_PROCESS_OBJECT_IDS: ContextVar[frozenset[str]] = ContextVar(
+    "generic_logoff_frozen_process_object_ids",
+    default=frozenset(),
+)
 
 
 _WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
@@ -4726,6 +4731,15 @@ class _LinuxSudoProcessClosePlan:
     auth_session_id: int
     auth_logon_type: int
     concurrency_group_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _GenericLogoffProcessClosePlan:
+    """Frozen canonical close for one process owned by generic session teardown."""
+
+    identity: ProcessIdentity
+    end_time: datetime
+    visible_create_delta: "_FrozenActivityTimingDelta | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -14850,17 +14864,17 @@ class ActivityGenerator:
             if lifecycle_process is None or lifecycle_process.closed_at is not None:
                 raise StateError("Linux sudo logoff process lifecycle prestate drifted")
             self._lifecycle_authority._action_cohort_registered_process(process_close.identity)
-        latest_child_close = self._lifecycle_authority.process_latest_closed_child_at_for_object(
+        latest_member_close = self._lifecycle_authority.session_latest_closed_member_at_for_object(
             session_identity.object_id
         )
         if (
             effective_end_plan is not None
             and effective_end_plan.is_hard_deadline
-            and latest_child_close is not None
-            and ensure_utc(latest_child_close) >= ensure_utc(effective_end_plan.canonical_end)
+            and latest_member_close is not None
+            and ensure_utc(latest_member_close) >= ensure_utc(effective_end_plan.canonical_end)
         ):
             raise StateError(
-                "Authoritative Linux sudo close cannot follow its retained child graph"
+                "Authoritative Linux sudo close cannot follow its retained session-member graph"
             )
         host_context = self._build_host_context(request.system)
         if (
@@ -15656,15 +15670,15 @@ class ActivityGenerator:
                         *continuation.timing_deltas,
                         continuation.rendered_dependents_delta,
                     )
-            latest_child_close = (
-                self._lifecycle_authority.process_latest_closed_child_at_for_object(
+            latest_member_close = (
+                self._lifecycle_authority.session_latest_closed_member_at_for_object(
                     session_identity.object_id
                 )
             )
-            if latest_child_close is not None:
+            if latest_member_close is not None:
                 final_time = max(
                     final_time,
-                    ensure_utc(latest_child_close) + timedelta(microseconds=1),
+                    ensure_utc(latest_member_close) + timedelta(microseconds=1),
                 )
             if continuation.process_closes:
                 final_time = max(
@@ -15810,6 +15824,387 @@ class ActivityGenerator:
             session_end_plan=session_end_plan,
         )
         LogoffActionBundle(self, request).execute()
+
+    def _plan_generic_logoff_process_closes(
+        self,
+        *,
+        system: System,
+        session: ActiveSession,
+        processes: list[RunningProcess],
+        base_logoff_time: datetime,
+        authoritative_end_plan: SessionEndPlan | None,
+        uses_ssh_transport_close_margin: bool,
+        suppresses_linux_foreground_lifetime_clamp: bool,
+    ) -> tuple[tuple[_GenericLogoffProcessClosePlan, ...], datetime | None]:
+        """Freeze and validate generic session process closes without mutation."""
+
+        authoritative = authoritative_end_plan is not None
+        termination_gaps_ms = (
+            []
+            if authoritative
+            else [
+                40
+                + (
+                    _stable_seed(
+                        "windows_session_process_termination_gap:"
+                        f"{session.system}:{session.logon_id}:{process.pid}:"
+                        f"{base_logoff_time.isoformat()}"
+                    )
+                    % 361
+                )
+                for process in processes
+            ]
+        )
+        if authoritative:
+            termination_span = timedelta(
+                milliseconds=min(3000, max(250, 100 * (len(processes) + 1)))
+            )
+        else:
+            final_margin_ms = 1000 if uses_ssh_transport_close_margin else 150
+            termination_span = timedelta(
+                milliseconds=max(500, sum(termination_gaps_ms) + final_margin_ms)
+            )
+        termination_start = ensure_utc(base_logoff_time) - termination_span
+        direct_session_role_pids = frozenset(
+            pid
+            for pid in (
+                session.process_tree_root,
+                session.transport_pid,
+                session.session_shell_pid,
+                session.session_user_manager_pid,
+                session.session_winlogon_pid,
+                session.explorer_pid,
+                session.initial_explorer_pid,
+            )
+            if pid is not None
+        )
+        latest_planned_child_close: dict[str, datetime] = {}
+        plans: list[_GenericLogoffProcessClosePlan] = []
+        cumulative_gap_ms = 0
+        os_category = _get_os_category(system.os)
+        deadline = (
+            ensure_utc(authoritative_end_plan.canonical_end)
+            if authoritative_end_plan is not None
+            else None
+        )
+        for ordinal, process in enumerate(processes):
+            authoritative_latest_allowed: datetime | None = None
+            ssh_network_close: datetime | None = None
+            ssh_clamp_latest_allowed: datetime | None = None
+            identity = self.state_manager.get_process_identity(session.system, process.pid)
+            if identity is None or identity.object_id != process.ecar_object_id:
+                raise StateError("Generic logoff process identity drifted before preparation")
+            lifecycle_process = self._lifecycle_authority.registry.get_process(identity.object_id)
+            if lifecycle_process is not None and (
+                lifecycle_process.closed_at is not None
+                or lifecycle_process.identity.object_id != identity.object_id
+                or lifecycle_process.identity.hostname != identity.hostname
+                or lifecycle_process.identity.pid != identity.pid
+                or lifecycle_process.identity.started_at != identity.started_at
+                or lifecycle_process.identity.image != identity.image
+            ):
+                raise StateError("Generic logoff process lifecycle prestate drifted")
+
+            if authoritative:
+                slot_ms = termination_span.total_seconds() * 1000 / max(1, len(processes) + 1)
+                terminate_at = termination_start + timedelta(milliseconds=slot_ms * ordinal)
+            else:
+                terminate_at = termination_start + timedelta(milliseconds=cumulative_gap_ms)
+                cumulative_gap_ms += termination_gaps_ms[ordinal]
+
+            is_session_bootstrap = bool(
+                identity.lifecycle_group_id == session.lifecycle_group_id
+                or identity.pid in direct_session_role_pids
+            )
+            process_lifetime = (
+                None
+                if (
+                    is_session_bootstrap
+                    or (os_category == "linux" and suppresses_linux_foreground_lifetime_clamp)
+                )
+                else _windows_foreground_lifetime(identity.image, identity.command_line)
+                if os_category == "windows"
+                else _linux_foreground_lifetime(identity.image, identity.command_line)
+            )
+            if process_lifetime is not None:
+                lifetime_rng = random.Random(
+                    _stable_seed(
+                        "orphan_foreground_process_lifetime:"
+                        f"{session.system}:{identity.pid}:{identity.started_at.isoformat()}:"
+                        f"{identity.command_line}"
+                    )
+                )
+                bounded_termination_time = identity.started_at + timedelta(
+                    seconds=lifetime_rng.uniform(*process_lifetime)
+                )
+                connection_hold = self._process_connection_hold_until.get(
+                    self._process_instance_key(
+                        session.system,
+                        identity.pid,
+                        identity.started_at,
+                    )
+                )
+                if connection_hold is not None:
+                    bounded_termination_time = max(
+                        bounded_termination_time,
+                        ensure_utc(connection_hold) + timedelta(milliseconds=25),
+                    )
+                terminate_at = min(terminate_at, bounded_termination_time)
+
+            if (
+                process.last_activity_time is not None
+                and terminate_at <= process.last_activity_time
+            ):
+                if authoritative:
+                    terminate_at = ensure_utc(process.last_activity_time) + timedelta(
+                        milliseconds=25
+                    )
+                else:
+                    delay_rng = random.Random(
+                        _stable_seed(
+                            "process_terminate_after_activity:"
+                            f"{session.system}:{identity.pid}:"
+                            f"{process.last_activity_time.isoformat()}"
+                        )
+                    )
+                    terminate_at = ensure_utc(process.last_activity_time) + timedelta(
+                        seconds=delay_rng.uniform(2.0, 30.0)
+                    )
+
+            if (
+                session.session_kind == "ssh"
+                and session.network_close_time is not None
+                and session.transport_pid != identity.pid
+            ):
+                ssh_network_close = ensure_utc(session.network_close_time)
+                process_logon_id = process.token_logon_id or identity.logon_id
+                end_margin_ms = 150 + (
+                    _stable_seed(
+                        "process_terminate_before_logoff:"
+                        f"{session.system}:{identity.pid}:{process_logon_id}"
+                    )
+                    % 850
+                )
+                latest_allowed = ssh_network_close - timedelta(milliseconds=end_margin_ms)
+                if identity.started_at >= latest_allowed:
+                    latest_allowed = identity.started_at + timedelta(milliseconds=100)
+                if latest_allowed < ssh_network_close:
+                    ssh_clamp_latest_allowed = latest_allowed
+                if terminate_at >= ssh_network_close and ssh_clamp_latest_allowed is not None:
+                    terminate_at = min(ensure_utc(terminate_at), latest_allowed)
+
+            if authoritative:
+                if deadline is None:  # pragma: no cover - narrowed by authoritative above
+                    raise StateError("Generic authoritative logoff lost its exact deadline")
+                hold_until = self._process_connection_hold_until.get(
+                    self._process_instance_key(session.system, identity.pid, identity.started_at)
+                )
+                if hold_until is not None and ensure_utc(hold_until) >= deadline:
+                    raise StateError(
+                        "Process connection hold extends beyond authoritative session end: "
+                        f"{session.system} pid={identity.pid} "
+                        f"hold={ensure_utc(hold_until).isoformat()} "
+                        f"end={deadline.isoformat()}"
+                    )
+                end_margin_ms = 25 + (
+                    _stable_seed(
+                        "process_terminate_before_authoritative_logoff:"
+                        f"{session.system}:{identity.pid}:"
+                        f"{process.token_logon_id or identity.logon_id}:"
+                        f"{deadline.isoformat()}"
+                    )
+                    % 176
+                )
+                authoritative_latest_allowed = deadline - timedelta(milliseconds=end_margin_ms)
+                terminate_at = min(ensure_utc(terminate_at), authoritative_latest_allowed)
+            else:
+                terminate_at = self._held_process_termination_time(
+                    system=system,
+                    pid=identity.pid,
+                    requested_time=terminate_at,
+                )
+
+            typed_hold_until = (
+                lifecycle_process.latest_hold_until if lifecycle_process is not None else None
+            )
+            resource_lease_deadline = self._lifecycle_authority.process_resource_lease_deadline(
+                session.system,
+                identity.pid,
+            )
+            dependency_frontier = max(
+                (
+                    deadline_at
+                    for deadline_at in (
+                        typed_hold_until,
+                        resource_lease_deadline,
+                    )
+                    if deadline_at is not None
+                ),
+                default=None,
+            )
+            if dependency_frontier is not None:
+                terminate_at = max(
+                    ensure_utc(terminate_at),
+                    ensure_utc(dependency_frontier),
+                )
+
+            if lifecycle_process is not None and lifecycle_process.latest_dependent_at is not None:
+                terminate_at = max(
+                    ensure_utc(terminate_at),
+                    ensure_utc(lifecycle_process.latest_dependent_at) + timedelta(microseconds=1),
+                )
+
+            retained_child_close = (
+                self._lifecycle_authority.process_latest_closed_child_at_for_object(
+                    identity.object_id
+                )
+            )
+            child_close_frontier = max(
+                (
+                    close_at
+                    for close_at in (
+                        retained_child_close,
+                        latest_planned_child_close.get(identity.object_id),
+                    )
+                    if close_at is not None
+                ),
+                default=None,
+            )
+            if child_close_frontier is not None:
+                terminate_at = max(
+                    ensure_utc(terminate_at),
+                    ensure_utc(child_close_frontier) + timedelta(microseconds=1),
+                )
+
+            visible_create_delta: _FrozenActivityTimingDelta | None = None
+            if os_category == "windows":
+                visible_create_time = self.process_source_create_time(session.system, identity.pid)
+                if visible_create_time is not None and terminate_at <= visible_create_time:
+                    relationship_key = "windows.process_exit_after_visible_create"
+                    visible_create_delta = self._freeze_profile_activity_gap(
+                        relationship_key,
+                        stable_id=_activity_timing_stable_id(
+                            "windows-visible-process-dependent",
+                            session.system,
+                            identity.pid,
+                            visible_create_time,
+                            terminate_at,
+                        ),
+                        host=session.system,
+                        source="endpoint_process",
+                        lifecycle_id=str(identity.pid),
+                        sample_key="visible_create_gap",
+                    )
+                    terminate_at = visible_create_time + visible_create_delta.value
+
+            terminate_at = max(
+                ensure_utc(terminate_at),
+                identity.started_at + timedelta(microseconds=1),
+            )
+            if (
+                ssh_network_close is not None
+                and ssh_clamp_latest_allowed is not None
+                and terminate_at >= ssh_network_close
+            ):
+                raise StateError(
+                    "Generic logoff cannot preserve a frozen process close across its "
+                    f"SSH transport clamp: process={identity.object_id}"
+                )
+            if deadline is not None and terminate_at >= deadline:
+                raise StateError(
+                    "Authoritative generic logoff cannot fit its process graph before "
+                    f"the exact session end: process={identity.object_id}"
+                )
+            if (
+                authoritative_latest_allowed is not None
+                and terminate_at > authoritative_latest_allowed
+            ):
+                raise StateError(
+                    "Authoritative generic logoff cannot preserve its frozen process "
+                    f"close before the exact deadline clamp: process={identity.object_id}"
+                )
+            plan = _GenericLogoffProcessClosePlan(
+                identity=identity,
+                end_time=ensure_utc(terminate_at),
+                visible_create_delta=visible_create_delta,
+            )
+            plans.append(plan)
+            parent_object_id = (
+                lifecycle_process.identity.parent_object_id
+                if lifecycle_process is not None
+                else (
+                    parent_identity.object_id
+                    if (
+                        parent_identity := self.state_manager.get_process_identity(
+                            session.system,
+                            identity.parent_pid,
+                        )
+                    )
+                    is not None
+                    else None
+                )
+            )
+            if parent_object_id:
+                prior_child_close = latest_planned_child_close.get(parent_object_id)
+                latest_planned_child_close[parent_object_id] = (
+                    plan.end_time
+                    if prior_child_close is None
+                    else max(prior_child_close, plan.end_time)
+                )
+
+        lifecycle_session = self._lifecycle_authority.registry.get_session(session.ecar_object_id)
+        if lifecycle_session is not None and lifecycle_session.closed_at is not None:
+            raise StateError("Generic logoff session lifecycle prestate drifted")
+        latest_session_hold = (
+            lifecycle_session.latest_hold_until if lifecycle_session is not None else None
+        )
+        retained_member_close = (
+            self._lifecycle_authority.session_latest_closed_member_at_for_object(
+                session.ecar_object_id
+            )
+        )
+        strict_session_frontier = max(
+            (
+                close_at
+                for close_at in (
+                    retained_member_close,
+                    (
+                        lifecycle_session.latest_dependent_at
+                        if lifecycle_session is not None
+                        else None
+                    ),
+                    *(plan.end_time for plan in plans),
+                )
+                if close_at is not None
+            ),
+            default=None,
+        )
+        if deadline is not None:
+            if (
+                strict_session_frontier is not None
+                and ensure_utc(strict_session_frontier) >= deadline
+            ):
+                raise StateError(
+                    "Authoritative generic logoff cannot follow its retained session graph"
+                )
+            if latest_session_hold is not None and ensure_utc(latest_session_hold) > deadline:
+                raise StateError(
+                    "Authoritative generic logoff cannot follow its retained session hold"
+                )
+            projected_session_frontier = strict_session_frontier
+        else:
+            projected_session_frontier = max(
+                (
+                    close_at
+                    for close_at in (
+                        strict_session_frontier,
+                        latest_session_hold,
+                    )
+                    if close_at is not None
+                ),
+                default=None,
+            )
+        return tuple(plans), projected_session_frontier
 
     def _execute_logoff_bundle(self, request: LogoffRequest) -> None:
         """Expand a logoff bundle through the compatibility adapter."""
@@ -16000,11 +16395,11 @@ class ActivityGenerator:
 
         if authoritative_end_plan is not None:
             time = ensure_utc(authoritative_end_plan.canonical_end)
-            if not uses_exact_linux_sudo_close:
-                self.state_manager.plan_session_end(logon_id, authoritative_end_plan)
 
         # Terminate session-specific processes before ending session
         deferred_ssh_transport_process = None
+        remember_linux_session_close = False
+        generic_process_closes: tuple[_GenericLogoffProcessClosePlan, ...] = ()
         if session:
             if ssh_transport_close_time is not None and authoritative_end_plan is None:
                 if transport_close_delta is None:
@@ -16033,9 +16428,7 @@ class ActivityGenerator:
                 and session.logon_type not in {3, 5}
                 and not uses_exact_linux_sudo_close
             ):
-                self._linux_shell_last_session_close[(system.hostname, user.username)] = ensure_utc(
-                    time
-                )
+                remember_linux_session_close = True
             session_processes = list(frozen_session_processes)
             # Per-session winlogon is a SYSTEM-token process, so its immutable
             # process LogonID is 0x3e7 rather than the human session LUID.  The
@@ -16115,121 +16508,70 @@ class ActivityGenerator:
                 finally:
                     self._release_linux_sudo_logoff_claim(continuation)
                 return
-            termination_gaps_ms: list[int] = []
-            if authoritative_end_plan is not None:
-                termination_span = timedelta(
-                    milliseconds=min(3000, max(250, 100 * (len(session_processes) + 1)))
+            generic_process_closes, projected_session_frontier = (
+                self._plan_generic_logoff_process_closes(
+                    system=system,
+                    session=session,
+                    processes=session_processes,
+                    base_logoff_time=ensure_utc(time),
+                    authoritative_end_plan=authoritative_end_plan,
+                    uses_ssh_transport_close_margin=ssh_transport_close_time is not None,
+                    suppresses_linux_foreground_lifetime_clamp=closes_linux_sudo_route,
                 )
-            else:
-                termination_gaps_ms = [
-                    40
-                    + (
-                        _stable_seed(
-                            "windows_session_process_termination_gap:"
-                            f"{session.system}:{logon_id}:{proc.pid}:{time.isoformat()}"
-                        )
-                        % 361
+            )
+            if ssh_transport_close_time is not None and authoritative_end_plan is not None:
+                if ssh_transport_close_time >= ensure_utc(authoritative_end_plan.canonical_end):
+                    raise StateError(
+                        "SSH transport extends beyond authoritative session end: "
+                        f"{system.hostname} logon_id={logon_id}"
                     )
-                    for proc in session_processes
-                ]
-                final_margin_ms = 1000 if ssh_transport_close_time is not None else 150
-                termination_span = timedelta(
-                    milliseconds=max(500, sum(termination_gaps_ms) + final_margin_ms)
-                )
-            termination_start = time - termination_span
+            if authoritative_end_plan is not None:
+                self.state_manager.plan_session_end(logon_id, authoritative_end_plan)
             prior_visible_termination = self._session_process_source_terminate_times.get(
                 (session.system, logon_id)
             )
             visible_termination_times = (
                 [prior_visible_termination] if prior_visible_termination is not None else []
             )
-            cumulative_gap_ms = 0
-            for ordinal, session_process in enumerate(session_processes):
-                if authoritative_end_plan is not None:
-                    slot_ms = (
-                        termination_span.total_seconds()
-                        * 1000
-                        / max(
-                            1,
-                            len(session_processes) + 1,
+            frozen_process_object_ids = frozenset(
+                process_close.identity.object_id for process_close in generic_process_closes
+            )
+            frozen_process_token = _GENERIC_LOGOFF_FROZEN_PROCESS_OBJECT_IDS.set(
+                frozen_process_object_ids
+            )
+            try:
+                for process_close in generic_process_closes:
+                    self.generate_process_termination(
+                        user=user,
+                        system=system,
+                        time=process_close.end_time,
+                        pid=process_close.identity.pid,
+                        process_name=process_close.identity.image,
+                        logon_id=logon_id,
+                        from_storyline=from_storyline,
+                        session_end_plan=authoritative_end_plan,
+                    )
+                    lifecycle_process = self._lifecycle_authority.registry.get_process(
+                        process_close.identity.object_id
+                    )
+                    if (
+                        lifecycle_process is None
+                        or lifecycle_process.closed_at != process_close.end_time
+                    ):
+                        raise StateError(
+                            "Generic logoff process close drifted from its frozen schedule: "
+                            f"process={process_close.identity.object_id}"
                         )
+                    if process_close.visible_create_delta is not None:
+                        process_close.visible_create_delta.publish()
+                    visible_termination_time = self.process_source_terminate_time(
+                        session.system,
+                        process_close.identity.pid,
                     )
-                    requested_termination_time = termination_start + timedelta(
-                        milliseconds=slot_ms * ordinal
-                    )
-                else:
-                    requested_termination_time = termination_start + timedelta(
-                        milliseconds=cumulative_gap_ms
-                    )
-                    cumulative_gap_ms += termination_gaps_ms[ordinal]
-                process_lifetime = (
-                    _windows_foreground_lifetime(
-                        session_process.image,
-                        session_process.command_line,
-                    )
-                    if _get_os_category(system.os) == "windows"
-                    else None
-                    if closes_linux_sudo_route
-                    else _linux_foreground_lifetime(
-                        session_process.image,
-                        session_process.command_line,
-                    )
-                )
-                if process_lifetime is not None:
-                    lifetime_rng = random.Random(
-                        _stable_seed(
-                            "orphan_foreground_process_lifetime:"
-                            f"{session.system}:{session_process.pid}:"
-                            f"{session_process.start_time.isoformat()}:"
-                            f"{session_process.command_line}"
-                        )
-                    )
-                    bounded_termination_time = ensure_utc(session_process.start_time) + timedelta(
-                        seconds=lifetime_rng.uniform(*process_lifetime)
-                    )
-                    connection_hold = self._process_connection_hold_until.get(
-                        self._process_instance_key(
-                            session.system,
-                            session_process.pid,
-                            session_process.start_time,
-                        )
-                    )
-                    if connection_hold is not None:
-                        bounded_termination_time = max(
-                            bounded_termination_time,
-                            ensure_utc(connection_hold) + timedelta(milliseconds=25),
-                        )
-                    requested_termination_time = min(
-                        requested_termination_time,
-                        bounded_termination_time,
-                    )
-                if closes_linux_sudo_route:
-                    retained_child_close = (
-                        self._lifecycle_authority.process_latest_closed_child_at_for_object(
-                            session_process.ecar_object_id
-                        )
-                    )
-                    if retained_child_close is not None:
-                        requested_termination_time = max(
-                            requested_termination_time,
-                            ensure_utc(retained_child_close) + timedelta(microseconds=1),
-                        )
-                self.generate_process_termination(
-                    user=user,
-                    system=system,
-                    time=requested_termination_time,
-                    pid=session_process.pid,
-                    process_name=session_process.image,
-                    logon_id=logon_id,
-                    from_storyline=from_storyline,
-                    session_end_plan=authoritative_end_plan,
-                )
-                visible_termination_time = self.process_source_terminate_time(
-                    session.system,
-                    session_process.pid,
-                )
-                if visible_termination_time is not None:
-                    visible_termination_times.append(visible_termination_time)
+                    if visible_termination_time is not None:
+                        visible_termination_times.append(visible_termination_time)
+            finally:
+                _GENERIC_LOGOFF_FROZEN_PROCESS_OBJECT_IDS.reset(frozen_process_token)
             if visible_termination_times and authoritative_end_plan is None:
                 latest_visible_termination = max(visible_termination_times)
                 observation_gap = self.dispatcher.observation_policy.maximum_delay_difference(
@@ -16243,6 +16585,36 @@ class ActivityGenerator:
                 )
                 used_timing_deltas.append(rendered_dependents_delta)
                 time = max(time, minimum_logoff_time)
+
+            latest_session_member_close = (
+                self._lifecycle_authority.session_latest_closed_member_at_for_object(
+                    session.ecar_object_id
+                )
+            )
+            generic_close_frontier = max(
+                (
+                    close_at
+                    for close_at in (
+                        projected_session_frontier,
+                        latest_session_member_close,
+                        *(close.end_time for close in generic_process_closes),
+                    )
+                    if close_at is not None
+                ),
+                default=None,
+            )
+            if generic_close_frontier is not None:
+                minimum_session_close = ensure_utc(generic_close_frontier) + timedelta(
+                    microseconds=1
+                )
+                if authoritative_end_plan is not None:
+                    if minimum_session_close > ensure_utc(authoritative_end_plan.canonical_end):
+                        raise StateError(
+                            "Authoritative generic logoff cannot follow its exact "
+                            "session-member close frontier"
+                        )
+                else:
+                    time = max(ensure_utc(time), minimum_session_close)
 
             if authoritative_end_plan is not None:
                 remaining_processes = self.state_manager.get_processes_for_session(
@@ -16260,13 +16632,6 @@ class ActivityGenerator:
                         "Authoritative session closure left running processes: "
                         f"{system.hostname} logon_id={logon_id} "
                         f"pids={[proc.pid for proc in remaining_processes]}"
-                    )
-                if ssh_transport_close_time is not None and ssh_transport_close_time >= ensure_utc(
-                    authoritative_end_plan.canonical_end
-                ):
-                    raise StateError(
-                        "SSH transport extends beyond authoritative session end: "
-                        f"{system.hostname} logon_id={logon_id}"
                     )
 
         # Build OccurrenceBuilder (StateManager.apply() handles end_session)
@@ -16454,6 +16819,10 @@ class ActivityGenerator:
                     )
                 )
 
+        if remember_linux_session_close:
+            self._linux_shell_last_session_close[(system.hostname, user.username)] = ensure_utc(
+                time
+            )
         for timing_delta in used_timing_deltas:
             timing_delta.publish()
         if session is not None and (
@@ -21588,6 +21957,11 @@ class ActivityGenerator:
         if child is None or _get_os_category(system.os) != "windows" or child.parent_pid <= 0:
             return
         parent = self.state_manager.get_process(system.hostname, child.parent_pid)
+        if (
+            parent is not None
+            and parent.ecar_object_id in _GENERIC_LOGOFF_FROZEN_PROCESS_OBJECT_IDS.get()
+        ):
+            return
         if parent is None or not self._is_one_shot_shell_command(parent.image, parent.command_line):
             return
         if not self._windows_shell_parent_invokes_child(

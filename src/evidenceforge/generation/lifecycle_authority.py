@@ -9380,6 +9380,16 @@ class GeneratorLifecycleAuthority:
             raise ValueError("Lifecycle latest child close requires a process object ID")
         return self._registry.process_latest_closed_child_at(process_object_id)
 
+    def session_latest_closed_member_at_for_object(
+        self,
+        session_object_id: str,
+    ) -> datetime | None:
+        """Return one session's latest retained member close without requiring a drain."""
+
+        if type(session_object_id) is not str or not session_object_id:
+            raise ValueError("Lifecycle latest member close requires a session object ID")
+        return self._registry.session_latest_closed_member_at(session_object_id)
+
     def reconcile_prepared_process_close(
         self,
         snapshot: ProcessLifecycleSnapshot,

@@ -27,6 +27,7 @@ import random
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -5364,6 +5365,186 @@ class TestActivityGenerator:
             if call.args[0].event_type == "logoff"
         ][-1]
         assert logoff_event.auth.logon_type == 3
+
+    def test_generic_windows_parent_follows_retained_closed_child(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Generic Windows teardown must honor a lifecycle-retained child frontier."""
+        session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        session_plan = state_manager.plan_session_materialization(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=session_start,
+            session_kind="interactive",
+            lifecycle_group_id="generic:windows-retained-child",
+            session_id=3,
+        )
+        session, receipt = activity_gen._lifecycle_authority.materialize_session(session_plan)
+        assert activity_gen._lifecycle_authority.authenticates_materialization_receipt(
+            session_plan,
+            receipt,
+        )
+        parent_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            session_start + timedelta(seconds=1),
+            session.logon_id,
+            r"C:\Tools\SessionHost.exe",
+            "SessionHost.exe",
+            parent_pid=0,
+            suppress_command_file_effect=True,
+            lifecycle_group_id=session.lifecycle_group_id,
+        )
+        child_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            session_start + timedelta(seconds=2),
+            session.logon_id,
+            r"C:\Tools\Worker.exe",
+            "Worker.exe --once",
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+            lifecycle_group_id="generic:windows-worker",
+        )
+        session.process_tree_root = parent_pid
+        parent_identity = state_manager.get_process_identity(test_system.hostname, parent_pid)
+        child_identity = state_manager.get_process_identity(test_system.hostname, child_pid)
+        assert parent_identity is not None
+        assert child_identity is not None
+        retained_child_close = session_start + timedelta(minutes=20)
+        activity_gen.generate_process_termination(
+            test_user,
+            test_system,
+            retained_child_close,
+            child_pid,
+            r"C:\Tools\Worker.exe",
+            session.logon_id,
+        )
+        assert state_manager.get_process(test_system.hostname, child_pid) is None
+
+        activity_gen.generate_logoff(
+            test_user,
+            test_system,
+            session_start + timedelta(minutes=5),
+            session.logon_id,
+            logon_type=2,
+            from_storyline=True,
+        )
+
+        child_lifecycle = activity_gen._lifecycle_authority.registry.get_process(
+            child_identity.object_id
+        )
+        parent_lifecycle = activity_gen._lifecycle_authority.registry.get_process(
+            parent_identity.object_id
+        )
+        session_lifecycle = activity_gen._lifecycle_authority.registry.get_session(
+            session.ecar_object_id
+        )
+        assert child_lifecycle is not None
+        assert parent_lifecycle is not None
+        assert session_lifecycle is not None
+        assert child_lifecycle.closed_at == retained_child_close
+        assert retained_child_close < parent_lifecycle.closed_at < session_lifecycle.closed_at
+
+    def test_generic_windows_frozen_schedule_owns_one_shot_parent_close(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """A frozen generic teardown must not recursively drift a scheduled shell parent."""
+        session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        session_plan = state_manager.plan_session_materialization(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=session_start,
+            session_kind="interactive",
+            lifecycle_group_id="generic:windows-one-shot-parent",
+            session_id=4,
+        )
+        session, session_receipt = activity_gen._lifecycle_authority.materialize_session(
+            session_plan
+        )
+        assert activity_gen._lifecycle_authority.authenticates_materialization_receipt(
+            session_plan,
+            session_receipt,
+        )
+        parent_plan = state_manager.plan_process_materialization(
+            system=test_system.hostname,
+            parent_pid=0,
+            image=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c Worker.exe --once",
+            username=test_user.username,
+            integrity_level="Medium",
+            os_category="windows",
+            logon_id=session.logon_id,
+            lifecycle_group_id=session.lifecycle_group_id,
+            start_time=session_start + timedelta(seconds=1),
+            require_session=True,
+            auth_session_id=session.session_id,
+            auth_logon_type=session.logon_type,
+        )
+        parent, parent_receipt = activity_gen._lifecycle_authority.materialize_process(parent_plan)
+        assert activity_gen._lifecycle_authority.authenticates_materialization_receipt(
+            parent_plan,
+            parent_receipt,
+        )
+        child_plan = state_manager.plan_process_materialization(
+            system=test_system.hostname,
+            parent_pid=parent.pid,
+            image=r"C:\Tools\Worker.exe",
+            command_line="Worker.exe --once",
+            username=test_user.username,
+            integrity_level="Medium",
+            os_category="windows",
+            logon_id=session.logon_id,
+            lifecycle_group_id="generic:windows-one-shot-child",
+            start_time=session_start + timedelta(seconds=2),
+            require_session=True,
+            auth_session_id=session.session_id,
+            auth_logon_type=session.logon_type,
+        )
+        child, child_receipt = activity_gen._lifecycle_authority.materialize_process(child_plan)
+        assert activity_gen._lifecycle_authority.authenticates_materialization_receipt(
+            child_plan,
+            child_receipt,
+        )
+        session.process_tree_root = parent.pid
+        frozen_closes: list[object] = []
+        original_planner = activity_gen._plan_generic_logoff_process_closes
+
+        def capture_plan(**kwargs: Any) -> tuple[tuple[object, ...], datetime | None]:
+            plans, frontier = original_planner(**kwargs)
+            frozen_closes.extend(plans)
+            return plans, frontier
+
+        with patch.object(
+            activity_gen,
+            "_plan_generic_logoff_process_closes",
+            side_effect=capture_plan,
+        ):
+            activity_gen.generate_logoff(
+                test_user,
+                test_system,
+                session_start + timedelta(minutes=5),
+                session.logon_id,
+                logon_type=2,
+                from_storyline=True,
+            )
+
+        closes_by_object = {plan.identity.object_id: plan.end_time for plan in frozen_closes}
+        parent_lifecycle = activity_gen._lifecycle_authority.registry.get_process(
+            parent.ecar_object_id
+        )
+        child_lifecycle = activity_gen._lifecycle_authority.registry.get_process(
+            child.ecar_object_id
+        )
+        assert parent_lifecycle is not None
+        assert child_lifecycle is not None
+        assert parent_lifecycle.closed_at == closes_by_object[parent.ecar_object_id]
+        assert child_lifecycle.closed_at == closes_by_object[child.ecar_object_id]
+        assert child_lifecycle.closed_at < parent_lifecycle.closed_at
 
     def test_process_termination_after_ended_session_clamps_before_logoff(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

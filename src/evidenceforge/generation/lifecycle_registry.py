@@ -3723,6 +3723,14 @@ class _LifecyclePartition:
             aggregate = self._children_by_parent.get(process_object_id)
             return None if aggregate is None else aggregate.latest_closed_at
 
+    def session_latest_closed_member_at(self, session_object_id: str) -> datetime | None:
+        """Return the latest retained member close even while other members remain live."""
+
+        with self._catalog_lock:
+            self._dependent_aggregate_candidates_inspected += 1
+            aggregate = self._members_by_session.get(session_object_id)
+            return None if aggregate is None else aggregate.latest_closed_at
+
     def resource_lease_deadline(self, subject: LifecycleEntityRef) -> datetime | None:
         """Return one subject's exact cached live resource-lease deadline."""
 
@@ -15838,6 +15846,15 @@ class LifecycleRegistry:
         if partition is None:
             return None
         return partition.process_latest_closed_child_at(process_object_id)
+
+    def session_latest_closed_member_at(self, session_object_id: str) -> datetime | None:
+        """Return the routed session's O(1) latest retained member close."""
+
+        route = self._routes.get("session", session_object_id)
+        if not isinstance(route, int):
+            return None
+        partition_id, _handle = self._decode_session_locator(route)
+        return self._partitions[partition_id].session_latest_closed_member_at(session_object_id)
 
     def resource_lease_deadline(self, subject: LifecycleEntityRef) -> datetime | None:
         """Return one routed subject's O(1) cached resource-lease deadline."""
