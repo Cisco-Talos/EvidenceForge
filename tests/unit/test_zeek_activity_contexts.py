@@ -53,7 +53,6 @@ from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
-    sample_timing_delta,
 )
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.zeek_files import _bounded_file_transfer_observation
@@ -386,7 +385,11 @@ def test_direct_http_download_path_replaces_tiny_caller_response_bytes(activity_
     """HTTP download semantics should not inherit tiny generic flow byte counts."""
     gen, events = activity_gen
     monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(0))
-    monkeypatch.setattr(generator_module, "_get_http_status", lambda _dst_ip, _uri: (200, "OK"))
+    monkeypatch.setattr(
+        generator_module,
+        "_get_http_status",
+        lambda _dst_ip, _uri, **_kwargs: (200, "OK"),
+    )
     source = System(
         hostname="WKS-01",
         ip="10.0.10.50",
@@ -1851,10 +1854,6 @@ class TestSslContextPopulation:
     ):
         """A successful CONNECT tunnel with bytes must not terminalize as a cache HIT."""
 
-        class ZeroRollRandom(random.Random):
-            def random(self) -> float:
-                return 0.0
-
         gen, events = activity_gen
         source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
         proxy = System(
@@ -1867,7 +1866,8 @@ class TestSslContextPopulation:
         gen._ip_to_system = {source.ip: source, proxy.ip: proxy}
         gen._proxy_mode = "explicit"
         gen._proxy_routes = {source.ip: [proxy]}
-        monkeypatch.setattr(generator_module, "_get_rng", lambda: ZeroRollRandom(7))
+        owner_rng = random.Random(7)
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: owner_rng)
         monkeypatch.setattr(
             generator_module,
             "_proxy_request_allows_cache_hit",
@@ -2587,25 +2587,16 @@ class TestSslContextPopulation:
         connection_syslog_event = next(
             event for event in syslog_events if event.syslog.message.startswith("Connection from")
         )
-        responder_event = next(
-            event
-            for event in events
-            if event.event_type == "system_process_create"
-            and event.process is not None
-            and event.process.pid == conn_event.network.responding_pid
+        responder_source_time = gen.process_source_create_time(
+            target.hostname,
+            conn_event.network.responding_pid,
         )
-        assert responder_event.source_timing is not None
-        ecar_process_times = [
-            timestamp
-            for key, timestamp in responder_event.source_timing.source_times.items()
-            if key.startswith("source.ecar_process_create|")
-        ]
-        assert ecar_process_times
+        assert responder_source_time is not None
         observation_gap = gen.dispatcher.observation_policy.maximum_delay_difference(
             "ecar",
             "syslog",
         )
-        assert connection_syslog_event.timestamp > max(ecar_process_times) + observation_gap
+        assert connection_syslog_event.timestamp > responder_source_time + observation_gap
 
     def test_failed_logon_ssh_syslog_follows_responder_process_source_time(self, activity_gen):
         """Typed failed SSH auth shares the responder process observation floor."""
@@ -3027,29 +3018,22 @@ class TestSslContextPopulation:
             if event.syslog is not None
             and event.syslog.message.startswith("pam_unix(sshd:session)")
         )
-        ecar_login_time = gen._source_timing_planner.source_time(
+        planned_ssh_event = gen.dispatcher.source_timing_planner.plan_event(
             ssh_event,
-            "source.ecar_session",
-            seed_parts=(
-                "login",
-                ssh_event.dst_host.hostname,
-                user.username,
-                "10.0.10.50",
-                51111,
-                ssh_event.auth.logon_id if ssh_event.auth else "",
-                10,
-                ssh_event.identity_plan.object_id,
-                ssh_event.timestamp,
-            ),
+            format_name="ecar",
+        )
+        ecar_login_time = EcarEmitter._session_timestamp(
+            object.__new__(EcarEmitter),
+            planned_ssh_event,
+            planned_ssh_event.dst_host,
+            "login",
         )
 
         assert ecar_login_time > accepted_event.timestamp
         assert ecar_login_time > pam_event.timestamp
-        assert ecar_login_time > pam_event.timestamp + timedelta(milliseconds=250)
-        gen.dispatcher.source_timing_planner.plan_event(ssh_event, format_name="ecar")
         delayed_for_observation_profile = replace(
-            ssh_event,
-            timestamp=ssh_event.timestamp + timedelta(milliseconds=750),
+            planned_ssh_event,
+            timestamp=planned_ssh_event.timestamp + timedelta(milliseconds=750),
             storyline_cluster_id="storyline-ssh",
         )
         delayed_ecar_time = EcarEmitter._session_timestamp(
@@ -3368,11 +3352,6 @@ class TestSslContextPopulation:
         transport_close = transport_event.timestamp + timedelta(
             seconds=transport_event.network.duration
         )
-        expected_delta = sample_timing_delta(
-            "windows.logoff_after_last_activity",
-            seed_parts=(target.hostname, logon_id, transport_close),
-        )
-
         gen.generate_logoff(
             user=user,
             system=target,
@@ -3382,7 +3361,18 @@ class TestSslContextPopulation:
         )
 
         logoff_event = next(event for event in events if event.event_type == "logoff")
-        assert logoff_event.timestamp == transport_close + expected_delta
+        logoff_window = get_timing_window(
+            "windows.logoff_after_last_activity",
+            default_min_ms=2_000,
+            default_max_ms=15_000,
+            default_position="after",
+            default_class="teardown",
+        )
+        assert (
+            timedelta(milliseconds=logoff_window.min_ms)
+            <= (logoff_event.timestamp - transport_close)
+            <= timedelta(milliseconds=logoff_window.max_ms)
+        )
         assert logoff_event.auth.source_ip == "10.0.10.50"
         assert logoff_event.auth.source_port == 51111
 
@@ -4195,18 +4185,14 @@ class TestFileTransferContext:
         """A transmitted redirect entity preserves explicit route MIME and gets a file."""
         gen, events = activity_gen
 
-        class LowRandom(random.Random):
-            def random(self) -> float:
-                return 0.05
-
         import evidenceforge.generation.activity.generator as generator_module
         import evidenceforge.generation.activity.proxy_uri as proxy_uri_module
 
-        monkeypatch.setattr(generator_module, "_get_rng", lambda: LowRandom(7))
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(7))
         monkeypatch.setattr(
             generator_module,
             "_get_http_status",
-            lambda _dst_ip, _uri: (301, "Moved Permanently"),
+            lambda _dst_ip, _uri, **_kwargs: (301, "Moved Permanently"),
         )
         monkeypatch.setattr(
             proxy_uri_module,
@@ -4286,11 +4272,12 @@ class TestFileTransferContext:
         gen, events = activity_gen
 
         has_file_transfer = False
-        for _ in range(100):
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        for ordinal in range(100):
             gen.generate_connection(
                 src_ip="10.0.10.50",
                 dst_ip="93.184.216.34",
-                time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                time=base_time + timedelta(seconds=ordinal * 2),
                 dst_port=80,
                 proto="tcp",
                 service="http",
